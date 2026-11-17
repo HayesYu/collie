@@ -906,15 +906,6 @@ select.picked { display: none; }
    area nor scrolls the screen sideways when the keyboard opens */
 .screen .xterm-helper-textarea { left: 0 !important; top: 0 !important; }
 
-/* Collie is on it: the last row of its conversation */
-.say.pending .thinking { display: flex; align-items: center; gap: 10px; min-height: 30px; font-size: 14px; color: var(--fg-3); }
-.say.pending .dots { display: inline-flex; gap: 4px; }
-.say.pending .dots i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .35; animation: thinkdot 1.2s ease-in-out infinite; }
-.say.pending .dots i:nth-child(2) { animation-delay: .2s; }
-.say.pending .dots i:nth-child(3) { animation-delay: .4s; }
-@keyframes thinkdot { 30% { opacity: 1; transform: translateY(-2px); } 60% { opacity: .35; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .say.pending .dots i { animation: none; opacity: .6; } }
-
 /* a stuck agent's dialog, answered from Collie's conversation */
 .needs .ask { margin-top: 10px; }
 .needs .ask-head a { font-size: 12px; color: var(--fg-3); text-decoration: none; }
@@ -922,3 +913,7 @@ select.picked { display: none; }
 .event:has(> .wstate) { grid-template-columns: 26px auto minmax(0, 1fr) auto; }
 .event:has(> .wstate) > span:nth-child(3) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .event > .wstate { font-size: 12px; color: var(--fg-3); white-space: nowrap; }
+
+/* sidebar: Collie's agents among yours */
+.item .name .by-collie { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; font: 500 10.5px/16px var(--sans, inherit); color: var(--fg-3); vertical-align: 1px; white-space: nowrap; }
+.list .empty-hint { list-style: none; padding: 4px 0; }

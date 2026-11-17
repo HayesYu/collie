@@ -306,13 +306,13 @@
 
   // ───────────────────────────── sidebar
   function itemHTML(v) {
-    const where = (state.machines || []).length > 1 && v.machine ? machineName(v.machine) + " · " : "";
+    const where = (state.machines || []).length > 1 ? machineName(v.machine) + " · " : "";
     const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
     const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
-      : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${tilde(v.cwd)}` : where + tilde(v.cwd);
+      : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
     return `<li><a class="item ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
       <span class="glyph">${glyph(v)}</span>
-      <span class="body"><div class="name">${esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}</div><div class="sub">${esc(sub)}</div></span>
+      <span class="body"><div class="name">${esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}${isCollieOwned(v) && v.name !== ROUTER ? `<span class="by-collie">Collie 派出</span>` : ""}</div><div class="sub">${esc(sub)}</div></span>
       <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a></li>`;
   }
 
@@ -324,33 +324,10 @@
     $("#attention-group").hidden = blocked.length === 0;
     $("#attention").innerHTML = blocked.map(itemHTML).join("");
 
-    // Your own agents, by computer. Collie's router and workers live in their
-    // own group below so the list stays yours.
     const machines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
     const multi = machines.length > 1;
-    const mine = state.agents.filter((a) => !isCollieOwned(a));
-    let html = "";
-    for (const m of machines) {
-      const list = mine.filter((a) => (a.machine || "") === m.id);
-      if (multi && !m.local && !m.online && !list.length) {
-        html += `<section class="group"><h2><span class="dot ${m.online ? "online" : "offline"}"></span>${esc(m.name)}<span class="count">离线</span></h2></section>`;
-        continue;
-      }
-      if (multi && m.local && !list.length && !state.ok) continue;
-      html += `<section class="group"><h2>${multi ? `<span class="dot ${(m.local ? state.ok : m.online) ? "online" : "offline"}"></span>${esc(m.name)}${m.local ? '<span class="tag">hub</span>' : ""}` : "Agents"}
-        <span class="count">${list.length || ""}</span></h2>
-        <ul class="list">${list.map(itemHTML).join("")}</ul>
-        ${list.length ? "" : `<p class="empty-hint">${m.local || !multi ? "还没有 agent 在跑。点右上角 + 新建，或让 Collie 派一个。" : "这台电脑上还没有 agent。"}</p>`}</section>`;
-    }
-    $("#machine-groups").innerHTML = html;
 
-    const crew = state.agents.filter((a) => isCollieOwned(a) && a.name !== ROUTER);
-    $("#worker-group").hidden = crew.length === 0;
-    $("#workers").innerHTML = crew.map(itemHTML).join("");
-    $("#worker-count").textContent = crew.length || "";
-
-    renderExt();
-    renderHist();
+    renderSessions();
     $("#shells").innerHTML = state.shells.map(itemHTML).join("");
     $("#shell-count").textContent = state.shells.length || "";
     $("#shell-group").hidden = state.shells.length === 0;
@@ -502,17 +479,6 @@
           const state = w ? (w.ended ? "已结束" : busy ? "还在跑" : stuck ? "等你确认" : "") : "";
           html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span>${state ? `<span class="wstate">${state}</span>` : ""}</${tag.split(" ")[0]}>`;
         }
-      }
-    }
-    // Collie's own state at the end of the conversation, where the eye is
-    // after sending: the header status alone is easy to miss.
-    if (sup.entries.length) {
-      const rs = r.status;
-      const pending = rs === "working" ? "在想…" : rs === "starting" ? "正在唤醒…" : rs === "dreaming" ? "在整理记忆…"
-        : routerQueued() && !sup.paused && rs !== "blocked" ? "收到了，马上看" : "";
-      if (pending) {
-        const cont = prevRole === "collie";
-        html += `<div class="say pending${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="thinking"><span class="dots"><i></i><i></i><i></i></span>${pending}</div></div>`;
       }
     }
     // Everything waiting on the human, in one place, answerable right here.
@@ -1104,17 +1070,7 @@
   };
   const histName = (h) => h.title || (h.name && !autoName(h.name) ? h.name : base(tilde(h.cwd)));
   const histOnline = (h) => !h.machine || (state.machines || []).some((m) => m.id === h.machine && m.online);
-  function renderHist() {
-    $("#hist-group").hidden = !hist.length;
-    $("#hist-count").textContent = hist.length || "";
-    const many = (state.machines || []).length > 1;
-    $("#hist-list").innerHTML = hist.slice(0, 20).map((h) => {
-      const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
-      return `<li><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
-        <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a></li>`;
-    }).join("");
-  }
+  const renderHist = () => renderSessions();
   function renderHistHead(hid) {
     const h = hist.find((x) => x.id === hid);
     const on = h && histOnline(h);
@@ -1184,27 +1140,53 @@
     location.hash = "#/";
   });
   const extName = (e) => e.title || (e.cwd ? e.cwd.split("/").filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
-  // Running sessions first (all of them); then the desktop apps' resting
-  // conversations, a few unless expanded.
-  const EXT_REST = 5;
+  // The sidebar, by what you need: what is going on now (herdr agents, yours
+  // and Collie's, and other apps' running sessions), then what you did lately
+  // (other apps' resting conversations and ended herdr sessions, merged).
+  // Which computer something is on is a detail on its row.
+  const RECENT_N = 8;
   let extAll = store.get("extAll", false);
   const EXT_STATE = { working: "在干活", idle: "空闲", blocked: "等电脑那边确认" };
-  function renderExt() {
-    $("#ext-group").hidden = ext.length === 0;
-    const live = ext.filter((e) => e.live), rest = ext.filter((e) => !e.live);
-    $("#ext-count").textContent = ext.length ? (live.length ? `${live.length} 个在跑` : ext.length) : "";
+  const RANK = { working: 0, starting: 1, blocked: 2, unknown: 3, idle: 4, done: 4 };
+  function renderExt() { renderSessions(); }
+  function renderSessions() {
     const many = (state.machines || []).length > 1;
-    const shown = [...live, ...(extAll ? rest : rest.slice(0, EXT_REST))];
-    const curHidden = view === "ext" && extCur && !shown.some((e) => e.id === extCur) && rest.some((e) => e.id === extCur);
-    if (curHidden) shown.push(rest.find((e) => e.id === extCur));
-    const firstRest = live.length ? shown.findIndex((e) => !e.live) : -1;
-    $("#ext-list").innerHTML = shown.map((e, i) => {
+    const extRow = (e) => {
       const where = [e.app || KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
       const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "正在运行")}"></span>` : "";
-      return (i === firstRest ? `<li class="sublabel">最近</li>` : "") + `<li><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
+      return `<li><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
-    }).join("") + (rest.length > EXT_REST ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `还有 ${rest.length - EXT_REST} 个最近的会话`}</button></li>` : "");
+    };
+    const histRow = (h) => {
+      const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
+      return `<li><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
+        <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
+        <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a></li>`;
+    };
+
+    // 进行中: needs-you rows are already above.
+    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked")
+      .map((a) => ({ rank: RANK[a.status] ?? 3, html: itemHTML(a) }));
+    const liveExt = ext.filter((e) => e.live).map((e) => ({ rank: RANK[e.status] ?? 3, html: extRow(e) }));
+    const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
+    const busy = live.filter((x) => x.rank <= 1).length;
+    $("#live-count").textContent = busy ? `${busy} 个在跑` : live.length || "";
+    $("#live-list").innerHTML = live.map((x) => x.html).join("")
+      || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`;
+
+    // 最近: newest first; Collie's own workers are reached from its conversation.
+    const collieRan = (name) => sup.workers.some((w) => w.name === name);
+    const recent = [
+      ...ext.filter((e) => !e.live).map((e) => ({ id: e.id, t: new Date(e.updated || e.started), html: extRow(e) })),
+      ...hist.filter((h) => !collieRan(h.name)).map((h) => ({ id: "h:" + h.id, t: new Date(h.ended), html: histRow(h) })),
+    ].sort((x, y) => y.t - x.t);
+    let shown = extAll ? recent : recent.slice(0, RECENT_N);
+    const cur = view === "ext" && extCur && !shown.some((x) => x.id === extCur) && recent.find((x) => x.id === extCur);
+    if (cur) shown = [...shown, cur];
+    $("#recent-group").hidden = !recent.length;
+    $("#recent-list").innerHTML = shown.map((x) => x.html).join("")
+      + (recent.length > RECENT_N ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `还有 ${recent.length - RECENT_N} 个`}</button></li>` : "");
   }
   // Look up the open session again in a moment (a few times at most).
   let extSoonT = null, extSoonN = 0;
@@ -1289,7 +1271,7 @@
     if (r.note) toast(r.note, "attn");
   });
   function closeExt() { extStream?.close(); extStream = null; }
-  $("#ext-list").addEventListener("click", (ev) => {
+  $("#recent-list").addEventListener("click", (ev) => {
     if (!ev.target.closest("[data-act=ext-more]")) return;
     ev.preventDefault();
     extAll = !extAll; store.set("extAll", extAll);

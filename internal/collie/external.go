@@ -254,6 +254,15 @@ func (s *Server) externalSessions() []*External {
 		}
 	}
 	list = append(list, s.desktopSessions(regs, listed, now)...)
+	// Collie's own workers (a herdr pane while they run, its history after)
+	// are listed as Collie's, not as the computer's other sessions.
+	kept := list[:0]
+	for _, e := range list {
+		if !collieSession(e.Title) {
+			kept = append(kept, e)
+		}
+	}
+	list = kept
 	sortSessions(list)
 	externalCache.at, externalCache.list = now, list
 	return list
@@ -682,4 +691,11 @@ func lastActive(e *External) time.Time {
 		return e.Updated
 	}
 	return e.Started
+}
+
+// collieSession: a conversation Collie started, recognised by its first
+// message (a worker's brief, or the event batches Collie delivers).
+func collieSession(title string) bool {
+	t := strings.TrimSpace(title)
+	return strings.HasPrefix(t, "[collie]") || strings.HasPrefix(t, "You are worker ")
 }

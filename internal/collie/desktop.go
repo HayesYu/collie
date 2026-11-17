@@ -344,7 +344,7 @@ func (s *Server) codexAppRows() []desktopRow {
 		if res.Scan(&id, &title, &cwd, &rollout, &created, &updated, &originator) != nil {
 			continue
 		}
-		app := codexClient(originator)
+		app := codexClient(originator, cwd)
 		d := desktopRow{id: "cx-" + id, kind: "codex", app: app, session: id, title: messageTitle(title), cwd: cwd, created: time.UnixMilli(created), updated: time.UnixMilli(updated)}
 		if isFile(rollout) {
 			d.path, d.format = rollout, "codex"
@@ -606,15 +606,21 @@ func (s *Server) codexDaemonHas(thread string) bool {
 // codexClient names what started a "vscode" thread: the Codex App, or another
 // program driving Codex's app-server (Persona's scheduled runs say
 // originator "persona").
-func codexClient(originator string) string {
+func codexClient(originator, cwd string) string {
+	// The Mac's shared Codex service was started by Persona and stamps every
+	// thread it runs "persona": its own runs are the ones in its folder.
+	if strings.Contains(cwd, "/.persona/") {
+		return "Persona（Codex）"
+	}
+	if originator == "persona" {
+		originator = ""
+	}
 	switch originator {
 	case "", "Codex Desktop", "codex_work_desktop":
 		if runtime.GOOS != "darwin" {
 			return "Codex App（远程）" // the App on another computer opened it here over SSH
 		}
 		return appCodex
-	case "persona":
-		return "Persona（Codex）"
 	case "codex-tui":
 		return "Codex 终端"
 	}

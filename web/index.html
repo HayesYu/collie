@@ -70,19 +70,14 @@
         <h2>需要你</h2>
         <ul class="list attn" id="attention"></ul>
       </section>
-      <div id="machine-groups"></div>
-      <details class="group" id="ext-group" hidden open>
-        <summary><h2>电脑上的其他会话 <span class="count" id="ext-count"></span></h2></summary>
-        <ul class="list" id="ext-list"></ul>
-      </details>
-      <details class="group" id="hist-group" hidden>
-        <summary><h2>最近结束 <span class="count" id="hist-count"></span></h2></summary>
-        <ul class="list" id="hist-list"></ul>
-      </details>
-      <details class="group" id="worker-group" hidden>
-        <summary><h2>Collie 派出的 <span class="count" id="worker-count"></span></h2></summary>
-        <ul class="list" id="workers"></ul>
-      </details>
+      <section class="group" id="live-group">
+        <h2>进行中 <span class="count" id="live-count"></span></h2>
+        <ul class="list" id="live-list"></ul>
+      </section>
+      <section class="group" id="recent-group" hidden>
+        <h2>最近</h2>
+        <ul class="list" id="recent-list"></ul>
+      </section>
       <details class="group" id="shell-group">
         <summary><h2>终端 <span class="count" id="shell-count"></span></h2></summary>
         <ul class="list" id="shells"></ul>

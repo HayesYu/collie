@@ -267,6 +267,8 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 .thread > .tools, .thread > * + .tools { margin-top: 14px; }
 .thread > .tools + .msg, .thread > .tools + .say { margin-top: 22px; }
 .chatbg .thread { overflow: visible; min-height: 100%; }
+/* "还在跑" follows the last message instead of sitting at the bottom. */
+.chatbg .thread:has(+ .working-row:not([hidden])) { min-height: 0; }
 .thread-empty { margin: auto; text-align: center; color: var(--fg-3); font-size: 13px; }
 .msg { max-width: 100%; min-width: 0; font-size: var(--msg-fs, 15px); line-height: 1.75; overflow-wrap: anywhere; }
 .msg.user {

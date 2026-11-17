@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -408,7 +407,7 @@ func (s *Server) codexAppUp() bool {
 	return true
 }
 
-var codexAppVersions = map[string]int{"thread-owner-discovery": 1, "thread-follower-start-turn": 2}
+var codexAppVersions = map[string]int{"thread-owner-discovery": 1, "thread-follower-start-turn": 2, "thread-follower-steer-turn": 1}
 
 type codexAppFrame struct {
 	Type            string          `json:"type"`
@@ -520,26 +519,14 @@ func (s *Server) codexAppSend(ctx context.Context, thread, text string) error {
 	if err != nil {
 		return errCodexNotLoaded
 	}
-	// Mid-turn, steer the way the App's own composer does: it shows the
-	// message once and matches the echo by clientUserMessageId. Starting a
-	// turn instead also lands as a steer, but the App draws it twice. A turn
-	// that just ended refuses the steer; then start one.
-	input := []map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}
-	_, err = c.request("thread-follower-steer-turn", map[string]any{
-		"conversationId": thread, "clientUserMessageId": uuid4(), "input": input,
-		"attachments": []any{}, "restoreMessage": map[string]any{"context": map[string]any{}},
-	}, owner)
-	if err != nil {
-		log.Printf("codex app: steer %s: %v; starting a turn", thread, err)
-		turn := map[string]any{
-			"conversationId": thread,
-			"turnStart": map[string]any{
-				"request": map[string]any{"threadId": thread, "clientUserMessageId": uuid4(), "input": input},
-				"context": map[string]any{},
-			},
-		}
-		_, err = c.request("thread-follower-start-turn", turn, owner)
+	turn := map[string]any{
+		"conversationId": thread,
+		"turnStart": map[string]any{
+			"request": map[string]any{"threadId": thread, "clientUserMessageId": uuid4(), "input": []map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}},
+			"context": map[string]any{},
+		},
 	}
+	_, err = c.request("thread-follower-start-turn", turn, owner)
 	forgetDesktopRows()
 	return err
 }

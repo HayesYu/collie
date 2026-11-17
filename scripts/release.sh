@@ -34,4 +34,4 @@ git tag -a "$version" -m "Collie $version" 2>/dev/null || true
 git push origin "$version"
 gh release create "$version" dist/collie-* dist/checksums.txt \
   --title "Collie $version" \
-  --notes "安装：\`curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh\`"
+  --notes "从源码安装见 README；也可以直接下载下面对应平台的二进制。"

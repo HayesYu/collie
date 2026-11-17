@@ -1381,7 +1381,7 @@
     const phoneURL = pb ? `${devAddr}/?pair=${pb.code}` : "";
     const pm = fresh("machine") ? pairing.machine : null;
     const nodeCmd = pm ? `collie node --hub ${devAddr} --code ${pm.code}` : "";
-    const installCmd = pm ? `curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh -s -- node --hub ${devAddr} --code ${pm.code}` : "";
+    const installCmd = pm ? `git clone -q https://github.com/huanyu1w1/collie.git ~/collie; cd ~/collie && git pull -q && sh docs/install.sh node --hub ${devAddr} --code ${pm.code}` : "";
     const machines = r.devices.filter((d) => d.kind === "machine");
     const browsers = r.devices.filter((d) => d.kind !== "machine");
     const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
@@ -1402,7 +1402,7 @@
 
         <div class="card pair-card">
           <div class="card-h">连接一台电脑</div>
-          <p class="pair-hint">在那台电脑上装好 herdr，然后运行（会装好 Collie，并作为后台服务常驻）：</p>
+          <p class="pair-hint">在那台电脑上装好 herdr、git 和 Go 1.25+，然后运行（从源码编译 Collie，并作为后台服务常驻）：</p>
           ${pm ? `<div class="code big"><span>${esc(installCmd)}</span><button class="icon-btn" data-copy="${esc(installCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
                <p class="pair-hint">已经装了 collie 的话：</p>
                <div class="code"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>

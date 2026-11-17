@@ -51,6 +51,17 @@ curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh -s -- node --hub h
 
 > 内网里是明文 HTTP。跨网络使用请放在 VPN / Tailscale 或 HTTPS 反向代理后面（这时用 `--url https://…` 让二维码指向它）。
 
+**从源码安装**（需要 Go 1.25+）：clone 下来在仓库里运行同一个脚本，它会用本地源码编译，不下载；参数和上面一样：
+
+```bash
+git clone https://github.com/huanyu1w1/collie.git && cd collie
+sh docs/install.sh hub                                          # 做 hub
+sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>   # 加入电脑
+sh docs/install.sh                                              # 只装命令
+```
+
+以后 `git pull` 再跑一次就是升级。
+
 只想装命令、不装服务：`curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh`。指定版本或目录：`COLLIE_VERSION=v0.1.0`、`COLLIE_BIN_DIR=…`。脚本在 [docs/install.sh](docs/install.sh)，下载会校验 SHA-256。
 
 ## 两种用法
@@ -174,7 +185,7 @@ Collie 同时支持 herdr 0.8 和 0.9：
 
 ## 从源码构建
 
-需要 Go 1.22+。
+需要 Go 1.25+。
 
 ```bash
 go build -o bin/collie .

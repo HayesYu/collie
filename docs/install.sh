@@ -10,7 +10,12 @@
 #   让这台电脑做 hub，并作为后台服务常驻：
 #     curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh -s -- hub [--url http://<本机内网 IP>:7788]
 #
-# 环境变量：COLLIE_VERSION（默认 latest）、COLLIE_BIN_DIR（默认 ~/.local/bin）。
+#   从源码安装（需要 Go 1.25+）：在仓库里运行这个脚本，会用本地源码编译，不下载：
+#     git clone https://github.com/huanyu1w1/collie.git && cd collie
+#     sh docs/install.sh [hub | node …]
+#
+# 环境变量：COLLIE_VERSION（默认 latest）、COLLIE_BIN_DIR（默认 ~/.local/bin）、
+# COLLIE_BINARY（直接安装这个现成的文件）。
 set -eu
 
 REPO=huanyu1w1/collie
@@ -50,6 +55,15 @@ sha256() {
 }
 
 # ------------------------------------------------------------------ binary
+# checkout: the repository this script was run from (sh docs/install.sh),
+# if any. Piped from curl, $0 is the shell, so this never matches.
+checkout() {
+  case "$0" in *install.sh) ;; *) return 1 ;; esac
+  d=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd) || return 1
+  grep -q '^module github.com/huanyu1w1/collie$' "$d/go.mod" 2>/dev/null || return 1
+  printf '%s\n' "$d"
+}
+
 install_binary() {
   asset=collie-$os-$arch
   if [ "$VERSION" = latest ]; then
@@ -60,8 +74,13 @@ install_binary() {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
 
-  if [ -n "${COLLIE_BINARY:-}" ]; then # a local build, for testing this script
+  if [ -n "${COLLIE_BINARY:-}" ]; then # a file built elsewhere
     cp "$COLLIE_BINARY" "$tmp/$asset"
+  elif src=$(checkout); then
+    command -v go >/dev/null 2>&1 || die "从源码安装需要 Go 1.25+：https://go.dev/dl/"
+    v=$(git -C "$src" describe --tags --always --dirty 2>/dev/null || echo dev)
+    step "从源码编译（$src，$v）"
+    (cd "$src" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$v" -o "$tmp/$asset" .) || die "编译失败"
   else
     step "下载 $asset（$VERSION）"
     fetch "$base/$asset" "$tmp/$asset" || die "下载失败：$base/$asset"

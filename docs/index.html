@@ -62,6 +62,7 @@ h1 { font-size: 40px; line-height: 1.2; letter-spacing: -.02em; margin: 24px 0 1
 .cmd { display: flex; align-items: flex-start; gap: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 10px 10px 10px 14px; }
 .cmd pre { margin: 0; flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; padding-top: 2px; }
 .cmd pre::before { content: "$ "; color: var(--fg-3); }
+.cmd pre.multi::before { content: none; }
 .copy { all: unset; cursor: pointer; flex: none; font-size: 12px; color: var(--fg-2); border: 1px solid var(--line-2); border-radius: 6px; padding: 2px 9px; }
 .copy:hover { color: var(--fg); background: var(--bg-3); }
 .copy.done { color: var(--ok); border-color: currentColor; }
@@ -118,6 +119,7 @@ footer a { color: var(--fg-2); }
         <button role="tab" aria-selected="true" data-tab="hub">做 hub</button>
         <button role="tab" aria-selected="false" data-tab="node">加入电脑</button>
         <button role="tab" aria-selected="false" data-tab="bin">只装命令</button>
+        <button role="tab" aria-selected="false" data-tab="src">从源码</button>
       </div>
       <div class="panel" data-panel="hub">
         <p>在一台常开的开发机上运行，装成后台服务。之后用手机扫终端里的二维码就能登录。</p>
@@ -130,6 +132,12 @@ footer a { color: var(--fg-2); }
       <div class="panel" data-panel="bin" hidden>
         <p>只把 <code>collie</code> 装到 <code>~/.local/bin</code>，不装服务。</p>
         <div class="cmd"><pre>curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh</pre><button class="copy">复制</button></div>
+      </div>
+      <div class="panel" data-panel="src" hidden>
+        <p>需要 Go 1.25+。在仓库里运行同一个脚本，会用本地源码编译；后面可以接 <code>hub</code> 或 <code>node --hub … --code …</code>。</p>
+        <div class="cmd"><pre class="multi">git clone https://github.com/huanyu1w1/collie.git
+cd collie
+sh docs/install.sh hub</pre><button class="copy">复制</button></div>
       </div>
     </div>
     <p class="note">macOS、Linux（amd64 / arm64）。服务用 launchd 或 systemd --user；下载会校验 SHA-256。<a href="install.sh">查看脚本</a></p>

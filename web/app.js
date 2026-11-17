@@ -1514,6 +1514,12 @@
     });
     term.open($("#screen"));
     term.onData(typeIntoPane);
+    // The terminal is the input: tap or click it and type. (A drag that
+    // selected text, or scrolled the screen sideways, isn't a tap.)
+    $("#screen").addEventListener("click", () => { if (!term.hasSelection()) term.focus(); });
+    term.textarea?.setAttribute("enterkeyhint", "enter");
+    term.textarea?.addEventListener("focus", () => $("#viewer").classList.add("typing"));
+    term.textarea?.addEventListener("blur", () => $("#viewer").classList.remove("typing"));
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { term.options.theme = termTheme(); });
     addEventListener("collie:theme", () => { term.options.theme = termTheme(); });
   }
@@ -1521,13 +1527,23 @@
     const fg = getComputedStyle(document.documentElement).getPropertyValue("--term-fg").trim();
     return { background: "rgba(0,0,0,0)", foreground: fg, cursor: fg, selectionBackground: "rgba(127,127,127,.3)" };
   }
+  // The pane keeps its own width (herdr can't resize it for us), so a phone
+  // can't fit 120 columns legibly: there it shows the screen at a readable
+  // size and scrolls sideways, or, with 全览, the whole width at once.
+  const narrowScreen = matchMedia("(max-width: 760px)");
   function fitTerm() {
     if (!term || !size.cols) return;
-    const avail = $("#screen").clientWidth - 32;
-    const fs = Math.max(6, Math.min(14, Math.floor((avail / size.cols / 0.602) * 2) / 2));
+    const el = $("#screen"), pad = parseFloat(getComputedStyle(el).paddingLeft) * 2;
+    const fitW = Math.floor(((el.clientWidth - pad) / size.cols / 0.602) * 2) / 2;
+    const overview = store.get("term-overview", false);
+    const fs = narrowScreen.matches && !overview ? Math.min(14, Math.max(fitW, 11)) : Math.max(4.5, Math.min(14, fitW));
     if (term.options.fontSize !== fs) term.options.fontSize = fs;
+    $("#term-fit").textContent = overview ? "放大" : "全览";
+    $("#term-fit").hidden = !narrowScreen.matches || fitW >= 11;
   }
   addEventListener("resize", () => fitTerm());
+  $("#term-fit").addEventListener("click", () => { store.set("term-overview", !store.get("term-overview", false)); fitTerm(); });
+  $("#term-kbd").addEventListener("click", () => term?.focus());
 
   function openStream() {
     const id = current;
@@ -1924,8 +1940,27 @@
     if (data.length === 1 && data.charCodeAt(0) < 27) return sendKeys(["ctrl+" + String.fromCharCode(data.charCodeAt(0) + 96)]);
     sendText(data);
   }
-  const sendKeys = (keys) => current && api(paneURL(current, "keys"), { body: { keys } }).catch((e) => toast(e.message));
-  const sendText = (text) => current && api(paneURL(current, "text"), { body: { text } }).catch((e) => toast(e.message));
+  // Keystrokes go out one request at a time, in order; text typed while one
+  // is on its way rides along in the next.
+  let sendChain = Promise.resolve(), sendTail = null;
+  function sendToPane(kind, body) {
+    if (!current) return;
+    const url = paneURL(current, kind);
+    if (kind === "text" && sendTail && sendTail.url === url && !sendTail.started) {
+      sendTail.body.text += body.text;
+      return sendTail.done;
+    }
+    const op = { url, body, started: false };
+    op.done = sendChain = sendChain.then(() => {
+      op.started = true;
+      if (sendTail === op) sendTail = null;
+      return api(url, { body: op.body });
+    }).catch((e) => toast(e.message));
+    sendTail = kind === "text" ? op : null;
+    return op.done;
+  }
+  const sendKeys = (keys) => sendToPane("keys", { keys });
+  const sendText = (text) => sendToPane("text", { text });
 
   $("#keys").addEventListener("click", (e) => {
     const b = e.target.closest("button");

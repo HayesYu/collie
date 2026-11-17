@@ -885,3 +885,23 @@ select.picked { display: none; }
 .local-app a svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; }
 .local-app a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .local-app .icon-btn svg { width: 14px; height: 14px; }
+
+/* screen mode: the terminal itself takes the typing, so no composer */
+.viewer[data-mode="screen"] ~ .composer { display: none; }
+.viewer[data-mode="screen"] ~ .keys { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.viewer:not([data-mode="screen"]) ~ .keys .screen-only { display: none; }
+.keys .screen-only[hidden] { display: none; }
+.keys #term-kbd svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; vertical-align: middle; }
+.viewer.typing[data-mode="screen"] { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.viewer.typing ~ .keys #term-kbd { color: var(--accent); border-color: var(--accent); }
+.screen { cursor: text; }
+.screen-hint {
+  display: none; position: absolute; right: 14px; bottom: 12px; padding: 4px 10px; border-radius: 999px;
+  font-size: 12px; color: var(--fg-3); background: var(--bg); border: 1px solid var(--line); pointer-events: none;
+}
+.viewer[data-mode="screen"]:not(.typing) > .screen-hint { display: block; }
+@media (max-width: 760px) { .screen { padding: 8px 10px; } }
+/* xterm parks its input at the cursor, which Collie never places (herdr
+   doesn't report it): keep it in the corner so it neither widens the scroll
+   area nor scrolls the screen sideways when the keyboard opens */
+.screen .xterm-helper-textarea { left: 0 !important; top: 0 !important; }

@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/huanyu1w1/collie/web"
+	"github.com/lihuanyu0w0/collie/web"
 )
 
 // version is what `collie version` prints; the main package passes it in.

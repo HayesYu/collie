@@ -24,7 +24,7 @@ Collie 是一个安静的 Web 控制台和 super-agent，用来"放牧"跑在 [h
 Collie 目前从源码安装，每台电脑都一样：需要 Go 1.25+ 和 git。
 
 ```bash
-git clone https://github.com/huanyu1w1/collie.git ~/collie && cd ~/collie
+git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
 ```
 
 [docs/install.sh](docs/install.sh) 用本地源码编译，装到 `~/.local/bin/collie`，并装成后台服务（macOS 用 launchd，Linux 用 `systemd --user`）。以后 `git pull` 再跑一次同样的命令就是升级。

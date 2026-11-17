@@ -1435,7 +1435,7 @@
     const phoneURL = pb ? `${devAddr}/?pair=${pb.code}` : "";
     const pm = fresh("machine") ? pairing.machine : null;
     const nodeCmd = pm ? `collie node --hub ${devAddr} --code ${pm.code}` : "";
-    const installCmd = pm ? `git clone -q https://github.com/huanyu1w1/collie.git ~/collie; cd ~/collie && git pull -q && sh docs/install.sh node --hub ${devAddr} --code ${pm.code}` : "";
+    const installCmd = pm ? `git clone -q https://github.com/lihuanyu0w0/collie.git ~/collie; cd ~/collie && git pull -q && sh docs/install.sh node --hub ${devAddr} --code ${pm.code}` : "";
     const machines = r.devices.filter((d) => d.kind === "machine");
     const browsers = r.devices.filter((d) => d.kind !== "machine");
     const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";

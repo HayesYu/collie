@@ -1,7 +1,7 @@
 #!/bin/sh
 # Collie installer. Run it inside a clone of the repository (needs Go 1.25+):
 #
-#   git clone https://github.com/huanyu1w1/collie.git ~/collie && cd ~/collie
+#   git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
 #   sh docs/install.sh                                     只装 collie 命令
 #   sh docs/install.sh hub [--url http://<本机内网 IP>:7788]  做 hub，并作为后台服务常驻
 #   sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>
@@ -14,7 +14,7 @@
 # COLLIE_VERSION（下载时的版本，默认 latest）。
 set -eu
 
-REPO=huanyu1w1/collie
+REPO=lihuanyu0w0/collie
 VERSION=${COLLIE_VERSION:-latest}
 BIN_DIR=${COLLIE_BIN_DIR:-$HOME/.local/bin}
 BIN=$BIN_DIR/collie
@@ -56,7 +56,7 @@ sha256() {
 checkout() {
   case "$0" in *install.sh) ;; *) return 1 ;; esac
   d=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd) || return 1
-  grep -q '^module github.com/huanyu1w1/collie$' "$d/go.mod" 2>/dev/null || return 1
+  grep -q '^module github.com/lihuanyu0w0/collie$' "$d/go.mod" 2>/dev/null || return 1
   printf '%s\n' "$d"
 }
 

@@ -1,4 +1,4 @@
-module github.com/huanyu1w1/collie
+module github.com/lihuanyu0w0/collie
 
 go 1.25.0
 

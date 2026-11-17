@@ -917,3 +917,8 @@ select.picked { display: none; }
 /* sidebar: Collie's agents among yours */
 .item .name .by-collie { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; font: 500 10.5px/16px var(--sans, inherit); color: var(--fg-3); vertical-align: 1px; white-space: nowrap; }
 .list .empty-hint { list-style: none; padding: 4px 0; }
+
+/* scrollbars: thin and quiet; the sidebar's shows only while you're on it */
+* { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.side-scroll { scrollbar-color: transparent transparent; transition: scrollbar-color .2s; }
+.side-scroll:hover, .side-scroll:focus-within { scrollbar-color: var(--line-2) transparent; }

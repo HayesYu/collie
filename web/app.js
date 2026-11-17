@@ -1152,11 +1152,12 @@
   function renderSessions() {
     const many = (state.machines || []).length > 1;
     const extRow = (e) => {
-      const where = [e.app || KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
+      const open = e.live && e.status === "idle";
+      const where = [e.app || KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
       const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "正在运行")}"></span>` : "";
       return `<li><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
+        <span class="body"><div class="name">${esc(extName(e))}${open ? `<span class="by-collie" title="会话还开着，但现在没在干活">后台开着</span>` : ""}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
     };
     const histRow = (h) => {
       const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
@@ -1165,20 +1166,23 @@
         <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a></li>`;
     };
 
-    // 进行中: needs-you rows are already above.
+    // 进行中: needs-you rows are already above. Another app's session that is
+    // only open (kept alive in the background, nothing running) stays here,
+    // marked, below the busy ones.
+    const going = (e) => e.live;
     const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked")
       .map((a) => ({ rank: RANK[a.status] ?? 3, html: itemHTML(a) }));
-    const liveExt = ext.filter((e) => e.live).map((e) => ({ rank: RANK[e.status] ?? 3, html: extRow(e) }));
+    const liveExt = ext.filter(going).map((e) => ({ rank: RANK[e.status] ?? 3, html: extRow(e) }));
     const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
     const busy = live.filter((x) => x.rank <= 1).length;
     $("#live-count").textContent = busy ? `${busy} 个在跑` : live.length || "";
     $("#live-list").innerHTML = live.map((x) => x.html).join("")
       || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`;
 
-    // 最近: newest first; Collie's own workers are reached from its conversation.
-    const collieRan = (name) => sup.workers.some((w) => w.name === name);
+    // 最近: newest first; Collie's own sessions are reached from its conversation.
+    const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
     const recent = [
-      ...ext.filter((e) => !e.live).map((e) => ({ id: e.id, t: new Date(e.updated || e.started), html: extRow(e) })),
+      ...ext.filter((e) => !going(e)).map((e) => ({ id: e.id, t: new Date(e.updated || e.started), html: extRow(e) })),
       ...hist.filter((h) => !collieRan(h.name)).map((h) => ({ id: "h:" + h.id, t: new Date(h.ended), html: histRow(h) })),
     ].sort((x, y) => y.t - x.t);
     let shown = extAll ? recent : recent.slice(0, RECENT_N);

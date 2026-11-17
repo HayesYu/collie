@@ -3,9 +3,11 @@ package collie
 import (
 	"bufio"
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -64,6 +66,9 @@ func contextUsage(path, format string, claudeWindow int) ctxUsage {
 }
 
 func readUsage(path, format string, size int64) ctxUsage {
+	if format == "agy" {
+		return agyUsage(path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ctxUsage{}
@@ -126,4 +131,123 @@ func readUsage(path, format string, size int64) ctxUsage {
 		}
 	}
 	return last
+}
+
+// agyUsage: Antigravity keeps no usage in its transcript; its conversation
+// database does. Each model call's metadata (protobuf) carries a context
+// meter at field 1.9.10: 1 = tokens in the window now, 4 = the window.
+// path is <home>/brain/<id>/.system_generated/logs/transcript.jsonl.
+func agyUsage(path string) ctxUsage {
+	logs := filepath.Dir(path)
+	id := filepath.Base(filepath.Dir(filepath.Dir(logs)))
+	home := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(logs))))
+	db := filepath.Join(home, "conversations", id+".db")
+	if !isFile(db) {
+		return ctxUsage{}
+	}
+	conn, err := sql.Open("sqlite", "file:"+db+"?mode=ro&_pragma=busy_timeout(2000)")
+	if err != nil {
+		return ctxUsage{}
+	}
+	defer conn.Close()
+	rows, err := conn.Query(`SELECT data FROM gen_metadata ORDER BY idx DESC LIMIT 8`)
+	if err != nil {
+		return ctxUsage{}
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b []byte
+		if rows.Scan(&b) != nil {
+			continue
+		}
+		if u, ok := agyMeter(b); ok {
+			return u
+		}
+	}
+	return ctxUsage{}
+}
+
+func agyMeter(b []byte) (ctxUsage, bool) {
+	for _, f1 := range pbBytes(b, 1) {
+		for _, f9 := range pbBytes(f1, 9) {
+			for _, m := range pbBytes(f9, 10) {
+				used, window := pbVarint(m, 1), pbVarint(m, 4)
+				if used > 0 && window > 0 {
+					return ctxUsage{Used: used, Window: window}, true
+				}
+			}
+		}
+	}
+	return ctxUsage{}, false
+}
+
+// pbFields walks one protobuf message, calling fn for each field; it stops
+// at anything malformed.
+func pbFields(b []byte, fn func(num, wire int, v uint64, sub []byte)) {
+	uv := func() (uint64, bool) {
+		var v uint64
+		for s := 0; s < 64; s += 7 {
+			if len(b) == 0 {
+				return 0, false
+			}
+			x := b[0]
+			b = b[1:]
+			v |= uint64(x&0x7f) << s
+			if x < 0x80 {
+				return v, true
+			}
+		}
+		return 0, false
+	}
+	for len(b) > 0 {
+		key, ok := uv()
+		if !ok {
+			return
+		}
+		num, wire := int(key>>3), int(key&7)
+		switch wire {
+		case 0:
+			v, ok := uv()
+			if !ok {
+				return
+			}
+			fn(num, wire, v, nil)
+		case 1, 5:
+			n := 8
+			if wire == 5 {
+				n = 4
+			}
+			if len(b) < n {
+				return
+			}
+			b = b[n:]
+		case 2:
+			l, ok := uv()
+			if !ok || uint64(len(b)) < l {
+				return
+			}
+			fn(num, wire, 0, b[:l])
+			b = b[l:]
+		default:
+			return
+		}
+	}
+}
+
+func pbBytes(b []byte, num int) (out [][]byte) {
+	pbFields(b, func(n, w int, _ uint64, sub []byte) {
+		if n == num && w == 2 {
+			out = append(out, sub)
+		}
+	})
+	return
+}
+
+func pbVarint(b []byte, num int) (v int) {
+	pbFields(b, func(n, w int, x uint64, _ []byte) {
+		if n == num && w == 0 {
+			v = int(x)
+		}
+	})
+	return
 }

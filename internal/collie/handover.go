@@ -91,8 +91,8 @@ func (sp *Super) checkHandover(ctx context.Context, live map[string]liveAgent, q
 		kind = "agy"
 	}
 	var u ctxUsage
-	if a.Session != "" {
-		if path, format := sp.s.findTranscript(kind, "id", a.Session, "", ""); path != "" {
+	if a.Session != "" || kind == "agy" {
+		if path, format := sp.s.findTranscript(kind, "id", a.Session, a.Pane, sp.routerDir()); path != "" {
 			u = contextUsage(path, format, window)
 		}
 	}

@@ -1,14 +1,18 @@
 #!/bin/sh
-# Collie installer. Run it inside a clone of the repository (needs Go 1.25+):
+# Collie installer — https://lihuanyu0w0.github.io/collie
 #
-#   git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
-#   sh docs/install.sh                                     只装 collie 命令
-#   sh docs/install.sh hub [--url http://<本机内网 IP>:7788]  做 hub，并作为后台服务常驻
-#   sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>
-#                                                          把这台电脑加入 hub，并作为后台服务常驻
+#   安装 collie 命令：
+#     curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh
 #
-# 服务：macOS 用 launchd，Linux 用 systemd --user。升级：git pull 后重跑。
-# 不在仓库里运行时（例如 curl | sh），改为下载 GitHub release 里的二进制。
+#   把这台电脑加入 hub，并作为后台服务常驻（macOS: launchd，Linux: systemd --user）：
+#     curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://<hub>:7788 --code <配对码>
+#
+#   让这台电脑做 hub，并作为后台服务常驻：
+#     curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub [--url http://<本机内网 IP>:7788]
+#
+#   从源码安装（需要 Go 1.25+）：在仓库里运行这个脚本，会用本地源码编译，不下载：
+#     git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
+#     sh docs/install.sh [hub | node …]
 #
 # 环境变量：COLLIE_BIN_DIR（默认 ~/.local/bin）、COLLIE_BINARY（直接安装这个现成的文件）、
 # COLLIE_VERSION（下载时的版本，默认 latest）。
@@ -231,7 +235,7 @@ case "$mode" in
         "$BIN" node --pair-only "$@"
         ;;
       *)
-        [ -f "$HOME/.collie/node.json" ] || die "第一次要带上 hub 地址和配对码：node --hub http://<hub>:7788 --code <配对码>
+        [ -f "$HOME/.collie/node.json" ] || die "第一次要带上 hub 地址和配对码：sh -s -- node --hub http://<hub>:7788 --code <配对码>
     配对码在 hub 的「设备 → 连接一台电脑」里拿。"
         ;;
     esac

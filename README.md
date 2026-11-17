@@ -2,7 +2,8 @@
 
 <h1 align="center">Collie</h1>
 
-<p align="center">在手机上放牧你的编程 agent</p>
+<p align="center">在手机上放牧你的编程 agent<br>
+<a href="https://lihuanyu0w0.github.io/collie">主页</a> · <a href="#安装">安装</a> · <a href="https://github.com/lihuanyu0w0/collie/releases">下载</a></p>
 
 Collie 是一个安静的 Web 控制台和 super-agent，用来"放牧"跑在 [herdr](https://herdr.dev) 里的编程 agent（Claude Code、Codex、Antigravity）。手机、平板、桌面浏览器都能用：看对话、发消息、处理确认框，需要你的时候叫你一声。
 
@@ -21,18 +22,12 @@ Collie 是一个安静的 Web 控制台和 super-agent，用来"放牧"跑在 [h
 
 每台电脑上都要先有 herdr 服务端在跑，并装好 agent 集成（`herdr integration install claude`、`codex`、`antigravity-cli`）。没装集成时，herdr 认不出 agent 在干什么，Collie 也就没法给它发消息。
 
-Collie 目前从源码安装，每台电脑都一样：需要 Go 1.25+ 和 git。
-
-```bash
-git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
-```
-
-[docs/install.sh](docs/install.sh) 用本地源码编译，装到 `~/.local/bin/collie`，并装成后台服务（macOS 用 launchd，Linux 用 `systemd --user`）。以后 `git pull` 再跑一次同样的命令就是升级。
+安装脚本下载对应平台的二进制（校验 SHA-256），装到 `~/.local/bin/collie`，并装成后台服务（macOS 用 launchd，Linux 用 `systemd --user`）。以后重跑同一条命令就是升级。
 
 **1. 开发机：起 hub**
 
 ```bash
-sh docs/install.sh hub
+curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub
 ```
 
 启动时打印本机内网地址和手机配对二维码；地址认不准时加 `--url http://<开发机 IP>:7788`。日志：`journalctl --user -u collie-hub -f`。要在退出登录后继续跑，运行一次 `loginctl enable-linger`。
@@ -43,13 +38,13 @@ sh docs/install.sh hub
 
 **3. 其他电脑：加入**
 
-在 hub 的「设备 → 连接一台电脑」里拿配对码（或在 hub 上运行 `collie pair --computer`），然后在那台电脑上 clone 仓库并运行：
+在 hub 的「设备 → 连接一台电脑」里拿配对码（或在 hub 上运行 `collie pair --computer`），然后在那台电脑上：
 
 ```bash
-sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>
+curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://<hub>:7788 --code <配对码>
 ```
 
-它会配对、把 hub 地址和令牌存进 `~/.collie/node.json`，再装成后台服务。升级时 `git pull` 后运行 `sh docs/install.sh node`。
+它会配对、把 hub 地址和令牌存进 `~/.collie/node.json`，再装成后台服务。之后重跑不带参数的 `… | sh -s -- node` 就是升级。
 
 **4. 在 Mac 上装成 app（可选）**
 
@@ -62,7 +57,17 @@ sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>
 
 > 内网里是明文 HTTP。跨网络使用请放在 VPN / Tailscale 或 HTTPS 反向代理后面（这时用 `--url https://…` 让二维码指向它）。
 
-只装命令、不装服务：`sh docs/install.sh`；换安装目录：`COLLIE_BIN_DIR=…`。
+**从源码安装**（需要 Go 1.25+ 和 git）：clone 下来在仓库里运行同一个脚本，它用本地源码编译、不下载，参数和上面一样：
+
+```bash
+git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
+sh docs/install.sh hub                                          # 做 hub
+sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>   # 加入电脑
+```
+
+以后 `git pull` 再跑一次就是升级。
+
+只想装命令、不装服务：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh`。指定版本或目录：`COLLIE_VERSION=v0.2.0`、`COLLIE_BIN_DIR=…`。脚本在 [docs/install.sh](docs/install.sh)。
 
 ## 两种用法
 

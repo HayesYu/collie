@@ -474,7 +474,7 @@
           const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
           const busy = w && !w.ended && (w.status === "working" || w.status === "starting");
           const stuck = w && !w.ended && w.status === "blocked";
-          const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : stuck ? "blocked" : "idle") : e.tone === "error" ? "failed" : "idle";
+          const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
           // A spawn line carries its worker's state, in place of a line per change.
           const state = w ? (w.ended ? "已结束" : busy ? "还在跑" : stuck ? "等你确认" : "") : "";
           html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span>${state ? `<span class="wstate">${state}</span>` : ""}</${tag.split(" ")[0]}>`;
@@ -709,7 +709,7 @@
     const legacy = by((f) => f.legacy);
     return `<p class="panel-intro">Collie 的长期记忆在 <code>${esc(r.dir)}/memory</code>，按用途分开：每次新会话只先读<b>指令、笔记索引、进行中的任务和最近说过的话</b>，其余需要时再看。
       「做梦」时，Collie 回顾最近的会话来整理记忆：替换过时的条目，发现只有跨多次对话才看得出的习惯（标记为 inferred）。</p>
-      <div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "idle"}"></span><span class="grow">${dream}</span>
+      <div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
         <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
         <div class="mem-dream mem-load"><span class="grow">每次新会话先读：<b class="${over ? "warn" : ""}">${kb(r.loaded)}</b> / 建议 ${kb(r.budget)} 以内${over ? "（偏大，做梦时会精简）" : ""}</span></div></div>
       ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
@@ -1146,7 +1146,7 @@
   // Which computer something is on is a detail on its row.
   const RECENT_N = 8;
   let extAll = store.get("extAll", false);
-  const EXT_STATE = { working: "在干活", idle: "后台开着，没在干活", blocked: "等电脑那边确认" };
+  const EXT_STATE = { working: "在干活", idle: "开着，在等你", blocked: "等电脑那边确认" };
   const RANK = { working: 0, starting: 1, blocked: 2, unknown: 3, idle: 4, done: 4 };
   function renderExt() { renderSessions(); }
   function renderSessions() {
@@ -1478,7 +1478,7 @@
 
       <div class="card"><div class="card-h">手机和浏览器</div><ul class="rows">
         ${browsers.length ? browsers.map((d) => `<li class="row dev-row">
-          <span class="dot idle"></span>
+          <span class="dot unknown"></span>
           <div><div class="meta"><b>${esc(d.name)}</b>${d.current ? '<span class="tag">当前</span>' : ""}<span>最近 ${when(d.last_seen)}</span></div></div>
           <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")
         : `<li class="empty-row">还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。</li>`}

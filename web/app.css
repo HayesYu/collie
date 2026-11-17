@@ -192,7 +192,7 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 
 /* ─── status dots ─── */
 .dot { position: relative; width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
-.dot.idle, .dot.unknown, .dot.shell, .dot.asleep, .dot.starting, .dot.gone { box-shadow: inset 0 0 0 1.5px var(--fg-3); }
+.dot.unknown, .dot.shell, .dot.asleep, .dot.starting, .dot.gone { box-shadow: inset 0 0 0 1.5px var(--fg-3); }
 .dot.done { background: var(--fg); }
 .dot.failed { background: var(--fg-3); }
 .dot.working, .dot.starting { box-shadow: inset 0 0 0 1.5px var(--fg); }
@@ -202,6 +202,12 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 }
 .dot.blocked { background: var(--attn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--attn) 22%, transparent); }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* How much a dot moves says how alive it is: spinning = busy, breathing =
+   open and waiting (an agent at its prompt, an app session kept in the
+   background), still ring = not running. Amber is the only colour: you. */
+.dot.idle { background: var(--fg-3); animation: rest 3.2s ease-in-out infinite; }
+@keyframes rest { 0%, 100% { opacity: .3; } 50% { opacity: .9; } }
+@media (prefers-reduced-motion: reduce) { .dot.idle { animation: none; opacity: .6; } }
 .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); white-space: nowrap; flex: none; }
 .status.blocked { color: var(--attn); font-weight: 500; }
 

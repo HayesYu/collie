@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,25 @@ func TestTrustDialogFor(t *testing.T) {
 	hooks := "Hooks need review\n 4 hooks are new or changed.\n Hooks can run outside the sandbox after you trust them.\n› 1. Review hooks\n  2. Trust all and continue"
 	if trustDialogFor(hooks, "/home/u/agent-workspace", "~/agent-workspace") {
 		t.Error("hooks review taken as a folder trust dialog")
+	}
+}
+
+func TestPickChoice(t *testing.T) {
+	a := Approval{Choices: []Choice{
+		{Label: "GPT-6.1-Sol (current)   Latest workhorse model", Text: "1"},
+		{Label: "GPT-6-Astra   Frontier intelligence", Text: "2"},
+		{Label: "GPT-6.1 Terra   GPT-6.1 Terra Codex model.", Text: "3"},
+	}}
+	for want, label := range map[string]string{"2": "GPT-6-Astra", "terra": "GPT-6.1 Terra", "6.1-sol": "GPT-6.1-Sol"} {
+		if c, ok := pickChoice(a, want); !ok || !strings.HasPrefix(c.Label, label) {
+			t.Errorf("pickChoice(%q) = %q %v", want, c.Label, ok)
+		}
+	}
+	if _, ok := pickChoice(a, "gpt"); ok {
+		t.Error("an ambiguous label picked a choice")
+	}
+	cursor := Approval{Choices: []Choice{{Label: "Review hooks", Keys: []string{"enter"}}, {Label: "Trust all and continue", Keys: []string{"down", "enter"}}}}
+	if c, ok := pickChoice(cursor, "2"); !ok || c.Label != "Trust all and continue" {
+		t.Errorf("by position: %q %v", c.Label, ok)
 	}
 }

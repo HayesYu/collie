@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,6 +28,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/report", s.superReport)
 	api("POST /api/super/subscribe", s.superSubscribe)
 	api("POST /api/super/stop", s.superStop)
+	api("POST /api/super/answer", s.superAnswer)
 	api("GET /api/super/show/{id}", s.superShow)
 	api("GET /api/super/list", s.superList)
 	api("GET /api/super/triggers", s.superTriggers)
@@ -799,3 +801,56 @@ func (s *Server) machineByName(n string) string {
 
 // modelNameRe: model ids and effort names go onto a command line as one argument.
 var modelNameRe = regexp.MustCompile(`^[A-Za-z0-9._:/@\[\]-]{0,120}$`)
+
+// superAnswer: the router answers a dialog a worker is stuck on, by choice
+// number, label words or "esc". The human sees what it picked.
+func (s *Server) superAnswer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Worker string `json:"worker"`
+		Choice string `json:"choice"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	sp := s.sup
+	sp.mu.Lock()
+	wk := sp.st.Workers[body.Worker]
+	sp.mu.Unlock()
+	if wk == nil || wk.Ended || wk.PaneID == "" {
+		writeJSON(w, 404, map[string]any{"error": "no running worker " + body.Worker})
+		return
+	}
+	rr, err := s.herdr.Read(r.Context(), wk.PaneID, "detection", "text", 0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if !screenAsks(rr.Text) {
+		writeJSON(w, 409, map[string]any{"error": body.Worker + " isn't showing a dialog now"})
+		return
+	}
+	a := parseApproval(rr.Text)
+	label := "Esc"
+	if strings.EqualFold(strings.TrimSpace(body.Choice), "esc") {
+		err = s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": wk.PaneID, "keys": []string{"esc"}}, nil)
+	} else {
+		c, ok := pickChoice(a, body.Choice)
+		if !ok {
+			var list []string
+			for i, c := range a.Choices {
+				list = append(list, fmt.Sprintf("%d. %s", i+1, c.Label))
+			}
+			writeJSON(w, 400, map[string]any{"error": "no single choice matches " + strconv.Quote(body.Choice), "choices": list})
+			return
+		}
+		label, err = strings.Join(strings.Fields(c.Label), " "), sp.choose(r.Context(), wk.PaneID, c)
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	sp.mu.Lock()
+	sp.addEntryLocked("event", wk.Thread, "替 "+wk.Name+" 选了："+clip(label, 80), wk.Name, "info")
+	sp.mu.Unlock()
+	writeJSON(w, 200, map[string]any{"ok": true, "picked": label})
+}

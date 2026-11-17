@@ -18,7 +18,7 @@ import (
 
 var cliCommands = map[string]func([]string) error{
 	"reply": cliReply, "spawn": cliSpawn, "send": cliSend, "report": cliReport,
-	"subscribe": cliSubscribe, "stop": cliStop, "show": cliShow, "list": cliList,
+	"subscribe": cliSubscribe, "stop": cliStop, "answer": cliAnswer, "show": cliShow, "list": cliList,
 	"timer": cliTimer, "say": cliSay, "hook": cliHook, "pair": cliPair,
 }
 
@@ -281,6 +281,17 @@ func cliStop(args []string) error {
 	return err
 }
 
+func cliAnswer(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: collie answer <worker> <choice number | label words | esc>")
+	}
+	b, err := cliCall("POST", "/api/super/answer", map[string]any{"worker": args[0], "choice": strings.Join(args[1:], " ")})
+	if err == nil {
+		printResult(b)
+	}
+	return err
+}
+
 func cliShow(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: collie show <trigger-id | thread | worker>")
@@ -415,7 +426,9 @@ only ever talks to you. You keep the big picture; workers do the work.
   Write a complete, self-contained brief: goal, context, constraints, what "done" means.
   What runs is set by the human in settings ({{WKIND}}): leave out --kind/--model/--effort. Pass one
   only when the human's message names it ("用 Codex", "opus"); otherwise Collie ignores it.
-- ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker (queued until it is free).
+- ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker; it gets the message now, even mid-task.
+- ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's
+  number (as listed in the BLOCKED event), words of its label, or ` + "`esc`" + `.
 - ` + "`{{BIN}} subscribe WORKER THREAD`" + ` — route a thread's future events straight to that worker
   (e.g. its GitHub PR thread). chat:main always stays with you.
 - ` + "`{{BIN}} stop WORKER`" + ` — stop a worker and close its terminal.
@@ -433,8 +446,15 @@ only ever talks to you. You keep the big picture; workers do the work.
 - Worker events: "finished a turn", "report from …", "BLOCKED …", "exited". When a
   worker finishes, check the result (show / read), then tell the human the outcome
   in one or two sentences, or dispatch the next step.
-- A BLOCKED worker is waiting on a terminal approval the human answers in Collie's UI.
-  Tell the human only if it matters; don't nag.
+- A BLOCKED worker is stuck on a dialog. **Decide it yourself when the answer follows
+  from what the human asked or is routine**: the model or option they named ("6.1sol" is
+  "GPT-6.1-Sol"), continuing a task they gave, trusting the folder a worker was started
+  in, Codex's "hooks need review" (they are the human's own hooks in ~/.codex/hooks.json:
+  trust them when the human's settings bypass permissions). Answer with ` + "`answer`" + `,
+  then tell the human in one line what you picked. Ask the human only when it is theirs
+  to decide: spending money, deleting or overwriting data, sending or publishing
+  something, granting access beyond their settings, or when you can't tell what they
+  want. Then say what the choices are; they can answer in chat or on the card.
 - Long texts are spilled: run ` + "`show`" + ` on the id when you need the full content.
 
 ## Style

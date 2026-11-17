@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -511,7 +512,7 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 	defer sp.mu.Unlock()
 	if blocked {
 		sp.ingestLocked("worker", w.Thread, w.Name,
-			fmt.Sprintf("worker %s is BLOCKED waiting for a human approval/answer in its terminal. The human sees it in Collie's attention list. Screen:\n%s", w.Name, summary), "", "", w.Name)
+			fmt.Sprintf("worker %s is BLOCKED on a dialog in its terminal (the human also sees it as a card in chat). Screen:\n%s%s\nIf the answer follows from what the human asked, or is routine, answer it yourself: `collie answer %s <choice>`. Leave it to the human only when it is theirs to decide (see ROUTER.md).", w.Name, summary, sp.choicesText(ctx, w.PaneID), w.Name), "", "", w.Name)
 		sp.addEntryLocked("event", w.Thread, w.Name+" 等你确认", w.Name, "blocked")
 		return
 	}
@@ -765,6 +766,21 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		sp.Ingest("system", thread, routerName, workerBrief(bin, w), "", name, name)
 	}()
 	return w, nil
+}
+
+// choicesText lists a dialog's choices for the router, numbered as `collie
+// answer` takes them.
+func (sp *Super) choicesText(ctx context.Context, pane string) string {
+	rr, err := sp.s.herdr.Read(ctx, pane, "detection", "text", 0)
+	if err != nil || !screenAsks(rr.Text) {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nChoices:")
+	for i, c := range parseApproval(rr.Text).Choices {
+		fmt.Fprintf(&b, "\n  %d. %s", i+1, c.Label)
+	}
+	return b.String()
 }
 
 func firstLine(s string) string {
@@ -1021,21 +1037,48 @@ func (sp *Super) answerTrust(ctx context.Context, pane, dir string) bool {
 	}
 	for _, c := range parseApproval(rr.Text).Choices {
 		l := strings.ToLower(c.Label)
-		if !strings.HasPrefix(l, "yes") || !strings.Contains(l, "trust") {
-			continue
+		if strings.HasPrefix(l, "yes") && strings.Contains(l, "trust") {
+			return sp.choose(ctx, pane, c) == nil
 		}
-		if c.Text != "" {
-			err = sp.s.herdr.Call(ctx, "pane.send_text", map[string]any{"pane_id": pane, "text": c.Text}, nil)
-		} else {
-			keys := c.Keys
-			if len(keys) == 0 {
-				keys = []string{"enter"}
-			}
-			err = sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": keys}, nil)
-		}
-		return err == nil
 	}
 	return false
+}
+
+// choose answers a dialog in pane with one of its choices: its digit for a
+// numbered menu, or the keys that move the cursor there and confirm.
+func (sp *Super) choose(ctx context.Context, pane string, c Choice) error {
+	if c.Text != "" {
+		return sp.s.herdr.Call(ctx, "pane.send_text", map[string]any{"pane_id": pane, "text": c.Text}, nil)
+	}
+	keys := c.Keys
+	if len(keys) == 0 {
+		keys = []string{"enter"}
+	}
+	return sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": keys}, nil)
+}
+
+// pickChoice finds the choice the router named: its number as shown ("3"),
+// its position, or words of its label.
+func pickChoice(a Approval, want string) (Choice, bool) {
+	want = strings.TrimSpace(want)
+	for _, c := range a.Choices {
+		if c.Text != "" && c.Text == want {
+			return c, true
+		}
+	}
+	if n, err := strconv.Atoi(want); err == nil && n >= 1 && n <= len(a.Choices) {
+		return a.Choices[n-1], true
+	}
+	var hit []Choice
+	for _, c := range a.Choices {
+		if want != "" && strings.Contains(strings.ToLower(c.Label), strings.ToLower(want)) {
+			hit = append(hit, c)
+		}
+	}
+	if len(hit) == 1 {
+		return hit[0], true
+	}
+	return Choice{}, false
 }
 
 // trustDialogFor: the screen asks whether to trust a folder, and names dir

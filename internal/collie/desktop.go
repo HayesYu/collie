@@ -357,6 +357,8 @@ func (s *Server) codexAppRows() []desktopRow {
 
 // codexTurnRunning: the rollout's last turn has started and not ended. A turn
 // silent for 20 minutes is taken as over (the App may have died mid-turn).
+// A long turn's start can sit megabytes back, so read backwards a chunk at a
+// time until a start or an end turns up.
 func codexTurnRunning(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -367,17 +369,27 @@ func codexTurnRunning(path string) bool {
 	if err != nil || time.Since(fi.ModTime()) > 20*time.Minute {
 		return false
 	}
-	off := fi.Size() - 512<<10
-	if off < 0 {
-		off = 0
+	return lastTurnOpen(f, fi.Size())
+}
+
+func lastTurnOpen(r io.ReaderAt, size int64) bool {
+	const chunk, overlap = 512 << 10, 64
+	for end := size; end > 0; end -= chunk - overlap {
+		off := max(end-chunk, 0)
+		b := make([]byte, end-off)
+		if _, err := r.ReadAt(b, off); err != nil && err != io.EOF {
+			return false
+		}
+		started := bytes.LastIndex(b, []byte(`"type":"task_started"`))
+		ended := max(bytes.LastIndex(b, []byte(`"type":"task_complete"`)), bytes.LastIndex(b, []byte(`"type":"turn_aborted"`)))
+		if started >= 0 || ended >= 0 {
+			return started > ended
+		}
+		if off == 0 {
+			break
+		}
 	}
-	b := make([]byte, fi.Size()-off)
-	if _, err := f.ReadAt(b, off); err != nil && err != io.EOF {
-		return false
-	}
-	started := bytes.LastIndex(b, []byte(`"type":"task_started"`))
-	ended := max(bytes.LastIndex(b, []byte(`"type":"task_complete"`)), bytes.LastIndex(b, []byte(`"type":"turn_aborted"`)))
-	return started >= 0 && started > ended
+	return false
 }
 
 // The Codex App's local message bus: its windows ask each other to run a turn
@@ -604,14 +616,11 @@ func (s *Server) codexDaemonHas(thread string) bool {
 }
 
 // codexClient names what started a "vscode" thread: the Codex App, or another
-// program driving Codex's app-server (Persona's scheduled runs say
-// originator "persona").
+// program driving Codex's app-server.
 func codexClient(originator, cwd string) string {
-	// The Mac's shared Codex service was started by Persona and stamps every
-	// thread it runs "persona": its own runs are the ones in its folder.
-	if strings.Contains(cwd, "/.persona/") {
-		return "Persona（Codex）"
-	}
+	// The Mac's shared Codex service stamps every thread it runs with the
+	// program that started the service, so "persona" says nothing about who
+	// asked: these are the App's.
 	if originator == "persona" {
 		originator = ""
 	}

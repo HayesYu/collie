@@ -323,8 +323,37 @@ func (t *transcript) claudeLine(line []byte) bool {
 			Name string `json:"name"`
 			Body string `json:"body"`
 		} `json:"origin"`
+		Attachment *struct {
+			Type   string          `json:"type"`
+			Prompt json.RawMessage `json:"prompt"`
+			Origin *struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"origin"`
+		} `json:"attachment"`
 	}
-	if json.Unmarshal(line, &e) != nil || e.Sidechain || len(e.Message.Content) == 0 {
+	if json.Unmarshal(line, &e) != nil || e.Sidechain {
+		return false
+	}
+	// What the human typed while the agent was busy is logged as a queued
+	// command once the agent takes it, not as a user line.
+	if a := e.Attachment; e.Type == "attachment" && a != nil && a.Type == "queued_command" {
+		kind := ""
+		if a.Origin != nil {
+			kind = a.Origin.Kind
+		}
+		text := promptText(a.Prompt)
+		if body, ok := collieBody(text); ok {
+			text, kind = body, "human"
+		}
+		if kind != "human" || strings.TrimSpace(text) == "" || noise(text) {
+			return false
+		}
+		t.add(&Message{Kind: "user", Text: strings.TrimSpace(text)})
+		t.lastID = ""
+		return true
+	}
+	if len(e.Message.Content) == 0 {
 		return false
 	}
 	if e.IsMeta {
@@ -1091,4 +1120,29 @@ func askOf(name string, raw json.RawMessage) *Message {
 		return m
 	}
 	return nil
+}
+
+// promptText reads a queued prompt: a string, or blocks of text and images.
+func promptText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	json.Unmarshal(raw, &blocks)
+	var out []string
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if !noise(b.Text) {
+				out = append(out, b.Text)
+			}
+		case "image":
+			out = append(out, "[image]")
+		}
+	}
+	return strings.Join(out, "\n")
 }

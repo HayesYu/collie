@@ -1091,8 +1091,8 @@
   }
   async function openHist(hid) {
     const el = $("#x-thread");
-    el.innerHTML = `<div class="thread-empty">读取中…</div>`; el._sig = ""; el._fresh = true; el._blocks = null;
     resetEarlier(el, null); el._msgs = null;
+    primeThread(el, "h:" + hid);
     if (!hist.some((h) => h.id === hid)) await loadHistory();
     renderHistHead(hid);
     const h = hist.find((x) => x.id === hid);
@@ -1104,6 +1104,7 @@
       if (view === "ext" && extCur === "h:" + hid) {
         resetEarlier(el, (c) => `/api/transcript?${q}&before=${c}`);
         el._msgs = r.messages || []; el._liveEarlier = r.earlier || 0;
+        keepThread("h:" + hid, el._msgs);
         el._redraw = () => { if (view === "ext" && extCur === "h:" + hid) drawThread(threadMsgs(el), el, "这个会话没有消息。"); };
         el._redraw();
       }
@@ -1286,8 +1287,8 @@
     extCur = id;
     if (id.startsWith("h:")) return openHist(id.slice(2));
     const el = $("#x-thread");
-    el.innerHTML = `<div class="thread-empty">读取中…</div>`; el._sig = ""; el._fresh = true;
-    el._msgs = null; el._blocks = null;
+    el._msgs = null;
+    primeThread(el, "x:" + id);
     resetEarlier(el, (c) => `/api/external/${encodeURIComponent(id)}/earlier?before=${c}`);
     extSoonN = 0;
     if (!ext.some((e) => e.id === id)) await loadExternal();
@@ -1303,7 +1304,7 @@
         if (!ext.some((e) => e.id === id)) loadExternal();
         if (mine() && !JSON.parse(ev.data).structured) el.innerHTML = `<div class="thread-empty">还没有找到这个会话的记录。</div>`;
       });
-      const show = (msgs) => { if (mine()) { drawThread(msgs, el, "这个会话还没有消息。"); extWorking(); } };
+      const show = (msgs) => { keepThread("x:" + id, msgs); if (mine()) { drawThread(msgs, el, "这个会话还没有消息。"); extWorking(); } };
       el._redraw = () => show(threadMsgs(el));
       es.addEventListener("patch", (ev) => mine() && show(applyPatch(el, JSON.parse(ev.data))));
       es.addEventListener("messages", (ev) => { el._msgs = null; el._older = null; show(JSON.parse(ev.data)); }); // an older computer
@@ -1653,7 +1654,9 @@
     const th = $("#thread");
     resetEarlier(th, (c) => paneURL(id, "earlier") + "?before=" + c);
     th._redraw = () => alive() && drawThread(threadMsgs(th));
-    stream.addEventListener("patch", (e) => alive() && drawThread(applyPatch(th, JSON.parse(e.data))));
+    if (!th._msgs) primeThread(th, "p:" + id);
+    const showPane = (msgs) => { keepThread("p:" + id, msgs); drawThread(msgs); };
+    stream.addEventListener("patch", (e) => alive() && showPane(applyPatch(th, JSON.parse(e.data))));
     stream.addEventListener("messages", (e) => alive() && drawThread(JSON.parse(e.data))); // an older computer
     stream.addEventListener("log", (e) => alive() && drawFallback(JSON.parse(e.data).text));
     stream.addEventListener("live", (e) => alive() && drawLive(JSON.parse(e.data)));
@@ -1720,6 +1723,23 @@
       if (row) { row.disabled = false; row.textContent = "加载更早的消息"; }
     }
   });
+
+  // Opening a thread: what was on screen last time shows at once and the live
+  // stream updates it; a thread never opened shows a skeleton of a
+  // conversation, so nothing jumps when the messages land.
+  const threadCache = new Map();
+  const SKELETON = `<div class="thread-skel" aria-label="读取中">${["user", "a", "a short", "tools", "user short", "a", "a short"].map((c) => `<div class="sk ${c}"></div>`).join("")}</div>`;
+  function primeThread(el, key) {
+    el._sig = ""; el._blocks = null; el._fresh = true;
+    const got = key && threadCache.get(key);
+    if (got) { drawThread(got, el); el._fresh = true; } else el.innerHTML = SKELETON;
+  }
+  function keepThread(key, msgs) {
+    if (!key || !msgs || !msgs.length) return;
+    threadCache.delete(key);
+    threadCache.set(key, msgs.slice(-120));
+    while (threadCache.size > 20) threadCache.delete(threadCache.keys().next().value);
+  }
 
   // An end-of-turn button answers by sending its label from this view's composer.
   document.addEventListener("click", (ev) => {

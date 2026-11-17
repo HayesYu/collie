@@ -126,3 +126,51 @@ func TestApprovalKeepsParagraphs(t *testing.T) {
 		t.Errorf("paragraphs lost:\n%q", a.Question)
 	}
 }
+
+// The router quoted a worker's trust dialog, then went back to its prompt.
+const quotedDialog = `> [collie] 1 new event
+
+  #t132 · chat:main · worker · from paper-ref-checker · 20:20
+    worker paper-ref-checker is BLOCKED waiting for a human approval/answer in its
+  terminal. Screen:
+    Accessing workspace:
+    /data00/home/u/agent-workspace
+    Do you trust the contents of this project?
+    Antigravity CLI requires permission to read, edit, and execute files here.
+    > Yes, I trust this folder
+      No, exit
+      ↑/↓ Navigate · enter Confirm
+                                                     auto · Gemini 4 Carbon ·
+  high
+
+  Reply to the human only via ` + "`collie reply`" + `.
+
+○ Thought for 5.8s (I realized I was wrong in telling the user that no prompt was expected)
+● Ran (C=/data00/home/u/.local/bin/collie; $C reply "说错了") (ctrl+o to expand)
+
+  paper-ref-checker is stuck waiting for you to approve folder access, so it hasn't started
+  the check yet.
+
+───────────────────────────────────────────────────────────────────────────────
+>
+───────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                         auto · Claude Opus 5.5 · medium`
+
+// The same dialog, live in an agy pane.
+const agyTrust = ` Accessing workspace:
+ /data00/home/u/agent-workspace
+ Do you trust the contents of this project?
+ Antigravity CLI requires permission to read, edit, and execute files here.
+ > Yes, I trust this folder
+   No, exit
+   ↑/↓ Navigate · enter Confirm
+                                                     auto · Gemini 4 Carbon · high`
+
+func TestScreenAsksQuoted(t *testing.T) {
+	if screenAsks(quotedDialog) {
+		t.Error("a dialog quoted in the transcript counted as a question")
+	}
+	if !screenAsks(agyTrust) {
+		t.Error("agy's trust dialog not seen")
+	}
+}

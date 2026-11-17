@@ -527,8 +527,14 @@ func (h *Herdr) ScreenAsks(ctx context.Context, pane string) bool {
 }
 
 // screenAsks: a menu with a key hint ("Enter to confirm · Esc to cancel") or
-// numbered options. An idle prompt ("❯ Try …") over a status line is neither.
+// numbered options, at the bottom of the screen. An idle prompt ("❯ Try …")
+// over a status line is neither, and nor is a dialog an agent quoted in its
+// transcript, which has more conversation and the input box below it.
 func screenAsks(screen string) bool {
 	a := parseApproval(screen)
-	return len(a.Choices) >= 2 && (a.Hint != "" || a.Choices[0].Text != "")
+	return len(a.Choices) >= 2 && (a.Hint != "" || a.Choices[0].Text != "") && a.after <= maxBelowMenu
 }
+
+// maxBelowMenu: a live dialog has at most a footer or status line or two
+// under its options (agy: "auto · Gemini 4 Carbon · high").
+const maxBelowMenu = 4

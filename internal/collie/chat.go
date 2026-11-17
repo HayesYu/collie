@@ -669,6 +669,7 @@ type Approval struct {
 	Choices  []Choice `json:"choices"`
 	Hint     string   `json:"hint,omitempty"`
 	Screen   string   `json:"screen"`
+	after    int      // lines of other text below the menu
 }
 
 var (
@@ -744,6 +745,11 @@ func parseApproval(screen string) Approval {
 	for !numbered && end+1 < len(lines) && strings.HasPrefix(lines[end+1], "  ") && strings.TrimSpace(lines[end+1]) != "" &&
 		!hintRe.MatchString(lines[end+1]) {
 		end++
+	}
+	for _, l := range lines[end+1:] {
+		if strings.TrimSpace(l) != "" && !hintRe.MatchString(l) {
+			a.after++
+		}
 	}
 
 	cur := -1

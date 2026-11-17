@@ -1,0 +1,2222 @@
+/* Collie — web console + super-agent for herdr. No build step, no framework. */
+(() => {
+  "use strict";
+
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem("collie." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem("collie." + k, JSON.stringify(v)); } catch {} },
+  };
+  const narrow = () => matchMedia("(max-width: 760px)").matches;
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
+  const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+  const when = (t) => {
+    const d = new Date(t); if (isNaN(d)) return "";
+    const today = new Date().toDateString() === d.toDateString();
+    return today ? hhmm(t) : d.toLocaleDateString([], { month: "numeric", day: "numeric" }) + " " + hhmm(t);
+  };
+
+  // ───────────────────────────── icons & labels
+  const GLYPHS = {
+    claude: '<svg viewBox="0 0 32 32"><path d="M16 5v22M5 16h22M8.2 8.2l15.6 15.6M23.8 8.2L8.2 23.8"/></svg>',
+    codex: '<svg viewBox="0 0 32 32"><path d="M16 4l10.4 6v12L16 28 5.6 22V10z"/><path d="M13 13l-3 3 3 3M19 13l3 3-3 3"/></svg>',
+    agy: '<svg viewBox="0 0 32 32"><ellipse cx="16" cy="16" rx="11" ry="5" transform="rotate(-30 16 16)"/><path d="M16 21V9M12 13l4-4 4 4"/></svg>',
+    agent: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="10"/><path d="M12 15h.01M20 15h.01M12 20c2.4 1.8 5.6 1.8 8 0"/></svg>',
+    shell: '<svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg>',
+    collie: '<img src="/icon.svg" alt="" style="width:20px;height:20px">',
+  };
+  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity" };
+  const STATUS_LABEL = {
+    idle: "空闲", working: "工作中", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
+    asleep: "休眠中", starting: "启动中", gone: "已退出", failed: "启动失败",
+  };
+  const ROUTER = "collie";
+  // Collie is one conversation to the human; the session behind it is an
+  // implementation detail. "done" just means a turn ended: it is idle.
+  const COLLIE_STATUS = { asleep: "休眠中", starting: "正在唤醒", working: "在想…", blocked: "等你确认", failed: "出错了", dreaming: "在做梦…" };
+  const SOURCE_LABEL = { worker: "派出的 agent", chat: "对话", timer: "定时", system: "Collie" };
+  const collieStatus = (s) => COLLIE_STATUS[s] || "空闲";
+  const collieDot = (s) => (s === "done" || s === "unknown" ? "idle" : s === "dreaming" ? "starting" : s || "asleep");
+  const glyph = (v) => v.name === ROUTER ? GLYPHS.collie : !v.is_agent ? GLYPHS.shell : (GLYPHS[v.kind] || GLYPHS.agent);
+
+  // ───────────────────────────── api
+  // A page left open keeps its old code after the hub is updated: when the
+  // hub reports a different web app, offer a reload (once).
+  let webBuild = null;
+  function noteBuild(v) {
+    if (!v) return;
+    if (webBuild === null) { webBuild = v; return; }
+    if (v === webBuild || document.getElementById("update-bar")) return;
+    const bar = document.createElement("button");
+    bar.id = "update-bar"; bar.type = "button";
+    bar.textContent = "Collie 有新版本，点这里刷新";
+    bar.onclick = () => location.reload();
+    document.body.append(bar);
+  }
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      method: opts.body ? "POST" : (opts.method || "GET"),
+      headers: opts.body ? { "Content-Type": "application/json" } : {},
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      credentials: "same-origin",
+    });
+    noteBuild(res.headers.get("X-Collie-Web"));
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (res.status === 401) { showLogin(); throw new Error("unauthorized"); }
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    return data;
+  }
+  const paneURL = (id, rest) => `/api/panes/${encodeURIComponent(id)}/${rest}`;
+  // ───────────────────────────── pickers
+  // Every <select> keeps its value (forms read it as before) but shows a quiet
+  // button and a menu that matches the app; on a phone the menu is a sheet.
+  // Options may carry data-glyph (agent icon), data-dot (status) and data-sub.
+  const pickPop = document.createElement("div");
+  pickPop.className = "pick-pop"; pickPop.hidden = true; pickPop.setAttribute("role", "listbox");
+  const pickBack = document.createElement("div");
+  pickBack.className = "pick-back"; pickBack.hidden = true;
+  document.body.append(pickBack, pickPop);
+  let pickOpen = null;
+  const optIcon = (o) => o.dataset.glyph ? `<span class="pi">${GLYPHS[o.dataset.glyph] || ""}</span>`
+    : o.dataset.dot ? `<span class="pi"><span class="dot ${esc(o.dataset.dot)}"></span></span>` : "";
+  function syncPick(sel) {
+    const b = sel._pick;
+    if (!b) return;
+    const o = sel.selectedOptions[0];
+    b.querySelector(".pv").innerHTML = o ? optIcon(o) + `<span class="pt">${esc(o.dataset.short || o.textContent)}</span>` : "";
+    b.disabled = sel.disabled;
+    b.hidden = sel.hidden;
+  }
+  function enhance(sel) {
+    if (sel._pick || "native" in sel.dataset) return;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pick" + (sel.dataset.pick ? " " + sel.dataset.pick : "");
+    if (sel.title) b.title = sel.title;
+    b.setAttribute("aria-haspopup", "listbox");
+    b.innerHTML = `<span class="pv"></span><svg class="pc" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>`;
+    sel._pick = b;
+    sel.classList.add("picked");
+    sel.tabIndex = -1;
+    sel.after(b);
+    b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); pickOpen === sel ? closePick() : openPick(sel); });
+    b.addEventListener("keydown", (e) => {
+      if ((e.key === "ArrowDown" || e.key === "ArrowUp") && pickOpen !== sel) { e.preventDefault(); openPick(sel); }
+    });
+    syncPick(sel);
+  }
+  function openPick(sel) {
+    closePick();
+    pickOpen = sel;
+    const row = (o) => `<button type="button" class="po${o.selected ? " on" : ""}" role="option" data-v="${esc(o.value)}" ${o.disabled ? "disabled" : ""}>
+      ${optIcon(o)}<span class="pl"><span>${esc(o.textContent)}</span>${o.dataset.sub ? `<small>${esc(o.dataset.sub)}</small>` : ""}</span>
+      <svg class="ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>`;
+    let html = sel.dataset.title ? `<div class="ph">${esc(sel.dataset.title)}</div>` : "";
+    for (const c of sel.children) {
+      html += c.tagName === "OPTGROUP" ? `<div class="ph">${esc(c.label)}</div>` + [...c.children].map(row).join("") : row(c);
+    }
+    pickPop.innerHTML = html;
+    const sheet = narrow();
+    pickPop.classList.toggle("sheet", sheet);
+    pickBack.hidden = !sheet;
+    pickPop.hidden = false;
+    sel._pick.setAttribute("aria-expanded", "true");
+    if (sheet) {
+      pickPop.style.cssText = "";
+    } else {
+      const r = sel._pick.getBoundingClientRect();
+      pickPop.style.minWidth = Math.max(r.width, 180) + "px";
+      const w = pickPop.offsetWidth, h = pickPop.offsetHeight;
+      const left = Math.min(Math.max(8, r.left), innerWidth - w - 8);
+      const below = innerHeight - r.bottom - 8;
+      const top = below >= h + 6 || below > r.top ? r.bottom + 6 : r.top - h - 6;
+      pickPop.style.left = left + "px";
+      pickPop.style.top = Math.max(8, top) + "px";
+    }
+    ($(".po.on", pickPop) || $(".po", pickPop))?.focus({ preventScroll: true });
+    $(".po.on", pickPop)?.scrollIntoView({ block: "nearest" });
+  }
+  function closePick(refocus) {
+    if (!pickOpen) return;
+    const sel = pickOpen;
+    pickOpen = null;
+    pickPop.hidden = true;
+    pickBack.hidden = true;
+    sel._pick.setAttribute("aria-expanded", "false");
+    if (refocus) sel._pick.focus({ preventScroll: true });
+  }
+  pickPop.addEventListener("click", (e) => {
+    const o = e.target.closest(".po");
+    if (!o || !pickOpen) return;
+    const sel = pickOpen;
+    closePick(true);
+    if (sel.value === o.dataset.v) return;
+    sel.value = o.dataset.v;
+    syncPick(sel);
+    sel.dispatchEvent(new Event("input", { bubbles: true }));
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  pickPop.addEventListener("keydown", (e) => {
+    const items = $$(".po:not([disabled])", pickPop);
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+    } else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closePick(true); }
+  });
+  pickBack.addEventListener("click", () => closePick());
+  document.addEventListener("mousedown", (e) => {
+    if (pickOpen && !pickPop.contains(e.target) && !pickOpen._pick.contains(e.target)) closePick();
+  });
+  addEventListener("resize", () => closePick());
+  document.addEventListener("scroll", (e) => { if (pickOpen && !pickPop.contains(e.target)) closePick(); }, true);
+  document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") syncPick(e.target); });
+  new MutationObserver((ms) => {
+    for (const m of ms) {
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === "SELECT") enhance(n); else n.querySelectorAll?.("select").forEach(enhance);
+      }
+      const s = m.target.closest?.("select");
+      if (s) syncPick(s);
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+  $$("select").forEach(enhance);
+
+
+  function toast(msg, kind = "") {
+    const t = document.createElement("div");
+    t.className = "toast " + kind;
+    t.textContent = msg;
+    $("#toasts").append(t);
+    setTimeout(() => t.remove(), kind === "attn" ? 5000 : 2600);
+  }
+
+  // ───────────────────────────── auth
+  function showLogin() {
+    $("#app").hidden = true;
+    $("#login").hidden = false;
+    setTimeout(() => $("#login-token").focus(), 50);
+  }
+  async function login(token) {
+    const res = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+    if (!res.ok) throw new Error("bad token");
+  }
+  // A name the hub shows in its device list, e.g. "iPhone · Safari".
+  function deviceName() {
+    const ua = navigator.userAgent;
+    const dev = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android"
+      : /Macintosh/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "设备";
+    const br = /EdgA?\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "浏览器";
+    return `${dev} · ${br}`;
+  }
+  async function pair(code) {
+    const res = await fetch("/api/pair", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, kind: "browser", name: deviceName() }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "配对失败");
+  }
+  $("#login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#login-error").textContent = "";
+    const v = $("#login-token").value.trim();
+    try {
+      if (/^[A-Z2-7]{8}$/i.test(v)) await pair(v); else await login(v);
+      boot();
+    } catch (err) { $("#login-error").textContent = /^[A-Z2-7]{8}$/i.test(v) ? err.message : "令牌不对"; }
+  });
+  $("#logout").addEventListener("click", async () => { await fetch("/api/logout", { method: "POST" }); location.reload(); });
+
+  // ───────────────────────────── live state
+  let state = { ok: false, agents: [], shells: [] };
+  let sup = { router: { status: "asleep" }, entries: [], workers: [], queued: 0 };
+  let prevStatus = new Map();
+  let view = null;     // "collie" | "auto" | "pane" | null
+  let current = null;  // pane id when view === "pane"
+
+  function connect() {
+    const ev = new EventSource("/api/events");
+    ev.addEventListener("super", (e) => {
+      sup = normSup(JSON.parse(e.data));
+      renderSide();
+      if (view === "collie") renderSuper();
+    });
+    ev.addEventListener("state", (e) => {
+      const next = JSON.parse(e.data);
+      notifyTransitions(next);
+      state = next;
+      renderSide();
+      if (view === "pane") renderHead();
+      if (view === "collie") renderSuper();
+    });
+    ev.onopen = () => $("#conn").className = "conn on";
+    ev.onerror = async () => {
+      $("#conn").className = "conn off";
+      try { await api("/api/session"); } catch {}
+      // A restart can answer with an error status, which closes the stream
+      // for good; open a new one or the page silently goes stale.
+      if (ev.readyState === EventSource.CLOSED && liveEv === ev) setTimeout(() => { if (liveEv === ev) connect(); }, 2000);
+    };
+    liveEv = ev;
+  }
+  let liveEv = null;
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && liveEv?.readyState === EventSource.CLOSED) connect();
+  });
+
+  function notifyTransitions(next) {
+    for (const a of next.agents) {
+      const before = prevStatus.get(a.pane_id);
+      if (before && before !== a.status) {
+        if (a.status === "blocked") ping(`${title(a)} 需要你确认`, a, "attn");
+        else if (before === "working" && (a.status === "done" || a.status === "idle") && !isWorker(a.name) && a.name !== ROUTER) {
+          ping(`${title(a)} 完成了`, a);
+        }
+      }
+    }
+    prevStatus = new Map(next.agents.map((a) => [a.pane_id, a.status]));
+  }
+
+  function ping(msg, a, kind) {
+    if (a.pane_id !== current || document.hidden) {
+      toast(msg, kind);
+      if (document.hidden && prefs.notify() && "Notification" in window && Notification.permission === "granted") {
+        const n = new Notification("Collie", { body: msg, icon: "/icon.svg", tag: a.pane_id });
+        n.onclick = () => { focus(); location.hash = "#/p/" + encodeURIComponent(a.pane_id); };
+      }
+    }
+  }
+
+  function normSup(s) { s.entries ||= []; s.workers ||= []; s.router ||= { status: "asleep" }; return s; }
+  const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
+  const paneOf = (name) => state.agents.find((a) => a.name === name)?.pane_id;
+  const find = (id) => state.agents.find((a) => a.pane_id === id) || state.shells.find((a) => a.pane_id === id);
+  // What to call an agent: the session's own title; a handle like "agy-1" says
+  // nothing, so until there's a title use the folder it works in.
+  const autoName = (n) => /^(claude|codex|agy|antigravity)-\d+$/.test(n || "");
+  const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "~";
+  function title(v) {
+    if (!v) return "";
+    if (v.name === ROUTER) return "Collie";
+    if (isWorker(v.name)) return v.name; // Collie talks about its agents by name
+    return v.topic || (v.name && !autoName(v.name) ? v.name : base(tilde(v.cwd))) || v.pane_id;
+  }
+
+  // ───────────────────────────── sidebar
+  function itemHTML(v) {
+    const where = (state.machines || []).length > 1 && v.machine ? machineName(v.machine) + " · " : "";
+    const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
+    const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
+      : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${tilde(v.cwd)}` : where + tilde(v.cwd);
+    return `<li><a class="item ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
+      <span class="glyph">${glyph(v)}</span>
+      <span class="body"><div class="name">${esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}</div><div class="sub">${esc(sub)}</div></span>
+      <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a></li>`;
+  }
+
+  const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
+  const isCollieOwned = (v) => v.name === ROUTER || isWorker(v.name);
+
+  function renderSide() {
+    const blocked = state.agents.filter((a) => a.status === "blocked");
+    $("#attention-group").hidden = blocked.length === 0;
+    $("#attention").innerHTML = blocked.map(itemHTML).join("");
+
+    // Your own agents, by computer. Collie's router and workers live in their
+    // own group below so the list stays yours.
+    const machines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
+    const multi = machines.length > 1;
+    const mine = state.agents.filter((a) => !isCollieOwned(a));
+    let html = "";
+    for (const m of machines) {
+      const list = mine.filter((a) => (a.machine || "") === m.id);
+      if (multi && !m.local && !m.online && !list.length) {
+        html += `<section class="group"><h2><span class="dot ${m.online ? "online" : "offline"}"></span>${esc(m.name)}<span class="count">离线</span></h2></section>`;
+        continue;
+      }
+      if (multi && m.local && !list.length && !state.ok) continue;
+      html += `<section class="group"><h2>${multi ? `<span class="dot ${(m.local ? state.ok : m.online) ? "online" : "offline"}"></span>${esc(m.name)}${m.local ? '<span class="tag">hub</span>' : ""}` : "Agents"}
+        <span class="count">${list.length || ""}</span></h2>
+        <ul class="list">${list.map(itemHTML).join("")}</ul>
+        ${list.length ? "" : `<p class="empty-hint">${m.local || !multi ? "还没有 agent 在跑。点右上角 + 新建，或让 Collie 派一个。" : "这台电脑上还没有 agent。"}</p>`}</section>`;
+    }
+    $("#machine-groups").innerHTML = html;
+
+    const crew = state.agents.filter((a) => isCollieOwned(a) && a.name !== ROUTER);
+    $("#worker-group").hidden = crew.length === 0;
+    $("#workers").innerHTML = crew.map(itemHTML).join("");
+    $("#worker-count").textContent = crew.length || "";
+
+    renderExt();
+    renderHist();
+    $("#shells").innerHTML = state.shells.map(itemHTML).join("");
+    $("#shell-count").textContent = state.shells.length || "";
+    $("#shell-group").hidden = state.shells.length === 0;
+
+    const online = machines.filter((m) => m.local ? state.ok : m.online).length;
+    $("#conn").className = "conn " + (online ? "on" : "off");
+    $("#herdr-status").textContent = !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
+    if (!state.ok && state.error) $("#herdr-status").title = state.error;
+    document.title = blocked.length ? `(${blocked.length}) Collie` : "Collie";
+
+    const r = sup.router || {};
+    const active = sup.workers.filter((w) => !w.ended);
+    const running = active.filter((w) => w.status === "working" || w.status === "starting").length;
+    $("#nav-collie-sub").textContent = collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : "");
+    $("#nav-collie-dot").className = "dot " + collieDot(r.status);
+    $("#nav-queue").hidden = !sup.queued;
+    $("#nav-queue").textContent = sup.queued;
+    $("#nav-collie").classList.toggle("active", view === "collie");
+    $("#nav-auto").classList.toggle("active", view === "auto");
+    $("#nav-devices").classList.toggle("active", view === "devices");
+    $("#nav-prefs").classList.toggle("active", view === "prefs");
+  }
+
+  // ───────────────────────────── routing
+  function route() {
+    const h = location.hash;
+    let next = null, id = null;
+    if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
+    else if (h.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(h.slice(4)); }
+    else if (h.startsWith("#/h/")) { next = "ext"; id = "h:" + decodeURIComponent(h.slice(4)); }
+    else if (h === "#/collie") next = "collie";
+    else if (h === "#/auto") next = "auto";
+    else if (h === "#/devices") next = "devices";
+    else if (h === "#/prefs") next = "prefs";
+    else if (!narrow()) {
+      // Desktop has no empty home: reopen where you were, else Collie.
+      const last = store.get("last", "#/collie");
+      const ok = last.startsWith("#/p/") ? !!find(decodeURIComponent(last.slice(4))) : /^#\/(collie|auto|devices|prefs)$/.test(last);
+      location.replace(ok ? last : "#/collie");
+      return;
+    }
+    if (next) store.set("last", h);
+    if (next === view && id === (next === "ext" ? extCur : current)) return;
+    if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
+    if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
+    if (view === "auto" && next !== "auto") clearInterval(autoTimer);
+    if (view === "devices" && next !== "devices") clearInterval(devTimer);
+    view = next; current = next === "ext" ? null : id;
+    document.body.classList.toggle("show-main", !!next);
+    $("#v-collie").hidden = next !== "collie";
+    $("#v-auto").hidden = next !== "auto";
+    $("#v-devices").hidden = next !== "devices";
+    $("#v-prefs").hidden = next !== "prefs";
+    $("#v-ext").hidden = next !== "ext";
+    $("#detail").hidden = next !== "pane";
+    renderSide();
+    if (next === "collie") { renderSuper(true); renderTarget(); if (!narrow()) $("#super-input").focus(); }
+    if (next === "auto") openAuto();
+    if (next === "devices") openDevices();
+    if (next === "prefs") renderPrefs();
+    if (next === "ext") openExt(id);
+    if (next === "pane") {
+      $("#gone").hidden = true;
+      $("#log").textContent = "";
+      resetChat();
+      term?.reset();
+      renderHead();
+      openStream();
+      if (!narrow()) $("#input").focus();
+    }
+  }
+  addEventListener("hashchange", route);
+
+  // ───────────────────────────── Collie (super-agent) view
+  let superSig = "";
+  // Which model Collie itself runs with, next to its status.
+  async function renderRouterModel(r) {
+    const el = $("#router-model");
+    const key = [r.kind, r.model, r.effort, r.pending].join("|");
+    if (el._key === key) return;
+    el._key = key;
+    let model = r.model;
+    if (!model && r.kind) model = (await modelsFor(r.kind === "antigravity" ? "agy" : r.kind, "")).default || "";
+    if (el._key !== key) return;
+    const parts = [];
+    if (model) parts.push(esc(model.split("/").pop()) + (r.model ? "" : "（默认）"));
+    if (r.effort) parts.push("思考 " + esc(EFFORT_LABEL[r.effort] || r.effort));
+    el.innerHTML = parts.join(" · ") + (r.pending ? ` <button type="button" class="pending" data-act="router-restart" title="Collie 的模型设置改过了，点这里重启 Collie">重启后生效</button>` : "");
+    el.title = `Collie 自己用的模型${model ? "：" + model : ""}${r.effort ? "，思考强度 " + r.effort : ""}（自动化 → 设置 → Collie 自己）`;
+  }
+  function renderSuper(force) {
+    const r = sup.router || {};
+    $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "";
+    const st = $("#router-status");
+    st.className = "status " + collieDot(r.status);
+    st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(collieStatus(r.status))}`;
+    $("#router-queue").textContent = sup.paused ? "已暂停投递" : sup.queued ? `${sup.queued} 条事件排队中` : "";
+    const cx = $("#router-ctx");
+    cx.textContent = r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "";
+    cx.classList.toggle("warn", !!r.handover || (r.rotate_at > 0 && r.context >= r.rotate_at - 10));
+    cx.title = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
+    renderRouterModel(r);
+    $$('[data-act="pause"]').forEach((b) => b.textContent = sup.paused ? "恢复投递" : "暂停投递");
+
+    const active = sup.workers.filter((w) => !w.ended);
+    if (view === "collie") renderTarget();
+    $("#crew").innerHTML = active.map((w) => {
+      const pane = paneOf(w.name);
+      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(w.status)}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
+    }).join("");
+
+    const box = $("#super-thread");
+    const scroller = box.parentElement;
+    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    let html = "";
+    if (!sup.entries.length) {
+      html = `<div class="hello"><img src="/icon.svg" alt="">
+        <h3>一个入口，管一群 agent</h3>
+        <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
+        <div class="ideas">
+          <button data-idea="看一下 ~/agent-workspace 里最近改动最多的三个项目，各派一个 agent 检查有没有失败的测试，最后给我一句话总结。">并行检查三个项目的测试</button>
+          <button data-idea="每天早上 9 点帮我看一下各个任务的进展，有卡住的就告诉我。">每天 9 点汇报进展</button>
+          <button data-idea="以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。">把 GitHub 评论变成任务</button>
+        </div></div>`;
+    } else {
+      let prev = "";
+      for (const e of sup.entries) {
+        if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
+        const cont = e.role === "collie" && prev === "collie";
+        prev = e.role;
+        if (e.role === "user") html += `<div class="msg user">${userText(e.text)}</div>`;
+        else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant">${md(e.text)}</div></div>`;
+        else {
+          const pane = e.ref ? paneOf(e.ref) : null;
+          const tag = pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
+          // A spawn line spins only while that worker is still at it; history stays still.
+          const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
+          const busy = w && !w.ended && (w.status === "working" || w.status === "starting");
+          const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : "idle") : e.tone === "error" ? "failed" : "idle";
+          html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span></${tag.split(" ")[0]}>`;
+        }
+      }
+    }
+    // Everything waiting on the human, in one place.
+    const needs = state.agents.filter((a) => a.status === "blocked");
+    if (needs.length) {
+      html += `<div class="needs">` + needs.map((a) => `<a class="need" href="#/p/${encodeURIComponent(a.pane_id)}">
+        <span class="dot blocked"></span>
+        <span class="body"><div class="name">${esc(title(a))} 等你确认</div><div class="sub">${esc(a.name === ROUTER ? "它停在一个对话框上，处理后才能继续" : (KIND_LABEL[a.kind] || a.kind) + " · " + tilde(a.cwd))}</div></span>
+        <span class="go">处理 →</span></a>`).join("") + `</div>`;
+    }
+    if (html === superSig && !force) return;
+    superSig = html;
+    box.innerHTML = html;
+    if (atBottom || force) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  $("#super-thread").addEventListener("click", (e) => {
+    const idea = e.target.closest("[data-idea]")?.dataset.idea;
+    if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); }
+  });
+
+  // Models and thinking efforts each agent offers, per computer (asked once per page).
+  const EFFORT_LABEL = { none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极致" };
+  const modelInfo = {};
+  async function modelsFor(kind, machine) {
+    const key = kind + "@" + (machine || "");
+    if (!modelInfo[key]) {
+      const q = new URLSearchParams({ kind });
+      if (machine) q.set("machine", machine);
+      modelInfo[key] = api("/api/models?" + q).catch(() => ({ models: [], efforts: ["low", "medium", "high", "xhigh", "max"] }));
+    }
+    return modelInfo[key];
+  }
+  // "派到": where this message's work runs. Starts at the defaults from
+  // 自动化 → 设置 and stays as picked until the page reloads.
+  let target = null, targetDefault = null;
+  async function renderTarget() {
+    if (!targetDefault) {
+      try {
+        const s = (await api("/api/super/settings")).settings;
+        targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
+      } catch { targetDefault = { machine: "", kind: "claude", model: "", effort: "" }; }
+    }
+    const t = target || targetDefault;
+    const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => m.local ? state.ok !== false : m.online || m.id === t.machine);
+    const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
+    const mSel = $("#t-machine"), kSel = $("#t-kind");
+    fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
+      data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
+    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"]].map(([k, l]) =>
+      `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${k === targetDefault.kind ? `data-sub="默认"` : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`).join(""));
+    mSel.value = t.machine; kSel.value = t.kind;
+    mSel.hidden = ms.length < 2;
+    syncPick(mSel); syncPick(kSel);
+    mSel._pick?.classList.toggle("changed", t.machine !== targetDefault.machine);
+    kSel._pick?.classList.toggle("changed", t.kind !== targetDefault.kind);
+    renderModelChips();
+  }
+  // The default model and effort belong to the default kind of agent; any
+  // other kind starts from that agent's own settings.
+  const modelDefaults = (t) => t.kind === targetDefault.kind ? { model: targetDefault.model, effort: targetDefault.effort } : { model: "", effort: "" };
+  const modelNow = (t) => { const d = modelDefaults(t); return { model: t.model ?? d.model, effort: t.effort ?? d.effort, d }; };
+  let chipSeq = 0;
+  async function renderModelChips() {
+    const seq = ++chipSeq, t = targetNow(), { model, effort, d } = modelNow(t);
+    const mSel = $("#t-model"), eSel = $("#t-effort");
+    const info = await modelsFor(t.kind, t.machine);
+    if (seq !== chipSeq) return;
+    const list = [...(info.models || [])];
+    if (model && !list.some((m) => m.id === model)) list.unshift({ id: model });
+    const short = (id) => id.split("/").pop();
+    const mark = (v, dv) => (v === dv ? " · 默认" : "");
+    let html = d.model ? "" : `<option value="" data-short="默认模型" data-sub="${esc(info.default ? "现在是 " + info.default + " · 默认" : "agent 自己的设置 · 默认")}">默认</option>`;
+    html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc((m.label && m.label !== m.id ? m.id : "") + mark(m.id, d.model))}" ${m.id === model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
+    if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
+    mSel.value = model;
+    const cur = list.find((m) => m.id === model);
+    const effs = cur?.efforts?.length ? cur.efforts : (info.efforts || []);
+    const eff = effs.includes(effort) ? effort : "";
+    const defE = d.effort || info.default_effort || "";
+    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="${esc(d.effort ? "派活默认" : "agent 自己的设置")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>`;
+    ehtml += effs.map((e) => `<option value="${esc(e)}" data-short="思考 · ${esc(EFFORT_LABEL[e] || e)}" data-sub="${esc(e)}" ${e === eff ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
+    if (eSel._html !== ehtml) { eSel._html = ehtml; eSel.innerHTML = ehtml; }
+    eSel.value = eff === d.effort ? "" : eff;
+    eSel.hidden = effs.length === 0;
+    syncPick(mSel); syncPick(eSel);
+    mSel._pick?.classList.toggle("changed", model !== d.model);
+    eSel._pick?.classList.toggle("changed", eff !== d.effort && eff !== "");
+  }
+  $("#t-machine").addEventListener("change", (e) => { target = { ...targetNow(), machine: e.target.value }; renderTarget(); });
+  $("#t-kind").addEventListener("change", (e) => { target = { ...targetNow(), kind: e.target.value, model: undefined, effort: undefined }; renderTarget(); });
+  $("#t-model").addEventListener("change", (e) => { target = { ...targetNow(), model: e.target.value }; renderModelChips(); });
+  $("#t-effort").addEventListener("change", (e) => { target = { ...targetNow(), effort: e.target.value || modelDefaults(targetNow()).effort }; renderModelChips(); });
+  const targetNow = () => target || targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
+
+  bindComposer($("#super-composer"), $("#super-input"), async (text) => {
+    const t = targetNow();
+    const { model, effort } = modelNow(t);
+    await api("/api/super/say", { body: { text, machine: t.machine || "local", kind: t.kind, model, effort } });
+    if (!sup.router?.alive) toast("正在唤醒 Collie…");
+  }, () => targetNow().machine);
+
+  // ───────────────────────────── automation view
+  let autoTab = store.get("autoTab", "inbox");
+  let autoTimer;
+  $("#auto-tabs").addEventListener("click", (e) => {
+    const t = e.target.closest("button")?.dataset.tab;
+    if (!t) return;
+    autoTab = t; store.set("autoTab", t);
+    openAuto();
+  });
+
+  function openAuto() {
+    memEditing = false;
+    $("#auto-body")._memSig = "";
+    $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
+    clearInterval(autoTimer);
+    loadAuto();
+    if (autoTab === "inbox" || autoTab === "threads") autoTimer = setInterval(loadAuto, 4000);
+    if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
+  }
+
+  async function loadAuto() {
+    const body = $("#auto-body");
+    try {
+      if (autoTab === "inbox" || autoTab === "threads") {
+        const r = await api("/api/super/triggers");
+        if (view !== "auto") return;
+        body.innerHTML = autoTab === "inbox" ? inboxHTML(r.triggers || []) : threadsHTML(r.threads || []);
+      } else if (autoTab === "memory") {
+        const r = await api("/api/super/memory");
+        if (view !== "auto" || autoTab !== "memory" || memEditing) return;
+        const sig = JSON.stringify(r);
+        if (sig !== body._memSig) {
+          const open = new Set([...body.querySelectorAll("details[open]")].map((d) => d.dataset.path || d.querySelector("summary")?.textContent));
+          const first = !body._memSig;
+          body._memSig = sig; body.innerHTML = memoryHTML(r);
+          if (!first) body.querySelectorAll("details").forEach((d) => d.open = open.has(d.dataset.path || d.querySelector("summary")?.textContent));
+        }
+        return;
+      } else if (autoTab === "timers") {
+        const r = await api("/api/super/timers");
+        body.innerHTML = timersHTML(r.timers || []);
+      } else {
+        const r = await api("/api/super/settings");
+        body.innerHTML = autoTab === "hooks" ? hooksHTML(r) : settingsHTML(r);
+      }
+    } catch (err) { body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
+  }
+
+  // ───────────────────────────── memory: what Collie keeps between sessions
+  let memEditing = false;
+  const kb = (n) => (n / 1024).toFixed(1) + " KB";
+  const dayTime = (t) => {
+    const d = new Date(t), today = new Date().toDateString(), tmr = new Date(Date.now() + 864e5).toDateString();
+    const hm = d.toTimeString().slice(0, 5);
+    return d.toDateString() === today ? "今天 " + hm : d.toDateString() === tmr ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  };
+  function memoryHTML(r) {
+    const files = r.files || [];
+    const by = (f) => files.filter(f);
+    const over = r.loaded > r.budget;
+    const dream = r.dreaming ? `<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。`
+      : `上次做梦：${r.last_dream ? dayTime(r.last_dream) : "还没有"}　·　下次：${r.next_dream ? dayTime(r.next_dream) + "（当天有新对话才会做）" : "已关闭"}`;
+    const firstLine = (t, dflt) => t.split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").trim()).find(Boolean) || dflt;
+    const card = (f, o = {}) => {
+      const edit = !f.legacy && o.edit !== false;
+      return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
+          <span class="mono mem-name">${esc(o.label || f.name)}</span><span class="grow">${esc(o.sub ?? firstLine(f.text, ""))}</span><span class="muted">${kb(f.size)}</span></summary>
+        <div class="mem-body msg assistant" data-view>${md(f.text)}</div>
+        ${edit ? `<div class="mem-tools"><span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
+        <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
+          <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div></form>` : ""}
+      </details>`;
+    };
+    const group = (title, note, list, o = {}) => list.length || o.always ? `<h4 class="mem-h">${title}<span class="muted">${note}</span></h4>
+      <div class="card">${list.length ? list.map((f, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {})).join("") : `<div class="empty-row">${o.empty || "空"}</div>`}</div>` : "";
+    const ins = by((f) => f.name === "instructions.md");
+    const tasks = by((f) => /^tasks\/[^/]+\.md$/.test(f.name));
+    const notes = by((f) => f.name.startsWith("notes/")).sort((a, b) => (a.name === "notes/index.md" ? -1 : b.name === "notes/index.md" ? 1 : a.name.localeCompare(b.name)));
+    const done = by((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
+    const msgs = by((f) => f.name === "messages.md");
+    const legacy = by((f) => f.legacy);
+    return `<p class="panel-intro">Collie 的长期记忆在 <code>${esc(r.dir)}/memory</code>，按用途分开：每次新会话只先读<b>指令、笔记索引、进行中的任务和最近说过的话</b>，其余需要时再看。
+      「做梦」时，Collie 回顾最近的会话来整理记忆：替换过时的条目，发现只有跨多次对话才看得出的习惯（标记为 inferred）。</p>
+      <div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "idle"}"></span><span class="grow">${dream}</span>
+        <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
+        <div class="mem-dream mem-load"><span class="grow">每次新会话先读：<b class="${over ? "warn" : ""}">${kb(r.loaded)}</b> / 建议 ${kb(r.budget)} 以内${over ? "（偏大，做梦时会精简）" : ""}</span></div></div>
+      ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
+      ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
+      ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined }, always: true, empty: "没有进行中的任务" })}
+      ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
+      ${group("最近说过的话", "hub 自动记录，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
+      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
+      ${group("已完成", "做完或放弃的任务", done, { card: (f) => ({ label: f.name.replace(/^tasks\/done\//, "") }) })}`;
+  }
+
+  function inboxHTML(ts) {
+    return `<p class="panel-intro">你的消息、外部事件、定时器，以及派出的 agent 完成或卡住，都会进这里。先按来源策略过滤；订阅了线程的 agent 直接收到，其余交给 Collie 判断。对方正忙时事件会先攒着，空闲后一次送过去。</p>
+      <div class="card"><ul class="rows">${ts.length ? ts.map((t) => `<li class="row">
+        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
+        <div><div class="meta"><b>#${esc(t.id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
+        <div class="text">${esc(t.text)}</div></div>
+        <span class="right">${when(t.at)}</span></li>`).join("") : `<li class="empty-row">收件箱是空的</li>`}</ul></div>`;
+  }
+
+  function threadsHTML(ths) {
+    return `<p class="panel-intro">同一个对话、Issue/PR 或群聊话题里的连续事件构成一条线程。Collie 派出的 agent 订阅线程后，后续事件直达它，不再经过 Collie。chat:main 始终由 Collie 自己处理。</p>
+      <div class="card"><ul class="rows">${ths.length ? ths.map((th) => `<li class="row">
+        <span class="badge">${th.triggers?.length || 0}</span>
+        <div><div class="meta"><b>${esc(th.id)}</b>${th.subscribers?.length ? `<span>订阅：${esc(th.subscribers.join(", "))}</span>` : "<span>→ Collie</span>"}</div></div>
+        <span class="right">${when(th.last_at)}</span></li>`).join("") : `<li class="empty-row">还没有线程</li>`}</ul></div>`;
+  }
+
+  // ───────────────────────────── timers: picked, not typed
+  const WEEK = [["mon", "一"], ["tue", "二"], ["wed", "三"], ["thu", "四"], ["fri", "五"], ["sat", "六"], ["sun", "日"]];
+  const UNIT = { m: "分钟", h: "小时" };
+  // describeSpec turns "weekly mon,thu 09:00" into "每周一、四 09:00".
+  function describeSpec(spec) {
+    const f = String(spec || "").trim().split(/\s+/);
+    const dur = (d) => {
+      const m = /^(\d+(?:\.\d+)?)([mhs])$/.exec(d || "");
+      if (!m) return d;
+      const n = +m[1];
+      if (m[2] === "h" && n >= 24 && n % 24 === 0) return `${n / 24} 天`;
+      if (m[2] === "m" && n >= 60 && n % 60 === 0) return `${n / 60} 小时`;
+      return `${n} ${UNIT[m[2]] || "秒"}`;
+    };
+    switch (f[0]) {
+      case "daily": return `每天 ${f[1]}`;
+      case "weekdays": return `工作日 ${f[1]}`;
+      case "weekly": return `每周${(f[1] || "").split(",").map((d) => (WEEK.find((w) => w[0] === d) || [, d])[1]).join("、")} ${f[2] || ""}`;
+      case "every": return `每隔 ${dur(f[1])}`;
+      case "in": return `${dur(f[1])}后（一次）`;
+      case "at": return `${f[1]} ${f[2] || ""}（一次）`;
+    }
+    return spec;
+  }
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const localStamp = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  // The spec the timer form describes, or an error to show.
+  function timerSpec(f) {
+    const mode = f.dataset.mode, clock = f.clock.value;
+    if (["daily", "weekdays", "weekly"].includes(mode) && !/^\d\d:\d\d$/.test(clock)) return { err: "选一个时间" };
+    if (mode === "daily") return { spec: `daily ${clock}` };
+    if (mode === "weekdays") return { spec: `weekdays ${clock}` };
+    if (mode === "weekly") {
+      const days = [...f.querySelectorAll(".tm-days button.on")].map((b) => b.dataset.day);
+      return days.length ? { spec: `weekly ${days.join(",")} ${clock}` } : { err: "选至少一天" };
+    }
+    if (mode === "every") {
+      const n = Math.floor(+f.every_n.value);
+      if (!(n >= 1)) return { err: "间隔至少 1" };
+      const u = f.every_u.value;
+      return { spec: u === "d" ? `every ${n * 24}h` : `every ${n}${u}` };
+    }
+    const at = f.at.value;
+    if (!at) return { err: "选一个日期和时间" };
+    if (new Date(at) <= new Date()) return { err: "这个时间已经过去了" };
+    return { spec: `at ${at.replace("T", " ")}` };
+  }
+  function syncTimerForm(f) {
+    const mode = f.dataset.mode;
+    f.querySelectorAll(".tm-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+    f.querySelectorAll("[data-show]").forEach((el) => { el.hidden = !el.dataset.show.split(" ").includes(mode); });
+    const r = timerSpec(f), target = f.target.selectedOptions[0]?.textContent || "Collie";
+    const sum = f.querySelector(".tm-sum");
+    sum.textContent = r.err ? r.err : `${describeSpec(r.spec)} · 交给 ${target.replace(/（.*）/, "")}`;
+    sum.classList.toggle("err", !!r.err);
+  }
+
+  function timersHTML(ts) {
+    const soon = new Date(Date.now() + 60 * 60 * 1000); soon.setMinutes(0);
+    setTimeout(() => { const f = $("#timer-form"); if (f) syncTimerForm(f); });
+    return `<p class="panel-intro">到点会给 Collie（或某个 agent）发一条消息：每天的例行检查、过一会儿的跟进提醒。Collie 自己也会设定时来跟进。</p>
+      <div class="card"><div class="card-h">新建定时</div>
+        <form class="form tm-form" id="timer-form" data-mode="weekdays">
+          <div class="tm-row"><span class="tm-lab">什么时候</span>
+            <div class="seg tm-mode">${[["daily", "每天"], ["weekdays", "工作日"], ["weekly", "每周"], ["every", "每隔"], ["once", "一次"]].map(([m, l]) => `<button type="button" data-mode="${m}">${l}</button>`).join("")}</div>
+          </div>
+          <div class="tm-row tm-when">
+            <span class="tm-lab"></span>
+            <div class="tm-days" data-show="weekly">${WEEK.map(([d, l], i) => `<button type="button" data-day="${d}" class="${i === 0 ? "on" : ""}">${l}</button>`).join("")}</div>
+            <input type="time" name="clock" value="09:00" data-show="daily weekdays weekly">
+            <span class="tm-every" data-show="every"><input type="number" name="every_n" min="1" value="2"><select name="every_u" data-title="单位"><option value="m">分钟</option><option value="h" selected>小时</option><option value="d">天</option></select></span>
+            <span class="tm-once" data-show="once"><input type="datetime-local" name="at" value="${localStamp(soon)}">
+              ${[["30 分钟后", 30], ["1 小时后", 60], ["明早 9 点", "am"]].map(([l, v]) => `<button type="button" class="chip-btn" data-at="${v}">${l}</button>`).join("")}</span>
+          </div>
+          <label class="tm-text"><span class="tm-lab">说什么</span><textarea name="text" rows="2" placeholder="例如：检查各个任务的进展，有卡住的告诉我" required></textarea></label>
+          <div class="tm-foot">
+            <label class="tm-target"><span class="tm-lab">交给</span><select name="target" data-title="到点交给谁"><option value="" data-sub="由它决定怎么处理">Collie</option>${sup.workers.filter((w) => !w.ended).map((w) => `<option value="${esc(w.name)}" data-sub="${esc(KIND_LABEL[w.kind] || w.kind)}">${esc(w.name)}</option>`).join("")}</select></label>
+            <span class="tm-sum muted"></span>
+            <button class="btn primary small">添加</button>
+          </div>
+        </form></div>
+      <div class="card"><ul class="rows">${ts.length ? ts.map((t) => `<li class="row">
+        <span class="badge ${t.enabled ? "queued" : "ignored"}">${t.enabled ? "启用" : "已结束"}</span>
+        <div><div class="meta"><b title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b><span>→ ${esc(t.target || "Collie")}</span>${t.enabled ? `<span>下次 ${when(t.next_run)}</span>` : ""}${t.owner ? `<span>${t.owner === "you" ? "你设的" : esc(t.owner) + " 设的"}</span>` : ""}</div>
+        <div class="text">${esc(t.text)}</div></div>
+        <button class="btn ghost small" data-del-timer="${esc(t.id)}">删除</button></li>`).join("") : `<li class="empty-row">还没有定时</li>`}</ul></div>`;
+  }
+  // Timer form: mode, days and quick times are buttons; everything re-describes the spec.
+  $("#auto-body").addEventListener("click", (e) => {
+    const f = e.target.closest("#timer-form");
+    if (!f) return;
+    const b = e.target.closest("button[type=button]");
+    if (!b) return;
+    if (b.dataset.mode) f.dataset.mode = b.dataset.mode;
+    if (b.dataset.day) {
+      b.classList.toggle("on");
+    }
+    if (b.dataset.at) {
+      let d = new Date();
+      if (b.dataset.at === "am") { d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); }
+      else d = new Date(d.getTime() + +b.dataset.at * 60000);
+      f.at.value = localStamp(d);
+    }
+    syncTimerForm(f);
+  });
+  $("#auto-body").addEventListener("input", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
+  $("#auto-body").addEventListener("change", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
+
+  function hooksHTML(r) {
+    const base = location.origin + "/hooks/";
+    const url = (src) => `${base}${src}?key=${r.hook_key}`;
+    return `<p class="panel-intro">把外部事件接进来。Webhook 立即返回 202，过滤和路由在收件箱里异步完成。未经请求的事件默认是 <b>candidate</b>：只有 Collie 的记忆或你的规则覆盖到时才会行动，否则保持安静。</p>
+      <div class="card"><div class="card-h">Webhook 地址</div><div class="form">
+        <label>GitHub <small>Settings → Webhooks，Content type 选 application/json</small><div class="code"><span>${esc(url("github"))}</span><button class="icon-btn" data-copy="${esc(url("github"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
+        <label>飞书 / Lark <small>事件订阅的请求地址，已支持 url_verification</small><div class="code"><span>${esc(url("feishu"))}</span><button class="icon-btn" data-copy="${esc(url("feishu"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
+        <label>通用 <small>POST JSON：{"text","thread","from","id"}，source 名可自取</small><div class="code"><span>curl -X POST '${esc(url("ci"))}' -H 'Content-Type: application/json' -d '{"thread":"build-42","text":"nightly build failed"}'</span></div></label>
+      </div></div>
+      <div class="card"><div class="card-h">来源策略（快路径）<button class="btn small" id="add-policy">添加</button></div>
+        <div id="policies">${(r.policies || []).map(policyRow).join("")}</div>
+        <div class="form"><div class="form-actions"><button class="btn primary small" id="save-policies">保存策略</button></div></div></div>`;
+  }
+
+  function policyRow(p = { source: "webhook:", action: "candidate", allow: [] }) {
+    return `<div class="policy">
+      <input data-f="source" value="${esc(p.source)}" placeholder="webhook:github">
+      <select data-f="action">${["respond", "candidate", "ignore"].map((a) => `<option value="${a}" ${p.action === a ? "selected" : ""}>${{ respond: "直接响应", candidate: "候选（Collie 判断）", ignore: "忽略" }[a]}</option>`).join("")}</select>
+      <input data-f="allow" value="${esc((p.allow || []).join(", "))}" placeholder="白名单（可选，逗号分隔）">
+      <button class="icon-btn" data-del-policy title="删除"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
+  }
+
+  // ───────────────────────────── settings: grouped by what they are about
+  // Fills a model picker and its effort picker from what that agent offers.
+  async function fillModels(form, who) {
+    const kindSel = form[who + "_kind"], modelSel = form[who + "_model"], effSel = form[who + "_effort"];
+    const machine = who === "worker" && form.worker_machine ? form.worker_machine.value : "";
+    const want = modelSel.dataset.value ?? modelSel.value, wantEff = effSel.dataset.value ?? effSel.value;
+    modelSel.innerHTML = `<option value="">读取中…</option>`;
+    const info = await modelsFor(kindSel.value, machine);
+    const list = [...(info.models || [])];
+    if (want && !list.some((m) => m.id === want)) list.unshift({ id: want });
+    const sub = (m) => [m.label && m.label !== m.id ? m.id : "", m.note && m.note !== m.id && !(m.label && m.note.startsWith(m.label)) ? m.note : ""].filter(Boolean).join(" · ");
+    modelSel.innerHTML = `<option value="" data-sub="${esc(info.default ? "现在是 " + info.default : "用 agent 自己的设置")}">默认</option>`
+      + list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(sub(m))}" ${m.id === want ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("")
+      + `<option value="__custom" data-sub="输入列表里没有的模型名">其他…</option>`;
+    delete modelSel.dataset.value;
+    const fillEffort = () => {
+      const m = list.find((x) => x.id === modelSel.value);
+      const effs = m?.efforts?.length ? m.efforts : (info.efforts || []);
+      const cur = effSel.dataset.value ?? effSel.value;
+      effSel.innerHTML = `<option value="" data-sub="${esc(info.default_effort ? "现在是 " + (EFFORT_LABEL[info.default_effort] || info.default_effort) : "用 agent 自己的设置")}">默认</option>`
+        + effs.map((e) => `<option value="${esc(e)}" data-sub="${esc(e)}" ${e === cur ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
+      delete effSel.dataset.value;
+      effSel.disabled = effs.length === 0;
+    };
+    fillEffort();
+    modelSel.onchange = () => {
+      if (modelSel.value === "__custom") {
+        const v = (prompt("模型名（照 agent 的 --model 参数写）") || "").trim();
+        if (v) modelSel.add(new Option(v, v, true, true), 1);
+        else modelSel.value = "";
+      }
+      fillEffort();
+    };
+  }
+  function bindSettings(form) {
+    if (!form || form._bound) return;
+    form._bound = true;
+    for (const who of ["router", "worker"]) {
+      fillModels(form, who);
+      form[who + "_kind"].addEventListener("change", () => { form[who + "_model"].value = ""; form[who + "_effort"].value = ""; fillModels(form, who); });
+    }
+    form.worker_machine?.addEventListener("change", () => fillModels(form, "worker"));
+  }
+
+  function settingsHTML(r) {
+    const s = r.settings;
+    const kindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
+    const modelPick = (who, model, effort) => `
+          <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
+          <label>思考强度<select name="${who}_effort" data-title="思考强度" data-value="${esc(effort || "")}"><option value="${esc(effort || "")}" selected>${esc(EFFORT_LABEL[effort] || effort || "默认")}</option></select></label>`;
+    const many = (state.machines || []).length > 1;
+    setTimeout(() => bindSettings($("#settings-form")));
+    return `<form class="settings" id="settings-form">
+      <section class="card set-sec">
+        <header><h4>Collie 自己</h4><p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p></header>
+        <div class="set-grid three">
+          <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${kindOpts(s.router_kind)}</select></label>
+          ${modelPick("router", s.router_model, s.router_effort)}
+        </div>
+        <details class="set-adv" ${(s.router_args || []).length ? "open" : ""}><summary>更多启动参数</summary>
+          <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="例如 --permission-mode plan"><small>原样加在启动命令后面，一般不用填</small></label>
+        </details>
+      </section>
+
+      <section class="card set-sec">
+        <header><h4>派活默认</h4><p>Collie 派 agent 干活时默认这样启动；你说「用 Codex…」「在 Mac 上…」时它会自己换。</p></header>
+        <div class="set-grid three">
+          <label>Agent<select name="worker_kind" data-title="派活默认用">${kindOpts(s.worker_kind)}</select></label>
+          ${modelPick("worker", s.worker_model, s.worker_effort)}
+        </div>
+        <div class="set-grid three">
+          ${many ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${state.machines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
+          <label class="${many ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(tilde(s.worker_cwd))}"></label>
+        </div>
+      </section>
+
+      <section class="card set-sec">
+        <header><h4>记忆与会话</h4><p>Collie 的对话变长后会换新会话，要记住的事通过 memory/ 交接；每晚回顾当天的对话，整理记忆。</p></header>
+        <div class="set-grid">
+          <label>上下文用到多少时换新会话<select name="rotate_pct" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
+          <label>每晚做梦<select name="dream_at" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
+        </div>
+      </section>
+
+      <section class="card set-sec">
+        <header><h4>通知</h4></header>
+        <div class="set-grid">
+          <label>Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"><small>飞书 / Lark 机器人或 Slack</small></label>
+          <label>什么时候推送<select name="notify_level" data-title="什么时候推送"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="卡住、要你确认、出错">只在需要你时</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="外加 Collie 的每条回复">也推送 Collie 的回复</option></select></label>
+        </div>
+      </section>
+
+      <section class="card set-sec">
+        <header><h4>其他</h4></header>
+        <div class="set-grid">
+          <label>聊天回复长度<input name="reply_chars" type="number" min="40" step="20" value="${s.reply_chars || 200}"><small>Collie 平时每条回复大约多少字（英文按词算）；你要详细时它会写长</small></label>
+          <label>多久没进展算卡住<input name="stall_minutes" type="number" min="0" value="${s.stall_minutes}"><small>分钟；0 表示不检查</small></label>
+        </div>
+        <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> 暂停投递：事件照收，先不交给 agent</label>
+      </section>
+
+      <div class="set-actions"><button type="button" class="btn small" data-act="router-restart">重启 Collie</button><span class="grow"></span><button class="btn primary small">保存</button></div>
+    </form>`;
+  }
+
+  $("#auto-body").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      if (f.id === "timer-form") {
+        const r = timerSpec(f);
+        if (r.err) { toast(r.err, "attn"); return; }
+        await api("/api/super/timers", { body: { spec: r.spec, text: f.text.value, target: f.target.value, owner: "you" } });
+        toast(`已添加：${describeSpec(r.spec)}`);
+        loadAuto();
+      } else if (f.classList.contains("mem-edit")) {
+        await api("/api/super/memory", { body: { path: f.closest("[data-path]").dataset.path, text: f.text.value } });
+        memEditing = false;
+        toast("已保存");
+        loadAuto();
+      } else if (f.id === "settings-form") {
+        const cur = (await api("/api/super/settings")).settings;
+        const s = {
+          ...cur,
+          router_kind: f.router_kind.value, router_args: f.router_args.value.split(/\s+/).filter(Boolean),
+          router_model: f.router_model.value === "__custom" ? "" : f.router_model.value, router_effort: f.router_effort.value,
+          worker_kind: f.worker_kind.value, worker_cwd: f.worker_cwd.value,
+          worker_model: f.worker_model.value === "__custom" ? "" : f.worker_model.value, worker_effort: f.worker_effort.value,
+          worker_machine: f.worker_machine ? f.worker_machine.value : (cur.worker_machine || ""),
+          reply_chars: +f.reply_chars.value, stall_minutes: +f.stall_minutes.value,
+          rotate_pct: +f.rotate_pct.value, dream_at: f.dream_at.value,
+          notify_webhook: f.notify_webhook.value.trim(), notify_level: f.notify_level.value, paused: f.paused.checked,
+        };
+        await api("/api/super/settings", { body: { settings: s } });
+        const relaunch = s.router_kind !== cur.router_kind || s.router_model !== (cur.router_model || "") || s.router_effort !== (cur.router_effort || "") || s.router_args.join(" ") !== (cur.router_args || []).join(" ");
+        toast(relaunch ? "已保存。Collie 的模型设置在重启 Collie 后生效" : "已保存");
+      }
+    } catch (err) { toast(err.message, "attn"); }
+  });
+
+  $("#auto-body").addEventListener("click", async (e) => {
+    const t = e.target.closest("button");
+    if (!t) return;
+    if (t.dataset.act === "mem-edit" || t.dataset.act === "mem-cancel") {
+      const box = t.closest("[data-path]");
+      memEditing = t.dataset.act === "mem-edit";
+      box.querySelector(".mem-edit").hidden = !memEditing;
+      box.querySelector("[data-view]").hidden = memEditing;
+      box.querySelector(".mem-tools").hidden = memEditing;
+      if (memEditing) box.querySelector("textarea").focus();
+      else { $("#auto-body")._memSig = ""; loadAuto(); }
+      return;
+    }
+    if (t.dataset.act === "dream-now") {
+      t.disabled = true; t.textContent = "开始中…";
+      try { await api("/api/super/dream", { body: {} }); toast("Collie 去做梦了"); }
+      catch (err) { toast(err.message, "attn"); }
+      loadAuto();
+      return;
+    }
+    if (t.dataset.delTimer) {
+      await api(`/api/super/timers/${t.dataset.delTimer}/delete`, { method: "POST", body: {} }).catch((err) => toast(err.message));
+      loadAuto();
+    } else if (t.dataset.copy) {
+      await copy(t.dataset.copy); toast("已复制");
+    } else if (t.id === "add-policy") {
+      $("#policies").insertAdjacentHTML("beforeend", policyRow());
+    } else if (t.hasAttribute("data-del-policy")) {
+      t.closest(".policy").remove();
+    } else if (t.id === "save-policies") {
+      const policies = $$(".policy").map((row) => ({
+        source: $("[data-f=source]", row).value.trim(), action: $("[data-f=action]", row).value,
+        allow: $("[data-f=allow]", row).value.split(",").map((x) => x.trim()).filter(Boolean),
+      })).filter((p) => p.source);
+      try { await api("/api/super/settings", { body: { policies } }); toast("策略已保存"); } catch (err) { toast(err.message, "attn"); }
+    }
+  });
+
+  // ───────────────────────────── agents in other terminals (outside herdr)
+  let ext = [], extTimer, extStream = null, extCur = null;
+  async function loadExternal() {
+    if (document.hidden && ext.length) return;
+    try { ext = (await api("/api/external")).sessions || []; } catch { return; }
+    renderExt();
+    if (view === "ext") renderExtHead();
+  }
+
+  // ───────────────────────────── ended sessions: read them, continue them
+  let hist = [];
+  async function loadHistory() {
+    try { hist = (await api("/api/history")).sessions || []; } catch { return; }
+    renderHist();
+    if (view === "ext" && extCur?.startsWith("h:")) renderHistHead(extCur.slice(2));
+  }
+  const ago = (t) => {
+    const s = (Date.now() - new Date(t)) / 1000;
+    return s < 90 ? "刚刚" : s < 3600 ? Math.round(s / 60) + " 分钟前" : s < 86400 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前";
+  };
+  const histName = (h) => h.title || (h.name && !autoName(h.name) ? h.name : base(tilde(h.cwd)));
+  const histOnline = (h) => !h.machine || (state.machines || []).some((m) => m.id === h.machine && m.online);
+  function renderHist() {
+    $("#hist-group").hidden = !hist.length;
+    $("#hist-count").textContent = hist.length || "";
+    const many = (state.machines || []).length > 1;
+    $("#hist-list").innerHTML = hist.slice(0, 20).map((h) => {
+      const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
+      return `<li><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
+        <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
+        <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a></li>`;
+    }).join("");
+  }
+  function renderHistHead(hid) {
+    const h = hist.find((x) => x.id === hid);
+    const on = h && histOnline(h);
+    $("#x-name").textContent = h ? histName(h) : "已结束的会话";
+    $("#x-kind").textContent = h ? KIND_LABEL[h.kind] || h.kind : "";
+    $("#x-tag").textContent = "已结束";
+    $("#x-status").className = "status ended";
+    $("#x-status").textContent = h ? "结束于 " + ago(h.ended) : "";
+    $("#x-cwd").textContent = h ? (h.machine ? machineName(h.machine) + " · " : "") + tilde(h.cwd) : "";
+    $("#x-note").textContent = !h ? "这条记录已经不在了。"
+      : on ? `继续会${h.machine ? "在 " + machineName(h.machine) + " 上" : ""}用同一个会话重新打开 ${KIND_LABEL[h.kind] || h.kind}，之前的上下文都还在。`
+      : `${machineName(h.machine)} 现在不在线，连上后才能继续。`;
+    const b = $("#x-takeover");
+    b.textContent = "继续这个会话";
+    b.hidden = false;
+    b.disabled = !on;
+    $("#x-forget").hidden = !h;
+  }
+  async function openHist(hid) {
+    const el = $("#x-thread");
+    el.innerHTML = `<div class="thread-empty">读取中…</div>`; el._sig = ""; el._fresh = true; el._blocks = null;
+    resetEarlier(el, null); el._msgs = null;
+    if (!hist.some((h) => h.id === hid)) await loadHistory();
+    renderHistHead(hid);
+    const h = hist.find((x) => x.id === hid);
+    if (!h) { el.innerHTML = ""; return; }
+    try {
+      const q = new URLSearchParams({ kind: h.kind, session: h.session, cwd: h.cwd });
+      if (h.machine) q.set("machine", h.machine);
+      const r = await api("/api/transcript?" + q);
+      if (view === "ext" && extCur === "h:" + hid) {
+        resetEarlier(el, (c) => `/api/transcript?${q}&before=${c}`);
+        el._msgs = r.messages || []; el._liveEarlier = r.earlier || 0;
+        el._redraw = () => { if (view === "ext" && extCur === "h:" + hid) drawThread(threadMsgs(el), el, "这个会话没有消息。"); };
+        el._redraw();
+      }
+    } catch (err) {
+      if (view === "ext" && extCur === "h:" + hid) el.innerHTML = `<div class="thread-empty">${esc(err.message)}</div>`;
+    }
+  }
+  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s] };
+  async function continueHist(hid) {
+    const h = hist.find((x) => x.id === hid);
+    if (!h || !RESUME[h.kind]) return;
+    const b = $("#x-takeover");
+    b.disabled = true; b.textContent = "正在打开…";
+    try {
+      const r = await api("/api/agents", { body: {
+        kind: h.kind, cwd: h.cwd, machine: h.machine || "", name: "", label: histName(h).slice(0, 40), args: RESUME[h.kind](h.session),
+      } });
+      if (r.warning) toast(r.warning);
+      await api(`/api/history/${encodeURIComponent(h.id)}/delete`, { body: {} }).catch(() => {});
+      hist = hist.filter((x) => x.id !== h.id);
+      renderHist();
+      location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+    } catch (err) {
+      toast(err.message, "attn");
+      renderHistHead(hid);
+    }
+  }
+  $("#x-forget").addEventListener("click", async () => {
+    const hid = extCur?.startsWith("h:") && extCur.slice(2);
+    if (!hid) return;
+    try { await api(`/api/history/${encodeURIComponent(hid)}/delete`, { body: {} }); } catch (err) { toast(err.message, "attn"); return; }
+    hist = hist.filter((x) => x.id !== hid);
+    renderHist();
+    location.hash = "#/";
+  });
+  const extName = (e) => e.title || (e.cwd ? e.cwd.split("/").filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
+  // Running sessions first (all of them); then the desktop apps' resting
+  // conversations, a few unless expanded.
+  const EXT_REST = 5;
+  let extAll = store.get("extAll", false);
+  const EXT_STATE = { working: "在干活", idle: "空闲", blocked: "等电脑那边确认" };
+  function renderExt() {
+    $("#ext-group").hidden = ext.length === 0;
+    const live = ext.filter((e) => e.live), rest = ext.filter((e) => !e.live);
+    $("#ext-count").textContent = ext.length ? (live.length ? `${live.length} 个在跑` : ext.length) : "";
+    const many = (state.machines || []).length > 1;
+    const shown = [...live, ...(extAll ? rest : rest.slice(0, EXT_REST))];
+    const curHidden = view === "ext" && extCur && !shown.some((e) => e.id === extCur) && rest.some((e) => e.id === extCur);
+    if (curHidden) shown.push(rest.find((e) => e.id === extCur));
+    const firstRest = live.length ? shown.findIndex((e) => !e.live) : -1;
+    $("#ext-list").innerHTML = shown.map((e, i) => {
+      const where = [e.app || KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
+      const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "正在运行")}"></span>` : "";
+      return (i === firstRest ? `<li class="sublabel">最近</li>` : "") + `<li><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
+        <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
+        <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
+    }).join("") + (rest.length > EXT_REST ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `还有 ${rest.length - EXT_REST} 个最近的会话`}</button></li>` : "");
+  }
+  // Look up the open session again in a moment (a few times at most).
+  let extSoonT = null, extSoonN = 0;
+  function extSoon() {
+    if (extSoonT || extSoonN >= 15) return;
+    extSoonN++;
+    extSoonT = setTimeout(() => { extSoonT = null; if (view === "ext") loadExternal(); }, 1500);
+  }
+  function extWorking(gone) {
+    const box = $("#x-working");
+    const e = !gone && !extCur?.startsWith("h:") && ext.find((x) => x.id === extCur);
+    const st = e && e.live ? e.status : "";
+    const text = { working: `${e && e.app || "那边"}里还在跑…`, blocked: "在等你在电脑上确认" }[st];
+    if (!text) { box.hidden = true; return; }
+    const was = nearBottom($("#x-thread"));
+    box.className = "working-row " + st;
+    box.innerHTML = `<span class="dot ${st}"></span>${esc(text)}`;
+    box.hidden = false;
+    stick($("#x-thread"), was);
+  }
+  function renderExtHead(gone) {
+    extWorking(gone);
+    if (extCur?.startsWith("h:")) return renderHistHead(extCur.slice(2));
+    $("#x-tag").textContent = "只读";
+    $("#x-forget").hidden = true;
+    $("#x-takeover").textContent = "在 herdr 里接管";
+    $("#x-takeover").className = "btn primary small";
+    $("#x-composer").hidden = true;
+    const e = ext.find((x) => x.id === extCur);
+    if (!e) {
+      $("#x-status").textContent = gone ? "已退出" : "正在连接那台电脑…";
+      $("#x-status").className = "status " + (gone ? "ended" : "unknown");
+      $("#x-takeover").disabled = true;
+      if (!gone) extSoon();
+      return;
+    }
+    $("#x-name").textContent = extName(e);
+    $("#x-kind").textContent = KIND_LABEL[e.kind] || e.kind;
+    $("#x-status").textContent = gone ? "已退出" : `正在运行 · ${e.app || "另一个终端"}`;
+    $("#x-status").className = "status " + (gone ? "ended" : "unknown");
+    $("#x-cwd").textContent = (e.machine ? machineName(e.machine) + " · " : "") + tilde(e.cwd);
+    const app = e.app || "另一个终端";
+    if (!e.live && !gone) {
+      // A desktop app's conversation that is not running right now.
+      $("#x-tag").textContent = e.can_send ? "可对话" : "只读";
+      $("#x-status").textContent = `上次活动 ${ago(e.updated || e.started)} · ${app}`;
+      $("#x-status").className = "status ended";
+      $("#x-takeover").hidden = !e.can_take_over;
+      $("#x-takeover").disabled = false;
+      $("#x-takeover").textContent = "在 herdr 里继续";
+      $("#x-takeover").className = "btn small";
+      $("#x-composer").hidden = !e.can_send;
+      if (e.can_send) $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : "经 Codex App 送达";
+      $("#x-note").textContent = e.can_send
+        ? `消息会送进 ${app} 里的这个对话，在原来的窗口里接着做${e.kind === "codex" ? "（App 会把它打开）" : ""}。`
+        : (e.read_only || "") + (e.can_take_over ? "。也可以在 herdr 里用同一个会话继续，之后就能在这里对话。" : "");
+      return;
+    }
+    $("#x-takeover").hidden = !e.can_take_over;
+    $("#x-note").textContent = gone ? "这个进程已经退出了。"
+      : !e.session ? `它跑在 ${app} 里，还没有会话记录，所以没法接管。`
+      : `它跑在 ${app} 里，Collie 只能看，不能往里面打字。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续，之后就能在这里和它对话。`;
+    $("#x-takeover").disabled = !!gone || !e.session;
+    if (e.status && !gone) {
+      $("#x-status").textContent = `${{ working: "正在跑", idle: "空闲，等你发话", blocked: "等电脑那边确认" }[e.status] || "正在运行"} · ${app}`;
+      $("#x-status").className = "status " + e.status;
+    }
+    if (e.can_send && !gone) {
+      // It takes messages where it runs: no need to take it over.
+      $("#x-tag").textContent = "可对话";
+      $("#x-composer").hidden = false;
+      $("#x-takeover").className = "btn small";
+      $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : e.app === "Codex 桌面版" ? "经 Codex App 送达" : e.kind === "codex" ? "经 Codex 后台送达" : "经会话收件箱送达";
+      $("#x-note").textContent = `消息会送进 ${app} 里的这个会话，在原来的窗口里接着做。权限确认和它问的问题，要在那台电脑上回答。也可以把它接管到 herdr，之后什么都能在这里操作。`;
+    } else if (!gone && e.read_only && e.session) {
+      $("#x-note").textContent = e.read_only + "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。";
+    }
+  }
+  bindComposer($("#x-composer"), $("#x-input"), async (text) => {
+    const e = ext.find((x) => x.id === extCur);
+    if (!e) throw new Error("这个会话已经结束了");
+    const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text } });
+    if (r.note) toast(r.note, "attn");
+  });
+  function closeExt() { extStream?.close(); extStream = null; }
+  $("#ext-list").addEventListener("click", (ev) => {
+    if (!ev.target.closest("[data-act=ext-more]")) return;
+    ev.preventDefault();
+    extAll = !extAll; store.set("extAll", extAll);
+    renderExt();
+  });
+  async function openExt(id) {
+    closeExt();
+    extCur = id;
+    if (id.startsWith("h:")) return openHist(id.slice(2));
+    const el = $("#x-thread");
+    el.innerHTML = `<div class="thread-empty">读取中…</div>`; el._sig = ""; el._fresh = true;
+    el._msgs = null; el._blocks = null;
+    resetEarlier(el, (c) => `/api/external/${encodeURIComponent(id)}/earlier?before=${c}`);
+    extSoonN = 0;
+    if (!ext.some((e) => e.id === id)) await loadExternal();
+    renderExtHead();
+    const mine = () => view === "ext" && extCur === id;
+    // The stream drops when the hub restarts or the computer reconnects:
+    // try again in a moment, keeping what is on screen.
+    let tries = 0;
+    const connect = () => {
+      const es = extStream = new EventSource(`/api/external/${encodeURIComponent(id)}/chat`);
+      es.addEventListener("meta", (ev) => {
+        tries = 0; extSoonN = 0;
+        if (!ext.some((e) => e.id === id)) loadExternal();
+        if (mine() && !JSON.parse(ev.data).structured) el.innerHTML = `<div class="thread-empty">还没有找到这个会话的记录。</div>`;
+      });
+      const show = (msgs) => { if (mine()) { drawThread(msgs, el, "这个会话还没有消息。"); extWorking(); } };
+      el._redraw = () => show(threadMsgs(el));
+      es.addEventListener("patch", (ev) => mine() && show(applyPatch(el, JSON.parse(ev.data))));
+      es.addEventListener("messages", (ev) => { el._msgs = null; el._older = null; show(JSON.parse(ev.data)); }); // an older computer
+      es.addEventListener("gone", () => { closeExt(); if (mine()) renderExtHead(true); });
+      es.onerror = () => {
+        if (es.readyState !== EventSource.CLOSED || extStream !== es || !mine()) return;
+        if (++tries > 20) { renderExtHead(true); return; }
+        if (!el.querySelector(".msg")) el.innerHTML = `<div class="thread-empty">连不上那台电脑，正在重试…</div>`;
+        setTimeout(() => { if (extStream === es && mine()) connect(); }, Math.min(1000 * tries, 5000));
+      };
+    };
+    connect();
+  }
+  $("#x-takeover").addEventListener("click", async () => {
+    if (extCur?.startsWith("h:")) return continueHist(extCur.slice(2));
+    const e = ext.find((x) => x.id === extCur);
+    if (!e) return;
+    const app = e.app || "另一个终端";
+    if (e.live && !confirm(`接管「${extName(e)}」？\n\n会先结束 ${app} 里的这个 ${KIND_LABEL[e.kind] || e.kind} 进程（相当于按 Ctrl-C），然后在 herdr 里用同一个会话继续。${app} 那边会回到命令行。`)) return;
+    const b = $("#x-takeover");
+    b.disabled = true; b.textContent = "接管中…";
+    try {
+      const r = await api(`/api/external/${encodeURIComponent(e.id)}/takeover`, { body: {} });
+      toast("已在 herdr 里接管");
+      ext = ext.filter((x) => x.id !== e.id);
+      renderExt();
+      location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+    } catch (err) {
+      toast(err.message, "attn");
+      b.disabled = false;
+    } finally { b.textContent = "在 herdr 里接管"; }
+  });
+
+  // ───────────────────────────── preferences (per device, in localStorage)
+  const prefs = {
+    theme: () => store.get("theme", "system"),
+    text: () => store.get("text", "normal"),
+    sendKey: () => store.get("sendKey", "enter"),
+    notify: () => store.get("notify", true),
+    fold: () => store.get("fold", true),
+  };
+  const darkMQ = matchMedia("(prefers-color-scheme: dark)");
+  function applyLook() {
+    const root = document.documentElement;
+    const t = prefs.theme(), x = prefs.text();
+    if (t === "system") delete root.dataset.theme; else root.dataset.theme = t;
+    if (x === "normal") delete root.dataset.text; else root.dataset.text = x;
+    const dark = t === "dark" || (t === "system" && darkMQ.matches);
+    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#0b0b0c" : "#ffffff"; });
+    dispatchEvent(new Event("collie:theme"));
+  }
+  darkMQ.addEventListener("change", applyLook);
+  applyLook();
+
+  function renderPrefs() {
+    const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
+      `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
+    const sw = (key, on) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"></button>`;
+    const row = (title, sub, ctl) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small>${sub}</small>` : ""}</div>${ctl}</div>`;
+    const perm = !("Notification" in window) ? "这个浏览器不支持通知（手机上通常要先添加到主屏幕）"
+      : Notification.permission === "denied" ? "浏览器已拒绝通知，需要在浏览器的网站设置里打开"
+      : "页面在后台时，agent 需要你确认或完成任务会弹通知";
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+    $("#prefs-body").innerHTML = `<div class="prefs">
+      <div class="card"><div class="card-h">外观</div>
+        ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
+        ${row("对话文字", "", seg("text", prefs.text(), [["small", "小"], ["normal", "标准"], ["large", "大"]]))}
+      </div>
+      <div class="card"><div class="card-h">对话</div>
+        ${row("打开 agent 时显示", "对话：从会话记录整理的消息；屏幕：终端原样；日志：自动换行的滚动输出", seg("mode2", mode, [["chat", "对话"], ["screen", "屏幕"], ["log", "日志"]]))}
+        ${row("发送消息", "另一种按法用来换行；Shift+Enter 总是换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
+        ${row("折叠连续的工具步骤", "超过 3 步时收成一行，只露出最后一步", sw("fold", prefs.fold()))}
+      </div>
+      <div class="card"><div class="card-h">通知</div>
+        ${row("浏览器通知", esc(perm), sw("notify", prefs.notify() && (!("Notification" in window) || Notification.permission !== "denied")))}
+      </div>
+      <p class="panel-intro">Collie 本身的设置（它自己用哪个 agent、派活默认在哪台电脑、通知机器人）在 <a href="#/auto" data-auto-tab="settings">自动化 → 设置</a>；电脑和手机的连接在 <a href="#/devices">设备</a>。</p>
+    </div>`;
+  }
+  $("#prefs-body").addEventListener("click", async (e) => {
+    const link = e.target.closest("a[data-auto-tab]");
+    if (link) autoTab = link.dataset.autoTab;
+    const b = e.target.closest(".seg[data-pref] button, button.switch[data-pref]");
+    if (!b) return;
+    if (b.classList.contains("switch")) {
+      const key = b.dataset.pref, on = b.getAttribute("aria-checked") !== "true";
+      if (key === "notify" && on && "Notification" in window && Notification.permission !== "granted") {
+        const p = await Notification.requestPermission();
+        if (p !== "granted") { toast("浏览器没有允许通知", "attn"); renderPrefs(); return; }
+      }
+      store.set(key, on);
+    } else {
+      const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
+      if (key === "mode2") setMode(v); else store.set(key, v);
+      if (key === "theme" || key === "text") applyLook();
+    }
+    renderPrefs();
+  });
+
+  // ───────────────────────────── devices
+  let devTimer;
+  let devAddr = store.get("pairAddr", "");
+  let pairing = { browser: null, machine: null }; // {code, expires}
+
+  function openDevices() {
+    clearInterval(devTimer);
+    loadDevices();
+    devTimer = setInterval(loadDevices, 5000);
+  }
+
+  async function newCode(kind) {
+    const r = await api("/api/pair/new", { body: { kind } });
+    pairing[kind] = { code: r.code, expires: new Date(r.expires).getTime() };
+    return r;
+  }
+
+  const left = (p) => { const s = Math.max(0, Math.round((p.expires - Date.now()) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+  async function loadDevices() {
+    let r;
+    try { r = await api("/api/devices"); } catch (err) { $("#devices-body").innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; return; }
+    if (view !== "devices") return;
+    const addrs = r.addresses || [];
+    if (!addrs.includes(devAddr)) devAddr = addrs[0] || location.origin;
+    const fresh = (k) => pairing[k] && pairing[k].expires - Date.now() > 15000;
+    if (!fresh("browser")) await newCode("browser").catch(() => {});
+    const pb = pairing.browser;
+    const phoneURL = pb ? `${devAddr}/?pair=${pb.code}` : "";
+    const pm = fresh("machine") ? pairing.machine : null;
+    const nodeCmd = pm ? `collie node --hub ${devAddr} --code ${pm.code}` : "";
+    const machines = r.devices.filter((d) => d.kind === "machine");
+    const browsers = r.devices.filter((d) => d.kind !== "machine");
+    const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
+    const keepOpen = document.activeElement?.id === "dev-addr";
+    if (keepOpen) return; // don't redraw under an open select
+
+    $("#devices-body").innerHTML = `
+      <p class="panel-intro">Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac 等电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。</p>
+
+      <div class="pair-grid">
+        <div class="card pair-card">
+          <div class="card-h">连接手机或平板</div>
+          <div class="qr-wrap">${pb ? `<img class="qr" alt="配对二维码" src="/api/qr?text=${encodeURIComponent(phoneURL)}">` : ""}</div>
+          <p class="pair-hint">用相机扫一下，在浏览器里打开即可，之后可「添加到主屏幕」。<b>${pb ? left(pb) : ""}</b> 内有效，只能用一次。</p>
+          <div class="code"><span>${esc(phoneURL)}</span><button class="icon-btn" data-copy="${esc(phoneURL)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+          ${addrSel}
+        </div>
+
+        <div class="card pair-card">
+          <div class="card-h">连接一台电脑</div>
+          <p class="pair-hint">在那台电脑上装好 herdr 和 Collie（同一个二进制），然后运行：</p>
+          ${pm ? `<div class="code big"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+               <p class="pair-hint"><b>${left(pm)}</b> 内有效，只能用一次。之后它会自动重连，只需运行 <code>collie node</code>。</p>`
+             : `<button class="btn primary" id="new-node-code">生成连接命令</button>`}
+          <p class="pair-hint muted">需要这台电脑能访问上面的地址（同一内网或 VPN）。</p>
+        </div>
+      </div>
+
+      <div class="card"><div class="card-h">电脑</div><ul class="rows">
+        <li class="row dev-row">
+          <span class="dot ${r.hub.herdr ? "online" : "offline"}"></span>
+          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div></div>
+          <span class="right">${r.hub.herdr ? "在线" : ""}</span></li>
+        ${machines.map((d) => `<li class="row dev-row">
+          <span class="dot ${d.online ? "online" : "offline"}"></span>
+          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span><span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div></div>
+          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")}
+      </ul></div>
+
+      <div class="card"><div class="card-h">手机和浏览器</div><ul class="rows">
+        ${browsers.length ? browsers.map((d) => `<li class="row dev-row">
+          <span class="dot idle"></span>
+          <div><div class="meta"><b>${esc(d.name)}</b>${d.current ? '<span class="tag">当前</span>' : ""}<span>最近 ${when(d.last_seen)}</span></div></div>
+          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")
+        : `<li class="empty-row">还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。</li>`}
+      </ul></div>`;
+  }
+
+  $("#devices-body").addEventListener("change", (e) => {
+    if (e.target.id === "dev-addr") { devAddr = e.target.value; store.set("pairAddr", devAddr); e.target.blur(); loadDevices(); }
+  });
+  $("#devices-body").addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    try {
+      if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
+      else if (b.id === "new-node-code") { await newCode("machine"); loadDevices(); }
+      else if (b.dataset.delDev) {
+        if (!confirm(`移除「${b.dataset.name}」？它需要重新配对才能再连进来。`)) return;
+        await api(`/api/devices/${encodeURIComponent(b.dataset.delDev)}/delete`, { body: {} });
+        loadDevices();
+      }
+    } catch (err) { toast(err.message, "attn"); }
+  });
+
+  // Clipboard API needs a secure context; plain-http LAN addresses fall back.
+  async function copy(text) {
+    if (navigator.clipboard && isSecureContext) return navigator.clipboard.writeText(text);
+    const t = document.createElement("textarea");
+    t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+    document.body.append(t); t.select(); document.execCommand("copy"); t.remove();
+  }
+
+  // ───────────────────────────── one agent: header
+  function renderHead() {
+    const v = find(current);
+    if (!v) return;
+    $("#d-name").textContent = v.name === ROUTER ? "Collie 的终端" : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
+    $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER ? `名字：${v.name}` : "";
+    $("#d-kind").textContent = v.is_agent ? (KIND_LABEL[v.kind] || v.kind) : "";
+    const role = isWorker(v.name) ? "Collie 派出" : "";
+    $("#d-worker").hidden = !role;
+    $("#d-worker").textContent = role;
+    const st = $("#d-status");
+    st.className = "status " + v.status;
+    st.innerHTML = `<span class="dot ${esc(v.status)}"></span>${esc(STATUS_LABEL[v.status] || v.status)}`;
+    $("#d-cwd").textContent = tilde(v.cwd);
+    // The pane may have shown up before the page knew what it is (a fresh
+    // terminal): once it does, switch to the view that fits.
+    if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); openStream(); }
+    $("#input").placeholder = v.name === ROUTER ? "直接在 Collie 的终端里输入…" : v.is_agent ? `给 ${KIND_LABEL[v.kind] || v.kind} 发消息…` : "输入命令…";
+  }
+
+  // ───────────────────────────── one agent: streams
+  let mode = store.get("mode2", "chat");
+  let stream = null;
+  let term = null;
+  let size = { cols: 0, rows: 0 };
+
+  // A plain shell has no conversation to show, so it opens on the screen.
+  const isShell = () => { const v = find(current); return !!v && !v.is_agent; };
+  let shellMode = null; // a shell's own pick; never overwrites the agent default
+  const curMode = () => isShell() ? (shellMode || (mode === "chat" ? "screen" : mode)) : mode;
+  function applyMode() {
+    const m = curMode();
+    $("#viewer").dataset.mode = m;
+    $("#detail").classList.toggle("chat-mode", m === "chat");
+    $("#detail").classList.toggle("shell", isShell());
+    $$("#mode-seg button").forEach((b) => {
+      b.classList.toggle("on", b.dataset.mode === m);
+      if (b.dataset.mode === "chat") b.hidden = isShell();
+    });
+  }
+  function setMode(m) {
+    if (view === "pane" && isShell()) shellMode = m; else { mode = m; store.set("mode2", m); }
+    applyMode();
+    if (view === "pane" && current) { closeStream(); resetChat(); openStream(); }
+  }
+  $$("#mode-seg button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+  function ensureTerm() {
+    if (term || !window.Terminal) return;
+    const css = getComputedStyle(document.documentElement);
+    term = new Terminal({
+      cols: 120, rows: 40, fontFamily: css.getPropertyValue("--mono"), fontSize: 13, lineHeight: 1.15,
+      cursorBlink: false, scrollback: 0, allowTransparency: true, theme: termTheme(),
+    });
+    term.open($("#screen"));
+    term.onData(typeIntoPane);
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { term.options.theme = termTheme(); });
+    addEventListener("collie:theme", () => { term.options.theme = termTheme(); });
+  }
+  function termTheme() {
+    const fg = getComputedStyle(document.documentElement).getPropertyValue("--term-fg").trim();
+    return { background: "rgba(0,0,0,0)", foreground: fg, cursor: fg, selectionBackground: "rgba(127,127,127,.3)" };
+  }
+  function fitTerm() {
+    if (!term || !size.cols) return;
+    const avail = $("#screen").clientWidth - 32;
+    const fs = Math.max(6, Math.min(14, Math.floor((avail / size.cols / 0.602) * 2) / 2));
+    if (term.options.fontSize !== fs) term.options.fontSize = fs;
+  }
+  addEventListener("resize", () => fitTerm());
+
+  function openStream() {
+    const id = current;
+    applyMode();
+    const m = curMode();
+    if (m === "chat") return openChat(id);
+    if (m === "screen") ensureTerm();
+    stream = new EventSource(paneURL(id, "stream") + "?mode=" + m);
+    stream.addEventListener("frame", (e) => {
+      if (id !== current) return;
+      const f = JSON.parse(e.data);
+      if (m === "screen") drawScreen(f); else drawLog(f.text);
+    });
+    stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
+  }
+  function closeStream() { stream?.close(); stream = null; }
+
+  function drawScreen(f) {
+    if (!term) return;
+    if (f.cols && f.rows && (f.cols !== size.cols || f.rows !== size.rows)) {
+      size = { cols: f.cols, rows: f.rows };
+      term.resize(f.cols, f.rows);
+      fitTerm();
+    }
+    term.write("\x1b[?25l\x1b[H\x1b[2J" + f.text.replace(/\r?\n/g, "\r\n"));
+  }
+  function cleanLog(text) {
+    return text.split("\n").map((l) => l.replace(/\s+$/, ""))
+      .map((l) => (/^\s*[─━═\-]{16,}\s*$/.test(l) ? "────────────────" : l))
+      .join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  }
+  function drawLog(text) {
+    const el = $("#log");
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    el.textContent = cleanLog(text);
+    if (atBottom) el.scrollTop = el.scrollHeight;
+    $("#jump").hidden = atBottom;
+  }
+  $("#log").addEventListener("scroll", () => { const el = $("#log"); $("#jump").hidden = el.scrollHeight - el.scrollTop - el.clientHeight < 40; });
+  $("#jump").addEventListener("click", () => { const el = $("#log"); el.scrollTop = el.scrollHeight; });
+
+  // ───────────────────────────── one agent: conversation
+  let showRaw = false;
+  function resetChat() {
+    $("#thread").innerHTML = "";
+    $("#thread").classList.remove("asking");
+    $("#live").hidden = true;
+    $("#live").innerHTML = "";
+    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; showRaw = false;
+  }
+  function openChat(id) {
+    stream = new EventSource(paneURL(id, "chat"));
+    const alive = () => id === current && curMode() === "chat";
+    stream.addEventListener("reset", () => alive() && resetChat());
+    const th = $("#thread");
+    resetEarlier(th, (c) => paneURL(id, "earlier") + "?before=" + c);
+    th._redraw = () => alive() && drawThread(threadMsgs(th));
+    stream.addEventListener("patch", (e) => alive() && drawThread(applyPatch(th, JSON.parse(e.data))));
+    stream.addEventListener("messages", (e) => alive() && drawThread(JSON.parse(e.data))); // an older computer
+    stream.addEventListener("log", (e) => alive() && drawFallback(JSON.parse(e.data).text));
+    stream.addEventListener("live", (e) => alive() && drawLive(JSON.parse(e.data)));
+    stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
+  }
+  // Threads on a .viewer.chatbg scroll the viewer around them.
+  const scroller = (el) => el.closest(".viewer.chatbg") || el;
+  const nearBottom = (el) => { const s = scroller(el); return s.scrollHeight - s.scrollTop - s.clientHeight < 80; };
+  const stick = (el, was) => {
+    if (!was) return;
+    const s = scroller(el);
+    s.scrollTop = s.scrollHeight;
+    requestAnimationFrame(() => { s.scrollTop = s.scrollHeight; }); // after images and code lay out
+  };
+
+  // A stream sends {base, from, msgs}: the first (and every reconnect) has
+  // from === base and carries the whole view; later ones replace the
+  // messages from position `from` on, and `base` moves when old ones fall off.
+  function applyPatch(el, p) {
+    let list = el._msgs, base = el._base;
+    if (!list || p.from === p.base || p.from < base || p.from > base + list.length) {
+      list = []; base = p.from;
+      el._older = null; // a fresh view: what was loaded before may not join it
+    }
+    list = list.slice(0, p.from - base).concat(p.msgs);
+    if (p.base > base) {
+      if (el._older) el._older = el._older.concat(list.slice(0, p.base - base));
+      list = list.slice(p.base - base); base = p.base;
+    }
+    el._msgs = list; el._base = base; el._liveEarlier = p.earlier || 0;
+    return threadMsgs(el);
+  }
+  // A thread's messages: the older ones loaded on request, then the live view.
+  const threadMsgs = (el) => (el._older || []).concat(el._msgs || []);
+  const earlierCursor = (el) => (el._older ? el._olderEarlier : el._liveEarlier) || 0;
+  function resetEarlier(el, url) { el._older = null; el._olderEarlier = 0; el._liveEarlier = 0; el._earlierURL = url; }
+
+  // "Load earlier": fetch the page before the oldest message shown and keep
+  // the reader's place.
+  document.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("[data-act=earlier]");
+    if (!b) return;
+    const el = b.closest(".thread");
+    if (!el || el._loadingEarlier || !el._earlierURL) return;
+    const cursor = earlierCursor(el);
+    if (!cursor) return;
+    el._loadingEarlier = true;
+    b.disabled = true; b.textContent = "加载中…";
+    try {
+      const r = await api(el._earlierURL(cursor));
+      if (el._earlierURL && earlierCursor(el) === cursor) {
+        el._older = (r.messages || []).concat(el._older || []);
+        el._olderEarlier = r.earlier || 0;
+        const s = scroller(el), fromBottom = s.scrollHeight - s.scrollTop;
+        el._redraw?.();
+        s.scrollTop = s.scrollHeight - fromBottom;
+      }
+    } catch (err) {
+      toast(err.message, "attn");
+    } finally {
+      // The row may have been kept as it was (its markup did not change).
+      el._loadingEarlier = false;
+      const row = el.querySelector("[data-act=earlier]");
+      if (row) { row.disabled = false; row.textContent = "加载更早的消息"; }
+    }
+  });
+
+  function drawThread(msgs, el = $("#thread"), empty = "还没有对话。发一条消息开始吧。") {
+    // Just opened: start at the latest message.
+    const was = el._fresh || nearBottom(el) || !el.childElementCount;
+    if (msgs.length) el._fresh = false;
+    const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
+    if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._blocks = null; return; }
+    const blocks = [];
+    let html = "", i = 0;
+    const cut = () => { blocks.push(html); html = ""; };
+    while (i < msgs.length) {
+      const m = msgs[i];
+      if (m.kind === "tool") {
+        // A run of tool calls reads as one quiet line; long runs fold away,
+        // keeping only the latest step in view.
+        const start = i;
+        while (i < msgs.length && msgs[i].kind === "tool") i++;
+        const run = msgs.slice(start, i);
+        const row = (t, k) => {
+          const cls = t.error ? "err" : (t.output ? "" : "pending");
+          return `<details class="tool ${cls}" data-i="${k}" ${open.has(String(k)) ? "open" : ""}>`
+            + `<summary><span class="tname">${esc(t.name)}</span><span class="targ">${esc(t.input)}</span></summary>`
+            + (t.output ? `<pre>${esc(t.output)}</pre>` : "") + `</details>`;
+        };
+        if (run.length <= 3 || !prefs.fold()) {
+          html += `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
+          cut();
+          continue;
+        }
+        const key = "run" + start;
+        const names = [...new Set(run.map((t) => t.name))].slice(0, 4).join("、");
+        const errs = run.filter((t) => t.error).length;
+        html += `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>
+          <summary><span class="n">${run.length} 个步骤</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${errs} 个出错</b>` : ""}</span></summary>
+          <div class="toolrun-body">${run.slice(0, -1).map((t, k) => row(t, start + k)).join("")}</div>
+        </details>${row(run[run.length - 1], i - 1)}</div>`;
+        cut();
+        continue;
+      }
+      html += m.kind === "user" ? `<div class="msg user">${esc(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
+      cut();
+      i++;
+    }
+    if (el._earlierURL && earlierCursor(el) > 0) {
+      blocks.unshift(`<div class="earlier-row"><button type="button" data-act="earlier">加载更早的消息</button></div>`);
+    }
+    const sig = blocks.join("");
+    if (sig === el._sig) return;
+    el._sig = sig;
+    const old = el._blocks;
+    if (old && el.children.length === old.length && el.lastElementChild === el._last) {
+      // Keep what did not change (and its open/closed state); redraw from
+      // the first block that did.
+      let k = 0;
+      while (k < old.length && k < blocks.length && old[k] === blocks[k]) k++;
+      while (el.children.length > k) el.lastElementChild.remove();
+      el.insertAdjacentHTML("beforeend", blocks.slice(k).join(""));
+    } else {
+      el.innerHTML = sig;
+    }
+    el._blocks = blocks; el._last = el.lastElementChild;
+    stick(el, was);
+  }
+
+  function drawFallback(text) {
+    const el = $("#thread");
+    const was = nearBottom(el) || !el.childElementCount;
+    const v = find(current);
+    const note = v && v.is_agent ? `${esc(KIND_LABEL[v.kind] || v.kind)} 还没有可读取的会话记录，先显示终端输出` : "普通终端，这里显示终端输出";
+    el.innerHTML = `<div class="fallback-note">${note}</div><pre class="termcard">${esc(cleanLog(text))}</pre>`;
+    stick(el, was);
+  }
+
+  let lastLive = null;
+  function drawLive(l) {
+    lastLive = l;
+    $("#thread").classList.toggle("asking", l.status === "blocked" && !!l.approval);
+    const box = $("#live");
+    const th = $("#thread");
+    const was = nearBottom(th);
+    if (l.status === "working" && l.tail) {
+      box.innerHTML = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre></div>`;
+      box.hidden = false;
+    } else if (l.status === "blocked" && l.approval) {
+      const v = find(current);
+      box.innerHTML = askHTML(l.approval, v ? title(v) : "agent");
+      box.hidden = false;
+    } else {
+      box.hidden = true;
+      box.innerHTML = "";
+    }
+    stick(th, was);
+  }
+
+  // Terminal dialogs arrive hard-wrapped at the terminal's width. Rebuild the
+  // paragraphs so the card can use its own width, and find the real question.
+  const CJK = /[　-鿿＀-￯]/;
+  function readDialog(text) {
+    const raw = (text || "").split("\n");
+    const ind = (l) => l.match(/^ */)[0].length;
+    const filled = raw.filter((l) => l.trim());
+    const base = filled.length ? Math.min(...filled.map(ind)) : 0;
+    const paras = [];
+    let cur = [];
+    for (const l of raw) {
+      if (l.trim()) cur.push(l);
+      else if (cur.length) { paras.push(cur); cur = []; }
+    }
+    if (cur.length) paras.push(cur);
+    // A line that ends mid-word and is followed by a capitalised line is a real
+    // line break ("This command requires approval" / "Do you want…"), not a wrap.
+    const split = [];
+    for (const p of paras) {
+      let part = [p[0]];
+      for (let k = 1; k < p.length; k++) {
+        const prev = p[k - 1].trim(), next = p[k].trim();
+        if (ind(p[k]) === ind(p[k - 1]) && /[A-Za-z0-9]$/.test(prev) && /^[A-Z]/.test(next)) { split.push(part); part = []; }
+        part.push(p[k]);
+      }
+      split.push(part);
+    }
+    let blocks = split.map((p) => {
+      const t0 = p[0].trim();
+      // Indented deeper than the dialog's text, or a lone path: show as-is.
+      if (p.every((l) => ind(l) > base) || (p.length === 1 && /^[~/.][^\s]*$/.test(t0))) {
+        const cut = Math.min(...p.map(ind));
+        return { code: true, text: p.map((l) => l.slice(cut)).join("\n") };
+      }
+      let t = "";
+      for (const l of p.map((x) => x.trim())) t += !t ? l : (CJK.test(t.slice(-1)) && CJK.test(l[0]) ? "" : " ") + l;
+      return { code: false, text: t };
+    });
+    // Terminal chrome that means nothing in a card.
+    blocks = blocks.filter((b, i) => b.code || !(/^tip:/i.test(b.text) ||
+      (i === blocks.length - 1 && b.text.split(/\s+/).length <= 3 && !/[.:?？。：]/.test(b.text))));
+    // The question is the last sentence ending in "?"; it becomes the title.
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.code) continue;
+      const ms = [...b.text.matchAll(/[^.!?。！？]*[?？]/g)];
+      if (!ms.length) continue;
+      const m = ms[ms.length - 1];
+      const rest = (b.text.slice(0, m.index) + b.text.slice(m.index + m[0].length)).trim();
+      const out = blocks.slice();
+      if (rest) out[i] = { code: false, text: rest }; else out.splice(i, 1);
+      // "Quick safety check: Is this…" → the label adds nothing to a title.
+      const q = m[0].trim().replace(/^[^:：?？]{1,24}[:：]\s*(?=\S)/, "");
+      return { q, blocks: out };
+    }
+    const last = blocks.map((b) => !b.code).lastIndexOf(true);
+    if (last < 0) return { q: "要继续吗？", blocks };
+    return { q: blocks[last].text, blocks: blocks.filter((_, k) => k !== last) };
+  }
+
+  // A calm decision sheet: the question as the title, the dialog's text
+  // reflowed under it, the choices as a list.
+  function askHTML(a, who) {
+    const { q, blocks } = readDialog(a.question);
+    const choices = a.choices || [];
+    const body = blocks.map((b) => b.code ? `<pre class="ctx-code">${esc(b.text)}</pre>` : `<p>${esc(b.text)}</p>`).join("");
+    return `<div class="ask">
+      <div class="ask-head"><span class="dot blocked"></span><span class="who">${esc(who)}</span><span>需要你确认</span><span class="spacer"></span>
+        <button data-raw>${showRaw ? "收起终端" : "查看终端"}</button></div>
+      <div class="ask-q"><div class="q">${esc(q)}</div>${body ? `<div class="ctx">${body}</div>` : ""}</div>
+      ${showRaw ? `<pre class="ask-raw">${esc(a.screen)}</pre>` : ""}
+      ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button class="choice ${c.current ? "current" : ""}" data-choice="${i}">
+          <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}</span></button>`).join("")}</div>
+        <div class="ask-keys"><button data-k="esc">Esc 取消</button></div>`
+      : `<div class="ask-keys"><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="esc">Esc</button><button class="go" data-k="enter">确认 ↵</button></div>`}
+    </div>`;
+  }
+
+  $("#live").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b || !current) return;
+    if (b.hasAttribute("data-raw")) { showRaw = !showRaw; if (lastLive) drawLive(lastLive); return; }
+    if (b.dataset.choice != null) {
+      const c = lastLive?.approval?.choices?.[+b.dataset.choice];
+      if (!c) return;
+      if (c.text) sendText(c.text); else sendKeys(c.keys || ["enter"]);
+      b.closest(".ask").style.opacity = ".5";
+      return;
+    }
+    if (b.dataset.k) sendKeys([b.dataset.k]);
+  });
+
+  $("#kbd-toggle").addEventListener("click", () => {
+    const on = $("#keys").classList.toggle("open");
+    $("#kbd-toggle").classList.toggle("on", on);
+  });
+
+  // Minimal, safe Markdown: escape first, then add a little structure.
+  const mdCache = new Map();
+  function md(src) {
+    const key = String(src || "");
+    let out = mdCache.get(key);
+    if (out === undefined) {
+      out = mdRender(key);
+      if (mdCache.size > 3000) mdCache.delete(mdCache.keys().next().value);
+      mdCache.set(key, out);
+    }
+    return out;
+  }
+  function mdRender(src) {
+    const blocks = [];
+    let text = String(src || "").replace(/```[^\n]*\n([\s\S]*?)(```|$)/g, (_, code) => {
+      blocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`);
+      return `\u0000${blocks.length - 1}\u0000`;
+    });
+    text = esc(text);
+    const inline = (s) => s
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    const out = [];
+    let list = null, para = [];
+    const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };
+    const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
+    // A GFM table: a | row, a |---| row, then more | rows.
+    const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+    const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
+    const lines = text.split("\n");
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li];
+      let m;
+      if (line.includes("|") && li + 1 < lines.length && isSep(lines[li + 1]) && lines[li + 1].includes("|")) {
+        flushPara(); flushList();
+        const head = cells(line);
+        const align = cells(lines[li + 1]).map((c) => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
+        const td = (tag, c, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ""}>${inline(c)}</${tag}>`;
+        let body = "";
+        li += 2;
+        while (li < lines.length && lines[li].includes("|") && lines[li].trim()) {
+          const r = cells(lines[li]);
+          body += `<tr>${head.map((_, k) => td("td", r[k] || "", k)).join("")}</tr>`;
+          li++;
+        }
+        li--;
+        out.push(`<div class="md-table"><table><thead><tr>${head.map((c, k) => td("th", c, k)).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
+        continue;
+      }
+      if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
+      if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); const h = Math.min(m[1].length + 1, 4); out.push(`<h${h}>${inline(m[2])}</h${h}>`); continue; }
+      if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+        const tag = /^\s*\d/.test(line) ? "ol" : "ul";
+        flushPara();
+        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+        list.items.push(m[1]);
+        continue;
+      }
+      if ((m = line.match(/^&gt;\s?(.*)$/))) { flushPara(); flushList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
+      if (!line.trim()) { flushPara(); flushList(); continue; }
+      flushList();
+      para.push(line);
+    }
+    flushPara(); flushList();
+    return out.join("").replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
+  }
+
+  // ───────────────────────────── input
+  const SEQ = {
+    "\r": "enter", "\x7f": "backspace", "\b": "backspace", "\t": "tab", "\x1b": "esc",
+    "\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left", "\x1b[Z": "shift+tab",
+    "\x1b[H": "home", "\x1b[F": "end", "\x1b[3~": "delete", "\x1b[5~": "pageup", "\x1b[6~": "pagedown",
+    "\x1bOA": "up", "\x1bOB": "down", "\x1bOC": "right", "\x1bOD": "left",
+  };
+  function typeIntoPane(data) {
+    if (!current) return;
+    if (SEQ[data]) return sendKeys([SEQ[data]]);
+    if (data.length === 1 && data.charCodeAt(0) < 27) return sendKeys(["ctrl+" + String.fromCharCode(data.charCodeAt(0) + 96)]);
+    sendText(data);
+  }
+  const sendKeys = (keys) => current && api(paneURL(current, "keys"), { body: { keys } }).catch((e) => toast(e.message));
+  const sendText = (text) => current && api(paneURL(current, "text"), { body: { text } }).catch((e) => toast(e.message));
+
+  $("#keys").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b || !current) return;
+    if (b.dataset.k) sendKeys([b.dataset.k]); else if (b.dataset.t) sendText(b.dataset.t);
+  });
+  $("#keys").addEventListener("mousedown", (e) => e.preventDefault());
+
+  function grow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, innerHeight * 0.4) + "px"; }
+  // Files go to the machine where the agent runs, then their paths ride
+  // along in the message (agents read images and files by path).
+  const fmtSize = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  function bindFiles(form, machine) {
+    const box = $(".files", form), picker = $('input[type="file"]', form);
+    form._files = [];
+    const draw = () => {
+      box.hidden = !form._files.length;
+      box.innerHTML = form._files.map((f, i) => `<span class="file ${f.err ? "err" : f.path ? "" : "busy"}" title="${esc(f.err || f.path || "上传中…")}">
+        ${f.thumb ? `<img src="${f.thumb}" alt="">` : `<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`}
+        <span class="fn">${esc(f.name)}</span><span class="fs">${f.err ? "失败" : f.path ? fmtSize(f.size) : "上传中"}</span>
+        <button type="button" data-rm="${i}" title="移除">×</button></span>`).join("");
+    };
+    const add = (list) => {
+      for (const file of list) {
+        const f = { name: file.name || "粘贴的图片.png", size: file.size, thumb: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" };
+        const m = machine();
+        f.done = fetch(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`, {
+          method: "POST", body: file, credentials: "same-origin",
+        }).then(async (res) => {
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(d.error || res.statusText);
+          f.path = d.path;
+        }).catch((err) => { f.err = err.message; toast(`${f.name}：${err.message}`, "attn"); }).finally(draw);
+        form._files.push(f);
+      }
+      draw();
+    };
+    $(".attach", form).addEventListener("click", () => picker.click());
+    picker.addEventListener("change", () => { add([...picker.files]); picker.value = ""; });
+    box.addEventListener("click", (e) => {
+      const i = e.target.closest("[data-rm]")?.dataset.rm;
+      if (i == null) return;
+      const [f] = form._files.splice(+i, 1);
+      if (f?.thumb) URL.revokeObjectURL(f.thumb);
+      draw();
+    });
+    const ta = $("textarea", form);
+    ta.addEventListener("paste", (e) => {
+      const files = [...(e.clipboardData?.files || [])];
+      if (files.length) { e.preventDefault(); add(files); }
+    });
+    form.addEventListener("dragover", (e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); form.classList.add("drop"); } });
+    form.addEventListener("dragleave", () => form.classList.remove("drop"));
+    form.addEventListener("drop", (e) => {
+      form.classList.remove("drop");
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault(); add([...e.dataTransfer.files]);
+    });
+    form._clearFiles = () => { form._files.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb)); form._files = []; draw(); };
+  }
+  async function withFiles(form, text) {
+    const files = form._files || [];
+    if (!files.length) return text;
+    await Promise.all(files.map((f) => f.done));
+    if (files.some((f) => f.err)) throw new Error("有文件没传上去，移除后再发");
+    return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
+  }
+  // A user message's attachments show as file names, not server paths.
+  function userText(t) {
+    const i = t.lastIndexOf("附件：\n");
+    if (i < 0) return esc(t);
+    const names = t.slice(i + 4).split("\n").filter(Boolean).map((p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, ""));
+    return esc(t.slice(0, i).trimEnd()) + `<span class="att">${names.map((n) => `<span>📎 ${esc(n)}</span>`).join("")}</span>`;
+  }
+
+  function bindComposer(form, input, send, machine) {
+    if (machine) bindFiles(form, machine);
+    input.addEventListener("input", () => grow(input));
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      const mod = e.metaKey || e.ctrlKey;
+      // "mod": Enter makes a new line and ⌘/Ctrl+Enter sends.
+      if (prefs.sendKey() === "mod" ? mod : !mod) { e.preventDefault(); form.requestSubmit(); }
+    });
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = $(".send", form);
+      btn.disabled = true;
+      try {
+        const text = await withFiles(form, input.value);
+        await send(text);
+        input.value = ""; grow(input); form._clearFiles?.();
+      }
+      catch (err) { toast(err.message, "attn"); }
+      finally { btn.disabled = false; }
+    });
+  }
+
+  bindComposer($("#composer"), $("#input"), async (text) => {
+    if (!current) return;
+    let v = find(current);
+    if (!v) {
+      // The page may be behind (e.g. the hub restarted); look again before giving up.
+      try { state = await api("/api/state"); renderSide(); } catch {}
+      v = find(current) || { pane_id: current, is_agent: false };
+    }
+    if (!text.trim()) { sendKeys(["enter"]); return; }
+    try {
+      if (v.is_agent) await api(`/api/agents/${encodeURIComponent(current)}/prompt`, { body: { text } });
+      else await api(paneURL(current, "text"), { body: { text, enter: true } });
+    } catch (err) {
+      throw new Error(err.message.includes("blocked") ? "agent 正在等你确认，先处理上面的确认卡片" : err.message);
+    }
+  }, () => (current || "").includes("@") ? current.slice(current.lastIndexOf("@") + 1) : "");
+
+  // ───────────────────────────── menus
+  document.addEventListener("click", (e) => {
+    const opener = e.target.closest("[data-menu]");
+    $$(".menu").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
+    if (opener) { const m = $("#" + opener.dataset.menu); m.hidden = !m.hidden; }
+  });
+
+  document.addEventListener("click", async (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (!act) return;
+    const v = find(current);
+    try {
+      if (act === "interrupt") sendKeys(["ctrl+c"]);
+      if (act === "copy" && v) { await copy(v.pane_id); toast("已复制 " + v.pane_id); }
+      if (act === "shell-here" && v) {
+        const r = await api("/api/agents", { body: { kind: "shell", cwd: v.cwd, machine: v.machine || "" } });
+        location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+      }
+      if (act === "close" && v) {
+        if (!confirm(`关闭工作区「${v.workspace_label || v.workspace_id}」？里面的进程会被结束。`)) return;
+        await api(`/api/workspaces/${encodeURIComponent(v.workspace_id)}/close`, { method: "POST", body: {} });
+        location.hash = "#/";
+      }
+      if (act === "router-open") {
+        const p = paneOf(ROUTER);
+        if (p) location.hash = "#/p/" + encodeURIComponent(p); else toast("Collie 还在休眠；发一条消息就会唤醒它");
+      }
+      if (act === "router-restart") {
+        if (!confirm("重启 Collie？它会读自己的记忆恢复上下文，排队的消息不会丢。")) return;
+        await api("/api/super/router/restart", { method: "POST", body: {} });
+        toast("Collie 正在重启");
+      }
+      if (act === "pause") {
+        const cur = (await api("/api/super/settings")).settings;
+        await api("/api/super/settings", { body: { settings: { ...cur, paused: !cur.paused } } });
+        toast(cur.paused ? "已恢复投递" : "已暂停投递");
+      }
+      if (act === "auto") location.hash = "#/auto";
+    } catch (err) { toast(err.message, "attn"); }
+  });
+
+  // ───────────────────────────── launcher
+  const sheet = $("#launch");
+  const cwdInput = $("#l-cwd");
+  const nameInput = $("#l-name");
+  let nameTouched = false;
+
+  function suggestName() {
+    if (!nameTouched) nameInput.value = "";
+    // A terminal needs only a computer and a folder.
+    const shell = $("input[name=kind]:checked")?.value === "shell";
+    $$("#launch .agent-only").forEach((f) => f.hidden = shell);
+    $("#launch-go").textContent = shell ? "打开" : "启动";
+  }
+  let pickMachine = "";
+  const recentKey = () => "recentDirs" + (pickMachine ? ":" + pickMachine : "");
+  function renderMachinePick() {
+    const ms = (state.machines || []).filter((m) => m.local ? state.ok : m.online);
+    $("#l-machine-field").hidden = ms.length < 2;
+    if (!ms.some((m) => m.id === pickMachine)) pickMachine = ms[0]?.id || "";
+    $("#l-machines").innerHTML = ms.map((m) => `<button type="button" class="${m.id === pickMachine ? "on" : ""}" data-m="${esc(m.id)}">
+      <span class="dot online"></span>${esc(m.name)}${m.local ? "<small>hub</small>" : ""}</button>`).join("");
+  }
+  function resetDir() {
+    const recent = store.get(recentKey(), []);
+    cwdInput.value = recent[0] || "~";
+    $("#recent").innerHTML = recent.slice(0, 6).map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join("");
+    browse(cwdInput.value);
+  }
+  $("#l-machines").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-m]");
+    if (!b) return;
+    pickMachine = b.dataset.m;
+    store.set("machine", pickMachine);
+    renderMachinePick();
+    resetDir();
+  });
+  function openLauncher() {
+    nameTouched = false;
+    $("#launch-error").textContent = "";
+    $("#l-prompt").value = "";
+    pickMachine = store.get("machine", "");
+    renderMachinePick();
+    const recent = store.get(recentKey(), []);
+    cwdInput.value = recent[0] || "~";
+    $("#recent").innerHTML = recent.slice(0, 6).map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join("");
+    const radio = $(`input[name=kind][value="${store.get("kind", "claude")}"]`);
+    if (radio) radio.checked = true;
+    suggestName();
+    browse(cwdInput.value);
+    sheet.showModal();
+    if (prefs.notify() && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  }
+  $("#new-btn").addEventListener("click", openLauncher);
+  $$("input[name=kind]").forEach((r) => r.addEventListener("change", suggestName));
+  nameInput.addEventListener("input", () => { nameTouched = true; });
+  $("#recent").addEventListener("click", (e) => { const d = e.target.closest("button")?.dataset.d; if (d) { cwdInput.value = d; browse(d); } });
+
+  let browseTimer;
+  async function browse(p) {
+    try {
+      const r = await api("/api/dirs?path=" + encodeURIComponent(p) + (pickMachine ? "&machine=" + encodeURIComponent(pickMachine) : ""));
+      $("#dirs").innerHTML = r.dirs.map((d) => `<li data-d="${esc(d)}">${esc(d)}</li>`).join("");
+    } catch { $("#dirs").innerHTML = ""; }
+  }
+  cwdInput.addEventListener("input", () => { clearTimeout(browseTimer); browseTimer = setTimeout(() => browse(cwdInput.value), 250); });
+  $("#dirs").addEventListener("click", (e) => {
+    const d = e.target.closest("li")?.dataset.d;
+    if (!d) return;
+    cwdInput.value = (cwdInput.value.replace(/\/+$/, "") || "~") + "/" + d;
+    browse(cwdInput.value);
+  });
+  $("#dir-up").addEventListener("click", () => {
+    const v = cwdInput.value.replace(/\/+$/, "");
+    const up = v.includes("/") ? v.slice(0, v.lastIndexOf("/")) || "/" : "~";
+    cwdInput.value = up;
+    browse(up);
+  });
+  $("#launch-form").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "go") return;
+    e.preventDefault();
+    const kind = $("input[name=kind]:checked").value;
+    const shell = kind === "shell";
+    const body = shell ? { kind, cwd: cwdInput.value.trim(), machine: pickMachine }
+      : { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine };
+    const go = $("#launch-go");
+    go.disabled = true; go.textContent = shell ? "打开中…" : "启动中…";
+    $("#launch-error").textContent = "";
+    try {
+      const r = await api("/api/agents", { body });
+      store.set("kind", body.kind);
+      store.set(recentKey(), [body.cwd, ...store.get(recentKey(), []).filter((d) => d !== body.cwd)].slice(0, 8));
+      sheet.close();
+      if (r.warning) toast(r.warning, "attn");
+      location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+    } catch (err) { $("#launch-error").textContent = err.message; }
+    finally { go.disabled = false; go.textContent = shell ? "打开" : "启动"; }
+  });
+
+  // ───────────────────────────── viewport (mobile keyboard)
+  // The app fills the visible area: its height shrinks above the keyboard, and
+  // it follows the visible area when the browser scrolls the page for it.
+  function setVH() {
+    const v = window.visualViewport;
+    const root = document.documentElement.style;
+    // Chats that were showing their latest lines keep showing them as the keyboard takes space.
+    const pinned = [...document.querySelectorAll(".viewer, #log")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    root.setProperty("--vh", (v ? v.height : innerHeight) + "px");
+    pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
+    root.setProperty("--vtop", (v ? Math.max(0, v.offsetTop) : 0) + "px");
+  }
+  window.visualViewport?.addEventListener("resize", setVH);
+  window.visualViewport?.addEventListener("scroll", setVH);
+  addEventListener("resize", setVH);
+  setVH();
+
+  // ───────────────────────────── boot
+  async function boot() {
+    const q = new URLSearchParams(location.search);
+    const t = q.get("t"), code = q.get("pair");
+    if (t || code) {
+      try { if (code) await pair(code); else await login(t); }
+      catch (err) { if (code) { $("#login-error").textContent = err.message; } }
+      history.replaceState(null, "", location.pathname + location.hash);
+    }
+    try { await api("/api/session"); } catch { return; }
+    try { sup = normSup(await api("/api/super")); } catch {}
+    try { state = await api("/api/state"); } catch {}
+    $("#login").hidden = true;
+    $("#app").hidden = false;
+    setMode(mode);
+    connect();
+    view = undefined;
+    route();
+    loadExternal();
+    clearInterval(extTimer);
+    loadHistory();
+    // The hub answers the list from its own copy, so this is cheap.
+    let tick = 0;
+    extTimer = setInterval(() => { loadExternal(); if (++tick % 3 === 0) loadHistory(); }, 3000);
+  }
+  boot();
+})();

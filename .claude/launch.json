@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "collie",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", ".", "-addr", "127.0.0.1:7788"],
+      "port": 7788
+    }
+  ]
+}

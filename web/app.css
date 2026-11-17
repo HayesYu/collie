@@ -519,9 +519,13 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 }
 .sheet::backdrop { background: rgba(10,10,10,.28); backdrop-filter: blur(3px); }
 .sheet form { display: flex; flex-direction: column; max-height: inherit; }
+/* One scroller: the body. The dialog itself never scrolls (its border would
+   otherwise make the form 2px too tall and add a second scrollbar). */
+dialog.sheet[open] { display: flex; flex-direction: column; overflow: hidden; }
+dialog.sheet > form { flex: 1 1 auto; min-height: 0; max-height: none; }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 6px; }
 .sheet-head h3 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
-.sheet-body { overflow: auto; flex: 1; min-height: 0; }
+.sheet-body { overflow: auto; flex: 1; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .sheet-note { margin: 0; padding: 0 20px 4px; font-size: 12px; line-height: 1.6; }
 .sheet .field { padding: 10px 20px; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }

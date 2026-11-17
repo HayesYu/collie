@@ -928,3 +928,14 @@ select.picked { display: none; }
 * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .side-scroll { scrollbar-color: transparent transparent; transition: scrollbar-color .2s; }
 .side-scroll:hover, .side-scroll:focus-within { scrollbar-color: var(--line-2) transparent; }
+
+/* a question to you inside a session's thread */
+.ask-card { margin: 10px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 8px; }
+.ask-card.open { border-color: color-mix(in srgb, var(--attn) 45%, var(--line)); }
+.ask-card .recap { color: var(--fg-2); font-size: 13px; }
+.ask-card .q { display: flex; align-items: baseline; gap: 8px; font-weight: 500; }
+.ask-card .q .dot { transform: translateY(-1px); }
+.ask-card .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-card .opt { font-size: 12.5px; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 6px; color: var(--fg-2); }
+.ask-card .answer { font-size: 13px; color: var(--fg-2); white-space: pre-wrap; }
+.ask-card .where { font-size: 12px; color: var(--fg-3); }

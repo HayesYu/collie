@@ -1721,6 +1721,16 @@
     }
   });
 
+  // An end-of-turn button answers by sending its label from this view's composer.
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-act=ask-reply]");
+    if (!b) return;
+    const form = b.closest("section.view")?.querySelector("form.composer:not([hidden])");
+    const input = form?.querySelector("textarea");
+    if (!form || !input) { toast("这里没法发消息，去电脑上回答", "attn"); return; }
+    input.value = b.dataset.text;
+    form.requestSubmit();
+  });
   function drawThread(msgs, el = $("#thread"), empty = "还没有对话。发一条消息开始吧。") {
     // Just opened: start at the latest message.
     const was = el._fresh || nearBottom(el) || !el.childElementCount;
@@ -1757,6 +1767,26 @@
           <div class="toolrun-body">${run.slice(0, -1).map((t, k) => row(t, start + k)).join("")}</div>
         </details>${row(run[run.length - 1], i - 1)}</div>`;
         cut();
+        continue;
+      }
+      if (m.kind === "ask") {
+        // A question to you: AskUserQuestion is answered in the app it runs
+        // in; the Claude app's end-of-turn buttons just send their label.
+        const later = msgs.slice(i + 1).some((x) => x.kind === "user");
+        const box = m.name === "wrap_up";
+        const open = box ? !later : !m.output;
+        const opts = (m.options || []).map((o) => box && open
+          ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
+          : `<span class="opt">${esc(o)}</span>`).join("");
+        html += `<div class="ask-card ${open ? "open" : ""}">`
+          + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
+          + `<div class="q"><span class="dot ${open ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
+          + (opts ? `<div class="opts">${opts}</div>` : "")
+          + (m.output ? `<div class="answer">${esc(m.output)}</div>`
+            : open && !box ? `<div class="where">在电脑上的会话里回答</div>` : "")
+          + `</div>`;
+        cut();
+        i++;
         continue;
       }
       html += m.kind === "user" ? `<div class="msg user">${esc(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;

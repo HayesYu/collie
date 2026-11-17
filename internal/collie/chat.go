@@ -16,13 +16,17 @@ import (
 
 // Message is one entry of the conversation view that wraps an agent terminal.
 type Message struct {
-	Kind   string `json:"kind"` // user | assistant | tool
-	Text   string `json:"text,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Input  string `json:"input,omitempty"`
-	Output string `json:"output,omitempty"`
-	Error  bool   `json:"error,omitempty"`
-	at     int64  // where in the log its line starts
+	Kind string `json:"kind"` // user | assistant | tool | ask
+	Text string `json:"text,omitempty"`
+	Name string `json:"name,omitempty"`
+	// ask: the agent's question to the human (Claude's AskUserQuestion, or
+	// the Claude app's end-of-turn box); Options are its answers' labels,
+	// Output the answer once given, Input a recap that came with it.
+	Options []string `json:"options,omitempty"`
+	Input   string   `json:"input,omitempty"`
+	Output  string   `json:"output,omitempty"`
+	Error   bool     `json:"error,omitempty"`
+	at      int64    // where in the log its line starts
 }
 
 // transcript incrementally parses an agent's JSONL session log.
@@ -406,6 +410,14 @@ func (t *transcript) claudeLine(line []byte) bool {
 				}
 				changed = true
 			case "tool_use":
+				if m := askOf(b.Name, b.Input); m != nil {
+					if m.Name == "AskUserQuestion" {
+						t.tools[b.ID] = m // its result is the answer
+					}
+					t.add(m)
+					changed = true
+					continue
+				}
 				m := &Message{Kind: "tool", Name: b.Name, Input: toolSummary(b.Name, b.Input)}
 				t.tools[b.ID] = m
 				t.add(m)
@@ -1026,4 +1038,57 @@ func (s *Server) paneAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"asking": true, "approval": parseApproval(res.Text)})
+}
+
+// askOf turns a question to the human into an ask item: Claude's
+// AskUserQuestion, or the Claude app's end-of-turn box (its wrap_up tool,
+// whose buttons just send their label back as the human's reply).
+func askOf(name string, raw json.RawMessage) *Message {
+	switch {
+	case name == "AskUserQuestion":
+		var in struct {
+			Questions []struct {
+				Question string `json:"question"`
+				Header   string `json:"header"`
+				Options  []struct {
+					Label string `json:"label"`
+				} `json:"options"`
+			} `json:"questions"`
+		}
+		if json.Unmarshal(raw, &in) != nil || len(in.Questions) == 0 {
+			return nil
+		}
+		m := &Message{Kind: "ask", Name: name}
+		var qs []string
+		for _, q := range in.Questions {
+			qs = append(qs, q.Question)
+		}
+		m.Text = strings.Join(qs, "\n")
+		if len(in.Questions) == 1 {
+			for _, o := range in.Questions[0].Options {
+				m.Options = append(m.Options, o.Label)
+			}
+		}
+		return m
+	case strings.HasSuffix(name, "__wrap_up"):
+		var in struct {
+			Recap   string `json:"recap"`
+			Ask     string `json:"ask"`
+			Actions []struct {
+				Label  string `json:"label"`
+				Action string `json:"action"`
+			} `json:"actions"`
+		}
+		if json.Unmarshal(raw, &in) != nil || in.Ask == "" {
+			return nil
+		}
+		m := &Message{Kind: "ask", Name: "wrap_up", Text: in.Ask, Input: in.Recap}
+		for _, a := range in.Actions {
+			if a.Action == "" && a.Label != "" {
+				m.Options = append(m.Options, a.Label)
+			}
+		}
+		return m
+	}
+	return nil
 }

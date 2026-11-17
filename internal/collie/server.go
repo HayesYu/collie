@@ -95,6 +95,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("POST /api/uploads", wrap(s.upload))
 	mux.Handle("GET /api/titles", wrap(s.getTitles))
 	mux.Handle("GET /api/models", wrap(s.listModels))
+	mux.Handle("POST /api/trust", wrap(s.trustFolder))
 	mux.Handle("GET /api/transcript", wrap(s.getTranscript))
 	mux.Handle("GET /api/external", wrap(s.listExternal))
 	mux.Handle("GET /api/external/{id}/chat", wrap(s.streamExternal))
@@ -561,6 +562,7 @@ func (s *Server) openShell(w http.ResponseWriter, r *http.Request, dir, label st
 // startAgent creates a workspace in cwd and starts a herdr agent in its pane.
 // An "agent_not_ready" error means the agent is up but sitting on a dialog.
 func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, label string, args []string) (paneID, wsID string, err error) {
+	s.trustForStart(ctx, machine, herdrKind, cwd, args)
 	wsID, paneID, err = s.herdr.CreateWorkspace(ctx, machine, cwd, label)
 	if err != nil {
 		return "", "", err

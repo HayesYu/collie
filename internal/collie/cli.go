@@ -413,8 +413,8 @@ only ever talks to you. You keep the big picture; workers do the work.
   Several computers may be connected; ` + "`{{BIN}} list`" + ` shows them. Use --machine when the human names a
   computer or the code lives there (cwd is then a path on that computer; "~" is its home).
   Write a complete, self-contained brief: goal, context, constraints, what "done" means.
-  The default kind is the human's choice: leave out --kind, and pass it (claude | codex | antigravity)
-  only when the human asks for a specific agent. Likewise pass --model/--effort only when asked.
+  What runs is set by the human in settings ({{WKIND}}): leave out --kind/--model/--effort. Pass one
+  only when the human's message names it ("用 Codex", "opus"); otherwise Collie ignores it.
 - ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker (queued until it is free).
 - ` + "`{{BIN}} subscribe WORKER THREAD`" + ` — route a thread's future events straight to that worker
   (e.g. its GitHub PR thread). chat:main always stays with you.

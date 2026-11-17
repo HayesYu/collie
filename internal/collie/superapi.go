@@ -291,13 +291,22 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	if body.Machine != nil {
 		machine = s.machineByName(*body.Machine)
 	}
+	// Agents (the router, workers) don't choose what runs; the human does.
+	var dropped []string
+	if body.By != "cli" {
+		body.Kind, body.Model, body.Effort, dropped = s.sup.gateSpawn(body.Kind, body.Model, body.Effort)
+	}
 	wk, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 202, map[string]any{"worker": wk.Name, "status": "starting", "thread": wk.Thread,
-		"note": "started asynchronously; you will get a [collie] event when it reports, finishes or gets blocked"})
+	res := map[string]any{"worker": wk.Name, "kind": wk.Kind, "status": "starting", "thread": wk.Thread,
+		"note": "started asynchronously; you will get a [collie] event when it reports, finishes or gets blocked"}
+	if len(dropped) > 0 {
+		res["ignored"] = dropped
+	}
+	writeJSON(w, 202, res)
 }
 
 func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {

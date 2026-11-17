@@ -934,6 +934,7 @@
           <label>聊天回复长度<input name="reply_chars" type="number" min="40" step="20" value="${s.reply_chars || 200}"><small>Collie 平时每条回复大约多少字（英文按词算）；你要详细时它会写长</small></label>
           <label>多久没进展算卡住<input name="stall_minutes" type="number" min="0" value="${s.stall_minutes}"><small>分钟；0 表示不检查</small></label>
         </div>
+        <label class="check"><input type="checkbox" name="bypass" ${s.ask_permissions ? "" : "checked"}> 跳过权限确认：Collie 和它派出的 agent 直接跑命令、改文件，不停下来问你（重启 Collie、新派的 agent 生效）</label>
         <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> 暂停投递：事件照收，先不交给 agent</label>
       </section>
 
@@ -968,10 +969,11 @@
           reply_chars: +f.reply_chars.value, stall_minutes: +f.stall_minutes.value,
           rotate_pct: +f.rotate_pct.value, dream_at: f.dream_at.value,
           notify_webhook: f.notify_webhook.value.trim(), notify_level: f.notify_level.value, paused: f.paused.checked,
+          ask_permissions: !f.bypass.checked,
         };
         await api("/api/super/settings", { body: { settings: s } });
-        const relaunch = s.router_kind !== cur.router_kind || s.router_model !== (cur.router_model || "") || s.router_effort !== (cur.router_effort || "") || s.router_args.join(" ") !== (cur.router_args || []).join(" ");
-        toast(relaunch ? "已保存。Collie 的模型设置在重启 Collie 后生效" : "已保存");
+        const relaunch = s.router_kind !== cur.router_kind || s.router_model !== (cur.router_model || "") || s.router_effort !== (cur.router_effort || "") || s.router_args.join(" ") !== (cur.router_args || []).join(" ") || s.ask_permissions !== !!cur.ask_permissions;
+        toast(relaunch ? "已保存。Collie 自己的启动设置在重启 Collie 后生效" : "已保存");
       }
     } catch (err) { toast(err.message, "attn"); }
   });

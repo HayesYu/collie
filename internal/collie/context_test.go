@@ -3,6 +3,7 @@ package collie
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,25 @@ func TestReplyLen(t *testing.T) {
 	s.migrateReply()
 	if s.ReplyChars != 200 {
 		t.Fatalf("default = %d", s.ReplyChars)
+	}
+}
+
+func TestWithBypass(t *testing.T) {
+	cases := []struct {
+		kind string
+		ask  bool
+		in   []string
+		want string
+	}{
+		{"claude", false, []string{"--model", "opus"}, "--model opus --dangerously-skip-permissions"},
+		{"antigravity", false, nil, "--dangerously-skip-permissions"},
+		{"codex", false, []string{"-m", "x"}, "-m x --dangerously-bypass-approvals-and-sandbox"},
+		{"claude", true, []string{"--model", "opus"}, "--model opus"},
+		{"claude", false, []string{"--dangerously-skip-permissions"}, "--dangerously-skip-permissions"},
+	}
+	for _, c := range cases {
+		if got := strings.Join(withBypass(c.in, c.kind, c.ask), " "); got != c.want {
+			t.Errorf("withBypass(%v, %s, %v) = %q, want %q", c.in, c.kind, c.ask, got, c.want)
+		}
 	}
 }

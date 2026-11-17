@@ -700,8 +700,9 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 			effort = sp.st.Settings.WorkerEffort
 		}
 	}
+	ask := sp.st.Settings.AskPermissions
 	sp.mu.Unlock()
-	wargs := modelArgs(kind, model, effort)
+	wargs := withBypass(modelArgs(kind, model, effort), kind, ask)
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -715,7 +716,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		args := append([]string{}, wargs...)
 		if kinds[kind] == "claude" {
 			// Reporting back is part of the job; don't make it a permission prompt.
-			args = []string{"--allowedTools", strings.Join(collieAllow(bin), ",")}
+			args = append(args, "--allowedTools", strings.Join(collieAllow(bin), ","))
 		}
 		pane, ws, err := sp.s.startAgent(ctx, m.ID, kinds[kind], name, dir, name, args)
 		sp.mu.Lock()
@@ -1139,7 +1140,8 @@ func collieAllow(bin string, extra ...string) []string {
 // routerArgsLocked: the extra launch flags plus the chosen model and effort.
 func (sp *Super) routerArgsLocked() []string {
 	st := sp.st.Settings
-	return append(append([]string{}, st.RouterArgs...), modelArgs(st.RouterKind, st.RouterModel, st.RouterEffort)...)
+	args := append(append([]string{}, st.RouterArgs...), modelArgs(st.RouterKind, st.RouterModel, st.RouterEffort)...)
+	return withBypass(args, st.RouterKind, st.AskPermissions)
 }
 
 // The model and effort the router was launched with, kept across hub restarts.

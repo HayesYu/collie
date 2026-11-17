@@ -59,6 +59,31 @@ func modelArgs(kind, model, effort string) []string {
 	return a
 }
 
+// bypassArgs: the launch flag that turns off an agent's permission prompts.
+func bypassArgs(kind string) []string {
+	switch kinds[kind] {
+	case "claude", "agy":
+		return []string{"--dangerously-skip-permissions"}
+	case "codex":
+		return []string{"--dangerously-bypass-approvals-and-sandbox"}
+	}
+	return nil
+}
+
+// withBypass adds bypassArgs to args unless permissions are asked for or the
+// flag is already there.
+func withBypass(args []string, kind string, ask bool) []string {
+	if ask {
+		return args
+	}
+	for _, f := range bypassArgs(kind) {
+		if !contains(args, f) {
+			args = append(args, f)
+		}
+	}
+	return args
+}
+
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 var modelCache = struct {

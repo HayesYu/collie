@@ -107,6 +107,9 @@ type Settings struct {
 	// When Collie dreams (reviews recent sessions and tidies its memory):
 	// "HH:MM" each night, "" for 04:00, "off" never.
 	DreamAt string `json:"dream_at,omitempty"`
+	// Collie and its workers run with the agent's permission checks off
+	// (--dangerously-skip-permissions and the like) unless this is set.
+	AskPermissions bool `json:"ask_permissions,omitempty"`
 }
 
 type State struct {

@@ -1,13 +1,19 @@
 {
+  "id": "/",
   "name": "Collie",
   "short_name": "Collie",
-  "description": "Herd your coding agents through herdr.",
+  "description": "在手机和电脑上放牧你的编程 agent",
+  "lang": "zh-CN",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ffffff",
+  "user_preferences": { "color_scheme": { "dark": { "background_color": "#0b0b0c", "theme_color": "#0b0b0c" } } },
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/app-icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/app-icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

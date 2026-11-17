@@ -51,6 +51,10 @@ sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>
 
 它会配对、把 hub 地址和令牌存进 `~/.collie/node.json`，再装成后台服务。升级时 `git pull` 后运行 `sh docs/install.sh node`。
 
+**4. 在 Mac 上装成 app（可选）**
+
+加入了 hub 的电脑会在本机 `http://127.0.0.1:17788` 提供同一个界面（转发到 hub）。浏览器把 127.0.0.1 当作安全来源，所以用 Chrome 打开它、登录一次（「设备 → 连接手机或平板」里的 8 位配对码），地址栏右侧点「安装 Collie」，就会得到一个能放进 Dock 的独立 app，浏览器通知也能用了。换端口：`collie node --ui 127.0.0.1:端口`；不要：`--ui off`。
+
 - node 出站连接、长连接复用（yamux），笔记本在 NAT 后面也能用，**不用开端口、不用 SSH**；断线后自动重连
 - hub 把所有电脑的 herdr 合成一个：远端的 pane id 带后缀，例如 `w1:p1@mac`；列表、对话、启动 agent、Collie 派 worker 都可以指定电脑
 - 每台设备一个令牌，可以在「设备」页随时移除；电脑的令牌只能连隧道和调用 `collie` CLI，打不开 Web 控制台

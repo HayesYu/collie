@@ -250,6 +250,7 @@ case "$mode" in
     done
     service node node "$@"
     say "    在 hub 的侧栏里能看到这台电脑了。"
+    say "    本机界面：http://127.0.0.1:17788（用 Chrome 打开可以安装成 app）"
     check_herdr
     ;;
   hub)

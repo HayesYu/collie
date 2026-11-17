@@ -59,6 +59,7 @@ func runNode(args []string) {
 	code := fs.String("code", "", "pairing code shown by the hub (first time only)")
 	name := fs.String("name", host, "how this computer is shown on the hub")
 	pairOnly := fs.Bool("pair-only", false, "join the hub and exit (a service runs `collie node` afterwards)")
+	ui := fs.String("ui", envOr("COLLIE_UI", defaultLocalUI), "serve the hub's web UI on this computer at this address (off: don't)")
 	sock := fs.String("socket", envOr("HERDR_SOCKET_PATH", filepath.Join(home, ".config/herdr/herdr.sock")), "herdr API socket")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: collie node --hub <address> --code <pairing code>   (first time)\n       collie node                                          (afterwards)\n\n")
@@ -109,6 +110,7 @@ func runNode(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go serveLocalUI(ctx, *ui, cfg.Hub)
 	backoff := time.Second
 	for ctx.Err() == nil {
 		start := time.Now()

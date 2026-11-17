@@ -1146,7 +1146,7 @@
   // Which computer something is on is a detail on its row.
   const RECENT_N = 8;
   let extAll = store.get("extAll", false);
-  const EXT_STATE = { working: "在干活", idle: "空闲", blocked: "等电脑那边确认" };
+  const EXT_STATE = { working: "在干活", idle: "后台开着，没在干活", blocked: "等电脑那边确认" };
   const RANK = { working: 0, starting: 1, blocked: 2, unknown: 3, idle: 4, done: 4 };
   function renderExt() { renderSessions(); }
   function renderSessions() {
@@ -1157,7 +1157,7 @@
       const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "正在运行")}"></span>` : "";
       return `<li><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(extName(e))}${open ? `<span class="by-collie" title="会话还开着，但现在没在干活">后台开着</span>` : ""}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
+        <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
     };
     const histRow = (h) => {
       const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");

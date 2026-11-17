@@ -330,7 +330,7 @@ func (s *Server) codexAppRows() []desktopRow {
 	}
 	defer db.Close()
 	q := `SELECT id, COALESCE(NULLIF(name,''), NULLIF(title,''), first_user_message), cwd, rollout_path,
-		COALESCE(created_at_ms, created_at*1000), COALESCE(updated_at_ms, updated_at*1000)
+		COALESCE(created_at_ms, created_at*1000), COALESCE(updated_at_ms, updated_at*1000), COALESCE(originator, '')
 		FROM threads WHERE archived = 0 AND source = 'vscode' AND updated_at > ? ORDER BY updated_at DESC LIMIT ?`
 	res, err := db.Query(q, time.Now().Add(-desktopWindow).Unix(), desktopMax)
 	if err != nil {
@@ -339,15 +339,12 @@ func (s *Server) codexAppRows() []desktopRow {
 	defer res.Close()
 	var rows []desktopRow
 	for res.Next() {
-		var id, title, cwd, rollout string
+		var id, title, cwd, rollout, originator string
 		var created, updated int64
-		if res.Scan(&id, &title, &cwd, &rollout, &created, &updated) != nil {
+		if res.Scan(&id, &title, &cwd, &rollout, &created, &updated, &originator) != nil {
 			continue
 		}
-		app := appCodex
-		if runtime.GOOS != "darwin" {
-			app = "Codex App（远程）" // the App on another computer opened it here over SSH
-		}
+		app := codexClient(originator)
 		d := desktopRow{id: "cx-" + id, kind: "codex", app: app, session: id, title: messageTitle(title), cwd: cwd, created: time.UnixMilli(created), updated: time.UnixMilli(updated)}
 		if isFile(rollout) {
 			d.path, d.format = rollout, "codex"
@@ -604,4 +601,22 @@ func messageTitle(t string) string {
 func (s *Server) codexDaemonHas(thread string) bool {
 	ids, err := s.codexLoaded()
 	return err == nil && ids[thread]
+}
+
+// codexClient names what started a "vscode" thread: the Codex App, or another
+// program driving Codex's app-server (Persona's scheduled runs say
+// originator "persona").
+func codexClient(originator string) string {
+	switch originator {
+	case "", "Codex Desktop", "codex_work_desktop":
+		if runtime.GOOS != "darwin" {
+			return "Codex App（远程）" // the App on another computer opened it here over SSH
+		}
+		return appCodex
+	case "persona":
+		return "Persona（Codex）"
+	case "codex-tui":
+		return "Codex 终端"
+	}
+	return originator + "（Codex）"
 }

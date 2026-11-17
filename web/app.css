@@ -951,3 +951,4 @@ select.picked { display: none; }
 .thread-skel .sk:nth-child(2n) { animation-delay: .15s; }
 @keyframes sk { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .thread-skel .sk { animation: none; } }
+.recap-note { margin: 8px 0; padding-left: 10px; border-left: 2px solid var(--line-2); color: var(--fg-2); font-size: 13px; }

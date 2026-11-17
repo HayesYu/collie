@@ -492,7 +492,7 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if e.path != "" && !peerTaken(e.path, offset, text, 6*time.Second) {
-			writeJSON(w, 202, map[string]any{"ok": true, "note": "已放进这个会话的收件箱，但它还没接收。打开电脑上的这个会话看看，可能在等你点允许"})
+			writeJSON(w, 202, map[string]any{"ok": true, "note": "已送到，但被这个会话扣住了：它开着跳过权限（bypass）模式，Claude 会先扣下外来消息，过一阵作废。要让它照做，在电脑上直接对它说"})
 			return
 		}
 	case "codex":

@@ -14,8 +14,8 @@ func TestAskOf(t *testing.T) {
 	if m == nil || m.Name != "wrap_up" || m.Text != "Go?" || m.Input != "R" || len(m.Options) != 1 || m.Options[0] != "Yes" {
 		t.Fatalf("wrap_up: %+v", m)
 	}
-	if askOf("mcp__ccd_turn__wrap_up", json.RawMessage(`{"recap":"R"}`)) != nil {
-		t.Fatal("wrap_up without a question is not an ask")
+	if m := askOf("mcp__ccd_turn__wrap_up", json.RawMessage(`{"recap":"R"}`)); m == nil || m.Name != "recap" || m.Input != "R" {
+		t.Fatalf("recap only: %+v", m)
 	}
 }
 

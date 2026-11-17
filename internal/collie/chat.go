@@ -1108,8 +1108,11 @@ func askOf(name string, raw json.RawMessage) *Message {
 				Action string `json:"action"`
 			} `json:"actions"`
 		}
-		if json.Unmarshal(raw, &in) != nil || in.Ask == "" {
+		if json.Unmarshal(raw, &in) != nil || (in.Ask == "" && in.Recap == "") {
 			return nil
+		}
+		if in.Ask == "" {
+			return &Message{Kind: "ask", Name: "recap", Input: in.Recap} // where the turn left things
 		}
 		m := &Message{Kind: "ask", Name: "wrap_up", Text: in.Ask, Input: in.Recap}
 		for _, a := range in.Actions {

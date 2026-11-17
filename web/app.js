@@ -1789,6 +1789,12 @@
         cut();
         continue;
       }
+      if (m.kind === "ask" && m.name === "recap") {
+        html += `<div class="recap-note">${esc(m.input)}</div>`;
+        cut();
+        i++;
+        continue;
+      }
       if (m.kind === "ask") {
         // A question to you: AskUserQuestion is answered in the app it runs
         // in; the Claude app's end-of-turn buttons just send their label.

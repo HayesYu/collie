@@ -176,6 +176,39 @@ WantedBy=default.target"
   fi
 }
 
+# ------------------------------------------------------------------ herdr
+warn() { printf '\033[33m!\033[0m %s\n' "$*"; }
+
+# check_herdr: Collie drives agents through herdr, which is installed and
+# set up on its own. Say what is missing on this computer; change nothing.
+check_herdr() {
+  hb=$(command -v herdr 2>/dev/null || true)
+  [ -z "$hb" ] && [ -x "$HOME/.local/bin/herdr" ] && hb=$HOME/.local/bin/herdr
+  if [ -z "$hb" ]; then
+    warn "没找到 herdr：没有它，这台电脑上的 agent 不会出现在 Collie 里${1:+（$1）}。"
+    say "    安装：https://herdr.dev"
+    return 0
+  fi
+  if ! "$hb" status 2>/dev/null | grep -q "status: running"; then
+    warn "herdr 服务端没在运行：运行一次 herdr 就会启动它（Collie 连的是它的 socket）。"
+  fi
+  st=$("$hb" integration status 2>/dev/null) || return 0
+  missing=""
+  for pair in claude:claude codex:codex agy:antigravity-cli; do
+    command -v "${pair%%:*}" >/dev/null 2>&1 || continue # this agent isn't installed here
+    target=${pair#*:}
+    line=$(printf '%s\n' "$st" | grep "^$target:" || true)
+    case "$line" in
+      "" | *": current"*) ;; # unknown to this herdr version, or fine
+      *) missing="$missing $target" ;;
+    esac
+  done
+  if [ -n "$missing" ]; then
+    warn "这些 agent 还没装 herdr 集成：herdr 认不出它们在干什么，Collie 也就没法给它们发消息。运行："
+    for t in $missing; do say "      herdr integration install $t"; done
+  fi
+}
+
 # ------------------------------------------------------------------ main
 mode=${1:-}
 [ $# -gt 0 ] && shift
@@ -188,6 +221,7 @@ case "$mode" in
     say "  让这台电脑做 hub：   collie -url http://<本机内网 IP>:7788"
     say "  把电脑加入 hub：     collie node --hub http://<hub>:7788 --code <配对码>"
     say "  （加 node / hub 参数重跑这个脚本，会顺便装成后台服务）"
+    check_herdr
     ;;
   node)
     install_binary
@@ -216,12 +250,14 @@ case "$mode" in
     done
     service node node "$@"
     say "    在 hub 的侧栏里能看到这台电脑了。"
+    check_herdr
     ;;
   hub)
     install_binary
     service hub serve "$@"
     say "    打开 hub 的地址；手机配对：collie pair（或在「设备」页扫码）。"
     say "    首次登录的令牌在 ~/.collie/token。"
+    check_herdr "hub 本身照常能用"
     ;;
   *)
     die "不认识的参数：$mode（可以是 node、hub，或者不带参数）"

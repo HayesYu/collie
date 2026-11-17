@@ -199,12 +199,21 @@ scripts/release.sh v0.1.0 --dry    # 交叉编译四个平台到 dist/
                          └─ yamux 隧道 ◀── collie node（herdr 流 + 本机 pane API）
 ```
 
+```
+main.go              入口：只有版本号和 collie.Main
+internal/collie/     hub、node 和 CLI（一个包）
+web/                 前端：原生 HTML/CSS/JS，无构建步骤；embed.go 用 go:embed 打进二进制
+docs/                install.sh 和主页
+scripts/release.sh   交叉编译和发布
+```
+
+`internal/collie/` 里：
+
 - `herdr.go`：herdr socket API 客户端
 - `fleet.go`：多台电脑的 herdr 路由（id 后缀、列表合并）
 - `hub.go` / `node.go`：设备配对与令牌、二维码、内网地址、隧道、请求转发
-- `external.go`：其他终端里的 agent 进程、会话记录定位、只读对话流、接管
+- `external.go` / `desktop.go`：其他终端和桌面 app 里的 agent 进程、会话记录定位、只读对话流、接管
 - `server.go`：鉴权、状态 SSE、pane 屏幕/日志 SSE、输入、启动 agent
 - `chat.go` / `agy.go`：会话记录解析（Claude / Codex / Antigravity）、决策卡片识别、对话 SSE
 - `store.go` / `db.go`：super-agent 的数据模型和 SQLite 持久化
 - `super.go` / `superapi.go` / `cli.go`：Router 与 worker 的调度循环、HTTP API、webhook、CLI 与 Router 手册
-- `web/`：原生 HTML/CSS/JS，无构建步骤

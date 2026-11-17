@@ -1,0 +1,1161 @@
+package collie
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Super is Collie's super-agent: one resident Router session (the herdr agent
+// named "collie") that talks to the human and dispatches work, plus isolated
+// Worker sessions (other herdr agents) that do it. Everything that reaches the
+// system is a Trigger in a durable inbox; Collie filters, routes, batches and
+// delivers triggers whenever the target session is free.
+type Super struct {
+	s   *Server
+	db  *sql.DB
+	bin string
+	dir string // ~/.config/collie
+
+	mu            sync.Mutex
+	st            *State
+	dirty         bool
+	deletedTimers []string
+	subs          map[chan struct{}]bool
+
+	routerLaunching bool
+	routerLaunchAt  time.Time
+	routerFresh     bool
+	routerAskedAt   time.Time // last delivery to the router not yet followed by a reply or check
+	routerUsage     ctxUsage
+	// The model and effort the running router was launched with (unknown after a hub restart).
+	routerRun   *[2]string
+	handover    *handover // set while the router writes its memory before a fresh session
+	dream       *dreamRun // set while Collie sleeps and a dream session tidies its memory
+	lastTrust   time.Time
+	lastScreen  map[string]screenMark
+	transcripts map[string]*transcript
+	notifyBuf   []string
+	notifyAt    time.Time
+}
+
+type screenMark struct {
+	hash  string
+	since time.Time
+	flag  bool
+}
+
+const (
+	routerName  = "collie"
+	routerLabel = "collie · router"
+)
+const mainThread = "chat:main"
+
+func newSuper(s *Server, dir string) (*Super, error) {
+	bin, _ := os.Executable()
+	if r, err := filepath.EvalSymlinks(bin); err == nil {
+		bin = r
+	}
+	bin = stableBin(bin, dir)
+	sp := &Super{
+		s: s, dir: dir, bin: bin,
+		subs:        map[chan struct{}]bool{},
+		lastScreen:  map[string]screenMark{},
+		transcripts: map[string]*transcript{},
+	}
+	db, err := openDB(filepath.Join(dir, "herd.db")) // ~/.collie/collie.db belongs to another app
+	if err != nil {
+		return nil, err
+	}
+	sp.db = db
+	if sp.st, err = loadState(db, s.home); err != nil {
+		return nil, err
+	}
+	return sp, nil
+}
+
+// ---------------------------------------------------------------- state plumbing
+
+func (sp *Super) changed() {
+	sp.dirty = true
+	for ch := range sp.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (sp *Super) subscribe() (chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	sp.mu.Lock()
+	sp.subs[ch] = true
+	sp.mu.Unlock()
+	return ch, func() { sp.mu.Lock(); delete(sp.subs, ch); sp.mu.Unlock() }
+}
+
+func (sp *Super) flush() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if !sp.dirty {
+		return
+	}
+	if err := saveState(sp.db, sp.st, sp.deletedTimers); err != nil {
+		log.Printf("save state: %v", err)
+		return
+	}
+	sp.st.trim() // history beyond the working set stays in SQLite
+	sp.dirty, sp.deletedTimers = false, nil
+}
+
+func (sp *Super) addEntryLocked(role, thread, text, ref, tone string) *Entry {
+	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone}
+	sp.st.Entries = append(sp.st.Entries, e)
+	if role == "collie" || tone == "blocked" || tone == "error" {
+		sp.queueNotifyLocked(role, text, tone)
+	}
+	sp.changed()
+	return e
+}
+
+func (sp *Super) threadLocked(id string) *Thread {
+	th := sp.st.Threads[id]
+	if th == nil {
+		th = &Thread{ID: id, Subscribers: []string{}, Triggers: []string{}}
+		sp.st.Threads[id] = th
+	}
+	return th
+}
+
+// Ingest puts one trigger in the inbox after the fast-path policy check.
+// It returns the trigger (nil when it was a duplicate).
+func (sp *Super) Ingest(source, thread, from, text, key, target, ref string) *Trigger {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.ingestLocked(source, thread, from, text, key, target, ref)
+}
+
+func (sp *Super) ingestLocked(source, thread, from, text, key, target, ref string) *Trigger {
+	if key != "" {
+		for i := len(sp.st.Triggers) - 1; i >= 0 && i > len(sp.st.Triggers)-400; i-- {
+			if sp.st.Triggers[i].Key == key {
+				return nil
+			}
+		}
+	}
+	if thread == "" {
+		thread = mainThread
+	}
+	pol := sp.st.policyFor(source)
+	action := pol.Action
+	if len(pol.Allow) > 0 && !contains(pol.Allow, from) {
+		action = "ignore"
+	}
+	t := &Trigger{
+		ID: sp.st.nextID("t"), Source: source, Thread: thread, From: from, Text: text,
+		At: time.Now(), Action: action, Status: "queued", Key: key, Ref: ref,
+	}
+	if action == "ignore" {
+		t.Status = "ignored"
+	} else if target != "" {
+		t.Targets = []string{target}
+	}
+	sp.st.Triggers = append(sp.st.Triggers, t)
+	th := sp.threadLocked(thread)
+	th.LastAt = t.At
+	th.Triggers = append(th.Triggers, t.ID)
+	sp.changed()
+	return t
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------- run loop
+
+func (sp *Super) Run(ctx context.Context) {
+	tick := time.NewTicker(1500 * time.Millisecond)
+	defer tick.Stop()
+	save := time.NewTicker(2 * time.Second)
+	defer save.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			sp.flush()
+			return
+		case <-save.C:
+			sp.flush()
+			sp.sendNotifications()
+		case <-tick.C:
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("super tick panic: %v", r)
+					}
+				}()
+				sp.tick(ctx)
+			}()
+		}
+	}
+}
+
+type liveAgent struct {
+	Pane    string
+	Status  string
+	Ready   bool
+	Kind    string
+	Session string
+}
+
+func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
+	list, err := sp.s.herdr.Agents(ctx)
+	if err != nil {
+		return nil, false
+	}
+	m := map[string]liveAgent{}
+	for _, a := range list {
+		if a.Name != nil {
+			la := liveAgent{Pane: a.PaneID, Status: a.AgentStatus, Ready: a.Ready, Kind: deref(a.Agent)}
+			if a.Session != nil && a.Session.Kind != "path" {
+				la.Session = a.Session.Value
+			}
+			m[*a.Name] = la
+		}
+	}
+	return m, true
+}
+
+func (sp *Super) tick(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	defer cancel()
+	live, ok := sp.liveAgents(ctx)
+	if !ok {
+		return // herdr unavailable; keep everything queued
+	}
+	now := time.Now()
+
+	type finished struct {
+		w       *Worker
+		blocked bool
+	}
+	var fin []finished
+	deliveries := map[string][]*Trigger{}
+
+	sp.mu.Lock()
+	paused := sp.st.Settings.Paused
+	// 1. Timers → triggers.
+	for _, t := range sp.st.Timers {
+		if t.Enabled && !t.NextRun.After(now) {
+			at := now
+			t.LastRun = &at
+			t.advance(now)
+			sp.ingestLocked("timer", t.Thread, t.ID, t.Text, "", t.Target, t.ID)
+		}
+	}
+	// 2. Worker lifecycle → triggers for the router.
+	for _, w := range sp.st.Workers {
+		if w.Ended {
+			continue
+		}
+		a, alive := live[w.Name]
+		if !alive {
+			if w.Status != "starting" && w.Status != "failed" {
+				w.Ended, w.Status = true, "gone"
+				sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf("worker %s exited (its herdr pane is gone).", w.Name), "", "", w.Name)
+				sp.addEntryLocked("event", w.Thread, w.Name+" 已退出", w.Name, "info")
+			}
+			continue
+		}
+		prev := w.Status
+		if a.Status != prev {
+			w.Status = a.Status
+			w.PaneID = a.Pane
+			sp.changed()
+			switch {
+			case a.Status == "blocked":
+				fin = append(fin, finished{w, true})
+			case prev == "working" && (a.Status == "done" || a.Status == "idle"):
+				if now.Sub(w.ReportAt) > 90*time.Second {
+					fin = append(fin, finished{w, false})
+				}
+			}
+		}
+	}
+	// 3. Route queued triggers to sessions: subscribed workers first (fast path), router otherwise.
+	for _, t := range sp.st.Triggers {
+		if t.Status != "queued" {
+			continue
+		}
+		if len(t.Targets) == 0 {
+			if t.Source != "worker" && t.Source != "chat" {
+				if th := sp.st.Threads[t.Thread]; th != nil {
+					for _, sub := range th.Subscribers {
+						if w := sp.st.Workers[sub]; w != nil && !w.Ended && sub != t.From {
+							t.Targets = append(t.Targets, sub)
+						}
+					}
+				}
+			}
+			if len(t.Targets) == 0 {
+				t.Targets = []string{routerName}
+			}
+		}
+		for _, target := range t.Targets {
+			deliveries[target] = append(deliveries[target], t)
+		}
+	}
+	routerAlive := false
+	_, routerAlive = live[routerName]
+	sp.mu.Unlock()
+
+	// Worker completion summaries need file/screen IO: do it outside the lock.
+	for _, f := range fin {
+		sp.workerSettled(ctx, f.w, f.blocked)
+	}
+
+	if paused {
+		return
+	}
+
+	// 4. Deliver batches to free sessions.
+	for target, list := range deliveries {
+		if target == routerName && (sp.handingOver() || sp.dreaming()) {
+			continue // events wait for the fresh session
+		}
+		a, alive := live[target]
+		if !alive {
+			if target == routerName {
+				sp.ensureRouter(ctx)
+			} else {
+				sp.rerouteToRouter(target, list)
+			}
+			continue
+		}
+		if target == routerName && a.Status == "blocked" {
+			sp.trustOwnDir(ctx, a.Pane)
+		}
+		if a.Status == "working" || a.Status == "blocked" || (!a.Ready && a.Status == "unknown") {
+			continue // batch builds up until the session is free
+		}
+		sp.deliver(ctx, target, list)
+	}
+
+	if a, ok := live[routerName]; ok && (a.Status == "done" || a.Status == "idle") {
+		sp.routerSettled(ctx, a.Pane)
+	}
+	sp.checkHandover(ctx, live, len(deliveries[routerName]) > 0)
+	sp.checkDream(ctx, live, len(deliveries[routerName]) > 0)
+
+	// 5. Watchdog.
+	sp.watchdog(ctx, live, routerAlive)
+}
+
+func (sp *Super) rerouteToRouter(target string, list []*Trigger) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	w := sp.st.Workers[target]
+	if w != nil && !w.Ended && (w.Status == "starting" || time.Since(w.CreatedAt) < 2*time.Minute) {
+		return // still launching
+	}
+	for _, t := range list {
+		t.Targets = replace(t.Targets, target, routerName)
+	}
+	sp.changed()
+}
+
+func replace(list []string, from, to string) []string {
+	out := []string{}
+	for _, x := range list {
+		if x == from {
+			x = to
+		}
+		if !contains(out, x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// deliver submits all pending triggers for one session as a single prompt.
+func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
+	sort.Slice(list, func(i, j int) bool { return list[i].At.Before(list[j].At) })
+	if len(list) > 20 {
+		list = list[:20]
+	}
+	sp.mu.Lock()
+	fresh := target == routerName && sp.routerFresh
+	words := sp.st.Settings.ReplyChars
+	sp.mu.Unlock()
+
+	var b strings.Builder
+	if fresh {
+		b.WriteString(sp.sessionStart())
+		b.WriteString("\n")
+	}
+	if len(list) == 1 {
+		b.WriteString("[collie] 1 new event\n")
+	} else {
+		fmt.Fprintf(&b, "[collie] %d new events (batched)\n", len(list))
+	}
+	for _, t := range list {
+		fmt.Fprintf(&b, "\n#%s · %s · %s", t.ID, t.Thread, t.Source)
+		if t.From != "" {
+			fmt.Fprintf(&b, " · from %s", t.From)
+		}
+		if t.Action == "candidate" {
+			b.WriteString(" · candidate (act only if a rule or memory says so; otherwise stay silent)")
+		}
+		fmt.Fprintf(&b, " · %s\n", t.At.Format("15:04"))
+		text := strings.TrimSpace(t.Text)
+		if len([]rune(text)) > 700 { // Inline & Spill
+			text = string([]rune(text)[:700]) + fmt.Sprintf(" … [spilled; run `collie show %s`]", t.ID)
+		}
+		b.WriteString(indent(text, "  "))
+		b.WriteString("\n")
+	}
+	if target == routerName {
+		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail). Delegate work with `collie spawn`; never do task work yourself.", words)
+	} else {
+		b.WriteString("\nWhen done or blocked on a decision, run `collie report \"…\"`.")
+	}
+
+	err := sp.s.herdr.Prompt(ctx, target, b.String())
+	var he *HerdrError
+	if err != nil && errors.As(err, &he) && (he.Code == "agent_blocked" || he.Code == "agent_not_ready") {
+		return
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if err != nil {
+		log.Printf("deliver to %s: %v", target, err)
+		return
+	}
+	if fresh {
+		sp.routerFresh = false
+	}
+	if target == routerName {
+		sp.routerAskedAt = time.Now()
+	}
+	for _, t := range list {
+		t.Targets = remove(t.Targets, target)
+		if len(t.Targets) == 0 {
+			t.Status = "delivered"
+		}
+	}
+	sp.changed()
+}
+
+func remove(list []string, v string) []string {
+	out := list[:0:0]
+	for _, x := range list {
+		if x != v {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func indent(s, p string) string {
+	return p + strings.ReplaceAll(s, "\n", "\n"+p)
+}
+
+// workerSettled turns a worker reaching done/blocked into a router trigger,
+// carrying a short summary from the worker's transcript or screen.
+func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
+	summary := sp.lastAssistant(ctx, w)
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if blocked {
+		sp.ingestLocked("worker", w.Thread, w.Name,
+			fmt.Sprintf("worker %s is BLOCKED waiting for a human approval/answer in its terminal. The human sees it in Collie's attention list. Screen:\n%s", w.Name, summary), "", "", w.Name)
+		sp.addEntryLocked("event", w.Thread, w.Name+" 等你确认", w.Name, "blocked")
+		return
+	}
+	sp.ingestLocked("worker", w.Thread, w.Name,
+		fmt.Sprintf("worker %s finished a turn. Last message:\n%s", w.Name, summary), "", "", w.Name)
+	sp.addEntryLocked("event", w.Thread, w.Name+" 完成了一轮", w.Name, "done")
+}
+
+func (sp *Super) lastAssistant(ctx context.Context, w *Worker) string {
+	if pane, machine := split(w.PaneID); machine != "" {
+		// Its transcript lives on that computer: ask its node.
+		if c, err := sp.s.herdr.Client(machine); err == nil {
+			req, _ := http.NewRequestWithContext(ctx, "GET", "http://node/api/panes/"+url.PathEscape(pane)+"/last", nil)
+			if resp, err := c.Do(req); err == nil {
+				var out struct {
+					Text string `json:"text"`
+				}
+				json.NewDecoder(resp.Body).Decode(&out)
+				resp.Body.Close()
+				if out.Text != "" {
+					return clip(out.Text, 1200)
+				}
+			}
+		}
+	} else if w.PaneID != "" {
+		var info struct {
+			Agent agentDetail `json:"agent"`
+		}
+		if sp.s.herdr.Call(ctx, "agent.get", map[string]any{"target": w.Name}, &info) == nil {
+			if tr := sp.s.transcriptFor(w.Name, w.PaneID, info.Agent, sp.transcripts); tr != nil {
+				tr.update()
+				msgs := tr.view()
+				for i := len(msgs) - 1; i >= 0; i-- {
+					if msgs[i].Kind == "assistant" {
+						return clip(msgs[i].Text, 1200)
+					}
+				}
+			}
+		}
+		if res, err := sp.s.herdr.Read(ctx, w.PaneID, "detection", "text", 0); err == nil {
+			return tailLines(res.Text, 14)
+		}
+	}
+	return "(no output captured)"
+}
+
+// ---------------------------------------------------------------- router
+
+func (sp *Super) routerDir() string { return filepath.Join(sp.dir, "router") }
+
+func (sp *Super) ensureRouter(ctx context.Context) {
+	sp.mu.Lock()
+	if sp.routerLaunching || time.Since(sp.routerLaunchAt) < 45*time.Second {
+		sp.mu.Unlock()
+		return
+	}
+	sp.routerLaunching, sp.routerLaunchAt = true, time.Now()
+	kind := sp.st.Settings.RouterKind
+	args := sp.routerArgsLocked()
+	sp.setRouterRun([2]string{sp.st.Settings.RouterModel, sp.st.Settings.RouterEffort})
+	sp.mu.Unlock()
+
+	go func() {
+		defer func() { sp.mu.Lock(); sp.routerLaunching = false; sp.mu.Unlock() }()
+		sp.closeStaleRouterWorkspaces(context.Background())
+		if err := sp.writeRouterFiles(); err != nil {
+			log.Printf("router files: %v", err)
+		}
+		lctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _, err := sp.s.startAgent(lctx, "", kinds[kind], routerName, sp.routerDir(), routerLabel, args)
+		sp.mu.Lock()
+		defer sp.mu.Unlock()
+		var he *HerdrError
+		if err != nil && !(errors.As(err, &he) && he.Code == "agent_not_ready") {
+			sp.addEntryLocked("event", mainThread, "Collie 启动失败："+err.Error(), routerName, "error")
+			return
+		}
+		sp.routerFresh = true
+		sp.addEntryLocked("event", mainThread, "Collie 已唤醒（"+kind+"）", routerName, "info")
+	}()
+}
+
+func (sp *Super) RestartRouter(ctx context.Context) error {
+	if live, ok := sp.liveAgents(ctx); ok {
+		if a, ok := live[routerName]; ok {
+			var p Pane
+			if err := sp.s.herdr.Call(ctx, "pane.get", map[string]any{"pane_id": a.Pane}, &struct {
+				Pane *Pane `json:"pane"`
+			}{&p}); err == nil && p.WorkspaceID != "" {
+				sp.s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": p.WorkspaceID}, nil)
+			}
+		}
+	}
+	sp.mu.Lock()
+	sp.routerLaunchAt = time.Time{}
+	sp.mu.Unlock()
+	sp.ensureRouter(ctx)
+	return nil
+}
+
+func (sp *Super) writeRouterFiles() error {
+	dir := sp.routerDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	sp.mu.Lock()
+	words := sp.st.Settings.ReplyChars
+	wkind := sp.st.Settings.WorkerKind
+	wcwd := sp.s.tilde(sp.st.Settings.WorkerCwd)
+	sp.mu.Unlock()
+	layout := "   " + strings.ReplaceAll(memoryLayout, "\n", "\n   ")
+	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", sp.bin, "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd).Replace(routerDoc)
+	for _, name := range []string{"ROUTER.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(doc), 0o600); err != nil {
+			return err
+		}
+	}
+	// Claude Code asks before every shell command; the router's whole job is
+	// running the collie CLI and keeping memory/, so allow exactly that.
+	perms, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{
+		"allow": collieAllow(sp.bin, append(memoryRules(dir),
+			// Read-only peeks at a worker's terminal.
+			"Bash(herdr agent read:*)", "Bash(herdr agent list:*)", "Bash(herdr agent get:*)", "Bash(herdr pane read:*)")...),
+	}}, "", "  ")
+	os.MkdirAll(filepath.Join(dir, ".claude"), 0o700)
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), perms, 0o600); err != nil {
+		return err
+	}
+	sp.ensureMemory()
+	return nil
+}
+
+// ---------------------------------------------------------------- workers
+
+var workerNameRe = regexp.MustCompile(`[^a-z0-9_-]+`)
+
+// Spawn starts a worker session asynchronously (start() returns at once; the
+// outcome arrives later as a trigger — the async ReAct pattern).
+// model and effort are launch choices for this worker; "" falls back to the
+// default worker settings when kind is the default kind, else the agent's own.
+func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool) (*Worker, error) {
+	m, err := sp.s.herdr.machine(machine)
+	if err != nil {
+		return nil, fmt.Errorf("machine %q is not connected", machine)
+	}
+	sp.mu.Lock()
+	if kind == "" {
+		kind = sp.st.Settings.WorkerKind
+	}
+	if _, ok := kinds[kind]; !ok {
+		sp.mu.Unlock()
+		return nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity)", kind)
+	}
+	if cwd == "" && (m.ID == sp.st.Settings.WorkerMachine || (m.Local && sp.st.Settings.WorkerMachine == "")) {
+		cwd = sp.st.Settings.WorkerCwd
+	}
+	if thread == "" {
+		thread = mainThread
+	}
+	if name == "" {
+		base := kind
+		if base == "antigravity" {
+			base = "agy"
+		}
+		for i := 1; ; i++ {
+			n := fmt.Sprintf("%s-%d", base, i)
+			if w := sp.st.Workers[n]; w == nil || w.Ended {
+				name = n
+				break
+			}
+		}
+	}
+	name = strings.Trim(workerNameRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	if !nameRe.MatchString(name) || name == routerName {
+		sp.mu.Unlock()
+		return nil, fmt.Errorf("invalid worker name %q", name)
+	}
+	if w := sp.st.Workers[name]; w != nil && !w.Ended {
+		sp.mu.Unlock()
+		return nil, fmt.Errorf("worker %s already exists", name)
+	}
+	dir := expandIn(m.Home, cwd)
+	if m.Local && !isDir(dir) {
+		sp.mu.Unlock()
+		return nil, fmt.Errorf("directory not found: %s", dir)
+	}
+	w := &Worker{Name: name, Kind: kind, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting"}
+	sp.st.Workers[name] = w
+	if subscribe {
+		th := sp.threadLocked(thread)
+		if !contains(th.Subscribers, name) {
+			th.Subscribers = append(th.Subscribers, name)
+		}
+	}
+	where := ""
+	if !m.Local {
+		where = " @ " + m.Name
+	}
+	sp.addEntryLocked("event", thread, fmt.Sprintf("派出 %s（%s%s）：%s", name, kind, where, clip(firstLine(task), 120)), name, "spawn")
+	sp.mu.Unlock()
+
+	// The default model applies to the default kind of worker.
+	sp.mu.Lock()
+	if kinds[kind] == kinds[sp.st.Settings.WorkerKind] {
+		if model == "" {
+			model = sp.st.Settings.WorkerModel
+		}
+		if effort == "" {
+			effort = sp.st.Settings.WorkerEffort
+		}
+	}
+	sp.mu.Unlock()
+	wargs := modelArgs(kind, model, effort)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		bin := sp.bin
+		if !m.Local && m.Bin != "" {
+			bin = m.Bin
+		} else if !m.Local {
+			bin = "collie"
+		}
+		args := append([]string{}, wargs...)
+		if kinds[kind] == "claude" {
+			// Reporting back is part of the job; don't make it a permission prompt.
+			args = []string{"--allowedTools", strings.Join(collieAllow(bin), ",")}
+		}
+		pane, ws, err := sp.s.startAgent(ctx, m.ID, kinds[kind], name, dir, name, args)
+		sp.mu.Lock()
+		w.PaneID, w.WorkspaceID = pane, ws
+		var he *HerdrError
+		blocked := err != nil && errors.As(err, &he) && he.Code == "agent_not_ready"
+		if err != nil && !blocked {
+			w.Status, w.Ended, w.Note = "failed", true, err.Error()
+			sp.ingestLocked("worker", thread, name, fmt.Sprintf("worker %s failed to start: %v", name, err), "", "", name)
+			sp.addEntryLocked("event", thread, name+" 启动失败："+err.Error(), name, "error")
+			sp.mu.Unlock()
+			return
+		}
+		w.Status = "idle"
+		if blocked {
+			w.Status = "blocked"
+		}
+		sp.changed()
+		sp.mu.Unlock()
+		// The task brief is delivered like any other trigger, so it waits
+		// politely if the worker is stuck on a startup dialog.
+		sp.Ingest("system", thread, routerName, workerBrief(bin, w), "", name, name)
+	}()
+	return w, nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func workerBrief(bin string, w *Worker) string {
+	return fmt.Sprintf(`You are worker %q, managed by Collie (thread %s). Your task:
+
+%s
+
+Rules:
+- Work autonomously in this directory; you never talk to humans directly.
+- When you finish, or need a decision only a human can make, run:
+    %s report "<≤100 words: outcome, what changed, where; or the exact question>"
+- Follow-ups for your thread arrive as messages starting with [collie].`, w.Name, w.Thread, strings.TrimSpace(w.Task), bin)
+}
+
+func (sp *Super) Report(name, text string) error {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	w := sp.st.Workers[name]
+	if w == nil {
+		return fmt.Errorf("unknown worker %s", name)
+	}
+	w.LastReport, w.ReportAt = text, time.Now()
+	sp.ingestLocked("worker", w.Thread, name, fmt.Sprintf("report from %s:\n%s", name, text), "", "", name)
+	sp.addEntryLocked("event", w.Thread, name+" 回报："+clip(text, 160), name, "done")
+	return nil
+}
+
+func (sp *Super) workerByPane(pane string) string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	for _, w := range sp.st.Workers {
+		if w.PaneID == pane && !w.Ended {
+			return w.Name
+		}
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------- watchdog
+
+// watchdog is the external control loop: it restarts the router when work is
+// waiting and flags workers that look stuck (screen unchanged while working).
+func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, routerAlive bool) {
+	sp.mu.Lock()
+	stall := time.Duration(sp.st.Settings.StallMinutes) * time.Minute
+	var watch []*Worker
+	for _, w := range sp.st.Workers {
+		if !w.Ended && w.Status == "working" {
+			watch = append(watch, w)
+		}
+	}
+	sp.mu.Unlock()
+	for _, w := range watch {
+		a, ok := live[w.Name]
+		if !ok {
+			continue
+		}
+		res, err := sp.s.herdr.Read(ctx, a.Pane, "detection", "text", 0)
+		if err != nil {
+			continue
+		}
+		h := fmt.Sprintf("%x", sha1.Sum([]byte(res.Text)))
+		m := sp.lastScreen[w.Name]
+		if m.hash != h {
+			sp.lastScreen[w.Name] = screenMark{hash: h, since: time.Now()}
+			continue
+		}
+		if !m.flag && stall > 0 && time.Since(m.since) > stall {
+			m.flag = true
+			sp.lastScreen[w.Name] = m
+			sp.Ingest("system", w.Thread, "watchdog",
+				fmt.Sprintf("watchdog: worker %s has shown no visible progress for %d min while 'working'. Inspect with `collie show %s`; send guidance, stop it, or tell the human.", w.Name, int(stall.Minutes()), w.Name), "", "", w.Name)
+		}
+	}
+}
+
+// ---------------------------------------------------------------- outbox
+
+func (sp *Super) queueNotifyLocked(role, text, tone string) {
+	if sp.st.Settings.NotifyWebhook == "" {
+		return
+	}
+	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" {
+		return
+	}
+	prefix := "Collie"
+	if tone == "blocked" {
+		prefix = "Collie · 需要你"
+	}
+	sp.notifyBuf = append(sp.notifyBuf, prefix+"："+clip(text, 400))
+}
+
+// sendNotifications paces outgoing notifications: messages are coalesced and
+// sent at most every 20 seconds.
+func (sp *Super) sendNotifications() {
+	sp.mu.Lock()
+	if len(sp.notifyBuf) == 0 || time.Since(sp.notifyAt) < 20*time.Second {
+		sp.mu.Unlock()
+		return
+	}
+	text := strings.Join(sp.notifyBuf, "\n\n")
+	url := sp.st.Settings.NotifyWebhook
+	sp.notifyBuf, sp.notifyAt = nil, time.Now()
+	sp.mu.Unlock()
+	body, _ := json.Marshal(map[string]any{
+		"msg_type": "text", "content": map[string]string{"text": text}, // Feishu/Lark bot
+		"text": text, // Slack-style
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		log.Printf("notify: %v", err)
+	} else {
+		resp.Body.Close()
+	}
+}
+
+// ---------------------------------------------------------------- recall
+
+// Show renders any object by id with links to related ids (chain of recall).
+func (sp *Super) Show(id string) (string, bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	var b strings.Builder
+	if t := sp.st.trigger(id); t != nil {
+		fmt.Fprintf(&b, "trigger %s\nsource: %s  thread: %s  from: %s  at: %s  status: %s  action: %s\n", t.ID, t.Source, t.Thread, t.From, t.At.Format(time.RFC3339), t.Status, t.Action)
+		if t.Ref != "" {
+			fmt.Fprintf(&b, "ref: %s\n", t.Ref)
+		}
+		fmt.Fprintf(&b, "\n%s\n", t.Text)
+		return b.String(), true
+	}
+	if th := sp.st.Threads[id]; th != nil {
+		fmt.Fprintf(&b, "thread %s\nsubscribers: %s\nrecent triggers:\n", th.ID, strings.Join(th.Subscribers, ", "))
+		ids := th.Triggers
+		if len(ids) > 15 {
+			ids = ids[len(ids)-15:]
+		}
+		for _, tid := range ids {
+			if t := sp.st.trigger(tid); t != nil {
+				fmt.Fprintf(&b, "  #%s %s %s: %s\n", t.ID, t.At.Format("01-02 15:04"), t.Source, clip(firstLine(t.Text), 90))
+			}
+		}
+		return b.String(), true
+	}
+	if w := sp.st.Workers[id]; w != nil {
+		fmt.Fprintf(&b, "worker %s (%s)\nstatus: %s  thread: %s  pane: %s  cwd: %s\ncreated: %s by %s\n", w.Name, w.Kind, w.Status, w.Thread, w.PaneID, w.Cwd, w.CreatedAt.Format("01-02 15:04"), w.CreatedBy)
+		fmt.Fprintf(&b, "\ntask:\n%s\n", w.Task)
+		if w.LastReport != "" {
+			fmt.Fprintf(&b, "\nlast report (%s):\n%s\n", w.ReportAt.Format("01-02 15:04"), w.LastReport)
+		}
+		if w.Note != "" {
+			fmt.Fprintf(&b, "\nnote: %s\n", w.Note)
+		}
+		fmt.Fprintf(&b, "\nterminal: herdr agent read %s --source recent-unwrapped --lines 80\n", w.Name)
+		return b.String(), true
+	}
+	return "", false
+}
+
+func (sp *Super) List() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	var b strings.Builder
+	b.WriteString("machines (pass the name to `collie spawn -machine`):\n")
+	for _, m := range sp.s.herdr.Machines() {
+		state := "online"
+		if !m.Local && !m.Online {
+			state = "offline"
+		}
+		id := m.ID
+		if m.Local {
+			id = "hub"
+		}
+		fmt.Fprintf(&b, "  %-14s %-8s %s  home=%s\n", id, state, m.Name, m.Home)
+	}
+	b.WriteString("workers:\n")
+	names := make([]string, 0, len(sp.st.Workers))
+	for n := range sp.st.Workers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	any := false
+	for _, n := range names {
+		w := sp.st.Workers[n]
+		if w.Ended && time.Since(w.CreatedAt) > 24*time.Hour {
+			continue
+		}
+		any = true
+		fmt.Fprintf(&b, "  %-14s %-8s %-8s thread=%s  %s\n", w.Name, w.Kind, w.Status, w.Thread, clip(firstLine(w.Task), 70))
+	}
+	if !any {
+		b.WriteString("  (none)\n")
+	}
+	b.WriteString("threads:\n")
+	ths := make([]*Thread, 0, len(sp.st.Threads))
+	for _, th := range sp.st.Threads {
+		ths = append(ths, th)
+	}
+	sort.Slice(ths, func(i, j int) bool { return ths[i].LastAt.After(ths[j].LastAt) })
+	for i, th := range ths {
+		if i >= 12 {
+			break
+		}
+		fmt.Fprintf(&b, "  %-28s last=%s subscribers=%s\n", th.ID, th.LastAt.Format("01-02 15:04"), strings.Join(th.Subscribers, ","))
+	}
+	b.WriteString("timers:\n")
+	for _, t := range sp.st.Timers {
+		if t.Enabled {
+			fmt.Fprintf(&b, "  %s %q next=%s → %s\n", t.ID, t.Spec, t.NextRun.Format("01-02 15:04"), clip(t.Text, 60))
+		}
+	}
+	return b.String()
+}
+
+// trustOwnDir answers the "do you trust this folder?" dialog for the router's
+// own working directory. Collie created that directory and wrote every file in
+// it, so asking the human adds friction without adding safety. Any other
+// dialog (and any other directory) is left for the human.
+func (sp *Super) trustOwnDir(ctx context.Context, pane string) {
+	sp.mu.Lock()
+	if time.Since(sp.lastTrust) < 5*time.Second {
+		sp.mu.Unlock()
+		return
+	}
+	sp.lastTrust = time.Now()
+	sp.mu.Unlock()
+
+	rr, err := sp.s.herdr.Read(ctx, pane, "visible", "text", 0)
+	if err != nil {
+		return
+	}
+	screen := rr.Text
+	low := strings.ToLower(screen)
+	if !strings.Contains(low, "trust") || !(strings.Contains(screen, sp.routerDir()) || strings.Contains(screen, sp.s.tilde(sp.routerDir()))) {
+		return
+	}
+	for _, c := range parseApproval(screen).Choices {
+		l := strings.ToLower(c.Label)
+		if !strings.HasPrefix(l, "yes") || !strings.Contains(l, "trust") {
+			continue
+		}
+		if c.Text != "" {
+			err = sp.s.herdr.Call(ctx, "pane.send_text", map[string]any{"pane_id": pane, "text": c.Text}, nil)
+		} else {
+			keys := c.Keys
+			if len(keys) == 0 {
+				keys = []string{"enter"}
+			}
+			err = sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": keys}, nil)
+		}
+		if err == nil {
+			log.Printf("router: trusted its own directory %s", sp.routerDir())
+		}
+		return
+	}
+}
+
+// closeStaleRouterWorkspaces removes router workspaces whose agent has exited,
+// so a crashed router does not leave an orphan shell behind.
+func (sp *Super) closeStaleRouterWorkspaces(ctx context.Context) {
+	wss, err := sp.s.herdr.Workspaces(ctx)
+	if err != nil {
+		return
+	}
+	for _, ws := range wss {
+		if _, m := split(ws.ID); ws.Label == routerLabel && m == "" {
+			sp.s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": ws.ID}, nil)
+		}
+	}
+}
+
+var agentErrRe = regexp.MustCompile(`(?i)(⚠|\berror\b|failed|unauthori[sz]ed|forbidden|rate.?limit|quota|not supported|invalid api key|overloaded)`)
+
+// routerSettled runs once after the router finishes a turn that we prompted.
+// If it went quiet without a `collie reply` and its screen shows an error
+// (bad credentials, region block, quota…), surface that in the chat instead of
+// leaving the human staring at silence.
+func (sp *Super) routerSettled(ctx context.Context, pane string) {
+	sp.mu.Lock()
+	asked := sp.routerAskedAt
+	if asked.IsZero() || time.Since(asked) < 4*time.Second {
+		sp.mu.Unlock()
+		return
+	}
+	sp.routerAskedAt = time.Time{}
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		e := sp.st.Entries[i]
+		if e.At.Before(asked) {
+			break
+		}
+		if e.Role == "collie" {
+			sp.mu.Unlock()
+			return
+		}
+	}
+	sp.mu.Unlock()
+
+	rr, err := sp.s.herdr.Read(ctx, pane, "recent", "text", 60)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(rr.Text, "\n")
+	// Only look at what the agent printed after our prompt, never at the event text itself.
+	start := 0
+	for i, l := range lines {
+		if strings.Contains(l, "collie reply") || strings.Contains(l, "yourself.") {
+			start = i + 1
+		}
+	}
+	for i := start; i < len(lines); i++ {
+		l := strings.TrimSpace(lines[i])
+		if l == "" || !agentErrRe.MatchString(l) {
+			continue
+		}
+		// Messages wrap in the terminal: keep following lines of the same block.
+		msg := l
+		for j := i + 1; j < len(lines) && j <= i+3; j++ {
+			next := strings.TrimSpace(lines[j])
+			if next == "" || strings.HasPrefix(next, "─") || strings.HasPrefix(next, "✻") || strings.HasPrefix(next, "Error ID") {
+				break
+			}
+			msg += " " + next
+		}
+		if r := []rune(msg); len(r) > 240 {
+			msg = string(r[:240]) + "…"
+		}
+		sp.mu.Lock()
+		text := "Collie 出错了：" + msg + "（可以在 自动化 → 设置 里给 Collie 换一个 agent）"
+		for i := len(sp.st.Entries) - 1; i >= 0 && i >= len(sp.st.Entries)-6; i-- {
+			if e := sp.st.Entries[i]; e.Text == text && time.Since(e.At) < 10*time.Minute {
+				sp.mu.Unlock()
+				return // same failure again; one notice is enough
+			}
+		}
+		sp.addEntryLocked("event", mainThread, text, routerName, "error")
+		sp.mu.Unlock()
+		return
+	}
+}
+
+// stableBin returns a path to this binary that agents can keep calling. A
+// `go run` build lives in a temp dir that vanishes on restart, so in that case
+// copy the executable to ~/.collie/bin/collie and hand out that path instead.
+func stableBin(exe, dir string) string {
+	if !strings.Contains(exe, "go-build") {
+		return exe
+	}
+	dst := filepath.Join(dir, "bin", "collie")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return exe
+	}
+	b, err := os.ReadFile(exe)
+	if err != nil {
+		return exe
+	}
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o755); err != nil {
+		return exe
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return exe
+	}
+	return dst
+}
+
+func (sp *Super) settings() Settings {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.st.Settings
+}
+
+// collieAllow is the Claude Code permission rule set for calling the collie
+// CLI, by its absolute path and by name.
+func collieAllow(bin string, extra ...string) []string {
+	rules := []string{"Bash(collie:*)", "Bash(collie *)", "Read(~/.collie/uploads/**)"}
+	// Claude matches the resolved path too; home is often a symlink.
+	if up, err := filepath.EvalSymlinks(filepath.Join(collieDir(), "uploads")); err == nil {
+		rules = append(rules, "Read(/"+up+"/**)")
+	}
+	if bin != "" && bin != "collie" {
+		rules = append(rules, "Bash("+bin+":*)", "Bash("+bin+" *)")
+	}
+	return append(rules, extra...)
+}
+
+// routerArgsLocked: the extra launch flags plus the chosen model and effort.
+func (sp *Super) routerArgsLocked() []string {
+	st := sp.st.Settings
+	return append(append([]string{}, st.RouterArgs...), modelArgs(st.RouterKind, st.RouterModel, st.RouterEffort)...)
+}
+
+// The model and effort the router was launched with, kept across hub restarts.
+func (sp *Super) setRouterRun(run [2]string) {
+	sp.routerRun = &run
+	b, _ := json.Marshal(run)
+	sp.db.Exec(`INSERT INTO kv(k,v) VALUES('router_run',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(b))
+}
+
+func (sp *Super) routerRunLocked() *[2]string {
+	if sp.routerRun == nil {
+		var raw string
+		var run [2]string
+		if sp.db.QueryRow(`SELECT v FROM kv WHERE k='router_run'`).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &run) == nil {
+			sp.routerRun = &run
+		}
+	}
+	return sp.routerRun
+}

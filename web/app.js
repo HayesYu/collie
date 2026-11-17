@@ -441,13 +441,15 @@
     el.innerHTML = parts.join(" · ") + (r.pending ? ` <button type="button" class="pending" data-act="router-restart" title="Collie 的模型设置改过了，点这里重启 Collie">重启后生效</button>` : "");
     el.title = `Collie 自己用的模型${model ? "：" + model : ""}${r.effort ? "，思考强度 " + r.effort : ""}（自动化 → 设置 → Collie 自己）`;
   }
+  // Messages waiting for Collie itself (an older hub only counts them all).
+  const routerQueued = () => sup.queued_router ?? sup.queued;
   function renderSuper(force) {
     const r = sup.router || {};
     $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "";
     const st = $("#router-status");
     st.className = "status " + collieDot(r.status);
     st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(collieStatus(r.status))}`;
-    $("#router-queue").textContent = sup.paused ? "已暂停投递" : sup.queued ? `${sup.queued} 条事件排队中` : "";
+    $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";
     const cx = $("#router-ctx");
     cx.textContent = r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "";
     cx.classList.toggle("warn", !!r.handover || (r.rotate_at > 0 && r.context >= r.rotate_at - 10));
@@ -465,7 +467,7 @@
     const box = $("#super-thread");
     const scroller = box.parentElement;
     const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
-    let html = "";
+    let html = "", prevRole = "";
     if (!sup.entries.length) {
       html = `<div class="hello"><img src="/icon.svg" alt="">
         <h3>一个入口，管一群 agent</h3>
@@ -480,7 +482,7 @@
       for (const e of sup.entries) {
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
         const cont = e.role === "collie" && prev === "collie";
-        prev = e.role;
+        prev = prevRole = e.role;
         if (e.role === "user") html += `<div class="msg user">${userText(e.text)}</div>`;
         else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant">${md(e.text)}</div></div>`;
         else {
@@ -492,6 +494,17 @@
           const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : "idle") : e.tone === "error" ? "failed" : "idle";
           html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span></${tag.split(" ")[0]}>`;
         }
+      }
+    }
+    // Collie's own state at the end of the conversation, where the eye is
+    // after sending: the header status alone is easy to miss.
+    if (sup.entries.length) {
+      const rs = r.status;
+      const pending = rs === "working" ? "在想…" : rs === "starting" ? "正在唤醒…" : rs === "dreaming" ? "在整理记忆…"
+        : routerQueued() && !sup.paused && rs !== "blocked" ? "收到了，马上看" : "";
+      if (pending) {
+        const cont = prevRole === "collie";
+        html += `<div class="say pending${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="thinking"><span class="dots"><i></i><i></i><i></i></span>${pending}</div></div>`;
       }
     }
     // Everything waiting on the human, in one place.

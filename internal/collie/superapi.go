@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -65,7 +66,9 @@ type superView struct {
 	Entries []*Entry   `json:"entries"`
 	Workers []*Worker  `json:"workers"`
 	Queued  int        `json:"queued"`
-	Paused  bool       `json:"paused"`
+	// QueuedRouter: those waiting for Collie itself, not for a worker.
+	QueuedRouter int  `json:"queued_router"`
+	Paused       bool `json:"paused"`
 }
 
 func (s *Server) superState(ctx context.Context) superView {
@@ -106,6 +109,9 @@ func (s *Server) superState(ctx context.Context) superView {
 	for _, t := range sp.st.Triggers {
 		if t.Status == "queued" {
 			v.Queued++
+			if len(t.Targets) == 0 || slices.Contains(t.Targets, routerName) {
+				v.QueuedRouter++
+			}
 		}
 	}
 	return v

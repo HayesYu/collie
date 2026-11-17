@@ -103,6 +103,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("GET /api/external/{id}/earlier", wrap(s.externalEarlier))
 	mux.Handle("POST /api/external/{id}/takeover", wrap(s.takeOverExternal))
 	mux.Handle("POST /api/external/{id}/send", wrap(s.sendExternal))
+	mux.Handle("POST /api/external/{id}/reveal", wrap(s.revealExternal))
 }
 
 // NodeRoutes is what a node serves to its hub through the tunnel.

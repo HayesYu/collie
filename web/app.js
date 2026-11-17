@@ -1741,6 +1741,14 @@
     while (threadCache.size > 20) threadCache.delete(threadCache.keys().next().value);
   }
 
+  document.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("[data-act=ask-reveal]");
+    if (!b || !extCur) return;
+    b.disabled = true;
+    try { await api(`/api/external/${encodeURIComponent(extCur)}/reveal`, { body: {} }); toast("已在电脑上的 Claude 桌面版打开这个会话"); }
+    catch (err) { toast(err.message, "attn"); }
+    finally { b.disabled = false; }
+  });
   // An end-of-turn button answers by sending its label from this view's composer.
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-act=ask-reply]");
@@ -1809,7 +1817,9 @@
           + `<div class="q"><span class="dot ${open ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
           + (opts ? `<div class="opts">${opts}</div>` : "")
           + (m.output ? `<div class="answer">${esc(m.output)}</div>`
-            : open && !box ? `<div class="where">在电脑上的会话里回答</div>` : "")
+            : open && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
+              ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
+              : `<div class="where">在电脑上的会话里回答</div>`) : "")
           + `</div>`;
         cut();
         i++;

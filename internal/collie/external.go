@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -698,4 +699,34 @@ func lastActive(e *External) time.Time {
 func collieSession(title string) bool {
 	t := strings.TrimSpace(title)
 	return strings.HasPrefix(t, "[collie]") || strings.HasPrefix(t, "You are worker ")
+}
+
+// revealExternal brings the session up in the app it runs in, on this
+// computer: Claude's desktop app opens it where it waits for you (its own
+// dialogs can only be answered there), the Codex App opens the thread.
+func (s *Server) revealExternal(w http.ResponseWriter, r *http.Request) {
+	e := s.viewableByID(r.PathValue("id"))
+	if e == nil {
+		writeJSON(w, 404, map[string]any{"error": "这个会话已经结束了"})
+		return
+	}
+	if runtime.GOOS != "darwin" {
+		writeJSON(w, 409, map[string]any{"error": "只能在 Mac 上打开 " + e.App})
+		return
+	}
+	var link string
+	switch {
+	case e.Kind == "claude" && strings.HasPrefix(e.ID, "cd-"):
+		link = "claude://code/needs-input?source=collie&session=" + url.QueryEscape("local_"+strings.TrimPrefix(e.ID, "cd-"))
+	case e.Kind == "codex" && e.via == "app" && e.Session != "":
+		link = "codex://threads/" + url.PathEscape(e.Session)
+	default:
+		writeJSON(w, 409, map[string]any{"error": "这个会话没法从这里在 " + e.App + " 里打开"})
+		return
+	}
+	if err := exec.CommandContext(r.Context(), "open", link).Run(); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }

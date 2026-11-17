@@ -275,6 +275,13 @@ func (sp *Super) tick(parent context.Context) {
 	// 2. Worker lifecycle → triggers for the router.
 	for _, w := range sp.st.Workers {
 		if w.Ended {
+			// herdr restored its pane (a herdr restart or update): it's back.
+			if a, ok := live[w.Name]; ok && w.Status == "gone" && w.PaneID != "" && a.Pane == w.PaneID {
+				w.Ended, w.Status = false, a.Status
+				sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf("worker %s is back: herdr restored its pane (status %s).", w.Name, a.Status), "", "", w.Name)
+				sp.addEntryLocked("event", w.Thread, w.Name+" 回来了（herdr 恢复了它的窗格）", w.Name, "info")
+				sp.changed()
+			}
 			continue
 		}
 		a, alive := live[w.Name]

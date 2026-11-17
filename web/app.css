@@ -914,3 +914,11 @@ select.picked { display: none; }
 .say.pending .dots i:nth-child(3) { animation-delay: .4s; }
 @keyframes thinkdot { 30% { opacity: 1; transform: translateY(-2px); } 60% { opacity: .35; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .say.pending .dots i { animation: none; opacity: .6; } }
+
+/* a stuck agent's dialog, answered from Collie's conversation */
+.needs .ask { margin-top: 10px; }
+.needs .ask-head a { font-size: 12px; color: var(--fg-3); text-decoration: none; }
+.needs .ask-head a:hover { color: var(--fg); }
+.event:has(> .wstate) { grid-template-columns: 26px auto minmax(0, 1fr) auto; }
+.event:has(> .wstate) > span:nth-child(3) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.event > .wstate { font-size: 12px; color: var(--fg-3); white-space: nowrap; }

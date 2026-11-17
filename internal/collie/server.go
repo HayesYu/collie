@@ -89,6 +89,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("GET /api/panes/{id}/chat", wrap(s.streamChat))
 	mux.Handle("GET /api/panes/{id}/earlier", wrap(s.paneEarlier))
 	mux.Handle("GET /api/panes/{id}/last", wrap(s.lastMessage))
+	mux.Handle("GET /api/panes/{id}/ask", wrap(s.paneAsk))
 	mux.Handle("POST /api/panes/{id}/text", wrap(s.sendText))
 	mux.Handle("POST /api/panes/{id}/keys", wrap(s.sendKeys))
 	mux.Handle("POST /api/workspaces/{id}/close", wrap(s.closeWorkspace))

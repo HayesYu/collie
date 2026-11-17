@@ -896,6 +896,12 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 		kind, status := "", "shell"
 		if err == nil && info.Agent.Agent != nil {
 			kind, status = *info.Agent.Agent, info.Agent.Status
+			// herdr says "idle" while a startup dialog is up (Codex's hooks
+			// review, a folder trust); the header already shows it as needing
+			// you, and the card with its choices belongs here too.
+			if status == "idle" && s.herdr.idleButAsking(ctx, id) {
+				status = "blocked"
+			}
 		} else if err != nil {
 			if _, e := s.herdr.Read(ctx, id, "visible", "text", 1); e != nil {
 				cancel()
@@ -1005,4 +1011,19 @@ func (s *Server) lastMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 404, map[string]any{"error": "pane not found"})
+}
+
+// paneAsk: the dialog a pane is showing, if any, so it can be answered from
+// Collie's conversation without opening the pane.
+func (s *Server) paneAsk(w http.ResponseWriter, r *http.Request) {
+	res, err := s.herdr.Read(r.Context(), r.PathValue("id"), "detection", "text", 0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if !screenAsks(res.Text) {
+		writeJSON(w, 200, map[string]any{"asking": false})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"asking": true, "approval": parseApproval(res.Text)})
 }

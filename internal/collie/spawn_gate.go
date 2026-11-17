@@ -3,6 +3,7 @@ package collie
 import (
 	"regexp"
 	"strings"
+	"time"
 )
 
 // What a worker runs is the human's call, made in settings. The router (a
@@ -66,6 +67,19 @@ func mentionsModel(text, model string) bool {
 			return true
 		}
 	}
+	// A run of its parts, as people shorten it ("6.1sol" for gpt-6.1-sol),
+	// with at least one real word in it, not just numbers or "medium".
+	for i := range parts {
+		for j := i + 2; j <= len(parts); j++ {
+			word := false
+			for _, p := range parts[i:j] {
+				word = word || (!genericModelWords[p] && strings.Trim(p, "0123456789") != "")
+			}
+			if p := alnumOnly.ReplaceAllString(strings.Join(parts[i:j], ""), ""); word && len(p) >= 4 && strings.Contains(flat, p) {
+				return true
+			}
+		}
+	}
 	// A distinctive word of it ("opus", "sonnet", "flash").
 	for _, p := range parts {
 		if len(p) >= 4 && !genericModelWords[p] && strings.Trim(p, "0123456789") != "" && strings.Contains(t, p) {
@@ -96,16 +110,56 @@ func mentionsEffort(text, effort string) bool {
 	return false
 }
 
-// humanWordsLocked: the human's latest message (a chat line or one of their
-// timers), which is what the router is acting on.
+// humanWordsLocked: what the human said lately (chat lines and their timers),
+// which the router is acting on. A choice often comes over a couple of
+// messages ("use codex", then "with 6.1sol"), so it is the latest message
+// plus the ones within a few minutes before it.
 func (sp *Super) humanWordsLocked() string {
-	for i := len(sp.st.Triggers) - 1; i >= 0; i-- {
-		if t := sp.st.Triggers[i]; t.Source == "chat" || t.Source == "timer" {
-			return t.Text
+	var words []string
+	var last time.Time
+	for i := len(sp.st.Triggers) - 1; i >= 0 && len(words) < humanWindowMsgs; i-- {
+		t := sp.st.Triggers[i]
+		if t.Source != "chat" && t.Source != "timer" {
+			continue
 		}
+		if last.IsZero() {
+			last = t.At
+		} else if last.Sub(t.At) > humanWindow {
+			break
+		}
+		words = append(words, t.Text)
+	}
+	// A short answer ("可以", "好") takes up what Collie just asked ("要不要改用
+	// codex？"): the question counts as the human's words.
+	if len(words) > 0 && len([]rune(strings.TrimSpace(words[0]))) <= shortAnswer {
+		if q := sp.lastQuestionLocked(last); q != "" {
+			words = append(words, q)
+		}
+	}
+	return strings.Join(words, "\n")
+}
+
+// lastQuestionLocked: Collie's latest reply before the human's message at
+// `before`, if it asked something.
+func (sp *Super) lastQuestionLocked(before time.Time) string {
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		e := sp.st.Entries[i]
+		if e.Role != "collie" || e.At.After(before) {
+			continue
+		}
+		if before.Sub(e.At) > humanWindow || !strings.ContainsAny(e.Text, "?？") {
+			return ""
+		}
+		return e.Text
 	}
 	return ""
 }
+
+const (
+	humanWindow     = 10 * time.Minute
+	humanWindowMsgs = 6
+	shortAnswer     = 12 // runes
+)
 
 // gateSpawn drops the launch choices the human didn't ask for. It returns
 // what is left and a note for each dropped one.

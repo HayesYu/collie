@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -44,9 +45,9 @@ type Super struct {
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
 	routerRun   *[2]string
-	handover    *handover // set while the router writes its memory before a fresh session
-	dream       *dreamRun // set while Collie sleeps and a dream session tidies its memory
-	lastTrust   time.Time
+	handover    *handover            // set while the router writes its memory before a fresh session
+	dream       *dreamRun            // set while Collie sleeps and a dream session tidies its memory
+	lastTrust   map[string]time.Time // pane → when its trust dialog was last answered
 	lastScreen  map[string]screenMark
 	transcripts map[string]*transcript
 	notifyBuf   []string
@@ -361,8 +362,14 @@ func (sp *Super) tick(parent context.Context) {
 		if target == routerName && a.Status == "blocked" {
 			sp.trustOwnDir(ctx, a.Pane)
 		}
-		if a.Status == "working" || a.Status == "blocked" || (!a.Ready && a.Status == "unknown") {
-			continue // batch builds up until the session is free
+		// Collie's own events batch up while it works. A worker takes a
+		// message mid-turn (Claude, Codex and agy queue typed input and pick it
+		// up themselves), so corrections and questions reach it now rather than
+		// after its current step. Nothing is typed over a dialog or into an
+		// agent that is still starting.
+		busy := a.Status == "working" && target == routerName
+		if busy || a.Status == "blocked" || (!a.Ready && a.Status == "unknown") {
+			continue
 		}
 		sp.deliver(ctx, target, list)
 	}
@@ -489,6 +496,16 @@ func indent(s, p string) string {
 // workerSettled turns a worker reaching done/blocked into a router trigger,
 // carrying a short summary from the worker's transcript or screen.
 func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
+	// The human chose to bypass permissions in settings, so a worker's
+	// "trust this folder?" (the folder Collie started it in) isn't theirs to
+	// click. Anything else still goes to them.
+	sp.mu.Lock()
+	ask := sp.st.Settings.AskPermissions
+	sp.mu.Unlock()
+	if blocked && !ask && sp.answerTrust(ctx, w.PaneID, w.Cwd) {
+		log.Printf("worker %s: trusted its folder %s", w.Name, w.Cwd)
+		return
+	}
 	summary := sp.lastAssistant(ctx, w)
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
@@ -978,24 +995,31 @@ func (sp *Super) List() string {
 // it, so asking the human adds friction without adding safety. Any other
 // dialog (and any other directory) is left for the human.
 func (sp *Super) trustOwnDir(ctx context.Context, pane string) {
-	sp.mu.Lock()
-	if time.Since(sp.lastTrust) < 5*time.Second {
-		sp.mu.Unlock()
-		return
+	if sp.answerTrust(ctx, pane, sp.routerDir()) {
+		log.Printf("router: trusted its own directory %s", sp.routerDir())
 	}
-	sp.lastTrust = time.Now()
+}
+
+// answerTrust picks "Yes, I trust this folder" when pane shows a folder-trust
+// dialog for dir, the folder Collie started that agent in. It reports whether
+// it answered. Nothing else is ever answered this way.
+func (sp *Super) answerTrust(ctx context.Context, pane, dir string) bool {
+	sp.mu.Lock()
+	if sp.lastTrust == nil {
+		sp.lastTrust = map[string]time.Time{}
+	}
+	if time.Since(sp.lastTrust[pane]) < 5*time.Second {
+		sp.mu.Unlock()
+		return false
+	}
+	sp.lastTrust[pane] = time.Now()
 	sp.mu.Unlock()
 
 	rr, err := sp.s.herdr.Read(ctx, pane, "visible", "text", 0)
-	if err != nil {
-		return
+	if err != nil || !trustDialogFor(rr.Text, dir, sp.s.tilde(dir)) {
+		return false
 	}
-	screen := rr.Text
-	low := strings.ToLower(screen)
-	if !strings.Contains(low, "trust") || !(strings.Contains(screen, sp.routerDir()) || strings.Contains(screen, sp.s.tilde(sp.routerDir()))) {
-		return
-	}
-	for _, c := range parseApproval(screen).Choices {
+	for _, c := range parseApproval(rr.Text).Choices {
 		l := strings.ToLower(c.Label)
 		if !strings.HasPrefix(l, "yes") || !strings.Contains(l, "trust") {
 			continue
@@ -1009,11 +1033,22 @@ func (sp *Super) trustOwnDir(ctx context.Context, pane string) {
 			}
 			err = sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": keys}, nil)
 		}
-		if err == nil {
-			log.Printf("router: trusted its own directory %s", sp.routerDir())
-		}
-		return
+		return err == nil
 	}
+	return false
+}
+
+// trustDialogFor: the screen asks whether to trust a folder, and names dir
+// (as given, with ~, or by its last part: the screen may show the path a
+// symlink resolves to).
+func trustDialogFor(screen, dir, tilde string) bool {
+	if !strings.Contains(strings.ToLower(screen), "trust") || dir == "" {
+		return false
+	}
+	if strings.Contains(screen, dir) || strings.Contains(screen, tilde) {
+		return true
+	}
+	return regexp.MustCompile(`(?m)/` + regexp.QuoteMeta(path.Base(dir)) + `/?\s*$`).MatchString(screen)
 }
 
 // closeStaleRouterWorkspaces removes router workspaces whose agent has exited,

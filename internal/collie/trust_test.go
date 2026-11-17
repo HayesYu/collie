@@ -36,3 +36,17 @@ func TestTrustAgyFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTrustDialogFor(t *testing.T) {
+	claude := " Accessing workspace:\n\n /data00/home/u/agent-workspace   \n\n Quick safety check: Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n Enter to confirm · Esc to cancel"
+	if !trustDialogFor(claude, "/home/u/agent-workspace", "~/agent-workspace") {
+		t.Error("trust dialog for a symlinked folder not recognised")
+	}
+	if trustDialogFor(claude, "/home/u/other", "~/other") {
+		t.Error("trust dialog for another folder answered")
+	}
+	hooks := "Hooks need review\n 4 hooks are new or changed.\n Hooks can run outside the sandbox after you trust them.\n› 1. Review hooks\n  2. Trust all and continue"
+	if trustDialogFor(hooks, "/home/u/agent-workspace", "~/agent-workspace") {
+		t.Error("hooks review taken as a folder trust dialog")
+	}
+}

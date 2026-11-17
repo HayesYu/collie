@@ -1,6 +1,9 @@
 package collie
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestMentions(t *testing.T) {
 	yes := func(ok bool, what string) {
@@ -54,5 +57,35 @@ func TestGateSpawn(t *testing.T) {
 	// Asking for the default kind needs no permission.
 	if k, _, _, d := sp.gateSpawn("antigravity", "", ""); k != "antigravity" || len(d) != 0 {
 		t.Fatalf("default kind dropped: %q %v", k, d)
+	}
+
+	// A choice spread over two messages counts, and a shortened model id.
+	sp.ingestLocked("chat", mainThread, "you", "装个 skill，用 codex", "", "", "")
+	sp.ingestLocked("chat", mainThread, "you", "用 6.1sol", "", "", "")
+	if k, m, _, d := sp.gateSpawn("codex", "gpt-6.1-sol", ""); k != "codex" || m != "gpt-6.1-sol" || len(d) != 0 {
+		t.Fatalf("two-message choice dropped: %q %q %v", k, m, d)
+	}
+	if mentionsModel("思考强度 medium，5 个文件", "claude-opus-5-5-medium") {
+		t.Fatal("generic parts taken as naming the model")
+	}
+	// An older conversation doesn't carry over.
+	old := sp.st.Triggers[len(sp.st.Triggers)-1]
+	old.At = old.At.Add(-time.Hour)
+	sp.st.Triggers[len(sp.st.Triggers)-2].At = old.At
+	sp.ingestLocked("chat", mainThread, "you", "统计下分区大小", "", "", "")
+	if k, _, _, d := sp.gateSpawn("codex", "", ""); k != "" || len(d) != 1 {
+		t.Fatalf("old choice carried over: %q %v", k, d)
+	}
+
+	// "可以" to Collie's own question picks what it asked about.
+	sp.addEntryLocked("collie", mainThread, "Mac 上的 Antigravity 用不了。要不要改用 claude 或 codex 在 Mac 上装？", "", "")
+	sp.ingestLocked("chat", mainThread, "you", "可以", "", "", "")
+	if k, _, _, d := sp.gateSpawn("claude", "", ""); k != "claude" || len(d) != 0 {
+		t.Fatalf("yes to Collie's question dropped: %q %v", k, d)
+	}
+	// A long message stands on its own.
+	sp.ingestLocked("chat", mainThread, "you", "先别管这个了，帮我统计一下 book_df 最新分区的大小和行数", "", "", "")
+	if k, _, _, _ := sp.gateSpawn("claude", "", ""); k != "" {
+		t.Fatalf("old question carried into a new request: %q", k)
 	}
 }

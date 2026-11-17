@@ -441,6 +441,10 @@
     el.innerHTML = parts.join(" · ") + (r.pending ? ` <button type="button" class="pending" data-act="router-restart" title="Collie 的模型设置改过了，点这里重启 Collie">重启后生效</button>` : "");
     el.title = `Collie 自己用的模型${model ? "：" + model : ""}${r.effort ? "，思考强度 " + r.effort : ""}（自动化 → 设置 → Collie 自己）`;
   }
+  // A worker's comings and goings: its spawn line shows where it stands, and
+  // a dialog waiting on the human shows as a card below. Reports and errors stay.
+  const CHATTER = /\s(完成了一轮|等你确认|已停止|已退出|回来了（herdr 恢复了它的窗格）)$/;
+  const workerChatter = (e) => e.ref && e.ref !== ROUTER && (e.tone === "done" || e.tone === "info" || e.tone === "blocked") && CHATTER.test(e.text);
   // Messages waiting for Collie itself (an older hub only counts them all).
   const routerQueued = () => sup.queued_router ?? sup.queued;
   function renderSuper(force) {
@@ -481,6 +485,7 @@
       let prev = "";
       for (const e of sup.entries) {
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
+        if (e.role === "event" && workerChatter(e)) continue;
         const cont = e.role === "collie" && prev === "collie";
         prev = prevRole = e.role;
         if (e.role === "user") html += `<div class="msg user">${userText(e.text)}</div>`;
@@ -491,8 +496,11 @@
           // A spawn line spins only while that worker is still at it; history stays still.
           const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
           const busy = w && !w.ended && (w.status === "working" || w.status === "starting");
-          const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : "idle") : e.tone === "error" ? "failed" : "idle";
-          html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span></${tag.split(" ")[0]}>`;
+          const stuck = w && !w.ended && w.status === "blocked";
+          const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : stuck ? "blocked" : "idle") : e.tone === "error" ? "failed" : "idle";
+          // A spawn line carries its worker's state, in place of a line per change.
+          const state = w ? (w.ended ? "已结束" : busy ? "还在跑" : stuck ? "等你确认" : "") : "";
+          html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span>${state ? `<span class="wstate">${state}</span>` : ""}</${tag.split(" ")[0]}>`;
         }
       }
     }
@@ -507,13 +515,18 @@
         html += `<div class="say pending${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="thinking"><span class="dots"><i></i><i></i><i></i></span>${pending}</div></div>`;
       }
     }
-    // Everything waiting on the human, in one place.
+    // Everything waiting on the human, in one place, answerable right here.
     const needs = state.agents.filter((a) => a.status === "blocked");
     if (needs.length) {
-      html += `<div class="needs">` + needs.map((a) => `<a class="need" href="#/p/${encodeURIComponent(a.pane_id)}">
+      html += `<div class="needs">` + needs.map((a) => {
+        const got = superAsks.get(a.pane_id);
+        if (!got || Date.now() - got.at > 4000) loadSuperAsk(a.pane_id);
+        if (got?.a) return superAskHTML(got.a, a);
+        return `<a class="need" href="#/p/${encodeURIComponent(a.pane_id)}">
         <span class="dot blocked"></span>
         <span class="body"><div class="name">${esc(title(a))} 等你确认</div><div class="sub">${esc(a.name === ROUTER ? "它停在一个对话框上，处理后才能继续" : (KIND_LABEL[a.kind] || a.kind) + " · " + tilde(a.cwd))}</div></span>
-        <span class="go">处理 →</span></a>`).join("") + `</div>`;
+        <span class="go">处理 →</span></a>`;
+      }).join("") + `</div>`;
     }
     if (html === superSig && !force) return;
     superSig = html;
@@ -521,9 +534,49 @@
     if (atBottom || force) scroller.scrollTop = scroller.scrollHeight;
   }
 
+  // The dialogs agents are stuck on, read from their screens (pane → {at, a}).
+  const superAsks = new Map();
+  async function loadSuperAsk(pane) {
+    const prev = superAsks.get(pane);
+    if (prev?.loading) return;
+    superAsks.set(pane, { ...prev, at: Date.now(), loading: true });
+    let a = null;
+    try { const r = await api(paneURL(pane, "ask")); a = r.asking ? r.approval : null; } catch { a = prev?.a || null; }
+    superAsks.set(pane, { at: Date.now(), a });
+    if (JSON.stringify(a) !== JSON.stringify(prev?.a ?? null) && view === "collie") renderSuper();
+  }
+  setInterval(() => { if (view === "collie" && state.agents.some((x) => x.status === "blocked")) renderSuper(); }, 4000);
+  function superAskHTML(a, agent) {
+    const { q, blocks } = readDialog(a.question);
+    const body = blocks.map((b) => b.code ? `<pre class="ctx-code">${esc(b.text)}</pre>` : `<p>${esc(b.text)}</p>`).join("");
+    const choices = a.choices || [];
+    return `<div class="ask" data-pane="${esc(agent.pane_id)}">
+      <div class="ask-head"><span class="dot blocked"></span><span class="who">${esc(title(agent))}</span><span>需要你确认</span><span class="spacer"></span>
+        <a href="#/p/${encodeURIComponent(agent.pane_id)}">打开 →</a></div>
+      <div class="ask-q"><div class="q">${esc(q)}</div>${body ? `<div class="ctx">${body}</div>` : ""}</div>
+      ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button class="choice ${c.current ? "current" : ""}" data-choice="${i}">
+          <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}</span></button>`).join("")}</div>
+        <div class="ask-keys"><button data-k="esc">Esc 取消</button></div>`
+      : `<div class="ask-keys"><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="esc">Esc</button><button class="go" data-k="enter">确认 ↵</button></div>`}
+    </div>`;
+  }
+
   $("#super-thread").addEventListener("click", (e) => {
     const idea = e.target.closest("[data-idea]")?.dataset.idea;
     if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); }
+    // Answering a stuck agent from here.
+    const b = e.target.closest("button"), card = b?.closest(".ask[data-pane]");
+    if (!card) return;
+    const pane = card.dataset.pane;
+    const send = (kind, body) => api(paneURL(pane, kind), { body }).catch((err) => toast(err.message));
+    if (b.dataset.choice != null) {
+      const c = superAsks.get(pane)?.a?.choices?.[+b.dataset.choice];
+      if (!c) return;
+      if (c.text) send("text", { text: c.text }); else send("keys", { keys: c.keys || ["enter"] });
+    } else if (b.dataset.k) send("keys", { keys: [b.dataset.k] });
+    else return;
+    card.style.opacity = ".5";
+    superAsks.delete(pane);
   });
 
   // Models and thinking efforts each agent offers, per computer (asked once per page).

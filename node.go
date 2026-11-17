@@ -58,6 +58,7 @@ func runNode(args []string) {
 	hub := fs.String("hub", "", "hub address, e.g. http://10.0.0.5:7788")
 	code := fs.String("code", "", "pairing code shown by the hub (first time only)")
 	name := fs.String("name", host, "how this computer is shown on the hub")
+	pairOnly := fs.Bool("pair-only", false, "join the hub and exit (a service runs `collie node` afterwards)")
 	sock := fs.String("socket", envOr("HERDR_SOCKET_PATH", filepath.Join(home, ".config/herdr/herdr.sock")), "herdr API socket")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: collie node --hub <address> --code <pairing code>   (first time)\n       collie node                                          (afterwards)\n\n")
@@ -81,11 +82,21 @@ func runNode(args []string) {
 			os.Exit(1)
 		}
 		fmt.Printf("  已加入 %s，这台电脑在 hub 上叫「%s」(%s)\n", cfg.Hub, cfg.Name, cfg.ID)
+		if *pairOnly {
+			return
+		}
 	} else if !ok {
 		fmt.Fprintln(os.Stderr, "这台电脑还没加入 hub。先在 hub 的「设备 → 连接电脑」里拿到命令，形如：\n  collie node --hub http://<hub 地址>:7788 --code <配对码>")
 		os.Exit(2)
 	} else if *hub != "" {
 		cfg.Hub = strings.TrimRight(*hub, "/")
+	}
+
+	// Without --name, keep the name chosen when this computer joined.
+	named := false
+	fs.Visit(func(f *flag.Flag) { named = named || f.Name == "name" })
+	if !named && cfg.Name != "" {
+		*name = cfg.Name
 	}
 
 	bin, _ := os.Executable()

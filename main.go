@@ -23,8 +23,16 @@ import (
 //go:embed web
 var webFS embed.FS
 
+// version is set at release time (-ldflags "-X main.version=v0.1.0").
+var version = "dev"
+
 func main() {
 	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			fmt.Println("collie", version)
+			return
+		}
 		if os.Args[1] == "node" {
 			runNode(os.Args[2:])
 			return

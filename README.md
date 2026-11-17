@@ -1,22 +1,17 @@
 <p align="center"><img src="web/icon.svg" width="72" alt="Collie"></p>
 
-# Collie
+<h1 align="center">Collie</h1>
 
-一个安静的 Web 控制台和 super-agent，用来"放牧"跑在 [herdr](https://herdr.dev) 里的编程 agent（Claude Code、Codex、Antigravity）。手机、平板、桌面浏览器都能用。
+<p align="center">在手机上放牧你的编程 agent<br>
+<a href="https://huanyu1w1.github.io/collie">主页</a> · <a href="#安装">安装</a> · <a href="https://github.com/huanyu1w1/collie/releases">下载</a></p>
 
-> Collie 是牧羊犬：herdr 管终端，Collie 把 agent 赶到一处干活，需要你的时候叫你一声。
+Collie 是一个安静的 Web 控制台和 super-agent，用来"放牧"跑在 [herdr](https://herdr.dev) 里的编程 agent（Claude Code、Codex、Antigravity）。手机、平板、桌面浏览器都能用：看对话、发消息、处理确认框，需要你的时候叫你一声。
 
-## 两种用法
+> Collie 是牧羊犬：herdr 管终端，Collie 把 agent 赶到一处干活。
 
-**和 Collie 对话（super-agent）**：你只和一个入口说话。Collie 的 Router 理解上下文，把活拆给 worker（Claude / Codex / Antigravity，各自在独立的 herdr 工作区里）并行去做，结果以事件的形式回到对话里，只在需要你决定或验收时出声。
+## 安装
 
-**直接管 agent**：不经过 Collie，新建、查看、接管任意一台电脑上的 agent 或终端。终端被包装成对话视图；agent 停在确认框时，会变成一张决策卡片。
-
-侧栏按电脑分组列出**你自己的** agent；Collie 派出的 worker 和 Router 收在单独的「Collie 的 worker」组里（默认折叠），两者互不干扰。桌面端打开时回到上次的页面（首次是 Collie），手机端首页是列表。
-
-## 部署：一个 hub，多台电脑，手机扫码
-
-参考 persona 的结构：Collie 放在一台常开的开发机上当 **hub**；其他电脑运行 `collie node` **主动连上** hub；手机、平板、浏览器只连 hub。
+一个 **hub** 放在常开的开发机上；其他电脑运行 `collie node` 主动连上 hub；手机、平板、浏览器只连 hub。
 
 ```
  手机 / 平板 / 浏览器 ──HTTP──▶  hub（开发机：collie + herdr）
@@ -25,41 +20,46 @@
                （本地 Mac + herdr）           （另一台机器）
 ```
 
-- node 出站连接、长连接复用（yamux），所以笔记本在 NAT 后面也能用，**不用开端口、不用 SSH**；断线后自动重连
-- hub 把所有电脑的 herdr 合成一个：远端的 pane id 带后缀，例如 `w1:p1@mac`；列表、对话、屏幕、启动 agent、Collie 派 worker 都可以指定电脑
+每台电脑上都要先有 herdr 服务端在跑，并装好 agent 集成（`herdr integration install claude`、`codex`、`antigravity-cli`）。没装集成时，herdr 认不出 agent 在干什么，Collie 也就没法给它发消息。
+
+**1. 开发机：起 hub**
+
+```bash
+curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh -s -- hub
+```
+
+装到 `~/.local/bin/collie`，并装成后台服务（macOS 用 launchd，Linux 用 `systemd --user`；要在退出登录后继续跑，运行一次 `loginctl enable-linger`）。启动时打印本机内网地址和手机配对二维码；地址认不准时加 `--url http://<开发机 IP>:7788`。日志：`journalctl --user -u collie-hub -f`。
+
+**2. 手机：扫码**
+
+扫终端里的二维码，或者在「设备 → 连接手机或平板」里扫。二维码里是 `http://<内网 IP>:7788/?pair=<配对码>`，10 分钟内有效、只能用一次；打开后这台手机拿到自己的令牌，之后「添加到主屏幕」即可。也可以在登录页直接输入 8 位配对码。
+
+**3. 其他电脑：加入**
+
+在 hub 的「设备 → 连接一台电脑」里拿配对码（或在 hub 上运行 `collie pair --computer`），然后在那台电脑上：
+
+```bash
+curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh -s -- node --hub http://<hub>:7788 --code <配对码>
+```
+
+它会配对、把 hub 地址和令牌存进 `~/.collie/node.json`，再装成后台服务。之后重跑不带参数的 `… | sh -s -- node` 就是升级。
+
+- node 出站连接、长连接复用（yamux），笔记本在 NAT 后面也能用，**不用开端口、不用 SSH**；断线后自动重连
+- hub 把所有电脑的 herdr 合成一个：远端的 pane id 带后缀，例如 `w1:p1@mac`；列表、对话、启动 agent、Collie 派 worker 都可以指定电脑
 - 每台设备一个令牌，可以在「设备」页随时移除；电脑的令牌只能连隧道和调用 `collie` CLI，打不开 Web 控制台
+- 在加入了 hub 的电脑上，`collie` CLI 会自动用 `node.json` 里的地址和令牌，所以跑在那里的 worker 也能 `collie report`
 
-**1. 在开发机上启动 hub**
+> 内网里是明文 HTTP。跨网络使用请放在 VPN / Tailscale 或 HTTPS 反向代理后面（这时用 `--url https://…` 让二维码指向它）。
 
-开发机上要有 herdr 服务端在跑，并装好 herdr 的 agent 集成（`herdr integration install claude`、`codex`、`antigravity-cli`）。没装集成时，herdr 认不出 agent 在干什么，Collie 也就没法给它发消息。
+只想装命令、不装服务：`curl -fsSL https://huanyu1w1.github.io/collie/install.sh | sh`。指定版本或目录：`COLLIE_VERSION=v0.1.0`、`COLLIE_BIN_DIR=…`。脚本在 [docs/install.sh](docs/install.sh)，下载会校验 SHA-256。
 
-```bash
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o collie .   # 在 Mac 上交叉编译
-scp collie devbox:.local/bin/collie
-ssh devbox 'systemd-run --user --unit=collie-hub -p Restart=on-failure -p WorkingDirectory=~ \
-  ~/.local/bin/collie -addr 0.0.0.0:7788 -url http://<开发机 IP>:7788'
-```
+## 两种用法
 
-用户级 systemd 服务在 SSH 断开后继续运行（需要开启 linger：`loginctl enable-linger`）。日志用 `journalctl --user -u collie-hub` 查看。
+**直接管 agent**：新建、查看、接管任意一台电脑上的 agent 或终端。终端被包装成对话视图；agent 停在确认框时，会变成一张决策卡片。
 
-启动时打印本机的内网地址（10.x 优先，其次 192.168 / 172.16 / 100.64；docker、虚拟网桥的地址会被排除）和一个**手机配对二维码**。地址认不准时用 `-url` 指定。
+**和 Collie 对话（super-agent）**：你只和一个入口说话。Collie 的 Router 理解上下文，把活拆给 worker（Claude / Codex / Antigravity，各自在独立的 herdr 工作区里）并行去做，结果以事件的形式回到对话里，只在需要你决定或验收时出声。
 
-**2. 手机扫码**
-
-扫终端里的二维码，或者在「设备 → 连接手机或平板」里扫。二维码里是 `http://<内网 IP>:7788/?pair=<配对码>`，10 分钟内有效、只能用一次；打开后这台手机拿到自己的令牌（存在 cookie 里），之后「添加到主屏幕」即可。也可以在登录页直接输入 8 位配对码。
-
-**3. 本地 Mac 加入**
-
-Mac 上装好 herdr 和同一个 collie（按本机系统编译），在 hub 的「设备 → 连接一台电脑」里复制命令，或在 hub 上运行 `collie pair --computer`：
-
-```bash
-collie node --hub http://10.254.182.253:7788 --code ABCD2345   # 第一次
-collie node                                                    # 以后（读 ~/.collie/node.json）
-```
-
-在 Mac 上，`collie` CLI 会自动用 `node.json` 里的 hub 地址和令牌，所以跑在 Mac 上的 worker 也能 `collie report`。
-
-> 内网里是明文 HTTP。跨网络使用请放在 VPN / Tailscale 或 HTTPS 反向代理后面（这时用 `-url https://…` 让二维码指向它）。
+侧栏按电脑分组列出**你自己的** agent；Collie 派出的 worker 和 Router 收在单独的「Collie 的 worker」组里（默认折叠），两者互不干扰。桌面端打开时回到上次的页面，手机端首页是列表。
 
 ## Super-agent 设计
 
@@ -87,38 +87,6 @@ collie node                                                    # 以后（读 ~/
 - **Watchdog**：worker 长时间屏幕无变化会被标记为卡住并通知 Router；Router 自己出错（凭证、地区限制、额度）会直接显示在对话里
 - **状态与计算分离**：所有状态存在 SQLite，Router 可以随时重启，读 `memory.md` 恢复上下文，排队的事件不会丢
 - **Outbox**：可选的飞书 / Slack 机器人通知，20 秒合并一次，安静模式只在需要你时推送
-
-## 运行
-
-需要 Go 1.22+，并且 herdr 服务端已经在运行（`herdr status`）。
-
-```bash
-go build -o bin/collie .
-./bin/collie                 # 监听 0.0.0.0:7788
-```
-
-启动时打印带主令牌的地址和手机配对二维码。前端（含 xterm.js）全部内嵌在二进制里，内网不需要访问 CDN。
-
-| 参数 | 环境变量 | 默认值 |
-|---|---|---|
-| `-addr` | `COLLIE_ADDR` | `0.0.0.0:7788` |
-| `-socket` | `HERDR_SOCKET_PATH` | `~/.config/herdr/herdr.sock` |
-| `-token` | `COLLIE_TOKEN` | 自动生成（主令牌） |
-| `-url` | `COLLIE_URL` | 自动探测内网地址；二维码和配对命令用它 |
-| | `COLLIE_HOME` | `~/.collie` |
-
-> 拿到令牌的人就能控制你的终端。主令牌只给自己用；其他设备都通过配对拿各自的令牌。
-
-### `~/.collie`
-
-| 路径 | 内容 |
-|---|---|
-| `herd.db` | SQLite（WAL）：Trigger 收件箱、线程、worker、对话、定时器、设置、已配对设备（只存令牌哈希） |
-| `node.json` | 仅 node：hub 地址、本机 id 和令牌 |
-| `token` | 访问令牌 |
-| `addr` | 当前监听地址，供 CLI 使用 |
-| `router/` | Router 的工作目录：`ROUTER.md`（操作手册，同时写成 CLAUDE.md / AGENTS.md / GEMINI.md）、`memory.md`（长期记忆） |
-| `bin/collie` | 用 `go run` 启动时复制出的稳定 CLI 路径 |
 
 ## CLI
 
@@ -154,7 +122,7 @@ Webhook 立即返回 202，过滤和路由在收件箱里异步完成。
 ## 直接管 agent
 
 - **新建 Agent**：选类型、名字、目录，可以顺手给它第一个任务
-- **对话视图**：消息来自 agent 自己的会话记录——Claude `~/.claude/projects/*/<id>.jsonl`、Codex `~/.codex/sessions/**/rollout-*.jsonl`、Antigravity `~/.gemini/antigravity/brain/<id>/…/transcript.jsonl`。Antigravity 不向 herdr 报告会话 id，Collie 用它自己的会话索引按工作目录精确配对，配不上时宁可显示终端输出，也不会串到别的会话
+- **对话视图**：消息来自 agent 自己的会话记录——Claude `~/.claude/projects/*/<id>.jsonl`、Codex `~/.codex/sessions/**/rollout-*.jsonl`、Antigravity `~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`（桌面版在 `~/.gemini/antigravity`）。Antigravity 不向 herdr 报告会话 id，Collie 用它自己的会话索引按工作目录精确配对，配不上时宁可显示终端输出，也不会串到别的会话
 - **决策卡片**：agent 停在确认框时，把问题用一句话讲清楚，选项变成列表；编号菜单发数字，光标菜单发方向键 + 回车。「查看终端」可以展开原始屏幕
 - **屏幕 / 日志视图**：xterm.js 原样呈现，或自动换行的滚动日志（适合窄屏）
 - **需要你**：blocked 的 agent 置顶，标签页标题带计数，后台时弹浏览器通知
@@ -179,6 +147,42 @@ Collie 同时支持 herdr 0.8 和 0.9：
 - 0.8 有时一直停在 `launch_pending`，不接受 `agent.prompt`。这时 Collie 确认 agent 空闲、屏幕上没有选择框以后，直接把消息贴进终端
 - 0.8 会把 Claude 的「是否信任此文件夹」报告成空闲。Collie 会看一眼屏幕，有选择框就当作「等你确认」处理
 
+## 参数与文件
+
+`collie`（等同 `collie serve`）启动 hub，打印带主令牌的地址和手机配对二维码。前端（含 xterm.js）全部内嵌在二进制里，内网不需要访问 CDN。
+
+| 参数 | 环境变量 | 默认值 |
+|---|---|---|
+| `-addr` | `COLLIE_ADDR` | `0.0.0.0:7788` |
+| `-socket` | `HERDR_SOCKET_PATH` | `~/.config/herdr/herdr.sock` |
+| `-token` | `COLLIE_TOKEN` | 自动生成（主令牌） |
+| `-url` | `COLLIE_URL` | 自动探测内网地址；二维码和配对命令用它 |
+| | `COLLIE_HOME` | `~/.collie` |
+
+> 拿到令牌的人就能控制你的终端。主令牌只给自己用；其他设备都通过配对拿各自的令牌。
+
+### `~/.collie`
+
+| 路径 | 内容 |
+|---|---|
+| `herd.db` | SQLite（WAL）：Trigger 收件箱、线程、worker、对话、定时器、设置、已配对设备（只存令牌哈希） |
+| `node.json` | 仅 node：hub 地址、本机 id 和令牌 |
+| `token` | 访问令牌 |
+| `addr` | 当前监听地址，供 CLI 使用 |
+| `router/` | Router 的工作目录：`ROUTER.md`（操作手册，同时写成 CLAUDE.md / AGENTS.md / GEMINI.md）、`memory.md`（长期记忆） |
+| `bin/collie` | 用 `go run` 启动时复制出的稳定 CLI 路径 |
+
+## 从源码构建
+
+需要 Go 1.22+。
+
+```bash
+go build -o bin/collie .
+./bin/collie                       # 监听 0.0.0.0:7788
+go test ./...
+scripts/release.sh v0.1.0 --dry    # 交叉编译四个平台到 dist/
+```
+
 ## 代码结构
 
 ```
@@ -197,7 +201,3 @@ Collie 同时支持 herdr 0.8 和 0.9：
 - `store.go` / `db.go`：super-agent 的数据模型和 SQLite 持久化
 - `super.go` / `superapi.go` / `cli.go`：Router 与 worker 的调度循环、HTTP API、webhook、CLI 与 Router 手册
 - `web/`：原生 HTML/CSS/JS，无构建步骤
-
-```bash
-go test ./...
-```

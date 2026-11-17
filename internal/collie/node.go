@@ -110,7 +110,7 @@ func runNode(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go serveLocalUI(ctx, *ui, cfg.Hub)
+	nodeUI = startLocalUI(ctx, *ui, cfg.Hub)
 	backoff := time.Second
 	for ctx.Err() == nil {
 		start := time.Now()
@@ -199,6 +199,9 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	req.Header.Set("X-Collie-Home", home)
 	req.Header.Set("X-Collie-OS", runtime.GOOS+"/"+runtime.GOARCH)
 	req.Header.Set("X-Collie-Bin", bin)
+	if nodeUI != "" {
+		req.Header.Set("X-Collie-UI", nodeUI)
+	}
 	conn.SetDeadline(time.Now().Add(15 * time.Second))
 	if err := req.Write(conn); err != nil {
 		conn.Close()

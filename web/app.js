@@ -2221,6 +2221,29 @@
     // The hub answers the list from its own copy, so this is cheap.
     let tick = 0;
     extTimer = setInterval(() => { loadExternal(); if (++tick % 3 === 0) loadHistory(); }, 3000);
+    offerLocalApp();
+  }
+
+  // On a computer that serves Collie at 127.0.0.1 (a node, or the hub's own
+  // machine), offer to switch there: Chrome installs and opens it as an app
+  // only on a secure origin, which the LAN address is not.
+  async function offerLocalApp() {
+    const local = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+    if (local || !matchMedia("(pointer: fine)").matches || store.get("local-app-off", false)) return;
+    let r;
+    try { r = await api("/api/local-app"); } catch { return; }
+    if (!r.url) return;
+    $("#local-app").hidden = false;
+    $("#local-app-open").title = r.url;
+    $("#local-app-open").onclick = async (e) => {
+      e.preventDefault();
+      try {
+        // A one-time code signs the new address in, like scanning a QR code.
+        const p = await api("/api/pair/new", { body: { kind: "browser" } });
+        location.href = `${r.url}/?pair=${encodeURIComponent(p.code)}${location.hash}`;
+      } catch (err) { toast(err.message, "attn"); }
+    };
+    $("#local-app-x").onclick = () => { store.set("local-app-off", true); $("#local-app").hidden = true; };
   }
   boot();
 })();

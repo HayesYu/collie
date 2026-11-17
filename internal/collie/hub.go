@@ -347,6 +347,7 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/pair", s.pair)
 	mux.HandleFunc("GET /api/node/connect", s.nodeConnect)
 	api("POST /api/pair/new", s.pairNew)
+	api("GET /api/local-app", s.localApp)
 	api("GET /api/qr", s.qr)
 	api("GET /api/devices", s.listDevices)
 	api("GET /api/history", s.listHistory)
@@ -538,6 +539,10 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	if n := strings.TrimSpace(r.Header.Get("X-Collie-Name")); n != "" {
 		m.Name = n
+	}
+	m.ip, _, _ = net.SplitHostPort(r.RemoteAddr)
+	if u := r.Header.Get("X-Collie-UI"); strings.HasPrefix(u, "http://127.0.0.1:") || strings.HasPrefix(u, "http://localhost:") {
+		m.ui = u
 	}
 	s.herdr.attach(m)
 	log.Printf("node %s (%s) connected from %s", m.ID, m.Name, r.RemoteAddr)

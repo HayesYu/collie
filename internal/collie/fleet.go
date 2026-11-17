@@ -27,6 +27,8 @@ type Machine struct {
 
 	conn   *herdrConn
 	client *http.Client // remote only: the node's own API, through the tunnel
+	ip     string       // remote only: where it connects from
+	ui     string       // remote only: its local web UI (http://127.0.0.1:port), if any
 	close  func()
 }
 

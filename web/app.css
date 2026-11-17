@@ -876,3 +876,12 @@ select.picked { display: none; }
 .earlier-row button:hover { color: var(--fg-2); background: var(--bg-3); }
 .earlier-row button:disabled { cursor: default; opacity: .6; }
 @media (pointer: coarse) { .earlier-row button { padding: 10px 18px; font-size: 13px; } }
+
+/* "在这台电脑的 Collie app 里打开": above the sidebar footer */
+.local-app { display: flex; align-items: center; gap: 4px; margin: 0 10px 6px; padding: 4px 4px 4px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); }
+.local-app[hidden] { display: none; }
+.local-app a { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--fg-2); text-decoration: none; }
+.local-app a:hover { color: var(--fg); }
+.local-app a svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.local-app a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-app .icon-btn svg { width: 14px; height: 14px; }

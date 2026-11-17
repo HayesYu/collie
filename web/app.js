@@ -1192,8 +1192,7 @@
       $("#x-takeover").className = "btn small";
       $("#x-composer").hidden = !e.can_send;
       if (e.can_send) $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : "经 Codex App 送达";
-      $("#x-note").textContent = e.can_send
-        ? `消息会送进 ${app} 里的这个对话，在原来的窗口里接着做${e.kind === "codex" ? "（App 会把它打开）" : ""}。`
+      $("#x-note").textContent = e.can_send ? ""
         : (e.read_only || "") + (e.can_take_over ? "。也可以在 herdr 里用同一个会话继续，之后就能在这里对话。" : "");
       return;
     }
@@ -1212,7 +1211,7 @@
       $("#x-composer").hidden = false;
       $("#x-takeover").className = "btn small";
       $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : e.app === "Codex 桌面版" ? "经 Codex App 送达" : e.kind === "codex" ? "经 Codex 后台送达" : "经会话收件箱送达";
-      $("#x-note").textContent = `消息会送进 ${app} 里的这个会话，在原来的窗口里接着做。权限确认和它问的问题，要在那台电脑上回答。也可以把它接管到 herdr，之后什么都能在这里操作。`;
+      $("#x-note").textContent = "";
     } else if (!gone && e.read_only && e.session) {
       $("#x-note").textContent = e.read_only + "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。";
     }

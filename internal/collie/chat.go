@@ -824,6 +824,39 @@ func tailLines(s string, n int) string {
 	return strings.Join(tailSlice(keep, n), "\n")
 }
 
+// activityLine is what a working agent says it is doing ("Thinking…",
+// "Running tests…"): the bottom of its screen without the input box, the
+// key hints and the spinner, which mean nothing outside the terminal.
+var (
+	liveHint    = regexp.MustCompile(`\s*[(（][^()（）]*(esc to (interrupt|cancel)|ctrl\+c)[^()（）]*[)）]`)
+	liveChrome  = regexp.MustCompile(`(?i)esc to (interrupt|cancel)|shift\+tab|for shortcuts|auto mode|bypass permissions|accept edits|plan mode|ctrl\+[a-z] to |^[❯>›]( |$)|^[⏵▸►»⏎]|⏎ send`)
+	liveBullet  = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*•◐◓◑◒◔◕○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]+\s*`)
+	liveSpinner = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*◐◓◑◒◔◕⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]`) // animated: a status line
+)
+
+func activityLine(screen string) string {
+	var keep []string
+	status := ""
+	for _, l := range strings.Split(screen, "\n") {
+		l = strings.TrimSpace(strings.Trim(strings.TrimSpace(l), "│┃|"))
+		hinted := liveHint.MatchString(l)
+		l = strings.TrimSpace(liveHint.ReplaceAllString(l, ""))
+		if l == "" || strings.Trim(l, "─━═╭╮╰╯ ") == "" || liveChrome.MatchString(l) {
+			continue
+		}
+		spun := liveSpinner.MatchString(l)
+		l = strings.TrimSpace(liveBullet.ReplaceAllString(l, ""))
+		if hinted || spun {
+			status = l // the agent's own status line wins
+		}
+		keep = append(keep, l)
+	}
+	if status != "" {
+		return status
+	}
+	return strings.Join(tailSlice(keep, 2), "\n")
+}
+
 // ---------------------------------------------------------------- streaming
 
 // streamChat wraps an agent terminal as a conversation: structured messages
@@ -910,7 +943,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 				if status == "blocked" {
 					live["approval"] = parseApproval(res.Text)
 				} else {
-					live["tail"] = tailLines(res.Text, 3)
+					live["tail"] = activityLine(res.Text)
 				}
 			}
 		}

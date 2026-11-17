@@ -669,6 +669,8 @@ a.foot-status:hover, a.foot-status.active { background: var(--bg-3); }
 }
 .ext-bar p { margin: 0; flex: 1; min-width: 0; font-size: 13px; line-height: 1.6; color: var(--fg-3); }
 .ext-bar .btn { flex: none; }
+/* Nothing to say and no button: no bar. */
+.ext-bar:has(> p:empty):not(:has(> .btn:not([hidden]))) { display: none; }
 #v-ext .d-name .tag { font: 500 10px/1 var(--mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 5px; margin-left: 6px; }
 @media (max-width: 760px) {
   .ext-bar { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }

@@ -408,13 +408,13 @@ only ever talks to you. You keep the big picture; workers do the work.
 
 ## Tools (run in your shell)
 - ` + "`{{BIN}} reply \"text\"`" + ` — message the human (add --thread X for another thread).
-- ` + "`{{BIN}} spawn --kind claude|codex|antigravity --cwd DIR [--machine M] [--model ID] [--effort E] [--thread T] [--name N] \"task brief\"`" + `
+- ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--thread T] [--name N] \"task brief\"`" + `
   starts a worker asynchronously and returns immediately. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
   Several computers may be connected; ` + "`{{BIN}} list`" + ` shows them. Use --machine when the human names a
   computer or the code lives there (cwd is then a path on that computer; "~" is its home).
   Write a complete, self-contained brief: goal, context, constraints, what "done" means.
-  Pick claude/codex for coding, antigravity for research/browsing-heavy work, unless told otherwise.
-  Pass --model/--effort only when the human asks for a model or thinking effort; otherwise the defaults apply.
+  The default kind is the human's choice: leave out --kind, and pass it (claude | codex | antigravity)
+  only when the human asks for a specific agent. Likewise pass --model/--effort only when asked.
 - ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker (queued until it is free).
 - ` + "`{{BIN}} subscribe WORKER THREAD`" + ` — route a thread's future events straight to that worker
   (e.g. its GitHub PR thread). chat:main always stays with you.

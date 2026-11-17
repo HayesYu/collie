@@ -242,3 +242,21 @@ func TestEarlierCursorShortLog(t *testing.T) {
 		t.Fatalf("a short log has nothing earlier, got cursor %d", c)
 	}
 }
+
+func TestActivityLine(t *testing.T) {
+	cases := map[string]string{
+		// Claude being interrupted (the screenshot)
+		"✻ Interrupting Claude…\n\n────────\n❯ \n────────\n  ⏵⏵ auto mode on · esc to interrupt": "Interrupting Claude…",
+		// Claude thinking, with the timing parenthetical
+		"● Earlier output line\n\n✶ Thinking… (12s · ↓ 1.2k tokens · esc to interrupt)\n\n╭──────╮\n│ > draft │\n╰──────╯\n  ? for shortcuts": "Thinking…",
+		// Codex
+		// agy (from a real screen)
+		"● Explored 2 files (index.md, df-check.md) (ctrl+o to expand)\n⣻  Memory structure appears clean. Creating a note file...\n────\n> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n────\nesc to cancel        auto · Gemini 4 Carbon · high": "Memory structure appears clean. Creating a note file...",
+		"• Working (5s • esc to interrupt)\n\n› Ask Codex to do anything\n\n  ⏎ send   ⇧⏎ newline": "Working",
+	}
+	for in, want := range cases {
+		if got := activityLine(in); got != want {
+			t.Errorf("activityLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

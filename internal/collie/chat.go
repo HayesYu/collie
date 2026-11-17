@@ -46,7 +46,7 @@ type transcript struct {
 }
 
 const (
-	maxMessages = 240
+	maxMessages = 60 // what a viewer gets first; older ones load on demand
 	maxOutput   = 1600
 	maxInput    = 400
 )
@@ -118,7 +118,7 @@ func (t *transcript) openTail() {
 	if err != nil {
 		return
 	}
-	for win := int64(4 << 20); ; win *= 4 {
+	for win := int64(1 << 20); ; win *= 4 {
 		*t = *newTranscript(t.path, t.format)
 		if win >= fi.Size() {
 			t.update()

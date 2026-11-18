@@ -155,6 +155,23 @@ func (sp *Super) lastQuestionLocked(before time.Time) string {
 	return ""
 }
 
+// earlierTriesLocked: workers started for the same job in the last hours,
+// named like it with a number added or changed. Names Collie made up
+// ("codex-2") say nothing about the job.
+func (sp *Super) earlierTriesLocked(name string) []*Worker {
+	stem := strings.TrimRight(strings.ToLower(strings.TrimSpace(name)), "-0123456789")
+	if len(stem) < 3 || kinds[stem] != "" || stem == "agy" {
+		return nil
+	}
+	var out []*Worker
+	for n, w := range sp.st.Workers {
+		if strings.TrimRight(n, "-0123456789") == stem && time.Since(w.CreatedAt) < 12*time.Hour {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 const (
 	humanWindow     = 10 * time.Minute
 	humanWindowMsgs = 6
@@ -163,21 +180,33 @@ const (
 
 // gateSpawn drops the launch choices the human didn't ask for. It returns
 // what is left and a note for each dropped one.
-func (sp *Super) gateSpawn(kind, model, effort string) (string, string, string, []string) {
+func (sp *Super) gateSpawn(kind, model, effort, name string) (string, string, string, []string) {
 	sp.mu.Lock()
 	words := sp.humanWordsLocked()
 	def := sp.st.Settings.WorkerKind
+	tries := sp.earlierTriesLocked(name)
 	sp.mu.Unlock()
+	// A retry of the same job (persona-off-mac → persona-off-mac3) keeps what
+	// the human chose for it, however long ago they said so.
+	triedWith := func(f func(*Worker) bool) bool {
+		for _, w := range tries {
+			if f(w) {
+				return true
+			}
+		}
+		return false
+	}
 	var dropped []string
-	if kind != "" && kinds[kind] != kinds[def] && !mentionsKind(words, kind) {
+	if kind != "" && kinds[kind] != kinds[def] && !mentionsKind(words, kind) &&
+		!triedWith(func(w *Worker) bool { return kinds[w.Kind] == kinds[kind] }) {
 		dropped = append(dropped, "--kind "+kind+" ignored: the human didn't ask for it; using the default ("+def+")")
 		kind = ""
 	}
-	if model != "" && !mentionsModel(words, model) {
+	if model != "" && !mentionsModel(words, model) && !triedWith(func(w *Worker) bool { return w.Model == model }) {
 		dropped = append(dropped, "--model "+model+" ignored: the human didn't name it; using the default")
 		model = ""
 	}
-	if effort != "" && !mentionsEffort(words, effort) {
+	if effort != "" && !mentionsEffort(words, effort) && !triedWith(func(w *Worker) bool { return w.Effort == effort }) {
 		dropped = append(dropped, "--effort "+effort+" ignored: the human didn't ask for it; using the default")
 		effort = ""
 	}

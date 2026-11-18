@@ -45,7 +45,9 @@ type Worker struct {
 	WorkspaceID string    `json:"workspace_id,omitempty"`
 	CreatedBy   string    `json:"created_by"`
 	CreatedAt   time.Time `json:"created_at"`
-	Status      string    `json:"status"` // starting | working | idle | done | blocked | unknown | gone | failed
+	Model       string    `json:"model,omitempty"`  // asked for by the human (empty: the default)
+	Effort      string    `json:"effort,omitempty"` // likewise
+	Status      string    `json:"status"`           // starting | working | idle | done | blocked | unknown | gone | failed
 	Note        string    `json:"note,omitempty"`
 	LastReport  string    `json:"last_report,omitempty"`
 	ReportAt    time.Time `json:"report_at,omitempty"`

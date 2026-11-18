@@ -779,7 +779,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		sp.mu.Unlock()
 		return nil, fmt.Errorf("directory not found: %s", dir)
 	}
-	w := &Worker{Name: name, Kind: kind, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting"}
+	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting"}
 	sp.st.Workers[name] = w
 	if subscribe {
 		th := sp.threadLocked(thread)

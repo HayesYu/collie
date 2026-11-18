@@ -426,6 +426,8 @@ only ever talks to you. You keep the big picture; workers do the work.
   Write a complete, self-contained brief: goal, context, constraints, what "done" means.
   What runs is set by the human in settings ({{WKIND}}): leave out --kind/--model/--effort. Pass one
   only when the human's message names it ("用 Codex", "opus"); otherwise Collie ignores it.
+  Retrying a job? Name the new worker after the old one with a number (persona-off-mac2) and pass
+  the same --kind/--model: what the human chose for that job still holds, so don't ask them again.
 - ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker; it gets the message now, even mid-task.
 - ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's
   number (as listed in the BLOCKED event), words of its label, or ` + "`esc`" + `.

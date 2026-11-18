@@ -302,7 +302,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	// Agents (the router, workers) don't choose what runs; the human does.
 	var dropped []string
 	if body.By != "cli" {
-		body.Kind, body.Model, body.Effort, dropped = s.sup.gateSpawn(body.Kind, body.Model, body.Effort)
+		body.Kind, body.Model, body.Effort, dropped = s.sup.gateSpawn(body.Kind, body.Model, body.Effort, body.Name)
 	}
 	wk, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub)
 	if err != nil {

@@ -66,6 +66,8 @@ nav a:hover { color: var(--fg); }
 
 /* hero */
 .hero { padding: 72px 0 32px; text-align: center; }
+.hero-name { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 18px; font-size: 17px; font-weight: 650; color: var(--fg-2); }
+.hero-name img { width: 24px; height: 24px; }
 h1 { font-size: 56px; line-height: 1.12; letter-spacing: -.03em; margin: 22px auto 16px; font-weight: 700; max-width: 820px; }
 h1 em { font-style: normal; color: var(--attn); }
 .lede { font-size: 18px; color: var(--fg-2); margin: 0 auto; max-width: 680px; }
@@ -195,6 +197,7 @@ footer a { color: var(--fg-2); }
 
 <main>
   <div class="wrap hero">
+    <p class="hero-name"><img src="icon.svg" alt="">Collie</p>
     <h1>在手机上，<br>指挥<em>一群 agent</em></h1>
     <p class="lede">电脑上开着的 Claude Code、Codex、Antigravity 会话，手机上直接接着聊。<br>活多了就交给 Collie 这个 super agent：<br class="wide">它派给各台电脑并行去做，盯进度、处理卡点，需要你拍板时点一下就回。</p>
     <div class="cta">

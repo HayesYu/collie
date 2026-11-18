@@ -164,7 +164,7 @@ func pairNode(hub, code, name string) (nodeConfig, error) {
 			if sv := resp.Header.Get("Server"); sv != "" {
 				out.Error += "（Server: " + sv + "）"
 			}
-			out.Error += "。这台机器可能连不到 " + hub + "，试试 curl --noproxy '*' " + hub + "/api/health"
+			out.Error += "。这台机器可能连不到 " + hub + "，试试 curl --noproxy '*' " + hub + "（能打开 hub 页面才对）"
 		}
 		return nodeConfig{}, errors.New(out.Error)
 	}

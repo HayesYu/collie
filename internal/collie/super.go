@@ -809,6 +809,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 			effort = sp.st.Settings.WorkerEffort
 		}
 	}
+	w.Run = &[2]string{model, effort}
 	ask := sp.st.Settings.AskPermissions
 	sp.mu.Unlock()
 	wargs := withBypass(modelArgs(kind, model, effort), kind, ask)

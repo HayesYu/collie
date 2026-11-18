@@ -1715,10 +1715,30 @@
     st.className = "status " + v.status;
     st.innerHTML = `<span class="dot ${esc(v.status)}"></span>${esc(STATUS_LABEL[v.status] || v.status)}`;
     $("#d-cwd").textContent = tilde(v.cwd);
+    renderWorkerModel(v);
     // The pane may have shown up before the page knew what it is (a fresh
     // terminal): once it does, switch to the view that fits.
     if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); openStream(); }
     $("#input").placeholder = v.name === ROUTER ? "直接在 Collie 的终端里输入…" : v.is_agent ? `给 ${KIND_LABEL[v.kind] || v.kind} 发消息…` : "输入命令…";
+  }
+
+  // What a worker Collie sent runs with, as Collie's own header shows it.
+  async function renderWorkerModel(v) {
+    const el = $("#d-model");
+    const w = isWorker(v.name) ? sup.workers.find((x) => x.name === v.name && !x.ended) : null;
+    const key = w?.run ? [w.name, w.kind, w.machine, ...w.run].join("|") : "";
+    if (el._key === key) return;
+    el._key = key;
+    if (!key) { el.hidden = true; el.textContent = ""; return; }
+    let [model, effort] = w.run;
+    const own = !model;
+    if (own) model = (await modelsFor(w.kind === "antigravity" ? "agy" : w.kind, w.machine || "")).default || "";
+    if (el._key !== key) return;
+    const parts = [model ? model.split("/").pop() + (own ? "（默认）" : "") : "agent 默认模型"];
+    if (effort) parts.push("思考 " + (EFFORT_LABEL[effort] || effort));
+    el.textContent = parts.join(" · ");
+    el.title = `Collie 派它时用的模型：${model || "agent 自己的设置"}${effort ? "，思考强度 " + effort : ""}`;
+    el.hidden = false;
   }
 
   // ───────────────────────────── one agent: streams

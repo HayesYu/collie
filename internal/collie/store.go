@@ -45,13 +45,16 @@ type Worker struct {
 	WorkspaceID string    `json:"workspace_id,omitempty"`
 	CreatedBy   string    `json:"created_by"`
 	CreatedAt   time.Time `json:"created_at"`
-	Model       string    `json:"model,omitempty"`  // asked for by the human (empty: the default)
+	Model       string    `json:"model,omitempty"`  // asked for when spawned (empty: the default)
 	Effort      string    `json:"effort,omitempty"` // likewise
-	Status      string    `json:"status"`           // starting | working | idle | done | blocked | unknown | gone | failed
-	Note        string    `json:"note,omitempty"`
-	LastReport  string    `json:"last_report,omitempty"`
-	ReportAt    time.Time `json:"report_at,omitempty"`
-	Ended       bool      `json:"ended,omitempty"`
+	// Run is the model and effort it was launched with, settings' defaults
+	// applied; "" is the agent's own default. Nil for workers from before.
+	Run        *[2]string `json:"run,omitempty"`
+	Status     string     `json:"status"` // starting | working | idle | done | blocked | unknown | gone | failed
+	Note       string     `json:"note,omitempty"`
+	LastReport string     `json:"last_report,omitempty"`
+	ReportAt   time.Time  `json:"report_at,omitempty"`
+	Ended      bool       `json:"ended,omitempty"`
 }
 
 // Entry is one line of the human-facing super-agent conversation.

@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Collie",
   "short_name": "Collie",
-  "description": "给你的 agent 配一个经理",
+  "description": "在手机上，指挥一群 agent",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

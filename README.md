@@ -2,7 +2,7 @@
 
 <h1 align="center">Collie</h1>
 
-<p align="center"><b>给你的 agent 配一个经理</b><br>
+<p align="center"><b>在手机上，指挥一群 agent</b><br>
 Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自己推进的 super-agent</p>
 
 <p align="center">
@@ -14,7 +14,7 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 
 <p align="center"><img src="docs/img/demo.gif" alt="给 Collie 发一句话：它派出 worker，worker 回报，Collie 汇总；决策卡片一点就回" width="900"></p>
 
-Collie 把跑在各台电脑上的 AI agent 收进一个网页：看对话、发消息、处理确认框，需要你的时候叫你一声。你也可以只和 **Collie** 说话，它会把活拆给 Claude、Codex、Antigravity 在你的机器上并行去做，只在需要你拍板时出声。
+电脑上开着的 Claude Code、Codex、Antigravity 会话，手机上直接接着聊：看对话、发消息、处理确认框，需要你的时候叫你一声。活多了就交给 **Collie** 这个 super agent：它把活派给各台电脑并行去做，盯进度、处理卡点，只在需要你拍板时出声。
 
 > Collie 是一只边牧（border collie）：[herdr](https://herdr.dev) 管终端，Collie 把 agent 赶到一处干活。
 

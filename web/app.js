@@ -150,6 +150,10 @@
   function openPick(sel) {
     closePick();
     pickOpen = sel;
+    // A modal <dialog> sits in the top layer, above any z-index: the menu has
+    // to live inside it to show.
+    const host = sel.closest("dialog[open]") || document.body;
+    if (pickPop.parentNode !== host) host.append(pickBack, pickPop);
     const row = (o) => `<button type="button" class="po${o.selected ? " on" : ""}" role="option" data-v="${esc(o.value)}" ${o.disabled ? "disabled" : ""}>
       ${optIcon(o)}<span class="pl"><span>${esc(o.textContent)}</span>${o.dataset.sub ? `<small>${esc(o.dataset.sub)}</small>` : ""}</span>
       <svg class="ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>`;

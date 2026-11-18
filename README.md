@@ -16,7 +16,7 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 
 Collie 把跑在各台电脑上的编程 agent 收进一个网页：看对话、发消息、处理确认框，需要你的时候叫你一声。你也可以只和 **Collie** 说话，它会把活拆给 Claude、Codex、Antigravity 在你的机器上并行去做，只在需要你拍板时出声。
 
-> Collie 是牧羊犬：[herdr](https://herdr.dev) 管终端，Collie 把 agent 赶到一处干活。
+> Collie 是一只边牧（border collie）：[herdr](https://herdr.dev) 管终端，Collie 把 agent 赶到一处干活。
 
 ## 为什么用 Collie
 

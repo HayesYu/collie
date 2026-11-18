@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="light" class="js">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,6 +9,7 @@
 <meta property="og:description" content="和 Collie 说一句，它把活拆给 Claude、Codex、Antigravity 在你的电脑上并行去做；确认框变成手机上一点就回的卡片。">
 <meta property="og:image" content="https://lihuanyu0w0.github.io/collie/img/hero-light.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<script>window.onerror = () => document.documentElement.classList.remove("js"); // a broken script must not hide the page</script>
 <style>
 :root {
   --bg: #ffffff; --bg-2: #f7f7f6; --bg-3: #efefed;
@@ -150,9 +151,10 @@ footer { border-top: 1px solid var(--line); margin-top: 80px; padding: 26px 0 52
 footer .wrap { display: flex; flex-wrap: wrap; gap: 6px 20px; }
 footer a { color: var(--fg-2); }
 
-.reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+/* Only hidden while the script runs: if it fails, everything still shows. */
+.js .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
 .reveal.in { opacity: 1; transform: none; }
-@media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) { .js .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
 
 @media (max-width: 900px) {
   .points { grid-template-columns: 1fr 1fr; }
@@ -364,7 +366,7 @@ sh docs/install.sh hub</pre><button class="copy">复制</button></div>
 
 <footer>
   <div class="wrap">
-    <span>Collie · 牧羊犬：herdr 管终端，Collie 把 agent 赶到一处干活</span>
+    <span>Collie · 一只边牧：herdr 管终端，Collie 把 agent 赶到一处干活</span>
     <a href="https://github.com/lihuanyu0w0/collie">源码</a>
     <a href="https://github.com/lihuanyu0w0/collie/releases">下载</a>
     <a href="https://github.com/lihuanyu0w0/collie#readme">文档</a>
@@ -372,6 +374,7 @@ sh docs/install.sh hub</pre><button class="copy">复制</button></div>
   </div>
 </footer>
 <script>
+(() => {
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll(".tabs button").forEach((x) => x.setAttribute("aria-selected", x === b));
   document.querySelectorAll(".panel").forEach((p) => { p.hidden = p.dataset.panel !== b.dataset.tab; });
@@ -386,10 +389,11 @@ document.querySelectorAll(".copy").forEach((b) => b.addEventListener("click", as
   b.textContent = "已复制"; b.classList.add("done");
   setTimeout(() => { b.textContent = "复制"; b.classList.remove("done"); }, 1500);
 }));
-const top = document.getElementById("top");
-addEventListener("scroll", () => top.classList.toggle("scrolled", scrollY > 8), { passive: true });
+const bar = document.getElementById("top"); // not "top": that is window.top
+addEventListener("scroll", () => bar.classList.toggle("scrolled", scrollY > 8), { passive: true });
 const io = "IntersectionObserver" in window ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" }) : null;
 document.querySelectorAll(".reveal").forEach((el) => io ? io.observe(el) : el.classList.add("in"));
+})();
 </script>
 </body>
 </html>

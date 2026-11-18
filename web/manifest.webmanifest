@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Collie",
   "short_name": "Collie",
-  "description": "说一句话，让一群 agent 去干活",
+  "description": "给你的 agent 配一个经理",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

@@ -482,7 +482,7 @@
     $("#v-ext").hidden = next !== "ext";
     $("#detail").hidden = next !== "pane";
     renderSide();
-    if (next === "collie") { renderSuper(true); renderTarget(); if (!narrow()) $("#super-input").focus(); }
+    if (next === "collie") { renderSuper(true); renderTarget(true); if (!narrow()) $("#super-input").focus(); }
     if (next === "auto") openAuto();
     if (next === "devices") openDevices();
     if (next === "prefs") renderPrefs();
@@ -655,15 +655,16 @@
     }
     return modelInfo[key];
   }
-  // "派到": where this message's work runs. Starts at the defaults from
-  // 自动化 → 设置 and stays as picked until the page reloads.
+  // "派到": where this message's work runs. Shows the defaults from
+  // 自动化 → 设置 (read again whenever this view opens); target holds only
+  // what was picked here, so a message never carries a stale default.
   let target = null, targetDefault = null;
-  async function renderTarget() {
-    if (!targetDefault) {
+  async function renderTarget(fresh) {
+    if (!targetDefault || fresh) {
       try {
         const s = (await api("/api/super/settings")).settings;
         targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
-      } catch { targetDefault = { machine: "", kind: "claude", model: "", effort: "" }; }
+      } catch { targetDefault ||= { machine: "", kind: "claude", model: "", effort: "" }; }
     }
     const t = target || targetDefault;
     const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
@@ -711,16 +712,28 @@
     mSel._pick?.classList.toggle("changed", model !== d.model);
     eSel._pick?.classList.toggle("changed", eff !== d.effort && eff !== "");
   }
-  $("#t-machine").addEventListener("change", (e) => { target = { ...targetNow(), machine: e.target.value }; renderTarget(); });
-  $("#t-kind").addEventListener("change", (e) => { target = { ...targetNow(), kind: e.target.value, model: undefined, effort: undefined }; renderTarget(); });
-  $("#t-model").addEventListener("change", (e) => { target = { ...targetNow(), model: e.target.value }; renderModelChips(); });
-  $("#t-effort").addEventListener("change", (e) => { target = { ...targetNow(), effort: e.target.value || modelDefaults(targetNow()).effort }; renderModelChips(); });
-  const targetNow = () => target || targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
+  const pick = (o) => { target = { ...(target || {}), ...o }; };
+  $("#t-machine").addEventListener("change", (e) => { pick({ machine: e.target.value }); renderTarget(); });
+  $("#t-kind").addEventListener("change", (e) => { pick({ kind: e.target.value, model: undefined, effort: undefined }); renderTarget(); });
+  $("#t-model").addEventListener("change", (e) => { pick({ model: e.target.value }); renderModelChips(); });
+  $("#t-effort").addEventListener("change", (e) => { pick({ effort: e.target.value || modelDefaults(targetNow()).effort }); renderModelChips(); });
+  const targetNow = () => {
+    const d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
+    const t = { ...d };
+    for (const [k, v] of Object.entries(target || {})) if (v !== undefined) t[k] = v;
+    if (target && "kind" in target && t.kind !== d.kind) { t.model = target.model; t.effort = target.effort; }
+    return t;
+  };
 
   bindComposer($("#super-composer"), $("#super-input"), async (text) => {
-    const t = targetNow();
+    // Only what was picked here goes along; the hub fills in its current defaults.
+    const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
-    await api("/api/super/say", { body: { text, machine: t.machine || "local", kind: t.kind, model, effort } });
+    await api("/api/super/say", { body: { text,
+      machine: "machine" in p ? (t.machine || "local") : "",
+      kind: "kind" in p ? t.kind : "",
+      model: "model" in p || "kind" in p ? model : "",
+      effort: "effort" in p || "kind" in p ? effort : "" } });
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }, () => targetNow().machine);
 
@@ -1102,6 +1115,7 @@
           ask_permissions: !f.bypass.checked,
         };
         await api("/api/super/settings", { body: { settings: s } });
+        renderTarget(true);
         const relaunch = s.router_kind !== cur.router_kind || s.router_model !== (cur.router_model || "") || s.router_effort !== (cur.router_effort || "") || s.router_args.join(" ") !== (cur.router_args || []).join(" ") || s.ask_permissions !== !!cur.ask_permissions;
         toast(relaunch ? "已保存。Collie 自己的启动设置在重启 Collie 后生效" : "已保存");
       }

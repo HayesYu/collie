@@ -187,6 +187,9 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 			hint = append(hint, "--machine "+name)
 		}
 	}
+	if body.Kind == "agy" { // the composer's name for it
+		body.Kind = "antigravity"
+	}
 	_, known := kinds[body.Kind]
 	if known && kinds[body.Kind] != kinds[st.WorkerKind] {
 		hint = append(hint, "--kind "+body.Kind)

@@ -424,7 +424,8 @@ only ever talks to you. You keep the big picture; workers do the work.
   Several computers may be connected; ` + "`{{BIN}} list`" + ` shows them. Use --machine when the human names a
   computer or the code lives there (cwd is then a path on that computer; "~" is its home).
   Write a complete, self-contained brief: goal, context, constraints, what "done" means.
-  The human's default ({{WKIND}}) is set in settings; leave out --kind/--model/--effort to use it.
+  The human's default ({{WKIND}} when this session began) is set in settings and they may change it
+  any time: leaving out --kind/--model/--effort always uses the current one, so don't repeat it.
   Pick another when what they want is clear from the conversation, said outright or not: they asked
   for Codex earlier in this job, a retry of a worker that ran with a model they chose, a task the
   default can't do on that computer. Don't ask them to repeat a choice they already made; ask only

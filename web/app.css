@@ -962,3 +962,8 @@ select.picked { display: none; }
 
 .model-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .model-row > * { flex: 1 1 160px; min-width: 0; }
+
+.update-note { flex: none; font: 500 11px/1 var(--sans); padding: 3px 6px; border-radius: 6px; color: var(--attn); border: 1px solid color-mix(in srgb, var(--attn) 40%, transparent); }
+.tag.attn { color: var(--attn); border-color: color-mix(in srgb, var(--attn) 40%, transparent); }
+.update-cmd { margin-top: 6px; }
+.update-cmd .pair-hint { margin: 0 0 4px; }

@@ -16,14 +16,16 @@ import (
 // A Machine is one computer whose herdr Collie can drive: the hub's own
 // machine, or a computer whose node has dialed in (see node.go).
 type Machine struct {
-	ID     string    `json:"id"`
-	Name   string    `json:"name"`
-	OS     string    `json:"os,omitempty"`
-	Home   string    `json:"home,omitempty"`
-	Bin    string    `json:"-"`
-	Local  bool      `json:"local"`
-	Online bool      `json:"online"`
-	Since  time.Time `json:"since,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	OS   string `json:"os,omitempty"`
+	// Version of collie it runs; "" for nodes from before v0.2.5.
+	Version string    `json:"version,omitempty"`
+	Home    string    `json:"home,omitempty"`
+	Bin     string    `json:"-"`
+	Local   bool      `json:"local"`
+	Online  bool      `json:"online"`
+	Since   time.Time `json:"since,omitempty"`
 
 	conn   *herdrConn
 	client *http.Client // remote only: the node's own API, through the tunnel

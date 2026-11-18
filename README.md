@@ -57,6 +57,15 @@ curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub
 
 > 内网里是明文 HTTP。跨网络使用请放在 VPN / Tailscale 或 HTTPS 反向代理后面（这时用 `--url https://…` 让二维码指向它）。
 
+### 更新
+
+hub 每隔几小时看一次 GitHub 上的最新版本。有电脑落后时，侧栏底部会出现「有新版」，「设备」页会列出是哪台以及要运行的命令：
+
+- 电脑（node）：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node`（不用再配对）
+- hub：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub`，当初加过 `--url` 等参数的话照样带上
+
+从源码编译的（版本是 `dev`）和 v0.2.5 以前的电脑不会被提示。
+
 ### 多个 hub
 
 几台电脑在互不相通的网络里（开发机、云电脑、家里的 Mac mini）时，每个网络各跑一个 hub，再在其中一个 hub 的「设备 → 其他 hub」里粘贴另一个 hub「连接手机或平板」下的链接。之后它的会话会并进同一个侧栏（标着来自哪个 hub），对话、发消息、停止都直接发给那个 hub。

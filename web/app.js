@@ -1556,6 +1556,30 @@
 
   const left = (p) => { const s = Math.max(0, Math.round((p.expires - Date.now()) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
+  // A newer release: the footer says so, the devices page says where and how.
+  const INSTALL = "curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s --";
+  const isOld = (have, latest) => {
+    const p = (v) => /^v\d+\.\d+\.\d+$/.test(v || "") ? v.slice(1).split(".").map(Number) : null;
+    const a = p(have), b = p(latest);
+    if (!a || !b) return false;
+    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+    return false;
+  };
+  async function checkUpdates() {
+    try {
+      const r = await api("/api/version");
+      const n = $("#update-note");
+      n.hidden = !r.outdated?.length;
+      n.title = r.outdated?.length ? `Collie ${r.latest} 已发布，可以更新：${r.outdated.join("、")}（看「设备」页）` : "";
+    } catch {}
+  }
+  checkUpdates();
+  setInterval(checkUpdates, 30 * 60 * 1000);
+  const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
+    ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
+  const updateRow = (have, latest, cmd, note) => isOld(have, latest)
+    ? `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : "";
+
   async function loadDevices() {
     let r;
     try { r = await api("/api/devices"); } catch (err) { $("#devices-body").innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; return; }
@@ -1603,11 +1627,11 @@
       <div class="card"><div class="card-h">电脑</div><ul class="rows">
         <li class="row dev-row">
           <span class="dot ${r.hub.herdr ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div></div>
+          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", "装 hub 时加过 --url 等参数的话照样带上")}</div>
           <span class="right">${r.hub.herdr ? "在线" : ""}</span></li>
         ${machines.map((d) => `<li class="row dev-row">
           <span class="dot ${d.online ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span><span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div></div>
+          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node")}</div>
           <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")}
       </ul></div>
 

@@ -350,6 +350,7 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("GET /api/local-app", s.localApp)
 	api("GET /api/qr", s.qr)
 	api("GET /api/devices", s.listDevices)
+	api("GET /api/version", s.getVersion)
 	api("GET /api/history", s.listHistory)
 	api("POST /api/history/{id}/delete", s.deleteHistory)
 	api("POST /api/devices/{id}/delete", s.deleteDevice)
@@ -460,6 +461,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		Online  bool   `json:"online"`
 		Current bool   `json:"current"`
 		Home    string `json:"home,omitempty"`
+		Version string `json:"version,omitempty"`
 	}
 	_, me := s.identity(r)
 	out := []view{}
@@ -467,7 +469,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		v := view{Device: d}
 		v.Hash = ""
 		if m, ok := machines[d.ID]; ok && d.Kind == "machine" {
-			v.Online, v.Home = m.Online, m.Home
+			v.Online, v.Home, v.Version = m.Online, m.Home, m.Version
 		}
 		v.Current = me != nil && me.ID == d.ID
 		out = append(out, v)
@@ -476,8 +478,9 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	_, herdrErr := s.herdr.local.conn.call(r.Context(), "workspace.list", nil)
 	writeJSON(w, 200, map[string]any{
 		"devices":   out,
-		"hub":       map[string]any{"name": local.Name, "home": local.Home, "herdr": herdrErr == nil},
+		"hub":       map[string]any{"name": local.Name, "home": local.Home, "herdr": herdrErr == nil, "version": version},
 		"addresses": s.addresses(r),
+		"latest":    latestVersion(),
 	})
 }
 
@@ -533,7 +536,7 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 	httpDial := streamDialer(open, "http")
 	m := &Machine{
 		ID: d.ID, Name: d.Name, OS: r.Header.Get("X-Collie-OS"), Home: r.Header.Get("X-Collie-Home"),
-		Bin: r.Header.Get("X-Collie-Bin"), Online: true, Since: time.Now(),
+		Bin: r.Header.Get("X-Collie-Bin"), Version: r.Header.Get("X-Collie-Version"), Online: true, Since: time.Now(),
 		conn: &herdrConn{dial: streamDialer(open, "herdr")},
 		client: &http.Client{Transport: &http.Transport{
 			DialContext:         func(ctx context.Context, _, _ string) (net.Conn, error) { return httpDial(ctx) },

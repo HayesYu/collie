@@ -424,10 +424,11 @@ only ever talks to you. You keep the big picture; workers do the work.
   Several computers may be connected; ` + "`{{BIN}} list`" + ` shows them. Use --machine when the human names a
   computer or the code lives there (cwd is then a path on that computer; "~" is its home).
   Write a complete, self-contained brief: goal, context, constraints, what "done" means.
-  What runs is set by the human in settings ({{WKIND}}): leave out --kind/--model/--effort. Pass one
-  only when the human's message names it ("用 Codex", "opus"); otherwise Collie ignores it.
-  Retrying a job? Name the new worker after the old one with a number (persona-off-mac2) and pass
-  the same --kind/--model: what the human chose for that job still holds, so don't ask them again.
+  The human's default ({{WKIND}}) is set in settings; leave out --kind/--model/--effort to use it.
+  Pick another when what they want is clear from the conversation, said outright or not: they asked
+  for Codex earlier in this job, a retry of a worker that ran with a model they chose, a task the
+  default can't do on that computer. Don't ask them to repeat a choice they already made; ask only
+  when it's genuinely unclear.
 - ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker; it gets the message now, even mid-task.
 - ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's
   number (as listed in the BLOCKED event), words of its label, or ` + "`esc`" + `.

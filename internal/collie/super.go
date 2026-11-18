@@ -198,6 +198,11 @@ func contains(list []string, v string) bool {
 // ---------------------------------------------------------------- run loop
 
 func (sp *Super) Run(ctx context.Context) {
+	// A new build may change the router's instructions: the next session
+	// (a handover, a dream, a restart) reads them fresh.
+	if err := sp.writeRouterFiles(); err != nil {
+		log.Printf("router files: %v", err)
+	}
 	tick := time.NewTicker(1500 * time.Millisecond)
 	defer tick.Stop()
 	save := time.NewTicker(2 * time.Second)

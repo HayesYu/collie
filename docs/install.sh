@@ -163,7 +163,22 @@ RestartSec=5
 [Install]
 WantedBy=default.target"
     if [ -n "${COLLIE_DRY_SERVICE:-}" ]; then say "$unit"; return; fi
-    command -v systemctl >/dev/null 2>&1 || die "没有 systemd：请自己用 nohup / tmux 运行：$BIN $*"
+    # Containers (cloud dev machines, sandboxes) often have systemctl but no
+    # user bus; fall back to a plain background process there.
+    if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+      log=$HOME/.collie/$name.log
+      pidf=$HOME/.collie/$name.pid
+      mkdir -p "$HOME/.collie"
+      if [ -f "$pidf" ] && kill "$(cat "$pidf")" 2>/dev/null; then sleep 1; fi
+      PATH=$path nohup "$BIN" "$@" >>"$log" 2>&1 </dev/null &
+      echo $! > "$pidf"
+      sleep 2
+      kill -0 "$(cat "$pidf")" 2>/dev/null || die "没能启动，看日志：tail -n 30 $log"
+      step "已在后台运行（这台机器没有 systemd 用户服务，用的 nohup；pid $(cat "$pidf")）"
+      say "    日志：tail -f $log"
+      say "    机器重启后不会自动起来，重跑这条安装命令即可"
+      return
+    fi
     mkdir -p "$unitdir"
     printf '%s\n' "$unit" > "$file"
     # The README's earlier one-off unit (systemd-run) has the same name.

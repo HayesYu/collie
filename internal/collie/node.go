@@ -158,7 +158,13 @@ func pairNode(hub, code, name string) (nodeConfig, error) {
 	json.NewDecoder(resp.Body).Decode(&out)
 	if resp.StatusCode != 200 || out.Token == "" {
 		if out.Error == "" {
-			out.Error = resp.Status
+			// The hub always explains itself in JSON; a bare status came from
+			// something in between (a sandbox egress gateway, a proxy).
+			out.Error = resp.Status + "：这不是 hub 的回复，是中间的网关或代理回的"
+			if sv := resp.Header.Get("Server"); sv != "" {
+				out.Error += "（Server: " + sv + "）"
+			}
+			out.Error += "。这台机器可能连不到 " + hub + "，试试 curl --noproxy '*' " + hub + "/api/health"
 		}
 		return nodeConfig{}, errors.New(out.Error)
 	}

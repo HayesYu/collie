@@ -1,17 +1,21 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collie</title>
-<meta name="description" content="在手机上放牧你的编程 agent：Claude Code、Codex、Antigravity，一个 hub，多台电脑。">
+<meta name="description" content="在手机上放牧你的编程 agent：Claude Code、Codex、Antigravity，一个 hub，多台电脑，一个会自己推进的 super-agent。">
+<meta property="og:title" content="Collie · 在手机上放牧你的编程 agent">
+<meta property="og:description" content="和 Collie 说一句，它把活拆给 Claude、Codex、Antigravity 在你的电脑上并行去做；确认框变成手机上一点就回的卡片。">
+<meta property="og:image" content="https://lihuanyu0w0.github.io/collie/img/hero-light.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <style>
 :root {
   --bg: #ffffff; --bg-2: #f7f7f6; --bg-3: #efefed;
   --line: #e9e9e6; --line-2: #dcdcd8;
   --fg: #111111; --fg-2: #55554f; --fg-3: #8e8e88;
-  --accent: #111111; --on-accent: #ffffff; --ok: #15803d;
+  --accent: #111111; --on-accent: #ffffff; --ok: #15803d; --attn: #b45309; --attn-soft: #fbf3e8;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 40px rgba(0,0,0,.08);
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   color-scheme: light;
@@ -21,7 +25,8 @@
     --bg: #0b0b0c; --bg-2: #131315; --bg-3: #1c1c1f;
     --line: #232326; --line-2: #313135;
     --fg: #ededeb; --fg-2: #a6a6a0; --fg-3: #6d6d68;
-    --accent: #f2f2f0; --on-accent: #0b0b0c; --ok: #4ade80;
+    --accent: #f2f2f0; --on-accent: #0b0b0c; --ok: #4ade80; --attn: #f0a35e; --attn-soft: #2a1f12;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.5);
     color-scheme: dark;
   }
 }
@@ -29,37 +34,101 @@
   --bg: #0b0b0c; --bg-2: #131315; --bg-3: #1c1c1f;
   --line: #232326; --line-2: #313135;
   --fg: #ededeb; --fg-2: #a6a6a0; --fg-3: #6d6d68;
-  --accent: #f2f2f0; --on-accent: #0b0b0c; --ok: #4ade80;
+  --accent: #f2f2f0; --on-accent: #0b0b0c; --ok: #4ade80; --attn: #f0a35e; --attn-soft: #2a1f12;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.5);
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.7 var(--sans); }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.7 var(--sans); overflow-x: hidden; }
 a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--line-2); }
 a:hover { text-decoration-color: currentColor; }
 code, pre { font-family: var(--mono); font-size: 13px; }
-.wrap { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+img, video { max-width: 100%; display: block; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+.narrow { max-width: 760px; }
 
-header.top { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; text-decoration: none; }
-nav a { color: var(--fg-2); text-decoration: none; margin-left: 18px; font-size: 14px; }
+header.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); border-bottom: 1px solid transparent; }
+header.top.scrolled { border-bottom-color: var(--line); }
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 650; text-decoration: none; }
+.brand img { width: 26px; height: 26px; }
+nav { display: flex; align-items: center; gap: 22px; }
+nav a { color: var(--fg-2); text-decoration: none; font-size: 14px; }
 nav a:hover { color: var(--fg); }
 
-.hero { padding: 64px 0 40px; }
-.hero img { width: 64px; height: 64px; border-radius: 15px; box-shadow: 0 0 0 1px var(--line), 0 8px 24px rgba(0,0,0,.06); }
-h1 { font-size: 40px; line-height: 1.2; letter-spacing: -.02em; margin: 24px 0 12px; font-weight: 650; }
-.lede { font-size: 17px; color: var(--fg-2); margin: 0; max-width: 560px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-size: 14.5px; font-weight: 550; padding: 10px 18px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--fg); background: var(--bg); transition: transform .15s ease, background .15s ease; }
+.btn:hover { background: var(--bg-3); transform: translateY(-1px); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.btn.primary:hover { background: var(--accent); opacity: .9; }
+.btn svg { width: 16px; height: 16px; }
+
+/* hero */
+.hero { padding: 72px 0 32px; text-align: center; }
+.pill { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 6px; text-decoration: none; }
+.pill b { background: var(--attn-soft); color: var(--attn); font-weight: 600; border-radius: 999px; padding: 1px 8px; font-size: 12px; }
+h1 { font-size: 56px; line-height: 1.12; letter-spacing: -.03em; margin: 22px auto 16px; font-weight: 700; max-width: 820px; }
+h1 em { font-style: normal; color: var(--attn); }
+.lede { font-size: 18px; color: var(--fg-2); margin: 0 auto; max-width: 640px; }
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
+.agents { display: flex; gap: 8px 18px; justify-content: center; flex-wrap: wrap; margin-top: 22px; font-size: 13px; color: var(--fg-3); }
+.agents span::before { content: "✓ "; color: var(--ok); }
+
+.stage { position: relative; margin: 48px auto 0; max-width: 1080px; }
+.frame { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow); background: var(--bg-2); }
+.frame .bar { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+.frame .bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-2); }
+.frame .bar span { margin-left: 10px; font-size: 12px; color: var(--fg-3); font-family: var(--mono); }
+.frame video, .frame img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; background: var(--bg); }
+.phone { position: absolute; right: -28px; bottom: -40px; width: 230px; border-radius: 34px; border: 7px solid #1b1b1d; box-shadow: var(--shadow); overflow: hidden; background: #fff; }
+.phone img { width: 100%; aspect-ratio: 390 / 844; object-fit: cover; }
+.play { position: absolute; left: 16px; bottom: 16px; font-size: 12.5px; color: #fff; background: rgba(0,0,0,.55); border-radius: 999px; padding: 5px 12px; border: 0; cursor: pointer; font-family: var(--sans); }
+
+/* sections */
+section { padding: 96px 0 0; }
+.kicker { font-size: 13px; font-weight: 600; color: var(--attn); letter-spacing: .04em; margin: 0 0 10px; }
+h2 { font-size: 36px; line-height: 1.2; margin: 0 0 14px; font-weight: 680; letter-spacing: -.02em; }
+.sub { color: var(--fg-2); font-size: 16.5px; margin: 0; max-width: 640px; }
+.center { text-align: center; }
+.center .sub { margin: 0 auto; }
+
+.points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 40px; }
+.point { border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 20px; background: var(--bg); }
+.point .ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--bg-3); margin-bottom: 14px; }
+.point .ic svg { width: 18px; height: 18px; stroke: var(--fg); fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.point b { display: block; font-size: 16px; margin-bottom: 6px; }
+.point span { color: var(--fg-2); font-size: 14px; }
+
+.feature { display: grid; grid-template-columns: 1fr 1.45fr; gap: 56px; align-items: center; margin-top: 80px; }
+.feature.flip { grid-template-columns: 1.45fr 1fr; }
+.feature.flip .text { order: 2; }
+.feature h3 { font-size: 26px; line-height: 1.25; margin: 0 0 12px; letter-spacing: -.015em; }
+.feature p { color: var(--fg-2); margin: 0 0 14px; }
+.feature ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.feature li { color: var(--fg-2); font-size: 14.5px; padding-left: 22px; position: relative; }
+.feature li::before { content: ""; position: absolute; left: 4px; top: .7em; width: 7px; height: 7px; border-radius: 50%; background: var(--attn); }
+.shot { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow); }
+.shot img { width: 100%; }
+.duo { display: flex; gap: 18px; justify-content: center; }
+.duo .phone { position: static; width: 46%; max-width: 250px; }
+
+.arch { margin-top: 36px; border: 1px solid var(--line); border-radius: 16px; padding: 18px; background: var(--bg); }
+.arch img { width: 100%; }
+.facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 20px; }
+.facts div { background: var(--bg); padding: 16px 18px; }
+.facts b { display: block; font-size: 15px; margin-bottom: 2px; }
+.facts span { color: var(--fg-2); font-size: 13.5px; }
 
 /* install */
-.install { margin: 36px 0 8px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg-2); }
+.install { margin: 32px 0 8px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--bg-2); text-align: left; }
 .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tabs button { all: unset; cursor: pointer; padding: 5px 12px; border-radius: 7px; font-size: 13px; color: var(--fg-2); white-space: nowrap; }
+.tabs button { all: unset; cursor: pointer; padding: 6px 14px; border-radius: 8px; font-size: 13.5px; color: var(--fg-2); white-space: nowrap; }
 .tabs button[aria-selected="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 0 0 1px var(--line); }
 .tabs button:focus-visible { outline: 2px solid var(--fg-3); }
-.panel { padding: 14px 16px 16px; }
+.panel { padding: 16px 18px 18px; }
 .panel[hidden] { display: none; }
-.panel p { margin: 0 0 10px; font-size: 13.5px; color: var(--fg-2); }
-.cmd { display: flex; align-items: flex-start; gap: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 10px 10px 10px 14px; }
+.panel p { margin: 0 0 10px; font-size: 14px; color: var(--fg-2); }
+.cmd { display: flex; align-items: flex-start; gap: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 11px 10px 11px 14px; }
 .cmd pre { margin: 0; flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; padding-top: 2px; }
 .cmd pre::before { content: "$ "; color: var(--fg-3); }
 .cmd pre.multi::before { content: none; }
@@ -67,119 +136,241 @@ h1 { font-size: 40px; line-height: 1.2; letter-spacing: -.02em; margin: 24px 0 1
 .copy:hover { color: var(--fg); background: var(--bg-3); }
 .copy.done { color: var(--ok); border-color: currentColor; }
 .note { font-size: 13px; color: var(--fg-3); margin: 10px 2px 0; }
-
-section { padding: 40px 0; border-top: 1px solid var(--line); }
-h2 { font-size: 20px; margin: 0 0 18px; font-weight: 620; letter-spacing: -.01em; }
-.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; display: grid; gap: 16px; }
-.steps li { counter-increment: s; display: grid; grid-template-columns: 28px 1fr; gap: 12px; }
-.steps li::before { content: counter(s); width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line-2); display: grid; place-items: center; font-size: 12px; color: var(--fg-2); margin-top: 2px; }
-.steps b { display: block; font-weight: 600; }
+.steps { list-style: none; padding: 0; margin: 28px 0 0; counter-reset: s; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; text-align: left; }
+.steps li { counter-increment: s; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+.steps li::before { content: counter(s); width: 26px; height: 26px; border-radius: 50%; background: var(--fg); color: var(--bg); display: grid; place-items: center; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.steps b { display: block; font-weight: 600; margin-bottom: 4px; }
 .steps span { color: var(--fg-2); font-size: 14px; }
 .steps code { background: var(--bg-3); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
 
-.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.grid div { background: var(--bg); padding: 16px 18px; }
-.grid b { display: block; font-weight: 600; margin-bottom: 4px; }
-.grid span { color: var(--fg-2); font-size: 14px; }
+.final { margin: 110px 0 0; padding: 56px 24px; border-radius: 20px; background: var(--bg-2); border: 1px solid var(--line); text-align: center; }
+.final h2 { margin-bottom: 10px; }
 
-.diagram { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; overflow-x: auto; margin: 0; line-height: 1.55; color: var(--fg-2); }
-.muted { color: var(--fg-2); font-size: 14px; }
-
-footer { border-top: 1px solid var(--line); padding: 24px 0 48px; color: var(--fg-3); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+footer { border-top: 1px solid var(--line); margin-top: 80px; padding: 26px 0 52px; color: var(--fg-3); font-size: 13px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 6px 20px; }
 footer a { color: var(--fg-2); }
 
+.reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+.reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
+
+@media (max-width: 900px) {
+  .points { grid-template-columns: 1fr 1fr; }
+  .feature, .feature.flip { grid-template-columns: 1fr; gap: 24px; margin-top: 64px; }
+  .feature.flip .text { order: 0; }
+  .facts { grid-template-columns: 1fr 1fr; }
+  .steps { grid-template-columns: 1fr; }
+  .phone { width: 170px; right: -8px; bottom: -28px; border-width: 5px; border-radius: 26px; }
+}
 @media (max-width: 600px) {
   .wrap { padding: 0 16px; }
-  .hero { padding: 36px 0 24px; }
-  h1 { font-size: 30px; }
+  nav a.hide-s { display: none; }
+  nav { gap: 16px; }
+  .hero { padding: 40px 0 16px; }
+  h1 { font-size: 36px; }
   .lede { font-size: 16px; }
-  .grid { grid-template-columns: 1fr; }
-  nav a { margin-left: 14px; }
-  .diagram { font-size: 11.5px; }
+  h2 { font-size: 28px; }
+  section { padding-top: 72px; }
+  .points { grid-template-columns: 1fr; }
+  .phone { display: none; }
+  .duo .phone { display: block; }
+  .facts { grid-template-columns: 1fr; }
+  .final { padding: 40px 18px; }
 }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <a class="brand" href="./">Collie</a>
+<header class="top" id="top">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="icon.svg" alt="">Collie</a>
     <nav>
-      <a href="#how">怎么用</a>
+      <a class="hide-s" href="#features">功能</a>
+      <a class="hide-s" href="#arch">架构</a>
+      <a href="#install">安装</a>
       <a href="https://github.com/lihuanyu0w0/collie">GitHub</a>
     </nav>
-  </header>
+  </div>
+</header>
 
-  <div class="hero">
-    <img src="icon.svg" alt="Collie">
-    <h1>在手机上放牧<br>你的编程 agent</h1>
-    <p class="lede">Collie 把跑在各台电脑上的 Claude Code、Codex、Antigravity 收到一个网页里：看对话、发消息、处理确认框，需要你的时候叫你一声。</p>
-
-    <div class="install" id="install">
-      <div class="tabs" role="tablist">
-        <button role="tab" aria-selected="true" data-tab="hub">做 hub</button>
-        <button role="tab" aria-selected="false" data-tab="node">加入电脑</button>
-        <button role="tab" aria-selected="false" data-tab="bin">只装命令</button>
-        <button role="tab" aria-selected="false" data-tab="src">从源码</button>
-      </div>
-      <div class="panel" data-panel="hub">
-        <p>在一台常开的开发机上运行，装成后台服务。之后用手机扫终端里的二维码就能登录。</p>
-        <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub</pre><button class="copy">复制</button></div>
-      </div>
-      <div class="panel" data-panel="node" hidden>
-        <p>在其他电脑上运行。hub 地址和配对码在 hub 的「设备 → 连接一台电脑」里拿；电脑主动连 hub，不用开端口。</p>
-        <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://&lt;hub&gt;:7788 --code &lt;配对码&gt;</pre><button class="copy">复制</button></div>
-      </div>
-      <div class="panel" data-panel="bin" hidden>
-        <p>只把 <code>collie</code> 装到 <code>~/.local/bin</code>，不装服务。</p>
-        <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh</pre><button class="copy">复制</button></div>
-      </div>
-      <div class="panel" data-panel="src" hidden>
-        <p>需要 Go 1.25+。在仓库里运行同一个脚本，会用本地源码编译；后面可以接 <code>hub</code> 或 <code>node --hub … --code …</code>。</p>
-        <div class="cmd"><pre class="multi">git clone https://github.com/lihuanyu0w0/collie.git
-cd collie
-sh docs/install.sh hub</pre><button class="copy">复制</button></div>
-      </div>
+<main>
+  <div class="wrap hero">
+    <a class="pill" href="https://github.com/lihuanyu0w0/collie/releases/latest"><b>v0.2.5</b>设备页一键更新所有电脑 →</a>
+    <h1>在手机上放牧<br>你的<em>编程 agent</em></h1>
+    <p class="lede">Collie 把各台电脑上的 Claude Code、Codex、Antigravity 收进一个网页。你只和 Collie 说一句，它拆活、派活、盯进度，只在需要你拍板时叫你。</p>
+    <div class="cta">
+      <a class="btn primary" href="demo/">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg>在线体验</a>
+      <a class="btn" href="#install">两分钟装好</a>
     </div>
-    <p class="note">macOS、Linux（amd64 / arm64）。服务用 launchd 或 systemd --user；下载会校验 SHA-256。<a href="install.sh">查看脚本</a></p>
+    <div class="agents"><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>macOS · Linux</span><span>手机 · 平板 · 桌面</span></div>
+
+    <div class="stage reveal">
+      <div class="frame">
+        <div class="bar"><i></i><i></i><i></i><span>collie · 和 Collie 对话</span></div>
+        <video id="hero-video" autoplay muted loop playsinline preload="metadata" poster="img/hero-light.png">
+          <source src="img/demo.mp4" type="video/mp4">
+          <img src="img/hero-light.png" alt="Collie 的对话界面">
+        </video>
+      </div>
+      <div class="phone"><img src="img/phone-ask.png" alt="手机上的决策卡片" loading="lazy"></div>
+    </div>
   </div>
 
-  <section id="how">
-    <h2>怎么用</h2>
-    <ol class="steps">
-      <li><div><b>开发机上起 hub</b><span>先装好 <a href="https://herdr.dev">herdr</a> 和它的 agent 集成（<code>herdr integration install claude</code>），再跑上面的「做 hub」。</span></div></li>
-      <li><div><b>手机扫码</b><span>扫终端里的二维码，或在「设备 → 连接手机或平板」里扫。每台设备一个令牌，随时可以移除。添加到主屏幕后就像一个 app。</span></div></li>
-      <li><div><b>其他电脑加入</b><span>笔记本在 NAT 后面也行：<code>collie node</code> 主动连上 hub，断线自动重连。</span></div></li>
-    </ol>
-  </section>
+  <section id="features">
+    <div class="wrap">
+      <div class="center reveal">
+        <p class="kicker">为什么用 Collie</p>
+        <h2>agent 在干活，你不用守着屏幕</h2>
+        <p class="sub">它们跑在你自己的电脑上，Collie 只负责让你随时看得到、管得到。</p>
+      </div>
+      <div class="points">
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></div>
+          <b>一个入口，派一群 agent</b><span>把事情告诉 Collie。它理解上下文，把活拆给 Claude、Codex 或 Antigravity 并行去做，结果回到同一个对话里。</span></div>
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12l3 3 5-6"/></svg></div>
+          <b>确认框变成卡片</b><span>agent 停在「允许运行吗？」时，问题和选项变成一张卡片，在手机上点一下就回，不用跑回电脑前。</span></div>
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="12" height="9" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="9" width="4" height="10" rx="1"/></svg></div>
+          <b>所有电脑合在一处</b><span>Mac、开发机、云电脑都连到一个 hub。电脑主动连出去：不开端口、不配 SSH，在 NAT 后面也行。</span></div>
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
+          <b>读真正的对话，不是截屏</b><span>直接读 agent 自己的会话记录，终端变成清晰的对话；想看原样也能切到屏幕和日志。</span></div>
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/></svg></div>
+          <b>自己往前推</b><span>worker 失败了就重试、换模型、换思路；只有花钱、删东西、发布这类事才停下来问你。</span></div>
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7z"/></svg></div>
+          <b>一个二进制，数据在你手里</b><span>单个 Go 程序、SQLite，前端内嵌。每台设备一个令牌，随时移除；不经过任何第三方服务。</span></div>
+      </div>
 
-  <section>
-    <h2>能做什么</h2>
-    <div class="grid">
-      <div><b>对话视图</b><span>直接读 agent 自己的会话记录，终端变成可读的对话；长对话可以往前翻。</span></div>
-      <div><b>决策卡片</b><span>agent 停在确认框时，问题和选项变成一张卡片，点一下就回。</span></div>
-      <div><b>多台电脑</b><span>一个 hub 合并所有电脑的 agent，侧栏按电脑分组，新建 agent 时选在哪台跑。</span></div>
-      <div><b>其他终端里的会话</b><span>iTerm、VS Code、tmux 里直接跑的 claude / codex / agy 也能看到，可以在 herdr 里接管。</span></div>
-      <div><b>Super-agent</b><span>只和 Collie 说话：Router 把活拆给并行的 worker，结果作为事件回到对话里。</span></div>
-      <div><b>接入外部事件</b><span>GitHub、飞书 webhook 和定时器都是 Trigger，按来源策略过滤后交给 Router。</span></div>
+      <div class="feature reveal">
+        <div class="text">
+          <p class="kicker">Super-agent</p>
+          <h3>说一句话，Collie 去组织</h3>
+          <p>你只和 Collie 对话。它常驻在 hub 上，把事情拆成任务交给 worker，worker 做完、卡住都会回报，Collie 再决定下一步。</p>
+          <ul>
+            <li>选哪个 agent、哪台电脑、哪个模型，它根据上下文自己定</li>
+            <li>GitHub 评论、飞书消息、定时器都能变成任务</li>
+            <li>长期记忆：记住你的偏好，每晚「做梦」整理一次</li>
+          </ul>
+        </div>
+        <div class="shot"><picture><img src="img/hero-light.png" alt="和 Collie 对话：派出两个 worker，一个已经回报" loading="lazy"></picture></div>
+      </div>
+
+      <div class="feature flip reveal">
+        <div class="text">
+          <p class="kicker">手机上处理</p>
+          <h3>需要你的时候，叫你一声</h3>
+          <p>卡住的 agent 置顶，标签页标题带计数，后台时弹通知。打开就是一张决策卡片：编号菜单发数字，光标菜单发方向键，都替你处理好了。</p>
+          <ul>
+            <li>扫码配对，添加到主屏幕就是一个 app</li>
+            <li>窄屏有专门的布局，单手就能回</li>
+          </ul>
+        </div>
+        <div class="duo">
+          <div class="phone"><img src="img/phone-list.png" alt="手机上的 agent 列表" loading="lazy"></div>
+          <div class="phone"><img src="img/phone-ask.png" alt="手机上的决策卡片" loading="lazy"></div>
+        </div>
+      </div>
+
+      <div class="feature reveal">
+        <div class="text">
+          <p class="kicker">直接管 agent</p>
+          <h3>每个 agent 都能接手</h3>
+          <p>在任意一台电脑上新建 agent：选类型、目录、模型，顺手给它第一个任务。对话视图里看它的思路和每一步工具调用，标题栏写着它用的模型。</p>
+          <ul>
+            <li>iTerm、VS Code、tmux 里直接跑的会话也能看到，一键在 herdr 里接管</li>
+            <li>屏幕视图用 xterm.js 原样呈现，日志视图在窄屏上自动换行</li>
+          </ul>
+        </div>
+        <div class="shot"><img src="img/agent.png" alt="Claude 的对话视图：读文件、计划、编辑" loading="lazy"></div>
+      </div>
+
+      <div class="feature flip reveal">
+        <div class="text">
+          <p class="kicker">Always-on</p>
+          <h3>事件进来，Collie 决定谁去做</h3>
+          <p>你的消息、webhook、定时器和 worker 的回报都进同一个收件箱。先按来源策略过滤，订阅了线程的 worker 直接收到，其余交给 Collie 判断。</p>
+          <ul>
+            <li>记忆按用途分开：指令、进行中的任务、笔记，每次只先读需要的</li>
+            <li>所有状态都在 SQLite，Collie 随时可以重启，事件不会丢</li>
+          </ul>
+        </div>
+        <div class="shot"><img src="img/memory.png" alt="自动化 · 记忆" loading="lazy"></div>
+      </div>
     </div>
   </section>
 
-  <section>
-    <h2>结构</h2>
-<pre class="diagram"> 手机 / 平板 / 浏览器 ──HTTP──▶  hub（开发机：collie + herdr）
-                                  ▲   ▲
-               collie node ──出站─┘   └─出站── collie node
-               （本地 Mac + herdr）           （另一台机器）</pre>
-    <p class="muted">单个 Go 二进制，前端内嵌，内网不需要访问 CDN。状态存在 SQLite（<code>~/.collie/herd.db</code>）。内网里是明文 HTTP，跨网络请放在 VPN / Tailscale 或 HTTPS 反向代理后面。</p>
+  <section id="arch">
+    <div class="wrap">
+      <div class="center reveal">
+        <p class="kicker">架构</p>
+        <h2>hub 常开，电脑连上来</h2>
+        <p class="sub">一个 hub 放在常开的开发机上；其他电脑运行 <code>collie node</code> 主动连上 hub；手机、平板、浏览器只连 hub。agent 本身跑在 <a href="https://herdr.dev">herdr</a> 里，关掉网页也不停。</p>
+      </div>
+      <div class="arch reveal"><img src="img/architecture-light.svg" alt="Collie 架构：浏览器和事件进 hub，hub 里有 Web 控制台、super-agent 和 herdr，其他电脑通过出站隧道连上来" loading="lazy"></div>
+      <div class="facts reveal">
+        <div><b>单个二进制</b><span>Go 编写，前端和 xterm.js 内嵌，内网不需要 CDN</span></div>
+        <div><b>出站隧道</b><span>yamux 长连接，断线自动重连</span></div>
+        <div><b>多个 hub</b><span>互不相通的网络各跑一个，侧栏合在一起</span></div>
+        <div><b>一键更新</b><span>有新版时设备页提示，点一下原地重启</span></div>
+      </div>
+    </div>
   </section>
 
-  <footer>
-    <span>Collie</span>
+  <section id="install">
+    <div class="wrap narrow center">
+      <p class="kicker reveal">安装</p>
+      <h2 class="reveal">两分钟装好</h2>
+      <p class="sub reveal">macOS、Linux（amd64 / arm64）。下载会校验 SHA-256，装成后台服务（launchd 或 systemd --user，没有的话用 nohup）；没有 herdr 的话顺便装上。</p>
+      <div class="install reveal">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-tab="hub">做 hub</button>
+          <button role="tab" aria-selected="false" data-tab="node">加入电脑</button>
+          <button role="tab" aria-selected="false" data-tab="bin">只装命令</button>
+          <button role="tab" aria-selected="false" data-tab="src">从源码</button>
+        </div>
+        <div class="panel" data-panel="hub">
+          <p>在一台常开的开发机上运行。之后用手机扫终端里的二维码就能登录。</p>
+          <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub</pre><button class="copy">复制</button></div>
+        </div>
+        <div class="panel" data-panel="node" hidden>
+          <p>在其他电脑上运行。hub 地址和配对码在 hub 的「设备 → 连接一台电脑」里拿；电脑主动连 hub，不用开端口。</p>
+          <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://&lt;hub&gt;:7788 --code &lt;配对码&gt;</pre><button class="copy">复制</button></div>
+        </div>
+        <div class="panel" data-panel="bin" hidden>
+          <p>只把 <code>collie</code> 装到 <code>~/.local/bin</code>，不装服务。</p>
+          <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh</pre><button class="copy">复制</button></div>
+        </div>
+        <div class="panel" data-panel="src" hidden>
+          <p>需要 Go 1.25+。在仓库里运行同一个脚本，会用本地源码编译；后面可以接 <code>hub</code> 或 <code>node --hub … --code …</code>。</p>
+          <div class="cmd"><pre class="multi">git clone https://github.com/lihuanyu0w0/collie.git
+cd collie
+sh docs/install.sh hub</pre><button class="copy">复制</button></div>
+        </div>
+      </div>
+      <p class="note reveal"><a href="install.sh">查看安装脚本</a> · <a href="https://github.com/lihuanyu0w0/collie#readme">完整文档</a></p>
+      <ol class="steps">
+        <li class="reveal"><b>开发机上起 hub</b><span>跑上面的「做 hub」。装好 herdr 的 agent 集成：<code>herdr integration install claude</code>。</span></li>
+        <li class="reveal"><b>手机扫码</b><span>扫终端里的二维码，每台设备一个令牌，添加到主屏幕后就像一个 app。</span></li>
+        <li class="reveal"><b>其他电脑加入</b><span>在「设备 → 连接一台电脑」里拿命令，在那台电脑上跑一下就连上了。</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="final reveal">
+      <h2>先看看它长什么样</h2>
+      <p class="sub" style="margin: 0 auto 24px">在线体验是真实的界面，数据是虚构的：可以给 Collie 发消息、点决策卡片、新建 agent。</p>
+      <div class="cta" style="margin-top:0"><a class="btn primary" href="demo/"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg>打开在线体验</a><a class="btn" href="https://github.com/lihuanyu0w0/collie">GitHub 上看源码</a></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Collie · 牧羊犬：herdr 管终端，Collie 把 agent 赶到一处干活</span>
     <a href="https://github.com/lihuanyu0w0/collie">源码</a>
     <a href="https://github.com/lihuanyu0w0/collie/releases">下载</a>
     <a href="https://github.com/lihuanyu0w0/collie#readme">文档</a>
-  </footer>
-</div>
+    <a href="demo/">在线体验</a>
+  </div>
+</footer>
 <script>
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll(".tabs button").forEach((x) => x.setAttribute("aria-selected", x === b));
@@ -195,6 +386,10 @@ document.querySelectorAll(".copy").forEach((b) => b.addEventListener("click", as
   b.textContent = "已复制"; b.classList.add("done");
   setTimeout(() => { b.textContent = "复制"; b.classList.remove("done"); }, 1500);
 }));
+const top = document.getElementById("top");
+addEventListener("scroll", () => top.classList.toggle("scrolled", scrollY > 8), { passive: true });
+const io = "IntersectionObserver" in window ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" }) : null;
+document.querySelectorAll(".reveal").forEach((el) => io ? io.observe(el) : el.classList.add("in"));
 </script>
 </body>
 </html>

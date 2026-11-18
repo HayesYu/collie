@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Collie">
+  <title>Collie 演示</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-512.png">
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="app.css">
+  <script>
+    // Apply this device's look before first paint (see 偏好设置).
+    try {
+      const g = (k) => JSON.parse(localStorage.getItem("collie." + k) || "null");
+      const t = g("theme"), x = g("text");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      if (x === "small" || x === "large") document.documentElement.dataset.text = x;
+    } catch {}
+  </script>
+</head>
+<body>
+
+<!-- ───────────── sign in ───────────── -->
+<section id="login" class="login" hidden>
+  <form class="login-card" id="login-form">
+    <img src="icon.svg" alt="" class="login-mark">
+    <h1>Collie</h1>
+    <p class="muted">手机：扫 hub 终端里的二维码，或在已登录的设备上打开「设备 → 连接手机」。<br>也可以输入配对码或访问令牌。</p>
+    <input id="login-token" type="password" autocomplete="current-password" placeholder="配对码或访问令牌" required>
+    <button class="btn primary block" type="submit">进入</button>
+    <p class="login-error" id="login-error"></p>
+  </form>
+</section>
+
+<!-- ───────────── app ───────────── -->
+<div id="app" class="app" hidden>
+
+  <aside class="side">
+    <header class="side-head">
+      <a class="brand" href="#/collie">
+        <img src="icon.svg" alt="">
+        <span>Collie</span>
+      </a>
+      <button class="icon-btn" id="new-btn" title="新建 Agent">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </header>
+
+    <nav class="side-nav">
+      <a class="nav-item" id="nav-collie" href="#/collie">
+        <span class="nav-ico"><img src="icon.svg" alt=""></span>
+        <span class="body"><div class="name">和 Collie 对话</div><div class="sub" id="nav-collie-sub">休眠中</div></span>
+        <span class="dot" id="nav-collie-dot"></span>
+      </a>
+      <a class="nav-item" id="nav-auto" href="#/auto">
+        <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
+        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">收件箱 · 定时 · 接入</div></span>
+        <span class="count-pill" id="nav-queue" hidden></span>
+      </a>
+    </nav>
+
+    <div class="side-scroll">
+      <section class="group" id="attention-group" hidden>
+        <h2>需要你</h2>
+        <ul class="list attn" id="attention"></ul>
+      </section>
+      <section class="group" id="live-group">
+        <h2>进行中 <span class="count" id="live-count"></span></h2>
+        <ul class="list" id="live-list"></ul>
+      </section>
+      <section class="group" id="recent-group" hidden>
+        <h2>最近</h2>
+        <ul class="list" id="recent-list"></ul>
+      </section>
+      <details class="group" id="shell-group">
+        <summary><h2>终端 <span class="count" id="shell-count"></span></h2></summary>
+        <ul class="list" id="shells"></ul>
+      </details>
+    </div>
+
+    <div class="local-app" id="local-app" hidden>
+      <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span>在 Collie app 中打开</span></a>
+      <button class="icon-btn" id="local-app-x" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <footer class="side-foot">
+      <a class="foot-status" href="#/devices" id="nav-devices" title="设备">
+        <span class="conn" id="conn"></span><span class="update-note" id="update-note" hidden>有新版</span><span id="herdr-status" class="muted">connecting…</span>
+      </a>
+      <a class="icon-btn" href="#/devices" title="设备与连接">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="13" height="10" rx="1.5"/><path d="M7 18h5M9.5 14v4"/><rect x="17" y="9" width="5" height="11" rx="1.2"/></svg>
+      </a>
+      <a class="icon-btn" href="#/prefs" id="nav-prefs" title="偏好设置">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </a>
+      <button class="icon-btn" id="logout" title="退出">
+        <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>
+      </button>
+    </footer>
+  </aside>
+
+  <main class="main">
+
+    <!-- ── Collie: the super-agent conversation ── -->
+    <section class="view" id="v-collie" hidden>
+      <header class="d-head">
+        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <div class="d-title">
+          <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
+          <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
+        </div>
+        <div class="menu-wrap">
+          <button class="icon-btn" data-menu="collie-menu" title="更多">
+            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          </button>
+          <div class="menu" id="collie-menu" hidden>
+            <button data-act="router-open">查看 Collie 的终端</button>
+            <button data-act="router-restart">重启 Collie</button>
+            <button data-act="pause">暂停投递</button>
+            <hr>
+            <button data-act="auto">自动化与设置</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="crew" id="crew"></div>
+
+      <div class="viewer chatbg">
+        <div class="thread" id="super-thread"></div>
+      </div>
+
+      <form class="composer" id="super-composer">
+        <div class="cbox">
+          <div class="files" hidden></div>
+          <textarea id="super-input" rows="1" placeholder="告诉 Collie 你要做什么…" enterkeyhint="send"></textarea>
+          <div class="cbar">
+            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <div class="chips">
+            <span class="cbar-label" title="Collie 把这条消息里的活派给谁：哪台电脑、哪个 agent、什么模型。Collie 自己用的模型显示在页面顶部">派活</span>
+            <select id="t-machine" data-pick="chip" data-title="这次在哪台电脑上做" title="这次在哪台电脑上做"></select>
+            <select id="t-kind" data-pick="chip" data-title="这次派哪个 agent" title="这次派哪个 agent"></select>
+            <select id="t-model" data-pick="chip" data-title="这次用哪个模型" title="这次用哪个模型"></select>
+            <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
+            </div>
+            <span class="spacer"></span>
+            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+          </div>
+        </div>
+        <input type="file" multiple hidden>
+      </form>
+    </section>
+
+    <!-- ── automation ── -->
+    <section class="view" id="v-auto" hidden>
+      <header class="d-head">
+        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <div class="d-title"><div class="d-name">自动化</div><div class="d-meta muted">Always-on：事件进来，Collie 决定谁去做</div></div>
+      </header>
+      <div class="tabs" id="auto-tabs">
+        <button data-tab="inbox" class="on">收件箱</button>
+        <button data-tab="threads">线程</button>
+        <button data-tab="timers">定时</button>
+        <button data-tab="memory">记忆</button>
+        <button data-tab="hooks">接入</button>
+        <button data-tab="settings">设置</button>
+      </div>
+      <div class="auto-body" id="auto-body"></div>
+    </section>
+
+    <!-- ── devices: phones, browsers and computers ── -->
+    <section class="view" id="v-devices" hidden>
+      <header class="d-head">
+        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <div class="d-title"><div class="d-name">设备</div><div class="d-meta muted">这台 hub 管着哪些电脑，谁能连进来</div></div>
+      </header>
+      <div class="auto-body" id="devices-body"></div>
+    </section>
+
+    <!-- ── an agent running in another terminal: read-only, can be taken over ── -->
+    <section class="view" id="v-ext" hidden>
+      <header class="d-head">
+        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <div class="d-title">
+          <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag">只读</span></div>
+          <div class="d-meta"><span class="status" id="x-status"></span><span class="muted mono" id="x-cwd"></span></div>
+        </div>
+      </header>
+      <div class="viewer chatbg">
+        <div class="thread" id="x-thread"></div>
+        <div class="working-row" id="x-working" hidden></div>
+      </div>
+      <form class="composer" id="x-composer" hidden>
+        <div class="cbox">
+          <textarea id="x-input" rows="1" placeholder="发消息给它，它会在原来的窗口里接着做…" enterkeyhint="send"></textarea>
+          <div class="cbar">
+            <span class="muted x-hint" id="x-hint"></span>
+            <span class="spacer"></span>
+            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+          </div>
+        </div>
+      </form>
+      <div class="ext-bar">
+        <p id="x-note"></p>
+        <button class="btn small" id="x-forget" hidden>移除</button>
+        <button class="btn primary small" id="x-takeover">在 herdr 里接管</button>
+      </div>
+    </section>
+
+    <!-- ── preferences: this device's look and habits ── -->
+    <section class="view" id="v-prefs" hidden>
+      <header class="d-head">
+        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <div class="d-title"><div class="d-name">偏好设置</div><div class="d-meta muted">只影响这台设备上的这个浏览器</div></div>
+      </header>
+      <div class="auto-body" id="prefs-body"></div>
+    </section>
+
+    <!-- ── one agent terminal, wrapped ── -->
+    <section class="view detail" id="detail" hidden>
+      <header class="d-head">
+        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <div class="d-title">
+          <div class="d-name"><span id="d-name"></span><span class="kind" id="d-kind"></span><span class="tag" id="d-worker" hidden></span></div>
+          <div class="d-meta"><span class="status" id="d-status"></span><span class="muted" id="d-model" hidden></span><span class="muted mono" id="d-cwd"></span></div>
+        </div>
+        <div class="seg" id="mode-seg">
+          <button data-mode="chat">对话</button>
+          <button data-mode="screen">屏幕</button>
+          <button data-mode="log">日志</button>
+        </div>
+        <div class="menu-wrap">
+          <button class="icon-btn" data-menu="more-menu" title="更多">
+            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          </button>
+          <div class="menu" id="more-menu" hidden>
+            <button data-act="interrupt">中断 (Ctrl-C)</button>
+            <button data-act="shell-here">在这个目录开个终端</button>
+            <button data-act="copy">复制 pane ID</button>
+            <hr>
+            <button data-act="close" class="danger">关闭工作区</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="viewer" id="viewer">
+        <div class="chat" id="chat">
+          <div class="thread" id="thread"></div>
+          <div class="live" id="live" hidden></div>
+        </div>
+        <div class="screen" id="screen"></div>
+        <div class="screen-hint" id="screen-hint">点终端即可输入</div>
+        <pre class="log" id="log"></pre>
+        <button class="jump" id="jump" hidden><svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
+        <div class="gone" id="gone" hidden>这个 pane 已经关闭。</div>
+      </div>
+
+      <div class="keys" id="keys">
+        <button class="screen-only" id="term-kbd" title="在终端里打字"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg></button>
+        <button data-k="esc">Esc</button>
+        <button data-k="ctrl+c">^C</button>
+        <button data-k="tab">Tab</button>
+        <button data-k="shift+tab">⇧Tab</button>
+        <button data-k="up">↑</button>
+        <button data-k="down">↓</button>
+        <button data-k="left">←</button>
+        <button data-k="right">→</button>
+        <button data-k="enter">↵</button>
+        <button data-t="1">1</button>
+        <button data-t="2">2</button>
+        <button data-t="3">3</button>
+        <button data-k="backspace">⌫</button>
+        <button class="screen-only" id="term-fit" title="整屏缩到一屏宽 / 放大到能看清">全览</button>
+      </div>
+
+      <form class="composer" id="composer">
+        <div class="cbox">
+          <div class="files" hidden></div>
+          <textarea id="input" rows="1" placeholder="给 agent 发消息…" enterkeyhint="send"></textarea>
+          <div class="cbar">
+            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn kbd-toggle" id="kbd-toggle" title="按键">
+              <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>
+            </button>
+            <span class="spacer"></span>
+            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+          </div>
+        </div>
+        <input type="file" multiple hidden>
+      </form>
+    </section>
+  </main>
+</div>
+
+<!-- ───────────── launcher ───────────── -->
+<dialog class="sheet" id="launch">
+  <form method="dialog" id="launch-form">
+    <header class="sheet-head">
+      <h3 id="launch-title">新建</h3>
+      <button class="icon-btn" value="cancel" formnovalidate title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="sheet-body">
+      <p class="sheet-note muted" id="launch-note">想让 Collie 拆解并派活？直接在「和 Collie 对话」里说就行。这里是手动启动一个独立的 agent，或开一个终端。</p>
+      <div class="field">
+        <label>类型</label>
+        <div class="kinds" id="kinds">
+          <label class="kind-card"><input type="radio" name="kind" value="claude" checked>
+            <svg viewBox="0 0 32 32"><path d="M16 5v22M5 16h22M8.2 8.2l15.6 15.6M23.8 8.2L8.2 23.8"/></svg><b>Claude</b><small>claude</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="codex">
+            <svg viewBox="0 0 32 32"><path d="M16 4l10.4 6v12L16 28 5.6 22V10z"/><path d="M13 13l-3 3 3 3M19 13l3 3-3 3"/></svg><b>Codex</b><small>codex</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="antigravity">
+            <svg viewBox="0 0 32 32"><ellipse cx="16" cy="16" rx="11" ry="5" transform="rotate(-30 16 16)"/><path d="M16 21V9M12 13l4-4 4 4"/></svg><b>Antigravity</b><small>agy</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="shell">
+            <svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg><b>终端</b><small>shell</small></label>
+        </div>
+      </div>
+      <div class="field" id="l-machine-field" hidden>
+        <label>在哪台电脑上</label>
+        <div class="machine-pick" id="l-machines"></div>
+      </div>
+      <div class="field agent-only">
+        <label for="l-model">模型 <span class="muted">可选</span></label>
+        <div class="model-row"><select id="l-model"></select><select id="l-effort"></select></div>
+      </div>
+      <div class="field agent-only">
+        <label for="l-name">名字 <span class="muted">可选</span></label>
+        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="不填就用会话自己的标题" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <small class="muted">想用命令行或让 Collie 按名字找它时再起，小写字母开头，可含数字、- 和 _</small>
+      </div>
+      <div class="field">
+        <label for="l-cwd">目录</label>
+        <div class="dir">
+          <input id="l-cwd" class="mono" value="~" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <button type="button" class="icon-btn" id="dir-up" title="上一级"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+        </div>
+        <div class="recent" id="recent"></div>
+        <ul class="dirs" id="dirs"></ul>
+      </div>
+      <div class="field agent-only">
+        <label for="l-prompt">第一个任务 <span class="muted">（可选）</span></label>
+        <textarea id="l-prompt" rows="3" placeholder="例如：跑一遍测试，修掉失败的用例"></textarea>
+      </div>
+      <p class="form-error" id="launch-error"></p>
+    </div>
+    <footer class="sheet-foot">
+      <button class="btn" value="cancel" formnovalidate>取消</button>
+      <button class="btn primary" id="launch-go" value="go">启动</button>
+    </footer>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="demo.js"></script>
+<script src="vendor/xterm.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

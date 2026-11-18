@@ -2,23 +2,51 @@
 
 <h1 align="center">Collie</h1>
 
-<p align="center">在手机上放牧你的编程 agent<br>
-<a href="https://lihuanyu0w0.github.io/collie">主页</a> · <a href="#安装">安装</a> · <a href="https://github.com/lihuanyu0w0/collie/releases">下载</a></p>
+<p align="center"><b>在手机上放牧你的编程 agent</b><br>
+Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自己推进的 super-agent</p>
 
-Collie 是一个安静的 Web 控制台和 super-agent，用来"放牧"跑在 [herdr](https://herdr.dev) 里的编程 agent（Claude Code、Codex、Antigravity）。手机、平板、桌面浏览器都能用：看对话、发消息、处理确认框，需要你的时候叫你一声。
+<p align="center">
+<a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ 在线体验</b></a> ·
+<a href="https://lihuanyu0w0.github.io/collie">主页</a> ·
+<a href="#安装">安装</a> ·
+<a href="https://github.com/lihuanyu0w0/collie/releases">下载</a>
+</p>
 
-> Collie 是牧羊犬：herdr 管终端，Collie 把 agent 赶到一处干活。
+<p align="center"><img src="docs/img/demo.gif" alt="给 Collie 发一句话：它派出 worker，worker 回报，Collie 汇总；决策卡片一点就回" width="900"></p>
+
+Collie 把跑在各台电脑上的编程 agent 收进一个网页：看对话、发消息、处理确认框，需要你的时候叫你一声。你也可以只和 **Collie** 说话，它会把活拆给 Claude、Codex、Antigravity 在你的机器上并行去做，只在需要你拍板时出声。
+
+> Collie 是牧羊犬：[herdr](https://herdr.dev) 管终端，Collie 把 agent 赶到一处干活。
+
+## 为什么用 Collie
+
+- **一个入口，派一群 agent** — 把事情告诉 Collie，它理解上下文、选 agent 和模型、拆活并行去做，结果回到同一个对话
+- **确认框变成卡片** — agent 停在「允许运行吗？」时，问题和选项变成一张卡片，手机上点一下就回
+- **所有电脑合在一处** — Mac、开发机、云电脑连到一个 hub；电脑主动连出去，不开端口、不配 SSH，在 NAT 后面也行
+- **读真正的对话** — 直接读 agent 自己的会话记录，终端变成清晰的对话；也能切到原样的屏幕和日志
+- **自己往前推** — worker 失败了重试、换模型、换思路；只有花钱、删东西、发布这类事才停下来问你
+- **一个二进制，数据在你手里** — 单个 Go 程序 + SQLite，前端内嵌；每台设备一个令牌，随时移除；不经过第三方服务
+
+<table>
+<tr>
+<td width="62%"><img src="docs/img/hero-light.png" alt="和 Collie 对话"><br><sub><b>和 Collie 对话</b>：派出两个 worker，一个已回报；卡住的 agent 直接在对话里处理</sub></td>
+<td width="19%"><img src="docs/img/phone-list.png" alt="手机上的列表"><br><sub><b>手机</b>：需要你的置顶</sub></td>
+<td width="19%"><img src="docs/img/phone-ask.png" alt="手机上的决策卡片"><br><sub><b>决策卡片</b>：一点就回</sub></td>
+</tr>
+<tr>
+<td colspan="3"><img src="docs/img/agent.png" alt="agent 的对话视图"><br><sub><b>直接管 agent</b>：对话视图里看它的计划和每一步工具调用，标题栏写着它用的模型</sub></td>
+</tr>
+</table>
+
+更多截图：[屏幕视图](docs/img/screen.png) · [自动化 · 记忆](docs/img/memory.png) · [设备](docs/img/devices.png) · [深色主题](docs/img/hero-dark.png)
+
+## 架构
+
+<p align="center"><img src="docs/img/architecture.svg" alt="Collie 架构" width="900"></p>
+
+一个 **hub** 放在常开的开发机上；其他电脑运行 `collie node` 主动连上 hub；手机、平板、浏览器只连 hub。互不相通的网络各跑一个 hub，浏览器把它们的会话合进同一个侧栏。
 
 ## 安装
-
-一个 **hub** 放在常开的开发机上；其他电脑运行 `collie node` 主动连上 hub；手机、平板、浏览器只连 hub。
-
-```
- 手机 / 平板 / 浏览器 ──HTTP──▶  hub（开发机：collie + herdr）
-                                  ▲   ▲
-               collie node ──出站─┘   └─出站── collie node
-               （本地 Mac + herdr）           （另一台机器）
-```
 
 每台电脑上都要先有 herdr 服务端在跑，并装好 agent 集成（`herdr integration install claude`、`codex`、`antigravity-cli`）。没装集成时，herdr 认不出 agent 在干什么，Collie 也就没法给它发消息。
 
@@ -229,8 +257,9 @@ scripts/release.sh v0.1.0 --dry    # 交叉编译四个平台到 dist/
 main.go              入口：只有版本号和 collie.Main
 internal/collie/     hub、node 和 CLI（一个包）
 web/                 前端：原生 HTML/CSS/JS，无构建步骤；embed.go 用 go:embed 打进二进制
-docs/                install.sh 和主页
+docs/                install.sh、主页和截图（docs/img/）
 scripts/release.sh   交叉编译和发布
+scripts/demo.sh      构建在线体验（docs/demo/）：真实前端 + scripts/demo/demo.js 里的虚构数据
 ```
 
 `internal/collie/` 里：

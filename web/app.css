@@ -224,6 +224,9 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 .kind:empty { display: none; }
 .d-meta { display: flex; align-items: center; gap: 12px; margin-top: 2px; min-width: 0; font-size: 12px; }
 .d-meta .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.d-meta > * { white-space: nowrap; flex: none; }
+.d-meta > .mono { flex: 0 1 auto; min-width: 0; }
+@media (max-width: 700px) { #d-model { display: none; } }
 
 .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--bg-3); flex: none; }
 .seg button { border: 0; background: transparent; padding: 5px 12px; border-radius: 7px; font-size: 13px; color: var(--fg-2); }

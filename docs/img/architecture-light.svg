@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Segoe UI', sans-serif">
+  <style>
+    .bg { fill: #ffffff; }
+    .box { fill: #f7f7f6; stroke: #dcdcd8; stroke-width: 1.2; }
+    .inner { fill: #ffffff; stroke: #dcdcd8; stroke-width: 1; }
+    .hub { fill: none; stroke: #111111; stroke-width: 1.4; }
+    .collie { fill: #fbf3e8; stroke: #e7c9a3; stroke-width: 1.2; }
+    .t { fill: #111111; font-size: 15px; font-weight: 600; }
+    .t2 { fill: #111111; font-size: 13.5px; font-weight: 600; }
+    .s { fill: #55554f; font-size: 12px; }
+    .m { fill: #8e8e88; font-size: 11.5px; }
+    .k { fill: #111111; font-size: 12.5px; font-family: 'SF Mono', ui-monospace, Menlo, monospace; }
+    .a { stroke: #8e8e88; stroke-width: 1.3; fill: none; marker-end: url(#arr); }
+    .ad { stroke: #8e8e88; stroke-width: 1.3; fill: none; stroke-dasharray: 4 4; marker-end: url(#arr); }
+    .ac { stroke: #b45309; stroke-width: 1.4; fill: none; marker-end: url(#arrc); }
+    .head { fill: #8e8e88; } .headc { fill: #b45309; }
+    .ct { fill: #b45309; font-size: 15px; font-weight: 600; }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="arrc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="headc" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <rect class="bg" width="1000" height="620" rx="14"/>
+
+  <!-- where you are, and what else talks to Collie -->
+  <path class="ad" d="M200,46 V24 H860 V44"/>
+  <text class="m" x="530" y="18" text-anchor="middle">浏览器也能直连别的网络里的 hub，会话并进同一个侧栏</text>
+
+  <rect class="box" x="40" y="48" width="320" height="64" rx="10"/>
+  <text class="t" x="60" y="74">手机 · 平板 · 电脑浏览器</text>
+  <text class="s" x="60" y="96">扫码配对，添加到主屏幕就是一个 app</text>
+  <rect class="box" x="400" y="48" width="300" height="64" rx="10"/>
+  <text class="t" x="420" y="74">GitHub · 飞书 · 定时器</text>
+  <text class="s" x="420" y="96">Webhook 和定时都是事件，进同一个收件箱</text>
+  <rect class="box" x="740" y="48" width="220" height="64" rx="10" stroke-dasharray="5 4"/>
+  <text class="t" x="760" y="74">另一个 hub</text>
+  <text class="s" x="760" y="96">云电脑、家里的 Mac mini</text>
+
+  <path class="a" d="M200,112 V160"/>
+  <text class="m" x="210" y="142">HTTP + SSE</text>
+  <path class="a" d="M550,112 V160"/>
+
+  <!-- hub -->
+  <rect class="hub" x="20" y="164" width="960" height="268" rx="16"/>
+  <text class="t" x="42" y="192">hub</text>
+  <text class="s" x="80" y="192">一台常开的开发机 · 单个 Go 二进制，前端内嵌</text>
+
+  <rect class="inner" x="42" y="208" width="262" height="202" rx="10"/>
+  <text class="t2" x="60" y="236">Web 控制台</text>
+  <text class="s" x="60" y="262">对话视图：读 agent 自己的会话记录</text>
+  <text class="s" x="60" y="286">决策卡片：确认框一点就回</text>
+  <text class="s" x="60" y="310">屏幕 / 日志：xterm.js 原样呈现</text>
+  <text class="s" x="60" y="334">其他终端里的会话：只读 + 接管</text>
+  <text class="s" x="60" y="358">设备与配对：一台设备一个令牌</text>
+  <text class="m" x="60" y="390">需要你时：置顶、计数、浏览器通知</text>
+
+  <rect class="collie" x="322" y="208" width="400" height="202" rx="10"/>
+  <text class="ct" x="340" y="236">Collie · super-agent</text>
+  <rect class="inner" x="340" y="252" width="112" height="54" rx="8"/>
+  <text class="t2" x="354" y="275">收件箱</text>
+  <text class="m" x="354" y="294">Trigger · 策略</text>
+  <rect class="inner" x="466" y="252" width="112" height="54" rx="8"/>
+  <text class="t2" x="480" y="275">Router</text>
+  <text class="m" x="480" y="294">理解、分派</text>
+  <rect class="inner" x="592" y="252" width="112" height="54" rx="8"/>
+  <text class="t2" x="606" y="275">Worker × N</text>
+  <text class="m" x="606" y="294">并行干活</text>
+  <path class="ac" d="M452,279 H464"/>
+  <path class="ac" d="M578,279 H590"/>
+  <path class="ac" d="M648,306 V326 H396 V308"/>
+  <text class="m" x="410" y="344">collie report：完成、阻塞都回到收件箱</text>
+  <text class="s" x="340" y="372">状态都在 SQLite，Router 随时可以重启</text>
+  <text class="s" x="340" y="394">长期记忆 · 做梦整理 · 定时跟进</text>
+
+  <rect class="inner" x="740" y="208" width="218" height="202" rx="10"/>
+  <text class="t2" x="758" y="236">herdr</text>
+  <text class="s" x="758" y="260">终端会话常驻，关掉网页也不停</text>
+  <rect class="inner" x="758" y="276" width="182" height="30" rx="7"/>
+  <text class="k" x="772" y="296">claude code</text>
+  <rect class="inner" x="758" y="314" width="182" height="30" rx="7"/>
+  <text class="k" x="772" y="334">codex</text>
+  <rect class="inner" x="758" y="352" width="182" height="30" rx="7"/>
+  <text class="k" x="772" y="372">antigravity</text>
+
+  <!-- computers that join -->
+  <path class="a" d="M200,488 V436"/>
+  <path class="a" d="M500,488 V436"/>
+  <path class="a" d="M800,488 V436"/>
+  <text class="m" x="210" y="466">出站隧道（yamux）：不用开端口、不用 SSH</text>
+
+  <rect class="box" x="40" y="492" width="320" height="96" rx="10"/>
+  <text class="t" x="60" y="520">你的 Mac</text>
+  <text class="k" x="60" y="544">collie node + herdr</text>
+  <text class="s" x="60" y="568">在 NAT 后面也行，断线自动重连</text>
+  <rect class="box" x="380" y="492" width="260" height="96" rx="10"/>
+  <text class="t" x="400" y="520">另一台开发机</text>
+  <text class="k" x="400" y="544">collie node + herdr</text>
+  <text class="s" x="400" y="568">hub 把所有电脑的 agent 合在一起</text>
+  <rect class="box" x="660" y="492" width="300" height="96" rx="10"/>
+  <text class="t" x="680" y="520">云电脑 / 服务器</text>
+  <text class="k" x="680" y="544">collie node + herdr</text>
+  <text class="s" x="680" y="568">在设备页一键更新到新版本</text>
+</svg>

@@ -1577,8 +1577,8 @@
   setInterval(checkUpdates, 30 * 60 * 1000);
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
     ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
-  const updateRow = (have, latest, cmd, note) => isOld(have, latest)
-    ? `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : "";
+  const updateRow = (have, latest, cmd, note, id, name) => isOld(have, latest)
+    ? `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}">更新到 ${esc(latest)}</button></p><p class="pair-hint muted">点了没反应的话，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : "";
 
   async function loadDevices() {
     let r;
@@ -1627,11 +1627,11 @@
       <div class="card"><div class="card-h">电脑</div><ul class="rows">
         <li class="row dev-row">
           <span class="dot ${r.hub.herdr ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", "装 hub 时加过 --url 等参数的话照样带上")}</div>
+          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}</div>
           <span class="right">${r.hub.herdr ? "在线" : ""}</span></li>
         ${machines.map((d) => `<li class="row dev-row">
           <span class="dot ${d.online ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node")}</div>
+          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node", "", d.id, d.name)}</div>
           <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")}
       </ul></div>
 
@@ -1704,6 +1704,14 @@
     try {
       if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
       else if (b.id === "new-node-code") { await newCode("machine"); loadDevices(); }
+      else if (b.dataset.update !== undefined) {
+        const id = b.dataset.update;
+        if (!confirm(`更新「${b.dataset.name}」上的 Collie？它会下载新版并重启，大约十几秒连不上${id ? "" : "（这是 hub，页面会短暂断开）"}；里面的 agent 不受影响。`)) return;
+        b.disabled = true; b.textContent = "更新中…";
+        const r = await api("/api/update?" + new URLSearchParams(id ? { machine: id } : {}), { body: {} });
+        toast(r.latest ? "已经是最新版" : `已更新到 ${r.version}，正在重启`);
+        setTimeout(() => { loadDevices(); checkUpdates(); }, 12000);
+      }
       else if (b.dataset.delHub) {
         if (!confirm(`不再显示「${b.dataset.name}」的会话？那个 hub 本身不受影响。`)) return;
         hubs = (await api("/api/hubs", { body: { hubs: hubs.filter((h) => h.key !== b.dataset.delHub) } })).hubs;

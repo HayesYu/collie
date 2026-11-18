@@ -98,6 +98,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("GET /api/titles", wrap(s.getTitles))
 	mux.Handle("GET /api/models", wrap(s.listModels))
 	mux.Handle("POST /api/trust", wrap(s.trustFolder))
+	mux.Handle("POST /api/update", wrap(s.selfUpdate))
 	mux.Handle("GET /api/transcript", wrap(s.getTranscript))
 	mux.Handle("GET /api/external", wrap(s.listExternal))
 	mux.Handle("GET /api/external/{id}/chat", wrap(s.streamExternal))

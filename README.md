@@ -59,7 +59,7 @@ curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub
 
 ### 更新
 
-hub 每隔几小时看一次 GitHub 上的最新版本。有电脑落后时，侧栏底部会出现「有新版」，「设备」页会列出是哪台以及要运行的命令：
+hub 每隔几小时看一次 GitHub 上的最新版本。有电脑落后时，侧栏底部会出现「有新版」，「设备」页会列出是哪台。点「更新到 vX」，那台电脑会自己下载新版、校验后原地重启（里面的 agent 不受影响）；也可以在那台电脑上手动运行：
 
 - 电脑（node）：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node`（不用再配对）
 - hub：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub`，当初加过 `--url` 等参数的话照样带上

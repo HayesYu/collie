@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Collie",
   "short_name": "Collie",
-  "description": "在手机和电脑上放牧你的 AI agent",
+  "description": "说一句话，让一群 agent 去干活",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

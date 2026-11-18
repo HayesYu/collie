@@ -2,7 +2,7 @@
 
 <h1 align="center">Collie</h1>
 
-<p align="center"><b>在手机上放牧你的 AI agent</b><br>
+<p align="center"><b>说一句话，让一群 agent 去干活</b><br>
 Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自己推进的 super-agent</p>
 
 <p align="center">

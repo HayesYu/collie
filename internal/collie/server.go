@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -74,7 +75,7 @@ func (s *Server) Routes() http.Handler {
 	s.machineRoutes(mux, func(h http.HandlerFunc) http.Handler { return s.auth(s.routed(h)) })
 	s.superRoutes(mux)
 	s.hubRoutes(mux)
-	return securityHeaders(mux)
+	return securityHeaders(cors(mux))
 }
 
 // machineRoutes are the endpoints about one machine's panes. The hub serves
@@ -688,6 +689,41 @@ func (s *Server) static() http.Handler {
 			}
 		}
 		files.ServeHTTP(w, r)
+	})
+}
+
+// crossSite reports a request made by a page from another origin: another
+// hub's web app showing this hub's sessions.
+func crossSite(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return false
+	}
+	u, err := url.Parse(o)
+	return err != nil || u.Host != r.Host
+}
+
+// cors lets another hub's page (the browser shows several hubs in one
+// sidebar) call this hub's API. Such calls carry the token themselves. No
+// Access-Control-Allow-Credentials: a page asking to send our cookie fails
+// the preflight, so allowing any origin hands nothing to a page that doesn't
+// already hold a token.
+func cors(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if crossSite(r) && strings.HasPrefix(r.URL.Path, "/api/") {
+			hd := w.Header()
+			hd.Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+			hd.Add("Vary", "Origin")
+			hd.Set("Access-Control-Expose-Headers", "X-Collie-Web")
+			if r.Method == http.MethodOptions {
+				hd.Set("Access-Control-Allow-Methods", "GET, POST")
+				hd.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				hd.Set("Access-Control-Max-Age", "600")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
 	})
 }
 

@@ -57,6 +57,14 @@ curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub
 
 > 内网里是明文 HTTP。跨网络使用请放在 VPN / Tailscale 或 HTTPS 反向代理后面（这时用 `--url https://…` 让二维码指向它）。
 
+### 多个 hub
+
+几台电脑在互不相通的网络里（开发机、云电脑、家里的 Mac mini）时，每个网络各跑一个 hub，再在其中一个 hub 的「设备 → 其他 hub」里粘贴另一个 hub「连接手机或平板」下的链接。之后它的会话会并进同一个侧栏（标着来自哪个 hub），对话、发消息、停止都直接发给那个 hub。
+
+- hub 之间不需要互通，只要浏览器能打开每一个；列表存在当前这个 hub 上，用它的手机和电脑浏览器看到的是同一组
+- 每个 hub 的 Collie 只调度自己网络里的电脑
+- 对方 hub 要是 v0.2.4 及以后（允许跨站访问，只认令牌、不认 Cookie）；https 的页面连不了 http 的 hub
+
 **从源码安装**（需要 Go 1.25+ 和 git）：clone 下来在仓库里运行同一个脚本，它用本地源码编译、不下载，参数和上面一样：
 
 ```bash

@@ -55,19 +55,58 @@
     bar.onclick = () => location.reload();
     document.body.append(bar);
   }
+  // ───────────────────────────── other hubs
+  // Hubs on networks that can't reach each other (a devbox, a cloud
+  // computer, a Mac mini at home) can all be reached from this browser.
+  // Their sessions join this sidebar with every id tagged "!<key>"; any
+  // request that names a tagged id goes straight to that hub, with its token.
+  let hubs = [];              // [{ key, name, url, token }], kept on this hub
+  const remote = new Map();   // key -> { state, ext, hist, online, es }
+  const tagged = (v, k) => (v || "") + "!" + k;
+  const hubMarks = (h) => ["!" + h.key, "%21" + h.key];
+  const hubOf = (text) => hubs.find((h) => hubMarks(h).some((m) => text.includes(m))) || null;
+  const untag = (text, h) => hubMarks(h).reduce((t, m) => t.split(m).join(""), text);
+  const hubName = (k) => hubs.find((h) => h.key === k)?.name || "";
+  function routeReq(path, body, hub) {
+    const b = body === undefined ? undefined : JSON.stringify(body);
+    const h = hub || hubOf(path + (b || ""));
+    if (!h) return { url: path, body: b, hub: null };
+    return { url: h.url + untag(path, h), body: b && untag(b, h), hub: h };
+  }
+  // Ids in a remote hub's answers get its tag, so follow-up requests route back.
+  function tagIds(v, k, depth = 0) {
+    if (depth > 3 || !v || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map((x) => tagIds(x, k, depth + 1));
+    const out = { ...v };
+    for (const f of ["pane_id", "workspace_id"]) if (typeof out[f] === "string" && out[f]) out[f] = tagged(out[f], k);
+    if (typeof out.machine === "string") out.machine = tagged(out.machine, k);
+    for (const [f, x] of Object.entries(out)) if (x && typeof x === "object") out[f] = tagIds(x, k, depth + 1);
+    return out;
+  }
   async function api(path, opts = {}) {
-    const res = await fetch(path, {
+    const r = routeReq(path, opts.body, opts.hub);
+    const headers = opts.body ? { "Content-Type": "application/json" } : {};
+    if (r.hub) headers.Authorization = "Bearer " + r.hub.token;
+    const res = await fetch(r.url, {
       method: opts.body ? "POST" : (opts.method || "GET"),
-      headers: opts.body ? { "Content-Type": "application/json" } : {},
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-      credentials: "same-origin",
+      headers, body: r.body,
+      credentials: r.hub ? "omit" : "same-origin",
     });
-    noteBuild(res.headers.get("X-Collie-Web"));
+    if (!r.hub) noteBuild(res.headers.get("X-Collie-Web"));
     let data = {};
     try { data = await res.json(); } catch {}
-    if (res.status === 401) { showLogin(); throw new Error("unauthorized"); }
+    if (res.status === 401) {
+      if (r.hub) throw new Error(`${r.hub.name} 不认这个浏览器了，在「设备」里重新添加它`);
+      showLogin(); throw new Error("unauthorized");
+    }
     if (!res.ok) throw new Error(data.error || res.statusText);
-    return data;
+    return r.hub ? tagIds(data, r.hub.key) : data;
+  }
+  // EventSource can't set headers: a remote hub takes its token in the URL.
+  function openES(path, hub) {
+    const r = routeReq(path, undefined, hub);
+    if (!r.hub) return new EventSource(path);
+    return new EventSource(r.url + (r.url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(r.hub.token));
   }
   const paneURL = (id, rest) => `/api/panes/${encodeURIComponent(id)}/${rest}`;
   // ───────────────────────────── pickers
@@ -231,6 +270,64 @@
 
   // ───────────────────────────── live state
   let state = { ok: false, agents: [], shells: [] };
+  let localState = state;     // this hub's own; state adds the other hubs'
+  function tagState(s, h, online) {
+    const k = h.key;
+    const fix = (a) => ({ ...a, hub: k, pane_id: tagged(a.pane_id, k), machine: tagged(a.machine, k),
+      workspace_id: a.workspace_id ? tagged(a.workspace_id, k) : a.workspace_id,
+      // Each hub has its own Collie; only this hub's is "Collie" here.
+      ...(a.name === ROUTER ? { name: "Collie · " + h.name, topic: "Collie · " + h.name } : {}) });
+    const ms = s.machines && s.machines.length ? s.machines : [{ id: "", name: h.name, local: true, online: s.ok !== false }];
+    return {
+      agents: (s.agents || []).map(fix), shells: (s.shells || []).map(fix),
+      machines: ms.map((m) => ({ ...m, hub: k, id: tagged(m.id, k), local: false,
+        name: m.local ? h.name : h.name + " · " + m.name,
+        online: online && (m.local ? s.ok !== false : m.online) })),
+    };
+  }
+  function mergedState() {
+    const parts = [...remote.values()].map((r) => r.state).filter(Boolean);
+    if (!parts.length) return localState;
+    return { ...localState,
+      agents: [...(localState.agents || []), ...parts.flatMap((p) => p.agents)],
+      shells: [...(localState.shells || []), ...parts.flatMap((p) => p.shells)],
+      machines: [...(localState.machines && localState.machines.length ? localState.machines : [{ id: "", name: "本机", local: true, online: localState.ok }]),
+        ...parts.flatMap((p) => p.machines)] };
+  }
+  function setLocalState(next) { localState = next; state = mergedState(); }
+  function remoteChanged() {
+    const m = mergedState();
+    notifyTransitions(m);
+    state = m;
+    renderSide();
+    if (view === "pane") renderHead();
+  }
+  function connectHub(h) {
+    let r = remote.get(h.key);
+    if (!r) { r = { state: tagState({}, h, false) }; remote.set(h.key, r); }
+    r.es?.close();
+    const es = r.es = openES("/api/events", h);
+    let gone;
+    es.addEventListener("state", (e) => {
+      clearTimeout(gone);
+      r.online = true; r.raw = JSON.parse(e.data);
+      r.state = tagState(r.raw, h, true);
+      remoteChanged();
+    });
+    es.onerror = () => {
+      // A blip reconnects by itself; only a hub that stays away goes grey.
+      clearTimeout(gone);
+      gone = setTimeout(() => { r.online = false; r.state = tagState({ ...(r.raw || {}), agents: [], shells: [] }, h, false); remoteChanged(); }, 8000);
+      if (es.readyState === EventSource.CLOSED && r.es === es) setTimeout(() => { if (r.es === es) connectHub(h); }, 5000);
+    };
+  }
+  async function loadHubs() {
+    try { hubs = (await api("/api/hubs")).hubs || []; } catch { return; }
+    for (const [k, r] of remote) if (!hubs.some((h) => h.key === k)) { r.es?.close(); remote.delete(k); }
+    for (const h of hubs) if (!remote.get(h.key)?.es || remote.get(h.key).url !== h.url) { connectHub(h); remote.get(h.key).url = h.url; }
+    state = mergedState();
+    renderSide();
+  }
   let sup = { router: { status: "asleep" }, entries: [], workers: [], queued: 0 };
   let prevStatus = new Map();
   let view = null;     // "collie" | "auto" | "pane" | null
@@ -244,7 +341,8 @@
       if (view === "collie") renderSuper();
     });
     ev.addEventListener("state", (e) => {
-      const next = JSON.parse(e.data);
+      localState = JSON.parse(e.data);
+      const next = mergedState();
       notifyTransitions(next);
       state = next;
       renderSide();
@@ -568,7 +666,7 @@
       } catch { targetDefault = { machine: "", kind: "claude", model: "", effort: "" }; }
     }
     const t = target || targetDefault;
-    const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => m.local ? state.ok !== false : m.online || m.id === t.machine);
+    const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
@@ -1053,14 +1151,31 @@
   async function loadExternal() {
     if (document.hidden && ext.length) return;
     try { ext = (await api("/api/external")).sessions || []; } catch { return; }
+    ext = ext.concat(...await fromHubs("/api/external", "ext"));
     renderExt();
     if (view === "ext") renderExtHead();
+  }
+
+  // The same list from every other hub, ids tagged; a hub that doesn't
+  // answer keeps what it showed last until it is marked offline.
+  async function fromHubs(path, field) {
+    return Promise.all(hubs.map(async (h) => {
+      const r = remote.get(h.key);
+      if (!r) return [];
+      if (!r.online) return (r[field] = []);
+      try {
+        const d = await api(path, { hub: h });
+        r[field] = (d.sessions || []).map((e) => ({ ...tagIds(e, h.key), id: tagged(e.id, h.key), hub: h.key }));
+      } catch {}
+      return r[field] || [];
+    }));
   }
 
   // ───────────────────────────── ended sessions: read them, continue them
   let hist = [];
   async function loadHistory() {
     try { hist = (await api("/api/history")).sessions || []; } catch { return; }
+    hist = hist.concat(...await fromHubs("/api/history", "hist"));
     renderHist();
     if (view === "ext" && extCur?.startsWith("h:")) renderHistHead(extCur.slice(2));
   }
@@ -1298,7 +1413,7 @@
     // try again in a moment, keeping what is on screen.
     let tries = 0;
     const connect = () => {
-      const es = extStream = new EventSource(`/api/external/${encodeURIComponent(id)}/chat`);
+      const es = extStream = openES(`/api/external/${encodeURIComponent(id)}/chat`);
       es.addEventListener("meta", (ev) => {
         tries = 0; extSoonN = 0;
         if (!ext.some((e) => e.id === id)) loadExternal();
@@ -1439,8 +1554,9 @@
     const machines = r.devices.filter((d) => d.kind === "machine");
     const browsers = r.devices.filter((d) => d.kind !== "machine");
     const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
-    const keepOpen = document.activeElement?.id === "dev-addr";
-    if (keepOpen) return; // don't redraw under an open select
+    const keepOpen = document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
+    if (keepOpen) return; // don't redraw under an open select or a half-typed form
+    const typed = [...document.querySelectorAll("#add-hub input")].map((i) => i.value);
 
     $("#devices-body").innerHTML = `
       <p class="panel-intro">Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac 等电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。</p>
@@ -1477,6 +1593,21 @@
           <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")}
       </ul></div>
 
+      <div class="card"><div class="card-h">其他 hub</div>
+        <p class="pair-hint">别的网络里的 Collie hub（云电脑、家里的电脑）。和这台 hub 不通也没关系：只要这个浏览器能打开它，它的会话就会出现在侧栏里。</p>
+        <ul class="rows">${hubs.map((h) => { const on = remote.get(h.key)?.online; return `<li class="row dev-row">
+          <span class="dot ${on ? "online" : "offline"}"></span>
+          <div><div class="meta"><b>${esc(h.name)}</b><span>${on ? "在线" : "连不上"}</span></div><div class="text mono">${esc(h.url)}</div></div>
+          <button class="btn ghost small" data-del-hub="${esc(h.key)}" data-name="${esc(h.name)}">移除</button></li>`; }).join("")}
+        </ul>
+        <form id="add-hub" class="hub-add">
+          <input name="link" required autocomplete="off" placeholder="粘贴那个 hub「设备 → 连接手机或平板」里的链接">
+          <input name="name" autocomplete="off" placeholder="叫它什么（可选）">
+          <button class="btn primary">添加</button>
+        </form>
+        <p class="pair-hint muted">那个 hub 也要是 v0.2.4 以后的版本。</p>
+      </div>
+
       <div class="card"><div class="card-h">手机和浏览器</div><ul class="rows">
         ${browsers.length ? browsers.map((d) => `<li class="row dev-row">
           <span class="dot unknown"></span>
@@ -1484,10 +1615,46 @@
           <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")
         : `<li class="empty-row">还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。</li>`}
       </ul></div>`;
+    document.querySelectorAll("#add-hub input").forEach((i, n) => { i.value = typed[n] || ""; });
   }
 
   $("#devices-body").addEventListener("change", (e) => {
     if (e.target.id === "dev-addr") { devAddr = e.target.value; store.set("pairAddr", devAddr); e.target.blur(); loadDevices(); }
+  });
+  // Adding another hub: its phone link carries a one-time pairing code; trade
+  // it for a token of its own (the cookie that link would set can't be used
+  // from this page) and keep the token here, for every browser of this hub.
+  $("#devices-body").addEventListener("submit", async (e) => {
+    if (e.target.id !== "add-hub") return;
+    e.preventDefault();
+    const f = e.target, btn = f.querySelector("button");
+    let u;
+    try { u = new URL(f.link.value.trim()); } catch { toast("链接不对：要以 http:// 或 https:// 开头", "attn"); return; }
+    const code = u.searchParams.get("pair");
+    if (!code) { toast("链接里没有配对码（?pair=…），在那个 hub 的「设备」页复制「连接手机或平板」下面的链接", "attn"); return; }
+    const url = (u.origin + u.pathname).replace(/\/+$/, "");
+    if (url === location.origin) { toast("这就是当前这个 hub", "attn"); return; }
+    if (location.protocol === "https:" && u.protocol === "http:") { toast("这个页面是 https，浏览器不让它连 http 的 hub", "attn"); return; }
+    btn.disabled = true;
+    try {
+      let res;
+      try {
+        res = await fetch(url + "/api/pair", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "omit",
+          body: JSON.stringify({ code, kind: "browser", name: "hub " + location.host, want_token: true }) });
+      } catch { throw new Error("这个浏览器连不上 " + url + "（或者它还是旧版本，不允许跨站访问）"); }
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.token) throw new Error(d.error || (res.ok ? "那个 hub 是旧版本，先升级到 v0.2.4" : res.statusText));
+      const key = "h" + Math.random().toString(36).slice(2, 8);
+      const name = f.name.value.trim().slice(0, 30) || u.hostname.split(".")[0];
+      const next = [...hubs, { key, name, url, token: d.token }];
+      hubs = (await api("/api/hubs", { body: { hubs: next } })).hubs;
+      f.reset();
+      toast(`已添加 ${name}`);
+      await loadHubs();
+      setTimeout(loadExternal, 1500);
+      loadDevices();
+    } catch (err) { toast(err.message, "attn"); }
+    finally { btn.disabled = false; }
   });
   $("#devices-body").addEventListener("click", async (e) => {
     const b = e.target.closest("button");
@@ -1495,6 +1662,11 @@
     try {
       if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
       else if (b.id === "new-node-code") { await newCode("machine"); loadDevices(); }
+      else if (b.dataset.delHub) {
+        if (!confirm(`不再显示「${b.dataset.name}」的会话？那个 hub 本身不受影响。`)) return;
+        hubs = (await api("/api/hubs", { body: { hubs: hubs.filter((h) => h.key !== b.dataset.delHub) } })).hubs;
+        await loadHubs(); loadExternal(); loadHistory(); loadDevices();
+      }
       else if (b.dataset.delDev) {
         if (!confirm(`移除「${b.dataset.name}」？它需要重新配对才能再连进来。`)) return;
         await api(`/api/devices/${encodeURIComponent(b.dataset.delDev)}/delete`, { body: {} });
@@ -1604,7 +1776,7 @@
     const m = curMode();
     if (m === "chat") return openChat(id);
     if (m === "screen") ensureTerm();
-    stream = new EventSource(paneURL(id, "stream") + "?mode=" + m);
+    stream = openES(paneURL(id, "stream") + "?mode=" + m);
     stream.addEventListener("frame", (e) => {
       if (id !== current) return;
       const f = JSON.parse(e.data);
@@ -1648,7 +1820,7 @@
     $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; showRaw = false;
   }
   function openChat(id) {
-    stream = new EventSource(paneURL(id, "chat"));
+    stream = openES(paneURL(id, "chat"));
     const alive = () => id === current && curMode() === "chat";
     stream.addEventListener("reset", () => alive() && resetChat());
     const th = $("#thread");
@@ -2105,8 +2277,10 @@
       for (const file of list) {
         const f = { name: file.name || "粘贴的图片.png", size: file.size, thumb: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" };
         const m = machine();
-        f.done = fetch(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`, {
-          method: "POST", body: file, credentials: "same-origin",
+        const up = routeReq(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
+        f.done = fetch(up.url, {
+          method: "POST", body: file, credentials: up.hub ? "omit" : "same-origin",
+          headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
         }).then(async (res) => {
           const d = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(d.error || res.statusText);
@@ -2182,7 +2356,7 @@
     let v = find(current);
     if (!v) {
       // The page may be behind (e.g. the hub restarted); look again before giving up.
-      try { state = await api("/api/state"); renderSide(); } catch {}
+      try { setLocalState(await api("/api/state")); renderSide(); } catch {}
       v = find(current) || { pane_id: current, is_agent: false };
     }
     if (!text.trim()) { sendKeys(["enter"]); return; }
@@ -2361,7 +2535,8 @@
     }
     try { await api("/api/session"); } catch { return; }
     try { sup = normSup(await api("/api/super")); } catch {}
-    try { state = await api("/api/state"); } catch {}
+    try { setLocalState(await api("/api/state")); } catch {}
+    await loadHubs();
     $("#login").hidden = true;
     $("#app").hidden = false;
     setMode(mode);

@@ -353,6 +353,8 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("GET /api/history", s.listHistory)
 	api("POST /api/history/{id}/delete", s.deleteHistory)
 	api("POST /api/devices/{id}/delete", s.deleteDevice)
+	api("GET /api/hubs", s.getHubs)
+	api("POST /api/hubs", s.setHubs)
 }
 
 func (s *Server) addresses(r *http.Request) []string {
@@ -394,6 +396,8 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 		Kind string `json:"kind"`
 		Name string `json:"name"`
 		OS   string `json:"os"`
+		// Another hub's page keeps the token itself: it can't use our cookie.
+		WantToken bool `json:"want_token"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -415,7 +419,7 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go s.auths.save()
-	if d.Kind == "browser" {
+	if d.Kind == "browser" && !body.WantToken {
 		setTokenCookie(w, r, token)
 		writeJSON(w, 200, map[string]any{"ok": true, "id": d.ID})
 		return
@@ -566,6 +570,11 @@ func (s *Server) identity(r *http.Request) (master bool, d *Device) {
 		got = c.Value
 	} else if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		got = strings.TrimPrefix(h, "Bearer ")
+	} else if t := r.URL.Query().Get("access_token"); t != "" && r.Method == http.MethodGet &&
+		strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		// An EventSource can't set headers; another hub's page passes the
+		// token in the URL, for event streams only.
+		got = t
 	}
 	if s.auths == nil {
 		x, y := sha256.Sum256([]byte(got)), sha256.Sum256([]byte(s.token))

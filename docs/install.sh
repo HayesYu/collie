@@ -203,13 +203,30 @@ warn() { printf '\033[33m!\033[0m %s\n' "$*"; }
 check_herdr() {
   hb=$(command -v herdr 2>/dev/null || true)
   [ -z "$hb" ] && [ -x "$HOME/.local/bin/herdr" ] && hb=$HOME/.local/bin/herdr
+  # Collie talks to herdr (the CLI at herdr.dev/install.sh), not to the Herdr
+  # app or herdr-core that releases.herdr.dev/app/install.sh puts in.
+  if [ -z "$hb" ] && [ -z "${COLLIE_NO_HERDR:-}" ]; then
+    step "安装 herdr（Collie 通过它看到和管理 agent；不想装就设 COLLIE_NO_HERDR=1）"
+    if curl -fsSL https://herdr.dev/install.sh | HERDR_INSTALL_DIR="$HOME/.local/bin" sh >/dev/null; then
+      hb=$HOME/.local/bin/herdr
+    else
+      warn "herdr 没装上，可以稍后自己装：curl -fsSL https://herdr.dev/install.sh | sh"
+    fi
+  fi
   if [ -z "$hb" ]; then
     warn "没找到 herdr：没有它，这台电脑上的 agent 不会出现在 Collie 里${1:+（$1）}。"
-    say "    安装：https://herdr.dev"
+    say "    安装：curl -fsSL https://herdr.dev/install.sh | sh"
     return 0
   fi
   if ! "$hb" status 2>/dev/null | grep -q "status: running"; then
-    warn "herdr 服务端没在运行：运行一次 herdr 就会启动它（Collie 连的是它的 socket）。"
+    # Collie needs herdr's server (its socket), not a terminal UI.
+    nohup "$hb" server >/dev/null 2>&1 </dev/null &
+    sleep 2
+    if "$hb" status 2>/dev/null | grep -q "status: running"; then
+      step "已在后台启动 herdr 服务端（herdr server）；之后运行 herdr 会直接接上它"
+    else
+      warn "herdr 服务端没起来：运行一次 herdr 或 herdr server（Collie 连的是它的 socket）。"
+    fi
   fi
   st=$("$hb" integration status 2>/dev/null) || return 0
   missing=""

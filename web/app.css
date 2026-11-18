@@ -630,6 +630,12 @@ a.foot-status:hover, a.foot-status.active { background: var(--bg-3); }
 .qr { width: 196px; height: 196px; image-rendering: pixelated; border-radius: 12px; border: 1px solid var(--line); background: #fff; padding: 8px; }
 .pair-hint { margin: 0; font-size: 13px; line-height: 1.6; color: var(--fg-2); }
 .pair-hint b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.card > .pair-hint { padding: 12px 16px 4px; }
+.card > .pair-hint.muted { padding: 0 16px 12px; color: var(--fg-3); font-size: 12px; }
+.hub-add { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.hub-add input[name=link] { flex: 3 1 260px; min-width: 0; }
+.hub-add input[name=name] { flex: 1 1 120px; min-width: 0; }
+.rows:empty { display: none; }
 .code.big span { white-space: normal; word-break: break-all; }
 .addr-pick { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--fg-3); }
 .addr-pick select, .addr-pick .pick { flex: 1; min-width: 0; font: 12px var(--mono); }

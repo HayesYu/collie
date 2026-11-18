@@ -623,7 +623,7 @@
         <a href="#/p/${encodeURIComponent(agent.pane_id)}">打开 →</a></div>
       <div class="ask-q"><div class="q">${esc(q)}</div>${body ? `<div class="ctx">${body}</div>` : ""}</div>
       ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button class="choice ${c.current ? "current" : ""}" data-choice="${i}">
-          <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}</span></button>`).join("")}</div>
+          <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}${c.desc ? `<span class="d">${esc(c.desc)}</span>` : ""}</span></button>`).join("")}</div>
         <div class="ask-keys"><button data-k="esc">Esc 取消</button></div>`
       : `<div class="ask-keys"><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="esc">Esc</button><button class="go" data-k="enter">确认 ↵</button></div>`}
     </div>`;
@@ -2065,7 +2065,7 @@
           + (m.output ? `<div class="answer">${esc(m.output)}</div>`
             : open && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
               ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
-              : `<div class="where">在电脑上的会话里回答</div>`) : "")
+              : el.id === "thread" ? "" : `<div class="where">在电脑上的会话里回答</div>`) : "")
           + `</div>`;
         cut();
         i++;
@@ -2112,17 +2112,20 @@
     const box = $("#live");
     const th = $("#thread");
     const was = nearBottom(th);
+    let html = "";
     if (l.status === "working" && l.tail) {
-      box.innerHTML = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre></div>`;
-      box.hidden = false;
+      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre></div>`;
     } else if (l.status === "blocked" && l.approval) {
       const v = find(current);
-      box.innerHTML = askHTML(l.approval, v ? title(v) : "agent");
-      box.hidden = false;
-    } else {
-      box.hidden = true;
-      box.innerHTML = "";
+      html = askHTML(l.approval, v ? title(v) : "agent");
     }
+    // Live updates arrive every second (the agent's clock ticks); redrawing
+    // an unchanged card would replay its entrance and make it jump.
+    if (html !== box._html) {
+      box._html = html;
+      box.innerHTML = html;
+    }
+    box.hidden = !html;
     stick(th, was);
   }
 
@@ -2165,6 +2168,8 @@
       return { code: false, text: t };
     });
     // Terminal chrome that means nothing in a card.
+    // Claude's question box heads itself with tabs ("☐ Color  ✔ Submit").
+    blocks = blocks.filter((b) => !/^(←\s*)?[☐☒✔]\s/.test(b.text.trim()));
     blocks = blocks.filter((b, i) => b.code || !(/^tip:/i.test(b.text) ||
       (i === blocks.length - 1 && b.text.split(/\s+/).length <= 3 && !/[.:?？。：]/.test(b.text))));
     // The question is the last sentence ending in "?"; it becomes the title.
@@ -2198,7 +2203,7 @@
       <div class="ask-q"><div class="q">${esc(q)}</div>${body ? `<div class="ctx">${body}</div>` : ""}</div>
       ${showRaw ? `<pre class="ask-raw">${esc(a.screen)}</pre>` : ""}
       ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button class="choice ${c.current ? "current" : ""}" data-choice="${i}">
-          <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}</span></button>`).join("")}</div>
+          <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}${c.desc ? `<span class="d">${esc(c.desc)}</span>` : ""}</span></button>`).join("")}</div>
         <div class="ask-keys"><button data-k="esc">Esc 取消</button></div>`
       : `<div class="ask-keys"><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="esc">Esc</button><button class="go" data-k="enter">确认 ↵</button></div>`}
     </div>`;

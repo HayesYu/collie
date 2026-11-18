@@ -701,6 +701,7 @@ type Choice struct {
 	Label   string   `json:"label"`
 	Keys    []string `json:"keys,omitempty"`
 	Text    string   `json:"text,omitempty"`
+	Desc    string   `json:"desc,omitempty"` // a line under the option that explains it
 	Current bool     `json:"current,omitempty"`
 }
 
@@ -728,8 +729,9 @@ func parseApproval(screen string) Approval {
 	// Blank and frame lines become paragraph breaks (""), so the card can
 	// reflow the dialog's text; a long rule marks where the dialog begins.
 	var lines []string
-	top := 0
+	top, width := 0, 0
 	for _, l := range strings.Split(screen, "\n") {
+		width = max(width, cells(strings.TrimRight(l, " ")))
 		l = strings.TrimRight(strings.Trim(strings.TrimRight(l, " "), "│┃"), " ")
 		if frameRe.MatchString(l) {
 			if ruleRe.MatchString(l) {
@@ -765,11 +767,34 @@ func parseApproval(screen string) Approval {
 	wrapped := func(l string) bool {
 		return strings.TrimSpace(l) != "" && len(l)-len(strings.TrimLeft(l, " ")) >= 4 && !numberedRe.MatchString(l)
 	}
+	digit := func(l string) int {
+		if m := numberedRe.FindStringSubmatch(l); m != nil {
+			return int(m[2][0] - '0')
+		}
+		return -1
+	}
+	first := digit(lines[end]) // the lowest option number found so far
 	for start > 0 {
 		prev := lines[start-1]
 		if numbered && (numberedRe.MatchString(prev) || wrapped(prev)) {
+			if d := digit(prev); d >= 0 {
+				first = d
+			}
 			start--
 			continue
+		}
+		// Claude's question box sets its last options apart with a rule
+		// ("4. Type something." ── "5. Chat about this"): one menu if the
+		// numbers carry on across the break.
+		if numbered && prev == "" && start >= 2 {
+			j := start - 2
+			for j > 0 && wrapped(lines[j]) {
+				j--
+			}
+			if d := digit(lines[j]); d >= 0 && d == first-1 {
+				start--
+				continue
+			}
 		}
 		// cursor menus: siblings are indented plain lines next to the ❯ line
 		if !numbered && strings.TrimSpace(prev) != "" && (cursorRe.MatchString(prev) || strings.HasPrefix(prev, "  ")) &&
@@ -796,7 +821,7 @@ func parseApproval(screen string) Approval {
 	cur := -1
 	opts := lines[start : end+1]
 	for i, l := range opts {
-		if cursorRe.MatchString(l) || strings.ContainsAny(strings.TrimSpace(l)[:1], "❯›>▸●➜→") {
+		if t := strings.TrimSpace(l); t != "" && (cursorRe.MatchString(l) || strings.ContainsAny(t[:1], "❯›>▸●➜→")) {
 			cur = i
 		}
 	}
@@ -805,7 +830,18 @@ func parseApproval(screen string) Approval {
 			m := numberedRe.FindStringSubmatch(l)
 			if m == nil {
 				if n := len(a.Choices); n > 0 && wrapped(l) {
-					a.Choices[n-1].Label += " " + strings.TrimSpace(l)
+					// The terminal wraps a line only when the next word does
+					// not fit; a line that would have fit explains the option.
+					c, t := &a.Choices[n-1], strings.TrimSpace(l)
+					above := strings.TrimRight(opts[i-1], " ")
+					switch {
+					case c.Desc != "":
+						c.Desc += " " + t
+					case cells(above)+1+cells(strings.Fields(t)[0]) <= width:
+						c.Desc = t
+					default:
+						c.Label += " " + t
+					}
 				}
 				continue
 			}
@@ -840,6 +876,20 @@ func parseApproval(screen string) Approval {
 	}
 	a.Question = strings.Join(trimBlank(lines[from:start]), "\n")
 	return a
+}
+
+// cells: how many terminal columns s takes (CJK and full-width take two).
+func cells(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x1100 && (r <= 0x115f || (r >= 0x2e80 && r <= 0xa4cf) || (r >= 0xac00 && r <= 0xd7a3) ||
+			(r >= 0xf900 && r <= 0xfaff) || (r >= 0xfe30 && r <= 0xfe4f) || (r >= 0xff00 && r <= 0xff60) || (r >= 0xffe0 && r <= 0xffe6)) {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
 }
 
 func trimBlank(ls []string) []string {

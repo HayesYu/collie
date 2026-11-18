@@ -174,3 +174,36 @@ func TestScreenAsksQuoted(t *testing.T) {
 		t.Error("agy's trust dialog not seen")
 	}
 }
+
+// Claude's AskUserQuestion box: descriptions under the options, and the last
+// option set apart by a rule.
+const askBox = `───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color for the button?
+
+❯ 1. Red
+     warm
+  2. Blue
+     calm
+  3. Green
+     fresh
+  4. Type something.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel`
+
+func TestAskBox(t *testing.T) {
+	if !screenAsks(askBox) {
+		t.Fatal("not seen as a question")
+	}
+	a := parseApproval(askBox)
+	if len(a.Choices) != 5 || a.Choices[0].Label != "Red" || a.Choices[0].Desc != "warm" || !a.Choices[0].Current ||
+		a.Choices[2].Desc != "fresh" || a.Choices[4].Text != "5" || a.Choices[4].Label != "Chat about this" {
+		t.Fatalf("choices: %+v", a.Choices)
+	}
+	if !strings.HasSuffix(a.Question, "Which color for the button?") {
+		t.Fatalf("question: %q", a.Question)
+	}
+}

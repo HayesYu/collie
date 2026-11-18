@@ -142,9 +142,12 @@ func pairNode(hub, code, name string) (nodeConfig, error) {
 		hub = "http://" + hub
 	}
 	body, _ := json.Marshal(map[string]string{"code": code, "kind": "machine", "name": name, "os": runtime.GOOS + "/" + runtime.GOARCH})
-	resp, err := http.Post(hub+"/api/pair", "application/json", bytes.NewReader(body))
+	// Dial the hub directly, as nodeSession does: a sandbox's http_proxy
+	// usually can't reach a hub on the private network and answers 502.
+	direct := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	resp, err := direct.Post(hub+"/api/pair", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nodeConfig{}, err
+		return nodeConfig{}, fmt.Errorf("连不上 hub %s：%v", hub, err)
 	}
 	defer resp.Body.Close()
 	var out struct {

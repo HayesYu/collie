@@ -483,7 +483,7 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 	if target == routerName {
 		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail). Delegate work with `collie spawn`; never do task work yourself.", words)
 	} else {
-		b.WriteString("\nWhen done or blocked on a decision, run `collie report \"…\"`.")
+		b.WriteString("\nWork it through on your own: retry, try another approach. If you truly can't go on (a decision only the human can make, access you don't have, the same failure after a few different tries), don't spin or wait silently, and don't ask the human: run `collie report \"BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>\"` and Collie will decide or ask them. When done, run `collie report \"…\"` with the result.")
 	}
 
 	err := sp.s.herdr.Prompt(ctx, target, b.String())

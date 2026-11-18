@@ -450,7 +450,11 @@ only ever talks to you. You keep the big picture; workers do the work.
 - Worker events: "finished a turn", "report from …", "BLOCKED …", "exited". When a
   worker finishes, check the result (show / read), then tell the human the outcome
   in one or two sentences, or dispatch the next step.
-- A BLOCKED worker is stuck on a dialog. **Decide it yourself when the answer follows
+- A report starting "BLOCKED:" is a worker that can't go on: it says what it needs, what
+  it tried and what it would pick. Unblock it yourself when you can (` + "`send`" + ` it the
+  answer, the path, another approach; or respawn on another agent/model/computer); ask
+  the human only for the things listed under "Drive it forward".
+- A "BLOCKED" event (not a report) is a worker stuck on a dialog. **Decide it yourself when the answer follows
   from what the human asked or is routine**: the model or option they named ("6.1sol" is
   "GPT-6.1-Sol"), continuing a task they gave, trusting the folder a worker was started
   in, Codex's "hooks need review" (they are the human's own hooks in ~/.codex/hooks.json:

@@ -23,3 +23,13 @@ func TestLastTurnOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestDeathReason(t *testing.T) {
+	screen := "  ~  codex -m gpt\nfile:///x/codex.js:108\n  throw new Error(\n        ^\nError: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex\n    at findCodexExecutable (file:///x)\nNode.js v22.22.0"
+	if got := deathReason(screen); got != "Error: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex" {
+		t.Fatalf("got %q", got)
+	}
+	if got := deathReason("zsh: command not found: claude"); got != "zsh: command not found: claude" {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -51,6 +51,7 @@ type Super struct {
 	lastTrust   map[string]time.Time // pane → when its trust dialog was last answered
 	lastScreen  map[string]screenMark
 	transcripts map[string]*transcript
+	noAgent     map[string]time.Time // worker → since when its pane has had no agent in it
 	notifyBuf   []string
 	notifyAt    time.Time
 }
@@ -78,6 +79,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 		subs:        map[chan struct{}]bool{},
 		lastScreen:  map[string]screenMark{},
 		transcripts: map[string]*transcript{},
+		noAgent:     map[string]time.Time{},
 	}
 	db, err := openDB(filepath.Join(dir, "herd.db")) // ~/.collie/collie.db belongs to another app
 	if err != nil {
@@ -261,6 +263,7 @@ func (sp *Super) tick(parent context.Context) {
 		blocked bool
 	}
 	var fin []finished
+	var dead []*Worker // the agent never started, or quit, leaving a shell
 	deliveries := map[string][]*Trigger{}
 
 	sp.mu.Lock()
@@ -295,6 +298,27 @@ func (sp *Super) tick(parent context.Context) {
 			}
 			continue
 		}
+		// No agent in the pane for a while: it failed to start (a broken
+		// install, a bad flag) or quit. Messages for it would wait forever.
+		if a.Kind == "" {
+			since, seen := sp.noAgent[w.Name]
+			if !seen {
+				sp.noAgent[w.Name], since = now, now
+			}
+			if now.Sub(since) > 30*time.Second && now.Sub(w.CreatedAt) > 45*time.Second {
+				delete(sp.noAgent, w.Name)
+				w.Ended, w.Status, w.PaneID = true, "failed", a.Pane
+				for _, t := range sp.st.Triggers {
+					if t.Status == "queued" && len(t.Targets) == 1 && t.Targets[0] == w.Name {
+						t.Status = "ignored"
+					}
+				}
+				dead = append(dead, w)
+				sp.changed()
+			}
+			continue
+		}
+		delete(sp.noAgent, w.Name)
 		prev := w.Status
 		if a.Status != prev {
 			w.Status = a.Status
@@ -340,6 +364,9 @@ func (sp *Super) tick(parent context.Context) {
 	// Worker completion summaries need file/screen IO: do it outside the lock.
 	for _, f := range fin {
 		sp.workerSettled(ctx, f.w, f.blocked)
+	}
+	for _, w := range dead {
+		sp.workerDead(ctx, w)
 	}
 
 	if paused {
@@ -496,6 +523,58 @@ func indent(s, p string) string {
 
 // workerSettled turns a worker reaching done/blocked into a router trigger,
 // carrying a short summary from the worker's transcript or screen.
+// workerDead tells the router and the human that a worker's agent isn't
+// running, with what its screen says (usually the error it died with).
+func (sp *Super) workerDead(ctx context.Context, w *Worker) {
+	tail := ""
+	if res, err := sp.s.herdr.Read(ctx, w.PaneID, "recent_unwrapped", "text", 40); err == nil {
+		var keep []string
+		for _, l := range strings.Split(res.Text, "\n") {
+			if l = strings.TrimRight(l, " "); strings.TrimSpace(l) != "" {
+				keep = append(keep, l)
+			}
+		}
+		if len(keep) > 12 {
+			keep = keep[len(keep)-12:]
+		}
+		tail = strings.Join(keep, "\n")
+	}
+	why := deathReason(tail)
+	if len([]rune(why)) > 160 {
+		why = string([]rune(why)[:160]) + "…"
+	}
+	log.Printf("worker %s: no agent in its pane %s; marked failed", w.Name, w.PaneID)
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf(
+		"worker %s failed: %s isn't running in its pane (it never started, or it quit), so its task was not delivered. Last lines on its screen:\n%s\nFix the cause or tell the human; spawn a new worker to retry.",
+		w.Name, w.Kind, tail), "", "", w.Name)
+	msg := w.Name + " 的 " + w.Kind + " 没有跑起来（或已退出），任务没发出去"
+	if why != "" {
+		msg += "：" + why
+	}
+	sp.addEntryLocked("event", w.Thread, msg, w.Name, "error")
+	sp.changed()
+}
+
+// deathReason picks the line that says why: "Error: …" over a stack frame
+// like "throw new Error(".
+func deathReason(screen string) string {
+	var loose string
+	for _, l := range strings.Split(screen, "\n") {
+		t := strings.TrimSpace(l)
+		low := strings.ToLower(t)
+		if strings.Contains(low, "error:") || strings.HasPrefix(low, "fatal") || strings.Contains(low, "panic:") ||
+			strings.Contains(low, "command not found") || strings.Contains(low, "no such file") {
+			return t
+		}
+		if loose == "" && strings.Contains(low, "error") {
+			loose = t
+		}
+	}
+	return loose
+}
+
 func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 	// The human chose to bypass permissions in settings, so a worker's
 	// "trust this folder?" (the folder Collie started it in) isn't theirs to

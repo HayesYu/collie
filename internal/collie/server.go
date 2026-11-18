@@ -479,8 +479,14 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 		Prompt string   `json:"prompt"`
 		Label  string   `json:"label"`
 		Args   []string `json:"args"`
+		Model  string   `json:"model"`  // "" = the agent's own default
+		Effort string   `json:"effort"` // likewise
 	}
 	if !decode(w, r, &body) {
+		return
+	}
+	if !modelNameRe.MatchString(body.Model) || !modelNameRe.MatchString(body.Effort) {
+		writeJSON(w, 400, map[string]any{"error": "invalid model or effort"})
 		return
 	}
 	if body.Kind == "shell" {
@@ -510,7 +516,8 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = body.Name
 	}
-	paneID, wsID, err := s.startAgent(ctx, "", kind, body.Name, cwd, label, body.Args)
+	args := append(modelArgs(body.Kind, body.Model, body.Effort), body.Args...)
+	paneID, wsID, err := s.startAgent(ctx, "", kind, body.Name, cwd, label, args)
 	if err != nil {
 		var he *HerdrError
 		if errors.As(err, &he) && he.Code == "agent_not_ready" {

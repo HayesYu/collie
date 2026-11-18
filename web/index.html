@@ -323,6 +323,10 @@
         <div class="machine-pick" id="l-machines"></div>
       </div>
       <div class="field agent-only">
+        <label for="l-model">模型 <span class="muted">可选</span></label>
+        <div class="model-row"><select id="l-model"></select><select id="l-effort"></select></div>
+      </div>
+      <div class="field agent-only">
         <label for="l-name">名字 <span class="muted">可选</span></label>
         <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="不填就用会话自己的标题" autocomplete="off" autocapitalize="off" spellcheck="false">
         <small class="muted">想用命令行或让 Collie 按名字找它时再起，小写字母开头，可含数字、- 和 _</small>

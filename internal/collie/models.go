@@ -97,7 +97,11 @@ type modelMark struct {
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
-	kind := kinds[r.URL.Query().Get("kind")]
+	q := r.URL.Query().Get("kind")
+	if q == "agy" { // the web app's short name
+		q = "antigravity"
+	}
+	kind := kinds[q]
 	if kind == "" {
 		writeJSON(w, 400, map[string]any{"error": "unknown agent kind"})
 		return

@@ -2435,7 +2435,41 @@
     const shell = $("input[name=kind]:checked")?.value === "shell";
     $$("#launch .agent-only").forEach((f) => f.hidden = shell);
     $("#launch-go").textContent = shell ? "打开" : "启动";
+    if (!shell) fillLaunchModels();
   }
+  // Model and effort for a new agent: "" leaves it to the agent's own settings
+  // on that computer (what it would run if started by hand).
+  let launchSeq = 0;
+  async function fillLaunchModels() {
+    const seq = ++launchSeq, kind = $("input[name=kind]:checked")?.value;
+    const mSel = $("#l-model");
+    const keep = { model: mSel.value, effort: $("#l-effort").value, key: mSel._key };
+    const info = await modelsFor(kind, pickMachine);
+    if (seq !== launchSeq) return;
+    const same = keep.key === kind + "@" + pickMachine;
+    mSel._key = kind + "@" + pickMachine;
+    const list = info.models || [];
+    const def = info.default ? info.default.split("/").pop() : "";
+    mSel.innerHTML = `<option value="" data-short="默认模型" data-sub="${esc(info.default ? "现在是 " + info.default : "agent 自己的设置")}">默认${def ? "（" + esc(def) + "）" : ""}</option>` +
+      list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(m.label && m.label !== m.id ? m.id : "")}">${esc(m.label || m.id)}</option>`).join("");
+    mSel.value = same && list.some((m) => m.id === keep.model) ? keep.model : "";
+    fillLaunchEfforts(info, same ? keep.effort : "");
+    syncPick(mSel);
+  }
+  function fillLaunchEfforts(info, want) {
+    const eSel = $("#l-effort");
+    const cur = (info.models || []).find((m) => m.id === $("#l-model").value);
+    const effs = cur?.efforts?.length ? cur.efforts : (info.efforts || []);
+    const defE = info.default_effort || "";
+    eSel.innerHTML = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>` +
+      effs.map((e) => `<option value="${esc(e)}" data-short="思考 · ${esc(EFFORT_LABEL[e] || e)}">${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
+    eSel.value = effs.includes(want) ? want : "";
+    eSel.hidden = effs.length === 0;
+    syncPick(eSel);
+  }
+  $("#l-model").addEventListener("change", async () => {
+    fillLaunchEfforts(await modelsFor($("input[name=kind]:checked").value, pickMachine), $("#l-effort").value);
+  });
   let pickMachine = "";
   const recentKey = () => "recentDirs" + (pickMachine ? ":" + pickMachine : "");
   function renderMachinePick() {
@@ -2458,6 +2492,7 @@
     store.set("machine", pickMachine);
     renderMachinePick();
     resetDir();
+    suggestName();
   });
   function openLauncher() {
     nameTouched = false;
@@ -2506,7 +2541,8 @@
     const kind = $("input[name=kind]:checked").value;
     const shell = kind === "shell";
     const body = shell ? { kind, cwd: cwdInput.value.trim(), machine: pickMachine }
-      : { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine };
+      : { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine,
+          model: $("#l-model").value, effort: $("#l-effort").value };
     const go = $("#launch-go");
     go.disabled = true; go.textContent = shell ? "打开中…" : "启动中…";
     $("#launch-error").textContent = "";

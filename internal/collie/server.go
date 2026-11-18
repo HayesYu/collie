@@ -185,18 +185,19 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------- state
 
 type AgentView struct {
-	PaneID         string `json:"pane_id"`
-	WorkspaceID    string `json:"workspace_id"`
-	WorkspaceLabel string `json:"workspace_label"`
-	Name           string `json:"name"`
-	Kind           string `json:"kind"`
-	Status         string `json:"status"`
-	Cwd            string `json:"cwd"`
-	Title          string `json:"title"`
-	Topic          string `json:"topic,omitempty"`   // the session's own title
-	Session        string `json:"session,omitempty"` // id to resume it by
-	IsAgent        bool   `json:"is_agent"`
-	Machine        string `json:"machine"`
+	PaneID         string     `json:"pane_id"`
+	WorkspaceID    string     `json:"workspace_id"`
+	WorkspaceLabel string     `json:"workspace_label"`
+	Name           string     `json:"name"`
+	Kind           string     `json:"kind"`
+	Status         string     `json:"status"`
+	Cwd            string     `json:"cwd"`
+	Title          string     `json:"title"`
+	Topic          string     `json:"topic,omitempty"`   // the session's own title
+	Session        string     `json:"session,omitempty"` // id to resume it by
+	IsAgent        bool       `json:"is_agent"`
+	Machine        string     `json:"machine"`
+	Run            *[2]string `json:"run,omitempty"` // model, effort Collie started it with
 }
 
 type PaneState struct {
@@ -261,6 +262,11 @@ func (s *Server) state(ctx context.Context) PaneState {
 		if v.IsAgent {
 			ps := topics[v.Machine][local]
 			v.Topic, v.Session = ps.Title, ps.Session
+			if r, ok := s.herdr.Run(p.ID); ok {
+				v.Run = r // started from here
+			} else {
+				v.Run = ps.Run // started by that machine's own node
+			}
 		}
 		if v.Name == "" {
 			v.Name = v.WorkspaceLabel
@@ -283,6 +289,15 @@ func (s *Server) state(ctx context.Context) PaneState {
 			return list[i].PaneID < list[j].PaneID
 		}
 	}
+	alive := map[string]bool{}
+	for _, p := range panes { // shells too: an agent may not show as one yet
+		alive[p.ID] = true
+	}
+	online := map[string]bool{"": true}
+	for _, m := range machines {
+		online[m.ID] = m.Local || m.Online
+	}
+	s.herdr.pruneRuns(alive, func(m string) bool { return online[m] })
 	sort.SliceStable(st.Agents, less(st.Agents))
 	sort.SliceStable(st.Shells, less(st.Shells))
 	return st
@@ -518,6 +533,9 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	args := append(modelArgs(body.Kind, body.Model, body.Effort), body.Args...)
 	paneID, wsID, err := s.startAgent(ctx, "", kind, body.Name, cwd, label, args)
+	if paneID != "" {
+		s.herdr.RememberRun(paneID, body.Model, body.Effort)
+	}
 	if err != nil {
 		var he *HerdrError
 		if errors.As(err, &he) && he.Code == "agent_not_ready" {

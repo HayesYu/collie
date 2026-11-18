@@ -166,6 +166,21 @@ func threadHistory(db *sql.DB, thread string, before int64, limit int) []*Trigge
 	return out
 }
 
+// loadAgentRuns restores the models agents were started with (Herdr.runs).
+func loadAgentRuns(db *sql.DB, h *Herdr) {
+	m := map[string][2]string{}
+	var raw string
+	if db.QueryRow(`SELECT v FROM kv WHERE k='agent_runs'`).Scan(&raw) == nil {
+		json.Unmarshal([]byte(raw), &m)
+	}
+	h.LoadRuns(m, func(m map[string][2]string) {
+		b, _ := json.Marshal(m)
+		if _, err := db.Exec(`INSERT INTO kv(k,v) VALUES('agent_runs',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(b)); err != nil {
+			log.Printf("save agent runs: %v", err)
+		}
+	})
+}
+
 // loadAgentNames restores the names Collie gave its agents (see Herdr.named)
 // and keeps them saved in the kv table.
 func loadAgentNames(db *sql.DB, h *Herdr) {

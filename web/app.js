@@ -1722,22 +1722,26 @@
     $("#input").placeholder = v.name === ROUTER ? "直接在 Collie 的终端里输入…" : v.is_agent ? `给 ${KIND_LABEL[v.kind] || v.kind} 发消息…` : "输入命令…";
   }
 
-  // What a worker Collie sent runs with, as Collie's own header shows it.
+  // What model an agent was started with, recorded when Collie (the launcher
+  // or a spawn) started it. Agents started by hand elsewhere show nothing.
   async function renderWorkerModel(v) {
     const el = $("#d-model");
-    const w = isWorker(v.name) ? sup.workers.find((x) => x.name === v.name && !x.ended) : null;
-    const key = w?.run ? [w.name, w.kind, w.machine, ...w.run].join("|") : "";
+    const w = !v.run && isWorker(v.name) ? sup.workers.find((x) => x.name === v.name && !x.ended) : null;
+    const run = v.run || w?.run;
+    const kind = v.run ? v.kind : w?.kind === "antigravity" ? "agy" : w?.kind;
+    const machine = v.run ? v.machine : w?.machine;
+    const key = run ? [v.pane_id, kind, machine, ...run].join("|") : "";
     if (el._key === key) return;
     el._key = key;
     if (!key) { el.hidden = true; el.textContent = ""; return; }
-    let [model, effort] = w.run;
+    let [model, effort] = run;
     const own = !model;
-    if (own) model = (await modelsFor(w.kind === "antigravity" ? "agy" : w.kind, w.machine || "")).default || "";
+    if (own && !hubOf(v.pane_id)) model = (await modelsFor(kind, machine || "")).default || "";
     if (el._key !== key) return;
-    const parts = [model ? model.split("/").pop() + (own ? "（默认）" : "") : "agent 默认模型"];
+    const parts = [model ? model.split("/").pop() + (own ? "（默认）" : "") : "默认模型"];
     if (effort) parts.push("思考 " + (EFFORT_LABEL[effort] || effort));
     el.textContent = parts.join(" · ");
-    el.title = `Collie 派它时用的模型：${model || "agent 自己的设置"}${effort ? "，思考强度 " + effort : ""}`;
+    el.title = `启动时用的模型：${model || "agent 自己的设置"}${effort ? "，思考强度 " + effort : ""}（之后在 agent 里换过的话这里不会变）`;
     el.hidden = false;
   }
 

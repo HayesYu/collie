@@ -54,6 +54,12 @@ type Herdr struct {
 	named     map[string]string // pane id → name
 	saveNames func(map[string]string)
 
+	// runs: the model and effort Collie started an agent with ("" = the
+	// agent's own default), by pane id. What it runs now may differ if the
+	// human switched models inside the agent.
+	runs     map[string][2]string
+	saveRuns func(map[string][2]string)
+
 	asks map[string]askCheck // pane → recent look at an "idle" screen
 }
 
@@ -63,6 +69,7 @@ func newHerdr(socket, hostname, home string) *Herdr {
 		remote: map[string]*Machine{},
 		names:  map[string]string{},
 		named:  map[string]string{},
+		runs:   map[string][2]string{},
 		asks:   map[string]askCheck{},
 	}
 }
@@ -121,6 +128,65 @@ func (h *Herdr) Remember(pane, name string) {
 	h.names[name] = pane
 	h.persistNamesLocked()
 	h.mu.Unlock()
+}
+
+// LoadRuns restores the recorded launch models and sets how to persist them.
+func (h *Herdr) LoadRuns(m map[string][2]string, save func(map[string][2]string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for k, v := range m {
+		h.runs[k] = v
+	}
+	h.saveRuns = save
+}
+
+// RememberRun records what model and effort an agent in pane was started with.
+func (h *Herdr) RememberRun(pane, model, effort string) {
+	if pane == "" {
+		return
+	}
+	h.mu.Lock()
+	h.runs[pane] = [2]string{model, effort}
+	h.persistRunsLocked()
+	h.mu.Unlock()
+}
+
+// Run returns what RememberRun recorded for pane.
+func (h *Herdr) Run(pane string) (*[2]string, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	r, ok := h.runs[pane]
+	if !ok {
+		return nil, false
+	}
+	return &r, true
+}
+
+// pruneRuns forgets panes that are gone (herdr reuses pane ids), on the
+// machines it has a full list from.
+func (h *Herdr) pruneRuns(alive map[string]bool, listed func(machine string) bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := len(h.runs)
+	for p := range h.runs {
+		if _, m := split(p); !alive[p] && listed(m) {
+			delete(h.runs, p)
+		}
+	}
+	if len(h.runs) != n {
+		h.persistRunsLocked()
+	}
+}
+
+func (h *Herdr) persistRunsLocked() {
+	if h.saveRuns == nil {
+		return
+	}
+	cp := make(map[string][2]string, len(h.runs))
+	for k, v := range h.runs {
+		cp[k] = v
+	}
+	h.saveRuns(cp)
 }
 
 func (h *Herdr) persistNamesLocked() {

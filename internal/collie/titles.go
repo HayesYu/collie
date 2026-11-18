@@ -118,8 +118,9 @@ func (s *Server) agyTitle(id string) string {
 
 // paneSession is what a machine knows about one of its agents' sessions.
 type paneSession struct {
-	Title   string `json:"title,omitempty"`
-	Session string `json:"session,omitempty"` // id to resume it by
+	Title   string     `json:"title,omitempty"`
+	Session string     `json:"session,omitempty"` // id to resume it by
+	Run     *[2]string `json:"run,omitempty"`     // model, effort it was started with
 }
 
 // localSessions maps this machine's agent panes (local ids) to their sessions.
@@ -128,6 +129,13 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 	agents, err := s.herdr.Agents(ctx)
 	if err != nil {
 		return out
+	}
+	if panes, err := s.herdr.Panes(ctx); err == nil {
+		alive := map[string]bool{}
+		for _, p := range panes {
+			alive[p.ID] = true
+		}
+		s.herdr.pruneRuns(alive, func(m string) bool { return m == "" })
 	}
 	for _, a := range agents {
 		local, machine := split(a.PaneID)
@@ -165,8 +173,9 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 			}
 			t = cleanTitle(tt)
 		}
-		if t != "" || sess != "" {
-			out[local] = paneSession{Title: t, Session: sess}
+		run, _ := s.herdr.Run(local)
+		if t != "" || sess != "" || run != nil {
+			out[local] = paneSession{Title: t, Session: sess, Run: run}
 		}
 	}
 	return out

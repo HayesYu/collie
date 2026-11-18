@@ -83,6 +83,7 @@ func serve() {
 	srv.auths = newAuth(sup.db, *token)
 	srv.herdr.onChange = sup.changed
 	loadAgentNames(sup.db, srv.herdr)
+	loadAgentRuns(sup.db, srv.herdr)
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {

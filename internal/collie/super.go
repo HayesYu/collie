@@ -829,6 +829,9 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 			args = append(args, "--allowedTools", strings.Join(collieAllow(bin), ","))
 		}
 		pane, ws, err := sp.s.startAgent(ctx, m.ID, kinds[kind], name, dir, name, args)
+		if pane != "" {
+			sp.s.herdr.RememberRun(pane, model, effort)
+		}
 		sp.mu.Lock()
 		w.PaneID, w.WorkspaceID = pane, ws
 		var he *HerdrError

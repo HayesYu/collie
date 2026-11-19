@@ -106,7 +106,7 @@ func larkSend(ns []notice, link string) error {
 // (orange when it needs you, as on the page), the body is Collie's own
 // Markdown, and a button opens Collie.
 func larkCard(ns []notice, link string) string {
-	title, color := "Collie", "grey"
+	title, color := "Collie", "default" // plain white: colour only when it needs you
 	for _, n := range ns {
 		switch {
 		case n.tone == "blocked":

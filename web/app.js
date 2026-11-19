@@ -867,19 +867,19 @@
       for (const w of sup.workers) if (!latest.has(w.name) || new Date(w.created_at) > new Date(latest.get(w.name).created_at)) latest.set(w.name, w);
       const ws = [...latest.values()].filter((w) => new RegExp(`(^|[^\\w-])${w.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(f.text));
       if (!ws.length) return "";
-      return `<div class="mem-crew">${ws.map((w) => {
+      return `<span class="mem-crew">${ws.map((w) => {
         const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
         const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
         const st = workerStatus(w);
-        return `<a class="chip" ${href ? `href="${href}"` : ""}><span class="dot ${esc(st)}" title="${esc(STATUS_LABEL[st] || st)}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
-      }).join("")}</div>`;
+        return `<a ${href ? `href="${href}"` : ""} title="${esc((KIND_LABEL[w.kind] || w.kind) + " · " + (STATUS_LABEL[st] || st))}"><span class="dot ${esc(st)}"></span>${esc(w.name)}</a>`;
+      }).join("")}</span>`;
     };
     const card = (f, o = {}) => {
       const edit = !f.legacy && o.edit !== false;
       return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
           <span class="mono mem-name">${esc(o.label || f.name)}</span><span class="grow">${esc(o.sub ?? firstLine(f.text, ""))}</span><span class="muted">${kb(f.size)}</span></summary>
-        ${o.crew ? crew(f) : ""}<div class="mem-body msg assistant" data-view>${md(f.text)}</div>
-        ${edit ? `<div class="mem-tools"><span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
+        <div class="mem-body msg assistant" data-view>${md(f.text)}</div>
+        ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
         <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
           <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div></form>` : ""}
       </details>`;

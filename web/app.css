@@ -322,7 +322,10 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
   #v-collie .msg.show-time::after, #v-collie .say .msg.show-time::after { display: block; }
   #v-collie .msg.user.show-time::after { color: inherit; opacity: .6; }
 }
-.mem-crew { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 18px 0; }
+.mem-crew { display: flex; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
+.mem-crew a { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); text-decoration: none; }
+.mem-crew a[href]:hover { color: var(--fg); }
+.mem-crew + .grow::before { content: "·"; margin-right: 8px; }
 .time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .say { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
 .avatar { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; background: var(--bg); margin-top: 2px; }

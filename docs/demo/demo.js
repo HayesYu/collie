@@ -276,6 +276,8 @@
     if (p === "/api/state") return json(state());
     if (p === "/api/super") return json(sup());
     if (p === "/api/super/settings") return json(settings);
+    if (p === "/api/super/seen") return json({ ok: true });
+    if (p === "/api/super/lark") return json({ ready: true, who: "Alex" });
     if (p === "/api/super/triggers") return json({ triggers, threads });
     if (p === "/api/super/timers") {
       if (method === "POST") timers.push({ id: "tm" + (++seq), spec: body.spec, text: body.text, target: body.target, enabled: true, next_run: later(60), owner: "you" });

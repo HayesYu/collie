@@ -1,0 +1,59 @@
+package collie
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// A fake lark-cli: says who is logged in, and writes what it was asked to send.
+func fakeLark(t *testing.T) string {
+	dir := t.TempDir()
+	sent := filepath.Join(dir, "sent")
+	script := `#!/bin/sh
+if [ "$1" = auth ]; then echo '{"identities":{"bot":{"available":true},"user":{"openId":"ou_test","userName":"T"}}}'; exit 0; fi
+printf '%s\n' "$@" >> "` + sent + `"
+`
+	if err := os.WriteFile(filepath.Join(dir, "lark-cli"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	binCache.Delete("lark-cli")
+	lark.get(true)
+	t.Cleanup(func() { binCache.Delete("lark-cli"); lark.get(true) })
+	return sent
+}
+
+func TestLarkNotify(t *testing.T) {
+	sent := fakeLark(t)
+	sp := &Super{st: &State{Settings: Settings{NotifyLark: true, NotifyLevel: "normal"}}}
+
+	// Looking at Collie: held back.
+	sp.Seen("http://hub:7788")
+	sp.queueNotifyLocked("collie", "做完了", "")
+	sp.sendNotifications()
+	if _, err := os.Stat(sent); err == nil {
+		t.Fatal("sent while you were looking")
+	}
+
+	// Away: sent, as the bot, to the logged-in user, with a link.
+	sp.seenAt = time.Now().Add(-5 * time.Minute)
+	sp.notifyAt = time.Time{}
+	sp.queueNotifyLocked("collie", "报告：都好了", "")
+	sp.sendNotifications()
+	b, err := os.ReadFile(sent)
+	if err != nil {
+		t.Fatal("nothing sent")
+	}
+	got := string(b)
+	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "报告：都好了", "http://hub:7788/#/collie"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "做完了") {
+		t.Error("the held-back message went out later")
+	}
+}

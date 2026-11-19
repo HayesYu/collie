@@ -55,6 +55,8 @@ type Super struct {
 	noAgent     map[string]time.Time // worker → since when its pane has had no agent in it
 	notifyBuf   []string
 	notifyAt    time.Time
+	seenAt      time.Time // when a page of Collie was last open in front of you
+	seenURL     string    // where that page was, for the link in a notification
 }
 
 type screenMark struct {
@@ -986,7 +988,7 @@ func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, router
 // ---------------------------------------------------------------- outbox
 
 func (sp *Super) queueNotifyLocked(role, text, tone string) {
-	if sp.st.Settings.NotifyWebhook == "" {
+	if sp.st.Settings.NotifyWebhook == "" && !sp.st.Settings.NotifyLark {
 		return
 	}
 	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" {
@@ -999,8 +1001,20 @@ func (sp *Super) queueNotifyLocked(role, text, tone string) {
 	sp.notifyBuf = append(sp.notifyBuf, prefix+"："+clip(text, 400))
 }
 
+// Seen notes that a page of Collie is open in front of you (the page says so
+// every 30 seconds while it is visible).
+func (sp *Super) Seen(url string) {
+	sp.mu.Lock()
+	sp.seenAt = time.Now()
+	if url != "" {
+		sp.seenURL = url
+	}
+	sp.mu.Unlock()
+}
+
 // sendNotifications paces outgoing notifications: messages are coalesced and
-// sent at most every 20 seconds.
+// sent at most every 20 seconds, and not at all while you are looking at
+// Collie (you see them there).
 func (sp *Super) sendNotifications() {
 	sp.mu.Lock()
 	if len(sp.notifyBuf) == 0 || time.Since(sp.notifyAt) < 20*time.Second {
@@ -1008,9 +1022,26 @@ func (sp *Super) sendNotifications() {
 		return
 	}
 	text := strings.Join(sp.notifyBuf, "\n\n")
-	url := sp.st.Settings.NotifyWebhook
+	url, toLark := sp.st.Settings.NotifyWebhook, sp.st.Settings.NotifyLark
+	looking := time.Since(sp.seenAt) < 75*time.Second
+	link := sp.seenURL
 	sp.notifyBuf, sp.notifyAt = nil, time.Now()
 	sp.mu.Unlock()
+	if looking {
+		return
+	}
+	if toLark {
+		msg := text
+		if link != "" {
+			msg += "\n\n打开 Collie：" + link + "/#/collie"
+		}
+		if err := larkSend(msg); err != nil {
+			log.Printf("notify lark: %v", err)
+		}
+	}
+	if url == "" {
+		return
+	}
 	body, _ := json.Marshal(map[string]any{
 		"msg_type": "text", "content": map[string]string{"text": text}, // Feishu/Lark bot
 		"text": text, // Slack-style

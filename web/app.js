@@ -400,6 +400,13 @@
     }
   }
 
+  // Tell the hub a page of Collie is in front of you: it holds back
+  // notifications while you can see them here.
+  const seen = () => { if (!document.hidden && document.hasFocus()) api("/api/super/seen", { body: { url: location.origin } }).catch(() => {}); };
+  setInterval(seen, 30e3);
+  document.addEventListener("visibilitychange", seen);
+  addEventListener("focus", seen);
+
   function normSup(s) { s.entries ||= []; s.workers ||= []; s.router ||= { status: "asleep" }; return s; }
   const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
   const paneOf = (name) => state.agents.find((a) => a.name === name)?.pane_id;
@@ -842,6 +849,10 @@
       } else {
         const r = await api("/api/super/settings");
         body.innerHTML = autoTab === "hooks" ? hooksHTML(r) : settingsHTML(r);
+        if (autoTab !== "hooks") api("/api/super/lark?fresh").then((l) => {
+          const el = $("#lark-who");
+          if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
+        }).catch(() => {});
       }
     } catch (err) { body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
   }
@@ -1140,8 +1151,9 @@
       <section class="card set-sec">
         <header><h4>通知</h4></header>
         <div class="set-grid">
+          <label class="check span3"><input type="checkbox" name="notify_lark" ${s.notify_lark ? "checked" : ""}> 用 hub 上的 lark-cli 发飞书消息给你<small id="lark-who" class="muted">· 正在看 hub 上的 lark-cli…</small></label>
           <label>Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"><small>飞书 / Lark 机器人或 Slack</small></label>
-          <label>什么时候推送<select name="notify_level" data-title="什么时候推送"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="卡住、要你确认、出错">只在需要你时</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="外加 Collie 的每条回复">也推送 Collie 的回复</option></select></label>
+          <label>什么时候推送<select name="notify_level" data-title="什么时候推送"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="卡住、要你确认、出错">只在需要你时</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="外加 Collie 的回复，比如做完事的汇报">也推送 Collie 的回复</option></select><small>你正开着 Collie 的网页时不推</small></label>
         </div>
       </section>
 
@@ -1185,7 +1197,7 @@
           worker_machine: f.worker_machine ? f.worker_machine.value : (cur.worker_machine || ""),
           reply_chars: +f.reply_chars.value, stall_minutes: +f.stall_minutes.value,
           rotate_pct: +f.rotate_pct.value, dream_at: f.dream_at.value,
-          notify_webhook: f.notify_webhook.value.trim(), notify_level: f.notify_level.value, paused: f.paused.checked,
+          notify_webhook: f.notify_webhook.value.trim(), notify_lark: f.notify_lark.checked, notify_level: f.notify_level.value, paused: f.paused.checked,
           ask_permissions: !f.bypass.checked,
         };
         await api("/api/super/settings", { body: { settings: s } });

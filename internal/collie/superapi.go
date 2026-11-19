@@ -37,6 +37,8 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/timers/{id}/delete", s.superDeleteTimer)
 	api("GET /api/super/settings", s.superSettings)
 	api("POST /api/super/settings", s.superSaveSettings)
+	api("POST /api/super/seen", s.superSeen)
+	api("GET /api/super/lark", s.superLark)
 	api("GET /api/super/memory", s.superMemory)
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("POST /api/super/dream", s.superDream)
@@ -542,6 +544,28 @@ func (s *Server) superSettings(w http.ResponseWriter, r *http.Request) {
 		"settings": sp.st.Settings, "policies": sp.st.Policies,
 		"hook_key": s.hookKey(), "router_dir": sp.routerDir(), "bin": sp.bin,
 	})
+}
+
+// superSeen: a page of Collie is open in front of you. Its origin goes in
+// the notifications' link.
+func (s *Server) superSeen(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL string `json:"url"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !strings.HasPrefix(body.URL, "http://") && !strings.HasPrefix(body.URL, "https://") || len(body.URL) > 200 {
+		body.URL = ""
+	}
+	s.sup.Seen(body.URL)
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// superLark says whom the hub's lark-cli would write to.
+func (s *Server) superLark(w http.ResponseWriter, r *http.Request) {
+	_, _, who, problem := lark.get(r.URL.Query().Has("fresh"))
+	writeJSON(w, 200, map[string]any{"ready": problem == "", "who": who, "problem": problem})
 }
 
 func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {

@@ -55,6 +55,9 @@ type Worker struct {
 	LastReport string     `json:"last_report,omitempty"`
 	ReportAt   time.Time  `json:"report_at,omitempty"`
 	Ended      bool       `json:"ended,omitempty"`
+	// Session is its agent's conversation id, kept after it stops so a later
+	// `spawn --resume` can carry on where it left off.
+	Session string `json:"session,omitempty"`
 }
 
 // Entry is one line of the human-facing super-agent conversation.

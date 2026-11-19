@@ -331,6 +331,10 @@ func (sp *Super) tick(parent context.Context) {
 			continue
 		}
 		delete(sp.noAgent, w.Name)
+		if a.Session != "" && a.Session != w.Session {
+			w.Session = a.Session
+			sp.dirty = true
+		}
 		prev := w.Status
 		if a.Status != prev {
 			w.Status = a.Status
@@ -765,7 +769,25 @@ var workerNameRe = regexp.MustCompile(`[^a-z0-9_-]+`)
 // outcome arrives later as a trigger — the async ReAct pattern).
 // model and effort are launch choices for this worker; "" falls back to the
 // default worker settings when kind is the default kind, else the agent's own.
-func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool) (*Worker, error) {
+// resumeFrom is what `spawn --resume` carries over from a stopped worker:
+// where it ran and the conversation to open again.
+func (sp *Super) resumeFrom(name string) (*Worker, error) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	w := sp.st.Workers[name]
+	switch {
+	case w == nil:
+		return nil, fmt.Errorf("no worker named %s", name)
+	case !w.Ended:
+		return nil, fmt.Errorf("%s is still running: `send` it instead", name)
+	case w.Session == "":
+		return nil, fmt.Errorf("%s left no conversation to resume; spawn a fresh worker", name)
+	}
+	c := *w
+	return &c, nil
+}
+
+func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool, resume string) (*Worker, error) {
 	m, err := sp.s.herdr.machine(machine)
 	if err != nil {
 		return nil, fmt.Errorf("machine %q is not connected", machine)
@@ -820,7 +842,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		sp.mu.Unlock()
 		return nil, fmt.Errorf("directory not found: %s", dir)
 	}
-	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting"}
+	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting", Session: resume}
 	sp.st.Workers[name] = w
 	if subscribe {
 		th := sp.threadLocked(thread)
@@ -832,7 +854,11 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	if !m.Local {
 		where = " @ " + m.Name
 	}
-	sp.addEntryLocked("event", thread, fmt.Sprintf("派出 %s（%s%s）：%s", name, kind, where, clip(firstLine(task), 120)), name, "spawn")
+	verb := "派出"
+	if resume != "" {
+		verb = "续上"
+	}
+	sp.addEntryLocked("event", thread, fmt.Sprintf("%s %s（%s%s）：%s", verb, name, kind, where, clip(firstLine(task), 120)), name, "spawn")
 	sp.mu.Unlock()
 
 	// The default model applies to the default kind of worker.
@@ -859,7 +885,8 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		} else if !m.Local {
 			bin = "collie"
 		}
-		args := append([]string{}, wargs...)
+		// codex's resume is a subcommand: it goes first, the flags after it.
+		args := append(resumeArgs(kinds[kind], resume), wargs...)
 		if kinds[kind] == "claude" {
 			// Reporting back is part of the job; don't make it a permission prompt.
 			args = append(args, "--allowedTools", strings.Join(collieAllow(bin), ","))

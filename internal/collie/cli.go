@@ -199,18 +199,22 @@ func cliSpawn(args []string) error {
 	model := fs.String("model", "", "model to launch with (default from settings for the default kind)")
 	effort := fs.String("effort", "", "thinking effort: low | medium | high | xhigh | max ...")
 	sub := fs.Bool("subscribe", false, "route later events of --thread straight to this worker")
+	resume := fs.String("resume", "", "a stopped worker to carry on from: its computer, directory and conversation")
 	fs.Parse(args)
 	t, err := textArg(fs)
 	if err != nil {
 		return err
 	}
-	body := map[string]any{"kind": *kind, "cwd": *cwd, "thread": *thread, "name": *name, "task": t, "by": by(), "model": *model, "effort": *effort}
+	body := map[string]any{"kind": *kind, "cwd": *cwd, "name": *name, "task": t, "by": by(), "model": *model, "effort": *effort, "resume": *resume}
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "subscribe" {
 			body["subscribe"] = *sub
 		}
 		if f.Name == "machine" {
 			body["machine"] = *machine
+		}
+		if f.Name == "thread" {
+			body["thread"] = *thread
 		}
 	})
 	b, err := cliCall("POST", "/api/super/spawn", body)
@@ -444,7 +448,10 @@ only ever talks to you. You keep the big picture; workers do the work.
   number (as listed in the BLOCKED event), words of its label, or ` + "`esc`" + `.
 - ` + "`{{BIN}} subscribe WORKER THREAD`" + ` — route a thread's future events straight to that worker
   (e.g. its GitHub PR thread). chat:main always stays with you.
-- ` + "`{{BIN}} stop WORKER`" + ` — stop a worker and close its terminal.
+- ` + "`{{BIN}} stop WORKER`" + ` — stop a worker and close its terminal. Its conversation is kept:
+  ` + "`{{BIN}} spawn --resume WORKER \"what next\"`" + ` opens it again on the same computer and
+  directory, so a follow-up on earlier work carries on with everything it knew. Spawn
+  fresh for a new job.
 - ` + "`{{BIN}} list`" + ` — workers, threads, timers.
 - ` + "`{{BIN}} show ID`" + ` — expand any id (trigger t12, thread github:org/repo#4, worker name).
   Results contain further ids: follow them hop by hop to recall older context.

@@ -55,6 +55,22 @@ func (s *Server) startedAt(pane string) (time.Time, bool) {
 }
 
 // Agent kinds Collie offers in its launcher, mapped to herdr's --kind values.
+// resumeArgs open an agent on an earlier conversation of its own.
+func resumeArgs(agent, session string) []string {
+	if session == "" {
+		return nil
+	}
+	switch agent {
+	case "claude":
+		return []string{"--resume", session}
+	case "codex":
+		return []string{"resume", session}
+	case "agy":
+		return []string{"--conversation", session}
+	}
+	return nil
+}
+
 var kinds = map[string]string{
 	"claude":      "claude",
 	"codex":       "codex",

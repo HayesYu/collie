@@ -635,15 +635,7 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]any{"error": "这个会话要在 " + e.App + " 里继续"})
 		return
 	}
-	var args []string
-	switch e.Kind {
-	case "claude":
-		args = []string{"--resume", e.Session}
-	case "codex":
-		args = []string{"resume", e.Session}
-	case "agy":
-		args = []string{"--conversation", e.Session}
-	}
+	args := resumeArgs(e.Kind, e.Session)
 	// Two processes writing one conversation would garble it: stop the
 	// original first, the way Ctrl-C would, and give it a moment to save.
 	if e.PID > 0 && alive(e.PID) {

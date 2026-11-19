@@ -289,9 +289,31 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		Model     string  `json:"model"`
 		Effort    string  `json:"effort"`
 		Subscribe *bool   `json:"subscribe"`
+		Resume    string  `json:"resume"` // a stopped worker to carry on from
 	}
 	if !decode(w, r, &body) {
 		return
+	}
+	session := ""
+	if body.Resume != "" {
+		old, err := s.sup.resumeFrom(body.Resume)
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": err.Error()})
+			return
+		}
+		// Its own computer, directory and agent: that is where the conversation is.
+		body.Kind, body.Cwd, session = old.Kind, old.Cwd, old.Session
+		m := old.Machine
+		body.Machine = &m
+		if body.Name == "" {
+			body.Name = old.Name
+		}
+		if body.Model == "" && body.Effort == "" {
+			body.Model, body.Effort = old.Model, old.Effort
+		}
+		if body.Thread == "" {
+			body.Thread = old.Thread
+		}
 	}
 	if strings.TrimSpace(body.Task) == "" {
 		writeJSON(w, 400, map[string]any{"error": "task is required"})
@@ -314,10 +336,12 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		sub = *body.Subscribe
 	}
 	machine := s.sup.settings().WorkerMachine
-	if body.Machine != nil {
+	if session != "" {
+		machine = *body.Machine // an id already
+	} else if body.Machine != nil {
 		machine = s.machineByName(*body.Machine)
 	}
-	wk, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub)
+	wk, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub, session)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
@@ -424,6 +448,15 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 	if wk == nil {
 		writeJSON(w, 404, map[string]any{"error": "unknown worker"})
 		return
+	}
+	if wk.Session == "" && wk.PaneID != "" {
+		// herdr does not always know (Antigravity): ask the pane's machine.
+		local, m := split(wk.PaneID)
+		if ps := s.titlesFor(m, r.Context())[local]; ps.Session != "" {
+			sp.mu.Lock()
+			wk.Session = ps.Session
+			sp.mu.Unlock()
+		}
 	}
 	if wk.WorkspaceID != "" {
 		s.herdr.Call(r.Context(), "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)

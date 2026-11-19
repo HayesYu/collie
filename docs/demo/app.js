@@ -2269,6 +2269,69 @@
     $("#kbd-toggle").classList.toggle("on", on);
   });
 
+  // A file path in a message: ~/… or /…, ending in a name with an extension.
+  // It runs on escaped text, so it never meets a raw quote or tag.
+  const FILE_RE = /(^|[\s(（：，、；>;])((?:~|\/)[\w.\-+@%~\/]*\/[\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/])/g;
+
+  // ───────────────────────────── file viewer
+  // A file an agent mentions opens here, read-only, from the computer it is on.
+  const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+  const MD_EXT = /\.(md|markdown|mdx)$/i;
+  const IMG_TYPE = { svg: "image/svg+xml", jpg: "image/jpeg", jpeg: "image/jpeg", ico: "image/x-icon" };
+  function fileContextMachine() {
+    if (view === "pane") return find(current)?.machine;
+    if (view === "ext") {
+      const id = extCur || "";
+      return (id.startsWith("h:") ? hist.find((h) => h.id === id.slice(2)) : ext.find((x) => x.id === id))?.machine;
+    }
+  }
+  async function fetchFile(path, machine) {
+    const q = `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}${IMG_EXT.test(path) ? "&as=image" : ""}`;
+    const r = routeReq(q);
+    const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
+    if (res.status === 404) return null;
+    if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || "打不开这个文件"); }
+    return { kind: res.headers.get("X-File-Kind"), size: +res.headers.get("X-File-Size") || 0,
+      path: decodeURIComponent(res.headers.get("X-File-Path") || path), blob: await res.blob(), machine };
+  }
+  let fileUrl = "";
+  async function openFile(path) {
+    const dlg = $("#file-view"), body = $("#fv-body");
+    $("#fv-name").textContent = path.split("/").pop();
+    $("#fv-path").textContent = path;
+    body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
+    if (!dlg.open) dlg.showModal();
+    // Where the message came from first, then the hub, then every other computer.
+    const ms = (state.machines || []).filter((m) => !m.hub && (m.local || m.online)).map((m) => m.local ? "" : m.id);
+    const tries = [...new Set([fileContextMachine() ?? "", "", ...ms])];
+    let f = null;
+    try {
+      for (const m of tries) if ((f = await fetchFile(path, m))) break;
+    } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+    if ($("#fv-path").textContent !== path) return;
+    if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+    const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
+    $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
+    if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
+    if (f.kind === "image") {
+      const ext = path.split(".").pop().toLowerCase();
+      fileUrl = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[ext] || "image/" + ext }));
+      body.innerHTML = `<div class="fv-img"><img src="${fileUrl}" alt=""></div>`;
+      return;
+    }
+    if (f.kind !== "text") { body.innerHTML = `<p class="fv-note">这个文件不是文本${f.size > 20 << 20 ? "，也太大了" : ""}，没法在这里预览。</p>`; return; }
+    const text = await f.blob.text();
+    const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
+    body.innerHTML = MD_EXT.test(path) ? `<div class="msg assistant fv-md">${mdRender(text)}</div>${cut}` : `<pre class="fv-pre">${esc(text)}</pre>${cut}`;
+  }
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest("a.fpath");
+    if (!a) return;
+    e.preventDefault();
+    openFile(a.dataset.path);
+  });
+  $("#file-view").addEventListener("close", () => { if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = ""; });
+
   // Minimal, safe Markdown: escape first, then add a little structure.
   const mdCache = new Map();
   function md(src) {
@@ -2291,7 +2354,8 @@
     const inline = (s) => s
       .replace(/`([^`\n]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(FILE_RE, '$1<a class="fpath" href="#" data-path="$2" title="打开这个文件">$2</a>');
     const out = [];
     let list = null, para = [];
     const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };

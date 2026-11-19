@@ -538,6 +538,18 @@ dialog.sheet > form { flex: 1 1 auto; min-height: 0; max-height: none; }
 .sheet-body { overflow: auto; flex: 1; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .sheet-note { margin: 0; padding: 0 20px 4px; font-size: 12px; line-height: 1.6; }
 .sheet .field { padding: 10px 20px; }
+/* file viewer */
+.file-sheet { width: min(860px, calc(100vw - 32px)); height: calc(var(--vh) - 48px); }
+.file-sheet .sheet-head h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fv-path { font: 11px var(--mono); overflow-wrap: anywhere; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+#fv-body { padding: 4px 20px 24px; }
+.fv-md { max-width: none; background: none; padding: 0; }
+.fv-pre { margin: 14px 0 0; font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.fv-img { padding-top: 16px; text-align: center; }
+.fv-img img { max-width: 100%; height: auto; border-radius: 8px; }
+.fv-note { margin: 16px 0 0; font-size: 13px; }
+a.fpath { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; cursor: pointer; }
+a.fpath:hover { text-decoration-color: currentColor; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }
 .field small { display: block; margin-top: 6px; font-size: 12px; }
 .kinds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }

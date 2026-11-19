@@ -84,6 +84,7 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) http.Handler) {
 	mux.Handle("GET /api/state", wrap(s.getState))
 	mux.Handle("GET /api/dirs", wrap(s.listDirs))
+	mux.Handle("GET /api/file", wrap(s.readFile))
 	mux.Handle("POST /api/agents", wrap(s.launchAgent))
 	mux.Handle("POST /api/agents/{target}/prompt", wrap(s.promptAgent))
 	mux.Handle("GET /api/panes/{id}/stream", wrap(s.streamPane))
@@ -743,7 +744,7 @@ func cors(h http.Handler) http.Handler {
 			hd := w.Header()
 			hd.Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			hd.Add("Vary", "Origin")
-			hd.Set("Access-Control-Expose-Headers", "X-Collie-Web")
+			hd.Set("Access-Control-Expose-Headers", "X-Collie-Web, X-File-Kind, X-File-Size, X-File-Path")
 			if r.Method == http.MethodOptions {
 				hd.Set("Access-Control-Allow-Methods", "GET, POST")
 				hd.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")

@@ -30,28 +30,48 @@ const repo = "lihuanyu0w0/collie"
 
 var latestRel struct {
 	sync.Mutex
-	once sync.Once
-	tag  string
+	once    sync.Once
+	tag     string
+	checked time.Time
+	busy    bool
 }
 
-// latestVersion returns the newest release tag seen so far ("" until known)
-// and starts checking every few hours on first use.
-func latestVersion() string {
+// latestVersion returns the newest release tag seen so far ("" until known).
+// It checks every hour; soon asks for another check in the background when the
+// last one is more than a few minutes old (the devices page, where updates are
+// looked at).
+func latestVersion(soon bool) string {
 	latestRel.once.Do(func() {
 		go func() {
 			for {
-				if t := fetchLatestTag(); t != "" {
-					latestRel.Lock()
-					latestRel.tag = t
-					latestRel.Unlock()
-				}
-				time.Sleep(6 * time.Hour)
+				refreshLatest()
+				time.Sleep(time.Hour)
 			}
 		}()
 	})
 	latestRel.Lock()
 	defer latestRel.Unlock()
+	if soon && !latestRel.busy && !latestRel.checked.IsZero() && time.Since(latestRel.checked) > 10*time.Minute {
+		go refreshLatest()
+	}
 	return latestRel.tag
+}
+
+func refreshLatest() {
+	latestRel.Lock()
+	if latestRel.busy {
+		latestRel.Unlock()
+		return
+	}
+	latestRel.busy = true
+	latestRel.Unlock()
+	t := fetchLatestTag()
+	latestRel.Lock()
+	defer latestRel.Unlock()
+	latestRel.busy, latestRel.checked = false, time.Now()
+	if t != "" {
+		latestRel.tag = t
+	}
 }
 
 func fetchLatestTag() string {
@@ -112,7 +132,7 @@ func outdated(have, latest string) bool {
 }
 
 func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
-	latest := latestVersion()
+	latest := latestVersion(false)
 	var old []string
 	for _, m := range s.herdr.Machines() {
 		v := m.Version

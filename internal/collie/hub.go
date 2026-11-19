@@ -481,7 +481,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		"devices":   out,
 		"hub":       map[string]any{"name": local.Name, "home": local.Home, "herdr": herdrErr == nil, "version": version, "agents": localAgents(local.Home, true)},
 		"addresses": s.addresses(r),
-		"latest":    latestVersion(),
+		"latest":    latestVersion(true),
 	})
 }
 

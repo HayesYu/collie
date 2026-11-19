@@ -273,6 +273,9 @@ func (s *Server) state(ctx context.Context) PaneState {
 		if v.Name == "" {
 			v.Name = v.WorkspaceLabel
 		}
+		if v.IsAgent && s.waiting(p.ID, v.Status) {
+			v.Status = "waiting"
+		}
 		if v.IsAgent {
 			st.Agents = append(st.Agents, v)
 		} else {

@@ -53,3 +53,17 @@ func TestAgentErrRe(t *testing.T) {
 		}
 	}
 }
+
+func TestHasBackground(t *testing.T) {
+	for screen, want := range map[string]bool{
+		" How's the CLI experience so far?\n [1] Good  [2] Fine\n? for shortcuts      auto · Gemini 4 Neon · xhigh · 1 task(s) · /tasks\n": true,
+		"❯ \n  ⏵⏵ bypass permissions on · 1 background task · ↓ to manage":                                                                 true,
+		"❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)":                                                                              false,
+		"● Created 3 tasks for the release\n\n❯ \n  ? for shortcuts":                                                                       false,
+		"? for shortcuts      auto · Gemini 4 Neon · xhigh":                                                                                false,
+	} {
+		if got := hasBackground(screen); got != want {
+			t.Errorf("%q: got %v, want %v", screen, got, want)
+		}
+	}
+}

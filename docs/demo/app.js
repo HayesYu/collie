@@ -13,6 +13,14 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
   const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+  // 21:52 today, 昨天 18:30, 11月18日 18:30 before that.
+  const sepTime = (t) => {
+    const d = new Date(t), now = new Date(), y = new Date(now - 86400e3);
+    if (d.toDateString() === now.toDateString()) return hhmm(t);
+    if (d.toDateString() === y.toDateString()) return "昨天 " + hhmm(t);
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm(t)}`;
+  };
+  const fullTime = (t) => new Date(t).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const when = (t) => {
     const d = new Date(t); if (isNaN(d)) return "";
     const today = new Date().toDateString() === d.toDateString();
@@ -30,7 +38,7 @@
   };
   const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity" };
   const STATUS_LABEL = {
-    idle: "空闲", working: "工作中", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
+    idle: "空闲", working: "工作中", waiting: "在等后台任务", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
     asleep: "休眠中", starting: "启动中", gone: "已退出", failed: "启动失败",
   };
   const ROUTER = "collie";
@@ -562,14 +570,24 @@
           <button data-idea="以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。">把 GitHub 评论变成任务</button>
         </div></div>`;
     } else {
-      let prev = "";
+      let prev = "", lastAt = 0;
       for (const e of sup.entries) {
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
         if (e.role === "event" && workerChatter(e)) continue;
+        // A quiet line with the time when the talk picks up again after a
+        // while (or on a new day); hovering a message shows its exact time.
+        const at = +new Date(e.at) || 0;
+        const talk = e.role === "user" || e.role === "collie";
+        if (talk && at && (!lastAt || at - lastAt > 10 * 60e3 || new Date(at).toDateString() !== new Date(lastAt).toDateString())) {
+          html += `<div class="time-sep">${esc(sepTime(at))}</div>`;
+          prev = "";
+        }
+        if (at) lastAt = at;
         const cont = e.role === "collie" && prev === "collie";
         prev = prevRole = e.role;
-        if (e.role === "user") html += `<div class="msg user">${userText(e.text)}</div>`;
-        else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant">${md(e.text)}</div></div>`;
+        const tip = at ? ` title="${esc(fullTime(at))}"` : "";
+        if (e.role === "user") html += `<div class="msg user"${tip}>${userText(e.text)}</div>`;
+        else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant"${tip}>${md(e.text)}</div></div>`;
         else {
           // A worker's line opens the session it was about: its record once
           // that session ended (a name is reused after), else its pane.
@@ -1300,7 +1318,7 @@
   const RECENT_N = 8;
   let extAll = store.get("extAll", false);
   const EXT_STATE = { working: "在干活", idle: "开着，在等你", blocked: "等电脑那边确认" };
-  const RANK = { working: 0, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
+  const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
   function renderExt() { renderSessions(); }
   $("#live-list").addEventListener("click", (e) => {
     const b = e.target.closest("[data-fold]");

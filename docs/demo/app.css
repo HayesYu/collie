@@ -200,6 +200,13 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
   content: ""; position: absolute; inset: -4px; border-radius: 50%;
   border: 1.5px solid transparent; border-top-color: var(--fg); animation: spin .9s linear infinite;
 }
+/* waiting: stopped, with work going on in the background (a timer, a shell):
+   the same ring as working, turning slowly and fainter */
+.dot.waiting { box-shadow: inset 0 0 0 1.5px var(--fg-3); }
+.dot.waiting::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%;
+  border: 1.5px solid transparent; border-top-color: var(--fg-3); animation: spin 2.8s linear infinite;
+}
 .dot.blocked { background: var(--attn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--attn) 22%, transparent); }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* How much a dot moves says how alive it is: spinning = busy, breathing =
@@ -300,6 +307,7 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 .msg.assistant blockquote { margin: 0 0 .7em; padding-left: 12px; border-left: 2px solid var(--line-2); color: var(--fg-2); }
 
 /* collie replies carry a small avatar */
+.time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .say { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
 .avatar { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; background: var(--bg); margin-top: 2px; }
 .avatar img { width: 20px; height: 20px; }

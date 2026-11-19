@@ -17,7 +17,7 @@
     agent({ pane_id: "w1:p1", workspace_id: "w1", name: "collie", kind: "claude", status: "idle", cwd: "/home/alex/.collie/router" }),
     agent({ pane_id: "w2:p1@macbook", workspace_id: "w2@macbook", name: "claude-1", kind: "claude", status: "working", cwd: "/Users/alex/code/shop-web", topic: "首页加暗色模式", run: ["opus", "high"] }),
     agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "blocked", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", run: ["gpt-6.1-sol", "high"] }),
-    agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "done", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", run: ["", ""] }),
+    agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", run: ["", ""] }),
     agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
     agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
   ];

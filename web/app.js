@@ -2294,9 +2294,9 @@
     return { kind: res.headers.get("X-File-Kind"), size: +res.headers.get("X-File-Size") || 0,
       path: decodeURIComponent(res.headers.get("X-File-Path") || path), blob: await res.blob(), machine };
   }
-  let fileUrl = "";
+  let fileUrl = "", fileSeq = 0;
   async function openFile(path) {
-    const body = $("#fv-body");
+    const body = $("#fv-body"), seq = ++fileSeq;
     $("#fv-name").textContent = path.split("/").pop();
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
@@ -2308,7 +2308,7 @@
     try {
       for (const m of tries) if ((f = await fetchFile(path, m))) break;
     } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
-    if ($("#fv-path").textContent !== path) return;
+    if (seq !== fileSeq) return;
     if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
     const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
     $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
@@ -2334,16 +2334,24 @@
   // usable; its width is dragged and remembered. Narrow ones: full screen.
   const pane = $("#file-view");
   const setFileW = (w) => document.documentElement.style.setProperty("--file-w", Math.round(w) + "px");
-  setFileW(store.get("fileW", 520));
+  // The widest the panel may be: the conversation keeps at least 420px.
+  const fileMax = () => innerWidth - $(".side").offsetWidth - 420;
+  let paneTimer;
   function showFilePane() {
-    pane.hidden = false;
+    clearTimeout(paneTimer);
+    // Until it has been dragged: a little under half the window.
+    setFileW(Math.max(Math.min(store.get("fileW", 0) || innerWidth * 0.45, fileMax()), 360));
+    if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
     $("#app").classList.add("has-file");
   }
   function closeFilePane() {
-    pane.hidden = true;
     $("#app").classList.remove("has-file");
-    $("#fv-path").textContent = "";
-    if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
+    fileSeq++;
+    clearTimeout(paneTimer);
+    paneTimer = setTimeout(() => {
+      pane.hidden = true;
+      if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
+    }, 360);
   }
   pane.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pane.hidden && !document.querySelector("dialog[open]")) closeFilePane(); });
@@ -2352,8 +2360,7 @@
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
     document.body.classList.add("dragging");
-    // The conversation keeps at least 420px.
-    const max = innerWidth - $(".side").offsetWidth - 420;
+    const max = fileMax();
     const move = (ev) => setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360));
     const up = () => {
       grip.removeEventListener("pointermove", move);

@@ -625,7 +625,7 @@
           html += `<div class="msg user" data-id="${esc(e.id)}"${tip}>${quote(e)}${userText(e.text)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${tip}>${quote(e)}${md(e.text)}${imagesIn(e.text)}</div>${e.id ? `<button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用这条回复">↩ 引用</button>` : ""}</div>`;
+          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${tip}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${e.id ? `<button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用这条回复">↩ 引用</button>` : ""}</div></div>`;
           sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";

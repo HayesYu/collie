@@ -332,13 +332,19 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 #v-collie .re-who { color: var(--fg-2); margin-right: 6px; }
 #v-collie .msg.user .re { color: inherit; opacity: .6; border-left-color: currentColor; }
 #v-collie .msg.user .re-who { color: inherit; }
-/* Quote a Collie message: a button that shows on hover (on a phone, once
-   you tap the message). */
-#v-collie .say { position: relative; }
-.re-btn { position: absolute; right: 0; top: -2px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
-  font-size: 11px; color: var(--fg-3); opacity: 0; pointer-events: none; transition: opacity .12s; }
-#v-collie .say:hover .re-btn, #v-collie .say:has(.show-time) .re-btn { opacity: 1; pointer-events: auto; }
-.re-btn:hover { color: var(--fg); border-color: var(--fg-3); }
+/* Quote a Collie message: in the gutter under its time, on hover (on a
+   phone, beside the time once you tap the message). */
+#v-collie .re-btn { position: absolute; left: -42px; top: 50px; width: 34px; padding: 0; border: 0; background: none; cursor: pointer;
+  font-size: 10px; line-height: 1.3; text-align: center; color: var(--fg-3); opacity: 0; pointer-events: none; transition: opacity .12s; }
+#v-collie .say.cont .re-btn { top: 20px; }
+#v-collie .say.cont .msg[data-time]::after { top: 2px; }
+#v-collie .say:hover .re-btn { opacity: 1; pointer-events: auto; }
+#v-collie .re-btn:hover { color: var(--fg); }
+@media (hover: none) {
+  #v-collie .re-btn { position: static; display: none; width: auto; margin: 4px 12px 0 0; font-size: 11px; opacity: 1; pointer-events: auto; }
+  #v-collie .msg.show-time > .re-btn { display: inline-block; }
+  #v-collie .say .msg.show-time::after { display: inline-block; }
+}
 .re-draft { display: flex; align-items: center; gap: 6px; margin: 10px 12px 0; padding-left: 8px; border-left: 2px solid var(--line-2); font-size: 12px; line-height: 18px; color: var(--fg-3); min-width: 0; }
 .re-draft[hidden] { display: none; }
 .re-draft .re-who { flex: none; color: var(--fg-2); }

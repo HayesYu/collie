@@ -57,3 +57,17 @@ func TestRouterDocChanged(t *testing.T) {
 		t.Fatalf("want one ask, got %d", asks())
 	}
 }
+
+func TestAgentStopLine(t *testing.T) {
+	cases := []struct{ screen, summary, want string }{
+		{"⏺ 正在读文件\n\n  ⎿  You've hit your usage limit · resets 5am\n\n> ", "正在读文件", "You've hit your usage limit · resets 5am"},
+		{"■ stream error: unexpected status 429 Too Many Requests\n", "", "stream error: unexpected status 429 Too Many Requests"},
+		{"⏺ 加了 rate limit 中间件，测试通过\n> ", "加了 rate limit 中间件，测试通过", ""}, // the work talking
+		{"  ⎿  Error: ENOENT no such file\n⏺ 改好了\n> ", "改好了", ""},      // a tool's error, not the agent's
+	}
+	for _, c := range cases {
+		if got := agentStopLine(c.screen, c.summary); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.screen, got, c.want)
+		}
+	}
+}

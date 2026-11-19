@@ -628,9 +628,54 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 		sp.addEntryLocked("event", w.Thread, w.Name+" 等你确认", w.Name, "blocked")
 		return
 	}
+	if msg := sp.workerAgentError(ctx, w, summary); msg != "" {
+		// Its agent stopped it (out of quota, logged out, the API down):
+		// the turn ended, the work did not.
+		sp.ingestLocked("worker", w.Thread, w.Name,
+			fmt.Sprintf("worker %s stopped on an error from its agent, not because it was done:\n%s\nLast message before it:\n%s\nIf this is a usage limit, a login or an outage, it won't get better by itself soon: hand the job to another kind of agent (spawn a fresh one with the brief and what this one got done; --resume only works with the same agent), then tell the human in one line what happened and who carries on.", w.Name, msg, summary), "", "", w.Name)
+		sp.addEntryLocked("event", w.Thread, w.Name+" 出错了："+msg, w.Name, "error")
+		return
+	}
 	sp.ingestLocked("worker", w.Thread, w.Name,
 		fmt.Sprintf("worker %s finished a turn. Last message:\n%s", w.Name, summary), "", "", w.Name)
 	sp.addEntryLocked("event", w.Thread, w.Name+" 完成了一轮", w.Name, "done")
+}
+
+// workerQuotaRe is an agent CLI saying it can't go on: a usage limit, the
+// login, the API. Narrower than agentErrRe: a worker's screen is full of its
+// work, and "error:" there is mostly the work's own.
+var workerQuotaRe = regexp.MustCompile(`(?i)(usage limit|limit reached|hit your( \w+)? limit|reached your( \w+)? limit|quota exceeded|exceeded your( current)? quota|resource.?exhausted|daily limit|rate.?limit(ed)?\b|credit balance|out of credits|please run /login|not logged in|invalid api key|api error|overloaded|unexpected status \d{3}|try again (at|in) )`)
+
+// workerAgentError reads the bottom of a worker's terminal after a turn:
+// what its agent printed when it gave up, or "". A line that is also in its
+// last message is the work talking about such things, not the agent.
+func (sp *Super) workerAgentError(ctx context.Context, w *Worker, summary string) string {
+	if w.PaneID == "" {
+		return ""
+	}
+	rr, err := sp.s.herdr.Read(ctx, w.PaneID, "recent", "text", 40)
+	if err != nil {
+		return ""
+	}
+	return agentStopLine(rr.Text, summary)
+}
+
+func agentStopLine(screen, summary string) string {
+	var tail []string
+	for _, l := range strings.Split(screen, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			tail = append(tail, t)
+		}
+	}
+	if len(tail) > 12 {
+		tail = tail[len(tail)-12:]
+	}
+	for _, l := range tail {
+		if workerQuotaRe.MatchString(l) && !strings.Contains(summary, strings.Trim(l, "⎿⏺●•✗✘⚠■│ ")) {
+			return clip(strings.Trim(l, "⎿⏺●•✗✘⚠■│ "), 200)
+		}
+	}
+	return ""
 }
 
 func (sp *Super) lastAssistant(ctx context.Context, w *Worker) string {

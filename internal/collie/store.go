@@ -66,6 +66,17 @@ type Entry struct {
 	At     time.Time `json:"at"`
 	Ref    string    `json:"ref,omitempty"`
 	Tone   string    `json:"tone,omitempty"` // event flavour: spawn | done | blocked | info | error
+	// What a reply is about, when Collie said (collie reply --re): copied at
+	// the time, so it still reads right after the original is trimmed away.
+	Re *Quote `json:"re,omitempty"`
+}
+
+// A Quote is what a reply answers: a message of yours, a worker's work, a timer.
+type Quote struct {
+	Entry  string `json:"entry,omitempty"`  // your message it answers
+	Worker string `json:"worker,omitempty"` // or the worker it is about
+	Who    string `json:"who"`              // 你 | the worker's name | 定时
+	Text   string `json:"text"`
 }
 
 type Timer struct {

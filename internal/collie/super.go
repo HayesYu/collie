@@ -130,10 +130,14 @@ func (sp *Super) flush() {
 }
 
 func (sp *Super) addEntryLocked(role, thread, text, ref, tone string) *Entry {
-	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone}
+	return sp.addEntryReLocked(role, thread, text, ref, tone, nil)
+}
+
+func (sp *Super) addEntryReLocked(role, thread, text, ref, tone string, re *Quote) *Entry {
+	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re}
 	sp.st.Entries = append(sp.st.Entries, e)
 	if role == "collie" || tone == "blocked" || tone == "error" {
-		sp.queueNotifyLocked(role, text, tone)
+		sp.queueNotifyLocked(role, text, tone, re)
 	}
 	sp.changed()
 	return e
@@ -500,7 +504,7 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 		b.WriteString("\n")
 	}
 	if target == routerName {
-		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail). Delegate work with `collie spawn`; never do task work yourself.", words)
+		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail; add --re <event id> when it answers something other than their latest message). Delegate work with `collie spawn`; never do task work yourself.", words)
 	} else {
 		b.WriteString("\nWork it through on your own: retry, try another approach. If you truly can't go on (a decision only the human can make, access you don't have, the same failure after a few different tries), don't spin or wait silently, and don't ask the human: run `collie report \"BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>\"` and Collie will decide or ask them. When done, run `collie report \"…\"` with the result.")
 	}
@@ -987,18 +991,81 @@ func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, router
 
 // ---------------------------------------------------------------- outbox
 
-func (sp *Super) queueNotifyLocked(role, text, tone string) {
+func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote) {
 	if sp.st.Settings.NotifyWebhook == "" && !sp.st.Settings.NotifyLark {
 		return
 	}
 	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" {
 		return
 	}
-	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text})
+	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text, re: re})
 }
 
-// A notice is one thing to tell you: what Collie said, or what needs you.
-type notice struct{ tone, text string }
+// A notice is one thing to tell you: what Collie said (and what about), or
+// what needs you.
+type notice struct {
+	tone, text string
+	re         *Quote
+}
+
+// quoteLine is a Quote as one line: "你：首页加一个暗色模式…".
+func (q *Quote) line() string {
+	t := strings.Join(strings.Fields(q.Text), " ")
+	return q.Who + "：" + clip(t, 60)
+}
+
+// quoteLocked finds what a reply's --re points at: an event Collie was given
+// (#t942), or an entry. Unknown ids give nil: the reply goes out anyway.
+func (sp *Super) quoteLocked(id string) *Quote {
+	id = strings.TrimPrefix(strings.TrimSpace(id), "#")
+	if id == "" {
+		return nil
+	}
+	entry := func(eid string) *Quote {
+		for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+			if e := sp.st.Entries[i]; e.ID == eid && e.Role == "user" {
+				return &Quote{Entry: e.ID, Who: "你", Text: humanText(e.Text)}
+			}
+		}
+		return nil
+	}
+	if q := entry(id); q != nil {
+		return q
+	}
+	t := sp.st.trigger(id)
+	if t == nil {
+		return nil
+	}
+	switch t.Source {
+	case "chat":
+		if q := entry(t.Ref); q != nil {
+			return q
+		}
+		return &Quote{Who: "你", Text: humanText(t.Text)}
+	case "timer":
+		return &Quote{Who: "定时", Text: t.Text}
+	}
+	name := t.Ref
+	if name == "" {
+		name = t.From
+	}
+	if w := sp.st.Workers[name]; w != nil {
+		return &Quote{Worker: w.Name, Who: w.Name, Text: w.Task}
+	}
+	return nil
+}
+
+// humanText is your message as you wrote it: without the attachment list and
+// the notes the hub adds for Collie.
+func humanText(t string) string {
+	if i := strings.Index(t, "\n\n[The human picked"); i >= 0 {
+		t = t[:i]
+	}
+	if i := strings.LastIndex(t, "附件：\n"); i >= 0 {
+		t = strings.TrimSpace(t[:i]) + " 📎"
+	}
+	return strings.TrimSpace(t)
+}
 
 func (n notice) label() string {
 	switch n.tone {
@@ -1014,7 +1081,11 @@ func (n notice) label() string {
 func noticesText(ns []notice) string {
 	var parts []string
 	for _, n := range ns {
-		parts = append(parts, n.label()+"："+clip(n.text, 400))
+		p := n.label() + "：" + clip(n.text, 400)
+		if n.re != nil {
+			p = "↩ " + n.re.line() + "\n" + p
+		}
+		parts = append(parts, p)
 	}
 	return strings.Join(parts, "\n\n")
 }

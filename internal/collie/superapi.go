@@ -219,6 +219,7 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Text   string `json:"text"`
 		Thread string `json:"thread"`
+		Re     string `json:"re"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -234,9 +235,13 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	sp.mu.Lock()
 	limit := sp.st.Settings.ReplyChars
-	e := sp.addEntryLocked("collie", body.Thread, text, "", "")
+	re := sp.quoteLocked(body.Re)
+	e := sp.addEntryReLocked("collie", body.Thread, text, "", "", re)
 	sp.mu.Unlock()
 	res := map[string]any{"ok": true, "entry": e.ID}
+	if body.Re != "" && re == nil {
+		res["warning"] = "--re " + body.Re + " is not an event or message I know; the reply went out without it"
+	}
 	if n := replyLen(text); limit > 0 && n > limit {
 		res["warning"] = fmt.Sprintf("reply is %d characters; chat replies are usually ≤%d. Fine if the human asked for detail or the result needs a list; otherwise keep the next one shorter", n, limit)
 	}

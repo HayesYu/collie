@@ -121,6 +121,9 @@ func larkCard(ns []notice, link string) string {
 			els = append(els, map[string]any{"tag": "hr"})
 		}
 		t := clip(n.text, 1500)
+		if n.re != nil {
+			t = "<font color='grey'>↩ " + larkEscape(n.re.line()) + "</font>\n" + t
+		}
 		if len(ns) > 1 && n.tone != "" && n.tone != "collie" {
 			t = "**" + n.label() + "**\n" + t
 		}
@@ -141,6 +144,9 @@ func larkCard(ns []notice, link string) string {
 	})
 	return string(b)
 }
+
+// larkEscape keeps quoted text from being read as card Markdown.
+var larkEscape = strings.NewReplacer("<", "&lt;", ">", "&gt;", "*", "\\*", "`", "'", "[", "\\[", "_", "\\_").Replace
 
 // cardSummary is what the chat list shows for the card: the first line of
 // what matters most (needs you, then an error, else the latest), without

@@ -326,6 +326,13 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 .mem-crew a { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); text-decoration: none; }
 .mem-crew a[href]:hover { color: var(--fg); }
 .mem-crew + .grow::before { content: "·"; margin-right: 8px; }
+/* What a reply answers: one quiet line above it. */
+#v-collie .re { display: block; max-width: 100%; margin: 0 0 6px; padding-left: 8px; border-left: 2px solid var(--line-2);
+  font-size: 12px; line-height: 18px; color: var(--fg-3); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#v-collie .re-who { color: var(--fg-2); margin-right: 6px; }
+#v-collie a.re[href]:hover { color: var(--fg-2); border-left-color: var(--fg-3); }
+#v-collie .msg.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0%, 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 25%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }
 .time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .say { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
 .avatar { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; background: var(--bg); margin-top: 2px; }

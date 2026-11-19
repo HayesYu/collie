@@ -162,12 +162,13 @@ func printResult(b []byte) {
 func cliReply(args []string) error {
 	fs := flag.NewFlagSet("reply", flag.ExitOnError)
 	thread := fs.String("thread", mainThread, "thread to reply in")
+	re := fs.String("re", "", "the event (#t123) this answers, shown to the human as a quote")
 	fs.Parse(args)
 	t, err := textArg(fs)
 	if err != nil {
 		return err
 	}
-	b, err := cliCall("POST", "/api/super/reply", map[string]any{"text": t, "thread": *thread})
+	b, err := cliCall("POST", "/api/super/reply", map[string]any{"text": t, "thread": *thread, "re": *re})
 	if err == nil {
 		printResult(b)
 	}
@@ -404,6 +405,11 @@ only ever talks to you. You keep the big picture; workers do the work.
    Messages may end with "附件：" and file paths: they were uploaded to the
    machine the human picked (or the default worker machine). Hand the paths
    to the agent doing the work; agents can read images and files by path.
+   When a reply answers something other than the human's latest message (an
+   earlier question, a worker's result, a timer), pass the event it answers:
+   ` + "`collie reply --re t123 \"…\"`" + `. The human sees one quoted line of it, so
+   they know which thing you mean. When unsure, pass it: the page hides the
+   quote when it is plain from what is right above.
 5. Your memory lives in memory/ (this directory). It is all you keep between
    sessions: Collie restarts you in a fresh session when your context fills
    up, and each session starts by reading the up-front files.

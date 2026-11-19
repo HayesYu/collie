@@ -589,6 +589,19 @@
         </div></div>`;
     } else {
       let prev = "", lastAt = 0;
+      // What a reply is about shows as a quoted line, unless it is plain
+      // from what is right above: the first answer to your last message, or
+      // a word on the worker whose line it follows.
+      let lastUser = "", sinceUser = 0, lastEvent = "";
+      const quote = (e) => {
+        const q = e.re;
+        if (!q) return "";
+        if (q.entry && q.entry === lastUser && !sinceUser) return "";
+        if (q.worker && q.worker === lastEvent) return "";
+        const pane = q.worker && paneOf(q.worker), past = q.worker && !pane ? workerHist(q.worker, e.at) : null;
+        const attr = q.entry ? `href="#" data-goto="${esc(q.entry)}"` : pane ? `href="#/p/${encodeURIComponent(pane)}"` : past ? `href="#/h/${encodeURIComponent(past.id)}"` : "";
+        return `<a class="re" ${attr} title="${esc(q.text)}"><span class="re-who">${esc(q.who)}</span>${esc(q.text.replace(/\s+/g, " "))}</a>`;
+      };
       for (const e of chatEntries()) {
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
         if (e.role === "event" && workerChatter(e)) continue;
@@ -607,9 +620,14 @@
         const cont = e.role === "collie" && prev === "collie";
         prev = prevRole = e.role;
         const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
-        if (e.role === "user") html += `<div class="msg user"${tip}>${userText(e.text)}</div>`;
-        else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant"${tip}>${md(e.text)}${imagesIn(e.text)}</div></div>`;
-        else {
+        if (e.role === "user") {
+          html += `<div class="msg user" data-id="${esc(e.id)}"${tip}>${userText(e.text)}</div>`;
+          lastUser = e.id; sinceUser = 0; lastEvent = "";
+        } else if (e.role === "collie") {
+          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant"${tip}>${quote(e)}${md(e.text)}${imagesIn(e.text)}</div></div>`;
+          sinceUser++; lastEvent = "";
+        } else {
+          lastEvent = e.ref || "";
           // A worker's line opens the session it was about: its record once
           // that session ended (a name is reused after), else its pane.
           const past = e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
@@ -2439,6 +2457,16 @@
       for (const el of document.querySelectorAll(".thumb[data-img] img")) if (el.parentElement.dataset.img === p) el.src = u;
     } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
   }
+  // A reply's quote of your message: take you to it.
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest("a.re[data-goto]");
+    if (!a) return;
+    e.preventDefault();
+    const m = document.querySelector(`#v-collie .msg[data-id="${CSS.escape(a.dataset.goto)}"]`);
+    if (!m) return toast("这条消息太早了，已经不在这里");
+    m.scrollIntoView({ block: "center", behavior: "smooth" });
+    m.classList.remove("flash"); void m.offsetWidth; m.classList.add("flash");
+  });
   // No hover on a phone: tap a Collie chat message to see when it was said.
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;

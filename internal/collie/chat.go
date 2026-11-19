@@ -923,20 +923,28 @@ func tailLines(s string, n int) string {
 
 // activityLine is what a working agent says it is doing ("Thinking…",
 // "Running tests…"): the bottom of its screen without the input box, the
-// key hints and the spinner, which mean nothing outside the terminal.
+// key hints and the spinner, which mean nothing outside the terminal. The
+// status line's own counters ("42s · ↓ 1.8k tokens") come back as meta.
 var (
 	liveHint    = regexp.MustCompile(`\s*[(（][^()（）]*(esc to (interrupt|cancel)|ctrl\+c)[^()（）]*[)）]`)
+	liveParen   = regexp.MustCompile(`\s*[(（]([^()（）]*)[)）]\s*$`)
+	liveKey     = regexp.MustCompile(`(?i)\besc\b|ctrl\+|to (interrupt|cancel|expand)`)
+	liveDigit   = regexp.MustCompile(`\d`)
 	liveChrome  = regexp.MustCompile(`(?i)esc to (interrupt|cancel)|shift\+tab|for shortcuts|auto mode|bypass permissions|accept edits|plan mode|ctrl\+[a-z] to |^[❯>›]( |$)|^[⏵▸►»⏎]|⏎ send`)
 	liveBullet  = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*•◐◓◑◒◔◕○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]+\s*`)
 	liveSpinner = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*◐◓◑◒◔◕⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]`) // animated: a status line
 )
 
-func activityLine(screen string) string {
+func activityLine(screen string) (text, meta string) {
 	var keep []string
-	status := ""
+	status, statusMeta := "", ""
 	for _, l := range strings.Split(screen, "\n") {
 		l = strings.TrimSpace(strings.Trim(strings.TrimSpace(l), "│┃|"))
 		hinted := liveHint.MatchString(l)
+		m := ""
+		if liveSpinner.MatchString(l) || hinted {
+			l, m = splitCounters(l)
+		}
 		l = strings.TrimSpace(liveHint.ReplaceAllString(l, ""))
 		if l == "" || strings.Trim(l, "─━═╭╮╰╯ ") == "" || liveChrome.MatchString(l) {
 			continue
@@ -944,14 +952,36 @@ func activityLine(screen string) string {
 		spun := liveSpinner.MatchString(l)
 		l = strings.TrimSpace(liveBullet.ReplaceAllString(l, ""))
 		if hinted || spun {
-			status = l // the agent's own status line wins
+			status, statusMeta = l, m // the agent's own status line wins
 		}
 		keep = append(keep, l)
 	}
 	if status != "" {
-		return status
+		return status, statusMeta
 	}
-	return strings.Join(tailSlice(keep, 2), "\n")
+	return strings.Join(tailSlice(keep, 2), "\n"), ""
+}
+
+// splitCounters takes a status line's closing parenthetical apart:
+// "Thinking… (42s · ↓ 1.8k tokens · esc to interrupt)" is "Thinking…" with
+// "42s · ↓ 1.8k tokens"; the key hints go.
+func splitCounters(l string) (string, string) {
+	m := liveParen.FindStringSubmatchIndex(l)
+	if m == nil {
+		return l, ""
+	}
+	var counters []string
+	for _, p := range strings.FieldsFunc(l[m[2]:m[3]], func(r rune) bool { return r == '·' || r == '•' }) {
+		p = strings.TrimSpace(p)
+		switch {
+		case p == "" || liveKey.MatchString(p):
+		case liveDigit.MatchString(p):
+			counters = append(counters, p)
+		default:
+			return l, "" // words, not counters: leave the line as it is
+		}
+	}
+	return strings.TrimSpace(l[:m[0]]), strings.Join(counters, " · ")
 }
 
 // ---------------------------------------------------------------- streaming
@@ -1046,7 +1076,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 				if status == "blocked" {
 					live["approval"] = parseApproval(res.Text)
 				} else {
-					live["tail"] = activityLine(res.Text)
+					live["tail"], live["meta"] = activityLine(res.Text)
 				}
 			}
 		}

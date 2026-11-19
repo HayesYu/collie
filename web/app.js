@@ -2155,7 +2155,7 @@
     const was = nearBottom(th);
     let html = "";
     if (l.status === "working" && l.tail) {
-      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre></div>`;
+      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre><span class="meta"></span></div>`;
     } else if (l.status === "blocked" && l.approval) {
       const v = find(current);
       html = askHTML(l.approval, v ? title(v) : "agent");
@@ -2166,6 +2166,9 @@
       box._html = html;
       box.innerHTML = html;
     }
+    // The counters tick every second: only their text changes.
+    const meta = box.querySelector(".live-working .meta");
+    if (meta && meta.textContent !== (l.meta || "")) meta.textContent = l.meta || "";
     box.hidden = !html;
     stick(th, was);
   }

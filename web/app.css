@@ -352,6 +352,7 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .live { padding: 0 max(20px, calc((100% - var(--col)) / 2)) 14px; }
 .live-working { display: flex; gap: 10px; align-items: flex-start; color: var(--fg-3); font-size: 12px; }
 .live-working .dot { margin-top: 5px; }
+.live-working .meta { flex: none; font: 11px/18px var(--mono); color: var(--fg-3); opacity: .8; font-variant-numeric: tabular-nums; }
 .live-working pre { margin: 0; flex: 1; min-width: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow: hidden; max-height: 4.5em; }
 
 /* ─── approval: a calm decision sheet ─── */

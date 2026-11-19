@@ -245,17 +245,26 @@ func TestEarlierCursorShortLog(t *testing.T) {
 
 func TestActivityLine(t *testing.T) {
 	cases := map[string]string{
+		// counters without a key hint (newer Claude)
+		"✻ Pondering… (42s · ↓ 1.8k tokens)\n❯ ": "Pondering…|42s · ↓ 1.8k tokens",
 		// Claude being interrupted (the screenshot)
 		"✻ Interrupting Claude…\n\n────────\n❯ \n────────\n  ⏵⏵ auto mode on · esc to interrupt": "Interrupting Claude…",
 		// Claude thinking, with the timing parenthetical
-		"● Earlier output line\n\n✶ Thinking… (12s · ↓ 1.2k tokens · esc to interrupt)\n\n╭──────╮\n│ > draft │\n╰──────╯\n  ? for shortcuts": "Thinking…",
+		"● Earlier output line\n\n✶ Thinking… (12s · ↓ 1.2k tokens · esc to interrupt)\n\n╭──────╮\n│ > draft │\n╰──────╯\n  ? for shortcuts": "Thinking…|12s · ↓ 1.2k tokens",
 		// Codex
 		// agy (from a real screen)
 		"● Explored 2 files (index.md, df-check.md) (ctrl+o to expand)\n⣻  Memory structure appears clean. Creating a note file...\n────\n> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n────\nesc to cancel        auto · Gemini 4 Carbon · high": "Memory structure appears clean. Creating a note file...",
-		"• Working (5s • esc to interrupt)\n\n› Ask Codex to do anything\n\n  ⏎ send   ⇧⏎ newline": "Working",
+		"• Working (5s • esc to interrupt)\n\n› Ask Codex to do anything\n\n  ⏎ send   ⇧⏎ newline": "Working|5s",
+		// a parenthetical of words stays in the text
+		"✻ Reading (src/main.go)\n❯ ": "Reading (src/main.go)",
 	}
 	for in, want := range cases {
-		if got := activityLine(in); got != want {
+		text, meta := activityLine(in)
+		got := text
+		if meta != "" {
+			got += "|" + meta
+		}
+		if got != want {
 			t.Errorf("activityLine(%q) = %q, want %q", in, got, want)
 		}
 	}

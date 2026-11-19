@@ -98,8 +98,8 @@
     ],
   };
   const lives = {
-    "w2:p1@macbook": { status: "working", tail: "✻ Editing src/components/Header.tsx… (42s · ↓ 1.8k tokens)" },
-    "w5:p1": { status: "working", tail: "• Running go test -run TestOrdersPagination -count=200 ./internal/orders (18s)" },
+    "w2:p1@macbook": { status: "working", tail: "Editing src/components/Header.tsx…", meta: "42s · ↓ 1.8k tokens" },
+    "w5:p1": { status: "working", tail: "Running go test -run TestOrdersPagination -count=200 ./internal/orders", meta: "18s" },
   };
   const approvals = {
     "w3:p1": {
@@ -218,7 +218,7 @@
     agents.push(agent({ pane_id: pane, workspace_id: pane.split(":")[0], name, kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }));
     workers.push({ name, kind: "codex", cwd: "/home/alex/code/shop-api", task: text, thread: "chat:main", pane_id: pane, workspace_id: pane.split(":")[0], machine: "", created_by: "collie", created_at: new Date().toISOString(), status: "working", run: ["gpt-6.1-sol", "medium"] });
     chats[pane] = [{ kind: "user", text: "[collie] " + text }, tool("Bash", "rg -n TODO --stats", "37 matches in 12 files")];
-    lives[pane] = { status: "working", tail: "• Reading the code (12s)" };
+    lives[pane] = { status: "working", tail: "Reading the code", meta: "12s" };
     entries.push(entry("event", `派出 ${name}（codex · devbox）`, { tone: "spawn", ref: name }));
     routerStatus = "idle"; pushAll();
     await wait(5000);
@@ -233,7 +233,7 @@
   }
   async function promptPane(id, text) {
     (chats[id] ||= []).push({ kind: "user", text });
-    setStatus(id, "working"); lives[id] = { status: "working", tail: "✻ Thinking… (3s)" }; pushAll();
+    setStatus(id, "working"); lives[id] = { status: "working", tail: "Thinking…", meta: "3s" }; pushAll();
     await wait(1800);
     chats[id].push(tool("Read", "README.md", "52 lines"));
     pushAll();
@@ -243,7 +243,7 @@
   }
   async function answerApproval(id) {
     delete approvals[id];
-    setStatus(id, "working"); lives[id] = { status: "working", tail: "• Running go test ./internal/orders/... (4s)" };
+    setStatus(id, "working"); lives[id] = { status: "working", tail: "Running go test ./internal/orders/...", meta: "4s" };
     chats[id].push(tool("Bash", "go test ./internal/orders/...", "ok  \tshop-api/internal/orders\t0.412s"));
     pushAll();
     await wait(2600);

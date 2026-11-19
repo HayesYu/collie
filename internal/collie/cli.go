@@ -464,6 +464,9 @@ only ever talks to you. You keep the big picture; workers do the work.
   listed in notes/index.md). Skip one-off details. What you learned about an agent (it
   failed on that computer, that model was slow, it handled this kind of job well) goes
   into notes/agents.md; read it when choosing who does a job.
+- Once a worker's result is passed on and nothing more is coming for it (a one-off job,
+  a check, a trial run), ` + "`stop`" + ` it so the list holds only work in flight. Keep it
+  only while a next step waits on it: the human's answer, a fix to make, a follow-up.
 - When the human agrees a how-to should become a skill, spawn a worker to write it where
   they said (their own skills, or a project's repo), then cut the note down to a pointer.
 - A report starting "BLOCKED:" is a worker that can't go on: it says what it needs, what

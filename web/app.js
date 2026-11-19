@@ -539,6 +539,13 @@
   const workerChatter = (e) => e.ref && e.ref !== ROUTER && (e.tone === "done" || e.tone === "info" || e.tone === "blocked") && CHATTER.test(e.text);
   // Messages waiting for Collie itself (an older hub only counts them all).
   const routerQueued = () => sup.queued_router ?? sup.queued;
+  // Messages you sent that the hub's stream hasn't shown yet.
+  const pendingSays = [];
+  function chatEntries() {
+    const have = new Set(sup.entries.map((e) => e.id));
+    for (let i = pendingSays.length - 1; i >= 0; i--) if (pendingSays[i].id && have.has(pendingSays[i].id)) pendingSays.splice(i, 1);
+    return pendingSays.length ? [...sup.entries, ...pendingSays] : sup.entries;
+  }
   function renderSuper(force) {
     const r = sup.router || {};
     $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "";
@@ -564,7 +571,7 @@
     const scroller = box.parentElement;
     const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     let html = "", prevRole = "";
-    if (!sup.entries.length) {
+    if (!sup.entries.length && !pendingSays.length) {
       html = `<div class="hello"><img src="/icon.svg" alt="">
         <h3>一个入口，管一群 agent</h3>
         <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
@@ -575,14 +582,17 @@
         </div></div>`;
     } else {
       let prev = "", lastAt = 0;
-      for (const e of sup.entries) {
+      for (const e of chatEntries()) {
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
         if (e.role === "event" && workerChatter(e)) continue;
         // A quiet line with the time when the talk picks up again after a
         // while (or on a new day); hovering a message shows its exact time.
         const at = +new Date(e.at) || 0;
+        // A new day always gets its line, even before an event (whose own
+        // time has no date); talk after a pause gets one too.
         const talk = e.role === "user" || e.role === "collie";
-        if (talk && at && (!lastAt || at - lastAt > 10 * 60e3 || new Date(at).toDateString() !== new Date(lastAt).toDateString())) {
+        const newDay = at && lastAt && new Date(at).toDateString() !== new Date(lastAt).toDateString();
+        if (at && (newDay || (talk && (!lastAt || at - lastAt > 10 * 60e3)))) {
           html += `<div class="time-sep">${esc(sepTime(at))}</div>`;
           prev = "";
         }
@@ -765,11 +775,25 @@
     // Only what was picked here goes along; the hub fills in its current defaults.
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
-    await api("/api/super/say", { body: { text,
+    // Your message shows at once; the hub's copy takes its place when it arrives.
+    const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true };
+    pendingSays.push(mine);
+    renderSuper(true);
+    let r;
+    try {
+      r = await api("/api/super/say", { body: { text,
       machine: "machine" in p ? (t.machine || "local") : "",
       kind: "kind" in p ? t.kind : "",
       model: "model" in p || "kind" in p ? model : "",
       effort: "effort" in p || "kind" in p ? effort : "" } });
+    } catch (err) {
+      pendingSays.splice(pendingSays.indexOf(mine), 1);
+      renderSuper(true);
+      throw err;
+    }
+    // The hub's copy may already be here (its push beat the reply): swap now.
+    mine.id = r?.entry || "";
+    if (!mine.id || sup.entries.some((e) => e.id === mine.id)) { pendingSays.splice(pendingSays.indexOf(mine), 1); renderSuper(true); }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }, () => targetNow().machine);
 
@@ -1811,7 +1835,12 @@
     const st = $("#d-status");
     st.className = "status " + v.status;
     st.innerHTML = `<span class="dot ${esc(v.status)}"></span>${esc(STATUS_LABEL[v.status] || v.status)}`;
-    $("#d-cwd").textContent = tilde(v.cwd);
+    // With more than one computer, say which one it runs on; its own home
+    // folder shortens to ~ (big Linux boxes keep homes outside /home).
+    const ms = state.machines || [];
+    const home = ms.find((m) => m.id === (v.machine || ""))?.home;
+    const cwd = home && (v.cwd || "").startsWith(home) ? "~" + v.cwd.slice(home.length) : tilde(v.cwd);
+    $("#d-cwd").textContent = (ms.length > 1 ? machineName(v.machine) + " · " : "") + cwd;
     renderWorkerModel(v);
     // The pane may have shown up before the page knew what it is (a fresh
     // terminal): once it does, switch to the view that fits.

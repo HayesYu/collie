@@ -212,9 +212,12 @@
 
   // ───────────────────────────── scripted replies
   let demoN = 0;
-  async function collieSay(text) {
-    entries.push(entry("user", text));
-    routerStatus = "working"; pushAll();
+  function collieSay(text) {
+    const mine = entry("user", text);
+    entries.push(mine); routerStatus = "working"; pushAll(); collieAnswer(text);
+    return mine.id;
+  }
+  async function collieAnswer(text) {
     await wait(1400);
     const name = "task-" + ["deps", "tests", "docs", "perf"][demoN++ % 4];
     entries.push(entry("collie", `收到。这件事我交给 **${name}**（Codex · devbox）去做，它会在 \`~/code/shop-api\` 里动手；有结果或需要你拍板时我再说。`));
@@ -279,7 +282,7 @@
       return json({ timers });
     }
     if (p === "/api/super/memory") return json(memory);
-    if (p === "/api/super/say") { collieSay(body.text || ""); return json({ ok: true }); }
+    if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "") });
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });

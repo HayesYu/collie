@@ -332,13 +332,8 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 	beat := time.NewTicker(15 * time.Second)
 	defer beat.Stop()
 	for {
-		b, _ := json.Marshal(s.state(r.Context()))
-		if string(b) != lastState {
-			lastState = string(b)
-			if sse.send("state", b) != nil {
-				return
-			}
-		}
+		// Collie's chat first: it is quick, and a message just sent should
+		// show before the slower look across every computer's sessions.
 		if s.sup != nil {
 			b, _ := json.Marshal(s.superState(r.Context()))
 			if string(b) != lastSuper {
@@ -346,6 +341,13 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 				if sse.send("super", b) != nil {
 					return
 				}
+			}
+		}
+		b, _ := json.Marshal(s.state(r.Context()))
+		if string(b) != lastState {
+			lastState = string(b)
+			if sse.send("state", b) != nil {
+				return
 			}
 		}
 		select {

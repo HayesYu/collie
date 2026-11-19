@@ -1439,7 +1439,7 @@
   // Which computer something is on is a detail on its row.
   const RECENT_N = 8;
   let extAll = store.get("extAll", false);
-  const EXT_STATE = { working: "在干活", idle: "开着，在等你", blocked: "等电脑那边确认" };
+  const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
   const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
   function renderExt() { renderSessions(); }
   $("#live-list").addEventListener("click", (e) => {
@@ -1567,7 +1567,7 @@
       : `它跑在 ${app} 里，Collie 只能看，不能往里面打字。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续，之后就能在这里和它对话。`;
     $("#x-takeover").disabled = !!gone || !e.session;
     if (e.status && !gone) {
-      $("#x-status").textContent = `${{ working: "正在跑", idle: "空闲，等你发话", blocked: "等电脑那边确认" }[e.status] || "正在运行"} · ${app}`;
+      $("#x-status").textContent = `${{ working: "正在跑", waiting: "在等后台任务", idle: "空闲，等你发话", blocked: "等电脑那边确认" }[e.status] || "正在运行"} · ${app}`;
       $("#x-status").className = "status " + e.status;
     }
     if (e.can_send && !gone) {

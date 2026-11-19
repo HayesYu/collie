@@ -329,12 +329,15 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 #v-collie .msg.user .re-who { color: inherit; }
 /* Under a Collie message: copy, quote, its time. The row keeps its place
    and shows on hover; on a phone it opens when you tap the message. */
-.msg-acts { display: flex; align-items: center; gap: 2px; height: 26px; margin: -2px 0 -8px -6px; color: var(--fg-3);
+/* It takes no room of its own: it sits in the gap before the next item
+   (and keeps its room only when a close follow-up message leaves no gap). */
+.msg-acts { display: flex; align-items: center; gap: 2px; height: 24px; margin: 0 0 -24px -6px; color: var(--fg-3); position: relative; z-index: 1;
   opacity: 0; pointer-events: none; transition: opacity .12s; }
 #v-collie .say:hover .msg-acts, #v-collie .msg.show-time .msg-acts { opacity: 1; pointer-events: auto; }
 /* your own message: the row sits under the bubble's right edge */
 #v-collie .mine { display: flex; flex-direction: column; align-items: flex-end; align-self: stretch; }
-#v-collie .mine .msg-acts { justify-content: flex-end; margin: 2px -6px -8px 0; }
+#v-collie .mine .msg-acts { justify-content: flex-end; margin: 2px -6px -26px 0; }
+#v-collie .say:has(+ .say.cont) .msg-acts { margin-bottom: 0; }
 #v-collie .mine .msg-acts .t { margin: 0 6px 0 0; }
 #v-collie .mine:hover .msg-acts, #v-collie .mine .msg.show-time + .msg-acts { opacity: 1; pointer-events: auto; }
 .msg-acts button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
@@ -342,7 +345,7 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 .msg-acts svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .msg-acts .t { margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
 @media (hover: none) {
-  .msg-acts { display: none; margin-bottom: 0; }
+  .msg-acts, #v-collie .mine .msg-acts { display: none; margin-bottom: 0; }
   #v-collie .msg.show-time .msg-acts, #v-collie .mine .msg.show-time + .msg-acts { display: flex; }
 }
 .re-draft { display: flex; align-items: center; gap: 6px; margin: 10px 12px 0; padding-left: 8px; border-left: 2px solid var(--line-2); font-size: 12px; line-height: 18px; color: var(--fg-3); min-width: 0; }

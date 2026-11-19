@@ -54,6 +54,7 @@ type desktopRow struct {
 	path, format        string
 	created, updated    time.Time
 	running             bool // the app says a turn is running (Codex, Antigravity)
+	waiting             bool // stopped, with something still to come (an Antigravity timer)
 }
 
 var desktopCache struct {
@@ -132,9 +133,11 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				e.ReadOnly = "这个对话现在没有在 Codex 里打开：在 Codex App 里点开它，就能从这里发消息"
 			}
 		case "agy":
-			e.Live = d.running
+			e.Live = d.running || d.waiting
 			if d.running {
 				e.Status = "working"
+			} else if d.waiting {
+				e.Status = "waiting"
 			}
 			if agyDesktopServer() != nil {
 				e.CanSend, e.via = true, "app"
@@ -544,7 +547,9 @@ func (s *Server) agyDesktopRows() []desktopRow {
 		return nil
 	}
 	defer db.Close()
-	res, err := db.Query(`SELECT conversation_id, title, preview, workspace_uris, status, last_modified_time, last_user_input_time
+	// not_fully_idle: the turn is over but the agent will be back on its own
+	// (it set a timer, or a command runs in the background).
+	res, err := db.Query(`SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, last_modified_time, last_user_input_time
 		FROM conversation_summaries WHERE nesting_depth = 0 AND killed = 0 AND last_modified_time > ?
 		ORDER BY last_modified_time DESC LIMIT ?`, time.Now().Add(-desktopWindow).UTC().Format("2006-01-02 15:04:05"), desktopMax)
 	if err != nil {
@@ -554,8 +559,9 @@ func (s *Server) agyDesktopRows() []desktopRow {
 	var rows []desktopRow
 	for res.Next() {
 		var id, title, preview, uris, status string
+		var notIdle bool
 		var mod, input any
-		if res.Scan(&id, &title, &preview, &uris, &status, &mod, &input) != nil {
+		if res.Scan(&id, &title, &preview, &uris, &status, &notIdle, &mod, &input) != nil {
 			continue
 		}
 		if title == "" {
@@ -569,6 +575,7 @@ func (s *Server) agyDesktopRows() []desktopRow {
 		}
 		d := desktopRow{id: "ag-" + id, kind: "agy", app: appAgy, session: id, title: messageTitle(title), cwd: cwd,
 			created: sqlTime(input), updated: sqlTime(mod), running: status == "CASCADE_RUN_STATUS_RUNNING"}
+		d.waiting = !d.running && notIdle
 		if f := filepath.Join(root, "brain", id, ".system_generated", "logs", "transcript.jsonl"); isFile(f) {
 			d.path, d.format = f, "agy"
 		}

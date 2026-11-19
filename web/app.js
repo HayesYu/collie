@@ -2296,11 +2296,11 @@
   }
   let fileUrl = "";
   async function openFile(path) {
-    const dlg = $("#file-view"), body = $("#fv-body");
+    const body = $("#fv-body");
     $("#fv-name").textContent = path.split("/").pop();
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
-    if (!dlg.open) dlg.showModal();
+    showFilePane();
     // Where the message came from first, then the hub, then every other computer.
     const ms = (state.machines || []).filter((m) => !m.hub && (m.local || m.online)).map((m) => m.local ? "" : m.id);
     const tries = [...new Set([fileContextMachine() ?? "", "", ...ms])];
@@ -2330,7 +2330,39 @@
     e.preventDefault();
     openFile(a.dataset.path);
   });
-  $("#file-view").addEventListener("close", () => { if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = ""; });
+  // Wide screens: a panel to the right of the conversation, which stays
+  // usable; its width is dragged and remembered. Narrow ones: full screen.
+  const pane = $("#file-view");
+  const setFileW = (w) => document.documentElement.style.setProperty("--file-w", Math.round(w) + "px");
+  setFileW(store.get("fileW", 520));
+  function showFilePane() {
+    pane.hidden = false;
+    $("#app").classList.add("has-file");
+  }
+  function closeFilePane() {
+    pane.hidden = true;
+    $("#app").classList.remove("has-file");
+    $("#fv-path").textContent = "";
+    if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
+  }
+  pane.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pane.hidden && !document.querySelector("dialog[open]")) closeFilePane(); });
+  $("#fv-grip").addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const grip = e.currentTarget;
+    grip.setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging");
+    // The conversation keeps at least 420px.
+    const max = innerWidth - $(".side").offsetWidth - 420;
+    const move = (ev) => setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360));
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      document.body.classList.remove("dragging");
+      store.set("fileW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--file-w")) || 520);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up, { once: true });
+  });
 
   // Minimal, safe Markdown: escape first, then add a little structure.
   const mdCache = new Map();

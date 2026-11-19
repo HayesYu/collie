@@ -538,16 +538,35 @@ dialog.sheet > form { flex: 1 1 auto; min-height: 0; max-height: none; }
 .sheet-body { overflow: auto; flex: 1; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .sheet-note { margin: 0; padding: 0 20px 4px; font-size: 12px; line-height: 1.6; }
 .sheet .field { padding: 10px 20px; }
-/* file viewer */
-.file-sheet { width: min(860px, calc(100vw - 32px)); height: calc(var(--vh) - 48px); }
-.file-sheet .sheet-head h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#fv-path { font: 11px var(--mono); overflow-wrap: anywhere; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
-#fv-body { padding: 4px 20px 24px; }
+/* file viewer: a third column on wide screens, full screen on narrow ones */
+.app.has-file { grid-template-columns: var(--side-w) minmax(0, 1fr) var(--file-w, 520px); }
+.filepane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--bg); }
+.filepane[hidden] { display: none; }
+.fv-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; }
+.fv-grip:hover, body.dragging .fv-grip { background: linear-gradient(90deg, transparent 3px, var(--line-2) 3px, var(--line-2) 5px, transparent 5px); }
+body.dragging { cursor: col-resize; user-select: none; }
+.fv-head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 4px 20px; }
+.fv-head h3 { flex: 1; margin: 0; min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fv-back { display: none; }
+#fv-path { margin: 0; padding: 0 20px 10px; font: 11px/1.5 var(--mono); overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+.fv-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 20px 24px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .fv-md { max-width: none; background: none; padding: 0; }
 .fv-pre { margin: 14px 0 0; font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .fv-img { padding-top: 16px; text-align: center; }
 .fv-img img { max-width: 100%; height: auto; border-radius: 8px; }
 .fv-note { margin: 16px 0 0; font-size: 13px; }
+@media (max-width: 1000px) {
+  .app.has-file { grid-template-columns: var(--side-w) 1fr; }
+  .filepane { position: fixed; inset: 0; z-index: 50; border-left: 0; animation: fv-in .18s ease-out; }
+  .fv-grip, .fv-x { display: none; }
+  .fv-back { display: inline-grid; }
+  .fv-head { padding: 10px 12px 4px; gap: 4px; }
+  .fv-head h3 { font-size: 16px; }
+  #fv-path { padding: 0 16px 10px; }
+  .fv-body { padding: 4px 16px 32px; }
+}
+@media (max-width: 760px) { .app.has-file { grid-template-columns: 1fr; } }
+@keyframes fv-in { from { transform: translateX(24px); opacity: 0; } }
 a.fpath { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; cursor: pointer; }
 a.fpath:hover { text-decoration-color: currentColor; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }

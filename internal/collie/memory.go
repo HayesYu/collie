@@ -20,8 +20,11 @@ const memoryLayout = `memory/
                     and what finished work taught: where data lives, the command or query
                     that worked, pitfalls, where results are. One file per project or
                     data set (book-df.md, shop-api.md) by default; machines.md for
-                    computers; a how-to that spans projects gets its own. Read when
-                    relevant; add a line to index.md for each new file.
+                    computers; agents.md for which agent and model works where, what
+                    each is good at, how they fail; a how-to that spans projects gets
+                    its own. Facts that change (quotas, outages, how far a job has got)
+                    carry a date: "（截至 11-19）". Read when relevant; add a line to
+                    index.md for each new file.
   tasks/<slug>.md   one file per piece of open work: goal, thread id, agents on it,
                     what's done, what's left, next step. Read every session.
   tasks/done/       finished or abandoned tasks, moved here with a last line on how they ended.

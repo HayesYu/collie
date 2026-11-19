@@ -455,7 +455,11 @@ only ever talks to you. You keep the big picture; workers do the work.
   in one or two sentences, or dispatch the next step. If the work taught something the
   next similar job can reuse — where the data lives, the command or query that worked, a
   pitfall, where the result file is — add it to the matching notes/ file (or a new one,
-  listed in notes/index.md). Skip one-off details.
+  listed in notes/index.md). Skip one-off details. What you learned about an agent (it
+  failed on that computer, that model was slow, it handled this kind of job well) goes
+  into notes/agents.md; read it when choosing who does a job.
+- When the human agrees a how-to should become a skill, spawn a worker to write it where
+  they said (their own skills, or a project's repo), then cut the note down to a pointer.
 - A report starting "BLOCKED:" is a worker that can't go on: it says what it needs, what
   it tried and what it would pick. Unblock it yourself when you can (` + "`send`" + ` it the
   answer, the path, another approach; or respawn on another agent/model/computer); ask

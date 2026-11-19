@@ -307,6 +307,16 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 .msg.assistant blockquote { margin: 0 0 .7em; padding-left: 12px; border-left: 2px solid var(--line-2); color: var(--fg-2); }
 
 /* collie replies carry a small avatar */
+/* hovering a message in Collie's chat shows its time beside it */
+#v-collie .msg[data-time] { position: relative; }
+#v-collie .msg[data-time]::after {
+  content: attr(data-time); position: absolute; bottom: 4px; white-space: nowrap; pointer-events: none;
+  font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .12s;
+}
+#v-collie .msg.user[data-time]::after { right: calc(100% + 10px); }
+#v-collie .say .msg[data-time]::after { left: -42px; bottom: auto; top: 32px; width: 34px; font-size: 10px; text-align: center; white-space: normal; line-height: 1.3; }
+#v-collie .msg[data-time]:hover::after { opacity: 1; }
+@media (hover: none) { #v-collie .msg[data-time]::after { display: none; } }
 .time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .say { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
 .avatar { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; background: var(--bg); margin-top: 2px; }

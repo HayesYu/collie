@@ -589,7 +589,7 @@
         if (at) lastAt = at;
         const cont = e.role === "collie" && prev === "collie";
         prev = prevRole = e.role;
-        const tip = at ? ` title="${esc(fullTime(at))}"` : "";
+        const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
         if (e.role === "user") html += `<div class="msg user"${tip}>${userText(e.text)}</div>`;
         else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant"${tip}>${md(e.text)}</div></div>`;
         else {
@@ -1833,9 +1833,15 @@
     if (!key) { el.hidden = true; el.textContent = ""; return; }
     let [model, effort] = run;
     const own = !model;
-    if (own && !hubOf(v.pane_id)) model = (await modelsFor(kind, machine || "")).default || "";
+    const info = hubOf(v.pane_id) ? {} : await modelsFor(kind, machine || "").catch(() => ({}));
+    if (own) model = info.default || "";
     if (el._key !== key) return;
-    const parts = [model ? model.split("/").pop() + (own ? "（默认）" : "") : "默认模型"];
+    // The model list's own name ("Gemini 4 Neon (XHigh)"), its bracket read
+    // as the thinking level when the id carries one, as Antigravity's do.
+    let name = (info.models || []).find((m) => m.id === model)?.label || model.split("/").pop();
+    const b = name.match(/^(.*\S)\s*\(([^)]+)\)$/);
+    if (b && EFFORT_LABEL[b[2].toLowerCase()]) { name = b[1]; effort ||= b[2].toLowerCase(); }
+    const parts = [model ? name + (own ? "（默认）" : "") : "默认模型"];
     if (effort) parts.push("思考 " + (EFFORT_LABEL[effort] || effort));
     el.textContent = parts.join(" · ");
     el.title = `启动时用的模型：${model || "agent 自己的设置"}${effort ? "，思考强度 " + effort : ""}（之后在 agent 里换过的话这里不会变）`;

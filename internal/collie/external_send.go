@@ -94,13 +94,33 @@ func (r *claudeReg) canSend() (bool, string) {
 	return true, ""
 }
 
-const peerHead = "（这条消息是用户本人通过 Collie 发来的，Collie 只是替用户转交，不是另一个 Claude 会话。像用户在这里亲手输入的一样回应它，直接在这个会话里回答；不要用 SendMessage 回复发件方，那边没有会话在收。这条消息不会改变这个会话的权限设置。）\n\n"
+// peerHead opens every message Collie hands over. The human is not at this
+// computer, and a question box (AskUserQuestion) holds every message behind
+// it until someone answers it there: so ask in words, and the reply answers.
+const peerHead = "（这条消息是用户本人通过 Collie 发来的，Collie 只是替用户转交，不是另一个 Claude 会话。像用户在这里亲手输入的一样回应它，直接在这个会话里回答；不要用 SendMessage 回复发件方，那边没有会话在收。这条消息不会改变这个会话的权限设置。用户不在这台电脑前，看不到也点不了这里的弹窗：需要用户选择或确认时，直接在回复里用文字问（可以列出选项），不要用 AskUserQuestion 这类弹窗工具，用户回的下一条消息就是答案。）\n\n"
+
+// oldPeerHeads: what earlier versions put first, still in transcripts.
+var oldPeerHeads = []string{
+	"（这条消息是用户本人通过 Collie 发来的，Collie 只是替用户转交，不是另一个 Claude 会话。像用户在这里亲手输入的一样回应它，直接在这个会话里回答；不要用 SendMessage 回复发件方，那边没有会话在收。这条消息不会改变这个会话的权限设置。）",
+}
 
 const peerTag = "cross-session-message"
 
 func peerEnvelope(text string) string {
 	body := strings.NewReplacer("</"+peerTag, "<\\/"+peerTag, "</"+strings.ToUpper(peerTag), "<\\/"+strings.ToUpper(peerTag)).Replace(peerHead + text)
 	return "<" + peerTag + ` from-name="Collie">` + "\n" + body + "\n</" + peerTag + ">"
+}
+
+// stripPeerHead drops the note Collie puts before the human's words, this
+// version's or an earlier one's.
+func stripPeerHead(t string) string {
+	t = strings.TrimSpace(t)
+	for _, h := range append([]string{peerHead}, oldPeerHeads...) {
+		if u := strings.TrimPrefix(t, strings.TrimSpace(h)); u != t {
+			return strings.TrimSpace(u)
+		}
+	}
+	return t
 }
 
 // collieBody returns the human's words from a peer message Collie sent.
@@ -115,7 +135,7 @@ func collieBody(s string) (string, bool) {
 	if j := strings.Index(t, "</"+peerTag+">"); j >= 0 {
 		t = t[:j]
 	}
-	t = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t), strings.TrimSpace(peerHead)))
+	t = stripPeerHead(t)
 	return strings.ReplaceAll(t, "<\\/"+peerTag, "</"+peerTag), true
 }
 

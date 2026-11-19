@@ -361,7 +361,7 @@ func (t *transcript) claudeLine(line []byte) bool {
 		if e.Type != "user" || e.Origin == nil || e.Origin.Kind != "peer" || e.Origin.Name != "Collie" {
 			return false
 		}
-		body := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(e.Origin.Body), strings.TrimSpace(peerHead)))
+		body := stripPeerHead(e.Origin.Body)
 		if body == "" {
 			return false
 		}

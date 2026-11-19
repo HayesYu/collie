@@ -72,3 +72,12 @@ func TestWithBypass(t *testing.T) {
 		}
 	}
 }
+
+func TestCollieBodyOldHead(t *testing.T) {
+	for _, h := range append([]string{peerHead}, oldPeerHeads...) {
+		s := "<cross-session-message from-name=\"Collie\">\n" + h + "\n\nBlue\n</cross-session-message>"
+		if b, ok := collieBody(s); !ok || b != "Blue" {
+			t.Fatalf("%q -> %q", h[:20], b)
+		}
+	}
+}

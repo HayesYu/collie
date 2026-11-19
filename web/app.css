@@ -314,7 +314,6 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
   font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .12s;
 }
 #v-collie .msg.user[data-time]::after { right: calc(100% + 10px); }
-#v-collie .say .msg[data-time]::after { left: -42px; bottom: auto; top: 32px; width: 34px; font-size: 10px; text-align: center; white-space: normal; line-height: 1.3; }
 #v-collie .msg[data-time]:hover::after, #v-collie .msg.show-time::after { opacity: 1; }
 /* Phones: tap a message and its time shows on a line of its own under it. */
 @media (hover: none) {
@@ -332,18 +331,18 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 #v-collie .re-who { color: var(--fg-2); margin-right: 6px; }
 #v-collie .msg.user .re { color: inherit; opacity: .6; border-left-color: currentColor; }
 #v-collie .msg.user .re-who { color: inherit; }
-/* Quote a Collie message: in the gutter under its time, on hover (on a
-   phone, beside the time once you tap the message). */
-#v-collie .re-btn { position: absolute; left: -42px; top: 50px; width: 34px; padding: 0; border: 0; background: none; cursor: pointer;
-  font-size: 10px; line-height: 1.3; text-align: center; color: var(--fg-3); opacity: 0; pointer-events: none; transition: opacity .12s; }
-#v-collie .say.cont .re-btn { top: 20px; }
-#v-collie .say.cont .msg[data-time]::after { top: 2px; }
-#v-collie .say:hover .re-btn { opacity: 1; pointer-events: auto; }
-#v-collie .re-btn:hover { color: var(--fg); }
+/* Under a Collie message: copy, quote, its time. The row keeps its place
+   and shows on hover; on a phone it opens when you tap the message. */
+.msg-acts { display: flex; align-items: center; gap: 2px; height: 26px; margin: -2px 0 -8px -6px; color: var(--fg-3);
+  opacity: 0; pointer-events: none; transition: opacity .12s; }
+#v-collie .say:hover .msg-acts, #v-collie .msg.show-time .msg-acts { opacity: 1; pointer-events: auto; }
+.msg-acts button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
+.msg-acts button:hover { background: var(--bg-2, rgba(127,127,127,.12)); color: var(--fg); }
+.msg-acts svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.msg-acts .t { margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
 @media (hover: none) {
-  #v-collie .re-btn { position: static; display: none; width: auto; margin: 4px 12px 0 0; font-size: 11px; opacity: 1; pointer-events: auto; }
-  #v-collie .msg.show-time > .re-btn { display: inline-block; }
-  #v-collie .say .msg.show-time::after { display: inline-block; }
+  .msg-acts { display: none; margin-bottom: 0; }
+  #v-collie .msg.show-time .msg-acts { display: flex; }
 }
 .re-draft { display: flex; align-items: center; gap: 6px; margin: 10px 12px 0; padding-left: 8px; border-left: 2px solid var(--line-2); font-size: 12px; line-height: 18px; color: var(--fg-3); min-width: 0; }
 .re-draft[hidden] { display: none; }

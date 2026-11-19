@@ -625,7 +625,7 @@
           html += `<div class="msg user" data-id="${esc(e.id)}"${tip}>${quote(e)}${userText(e.text)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${tip}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${e.id ? `<button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用这条回复">↩ 引用</button>` : ""}</div></div>`;
+          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${msgActs(e, at)}</div></div>`;
           sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
@@ -2478,6 +2478,29 @@
       for (const el of document.querySelectorAll(".thumb[data-img] img")) if (el.parentElement.dataset.img === p) el.src = u;
     } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
   }
+  // Under each Collie message, on hover: copy, quote, and when it was said.
+  const ICON_COPY = `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
+  const ICON_QUOTE = `<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>`;
+  const msgActs = (e, at) => e.id ? `<div class="msg-acts">
+      <button type="button" data-copy="${esc(e.id)}" title="复制">${ICON_COPY}</button>
+      <button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用回复">${ICON_QUOTE}</button>
+      ${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}</div>` : "";
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; } catch {}
+    // http pages have no clipboard API: the old way still works there
+    const ta = Object.assign(document.createElement("textarea"), { value: t });
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.append(ta); ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }
+  document.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("[data-copy]");
+    if (!b) return;
+    const e = sup.entries.find((x) => x.id === b.dataset.copy);
+    if (e) toast(await copyText(e.text) ? "已复制" : "复制失败", "");
+  });
   // A reply's quote of your message: take you to it.
   document.addEventListener("click", (e) => {
     const a = e.target.closest("a.re[data-goto]");
@@ -2491,7 +2514,7 @@
   // No hover on a phone: tap a Collie chat message to see when it was said.
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
-    const m = e.target.closest("#v-collie .msg[data-time]");
+    const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg");
     if (m && e.target.closest("a, button, .thumb")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");

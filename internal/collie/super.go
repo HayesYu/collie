@@ -53,7 +53,7 @@ type Super struct {
 	lastScreen  map[string]screenMark
 	transcripts map[string]*transcript
 	noAgent     map[string]time.Time // worker → since when its pane has had no agent in it
-	notifyBuf   []string
+	notifyBuf   []notice
 	notifyAt    time.Time
 	seenAt      time.Time // when a page of Collie was last open in front of you
 	seenURL     string    // where that page was, for the link in a notification
@@ -994,11 +994,29 @@ func (sp *Super) queueNotifyLocked(role, text, tone string) {
 	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" {
 		return
 	}
-	prefix := "Collie"
-	if tone == "blocked" {
-		prefix = "Collie · 需要你"
+	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text})
+}
+
+// A notice is one thing to tell you: what Collie said, or what needs you.
+type notice struct{ tone, text string }
+
+func (n notice) label() string {
+	switch n.tone {
+	case "blocked":
+		return "Collie · 需要你"
+	case "error":
+		return "Collie · 出错了"
 	}
-	sp.notifyBuf = append(sp.notifyBuf, prefix+"："+clip(text, 400))
+	return "Collie"
+}
+
+// noticesText is the plain form (webhooks, and the card's fallback).
+func noticesText(ns []notice) string {
+	var parts []string
+	for _, n := range ns {
+		parts = append(parts, n.label()+"："+clip(n.text, 400))
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // Seen notes that a page of Collie is open in front of you (the page says so
@@ -1021,7 +1039,8 @@ func (sp *Super) sendNotifications() {
 		sp.mu.Unlock()
 		return
 	}
-	text := strings.Join(sp.notifyBuf, "\n\n")
+	notices := sp.notifyBuf
+	text := noticesText(notices)
 	url, toLark := sp.st.Settings.NotifyWebhook, sp.st.Settings.NotifyLark
 	looking := time.Since(sp.seenAt) < 75*time.Second
 	link := sp.seenURL
@@ -1031,11 +1050,10 @@ func (sp *Super) sendNotifications() {
 		return
 	}
 	if toLark {
-		msg := text
 		if link != "" {
-			msg += "\n\n打开 Collie：" + link + "/#/collie"
+			link += "/#/collie"
 		}
-		if err := larkSend(msg); err != nil {
+		if err := larkSend(notices, link); err != nil {
 			log.Printf("notify lark: %v", err)
 		}
 	}

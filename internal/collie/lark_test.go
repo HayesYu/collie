@@ -48,7 +48,7 @@ func TestLarkNotify(t *testing.T) {
 		t.Fatal("nothing sent")
 	}
 	got := string(b)
-	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "报告：都好了", "http://hub:7788/#/collie"} {
+	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "--msg-type\ninteractive", `"schema":"2.0"`, "报告：都好了", `"default_url":"http://hub:7788/#/collie"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)
 		}

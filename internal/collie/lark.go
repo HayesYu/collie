@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -68,19 +70,75 @@ func larkLookup() (bin, openID, who, problem string) {
 	return bin, st.Identities.User.OpenID, st.Identities.User.UserName, ""
 }
 
-// larkSend writes text to the logged-in user, as the bot (a message from
-// yourself would not ring).
-func larkSend(text string) error {
+// larkSend writes to the logged-in user, as the bot (a message from yourself
+// would not ring): a card, or plain text if the card is turned down.
+func larkSend(ns []notice, link string) error {
 	bin, openID, _, problem := lark.get(false)
 	if problem != "" {
 		return errors.New(problem)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "im", "+messages-send", "--as", "bot", "--user-id", openID, "--text", text).CombinedOutput()
-	if err != nil {
-		lark.get(true) // logged out, or moved: look again next time
-		return errors.New(clip(string(out), 300))
+	send := func(args ...string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		args = append([]string{"im", "+messages-send", "--as", "bot", "--user-id", openID}, args...)
+		if out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput(); err != nil {
+			return errors.New(clip(string(out), 300))
+		}
+		return nil
 	}
+	err := send("--msg-type", "interactive", "--content", larkCard(ns, link))
+	if err == nil {
+		return nil
+	}
+	text := noticesText(ns)
+	if link != "" {
+		text += "\n\n打开 Collie：" + link
+	}
+	if err2 := send("--text", text); err2 != nil {
+		lark.get(true) // logged out, or moved: look again next time
+		return err2
+	}
+	log.Printf("notify lark: card refused, sent as text: %v", err)
 	return nil
+}
+
+// larkCard is a Feishu card (JSON 2.0): the header says how much it matters
+// (orange when it needs you, as on the page), the body is Collie's own
+// Markdown, and a button opens Collie.
+func larkCard(ns []notice, link string) string {
+	title, color := "Collie", "grey"
+	for _, n := range ns {
+		switch {
+		case n.tone == "blocked":
+			title, color = n.label(), "orange"
+		case n.tone == "error" && color != "orange":
+			title, color = n.label(), "red"
+		}
+	}
+	var els []any
+	for i, n := range ns {
+		if i > 0 {
+			els = append(els, map[string]any{"tag": "hr"})
+		}
+		t := clip(n.text, 1500)
+		if len(ns) > 1 && n.tone != "" && n.tone != "collie" {
+			t = "**" + n.label() + "**\n" + t
+		}
+		els = append(els, map[string]any{"tag": "markdown", "content": t})
+	}
+	if link != "" {
+		els = append(els, map[string]any{
+			"tag": "button", "type": "default", "width": "default",
+			"text":      map[string]string{"tag": "plain_text", "content": "打开 Collie"},
+			"behaviors": []any{map[string]string{"type": "open_url", "default_url": link}},
+		})
+	}
+	summary := strings.TrimSpace(strings.SplitN(ns[len(ns)-1].text, "\n", 2)[0])
+	b, _ := json.Marshal(map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"summary": map[string]string{"content": clip(summary, 60)}},
+		"header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}, "template": color},
+		"body":   map[string]any{"elements": els},
+	})
+	return string(b)
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"slices"
@@ -696,6 +697,13 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 		sp.st.Policies = valid
 	}
 	sp.changed()
+	if body.Settings != nil {
+		go func() { // ROUTER.md quotes some settings (reply length, where workers go)
+			if err := sp.writeRouterFiles(); err != nil {
+				log.Printf("router files: %v", err)
+			}
+		}()
+	}
 	writeJSON(w, 200, map[string]any{"settings": sp.st.Settings, "policies": sp.st.Policies})
 }
 

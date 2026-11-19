@@ -695,10 +695,7 @@
     box.innerHTML = html;
     if (atBottom || force) scroller.scrollTop = scroller.scrollHeight;
   }
-  // Scrolled to the top: bring the next page in by itself.
-  $("#super-thread").parentElement.addEventListener("scroll", (e) => {
-    if (e.target.scrollTop < 40 && e.target.scrollHeight > e.target.clientHeight + 100 && canLoadOlder()) loadOlder();
-  }, { passive: true });
+  $("#super-thread")._loadMore = () => canLoadOlder() && loadOlder();
 
   // The dialogs agents are stuck on, read from their screens (pane → {at, a}).
   const superAsks = new Map();
@@ -2140,7 +2137,10 @@
   // A thread's messages: the older ones loaded on request, then the live view.
   const threadMsgs = (el) => (el._older || []).concat(el._msgs || []);
   const earlierCursor = (el) => (el._older ? el._olderEarlier : el._liveEarlier) || 0;
-  function resetEarlier(el, url) { el._older = null; el._olderEarlier = 0; el._liveEarlier = 0; el._earlierURL = url; }
+  function resetEarlier(el, url) {
+    el._older = null; el._olderEarlier = 0; el._liveEarlier = 0; el._earlierURL = url;
+    el._loadMore = url && (() => { el._earlierFailed = false; if (earlierCursor(el) > 0) loadEarlier(el); });
+  }
 
   // Scrolled to the top of a conversation: fetch the page before the oldest
   // message shown, keeping the reader's place.
@@ -2165,11 +2165,13 @@
     el._redraw?.();
     s.scrollTop = s.scrollHeight - fromBottom;
   }
+  // Any conversation scrolled to its top brings in the page before: each
+  // thread says how (_loadMore), this one listener notices.
   document.addEventListener("scroll", (ev) => {
     const s = ev.target;
     if (!(s instanceof Element) || s.scrollTop >= 40 || s.scrollHeight <= s.clientHeight + 100) return;
-    const el = [...s.querySelectorAll(".thread")].find((t) => t._earlierURL && scroller(t) === s) || (s._earlierURL && s);
-    if (el && earlierCursor(el) > 0) { el._earlierFailed = false; loadEarlier(el); }
+    const el = s._loadMore ? s : [...s.querySelectorAll(".thread")].find((t) => t._loadMore && (t.parentElement === s || scroller(t) === s));
+    el?._loadMore();
   }, { capture: true, passive: true });
 
   // Opening a thread: what was on screen last time shows at once and the live

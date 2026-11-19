@@ -622,7 +622,7 @@
         prev = prevRole = e.role;
         const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
         if (e.role === "user") {
-          html += `<div class="msg user" data-id="${esc(e.id)}"${tip}>${quote(e)}${userText(e.text)}</div>`;
+          html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
         } else if (e.role === "collie") {
           html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${msgActs(e, at)}</div></div>`;
@@ -2485,6 +2485,9 @@
       <button type="button" data-copy="${esc(e.id)}" title="复制">${ICON_COPY}</button>
       <button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用回复">${ICON_QUOTE}</button>
       ${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}</div>` : "";
+  // Under your own message, at its right edge: when you said it, and copy.
+  const mineActs = (e, at) => e.id ? `<div class="msg-acts">${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}
+      <button type="button" data-copy="${esc(e.id)}" title="复制">${ICON_COPY}</button></div>` : "";
   async function copyText(t) {
     try { await navigator.clipboard.writeText(t); return true; } catch {}
     // http pages have no clipboard API: the old way still works there
@@ -2514,7 +2517,7 @@
   // No hover on a phone: tap a Collie chat message to see when it was said.
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
-    const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg");
+    const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
     if (m && e.target.closest("a, button, .thumb")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");

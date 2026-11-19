@@ -336,13 +336,18 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 .msg-acts { display: flex; align-items: center; gap: 2px; height: 26px; margin: -2px 0 -8px -6px; color: var(--fg-3);
   opacity: 0; pointer-events: none; transition: opacity .12s; }
 #v-collie .say:hover .msg-acts, #v-collie .msg.show-time .msg-acts { opacity: 1; pointer-events: auto; }
+/* your own message: the row sits under the bubble's right edge */
+#v-collie .mine { display: flex; flex-direction: column; align-items: flex-end; align-self: stretch; }
+#v-collie .mine .msg-acts { justify-content: flex-end; margin: 2px -6px -8px 0; }
+#v-collie .mine .msg-acts .t { margin: 0 6px 0 0; }
+#v-collie .mine:hover .msg-acts, #v-collie .mine .msg.show-time + .msg-acts { opacity: 1; pointer-events: auto; }
 .msg-acts button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
 .msg-acts button:hover { background: var(--bg-2, rgba(127,127,127,.12)); color: var(--fg); }
 .msg-acts svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .msg-acts .t { margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
 @media (hover: none) {
   .msg-acts { display: none; margin-bottom: 0; }
-  #v-collie .msg.show-time .msg-acts { display: flex; }
+  #v-collie .msg.show-time .msg-acts, #v-collie .mine .msg.show-time + .msg-acts { display: flex; }
 }
 .re-draft { display: flex; align-items: center; gap: 6px; margin: 10px 12px 0; padding-left: 8px; border-left: 2px solid var(--line-2); font-size: 12px; line-height: 18px; color: var(--fg-3); min-width: 0; }
 .re-draft[hidden] { display: none; }

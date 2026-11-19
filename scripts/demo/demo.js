@@ -43,7 +43,7 @@
   ];
   const sup = () => ({
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: "claude", context: 23, rotate_at: 70, model: "sonnet" },
-    entries, workers, queued: 0, queued_router: 0, paused: false,
+    entries, workers, queued: 0, queued_router: 0, paused: false, earlier: true,
   });
   let routerStatus = "idle";
 
@@ -279,6 +279,13 @@
     if (p === "/api/super") return json(sup());
     if (p === "/api/super/settings") return json(settings);
     if (p === "/api/super/seen") return json({ ok: true });
+    if (p === "/api/super/earlier") { // yesterday's chat, made up
+      const y = (h, m) => { const d = new Date(Date.now() - 864e5); d.setHours(h, m, 0, 0); return d.toISOString(); };
+      return json({ more: false, entries: [
+        { id: "e0a", role: "user", thread: "chat:main", text: "明天早上提醒我看一下 v1.4 的发布清单。", at: y(18, 20) },
+        { id: "e0b", role: "collie", thread: "chat:main", text: "好，明早 9:00 提醒你。", at: y(18, 20) },
+      ] });
+    }
     if (p === "/api/super/lark") return json({ ready: true, who: "Alex" });
     if (p === "/api/super/triggers") return json({ triggers, threads });
     if (p === "/api/super/timers") {

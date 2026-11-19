@@ -434,7 +434,7 @@
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
     return `<li><a class="item ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
       <span class="glyph">${glyph(v)}</span>
-      <span class="body"><div class="name">${esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}${isCollieOwned(v) && v.name !== ROUTER ? `<span class="by-collie">Collie 派出</span>` : ""}</div><div class="sub">${esc(sub)}</div></span>
+      <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm">${esc(title(v))}</span><span class="by-collie">Collie 派出</span>` : esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}</div><div class="sub">${esc(sub)}</div></span>
       <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a></li>`;
   }
 
@@ -548,10 +548,31 @@
   const routerQueued = () => sup.queued_router ?? sup.queued;
   // Messages you sent that the hub's stream hasn't shown yet.
   const pendingSays = [];
+  // Older chat, loaded a page at a time when you ask: the hub only sends the
+  // latest 200 lines. olderMore: whether there is more before that.
+  let older = [], olderMore = null, olderBusy = false;
   function chatEntries() {
     const have = new Set(sup.entries.map((e) => e.id));
     for (let i = pendingSays.length - 1; i >= 0; i--) if (pendingSays[i].id && have.has(pendingSays[i].id)) pendingSays.splice(i, 1);
-    return pendingSays.length ? [...sup.entries, ...pendingSays] : sup.entries;
+    const old = older.length ? older.filter((e) => !have.has(e.id)) : [];
+    return old.length || pendingSays.length ? [...old, ...sup.entries, ...pendingSays] : sup.entries;
+  }
+  // More before what is shown? Until asked, guess from a full page.
+  const canLoadOlder = () => olderMore ?? !!sup.earlier;
+  async function loadOlder() {
+    const first = chatEntries().find((e) => e.id);
+    if (olderBusy || !first) return;
+    olderBusy = true;
+    renderSuper();
+    const scroller = $("#super-thread").parentElement, fromBottom = scroller.scrollHeight - scroller.scrollTop;
+    try {
+      const r = await api(`/api/super/earlier?before=${encodeURIComponent(first.id)}`);
+      older = [...(r.entries || []), ...older];
+      olderMore = !!r.more;
+    } catch (e) { toast(e.message, "attn"); }
+    olderBusy = false;
+    renderSuper();
+    scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
   }
   function renderSuper(force) {
     const r = sup.router || {};
@@ -658,11 +679,19 @@
         <span class="go">处理 →</span></a>`;
       }).join("") + `</div>`;
     }
+    if (sup.entries.length && canLoadOlder()) {
+      html = `<div class="earlier-row"><button type="button" data-act="super-earlier" ${olderBusy ? "disabled" : ""}>${olderBusy ? "加载中…" : "加载更早的消息"}</button></div>` + html;
+    }
     if (html === superSig && !force) return;
     superSig = html;
     box.innerHTML = html;
     if (atBottom || force) scroller.scrollTop = scroller.scrollHeight;
   }
+  document.addEventListener("click", (e) => { if (e.target.closest('[data-act="super-earlier"]')) loadOlder(); });
+  // Scrolled to the top: bring the next page in by itself.
+  $("#super-thread").parentElement.addEventListener("scroll", (e) => {
+    if (e.target.scrollTop < 40 && e.target.scrollHeight > e.target.clientHeight + 100 && canLoadOlder()) loadOlder();
+  }, { passive: true });
 
   // The dialogs agents are stuck on, read from their screens (pane → {at, a}).
   const superAsks = new Map();

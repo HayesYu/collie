@@ -39,6 +39,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/settings", s.superSaveSettings)
 	api("POST /api/super/seen", s.superSeen)
 	api("GET /api/super/lark", s.superLark)
+	api("GET /api/super/earlier", s.superEarlier)
 	api("GET /api/super/memory", s.superMemory)
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("POST /api/super/dream", s.superDream)
@@ -68,6 +69,7 @@ type routerView struct {
 type superView struct {
 	Router  routerView `json:"router"`
 	Entries []*Entry   `json:"entries"`
+	Earlier bool       `json:"earlier,omitempty"` // older chat than Entries: /api/super/earlier
 	Workers []*Worker  `json:"workers"`
 	Queued  int        `json:"queued"`
 	// QueuedRouter: those waiting for Collie itself, not for a worker.
@@ -100,6 +102,7 @@ func (s *Server) superState(ctx context.Context) superView {
 	es := sp.st.Entries
 	if len(es) > 200 {
 		es = es[len(es)-200:]
+		v.Earlier = true
 	}
 	v.Entries = append([]*Entry{}, es...)
 	v.Workers = []*Worker{}
@@ -570,6 +573,28 @@ func (s *Server) superSeen(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sup.Seen(body.URL)
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// superEarlier is Collie's chat before a given entry, a page at a time,
+// oldest first: what the page shows when you scroll back past what it has.
+func (s *Server) superEarlier(w http.ResponseWriter, r *http.Request) {
+	before := idNum(r.URL.Query().Get("before"))
+	if before <= 0 {
+		writeJSON(w, 400, map[string]any{"error": "before?"})
+		return
+	}
+	sp := s.sup
+	sp.flush() // what memory has but the DB not yet
+	const page = 120
+	es := entryHistory(sp.db, mainThread, before, page+1)
+	more := len(es) > page
+	if more {
+		es = es[:page]
+	}
+	for i, j := 0, len(es)-1; i < j; i, j = i+1, j-1 {
+		es[i], es[j] = es[j], es[i]
+	}
+	writeJSON(w, 200, map[string]any{"entries": es, "more": more})
 }
 
 // superLark says whom the hub's lark-cli would write to.

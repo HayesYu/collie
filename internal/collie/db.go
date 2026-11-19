@@ -166,6 +166,15 @@ func threadHistory(db *sql.DB, thread string, before int64, limit int) []*Trigge
 	return out
 }
 
+// entryHistory reads a thread's chat from before entry number `before`,
+// newest first, straight from the DB (memory keeps only the recent ones).
+func entryHistory(db *sql.DB, thread string, before int64, limit int) []*Entry {
+	var out []*Entry
+	loadRows(db, `SELECT data FROM entries WHERE thread = ? AND n < ? ORDER BY n DESC LIMIT ?`,
+		func(e *Entry) { out = append(out, e) }, thread, before, limit)
+	return out
+}
+
 // loadAgentRuns restores the models agents were started with (Herdr.runs).
 func loadAgentRuns(db *sql.DB, h *Herdr) {
 	m := map[string][2]string{}

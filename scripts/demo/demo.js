@@ -213,8 +213,9 @@
 
   // ───────────────────────────── scripted replies
   let demoN = 0;
-  function collieSay(text) {
-    const mine = entry("user", text);
+  function collieSay(text, re) {
+    const q = re && entries.find((e) => e.id === re);
+    const mine = entry("user", text, q ? { re: { entry: q.id, who: "Collie", text: q.text } } : {});
     entries.push(mine); routerStatus = "working"; pushAll(); collieAnswer(text);
     return mine.id;
   }
@@ -285,7 +286,7 @@
       return json({ timers });
     }
     if (p === "/api/super/memory") return json(memory);
-    if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "") });
+    if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "", body.re) });
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });

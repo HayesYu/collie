@@ -330,6 +330,21 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
 #v-collie .re { display: block; max-width: 100%; margin: 0 0 6px; padding-left: 8px; border-left: 2px solid var(--line-2);
   font-size: 12px; line-height: 18px; color: var(--fg-3); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #v-collie .re-who { color: var(--fg-2); margin-right: 6px; }
+#v-collie .msg.user .re { color: inherit; opacity: .6; border-left-color: currentColor; }
+#v-collie .msg.user .re-who { color: inherit; }
+/* Quote a Collie message: a button that shows on hover (on a phone, once
+   you tap the message). */
+#v-collie .say { position: relative; }
+.re-btn { position: absolute; right: 0; top: -2px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  font-size: 11px; color: var(--fg-3); opacity: 0; pointer-events: none; transition: opacity .12s; }
+#v-collie .say:hover .re-btn, #v-collie .say:has(.show-time) .re-btn { opacity: 1; pointer-events: auto; }
+.re-btn:hover { color: var(--fg); border-color: var(--fg-3); }
+.re-draft { display: flex; align-items: center; gap: 6px; margin: 10px 12px 0; padding-left: 8px; border-left: 2px solid var(--line-2); font-size: 12px; line-height: 18px; color: var(--fg-3); min-width: 0; }
+.re-draft[hidden] { display: none; }
+.re-draft .re-who { flex: none; color: var(--fg-2); }
+.re-draft .re-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.re-draft button { flex: none; border: 0; background: none; color: var(--fg-3); font-size: 15px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.re-draft button:hover { color: var(--fg); }
 #v-collie a.re[href]:hover { color: var(--fg-2); border-left-color: var(--fg-3); }
 #v-collie .msg.flash { animation: flash 1.4s ease-out; }
 @keyframes flash { 0%, 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 25%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }

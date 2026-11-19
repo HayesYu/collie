@@ -87,3 +87,13 @@ func TestQuote(t *testing.T) {
 		t.Error("unknown ids should give no quote")
 	}
 }
+
+func TestCollieQuote(t *testing.T) {
+	sp := &Super{st: &State{Entries: []*Entry{{ID: "e1", Role: "collie", Text: "要我开 PR 吗？"}, {ID: "e2", Role: "user", Text: "x"}}}}
+	if q := sp.collieQuoteLocked("e1"); q == nil || q.line() != "Collie：要我开 PR 吗？" {
+		t.Errorf("got %+v", q)
+	}
+	if sp.collieQuoteLocked("e2") != nil || sp.collieQuoteLocked("") != nil {
+		t.Error("only Collie's messages are quoted")
+	}
+}

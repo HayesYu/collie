@@ -166,6 +166,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		Kind    string `json:"kind"`
 		Model   string `json:"model"`
 		Effort  string `json:"effort"`
+		Re      string `json:"re"` // a message of Collie's this answers
 	}
 	if !decode(w, r, &body) || strings.TrimSpace(body.Text) == "" {
 		if strings.TrimSpace(body.Text) == "" {
@@ -175,9 +176,13 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	}
 	sp := s.sup
 	sp.mu.Lock()
-	e := sp.addEntryLocked("user", mainThread, body.Text, "", "")
+	re := sp.collieQuoteLocked(body.Re)
+	e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
 	// The composer's "派到" chip: a one-off choice the router should honour.
 	text := body.Text
+	if re != nil { // which of your messages they mean: Collie need not guess
+		text = "[In reply to what you said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
+	}
 	st := sp.st.Settings
 	var hint []string
 	if m := s.machineByName(body.Machine); m != "" || body.Machine == "local" {

@@ -1055,6 +1055,19 @@ func (sp *Super) quoteLocked(id string) *Quote {
 	return nil
 }
 
+// collieQuoteLocked is a message of Collie's you answer, as a Quote.
+func (sp *Super) collieQuoteLocked(id string) *Quote {
+	if id == "" {
+		return nil
+	}
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		if e := sp.st.Entries[i]; e.ID == id && e.Role == "collie" {
+			return &Quote{Entry: e.ID, Who: "Collie", Text: clip(e.Text, 600)}
+		}
+	}
+	return nil
+}
+
 // humanText is your message as you wrote it: without the attachment list and
 // the notes the hub adds for Collie.
 func humanText(t string) string {

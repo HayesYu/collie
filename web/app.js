@@ -592,15 +592,16 @@
       // What a reply is about shows as a quoted line, unless it is plain
       // from what is right above: the first answer to your last message, or
       // a word on the worker whose line it follows.
-      let lastUser = "", sinceUser = 0, lastEvent = "";
+      let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0;
       const quote = (e) => {
         const q = e.re;
         if (!q) return "";
         if (q.entry && q.entry === lastUser && !sinceUser) return "";
+        if (q.entry && q.entry === lastCollie && !sinceCollie) return "";
         if (q.worker && q.worker === lastEvent) return "";
         const pane = q.worker && paneOf(q.worker), past = q.worker && !pane ? workerHist(q.worker, e.at) : null;
         const attr = q.entry ? `href="#" data-goto="${esc(q.entry)}"` : pane ? `href="#/p/${encodeURIComponent(pane)}"` : past ? `href="#/h/${encodeURIComponent(past.id)}"` : "";
-        return `<a class="re" ${attr} title="${esc(q.text)}"><span class="re-who">${esc(q.who)}</span>${esc(q.text.replace(/\s+/g, " "))}</a>`;
+        return `<a class="re" ${attr} title="${esc(q.text)}"><span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}</a>`;
       };
       for (const e of chatEntries()) {
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
@@ -621,11 +622,11 @@
         prev = prevRole = e.role;
         const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
         if (e.role === "user") {
-          html += `<div class="msg user" data-id="${esc(e.id)}"${tip}>${userText(e.text)}</div>`;
-          lastUser = e.id; sinceUser = 0; lastEvent = "";
+          html += `<div class="msg user" data-id="${esc(e.id)}"${tip}>${quote(e)}${userText(e.text)}</div>`;
+          lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant"${tip}>${quote(e)}${md(e.text)}${imagesIn(e.text)}</div></div>`;
-          sinceUser++; lastEvent = "";
+          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${tip}>${quote(e)}${md(e.text)}${imagesIn(e.text)}</div>${e.id ? `<button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用这条回复">↩ 引用</button>` : ""}</div>`;
+          sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
           // A worker's line opens the session it was about: its record once
@@ -796,23 +797,43 @@
     return t;
   };
 
+  // Quoting one of Collie's messages: it rides along with what you send next.
+  let replyTo = null;
+  const setReply = (e) => {
+    replyTo = e ? { entry: e.id, who: "Collie", text: e.text } : null;
+    const box = $("#re-draft");
+    box.hidden = !e;
+    if (e) { $(".re-t", box).textContent = reLine(e.text); $("#super-input").focus(); }
+  };
+  const reLine = (t) => plainLine(t);
+  $("#re-draft button").addEventListener("click", () => setReply(null));
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest(".re-btn[data-re]");
+    if (!b) return;
+    const e = sup.entries.find((x) => x.id === b.dataset.re);
+    if (e) setReply(e);
+  });
+
   bindComposer($("#super-composer"), $("#super-input"), async (text) => {
     // Only what was picked here goes along; the hub fills in its current defaults.
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
+    const re = replyTo;
+    setReply(null);
     // Your message shows at once; the hub's copy takes its place when it arrives.
-    const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true };
+    const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
     renderSuper(true);
     let r;
     try {
-      r = await api("/api/super/say", { body: { text,
+      r = await api("/api/super/say", { body: { text, re: re?.entry || "",
       machine: "machine" in p ? (t.machine || "local") : "",
       kind: "kind" in p ? t.kind : "",
       model: "model" in p || "kind" in p ? model : "",
       effort: "effort" in p || "kind" in p ? effort : "" } });
     } catch (err) {
       pendingSays.splice(pendingSays.indexOf(mine), 1);
+      if (re && !replyTo) setReply(sup.entries.find((x) => x.id === re.entry));
       renderSuper(true);
       throw err;
     }
@@ -2707,6 +2728,9 @@
     const ps = [...new Set([...(t || "").matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
     return ps.length ? `<span class="thumbs">${ps.map(thumbBtn).join("")}</span>` : "";
   }
+  // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
+  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").trim()).filter(Boolean).join(" ")
+    .replace(/\*\*|__|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
   function userText(t) {

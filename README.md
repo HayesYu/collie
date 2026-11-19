@@ -25,6 +25,7 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 - **所有电脑合在一处** — Mac、开发机、云电脑连到一个 hub；电脑主动连出去，不开端口、不配 SSH，在 NAT 后面也行
 - **读真正的对话** — 直接读 agent 自己的会话记录，终端变成清晰的对话；也能切到原样的屏幕和日志
 - **自己往前推** — worker 失败了重试、换模型、换思路；只有花钱、删东西、发布这类事才停下来问你
+- **越用越会派活** — 记住你的偏好和每次干活的经验：数据在哪、怎么做的、踩过的坑、哪个 agent 在哪台电脑上好用，下次派活直接带上
 - **一个二进制，数据在你手里** — 单个 Go 程序 + SQLite，前端内嵌；每台设备一个令牌，随时移除；不经过第三方服务
 
 <table>
@@ -230,7 +231,7 @@ Collie 同时支持 herdr 0.8 和 0.9：
 | `node.json` | 仅 node：hub 地址、本机 id 和令牌 |
 | `token` | 访问令牌 |
 | `addr` | 当前监听地址，供 CLI 使用 |
-| `router/` | Router 的工作目录：`ROUTER.md`（操作手册，同时写成 CLAUDE.md / AGENTS.md / GEMINI.md）、`memory.md`（长期记忆） |
+| `router/` | Router 的工作目录：`ROUTER.md`（操作手册，同时写成 CLAUDE.md / AGENTS.md / GEMINI.md）、`memory/`（长期记忆：你的偏好、进行中的任务、按项目整理的笔记） |
 | `bin/collie` | 用 `go run` 启动时复制出的稳定 CLI 路径 |
 
 ## 从源码构建

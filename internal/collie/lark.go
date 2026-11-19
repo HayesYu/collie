@@ -133,12 +133,34 @@ func larkCard(ns []notice, link string) string {
 			"behaviors": []any{map[string]string{"type": "open_url", "default_url": link}},
 		})
 	}
-	summary := strings.TrimSpace(strings.SplitN(ns[len(ns)-1].text, "\n", 2)[0])
 	b, _ := json.Marshal(map[string]any{
 		"schema": "2.0",
-		"config": map[string]any{"summary": map[string]string{"content": clip(summary, 60)}},
+		"config": map[string]any{"summary": map[string]string{"content": clip(cardSummary(ns), 60)}},
 		"header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}, "template": color},
 		"body":   map[string]any{"elements": els},
 	})
 	return string(b)
+}
+
+// cardSummary is what the chat list shows for the card: the first line of
+// what matters most (needs you, then an error, else the latest), without
+// the Markdown marks the list would show as they are.
+var mdMarks = strings.NewReplacer("**", "", "__", "", "`", "")
+
+func cardSummary(ns []notice) string {
+	pick := ns[len(ns)-1]
+	for _, tone := range []string{"error", "blocked"} {
+		for _, n := range ns {
+			if n.tone == tone {
+				pick = n
+			}
+		}
+	}
+	for _, l := range strings.Split(pick.text, "\n") {
+		l = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "#>-*• "))
+		if l = strings.TrimSpace(mdMarks.Replace(l)); l != "" {
+			return l
+		}
+	}
+	return pick.label()
 }

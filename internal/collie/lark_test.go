@@ -57,3 +57,13 @@ func TestLarkNotify(t *testing.T) {
 		t.Error("the held-back message went out later")
 	}
 }
+
+func TestCardSummary(t *testing.T) {
+	got := cardSummary([]notice{{text: "写完了"}, {tone: "blocked", text: "测试：**fix-flaky-test** 在等你批准 `go test`"}, {text: "### 后面的"}})
+	if want := "测试：fix-flaky-test 在等你批准 go test"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := cardSummary([]notice{{text: "\n- **完成**：好了"}}); got != "完成：好了" {
+		t.Errorf("got %q", got)
+	}
+}

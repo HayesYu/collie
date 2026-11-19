@@ -20,12 +20,14 @@ type Machine struct {
 	Name string `json:"name"`
 	OS   string `json:"os,omitempty"`
 	// Version of collie it runs; "" for nodes from before v0.2.5.
-	Version string    `json:"version,omitempty"`
-	Home    string    `json:"home,omitempty"`
-	Bin     string    `json:"-"`
-	Local   bool      `json:"local"`
-	Online  bool      `json:"online"`
-	Since   time.Time `json:"since,omitempty"`
+	Version string `json:"version,omitempty"`
+	// Agents it has installed (herdr kinds); nil when not known.
+	Agents []string  `json:"agents"`
+	Home   string    `json:"home,omitempty"`
+	Bin    string    `json:"-"`
+	Local  bool      `json:"local"`
+	Online bool      `json:"online"`
+	Since  time.Time `json:"since,omitempty"`
 
 	conn   *herdrConn
 	client *http.Client // remote only: the node's own API, through the tunnel
@@ -235,6 +237,7 @@ func (h *Herdr) Machines() []Machine {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	out := []Machine{*h.local}
+	out[0].Agents = localAgents(h.local.Home, false)
 	var rs []Machine
 	for _, m := range h.remote {
 		rs = append(rs, *m)

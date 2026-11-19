@@ -9,6 +9,7 @@
     set(k, v) { try { localStorage.setItem("collie." + k, JSON.stringify(v)); } catch {} },
   };
   const narrow = () => matchMedia("(max-width: 760px)").matches;
+  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
   const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
@@ -678,8 +679,12 @@
     const mSel = $("#t-machine"), kSel = $("#t-kind");
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
       data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
-    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"]].map(([k, l]) =>
-      `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${k === targetDefault.kind ? `data-sub="默认"` : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`).join(""));
+    const have = ms.find((m) => m.id === t.machine)?.agents;
+    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"]].map(([k, l]) => {
+      const missing = Array.isArray(have) && !have.includes(k);
+      const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
+      return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${sub}"` : ""} ${missing && k !== t.kind ? "disabled" : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`;
+    }).join(""));
     mSel.value = t.machine; kSel.value = t.kind;
     mSel.hidden = ms.length < 2;
     syncPick(mSel); syncPick(kSel);
@@ -1595,6 +1600,10 @@
   }
   checkUpdates();
   setInterval(checkUpdates, 30 * 60 * 1000);
+  // Which agents a computer has: nothing when not known (an older node).
+  const agentsTag = (list) => !Array.isArray(list) ? ""
+    : list.length ? `<span title="这台电脑上装了的 agent">${list.map((k) => esc(AGENT_LABEL[k] || k)).join(" · ")}</span>`
+    : `<span class="tag attn" title="找不到 claude、codex、agy 命令：装一个，再重连这台电脑">没装 agent</span>`;
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
     ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
   const updateRow = (have, latest, cmd, note, id, name) => isOld(have, latest)
@@ -1647,11 +1656,11 @@
       <div class="card"><div class="card-h">电脑</div><ul class="rows">
         <li class="row dev-row">
           <span class="dot ${r.hub.herdr ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}</div>
+          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${agentsTag(r.hub.agents)}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}</div>
           <span class="right">${r.hub.herdr ? "在线" : ""}</span></li>
         ${machines.map((d) => `<li class="row dev-row">
           <span class="dot ${d.online ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node", "", d.id, d.name)}</div>
+          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}${d.online ? agentsTag(d.agents) : ""}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node", "", d.id, d.name)}</div>
           <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")}
       </ul></div>
 
@@ -2563,6 +2572,25 @@
     if (!ms.some((m) => m.id === pickMachine)) pickMachine = ms[0]?.id || "";
     $("#l-machines").innerHTML = ms.map((m) => `<button type="button" class="${m.id === pickMachine ? "on" : ""}" data-m="${esc(m.id)}">
       <span class="dot online"></span>${esc(m.name)}${m.local ? "<small>hub</small>" : ""}</button>`).join("");
+    markKinds();
+  }
+  // Agents the chosen computer doesn't have can't be picked.
+  function markKinds() {
+    const have = (state.machines || []).find((m) => m.id === pickMachine)?.agents;
+    for (const r of $$("input[name=kind]")) {
+      const k = r.value === "antigravity" ? "agy" : r.value;
+      const card = r.closest(".kind-card"), small = card.querySelector("small");
+      small.dataset.cmd ||= small.textContent;
+      const missing = Array.isArray(have) && k in AGENT_LABEL && !have.includes(k);
+      r.disabled = missing;
+      card.classList.toggle("missing", missing);
+      card.title = missing ? "这台电脑上没装 " + AGENT_LABEL[k] : "";
+      small.textContent = missing ? "没装" : small.dataset.cmd;
+    }
+    if ($("input[name=kind]:checked")?.disabled) {
+      const first = $$("input[name=kind]").find((r) => !r.disabled);
+      if (first) { first.checked = true; first.dispatchEvent(new Event("change")); }
+    }
   }
   function resetDir() {
     const recent = store.get(recentKey(), []);
@@ -2589,7 +2617,8 @@
     cwdInput.value = recent[0] || "~";
     $("#recent").innerHTML = recent.slice(0, 6).map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join("");
     const radio = $(`input[name=kind][value="${store.get("kind", "claude")}"]`);
-    if (radio) radio.checked = true;
+    if (radio && !radio.disabled) radio.checked = true;
+    markKinds();
     suggestName();
     browse(cwdInput.value);
     sheet.showModal();

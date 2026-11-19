@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -672,7 +673,11 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 		defer sp.mu.Unlock()
 		var he *HerdrError
 		if err != nil && !(errors.As(err, &he) && he.Code == "agent_not_ready") {
-			sp.addEntryLocked("event", mainThread, "Collie 启动失败："+err.Error(), routerName, "error")
+			msg := "Collie 启动失败：" + err.Error()
+			if strings.Contains(err.Error(), "没装") {
+				msg += "。装上它，或在 自动化 → 设置 → Collie 自己 里换一个 agent"
+			}
+			sp.addEntryLocked("event", mainThread, msg, routerName, "error")
 			return
 		}
 		sp.routerFresh = true
@@ -750,6 +755,15 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	if _, ok := kinds[kind]; !ok {
 		sp.mu.Unlock()
 		return nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity)", kind)
+	}
+	// Say so now, while the router can still pick another computer or kind.
+	have := m.Agents
+	if m.Local {
+		have = localAgents(sp.s.home, false)
+	}
+	if have != nil && !slices.Contains(have, kinds[kind]) {
+		sp.mu.Unlock()
+		return nil, fmt.Errorf("%s has no %s installed (it has: %s); pick another computer or kind", m.Name, kind, strings.Join(append(have, "none")[:max(len(have), 1)], ", "))
 	}
 	if cwd == "" && (m.ID == sp.st.Settings.WorkerMachine || (m.Local && sp.st.Settings.WorkerMachine == "")) {
 		cwd = sp.st.Settings.WorkerCwd

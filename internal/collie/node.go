@@ -209,6 +209,7 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	req.Header.Set("X-Collie-OS", runtime.GOOS+"/"+runtime.GOARCH)
 	req.Header.Set("X-Collie-Bin", bin)
 	req.Header.Set("X-Collie-Version", version)
+	req.Header.Set("X-Collie-Agents", agentsHeader(localAgents(home, true)))
 	if nodeUI != "" {
 		req.Header.Set("X-Collie-UI", nodeUI)
 	}

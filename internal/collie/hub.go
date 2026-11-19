@@ -458,10 +458,11 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	type view struct {
 		Device
-		Online  bool   `json:"online"`
-		Current bool   `json:"current"`
-		Home    string `json:"home,omitempty"`
-		Version string `json:"version,omitempty"`
+		Online  bool     `json:"online"`
+		Current bool     `json:"current"`
+		Home    string   `json:"home,omitempty"`
+		Version string   `json:"version,omitempty"`
+		Agents  []string `json:"agents"`
 	}
 	_, me := s.identity(r)
 	out := []view{}
@@ -469,7 +470,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		v := view{Device: d}
 		v.Hash = ""
 		if m, ok := machines[d.ID]; ok && d.Kind == "machine" {
-			v.Online, v.Home, v.Version = m.Online, m.Home, m.Version
+			v.Online, v.Home, v.Version, v.Agents = m.Online, m.Home, m.Version, m.Agents
 		}
 		v.Current = me != nil && me.ID == d.ID
 		out = append(out, v)
@@ -478,7 +479,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	_, herdrErr := s.herdr.local.conn.call(r.Context(), "workspace.list", nil)
 	writeJSON(w, 200, map[string]any{
 		"devices":   out,
-		"hub":       map[string]any{"name": local.Name, "home": local.Home, "herdr": herdrErr == nil, "version": version},
+		"hub":       map[string]any{"name": local.Name, "home": local.Home, "herdr": herdrErr == nil, "version": version, "agents": localAgents(local.Home, true)},
 		"addresses": s.addresses(r),
 		"latest":    latestVersion(),
 	})
@@ -536,7 +537,7 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 	httpDial := streamDialer(open, "http")
 	m := &Machine{
 		ID: d.ID, Name: d.Name, OS: r.Header.Get("X-Collie-OS"), Home: r.Header.Get("X-Collie-Home"),
-		Bin: r.Header.Get("X-Collie-Bin"), Version: r.Header.Get("X-Collie-Version"), Online: true, Since: time.Now(),
+		Bin: r.Header.Get("X-Collie-Bin"), Version: r.Header.Get("X-Collie-Version"), Agents: parseAgentsHeader(r.Header.Get("X-Collie-Agents")), Online: true, Since: time.Now(),
 		conn: &herdrConn{dial: streamDialer(open, "herdr")},
 		client: &http.Client{Transport: &http.Transport{
 			DialContext:         func(ctx context.Context, _, _ string) (net.Conn, error) { return httpDial(ctx) },

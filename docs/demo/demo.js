@@ -50,7 +50,7 @@
   const tool = (name, input, output, error) => ({ kind: "tool", name, input, output, error });
   const chats = {
     "w2:p1@macbook": [
-      { kind: "user", text: "首页加一个暗色模式：跟随系统，右上角可以手动切换，记住用户的选择。" },
+      { kind: "user", text: "[image:~/.collie/images/0d3a9e5c71b2f4e8a6c1.png]\n首页加一个暗色模式：跟随系统，右上角可以手动切换，记住用户的选择。参考这张图的配色。" },
       { kind: "assistant", text: "先看看现在的样式是怎么组织的。" },
       tool("Read", "src/styles/theme.css", "48 lines"),
       tool("Grep", "color: #", "src/components/Header.tsx:12\nsrc/components/Card.tsx:31\nsrc/pages/Home.tsx:77"),
@@ -286,6 +286,10 @@
     if (p === "/api/version") return json({ version: "v0.2.5", latest: "v0.2.5", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
+    if (p === "/api/file" && /images\/0d3a9e5c71b2f4e8a6c1\.png$/.test(q.get("path") || "")) {
+      const b = await (await realFetch(new URL("../img/hero-dark.png", location.href))).blob();
+      return new Response(b, { headers: { "X-File-Kind": "image", "X-File-Size": String(b.size), "X-File-Path": encodeURIComponent(q.get("path")) } });
+    }
     if (p === "/api/file") {
       if (q.get("machine") !== "macbook" || !/CHANGELOG\.md$/.test(q.get("path") || "")) return json({ error: "找不到这个文件" }, 404);
       return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });

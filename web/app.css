@@ -578,6 +578,11 @@ body.dragging { cursor: col-resize; user-select: none; }
 }
 @media (max-width: 760px) { .app.has-file { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .app, .filepane { transition: none !important; } }
+.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.thumb { display: block; padding: 0; border: 0; border-radius: 10px; overflow: hidden; background: rgba(127,127,127,.18); cursor: zoom-in; }
+.thumb img { display: block; max-width: min(240px, 60vw); max-height: 180px; min-width: 64px; min-height: 48px; object-fit: cover; }
+.thumb.broken::after { content: "图片读不到"; display: block; padding: 14px 16px; font-size: 12px; opacity: .7; }
+.thumb.broken img { display: none; }
 a.fpath { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; cursor: pointer; }
 a.fpath:hover { text-decoration-color: currentColor; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }

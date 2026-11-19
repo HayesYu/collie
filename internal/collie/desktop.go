@@ -598,7 +598,10 @@ var leadingTag = regexp.MustCompile(`(?s)^\s*<([A-Za-z][\w:-]*)[^>]*>.*?</([A-Za
 
 // messageTitle is a conversation's title as one short line, without the context
 // blocks some tools put before the message.
+var imageMark = regexp.MustCompile(`\[image(:[^\]\s]*)?\]\s*`)
+
 func messageTitle(t string) string {
+	t = imageMark.ReplaceAllString(t, "") // a picture says nothing as a title
 	for i := 0; i < 4; i++ {
 		m := leadingTag.FindStringSubmatchIndex(t)
 		if m == nil || t[m[2]:m[3]] != t[m[4]:m[5]] {

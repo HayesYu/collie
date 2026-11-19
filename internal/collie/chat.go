@@ -389,6 +389,7 @@ func (t *transcript) claudeLine(line []byte) bool {
 			ToolUseID string          `json:"tool_use_id"`
 			Content   json.RawMessage `json:"content"`
 			IsError   bool            `json:"is_error"`
+			Source    imageSource     `json:"source"`
 		}
 		json.Unmarshal(e.Message.Content, &blocks)
 		changed := false
@@ -406,7 +407,7 @@ func (t *transcript) claudeLine(line []byte) bool {
 					text = append(text, b.Text)
 				}
 			case "image":
-				text = append(text, "[image]")
+				text = append(text, imageToken(b.Source))
 			}
 		}
 		if len(text) > 0 {
@@ -1212,8 +1213,9 @@ func promptText(raw json.RawMessage) string {
 		return s
 	}
 	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type   string      `json:"type"`
+		Text   string      `json:"text"`
+		Source imageSource `json:"source"`
 	}
 	json.Unmarshal(raw, &blocks)
 	var out []string
@@ -1224,7 +1226,7 @@ func promptText(raw json.RawMessage) string {
 				out = append(out, b.Text)
 			}
 		case "image":
-			out = append(out, "[image]")
+			out = append(out, imageToken(b.Source))
 		}
 	}
 	return strings.Join(out, "\n")

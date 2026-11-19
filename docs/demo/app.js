@@ -2114,7 +2114,7 @@
         i++;
         continue;
       }
-      html += m.kind === "user" ? `<div class="msg user">${esc(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
+      html += m.kind === "user" ? `<div class="msg user">${withImages(esc(m.text))}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
       cut();
       i++;
     }
@@ -2329,7 +2329,33 @@
     const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
     body.innerHTML = MD_EXT.test(path) ? `<div class="msg assistant fv-md">${mdRender(text)}</div>${cut}` : `<pre class="fv-pre">${esc(text)}</pre>${cut}`;
   }
+  // Images a message carries ("[image:~/.collie/images/….png]", saved from the
+  // agent's transcript on its computer) show as thumbnails; tap for the panel.
+  const IMG_TOKEN = /\[image:(~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp))\]\n?/g;
+  const thumbs = new Map(); // path -> object URL, kept so redraws don't refetch
+  const IMG_RUN = /(?:\[image:~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp)\]\n?)+/g;
+  const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) =>
+    `<button type="button" class="thumb" data-img="${p}"><img alt="图片"${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`)}</span>`) : html;
+  async function loadThumb(img) {
+    const p = img.parentElement.dataset.img;
+    if (thumbs.get(p)) { img.src = thumbs.get(p); return; }
+    if (thumbs.has(p)) return; // on its way; it fills every copy when it lands
+    thumbs.set(p, "");
+    try {
+      const f = await fetchFile(p, fileContextMachine() ?? "");
+      if (!f || f.kind !== "image") throw 0;
+      const u = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[p.split(".").pop()] || "image/" + p.split(".").pop() }));
+      thumbs.set(p, u);
+      for (const el of document.querySelectorAll(`.thumb[data-img="${p}"] img`)) el.src = u;
+    } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
+  }
+  new MutationObserver(() => {
+    for (const img of document.querySelectorAll(".thumb img:not([src])")) if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
+  }).observe(document.body, { childList: true, subtree: true });
+
   document.addEventListener("click", (e) => {
+    const t = e.target.closest(".thumb[data-img]");
+    if (t) { e.preventDefault(); openFile(t.dataset.img); return; }
     const a = e.target.closest("a.fpath");
     if (!a) return;
     e.preventDefault();

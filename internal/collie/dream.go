@@ -410,7 +410,8 @@ Tidy memory/:
 1. Replace stale entries: tasks that are finished, abandoned or whose agents are gone go to tasks/done/ with a last line on how they ended; facts the logs show have changed get fixed.
 2. Merge duplicates and tighten wording. Pointers (paths, thread ids, URLs), not copies. Keep the up-front files (instructions.md, notes/index.md, open tasks) under ~6 KB together; move detail into notes/ files and list each in notes/index.md.
 3. Look for patterns that only show across sessions: requests the human repeats, corrections they keep making, preferences they never stated outright, mistakes Collie made more than once. Write the ones that should change how Collie behaves into instructions.md (or a note), marked "(inferred)". Each must be backed by the logs; never invent.
-4. Keep every explicit instruction from the human unless a later one overrides it. Don't edit memory/messages.md (the hub writes it).
+4. Finished work that taught something reusable (where data lives, the command or query that worked, a pitfall, where results are) belongs in notes/, filed by topic so the next similar job finds it; read the task files and the logs for it. Add what Collie missed; skip one-off details.
+5. Keep every explicit instruction from the human unless a later one overrides it. Don't edit memory/messages.md (the hub writes it).
 
 Then write dreams/{{DATE}}.md (append if it exists). Its first line: one sentence in Chinese saying what you changed; the human sees it. After that: what you changed and why, and patterns you noticed but didn't act on.
 

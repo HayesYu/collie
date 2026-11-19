@@ -16,8 +16,12 @@ import (
 const memoryLayout = `memory/
   instructions.md   the human's standing instructions and preferences. Read every session.
   notes/index.md    one line per note file saying what it holds. Read every session.
-  notes/<topic>.md  what you learned about people, projects, machines, recurring how-tos.
-                    Read when relevant; add a line to index.md for each new file.
+  notes/<topic>.md  what you learned about people, projects, machines, recurring how-tos,
+                    and what finished work taught: where data lives, the command or query
+                    that worked, pitfalls, where results are. One file per project or
+                    data set (book-df.md, shop-api.md) by default; machines.md for
+                    computers; a how-to that spans projects gets its own. Read when
+                    relevant; add a line to index.md for each new file.
   tasks/<slug>.md   one file per piece of open work: goal, thread id, agents on it,
                     what's done, what's left, next step. Read every session.
   tasks/done/       finished or abandoned tasks, moved here with a last line on how they ended.

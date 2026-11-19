@@ -377,6 +377,16 @@
     if (!document.hidden && liveEv?.readyState === EventSource.CLOSED) connect();
   });
 
+  // A finished agent you have open here has been seen: the hub then shows
+  // it as idle everywhere (herdr itself only counts its own terminal).
+  const seenAt = new Map();
+  function markSeen(v) {
+    if (v.status !== "done" || document.hidden || Date.now() - (seenAt.get(v.pane_id) || 0) < 3000) return;
+    seenAt.set(v.pane_id, Date.now());
+    api("/api/seen", { body: { pane: v.pane_id } }).catch(() => {});
+  }
+  document.addEventListener("visibilitychange", () => { if (view === "pane" && find(current)) markSeen(find(current)); });
+
   function notifyTransitions(next) {
     for (const a of next.agents) {
       const before = prevStatus.get(a.pane_id);
@@ -1920,6 +1930,7 @@
   function renderHead() {
     const v = find(current);
     if (!v) return;
+    markSeen(v);
     $("#d-name").textContent = v.name === ROUTER ? "Collie 的终端" : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
     $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER ? `名字：${v.name}` : "";
     $("#d-kind").textContent = v.is_agent ? (KIND_LABEL[v.kind] || v.kind) : "";

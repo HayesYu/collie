@@ -22,6 +22,7 @@ import (
 )
 
 type Server struct {
+	seen  seenPanes // panes you have opened here since they finished
 	herdr *Herdr
 	token string
 	home  string
@@ -101,6 +102,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("POST /api/trust", wrap(s.trustFolder))
 	mux.Handle("POST /api/update", wrap(s.selfUpdate))
 	mux.Handle("GET /api/transcript", wrap(s.getTranscript))
+	mux.Handle("POST /api/seen", wrap(s.seenPane))
 	mux.Handle("GET /api/external", wrap(s.listExternal))
 	mux.Handle("GET /api/external/{id}/chat", wrap(s.streamExternal))
 	mux.Handle("GET /api/external/{id}/earlier", wrap(s.externalEarlier))
@@ -272,6 +274,9 @@ func (s *Server) state(ctx context.Context) PaneState {
 		}
 		if v.Name == "" {
 			v.Name = v.WorkspaceLabel
+		}
+		if v.IsAgent {
+			v.Status = s.seen.status(p.ID, v.Status)
 		}
 		if v.IsAgent && s.waiting(p.ID, v.Status) {
 			v.Status = "waiting"

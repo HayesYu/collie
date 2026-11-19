@@ -670,7 +670,9 @@
         targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
       } catch { targetDefault ||= { machine: "", kind: "claude", model: "", effort: "" }; }
     }
-    const t = target || targetDefault;
+    // What was picked here over the defaults: picking only an agent leaves the
+    // computer at its default, not unset.
+    const t = targetNow();
     const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");

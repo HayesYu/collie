@@ -689,15 +689,12 @@
         <span class="go">处理 →</span></a>`;
       }).join("") + `</div>`;
     }
-    if (sup.entries.length && canLoadOlder()) {
-      html = `<div class="earlier-row"><button type="button" data-act="super-earlier" ${olderBusy ? "disabled" : ""}>${olderBusy ? "加载中…" : "加载更早的消息"}</button></div>` + html;
-    }
+    if (olderBusy) html = `<div class="earlier-row">加载中…</div>` + html;
     if (html === superSig && !force) return;
     superSig = html;
     box.innerHTML = html;
     if (atBottom || force) scroller.scrollTop = scroller.scrollHeight;
   }
-  document.addEventListener("click", (e) => { if (e.target.closest('[data-act="super-earlier"]')) loadOlder(); });
   // Scrolled to the top: bring the next page in by itself.
   $("#super-thread").parentElement.addEventListener("scroll", (e) => {
     if (e.target.scrollTop < 40 && e.target.scrollHeight > e.target.clientHeight + 100 && canLoadOlder()) loadOlder();
@@ -2145,35 +2142,35 @@
   const earlierCursor = (el) => (el._older ? el._olderEarlier : el._liveEarlier) || 0;
   function resetEarlier(el, url) { el._older = null; el._olderEarlier = 0; el._liveEarlier = 0; el._earlierURL = url; }
 
-  // "Load earlier": fetch the page before the oldest message shown and keep
-  // the reader's place.
-  document.addEventListener("click", async (ev) => {
-    const b = ev.target.closest("[data-act=earlier]");
-    if (!b) return;
-    const el = b.closest(".thread");
-    if (!el || el._loadingEarlier || !el._earlierURL) return;
+  // Scrolled to the top of a conversation: fetch the page before the oldest
+  // message shown, keeping the reader's place.
+  async function loadEarlier(el) {
+    if (el._loadingEarlier || !el._earlierURL) return;
     const cursor = earlierCursor(el);
     if (!cursor) return;
     el._loadingEarlier = true;
-    b.disabled = true; b.textContent = "加载中…";
+    el._redraw?.();
     try {
       const r = await api(el._earlierURL(cursor));
       if (el._earlierURL && earlierCursor(el) === cursor) {
         el._older = (r.messages || []).concat(el._older || []);
         el._olderEarlier = r.earlier || 0;
-        const s = scroller(el), fromBottom = s.scrollHeight - s.scrollTop;
-        el._redraw?.();
-        s.scrollTop = s.scrollHeight - fromBottom;
       }
     } catch (err) {
+      el._earlierFailed = true; // scrolling up tries again; nothing loops on its own
       toast(err.message, "attn");
-    } finally {
-      // The row may have been kept as it was (its markup did not change).
-      el._loadingEarlier = false;
-      const row = el.querySelector("[data-act=earlier]");
-      if (row) { row.disabled = false; row.textContent = "加载更早的消息"; }
     }
-  });
+    el._loadingEarlier = false;
+    const s = scroller(el), fromBottom = s.scrollHeight - s.scrollTop;
+    el._redraw?.();
+    s.scrollTop = s.scrollHeight - fromBottom;
+  }
+  document.addEventListener("scroll", (ev) => {
+    const s = ev.target;
+    if (!(s instanceof Element) || s.scrollTop >= 40 || s.scrollHeight <= s.clientHeight + 100) return;
+    const el = [...s.querySelectorAll(".thread")].find((t) => t._earlierURL && scroller(t) === s) || (s._earlierURL && s);
+    if (el && earlierCursor(el) > 0) { el._earlierFailed = false; loadEarlier(el); }
+  }, { capture: true, passive: true });
 
   // Opening a thread: what was on screen last time shows at once and the live
   // stream updates it; a thread never opened shows a skeleton of a
@@ -2280,9 +2277,7 @@
       cut();
       i++;
     }
-    if (el._earlierURL && earlierCursor(el) > 0) {
-      blocks.unshift(`<div class="earlier-row"><button type="button" data-act="earlier">加载更早的消息</button></div>`);
-    }
+    if (el._loadingEarlier) blocks.unshift(`<div class="earlier-row">加载中…</div>`);
     const sig = blocks.join("");
     if (sig === el._sig) return;
     el._sig = sig;
@@ -2299,6 +2294,12 @@
     }
     el._blocks = blocks; el._last = el.lastElementChild;
     stick(el, was);
+    // Too short to scroll, with more before it: there is no top to scroll
+    // to, so bring the earlier page in now.
+    if (el._earlierURL && !el._loadingEarlier && !el._earlierFailed && earlierCursor(el) > 0) {
+      const s = scroller(el);
+      if (s.scrollHeight <= s.clientHeight + 100) setTimeout(() => loadEarlier(el));
+    }
   }
 
   function drawFallback(text) {

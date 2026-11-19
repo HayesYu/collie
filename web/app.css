@@ -997,11 +997,9 @@ select.picked { display: none; }
 .list .sublabel { font-size: 11px; font-weight: 500; letter-spacing: .04em; color: var(--fg-3); padding: 12px 10px 4px; margin-top: 4px; border-top: 1px solid var(--line); }
 
 /* "加载更早的消息" at the top of a long conversation */
-.thread > .earlier-row { display: flex; justify-content: center; margin: 0 0 4px; }
-.earlier-row button { all: unset; cursor: pointer; font-size: 12px; color: var(--fg-3); padding: 6px 14px; border: 1px solid var(--line-2); border-radius: 999px; }
-.earlier-row button:hover { color: var(--fg-2); background: var(--bg-3); }
-.earlier-row button:disabled { cursor: default; opacity: .6; }
-@media (pointer: coarse) { .earlier-row button { padding: 10px 18px; font-size: 13px; } }
+/* Older messages come in by themselves when you scroll to the top; this is
+   the quiet line while they load. */
+.thread > .earlier-row { text-align: center; margin: 0 0 4px; padding: 6px 0; font-size: 12px; color: var(--fg-3); }
 
 /* "在这台电脑的 Collie app 里打开": above the sidebar footer */
 .local-app { display: flex; align-items: center; gap: 4px; margin: 0 10px 6px; padding: 4px 4px 4px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); }

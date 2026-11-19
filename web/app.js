@@ -571,8 +571,11 @@
         if (e.role === "user") html += `<div class="msg user">${userText(e.text)}</div>`;
         else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant">${md(e.text)}</div></div>`;
         else {
-          const pane = e.ref ? paneOf(e.ref) : null;
-          const tag = pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
+          // A worker's line opens the session it was about: its record once
+          // that session ended (a name is reused after), else its pane.
+          const past = e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
+          const pane = !past && e.ref ? paneOf(e.ref) : null;
+          const tag = past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"` : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
           // A spawn line spins only while that worker is still at it; history stays still.
           const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
           const busy = w && !w.ended && (w.status === "working" || w.status === "starting");
@@ -1198,10 +1201,19 @@
 
   // ───────────────────────────── ended sessions: read them, continue them
   let hist = [];
+  // workerHist: the ended session named name that a line at time at was
+  // about: the first of that name to end after it.
+  const workerHist = (name, at) => {
+    const t = new Date(at);
+    let best = null;
+    for (const h of hist) if (h.name === name && new Date(h.ended) >= t && (!best || new Date(h.ended) < new Date(best.ended))) best = h;
+    return best;
+  };
   async function loadHistory() {
     try { hist = (await api("/api/history")).sessions || []; } catch { return; }
     hist = hist.concat(...await fromHubs("/api/history", "hist"));
     renderHist();
+    if (view === "collie") renderSuper();
     if (view === "ext" && extCur?.startsWith("h:")) renderHistHead(extCur.slice(2));
   }
   const ago = (t) => {

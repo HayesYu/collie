@@ -1040,8 +1040,8 @@ select.picked { display: none; }
 /* sidebar: Collie's agents among yours */
 /* A long name gives way, not the badge after it. */
 .item .name:has(.by-collie) { display: flex; align-items: center; }
-.item .name .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.item .name .by-collie { flex: none; margin-left: 6px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; font: 500 10.5px/16px var(--sans, inherit); color: var(--fg-3); vertical-align: 1px; white-space: nowrap; }
+.item .name .nm { min-width: 0; margin-right: 6px; overflow: hidden; text-overflow: ellipsis; }
+.item .name .by-collie { flex: none; margin-left: auto; /* all badges line up at the right */ padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; font: 500 10.5px/16px var(--sans, inherit); color: var(--fg-3); vertical-align: 1px; white-space: nowrap; }
 .list .empty-hint { list-style: none; padding: 4px 0; }
 .fold-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 10px; background: none; color: var(--fg-3); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .fold-row:hover { background: var(--bg-3); color: var(--fg-2); }

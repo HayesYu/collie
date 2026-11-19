@@ -1226,7 +1226,10 @@ func (sp *Super) closeStaleRouterWorkspaces(ctx context.Context) {
 	}
 }
 
-var agentErrRe = regexp.MustCompile(`(?i)(⚠|\berror\b|failed|unauthori[sz]ed|forbidden|rate.?limit|quota|not supported|invalid api key|overloaded)`)
+// agentErrRe matches what an agent CLI prints when it can't run (the API
+// refused, the login expired, the quota ran out), not Collie's own words about
+// a task: "the backup failed twice" and "its error output" are work, not errors.
+var agentErrRe = regexp.MustCompile(`(?i)(api error|please run /login|invalid api key|quota exceeded|daily limit|rate.?limit(ed)?\b|overloaded|unauthori[sz]ed|credit balance|unexpected status \d{3}|^[\W]*(⚠|■|error\b|error:))`)
 
 // routerSettled runs once after the router finishes a turn that we prompted.
 // If it went quiet without a `collie reply` and its screen shows an error

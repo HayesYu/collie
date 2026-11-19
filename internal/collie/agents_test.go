@@ -36,3 +36,20 @@ func TestAgentMissingRemote(t *testing.T) {
 		t.Fatalf("missing: %v", err)
 	}
 }
+
+func TestAgentErrRe(t *testing.T) {
+	for l, want := range map[string]bool{
+		"● Please run /login · API Error: 403 LLMBox: quota exceeded: Daily Limits exceeded.": true,
+		"⎿  API Error: 529 overloaded":         true,
+		"■ unexpected status 401 Unauthorized": true,
+		"Error: invalid api key":               true,
+		"⚠ Credit balance is too low":          true,
+		"○ Thought for 8.0s (The backup has failed twice, so I'm considering a different route)":        false,
+		"purchase-ingest-run is waiting for the logs of the f2-vs-f4 comparison and the failed backup.": false,
+		"purchase-ingest-run is pulling the comparison job's latest error output (python.stderr).":      false,
+	} {
+		if got := agentErrRe.MatchString(l); got != want {
+			t.Errorf("%q: got %v, want %v", l, got, want)
+		}
+	}
+}

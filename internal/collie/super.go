@@ -210,6 +210,16 @@ func (sp *Super) Run(ctx context.Context) {
 	if err := sp.writeRouterFiles(); err != nil {
 		log.Printf("router files: %v", err)
 	}
+	// The Collie running now read ROUTER.md when its session began: if this
+	// build changed it, have it read it again.
+	dir := sp.routerDir()
+	now, _ := os.ReadFile(filepath.Join(dir, "ROUTER.md"))
+	if read, _ := os.ReadFile(filepath.Join(dir, routerReadFile)); len(now) > 0 && !bytes.Equal(read, now) {
+		sp.mu.Lock()
+		sp.ingestLocked("system", mainThread, "collie", "ROUTER.md changed (a new Collie build: new rules or commands). Re-read it now and work by it from here on. Nothing to tell the human.", "", "", "")
+		sp.mu.Unlock()
+		os.WriteFile(filepath.Join(dir, routerReadFile), now, 0o600)
+	}
 	tick := time.NewTicker(1500 * time.Millisecond)
 	defer tick.Stop()
 	save := time.NewTicker(2 * time.Second)
@@ -692,6 +702,10 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 		if err := sp.writeRouterFiles(); err != nil {
 			log.Printf("router files: %v", err)
 		}
+		// What this session will read, to tell later whether it is out of date.
+		if b, err := os.ReadFile(filepath.Join(sp.routerDir(), "ROUTER.md")); err == nil {
+			os.WriteFile(filepath.Join(sp.routerDir(), routerReadFile), b, 0o600)
+		}
 		lctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		_, _, err := sp.s.startAgent(lctx, "", kinds[kind], routerName, sp.routerDir(), routerLabel, args)
@@ -728,6 +742,9 @@ func (sp *Super) RestartRouter(ctx context.Context) error {
 	sp.ensureRouter(ctx)
 	return nil
 }
+
+// routerReadFile keeps a copy of the ROUTER.md the running Collie read.
+const routerReadFile = ".router-read.md"
 
 func (sp *Super) writeRouterFiles() error {
 	dir := sp.routerDir()

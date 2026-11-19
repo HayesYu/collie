@@ -403,6 +403,10 @@
   function normSup(s) { s.entries ||= []; s.workers ||= []; s.router ||= { status: "asleep" }; return s; }
   const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
   const paneOf = (name) => state.agents.find((a) => a.name === name)?.pane_id;
+  // A worker's status as the sidebar shows it (which knows when it waits on
+  // background work), else as Collie last saw it.
+  const workerStatus = (w) => (!w.ended && state.agents.find((a) => a.name === w.name)?.status) || w.status;
+  const workerBusy = (w) => !w.ended && ["working", "starting", "waiting"].includes(workerStatus(w));
   const find = (id) => state.agents.find((a) => a.pane_id === id) || state.shells.find((a) => a.pane_id === id);
   // What to call an agent: the session's own title; a handle like "agy-1" says
   // nothing, so until there's a title use the folder it works in.
@@ -451,7 +455,7 @@
 
     const r = sup.router || {};
     const active = sup.workers.filter((w) => !w.ended);
-    const running = active.filter((w) => w.status === "working" || w.status === "starting").length;
+    const running = active.filter(workerBusy).length;
     $("#nav-collie-sub").textContent = collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : "");
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
     $("#nav-queue").hidden = !sup.queued;
@@ -553,7 +557,7 @@
     if (view === "collie") renderTarget();
     $("#crew").innerHTML = active.map((w) => {
       const pane = paneOf(w.name);
-      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(w.status)}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
+      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
     }).join("");
 
     const box = $("#super-thread");
@@ -596,7 +600,7 @@
           const tag = past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"` : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
           // A spawn line spins only while that worker is still at it; history stays still.
           const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
-          const busy = w && !w.ended && (w.status === "working" || w.status === "starting");
+          const busy = w && workerBusy(w);
           const stuck = w && !w.ended && w.status === "blocked";
           const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
           // A spawn line carries its worker's state, in place of a line per change.

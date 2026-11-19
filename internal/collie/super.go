@@ -396,14 +396,19 @@ func (sp *Super) tick(parent context.Context) {
 		if target == routerName && a.Status == "blocked" {
 			sp.trustOwnDir(ctx, a.Pane)
 		}
-		// Collie's own events batch up while it works. A worker takes a
-		// message mid-turn (Claude, Codex and agy queue typed input and pick it
-		// up themselves), so corrections and questions reach it now rather than
-		// after its current step. Nothing is typed over a dialog or into an
-		// agent that is still starting.
-		busy := a.Status == "working" && target == routerName
-		if busy || a.Status == "blocked" || (!a.Ready && a.Status == "unknown") {
+		// Nothing is typed over a dialog or into an agent that is still
+		// starting. Otherwise a message goes in mid-turn: Claude, Codex and agy
+		// queue typed input and pick it up between steps, so corrections and
+		// questions arrive now rather than after the current step. Collie's
+		// other events (reports, timers) batch up while it works; the human's
+		// own messages don't wait.
+		if a.Status == "blocked" || (!a.Ready && a.Status == "unknown") {
 			continue
+		}
+		if a.Status == "working" && target == routerName {
+			if list = fromHuman(list); len(list) == 0 {
+				continue
+			}
 		}
 		sp.deliver(ctx, target, list)
 	}
@@ -416,6 +421,17 @@ func (sp *Super) tick(parent context.Context) {
 
 	// 5. Watchdog.
 	sp.watchdog(ctx, live, routerAlive)
+}
+
+// fromHuman keeps what the human said in the chat.
+func fromHuman(list []*Trigger) []*Trigger {
+	var out []*Trigger
+	for _, t := range list {
+		if t.Source == "chat" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func (sp *Super) rerouteToRouter(target string, list []*Trigger) {
@@ -501,8 +517,8 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 	if fresh {
 		sp.routerFresh = false
 	}
-	if target == routerName {
-		sp.routerAskedAt = time.Now()
+	if target == routerName && sp.routerAskedAt.IsZero() {
+		sp.routerAskedAt = time.Now() // a message mid-turn keeps the turn's start
 	}
 	for _, t := range list {
 		t.Targets = remove(t.Targets, target)

@@ -100,9 +100,9 @@ type Settings struct {
 	WorkerMachine string `json:"worker_machine"`
 	NotifyWebhook string `json:"notify_webhook,omitempty"`
 	// Also send them from the hub's lark-cli (its bot, to whoever is logged in).
-	NotifyLark bool `json:"notify_lark,omitempty"`
-	NotifyLevel   string `json:"notify_level"` // quiet | normal
-	StallMinutes  int    `json:"stall_minutes"`
+	NotifyLark   bool   `json:"notify_lark,omitempty"`
+	NotifyLevel  string `json:"notify_level"` // quiet | normal
+	StallMinutes int    `json:"stall_minutes"`
 	// How long a chat reply should usually be, in characters (an English word counts as one).
 	ReplyChars int `json:"reply_chars"`
 	// The old limit in words (a Chinese character counted as half a word); read once to migrate.

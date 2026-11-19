@@ -601,7 +601,7 @@
         prev = prevRole = e.role;
         const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
         if (e.role === "user") html += `<div class="msg user"${tip}>${userText(e.text)}</div>`;
-        else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant"${tip}>${md(e.text)}</div></div>`;
+        else if (e.role === "collie") html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant"${tip}>${md(e.text)}${imagesIn(e.text)}</div></div>`;
         else {
           // A worker's line opens the session it was about: its record once
           // that session ended (a name is reused after), else its pane.
@@ -827,7 +827,8 @@
       } else if (autoTab === "memory") {
         const r = await api("/api/super/memory");
         if (view !== "auto" || autoTab !== "memory" || memEditing) return;
-        const sig = JSON.stringify(r);
+        // Workers' states count too: the task cards show them.
+        const sig = JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + workerStatus(w)).join();
         if (sig !== body._memSig) {
           const open = new Set([...body.querySelectorAll("details[open]")].map((d) => d.dataset.path || d.querySelector("summary")?.textContent));
           const first = !body._memSig;
@@ -860,11 +861,24 @@
     const dream = r.dreaming ? `<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。`
       : `上次做梦：${r.last_dream ? dayTime(r.last_dream) : "还没有"}　·　下次：${r.next_dream ? dayTime(r.next_dream) + "（当天有新对话才会做）" : "已关闭"}`;
     const firstLine = (t, dflt) => t.split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || dflt;
+    // A task names the workers on it: show them live, and open their session.
+    const crew = (f) => {
+      const latest = new Map(); // a name can be reused: the newest one
+      for (const w of sup.workers) if (!latest.has(w.name) || new Date(w.created_at) > new Date(latest.get(w.name).created_at)) latest.set(w.name, w);
+      const ws = [...latest.values()].filter((w) => new RegExp(`(^|[^\\w-])${w.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(f.text));
+      if (!ws.length) return "";
+      return `<div class="mem-crew">${ws.map((w) => {
+        const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
+        const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+        const st = workerStatus(w);
+        return `<a class="chip" ${href ? `href="${href}"` : ""}><span class="dot ${esc(st)}" title="${esc(STATUS_LABEL[st] || st)}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
+      }).join("")}</div>`;
+    };
     const card = (f, o = {}) => {
       const edit = !f.legacy && o.edit !== false;
       return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
           <span class="mono mem-name">${esc(o.label || f.name)}</span><span class="grow">${esc(o.sub ?? firstLine(f.text, ""))}</span><span class="muted">${kb(f.size)}</span></summary>
-        <div class="mem-body msg assistant" data-view>${md(f.text)}</div>
+        ${o.crew ? crew(f) : ""}<div class="mem-body msg assistant" data-view>${md(f.text)}</div>
         ${edit ? `<div class="mem-tools"><span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
         <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
           <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div></form>` : ""}
@@ -885,11 +899,11 @@
         <div class="mem-dream mem-load"><span class="grow">每次新会话先读：<b class="${over ? "warn" : ""}">${kb(r.loaded)}</b> / 建议 ${kb(r.budget)} 以内${over ? "（偏大，做梦时会精简）" : ""}</span></div></div>
       ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
       ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
-      ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined }, always: true, empty: "没有进行中的任务" })}
+      ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "没有进行中的任务" })}
       ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
       ${group("最近说过的话", "hub 自动记录，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
       ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
-      ${group("已完成", "做完或放弃的任务", done, { card: (f) => ({ label: f.name.replace(/^tasks\/done\//, "") }) })}`;
+      ${group("已完成", "做完或放弃的任务", done, { card: (f) => ({ label: f.name.replace(/^tasks\/done\//, ""), crew: true }) })}`;
   }
 
   function inboxHTML(ts) {
@@ -2171,7 +2185,7 @@
         i++;
         continue;
       }
-      html += m.kind === "user" ? `<div class="msg user">${withImages(esc(m.text))}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
+      html += m.kind === "user" ? `<div class="msg user">${userText(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
       cut();
       i++;
     }
@@ -2356,6 +2370,15 @@
     return { kind: res.headers.get("X-File-Kind"), size: +res.headers.get("X-File-Size") || 0,
       path: decodeURIComponent(res.headers.get("X-File-Path") || path), blob: await res.blob(), machine };
   }
+  // Where the message came from first, then the hub, then every other computer.
+  const fileTries = () => {
+    const ms = (state.machines || []).filter((m) => !m.hub && (m.local || m.online)).map((m) => m.local ? "" : m.id);
+    return [...new Set([fileContextMachine() ?? "", "", ...ms])];
+  };
+  async function findFile(path, tries = fileTries()) {
+    for (const m of tries) { const f = await fetchFile(path, m); if (f) return f; }
+    return null;
+  }
   let fileUrl = "", fileSeq = 0;
   async function openFile(path) {
     const body = $("#fv-body"), seq = ++fileSeq;
@@ -2363,12 +2386,10 @@
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
     showFilePane();
-    // Where the message came from first, then the hub, then every other computer.
-    const ms = (state.machines || []).filter((m) => !m.hub && (m.local || m.online)).map((m) => m.local ? "" : m.id);
-    const tries = [...new Set([fileContextMachine() ?? "", "", ...ms])];
+    const tries = fileTries();
     let f = null;
     try {
-      for (const m of tries) if ((f = await fetchFile(path, m))) break;
+      f = await findFile(path, tries);
     } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
     if (seq !== fileSeq) return;
     if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
@@ -2391,21 +2412,29 @@
   const IMG_TOKEN = /\[image:(~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp))\]\n?/g;
   const thumbs = new Map(); // path -> object URL, kept so redraws don't refetch
   const IMG_RUN = /(?:\[image:~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp)\]\n?)+/g;
-  const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) =>
-    `<button type="button" class="thumb" data-img="${p}"><img alt="图片"${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`)}</span>`) : html;
+  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}"><img alt="图片"${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`;
+  const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
   async function loadThumb(img) {
     const p = img.parentElement.dataset.img;
     if (thumbs.get(p)) { img.src = thumbs.get(p); return; }
     if (thumbs.has(p)) return; // on its way; it fills every copy when it lands
     thumbs.set(p, "");
     try {
-      const f = await fetchFile(p, fileContextMachine() ?? "");
+      const f = await findFile(p);
       if (!f || f.kind !== "image") throw 0;
       const u = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[p.split(".").pop()] || "image/" + p.split(".").pop() }));
       thumbs.set(p, u);
-      for (const el of document.querySelectorAll(`.thumb[data-img="${p}"] img`)) el.src = u;
+      for (const el of document.querySelectorAll(".thumb[data-img] img")) if (el.parentElement.dataset.img === p) el.src = u;
     } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
   }
+  // No hover on a phone: tap a Collie chat message to see when it was said.
+  document.addEventListener("click", (e) => {
+    if (!matchMedia("(hover: none)").matches) return;
+    const m = e.target.closest("#v-collie .msg[data-time]");
+    if (m && e.target.closest("a, button, .thumb")) return;
+    for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
+    m?.classList.toggle("show-time");
+  });
   new MutationObserver(() => {
     for (const img of document.querySelectorAll(".thumb img:not([src])")) if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
   }).observe(document.body, { childList: true, subtree: true });
@@ -2631,12 +2660,24 @@
     if (files.some((f) => f.err)) throw new Error("有文件没传上去，移除后再发");
     return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
   }
-  // A user message's attachments show as file names, not server paths.
+  // Images a Collie message points at (a screenshot a worker took) show
+  // under it, so you need not open each one.
+  const IMG_PATH = /(?:^|[\s(（`"'：:])((?:~|\/)[^\s`"'()（）<>]*\.(?:png|jpe?g|gif|webp))(?=$|[\s)）`"'，。,;；])/gim;
+  function imagesIn(t) {
+    const ps = [...new Set([...(t || "").matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
+    return ps.length ? `<span class="thumbs">${ps.map(thumbBtn).join("")}</span>` : "";
+  }
+  // A user message's attachments: images as thumbnails, other files by name
+  // (not server paths).
   function userText(t) {
     const i = t.lastIndexOf("附件：\n");
-    if (i < 0) return esc(t);
-    const names = t.slice(i + 4).split("\n").filter(Boolean).map((p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, ""));
-    return esc(t.slice(0, i).trimEnd()) + `<span class="att">${names.map((n) => `<span>📎 ${esc(n)}</span>`).join("")}</span>`;
+    if (i < 0) return withImages(esc(t));
+    const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
+    const imgs = paths.filter((p) => IMG_EXT.test(p)), rest = paths.filter((p) => !IMG_EXT.test(p));
+    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
+    return withImages(esc(t.slice(0, i).trimEnd()))
+      + (imgs.length ? `<span class="thumbs">${imgs.map(thumbBtn).join("")}</span>` : "")
+      + (rest.length ? `<span class="att">${rest.map((p) => `<span>📎 ${esc(name(p))}</span>`).join("")}</span>` : "");
   }
 
   function bindComposer(form, input, send, machine) {

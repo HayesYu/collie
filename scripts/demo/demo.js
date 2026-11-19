@@ -33,7 +33,7 @@
   let seq = 100;
   const entry = (role, text, o = {}) => ({ id: "e" + (++seq), role, thread: "chat:main", text, at: o.at || new Date().toISOString(), ...o });
   const entries = [
-    entry("user", "订单接口的分页测试偶尔会挂，帮我查一下。顺便把 v1.4 的发布说明写了。", { at: ago(15) }),
+    entry("user", "订单接口的分页测试偶尔会挂，帮我查一下。顺便把 v1.4 的发布说明写了。\n\n附件：\n/home/alex/.collie/uploads/20261119/a1b2c3-ci-failure.png", { at: ago(15) }),
     entry("collie", "好，分两路并行：\n\n- **fix-flaky-test**（Codex · devbox）查 `TestOrdersPagination` 为什么偶发失败\n- **release-notes**（Claude · macbook）按 v1.3 以来的提交写发布说明\n\n有结果我再告诉你。", { at: ago(14.5) }),
     entry("event", "派出 fix-flaky-test（codex · devbox）", { tone: "spawn", ref: "fix-flaky-test", at: ago(14) }),
     entry("event", "派出 release-notes（claude · macbook）", { tone: "spawn", ref: "release-notes", at: ago(14) }),
@@ -289,7 +289,7 @@
     if (p === "/api/version") return json({ version: "v0.2.5", latest: "v0.2.5", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
-    if (p === "/api/file" && /images\/0d3a9e5c71b2f4e8a6c1\.png$/.test(q.get("path") || "")) {
+    if (p === "/api/file" && /images\/0d3a9e5c71b2f4e8a6c1\.png$|uploads\/.*\.png$/.test(q.get("path") || "")) {
       const b = await (await realFetch(new URL("../img/hero-dark.png", location.href))).blob();
       return new Response(b, { headers: { "X-File-Kind": "image", "X-File-Size": String(b.size), "X-File-Path": encodeURIComponent(q.get("path")) } });
     }

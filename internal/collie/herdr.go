@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
+	"os"
+	"os/exec"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -22,13 +26,60 @@ type herdrConn struct {
 
 func unixDialer(socket string) func(ctx context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) {
-		var d net.Dialer
-		c, err := d.DialContext(ctx, "unix", socket)
+		c, err := dialHerdr(ctx, socket)
 		if err != nil {
 			return nil, fmt.Errorf("herdr socket unavailable (is `herdr server` running?): %w", err)
 		}
 		return c, nil
 	}
+}
+
+// dialHerdr connects to this computer's herdr. Nothing there (a restart, a
+// logout: herdr stopped with the session, Collie's service came back on its
+// own): start herdr's server in the background and try again.
+func dialHerdr(ctx context.Context, socket string) (net.Conn, error) {
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "unix", socket)
+	if err == nil || !startHerdrServer() {
+		return c, err
+	}
+	for i := 0; i < 40; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(250 * time.Millisecond):
+		}
+		if c, err2 := d.DialContext(ctx, "unix", socket); err2 == nil {
+			return c, nil
+		}
+	}
+	return nil, err
+}
+
+var herdrStarted atomic.Int64 // unix seconds of the last start we made
+
+// startHerdrServer runs `herdr server` detached, at most once in 30s.
+func startHerdrServer() bool {
+	now := time.Now().Unix()
+	last := herdrStarted.Load()
+	if now-last < 30 || !herdrStarted.CompareAndSwap(last, now) {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	bin := findBin("herdr", home)
+	if bin == "" {
+		return false
+	}
+	cmd := exec.Command(bin, "server")
+	cmd.Dir = home
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives us, like the one a terminal starts
+	if err := cmd.Start(); err != nil {
+		log.Printf("start herdr server: %v", err)
+		return false
+	}
+	log.Printf("herdr was not running: started `herdr server` (pid %d)", cmd.Process.Pid)
+	go cmd.Wait()
+	return true
 }
 
 type HerdrError struct {

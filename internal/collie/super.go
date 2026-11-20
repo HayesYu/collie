@@ -870,10 +870,10 @@ func (sp *Super) resumeFrom(name string) (*Worker, error) {
 	return &c, nil
 }
 
-func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool, resume string) (*Worker, error) {
+func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool, resume string) (*Worker, <-chan error, error) {
 	m, err := sp.s.herdr.machine(machine)
 	if err != nil {
-		return nil, fmt.Errorf("machine %q is not connected", machine)
+		return nil, nil, fmt.Errorf("machine %q is not connected", machine)
 	}
 	sp.mu.Lock()
 	if kind == "" {
@@ -881,7 +881,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	}
 	if _, ok := kinds[kind]; !ok {
 		sp.mu.Unlock()
-		return nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity)", kind)
+		return nil, nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity)", kind)
 	}
 	// Say so now, while the router can still pick another computer or kind.
 	have := m.Agents
@@ -890,7 +890,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	}
 	if have != nil && !slices.Contains(have, kinds[kind]) {
 		sp.mu.Unlock()
-		return nil, fmt.Errorf("%s has no %s installed (it has: %s); pick another computer or kind", m.Name, kind, strings.Join(append(have, "none")[:max(len(have), 1)], ", "))
+		return nil, nil, fmt.Errorf("%s has no %s installed (it has: %s); pick another computer or kind", m.Name, kind, strings.Join(append(have, "none")[:max(len(have), 1)], ", "))
 	}
 	if cwd == "" && (m.ID == sp.st.Settings.WorkerMachine || (m.Local && sp.st.Settings.WorkerMachine == "")) {
 		cwd = sp.st.Settings.WorkerCwd
@@ -914,16 +914,16 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	name = strings.Trim(workerNameRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	if !nameRe.MatchString(name) || name == routerName {
 		sp.mu.Unlock()
-		return nil, fmt.Errorf("invalid worker name %q", name)
+		return nil, nil, fmt.Errorf("invalid worker name %q", name)
 	}
 	if w := sp.st.Workers[name]; w != nil && !w.Ended {
 		sp.mu.Unlock()
-		return nil, fmt.Errorf("worker %s already exists", name)
+		return nil, nil, fmt.Errorf("worker %s already exists", name)
 	}
 	dir := expandIn(m.Home, cwd)
 	if m.Local && !isDir(dir) {
 		sp.mu.Unlock()
-		return nil, fmt.Errorf("directory not found: %s", dir)
+		return nil, nil, fmt.Errorf("directory not found: %s", dir)
 	}
 	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting", Session: resume}
 	sp.st.Workers[name] = w
@@ -959,6 +959,18 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	sp.mu.Unlock()
 	wargs := withBypass(modelArgs(kind, model, effort), kind, ask)
 
+	// started answers whoever is still waiting on the spawn (superSpawn waits
+	// a few seconds): a failure it hears it can say at once, as the spawn's
+	// own error, instead of as an event after it already said "started".
+	started := make(chan error)
+	tell := func(err error) bool {
+		select {
+		case started <- err:
+			return true
+		default:
+			return false
+		}
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -984,9 +996,11 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		blocked := err != nil && errors.As(err, &he) && he.Code == "agent_not_ready"
 		if err != nil && !blocked {
 			w.Status, w.Ended, w.Note = "failed", true, err.Error()
-			sp.ingestLocked("worker", thread, name, fmt.Sprintf("worker %s failed to start: %v", name, err), "", "", name)
 			sp.addEntryLocked("event", thread, name+" 启动失败："+err.Error(), name, "error")
 			sp.mu.Unlock()
+			if !tell(err) {
+				sp.Ingest("worker", thread, name, fmt.Sprintf("worker %s failed to start: %v", name, err), "", "", name)
+			}
 			return
 		}
 		w.Status = "idle"
@@ -995,11 +1009,12 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		}
 		sp.changed()
 		sp.mu.Unlock()
+		tell(nil)
 		// The task brief is delivered like any other trigger, so it waits
 		// politely if the worker is stuck on a startup dialog.
 		sp.Ingest("system", thread, routerName, workerBrief(bin, w), "", name, name)
 	}()
-	return w, nil
+	return w, started, nil
 }
 
 // choicesText lists a dialog's choices for the router, numbered as `collie

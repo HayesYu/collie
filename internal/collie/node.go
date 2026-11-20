@@ -265,8 +265,9 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 			}
 			switch kind {
 			case "herdr":
-				h, err := net.Dial("unix", sock)
+				h, err := dialHerdr(context.Background(), sock)
 				if err != nil {
+					log.Printf("herdr: %v", err)
 					st.Close()
 					return
 				}

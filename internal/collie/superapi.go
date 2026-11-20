@@ -342,13 +342,25 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	} else if body.Machine != nil {
 		machine = s.machineByName(*body.Machine)
 	}
-	wk, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub, session)
+	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub, session)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
 	}
-	res := map[string]any{"worker": wk.Name, "kind": wk.Kind, "status": "starting", "thread": wk.Thread,
-		"note": "started asynchronously; you will get a [collie] event when it reports, finishes or gets blocked"}
+	// Most failures (the computer's herdr down, a bad directory) show in the
+	// first seconds: say them now, so nobody hears "started" first.
+	status := "starting"
+	select {
+	case err := <-started:
+		if err != nil {
+			writeJSON(w, 502, map[string]any{"error": "worker " + wk.Name + " failed to start: " + err.Error()})
+			return
+		}
+		status = "started"
+	case <-time.After(8 * time.Second):
+	}
+	res := map[string]any{"worker": wk.Name, "kind": wk.Kind, "status": status, "thread": wk.Thread,
+		"note": "its agent is starting; you will get a [collie] event when it reports, finishes, gets blocked or fails. Tell the human it is on its way, not that it is done"}
 	writeJSON(w, 202, res)
 }
 

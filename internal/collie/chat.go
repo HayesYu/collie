@@ -52,6 +52,13 @@ const (
 )
 
 func newTranscript(path, format string) *transcript {
+	if format == "agy" {
+		// transcript.jsonl cuts long messages ("<truncated 3142 bytes>");
+		// Antigravity keeps the whole of them, line for line, next to it.
+		if full := strings.TrimSuffix(path, "transcript.jsonl") + "transcript_full.jsonl"; full != path && isFile(full) {
+			path = full
+		}
+	}
 	return &transcript{path: path, format: format, tools: map[string]*Message{}}
 }
 

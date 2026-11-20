@@ -2641,11 +2641,17 @@
       .replace(/`([^`\n]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
+      .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
+        p = p.replace(/:\d+(?:[-:]\d+)?$/, "");
+        try { p = decodeURI(p); } catch {}
+        return `<a class="fpath" href="#" data-path="${p}" title="${p}">${label}</a>`;
+      })
       .replace(FILE_RE, '$1<a class="fpath" href="#" data-path="$2" title="打开这个文件">$2</a>');
     const out = [];
     let list = null, para = [];
     const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };
-    const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
+    const flushList = () => { if (list) { out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
     // A GFM table: a | row, a |---| row, then more | rows.
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
     const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
@@ -2674,7 +2680,8 @@
       if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
         const tag = /^\s*\d/.test(line) ? "ol" : "ul";
         flushPara();
-        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+        // "2." after a few bullets carries on the numbering, as the agent wrote it.
+        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [], start: parseInt(line) || 1 }; }
         list.items.push(m[1]);
         continue;
       }

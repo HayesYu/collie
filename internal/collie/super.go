@@ -45,6 +45,7 @@ type Super struct {
 	routerLaunchAt  time.Time
 	routerFresh     bool
 	routerAskedAt   time.Time // last delivery to the router not yet followed by a reply or check
+	routerRetries   int       // turns in a row that ended on an API error, each retried
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
 	routerRun   *[2]string
@@ -1491,6 +1492,7 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 			break
 		}
 		if e.Role == "collie" {
+			sp.routerRetries = 0
 			sp.mu.Unlock()
 			return
 		}
@@ -1505,7 +1507,7 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 	// Only look at what the agent printed after our prompt, never at the event text itself.
 	start := 0
 	for i, l := range lines {
-		if strings.Contains(l, "collie reply") || strings.Contains(l, "yourself.") {
+		if strings.Contains(l, "collie reply") || strings.Contains(l, "yourself.") || strings.Contains(l, routerRetryMark) {
 			start = i + 1
 		}
 	}
@@ -1527,7 +1529,18 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 			msg = string(r[:240]) + "…"
 		}
 		sp.mu.Lock()
-		text := "Collie 出错了：" + msg + "（可以在 自动化 → 设置 里给 Collie 换一个 agent）"
+		// Most of these pass (a region check, a busy API, a dropped
+		// connection): try again before calling it an error.
+		if n := sp.routerRetries; n < len(routerRetryWait) {
+			sp.routerRetries++
+			wait := routerRetryWait[n]
+			sp.addEntryLocked("event", mainThread, fmt.Sprintf("Collie 遇到 API 错误（%s），%s后自动重试", clip(msg, 80), waitText(wait)), "", "info")
+			sp.mu.Unlock()
+			go sp.retryRouter(wait, msg)
+			return
+		}
+		sp.routerRetries = 0
+		text := "Collie 出错了：" + msg + "（自动重试了 " + fmt.Sprint(len(routerRetryWait)) + " 次都没好；可以在终端里让它继续，或在 自动化 → 设置 里给 Collie 换一个 agent）"
 		for i := len(sp.st.Entries) - 1; i >= 0 && i >= len(sp.st.Entries)-6; i-- {
 			if e := sp.st.Entries[i]; e.Text == text && time.Since(e.At) < 10*time.Minute {
 				sp.mu.Unlock()
@@ -1538,6 +1551,46 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 		sp.mu.Unlock()
 		return
 	}
+	sp.mu.Lock()
+	sp.routerRetries = 0 // a quiet turn, no error: it is working again
+	sp.mu.Unlock()
+}
+
+// routerRetryWait: how long to wait before each retry of a turn that ended
+// on an API error.
+var routerRetryWait = []time.Duration{20 * time.Second, time.Minute, 3 * time.Minute}
+
+// routerRetryMark starts the retry prompt; the error scan reads from there.
+const routerRetryMark = "[collie] Your last turn stopped"
+
+func waitText(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d 秒", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%d 分钟", int(d.Minutes()))
+}
+
+// retryRouter nudges Collie to carry on after an API error, unless something
+// else has got it going meanwhile (your next message, a worker's event).
+func (sp *Super) retryRouter(wait time.Duration, msg string) {
+	time.Sleep(wait)
+	sp.mu.Lock()
+	busy := !sp.routerAskedAt.IsZero() || sp.routerLaunching
+	sp.mu.Unlock()
+	if busy {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := sp.s.herdr.Prompt(ctx, routerName, routerRetryMark+" on an error from your model's API ("+msg+"). It may have passed: carry on with what you were doing; the events you had are still yours to handle."); err != nil {
+		log.Printf("router retry: %v", err)
+		return
+	}
+	sp.mu.Lock()
+	if sp.routerAskedAt.IsZero() {
+		sp.routerAskedAt = time.Now() // so this turn is checked like any other
+	}
+	sp.mu.Unlock()
 }
 
 // stableBin returns a path to this binary that agents can keep calling. A

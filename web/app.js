@@ -2506,7 +2506,7 @@
   const IMG_TOKEN = /\[image:(~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp))\]\n?/g;
   const thumbs = new Map(); // path -> object URL, kept so redraws don't refetch
   const IMG_RUN = /(?:\[image:~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp)\]\n?)+/g;
-  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}"><img alt="图片"${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`;
+  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="图片"><img alt=""${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`;
   const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
   async function loadThumb(img) {
     const p = img.parentElement.dataset.img;

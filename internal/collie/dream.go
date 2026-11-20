@@ -254,10 +254,11 @@ func (sp *Super) driveDream(ctx context.Context, d *dreamRun, live map[string]li
 
 func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
 	sp.closeWorkspaces(ctx, dreamLabel)
-	summary := ""
+	summary, skills := "", ""
 	if ok {
 		sp.setLastDream(time.Now())
-		summary = dreamSummary(filepath.Join(sp.routerDir(), "dreams", d.at.Format("2006-01-02")+".md"))
+		journal := filepath.Join(sp.routerDir(), "dreams", d.at.Format("2006-01-02")+".md")
+		summary, skills = dreamSummary(journal), dreamSkills(journal)
 	}
 	sp.mu.Lock()
 	sp.dream = nil
@@ -270,19 +271,44 @@ func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
 	default:
 		sp.addEntryLocked("event", mainThread, "Collie 醒了，记忆整理好了", "", "info")
 	}
+	if skills != "" {
+		// Yours to decide, so it is said to you, not left in the journal.
+		sp.addEntryLocked("collie", mainThread, "整理记忆时发现这几件事做熟了，可以做成 skill，以后哪个 agent 都能直接用："+skills+"。要做的话告诉我放在哪（你自己的 skills，还是某个项目的仓库）。", "", "")
+	}
 	sp.mu.Unlock()
 	sp.ensureRouter(ctx)
 }
 
 // dreamSummary is the journal's first line of prose.
+// dreamSkillsPrefix starts the journal line naming how-tos ripe for a skill.
+const dreamSkillsPrefix = "可做成 skill："
+
+// dreamSkills is what that line lists, or "".
+func dreamSkills(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for i, l := range strings.Split(string(b), "\n") {
+		if i > 8 {
+			break // it is up top, not in the reasons below
+		}
+		l = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), ">-* "))
+		if s, ok := strings.CutPrefix(l, dreamSkillsPrefix); ok {
+			return strings.TrimRight(strings.TrimSpace(s), "。.")
+		}
+	}
+	return ""
+}
+
 func dreamSummary(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 	for _, l := range strings.Split(string(b), "\n") {
-		if l = strings.TrimSpace(l); strings.HasPrefix(l, "#") {
-			continue // the title
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "#") || strings.HasPrefix(l, dreamSkillsPrefix) {
+			continue // the title; the skills, said on their own
 		}
 		l = strings.TrimSpace(strings.TrimLeft(l, ">-* "))
 		if l != "" {
@@ -411,7 +437,7 @@ Tidy memory/:
 2. Merge duplicates and tighten wording. Pointers (paths, thread ids, URLs), not copies. Keep the up-front files (instructions.md, notes/index.md, open tasks) under ~6 KB together; move detail into notes/ files and list each in notes/index.md.
 3. Look for patterns that only show across sessions: requests the human repeats, corrections they keep making, preferences they never stated outright, mistakes Collie made more than once. Write the ones that should change how Collie behaves into instructions.md (or a note), marked "(inferred)". Each must be backed by the logs; never invent.
 4. Finished work that taught something reusable (where data lives, the command or query that worked, a pitfall, where results are) belongs in notes/, filed by topic so the next similar job finds it; read the task files and the logs for it. Add what Collie missed; skip one-off details. What the logs show about agents (which agent or model worked or failed on which computer, and at what) goes into notes/agents.md. Dated facts that are old enough to have changed: check them (` + "`{{BIN}} list`" + `, the files) and fix or drop them.
-5. A how-to in notes/ that three or more jobs have used and whose steps stopped changing could become a skill, which every agent can use. Don't write skills: say so in the journal's first line ("……可以做成 skill，要的话告诉 Collie 放在哪") and list it below.
+5. A how-to in notes/ that three or more jobs have used and whose steps stopped changing could become a skill, which every agent can use. Don't write skills: name them on the journal's second line, which starts "可做成 skill：" and lists them separated by 、 (each a few words a human recognises, e.g. "Dorado 只读查表"); the human gets it as a message from Collie. Leave the line out when there are none. Say why below.
 6. Keep every explicit instruction from the human unless a later one overrides it. Don't edit memory/messages.md (the hub writes it).
 
 Then write dreams/{{DATE}}.md (append if it exists). Its first line: one sentence in Chinese saying what you changed; the human sees it. After that: what you changed and why, and patterns you noticed but didn't act on.

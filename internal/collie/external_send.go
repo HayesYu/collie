@@ -471,6 +471,81 @@ func (s *Server) codexSend(ctx context.Context, thread, text string) error {
 	return c.call("turn/start", map[string]any{"threadId": thread, "input": input}, nil)
 }
 
+// codexInterrupt stops the turn a Codex thread is running in the shared
+// daemon. Closing its terminal is not enough: the turn lives in the daemon,
+// not in the window, and carries on without it.
+func (s *Server) codexInterrupt(ctx context.Context, thread string) error {
+	sock := s.codexDaemonSock()
+	if sock == "" {
+		return nil // no daemon: the turn ran in its terminal and went with it
+	}
+	c, err := dialCodex(ctx, sock)
+	if err != nil {
+		return err
+	}
+	defer c.close()
+	if ids, err := c.loaded(); err != nil || !ids[thread] {
+		return err
+	}
+	var read struct {
+		Thread struct {
+			Turns []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"turns"`
+		} `json:"thread"`
+	}
+	if err := c.call("thread/read", map[string]any{"threadId": thread, "includeTurns": true}, &read); err != nil {
+		return err
+	}
+	for _, t := range read.Thread.Turns {
+		if t.Status == "inProgress" {
+			return c.call("turn/interrupt", map[string]any{"threadId": thread, "turnId": t.ID}, nil)
+		}
+	}
+	return nil
+}
+
+// interruptCodex: POST /api/codex/interrupt {thread}, on the computer the
+// thread runs on.
+func (s *Server) interruptCodex(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Thread string `json:"thread"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := s.codexInterrupt(r.Context(), body.Thread); err != nil {
+		writeJSON(w, 502, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// stopCodexTurn interrupts a Codex thread's turn on whichever computer has it.
+func (s *Server) stopCodexTurn(ctx context.Context, machine, thread string) error {
+	if machine == "" {
+		return s.codexInterrupt(ctx, thread)
+	}
+	c, err := s.herdr.Client(machine)
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(map[string]any{"thread": thread})
+	req, _ := http.NewRequestWithContext(ctx, "POST", "http://node/api/codex/interrupt", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		return fmt.Errorf("interrupt: %s %s", resp.Status, msg)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------- HTTP
 
 func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {

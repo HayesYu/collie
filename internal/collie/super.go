@@ -245,6 +245,21 @@ type liveAgent struct {
 	Session string
 }
 
+var uuidRe = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// sessionID is what an agent's conversation is resumed by. herdr gives some
+// (Codex) as the path of their log, whose name ends in the id.
+func sessionID(kind, value string) string {
+	if kind != "path" {
+		return value
+	}
+	ids := uuidRe.FindAllString(filepath.Base(value), -1)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[len(ids)-1]
+}
+
 func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 	list, err := sp.s.herdr.Agents(ctx)
 	if err != nil {
@@ -254,8 +269,8 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 	for _, a := range list {
 		if a.Name != nil {
 			la := liveAgent{Pane: a.PaneID, Status: a.AgentStatus, Ready: a.Ready, Kind: deref(a.Agent)}
-			if a.Session != nil && a.Session.Kind != "path" {
-				la.Session = a.Session.Value
+			if a.Session != nil {
+				la.Session = sessionID(a.Session.Kind, a.Session.Value)
 			}
 			m[*a.Name] = la
 		}

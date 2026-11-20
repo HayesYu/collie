@@ -471,6 +471,19 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 			sp.mu.Unlock()
 		}
 	}
+	if wk.PaneID != "" {
+		// Esc stops the turn it is on, the way you would before closing it:
+		// Codex's turn lives in a shared daemon and would carry on without
+		// its window.
+		s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": wk.PaneID, "keys": []string{"esc"}}, nil)
+		time.Sleep(700 * time.Millisecond)
+	}
+	if kinds[wk.Kind] == "codex" && wk.Session != "" {
+		// Its turn runs in Codex's shared daemon and outlives the terminal.
+		if err := s.stopCodexTurn(r.Context(), wk.Machine, wk.Session); err != nil {
+			log.Printf("stop %s: interrupt its codex turn: %v", wk.Name, err)
+		}
+	}
 	if wk.WorkspaceID != "" {
 		s.herdr.Call(r.Context(), "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)
 	}

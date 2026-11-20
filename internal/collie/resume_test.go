@@ -102,3 +102,15 @@ func TestAgyFullTranscript(t *testing.T) {
 		t.Errorf("not agy: got %s", tr.path)
 	}
 }
+
+func TestSessionID(t *testing.T) {
+	if got := sessionID("path", "/u/.codex/sessions/2026/11/21/rollout-2026-11-21T03-21-45-01a1fa68-5cc0-7561-9652-081fb93ad0f9.jsonl"); got != "01a1fa68-5cc0-7561-9652-081fb93ad0f9" {
+		t.Errorf("codex path: %q", got)
+	}
+	if got := sessionID("id", "abc"); got != "abc" {
+		t.Errorf("id: %q", got)
+	}
+	if got := sessionID("path", "/tmp/x.jsonl"); got != "" {
+		t.Errorf("no id: %q", got)
+	}
+}

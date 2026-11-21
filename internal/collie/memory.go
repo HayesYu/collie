@@ -28,8 +28,8 @@ const memoryLayout = `memory/
   tasks/<slug>.md   one file per piece of open work: goal, thread id, agents on it,
                     what's done, what's left, next step. Read every session.
   tasks/done/       finished or abandoned tasks, moved here with a last line on how they ended.
-  messages.md       written by the hub: what you recently told the human. Read every
-                    session so you don't repeat yourself; don't edit it.
+  messages.md       what you recently told the human, kept up to date by the hub. Read
+                    every session, to build on what you already said.
 Store only what can't be looked up again: pointers (paths, thread ids, URLs), not copies.`
 
 func (sp *Super) memDir() string { return filepath.Join(sp.routerDir(), "memory") }

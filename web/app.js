@@ -451,6 +451,12 @@
   const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
   const isCollieOwned = (v) => v.name === ROUTER || isWorker(v.name);
 
+  // "09:00", "明天 09:00", "11月24日 09:00".
+  function whenShort(at) {
+    const d = new Date(at), hm = d.toTimeString().slice(0, 5);
+    const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+    return days === 0 ? hm : days === 1 ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  }
   function renderSide() {
     const blocked = state.agents.filter((a) => a.status === "blocked");
     $("#attention-group").hidden = blocked.length === 0;
@@ -474,6 +480,11 @@
     const active = sup.workers.filter((w) => !w.ended);
     const running = active.filter(workerBusy).length;
     $("#nav-collie-sub").textContent = collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : "");
+    // The next time Collie set itself to look again, under 自动化 where its
+    // timers are: "明天 09:00 再看：复查 paper_df…".
+    const f = sup.follow;
+    $("#nav-auto-sub").textContent = f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "收件箱 · 定时 · 接入";
+    $("#nav-auto-sub").title = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}` : "";
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
     $("#nav-queue").hidden = !sup.queued;
     $("#nav-queue").textContent = sup.queued;

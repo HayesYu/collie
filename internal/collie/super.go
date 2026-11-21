@@ -792,6 +792,20 @@ func (sp *Super) RestartRouter(ctx context.Context) error {
 	return nil
 }
 
+// followLocked is the soonest one-off timer Collie set itself ("in 30m",
+// "at …"): a follow-up. Routines like a weekday check are not one.
+func (sp *Super) followLocked() *followView {
+	var f *followView
+	for _, t := range sp.st.Timers {
+		if t.Enabled && t.Owner != "you" && (strings.HasPrefix(t.Spec, "in ") || strings.HasPrefix(t.Spec, "at ")) && t.NextRun.After(time.Now()) {
+			if f == nil || t.NextRun.Before(f.Next) {
+				f = &followView{Next: t.NextRun, NextText: clip(firstLine(t.Text), 80)}
+			}
+		}
+	}
+	return f
+}
+
 // routerReadFile keeps a copy of the ROUTER.md the running Collie read.
 const routerReadFile = ".router-read.md"
 

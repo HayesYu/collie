@@ -76,6 +76,13 @@ type superView struct {
 	// QueuedRouter: those waiting for Collie itself, not for a worker.
 	QueuedRouter int  `json:"queued_router"`
 	Paused       bool `json:"paused"`
+	// Follow: the next time Collie set itself to look at something again.
+	Follow *followView `json:"follow,omitempty"`
+}
+
+type followView struct {
+	Next     time.Time `json:"next"`
+	NextText string    `json:"next_text"` // what it will look at then
 }
 
 func (s *Server) superState(ctx context.Context) superView {
@@ -114,6 +121,7 @@ func (s *Server) superState(ctx context.Context) superView {
 		}
 	}
 	sort.Slice(v.Workers, func(i, j int) bool { return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt) })
+	v.Follow = sp.followLocked()
 	for _, t := range sp.st.Triggers {
 		if t.Status == "queued" {
 			v.Queued++

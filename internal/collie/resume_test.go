@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestResumeFrom(t *testing.T) {
@@ -112,5 +113,22 @@ func TestSessionID(t *testing.T) {
 	}
 	if got := sessionID("path", "/tmp/x.jsonl"); got != "" {
 		t.Errorf("no id: %q", got)
+	}
+}
+
+func TestFollow(t *testing.T) {
+	soon, later := time.Now().Add(time.Hour), time.Now().Add(20*time.Hour)
+	sp := &Super{st: &State{Timers: []*Timer{
+		{Spec: "weekdays 10:00", Text: "飞书 todo 例行", NextRun: soon.Add(-30 * time.Minute), Enabled: true, Owner: "collie"},
+		{Spec: "at 2026-11-22 09:00", Text: "复查 paper_df\n细节", NextRun: later, Enabled: true, Owner: "collie"},
+		{Spec: "in 30m", Text: "看一眼进度", NextRun: soon, Enabled: false, Owner: "collie"},
+	}}}
+	f := sp.followLocked()
+	if f == nil || f.NextText != "复查 paper_df" || !f.Next.Equal(later) {
+		t.Fatalf("got %+v", f)
+	}
+	sp.st.Timers = sp.st.Timers[:1]
+	if sp.followLocked() != nil {
+		t.Error("a routine is not a follow-up")
 	}
 }

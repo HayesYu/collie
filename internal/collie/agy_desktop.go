@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -50,6 +53,10 @@ func forgetAgyServer() {
 }
 
 func findAgyServer() *agyServer {
+	if ls := findAgyHub(); ls != nil {
+		return ls
+	}
+	// Before 2.34 the token was on the server's command line.
 	out, err := exec.Command("ps", "-axww", "-o", "pid=,command=").Output()
 	if err != nil {
 		return nil
@@ -78,6 +85,39 @@ func findAgyServer() *agyServer {
 			if ls.probe() {
 				return ls
 			}
+		}
+	}
+	return nil
+}
+
+// findAgyHub reads the file the app (2.34 and later) writes for local
+// clients: ~/.gemini/antigravity/daemon/hub_<port>.json with the server's
+// pid, plain-HTTP port and token.
+func findAgyHub() *agyServer {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	files, _ := filepath.Glob(filepath.Join(home, ".gemini", "antigravity", "daemon", "hub_*.json"))
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var h struct {
+			PID      int    `json:"pid"`
+			HTTPPort int    `json:"httpPort"`
+			CSRF     string `json:"csrfToken"`
+		}
+		if json.Unmarshal(b, &h) != nil || h.HTTPPort == 0 || h.CSRF == "" {
+			continue
+		}
+		if h.PID > 0 && syscall.Kill(h.PID, 0) != nil {
+			continue // left behind by a server that has quit
+		}
+		ls := &agyServer{addr: "127.0.0.1:" + strconv.Itoa(h.HTTPPort), csrf: h.CSRF}
+		if ls.probe() {
+			return ls
 		}
 	}
 	return nil

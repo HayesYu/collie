@@ -1473,12 +1473,6 @@
   const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
   const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
   function renderExt() { renderSessions(); }
-  $("#live-list").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-fold]");
-    if (!b) return;
-    store.set("idleOpen", !store.get("idleOpen", false));
-    renderSessions();
-  });
   function renderSessions() {
     const many = (state.machines || []).length > 1;
     const extRow = (e) => {
@@ -1496,31 +1490,18 @@
         <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a></li>`;
     };
 
-    // 进行中: needs-you rows are already above. Another app's session that is
-    // only open (kept alive in the background, nothing running) stays here,
-    // marked, below the busy ones.
-    const going = (e) => e.live;
+    // 进行中: what is running or has just finished (needs-you rows are already
+    // above). Another app's session that is only open (kept alive in the
+    // background, nothing running) is listed under 最近 by its time, its dot
+    // saying it is still open.
+    const going = (e) => e.live && e.status !== "idle" && e.status !== "unknown";
     const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked")
       .map((a) => ({ rank: RANK[a.status] ?? 3, done: a.status === "done", html: itemHTML(a), on: view === "pane" && a.pane_id === current }));
     const liveExt = ext.filter(going).map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
     const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
     const busy = live.filter((x) => x.rank <= 1).length;
     $("#live-count").textContent = busy ? `${busy} 个在跑` : live.length || "";
-    // Sessions that are only open (idle, a plain terminal) fold into one row
-    // once there are more than a few, so 最近 stays within reach. One that just
-    // finished has a result to look at, so it stays listed, as does the one on
-    // screen.
-    const folds = (x) => x.rank >= 3 && !x.done;
-    const idle = live.filter(folds);
-    let rows = live;
-    if (idle.length > 3) {
-      const open = store.get("idleOpen", false);
-      const shown = live.filter((x) => !folds(x) || open || x.on);
-      const hid = idle.length - (open ? 0 : idle.filter((x) => x.on).length);
-      rows = [...shown, { html: `<li><button type="button" class="fold-row ${open ? "open" : ""}" data-fold="idle" aria-expanded="${open}">
-        <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>${open ? "收起空闲的" : `${hid} 个空闲`}</button></li>` }];
-    }
-    $("#live-list").innerHTML = rows.map((x) => x.html).join("")
+    $("#live-list").innerHTML = live.map((x) => x.html).join("")
       || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`;
 
     // 最近: newest first; Collie's own sessions are reached from its conversation.

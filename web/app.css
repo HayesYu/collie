@@ -983,7 +983,7 @@ select.picked { display: none; }
   .tm-sum { text-align: left; flex-basis: 100%; order: 3; }
 }
 
-/* sidebar: the desktop apps' resting conversations, folded after a few */
+/* sidebar: 最近 shows a few, the rest behind a row */
 .more-row { all: unset; box-sizing: border-box; display: block; width: 100%; cursor: pointer; padding: 6px 10px 6px 42px; font-size: 12px; color: var(--fg-3); border-radius: 8px; }
 .more-row:hover { color: var(--fg-2); background: var(--bg-3); }
 
@@ -1059,10 +1059,6 @@ select.picked { display: none; }
 .item .name .nm { min-width: 0; margin-right: 6px; overflow: hidden; text-overflow: ellipsis; }
 .item .name .by-collie { flex: none; margin-left: auto; /* all badges line up at the right */ padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; font: 500 10.5px/16px var(--sans, inherit); color: var(--fg-3); vertical-align: 1px; white-space: nowrap; }
 .list .empty-hint { list-style: none; padding: 4px 0; }
-.fold-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 10px; background: none; color: var(--fg-3); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
-.fold-row:hover { background: var(--bg-3); color: var(--fg-2); }
-.fold-row svg { width: 14px; height: 14px; margin: 0 6px 0 6px; fill: none; stroke: currentColor; stroke-width: 2; transition: transform .15s; }
-.fold-row.open svg { transform: rotate(90deg); }
 
 /* scrollbars: thin and quiet; the sidebar's shows only while you're on it */
 * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }

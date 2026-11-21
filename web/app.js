@@ -1616,6 +1616,9 @@
     if (!e) throw new Error("这个会话已经结束了");
     const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text } });
     if (r.note) toast(r.note, "attn");
+  }, () => { // files go to the computer it runs on (through its hub, if another)
+    const e = ext.find((x) => x.id === extCur);
+    return e?.hub ? tagged(e.machine || "", e.hub) : e?.machine || "";
   });
   function closeExt() { extStream?.close(); extStream = null; }
   $("#recent-list").addEventListener("click", (ev) => {

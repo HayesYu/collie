@@ -197,13 +197,16 @@
       </div>
       <form class="composer" id="x-composer" hidden>
         <div class="cbox">
+          <div class="files" hidden></div>
           <textarea id="x-input" rows="1" placeholder="发消息给它，它会在原来的窗口里接着做…" enterkeyhint="send"></textarea>
           <div class="cbar">
+            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
             <span class="muted x-hint" id="x-hint"></span>
             <span class="spacer"></span>
             <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
+        <input type="file" multiple hidden>
       </form>
       <div class="ext-bar">
         <p id="x-note"></p>

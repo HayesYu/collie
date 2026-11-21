@@ -2659,6 +2659,13 @@
     }
     return out;
   }
+  // A bare link: it ends at a space or Chinese punctuation, and shows as its
+  // host and path, shortened ([name](url) is better still: the name shows).
+  const URL_RE = /(?<![="'>\w\/])https?:\/\/[^\s<>"，。；：、！？）」』】（「『【]+/g;
+  const urlLabel = (u) => {
+    const s = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    return s.length > 42 ? s.slice(0, 40) + "…" : s;
+  };
   function mdRender(src) {
     const blocks = [];
     let text = String(src || "").replace(/```[^\n]*\n([\s\S]*?)(```|$)/g, (_, code) => {
@@ -2676,7 +2683,13 @@
         try { p = decodeURI(p); } catch {}
         return `<a class="fpath" href="#" data-path="${p}" title="${p}">${label}</a>`;
       })
-      .replace(FILE_RE, '$1<a class="fpath" href="#" data-path="$2" title="打开这个文件">$2</a>');
+      .replace(FILE_RE, '$1<a class="fpath" href="#" data-path="$2" title="打开这个文件">$2</a>')
+      .replace(URL_RE, (u) => {
+        let tail = u.match(/[.,;:!?'\]]+$/)?.[0] || ""; // sentence punctuation after a link
+        u = u.slice(0, u.length - tail.length);
+        if (u.endsWith(")") && !u.includes("(")) { u = u.slice(0, -1); tail = ")" + tail; }
+        return `<a class="url" href="${u}" target="_blank" rel="noopener noreferrer" title="${u}">${urlLabel(u)}</a>${tail}`;
+      });
     const out = [];
     let list = null, para = [];
     const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };

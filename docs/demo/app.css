@@ -649,6 +649,8 @@ body.dragging { cursor: col-resize; user-select: none; }
 .thumb.broken img { display: none; }
 a.fpath { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; cursor: pointer; }
 a.fpath:hover { text-decoration-color: currentColor; }
+a.url { color: var(--accent, inherit); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; word-break: break-all; }
+a.url:hover { text-decoration-color: currentColor; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }
 .field small { display: block; margin-top: 6px; font-size: 12px; }
 .kinds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }

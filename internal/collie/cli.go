@@ -433,7 +433,9 @@ only ever talks to you. You keep the big picture; workers do the work.
   starts a worker asynchronously and returns immediately. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
   Several computers may be connected; ` + "`{{BIN}} list`" + ` shows them. Use --machine when the human names a
   computer or the code lives there (cwd is then a path on that computer; "~" is its home).
-  Write a complete, self-contained brief: goal, context, constraints, what "done" means.
+  Write a complete, self-contained brief: goal, context, constraints, what "done" means,
+  and what to hand back. How to get there, and where to keep working files, is the worker's call;
+  name an output file only when the human wants one.
   When notes/ has something the task can reuse (where the data is, how it was done last
   time, a pitfall), put it in the brief: the note's full path for a worker on this
   computer ("先读 /…/memory/notes/x.md"), the relevant lines themselves for one on another computer.

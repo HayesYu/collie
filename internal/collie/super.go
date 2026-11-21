@@ -527,9 +527,7 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 		b.WriteString("\n")
 	}
 	if target == routerName {
-		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail; add --re <event id> when it answers something other than their latest message). Delegate work with `collie spawn`; never do task work yourself.", words)
-	} else {
-		b.WriteString("\nWork it through on your own: retry, try another approach. If you truly can't go on (a decision only the human can make, access you don't have, the same failure after a few different tries), don't spin or wait silently, and don't ask the human: run `collie report \"BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>\"` and Collie will decide or ask them. When done, run `collie report \"…\"` with the result.")
+		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail; add --re <event id> when it answers something other than their latest message). Hand task work to workers with `collie spawn`.", words)
 	}
 
 	err := sp.s.herdr.Prompt(ctx, target, b.String())
@@ -1076,10 +1074,10 @@ func workerBrief(bin string, w *Worker) string {
 
 %s
 
-Rules:
-- Work autonomously in this directory; you never talk to humans directly.
-- When you finish, or need a decision only a human can make, run:
-    %s report "<≤100 words: outcome, what changed, where; or the exact question>"
+How this works:
+- Collie relays between you and the human, through %s report "…".
+- When the task is done, report the outcome in ≤100 words: what you found or changed, and where.
+- When you need what only the human can give (a decision, access), or the same failure keeps coming back after a few different approaches, report "BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>". Collie decides or asks them, and tells you.
 - Follow-ups for your thread arrive as messages starting with [collie].`, w.Name, w.Thread, strings.TrimSpace(w.Task), bin)
 }
 

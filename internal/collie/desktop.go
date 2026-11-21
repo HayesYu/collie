@@ -127,14 +127,18 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				// A thread the App opened on this machine from another
 				// computer runs in Codex's shared background service.
 				e.CanSend = true
-			case d.app == appCodex && codexNewAppUp():
-				e.ReadOnly = "新版 Codex 桌面版不再让别的程序往它的对话里发消息：要接着说，在 Codex 里，或在 herdr 里接管，用终端版的 Codex 接着这个对话（Codex 里正开着它时接不了，先切到别的对话）"
+			case d.app == appCodex && !d.running && s.codexDaemonSock() != "":
+				// The new App (and a closed one) can't be written to; the
+				// shared daemon continues the thread instead.
+				e.CanSend, e.via = true, "bg"
 				// The CLI shares ~/.codex with the App: `codex resume` picks
-				// the thread up in a herdr pane. Not while the App runs a turn.
-				e.CanTakeOver = !d.running && e.Session != "" && e.Cwd != ""
+				// the thread up in a herdr pane too.
+				e.CanTakeOver = e.Session != "" && e.Cwd != ""
+			case d.app == appCodex && d.running:
+				e.ReadOnly = "Codex 正在跑这个对话：等它这一轮跑完再发，或直接在 Codex 里说"
 			case d.app == appCodex:
-				e.ReadOnly = "Codex App 没有打开：打开它之后就能从这里发消息，或在 herdr 里接管"
-				e.CanTakeOver = !d.running && e.Session != "" && e.Cwd != ""
+				e.ReadOnly = "这台电脑上没有 Codex 后台：在 Codex 里接着说，或在 herdr 里接管"
+				e.CanTakeOver = e.Session != "" && e.Cwd != ""
 			default:
 				e.ReadOnly = "这个对话现在没有在 Codex 里打开：在 Codex App 里点开它，就能从这里发消息"
 			}
@@ -406,25 +410,6 @@ func lastTurnOpen(r io.ReaderAt, size int64) bool {
 // 4-byte little-endian length and a JSON object; each request carries the
 // version the App expects for its method.
 func (s *Server) codexAppSock() string { return filepath.Join(s.codexHome(), "ipc", "ipc.sock") }
-
-// codexNewAppUp: the Codex App from 26.11 on (shipped as ChatGPT.app) is
-// running. It keeps its app-server private (stdio) and has no ipc.sock, so its
-// threads can be read here but not written to.
-func codexNewAppUp() bool {
-	codexNewApp.Lock()
-	defer codexNewApp.Unlock()
-	if time.Since(codexNewApp.at) > 20*time.Second {
-		out, _ := exec.Command("ps", "-axww", "-o", "command=").Output()
-		codexNewApp.at, codexNewApp.up = time.Now(), strings.Contains(string(out), "/Codex Framework.framework/")
-	}
-	return codexNewApp.up
-}
-
-var codexNewApp struct {
-	sync.Mutex
-	at time.Time
-	up bool
-}
 
 func (s *Server) codexAppUp() bool {
 	c, err := net.DialTimeout("unix", s.codexAppSock(), 300*time.Millisecond)

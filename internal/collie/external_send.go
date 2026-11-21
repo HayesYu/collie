@@ -32,6 +32,7 @@ import (
 //     desktop app's sessions as well as any terminal.
 //   - Codex (0.163+) runs a shared app-server daemon that its terminal UI is a
 //     client of. Collie joins as one more client and starts (or steers) a turn.
+//     A Codex App thread nobody has open is continued there in the background.
 //
 // Both are messages only: approvals and questions stay on that computer.
 
@@ -430,6 +431,20 @@ func (s *Server) codexLoaded() (map[string]bool, error) {
 }
 
 func (s *Server) codexSend(ctx context.Context, thread, text string) error {
+	return s.codexDaemonSend(ctx, thread, text, false)
+}
+
+// codexBgSend continues a Codex App thread in the shared daemon when nothing
+// else runs it: the new App keeps its own app-server private, so this is the
+// way in. The App locks only the thread it has open; the daemon takes the
+// lock for the turn and lets go about a minute after it ends. Nobody is there
+// to approve, so the turn asks for none: what its sandbox won't allow fails,
+// and Codex says so.
+func (s *Server) codexBgSend(ctx context.Context, thread, text string) error {
+	return s.codexDaemonSend(ctx, thread, text, true)
+}
+
+func (s *Server) codexDaemonSend(ctx context.Context, thread, text string, idle bool) error {
 	sock := s.codexDaemonSock()
 	if sock == "" {
 		return errors.New("这台电脑上没有运行 Codex 后台")
@@ -443,10 +458,14 @@ func (s *Server) codexSend(ctx context.Context, thread, text string) error {
 	if err != nil {
 		return err
 	}
-	if !ids[thread] {
+	headless := idle && !ids[thread]
+	if !ids[thread] && !headless {
 		return errors.New("这个 Codex 会话没有在共享后台里运行，只能看")
 	}
 	if err := c.call("thread/resume", map[string]any{"threadId": thread, "excludeTurns": true}, nil); err != nil {
+		if strings.Contains(err.Error(), "active writer") || strings.Contains(err.Error(), "live local writer") {
+			return errors.New("这个对话正在 Codex 里打开着：在 Codex 里切到别的对话再发，或直接在 Codex 里说")
+		}
 		return err
 	}
 	var read struct {
@@ -468,7 +487,15 @@ func (s *Server) codexSend(ctx context.Context, thread, text string) error {
 	if running != "" {
 		return c.call("turn/steer", map[string]any{"threadId": thread, "input": input, "expectedTurnId": running}, nil)
 	}
-	return c.call("turn/start", map[string]any{"threadId": thread, "input": input}, nil)
+	if !headless {
+		return c.call("turn/start", map[string]any{"threadId": thread, "input": input}, nil)
+	}
+	if err := c.call("turn/start", map[string]any{"threadId": thread, "input": input, "approvalPolicy": "never"}, nil); err != nil {
+		return err
+	}
+	// Let go, so the daemon closes the thread (and its lock) once it is idle.
+	c.call("thread/unsubscribe", map[string]any{"threadId": thread}, nil)
+	return nil
 }
 
 // codexInterrupt stops the turn a Codex thread is running in the shared
@@ -592,11 +619,18 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 		}
 	case "codex":
 		send := s.codexSend
-		if e.via == "app" {
+		switch e.via {
+		case "app":
 			send = s.codexAppSend
+		case "bg":
+			send = s.codexBgSend
 		}
 		if err := send(ctx, e.Session, text); err != nil {
 			fail(w, err)
+			return
+		}
+		if e.via == "bg" {
+			writeJSON(w, 200, map[string]any{"ok": true, "note": "已发出：这一轮在电脑的 Codex 后台里跑，Codex App 里不会实时显示，跑完一分钟左右在 Codex 里打开就能看到"})
 			return
 		}
 	case "agy":

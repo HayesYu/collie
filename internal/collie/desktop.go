@@ -128,7 +128,7 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				// computer runs in Codex's shared background service.
 				e.CanSend = true
 			case d.app == appCodex && codexNewAppUp():
-				e.ReadOnly = "新版 Codex（现在叫 ChatGPT）不再让别的程序往它的对话里发消息：这里只能看，要说话请在 ChatGPT 里"
+				e.ReadOnly = "新版 Codex 桌面版不再让别的程序往它的对话里发消息：这里只能看，要接着说请在 Codex 里"
 			case d.app == appCodex:
 				e.ReadOnly = "Codex App 没有打开：打开它之后就能从这里发消息"
 			default:

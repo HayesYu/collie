@@ -128,7 +128,7 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				// computer runs in Codex's shared background service.
 				e.CanSend = true
 			case d.app == appCodex && codexNewAppUp():
-				e.ReadOnly = "新版 Codex 桌面版不再让别的程序往它的对话里发消息：要接着说，在 Codex 里，或在 herdr 里接管，用终端版的 Codex 接着这个对话"
+				e.ReadOnly = "新版 Codex 桌面版不再让别的程序往它的对话里发消息：要接着说，在 Codex 里，或在 herdr 里接管，用终端版的 Codex 接着这个对话（Codex 里正开着它时接不了，先切到别的对话）"
 				// The CLI shares ~/.codex with the App: `codex resume` picks
 				// the thread up in a herdr pane. Not while the App runs a turn.
 				e.CanTakeOver = !d.running && e.Session != "" && e.Cwd != ""

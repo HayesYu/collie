@@ -608,8 +608,9 @@
     const wk = $("#super-working");
     st.hidden = !!busy;
     if (busy) {
-      wk.className = "working-row " + (r.status === "working" ? "working" : collieDot(r.status));
-      wk.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(busy)}`;
+      // In Collie's own column, where its next message will appear.
+      wk.className = "working-row say " + (r.status === "working" ? "working" : collieDot(r.status));
+      wk.innerHTML = `<span class="avatar"><img src="icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
     }
     wk.hidden = !busy;
     $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";

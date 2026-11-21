@@ -994,6 +994,10 @@ select.picked { display: none; }
 .working-row { display: flex; align-items: center; gap: 8px; margin-top: -12px; padding: 0 max(20px, calc((100% - var(--col)) / 2)) 24px; font-size: 13px; color: var(--fg-3); }
 .working-row.working { animation: workpulse 1.6s ease-in-out infinite; }
 @keyframes workpulse { 50% { opacity: .55; } }
+/* Collie's own: under its avatar, text lined up with its messages */
+.working-row.say { display: grid; gap: 12px; align-items: center; }
+.working-row.say.working { animation: none; }
+.working-row.say.working .wk-t { animation: workpulse 1.6s ease-in-out infinite; }
 
 /* markdown tables in replies: rules between rows, no grid; scroll sideways on narrow screens */
 .md-table { overflow-x: auto; margin: 14px 0; -webkit-overflow-scrolling: touch; }

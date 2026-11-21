@@ -76,14 +76,14 @@ func TestAgentStopLine(t *testing.T) {
 func TestDreamSkills(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "d.md")
 	os.WriteFile(p, []byte("归档了两个任务。\n可做成 skill：Dorado 只读查表、Spark 草稿读 HDFS。\n\n# 记录\n"), 0o600)
-	if got := dreamSkills(p); got != "Dorado 只读查表、Spark 草稿读 HDFS" {
+	if got := dreamLine(p, dreamSkillsPrefix); got != "Dorado 只读查表、Spark 草稿读 HDFS" {
 		t.Errorf("skills: %q", got)
 	}
 	if got := dreamSummary(p); got != "归档了两个任务。" {
 		t.Errorf("summary: %q", got)
 	}
 	os.WriteFile(p, []byte("归档了两个任务。\n"), 0o600)
-	if dreamSkills(p) != "" {
+	if dreamLine(p, dreamSkillsPrefix) != "" {
 		t.Error("no line, no skills")
 	}
 }
@@ -144,5 +144,19 @@ func TestProgressHash(t *testing.T) {
 	}
 	if progressHash("Working (12s • esc to interrupt)\nran 3 tests") != progressHash("Working (95s • esc to interrupt)\nran 3 tests") {
 		t.Error("codex's timer is not progress")
+	}
+}
+
+func TestDreamFixLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "j.md")
+	os.WriteFile(p, []byte("精简了指令。\n可改进 skill：feishu-todo（漏读话题回复）\n\n- 细节\n"), 0o600)
+	if got := dreamLine(p, dreamFixPrefix); got != "feishu-todo（漏读话题回复）" {
+		t.Errorf("fix line: %q", got)
+	}
+	if dreamLine(p, dreamSkillsPrefix) != "" || dreamSummary(p) != "精简了指令。" {
+		t.Error("the fix line is neither a new skill nor the summary")
+	}
+	if journalName(time.Date(2026, 11, 21, 18, 32, 0, 0, time.Local)) != "2026-11-21-1832" {
+		t.Error("journal name")
 	}
 }

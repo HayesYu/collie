@@ -136,7 +136,8 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 	}
 	sp.dream = &dreamRun{at: time.Now(), reason: reason}
 	kind := sp.st.Settings.RouterKind
-	args := sp.routerArgsLocked()
+	args := sp.dreamArgsLocked()
+	at := sp.dream.at
 	sp.addEntryLocked("event", mainThread, "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", "", "info")
 	sp.mu.Unlock()
 
@@ -178,7 +179,7 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 				return
 			}
 		}
-		prompt := strings.ReplaceAll(dreamPrompt, "{{DATE}}", time.Now().Format("2006-01-02"))
+		prompt := strings.ReplaceAll(dreamPrompt, "{{DATE}}", journalName(at))
 		prompt = strings.ReplaceAll(prompt, "{{BIN}}", sp.bin)
 		migrate := ""
 		if sp.legacyMemory() {
@@ -254,11 +255,11 @@ func (sp *Super) driveDream(ctx context.Context, d *dreamRun, live map[string]li
 
 func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
 	sp.closeWorkspaces(ctx, dreamLabel)
-	summary, skills := "", ""
+	summary, skills, fixes := "", "", ""
 	if ok {
 		sp.setLastDream(time.Now())
-		journal := filepath.Join(sp.routerDir(), "dreams", d.at.Format("2006-01-02")+".md")
-		summary, skills = dreamSummary(journal), dreamSkills(journal)
+		journal := filepath.Join(sp.routerDir(), "dreams", journalName(d.at)+".md")
+		summary, skills, fixes = dreamSummary(journal), dreamLine(journal, dreamSkillsPrefix), dreamLine(journal, dreamFixPrefix)
 	}
 	sp.mu.Lock()
 	sp.dream = nil
@@ -275,6 +276,9 @@ func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
 		// Yours to decide, so it is said to you, not left in the journal.
 		sp.addEntryLocked("collie", mainThread, "整理记忆时发现这几件事做熟了，可以做成 skill，以后哪个 agent 都能直接用："+skills+"。要做的话告诉我放在哪（你自己的 skills，还是某个项目的仓库）。", "", "")
 	}
+	if fixes != "" {
+		sp.addEntryLocked("collie", mainThread, "整理记忆时发现已有的 skill 有地方不好用："+fixes+"。要改的话说一声，我派人去改。", "", "")
+	}
 	sp.mu.Unlock()
 	sp.ensureRouter(ctx)
 }
@@ -283,8 +287,27 @@ func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
 // dreamSkillsPrefix starts the journal line naming how-tos ripe for a skill.
 const dreamSkillsPrefix = "可做成 skill："
 
-// dreamSkills is what that line lists, or "".
-func dreamSkills(path string) string {
+// dreamFixPrefix starts the line naming existing skills that need fixing.
+const dreamFixPrefix = "可改进 skill："
+
+// journalName names one dream's journal: one file per run, so the hub reads
+// this run's summary, never an earlier one's from the same day.
+func journalName(at time.Time) string { return at.Format("2006-01-02-1504") }
+
+// dreamArgsLocked: dreaming runs as Collie's agent but on the model its
+// workers use. Collie itself is tuned for quick routing; tidying memory is
+// judgement work that runs once a day with nobody waiting.
+func (sp *Super) dreamArgsLocked() []string {
+	st := sp.st.Settings
+	if st.WorkerModel == "" || kinds[st.WorkerKind] != kinds[st.RouterKind] {
+		return sp.routerArgsLocked()
+	}
+	args := append(append([]string{}, st.RouterArgs...), modelArgs(st.RouterKind, st.WorkerModel, st.WorkerEffort)...)
+	return withBypass(args, st.RouterKind, st.AskPermissions)
+}
+
+// dreamLine is what the journal's line starting with prefix lists, or "".
+func dreamLine(path, prefix string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -294,7 +317,7 @@ func dreamSkills(path string) string {
 			break // it is up top, not in the reasons below
 		}
 		l = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), ">-* "))
-		if s, ok := strings.CutPrefix(l, dreamSkillsPrefix); ok {
+		if s, ok := strings.CutPrefix(l, prefix); ok {
 			return strings.TrimRight(strings.TrimSpace(s), "。.")
 		}
 	}
@@ -307,7 +330,7 @@ func dreamSummary(path string) string {
 		return ""
 	}
 	for _, l := range strings.Split(string(b), "\n") {
-		if l = strings.TrimSpace(l); strings.HasPrefix(l, "#") || strings.HasPrefix(l, dreamSkillsPrefix) {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "#") || strings.HasPrefix(l, dreamSkillsPrefix) || strings.HasPrefix(l, dreamFixPrefix) {
 			continue // the title; the skills, said on their own
 		}
 		l = strings.TrimSpace(strings.TrimLeft(l, ">-* "))
@@ -432,14 +455,17 @@ const dreamPrompt = `[collie] Dream. You are Collie's memory keeper, running whi
 - dreams/: earlier dream journals, if any.
 Run ` + "`{{BIN}} list`" + ` to see which agents are actually still around.
 {{MIGRATE}}
-Tidy memory/:
+Tidy memory/. Every session reads the up-front files (instructions.md, notes/index.md, open tasks) before anything else, so each line there has to earn its place: keep them under ~6 KB together, and smaller is better.
 1. Replace stale entries: tasks that are finished, abandoned or whose agents are gone go to tasks/done/ with a last line on how they ended; facts the logs show have changed get fixed.
-2. Merge duplicates and tighten wording. Pointers (paths, thread ids, URLs), not copies. Keep the up-front files (instructions.md, notes/index.md, open tasks) under ~6 KB together; move detail into notes/ files and list each in notes/index.md. In instructions.md, each line is the rule itself, in a sentence or two; the how-to, examples and history go in the note it points to.
-3. Look for patterns that only show across sessions: requests the human repeats, corrections they keep making, preferences they never stated outright, mistakes Collie made more than once. Write the ones that should change how Collie behaves into instructions.md (or a note), marked "(inferred)". Each must be backed by the logs; never invent.
-4. Finished work that taught something reusable (where data lives, the command or query that worked, a pitfall, where results are) belongs in notes/, filed by topic so the next similar job finds it; read the task files and the logs for it. Add what Collie missed; skip one-off details. What the logs show about agents (which agent or model worked or failed on which computer, and at what) goes into notes/agents.md. Dated facts that are old enough to have changed: check them (` + "`{{BIN}} list`" + `, the files) and fix or drop them.
-5. A how-to in notes/ that three or more jobs have used and whose steps stopped changing could become a skill, which every agent can use. Don't write skills: name them on the journal's second line, which starts "可做成 skill：" and lists them separated by 、 (each a few words a human recognises, e.g. "Dorado 只读查表"); the human gets it as a message from Collie. Leave the line out when there are none. Say why below.
-6. Keep every explicit instruction from the human unless a later one overrides it. Don't edit memory/messages.md (the hub writes it).
+2. Rewrite instructions.md line by line. Each line is one rule or preference, at most about 80 Chinese characters: what to do, not why, not the incidents behind it, not the steps. Move the steps, examples, dates and history into the note the line points to ("见 notes/x.md"). A routine a timer already runs keeps its how-to in the timer and its note, not here. Merge lines that say the same thing.
+3. Look for patterns that only show across sessions: requests the human repeats, corrections they keep making, preferences they never stated outright, mistakes Collie made more than once. Write the ones that should change how Collie behaves into instructions.md (or a note), marked "(inferred)", in the same short form. Each must be backed by the logs; never invent. A one-off isn't a pattern.
+4. Finished work that taught something reusable (where data lives, the command or query that worked, a pitfall, where results are) belongs in notes/, filed by topic so the next similar job finds it; read the task files and the logs for it. Add what Collie missed; skip one-off details. Pointers (paths, thread ids, URLs), not copies; merge duplicates. Each note gets one line in notes/index.md. What the logs show about agents (which agent or model worked or failed on which computer, and at what) goes into notes/agents.md. Dated facts that are old enough to have changed: check them (` + "`{{BIN}} list`" + `, the files) and fix or drop them.
+5. Skills. Find the ones that exist (notes/skills.md says where they live; look there). A note whose how-to is now a skill shrinks to a pointer to it.
+   - A how-to in notes/ that three or more jobs have used, whose steps stopped changing and that no skill covers yet, could become one. Don't write skills: list them on a line starting "可做成 skill：", separated by 、 (each a few words a human recognises, e.g. "Dorado 只读查表").
+   - An existing skill the logs show agents working around, failing with, or correcting by hand needs fixing: list it on a line starting "可改进 skill：" as "name（what to fix, a few words）", separated by 、.
+   Both lines go right under the journal's first line; the human gets them as messages from Collie. Leave a line out when it has nothing; never list a skill that already exists as a new one.
+6. Keep every explicit instruction from the human unless a later one overrides it (shortening its wording is fine). Don't edit memory/messages.md (the hub writes it).
 
-Then write dreams/{{DATE}}.md (append if it exists). Its first line: one sentence in Chinese saying what you changed; the human sees it. After that: what you changed and why, and patterns you noticed but didn't act on.
+Then write a new file dreams/{{DATE}}.md. Its first line: one sentence in Chinese saying what you changed; the human sees it. Then the skill lines, if any. Then, in under 30 lines: what you changed and why, and patterns you noticed but didn't act on.
 
 Don't message the human and don't start agents. When the files are written, stop.`

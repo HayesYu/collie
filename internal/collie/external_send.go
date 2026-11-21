@@ -630,7 +630,7 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if e.via == "bg" {
-			writeJSON(w, 200, map[string]any{"ok": true, "note": "已发出：这一轮在电脑的 Codex 后台里跑，Codex App 里不会实时显示，跑完一分钟左右在 Codex 里打开就能看到"})
+			writeJSON(w, 200, map[string]any{"ok": true, "note": "已发出：这一轮在 Codex 后台里跑，Codex App 不会实时显示；跑完后（本机的对话再等一分钟左右）在 Codex 里打开就能看到"})
 			return
 		}
 	case "agy":

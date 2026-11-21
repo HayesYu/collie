@@ -127,16 +127,16 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				// A thread the App opened on this machine from another
 				// computer runs in Codex's shared background service.
 				e.CanSend = true
-			case d.app == appCodex && !d.running && s.codexDaemonSock() != "":
+			case isCodexApp(d.app) && !d.running && s.codexDaemonSock() != "":
 				// The new App (and a closed one) can't be written to; the
 				// shared daemon continues the thread instead.
 				e.CanSend, e.via = true, "bg"
 				// The CLI shares ~/.codex with the App: `codex resume` picks
 				// the thread up in a herdr pane too.
 				e.CanTakeOver = e.Session != "" && e.Cwd != ""
-			case d.app == appCodex && d.running:
+			case isCodexApp(d.app) && d.running:
 				e.ReadOnly = "Codex 正在跑这个对话：等它这一轮跑完再发，或直接在 Codex 里说"
-			case d.app == appCodex:
+			case isCodexApp(d.app):
 				e.ReadOnly = "这台电脑上没有 Codex 后台：在 Codex 里接着说，或在 herdr 里接管"
 				e.CanTakeOver = e.Session != "" && e.Cwd != ""
 			default:
@@ -635,6 +635,10 @@ func (s *Server) codexDaemonHas(thread string) bool {
 	return err == nil && ids[thread]
 }
 
+const appCodexRemote = "Codex App（远程）"
+
+func isCodexApp(app string) bool { return app == appCodex || app == appCodexRemote }
+
 // codexClient names what started a "vscode" thread: the Codex App, or another
 // program driving Codex's app-server.
 func codexClient(originator, cwd string) string {
@@ -647,7 +651,7 @@ func codexClient(originator, cwd string) string {
 	switch originator {
 	case "", "Codex Desktop", "codex_work_desktop":
 		if runtime.GOOS != "darwin" {
-			return "Codex App（远程）" // the App on another computer opened it here over SSH
+			return appCodexRemote // the App on another computer opened it here over SSH
 		}
 		return appCodex
 	case "codex-tui":

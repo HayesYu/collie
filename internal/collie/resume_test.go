@@ -132,3 +132,17 @@ func TestFollow(t *testing.T) {
 		t.Error("a routine is not a follow-up")
 	}
 }
+
+func TestProgressHash(t *testing.T) {
+	a := progressHash("⏺ Bash(collie show t12)\n✻ Thinking… (3m 21s · ↓ 1.2k tokens · esc to interrupt)\n> ")
+	b := progressHash("⏺ Bash(collie show t12)\n✶ Pondering… (4m 02s · ↓ 1.2k tokens · esc to interrupt)\n> ")
+	if a != b {
+		t.Error("the spinner line alone moving is not progress")
+	}
+	if c := progressHash("⏺ Bash(collie show t12)\n⏺ Read(memory/notes/index.md)\n> "); c == a {
+		t.Error("a new step is progress")
+	}
+	if progressHash("Working (12s • esc to interrupt)\nran 3 tests") != progressHash("Working (95s • esc to interrupt)\nran 3 tests") {
+		t.Error("codex's timer is not progress")
+	}
+}

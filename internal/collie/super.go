@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Super is Collie's super-agent: one resident Router session (the herdr agent
@@ -46,6 +47,7 @@ type Super struct {
 	routerFresh     bool
 	routerAskedAt   time.Time // last delivery to the router not yet followed by a reply or check
 	routerRetries   int       // turns in a row that ended on an API error, each retried
+	routerNudged    bool      // the watchdog interrupted this turn once already
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
 	routerRun   *[2]string
@@ -1128,7 +1130,7 @@ func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, router
 		if err != nil {
 			continue
 		}
-		h := fmt.Sprintf("%x", sha1.Sum([]byte(res.Text)))
+		h := progressHash(res.Text)
 		m := sp.lastScreen[w.Name]
 		if m.hash != h {
 			sp.lastScreen[w.Name] = screenMark{hash: h, since: time.Now()}
@@ -1141,6 +1143,86 @@ func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, router
 				fmt.Sprintf("watchdog: worker %s has shown no visible progress for %d min while 'working'. Inspect with `collie show %s`; send guidance, stop it, or tell the human.", w.Name, int(stall.Minutes()), w.Name), "", "", w.Name)
 		}
 	}
+	sp.watchRouter(ctx, live, stall)
+}
+
+// watchRouter catches Collie itself hanging mid-turn (a stream that never
+// ends, a tool that never returns): nothing but the timer moves on its screen.
+// The first time it interrupts and tells Collie to carry on; if that turn
+// hangs again, it tells the human instead of looping.
+func (sp *Super) watchRouter(ctx context.Context, live map[string]liveAgent, stall time.Duration) {
+	a, ok := live[routerName]
+	if !ok || stall <= 0 || a.Status != "working" {
+		sp.mu.Lock()
+		delete(sp.lastScreen, routerName)
+		if ok && (a.Status == "done" || a.Status == "idle") {
+			sp.routerNudged = false
+		}
+		sp.mu.Unlock()
+		return
+	}
+	res, err := sp.s.herdr.Read(ctx, a.Pane, "detection", "text", 0)
+	if err != nil {
+		return
+	}
+	h := progressHash(res.Text)
+	sp.mu.Lock()
+	m := sp.lastScreen[routerName]
+	if m.hash != h {
+		sp.lastScreen[routerName] = screenMark{hash: h, since: time.Now()}
+		sp.mu.Unlock()
+		return
+	}
+	if m.flag || time.Since(m.since) < stall {
+		sp.mu.Unlock()
+		return
+	}
+	m.flag = true
+	sp.lastScreen[routerName] = m
+	mins := int(time.Since(m.since).Minutes())
+	if sp.routerNudged {
+		sp.addEntryLocked("event", mainThread, fmt.Sprintf("Collie 又卡住了（%d 分钟没有动静，自动打断过一次没好）；可以在终端里看看它，或在 自动化 → 设置 里给 Collie 换一个 agent", mins), routerName, "error")
+		sp.mu.Unlock()
+		return
+	}
+	sp.routerNudged = true
+	sp.addEntryLocked("event", mainThread, fmt.Sprintf("Collie 卡住了 %d 分钟没有动静，已自动打断让它继续", mins), "", "info")
+	sp.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": a.Pane, "keys": []string{"esc"}}, nil)
+		time.Sleep(2 * time.Second)
+		if err := sp.s.herdr.Prompt(ctx, routerName, fmt.Sprintf("%s: nothing on your screen changed for %d min, so Collie interrupted it. Carry on with what you were doing; the events you had are still yours to handle. If a command hangs, don't run it again: hand that job to a worker.", routerRetryMark, mins)); err != nil {
+			log.Printf("router nudge: %v", err)
+			return
+		}
+		sp.mu.Lock()
+		if sp.routerAskedAt.IsZero() {
+			sp.routerAskedAt = time.Now()
+		}
+		sp.mu.Unlock()
+	}()
+}
+
+// progressHash fingerprints a pane's screen for the watchdog, leaving out what
+// moves on its own while an agent waits: the spinner line ("✻ Thinking… (3m
+// 21s · esc to interrupt)", "Working (12s • esc to interrupt)") and numbers.
+func progressHash(screen string) string {
+	var b strings.Builder
+	for _, l := range strings.Split(screen, "\n") {
+		if strings.Contains(strings.ToLower(l), "esc to interrupt") || strings.Contains(strings.ToLower(l), "esc to cancel") {
+			continue
+		}
+		b.WriteString(strings.Map(func(r rune) rune {
+			if unicode.IsDigit(r) {
+				return -1
+			}
+			return r
+		}, l))
+		b.WriteByte('\n')
+	}
+	return fmt.Sprintf("%x", sha1.Sum([]byte(b.String())))
 }
 
 // ---------------------------------------------------------------- outbox

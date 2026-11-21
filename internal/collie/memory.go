@@ -54,14 +54,18 @@ func (sp *Super) ensureMemory() {
 	sp.writeMessages()
 }
 
+// recentMessages is how many of Collie's replies messages.md keeps: enough
+// not to repeat itself after a restart; older ones are in the chat history.
+const recentMessages = 10
+
 // writeMessages records Collie's recent replies to the human.
 func (sp *Super) writeMessages() {
 	sp.mu.Lock()
 	var lines []string
-	for i := len(sp.st.Entries) - 1; i >= 0 && len(lines) < 30; i-- {
+	for i := len(sp.st.Entries) - 1; i >= 0 && len(lines) < recentMessages; i-- {
 		e := sp.st.Entries[i]
 		if e.Role == "collie" {
-			lines = append(lines, fmt.Sprintf("- %s [%s] %s", e.At.Format("01-02 15:04"), e.Thread, clip(oneLine(e.Text), 400)))
+			lines = append(lines, fmt.Sprintf("- %s [%s] %s", e.At.Format("01-02 15:04"), e.Thread, clip(oneLine(e.Text), 240)))
 		}
 	}
 	sp.mu.Unlock()
@@ -94,6 +98,7 @@ func (sp *Super) loadedSize() int64 {
 	dir := sp.memDir()
 	add(filepath.Join(dir, "instructions.md"))
 	add(filepath.Join(dir, "notes", "index.md"))
+	add(filepath.Join(dir, "messages.md"))
 	for _, t := range sp.openTasks() {
 		add(filepath.Join(dir, "tasks", t))
 	}

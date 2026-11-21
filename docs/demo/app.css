@@ -901,6 +901,10 @@ select.picked { display: none; }
 .mem-edit textarea { width: 100%; min-height: 360px; resize: vertical; font: 13px/1.6 var(--mono); padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2, var(--bg)); color: inherit; }
 .mem-edit .form-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .mem-h { margin: 22px 0 8px; font-size: 13px; font-weight: 600; color: var(--fg-2); }
+.mem-done > summary { list-style: none; cursor: pointer; }
+.mem-done > summary::-webkit-details-marker { display: none; }
+.mem-done > summary .muted::after { content: " ▸"; }
+.mem-done[open] > summary .muted::after { content: " ▾"; }
 .mem-fold + .mem-fold { border-top: 1px solid var(--line); }
 .mem-fold > summary { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; font-size: 13px; list-style: none; }
 .mem-fold > summary::-webkit-details-marker { display: none; }

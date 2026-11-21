@@ -484,7 +484,8 @@
     // timers are: "明天 09:00 再看：复查 paper_df…".
     const f = sup.follow;
     $("#nav-auto-sub").textContent = f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "收件箱 · 定时 · 接入";
-    $("#nav-auto-sub").title = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}` : "";
+    $("#nav-auto-sub").title = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}（点开看进行中的任务）` : "";
+    $("#nav-auto-sub").classList.toggle("follow", !!f?.next);
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
     $("#nav-queue").hidden = !sup.queued;
     $("#nav-queue").textContent = sup.queued;
@@ -897,6 +898,9 @@
     openAuto();
   });
 
+  // The follow-up line under 自动化 opens the open tasks (top of 记忆).
+  $("#nav-auto-sub").addEventListener("click", () => { if (sup.follow?.next) { autoTab = "memory"; store.set("autoTab", autoTab); if (view === "auto") openAuto(); } });
+
   function openAuto() {
     memEditing = false;
     $("#auto-body")._memSig = "";
@@ -992,12 +996,13 @@
         <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
         <div class="mem-dream mem-load"><span class="grow">每次新会话先读：<b class="${over ? "warn" : ""}">${kb(r.loaded)}</b> / 建议 ${kb(r.budget)} 以内${over ? "（偏大，做梦时会精简）" : ""}</span></div></div>
       ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
-      ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
       ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "没有进行中的任务" })}
+      ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
       ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
-      ${group("最近说过的话", "hub 自动记录，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
+      ${group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
       ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
-      ${group("已完成", "做完或放弃的任务", done, { card: (f) => ({ label: f.name.replace(/^tasks\/done\//, ""), crew: true }) })}`;
+      ${done.length ? `<details class="mem-done" data-path="tasks/done/"><summary class="mem-h">已完成<span class="muted">${done.length} 件 · 做完或放弃的任务，不再先读</span></summary>
+        <div class="card">${done.map((f) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true })).join("")}</div></details>` : ""}`;
   }
 
   function inboxHTML(ts) {

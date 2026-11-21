@@ -15,7 +15,7 @@ import (
 // starts it again in a fresh session that begins by reading it. The
 // old session stays readable under "最近结束".
 
-const memoryBudget = 6 << 10 // what a session reads up front from memory/, in bytes
+const memoryBudget = 8 << 10 // what a session reads up front from memory/ (messages.md included), in bytes
 
 type handover struct {
 	at      time.Time

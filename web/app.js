@@ -602,6 +602,16 @@
     const st = $("#router-status");
     st.className = "status " + collieDot(r.status);
     st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(collieStatus(r.status))}`;
+    // While Collie is busy, say so where the answer will appear, as the
+    // other agents' sessions do; the header keeps the resting states.
+    const busy = { working: "Collie 在想…", starting: "Collie 正在醒来…", blocked: "Collie 在等你在电脑上确认", dreaming: "Collie 在做梦，整理完记忆会自己醒来" }[r.status];
+    const wk = $("#super-working");
+    st.hidden = !!busy;
+    if (busy) {
+      wk.className = "working-row " + (r.status === "working" ? "working" : collieDot(r.status));
+      wk.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(busy)}`;
+    }
+    wk.hidden = !busy;
     $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";
     const cx = $("#router-ctx");
     cx.textContent = r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "";

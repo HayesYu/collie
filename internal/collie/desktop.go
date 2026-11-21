@@ -127,6 +127,8 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				// A thread the App opened on this machine from another
 				// computer runs in Codex's shared background service.
 				e.CanSend = true
+			case d.app == appCodex && codexNewAppUp():
+				e.ReadOnly = "新版 Codex（现在叫 ChatGPT）不再让别的程序往它的对话里发消息：这里只能看，要说话请在 ChatGPT 里"
 			case d.app == appCodex:
 				e.ReadOnly = "Codex App 没有打开：打开它之后就能从这里发消息"
 			default:
@@ -400,6 +402,25 @@ func lastTurnOpen(r io.ReaderAt, size int64) bool {
 // 4-byte little-endian length and a JSON object; each request carries the
 // version the App expects for its method.
 func (s *Server) codexAppSock() string { return filepath.Join(s.codexHome(), "ipc", "ipc.sock") }
+
+// codexNewAppUp: the Codex App from 26.11 on (shipped as ChatGPT.app) is
+// running. It keeps its app-server private (stdio) and has no ipc.sock, so its
+// threads can be read here but not written to.
+func codexNewAppUp() bool {
+	codexNewApp.Lock()
+	defer codexNewApp.Unlock()
+	if time.Since(codexNewApp.at) > 20*time.Second {
+		out, _ := exec.Command("ps", "-axww", "-o", "command=").Output()
+		codexNewApp.at, codexNewApp.up = time.Now(), strings.Contains(string(out), "/Codex Framework.framework/")
+	}
+	return codexNewApp.up
+}
+
+var codexNewApp struct {
+	sync.Mutex
+	at time.Time
+	up bool
+}
 
 func (s *Server) codexAppUp() bool {
 	c, err := net.DialTimeout("unix", s.codexAppSock(), 300*time.Millisecond)

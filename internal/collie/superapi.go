@@ -60,6 +60,8 @@ type routerView struct {
 	RotateAt int  `json:"rotate_at"`
 	Handover bool `json:"handover,omitempty"`
 	Dreaming bool `json:"dreaming,omitempty"`
+	// It has already replied this turn, and is only wrapping up (memory…).
+	Replied bool `json:"replied,omitempty"`
 	// The model and effort it runs with ("" = the agent's own default), and
 	// whether the settings have changed since it started.
 	Model   string `json:"model,omitempty"`
@@ -93,6 +95,14 @@ func (s *Server) superState(ctx context.Context) superView {
 	v := superView{Router: routerView{Kind: sp.st.Settings.RouterKind, Status: "asleep"}, Paused: sp.st.Settings.Paused}
 	if a, ok := live[routerName]; ok {
 		v.Router = routerView{Alive: true, Status: a.Status, PaneID: a.Pane, Kind: a.Kind}
+		if asked := sp.routerAskedAt; a.Status == "working" && !asked.IsZero() {
+			for i := len(sp.st.Entries) - 1; i >= 0 && !sp.st.Entries[i].At.Before(asked); i-- {
+				if r := sp.st.Entries[i].Role; r == "collie" || r == "user" {
+					v.Router.Replied = r == "collie" // unless the human has said more since
+					break
+				}
+			}
+		}
 	} else if sp.routerLaunching {
 		v.Router.Status = "starting"
 	}

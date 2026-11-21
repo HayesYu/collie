@@ -106,6 +106,15 @@ func (sp *Super) loadedSize() int64 {
 	return n
 }
 
+// upFrontSize is the part of loadedSize that Collie writes: all of it but messages.md.
+func (sp *Super) upFrontSize() int64 {
+	n := sp.loadedSize()
+	if fi, err := os.Stat(filepath.Join(sp.memDir(), "messages.md")); err == nil {
+		n -= fi.Size()
+	}
+	return n
+}
+
 func (sp *Super) legacyMemory() bool {
 	return isFile(filepath.Join(sp.routerDir(), "memory.md"))
 }
@@ -124,8 +133,8 @@ func (sp *Super) sessionStart() string {
 	b.WriteString(". Then handle the events below.\n")
 	if sp.legacyMemory() {
 		b.WriteString("Also read memory.md. " + migrateNote + " Do that once these events are handled.\n")
-	} else if n := sp.loadedSize(); n > memoryBudget*2 {
-		fmt.Fprintf(&b, "What you read up front is %d KB, too much for every session: once these events are handled, trim it to ~%d KB (move detail into notes/, finished work into tasks/done/).\n", n/1024, memoryBudget/1024)
+	} else if n := sp.upFrontSize(); n > upFrontBudget*2 {
+		fmt.Fprintf(&b, "The up-front files (instructions, notes/index.md, open tasks) are %d KB, a lot for every session: once these events are handled, bring them to ~%d KB (detail into notes/, finished work into tasks/done/).\n", n/1024, upFrontBudget/1024)
 	}
 	return b.String()
 }

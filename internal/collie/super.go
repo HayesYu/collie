@@ -527,7 +527,7 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 		b.WriteString("\n")
 	}
 	if target == routerName {
-		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail; add --re <event id> when it answers something other than their latest message). Hand task work to workers with `collie spawn`.", words)
+		fmt.Fprintf(&b, "\nReply with `collie reply`, usually ≤%d characters.", words)
 	}
 
 	err := sp.s.herdr.Prompt(ctx, target, b.String())
@@ -851,7 +851,7 @@ func (sp *Super) writeRouterFiles() error {
 	wcwd := sp.s.tilde(sp.st.Settings.WorkerCwd)
 	sp.mu.Unlock()
 	layout := "   " + strings.ReplaceAll(memoryLayout, "\n", "\n   ")
-	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", sp.bin, "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd).Replace(routerDoc)
+	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", sp.bin, "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd, "{{BUDGET}}", fmt.Sprint(upFrontBudget>>10)).Replace(routerDoc)
 	for _, name := range []string{"ROUTER.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(doc), 0o600); err != nil {
 			return err
@@ -1191,7 +1191,7 @@ func (sp *Super) watchRouter(ctx context.Context, live map[string]liveAgent, sta
 		defer cancel()
 		sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": a.Pane, "keys": []string{"esc"}}, nil)
 		time.Sleep(2 * time.Second)
-		if err := sp.s.herdr.Prompt(ctx, routerName, fmt.Sprintf("%s: nothing on your screen changed for %d min, so Collie interrupted it. Carry on with what you were doing; the events you had are still yours to handle. If a command hangs, don't run it again: hand that job to a worker.", routerRetryMark, mins)); err != nil {
+		if err := sp.s.herdr.Prompt(ctx, routerName, fmt.Sprintf("%s: nothing on your screen changed for %d min, so Collie interrupted it. Carry on with what you were doing; the events you had are still yours to handle. A command that hangs is a job for a worker: hand it over.", routerRetryMark, mins)); err != nil {
 			log.Printf("router nudge: %v", err)
 			return
 		}

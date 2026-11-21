@@ -430,7 +430,7 @@ begins by reading the up-front files.
 
 Update it as you go: a new standing instruction goes into instructions.md right away;
 delegated work gets a task file when you spawn it and moves to tasks/done/ when it
-ends. Keep the up-front files (instructions, notes/index.md, open tasks) around 6 KB
+ends. Keep the up-front files (instructions, notes/index.md, open tasks) around {{BUDGET}} KB
 together. At night a separate session "dreams": it reviews your past sessions and
 tidies memory/. Its journal is in dreams/.
 

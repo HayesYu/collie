@@ -135,17 +135,61 @@ func (sp *Super) flush() {
 }
 
 func (sp *Super) addEntryLocked(role, thread, text, ref, tone string) *Entry {
-	return sp.addEntryReLocked(role, thread, text, ref, tone, nil)
+	return sp.addEntryOptsLocked(role, thread, text, ref, tone, nil, nil)
 }
 
 func (sp *Super) addEntryReLocked(role, thread, text, ref, tone string, re *Quote) *Entry {
-	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re}
+	return sp.addEntryOptsLocked(role, thread, text, ref, tone, re, nil)
+}
+
+func (sp *Super) addEntryOptsLocked(role, thread, text, ref, tone string, re *Quote, opts []string) *Entry {
+	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re, Options: opts}
 	sp.st.Entries = append(sp.st.Entries, e)
 	if role == "collie" || tone == "blocked" || tone == "error" {
-		sp.queueNotifyLocked(role, text, tone, re)
+		sp.queueNotifyLocked(role, text, tone, re, opts...)
 	}
 	sp.changed()
 	return e
+}
+
+const maxReplyOptions = 6
+
+func cleanOptions(raw []string) []string {
+	var out []string
+	for _, s := range raw {
+		s = clip(oneLine(s), 80)
+		if s == "" || slices.Contains(out, s) {
+			continue
+		}
+		out = append(out, s)
+		if len(out) >= maxReplyOptions {
+			break
+		}
+	}
+	return out
+}
+
+// Reply posts Collie's message to a conversation thread, with optional quote
+// and quick-reply buttons, and returns any soft warning for the CLI.
+func (sp *Super) Reply(thread, text, reID string, options []string) (*Entry, string) {
+	text = strings.TrimSpace(text)
+	if thread == "" {
+		thread = mainThread
+	}
+	opts := cleanOptions(options)
+	sp.mu.Lock()
+	limit := sp.st.Settings.ReplyChars
+	re := sp.quoteLocked(reID)
+	e := sp.addEntryOptsLocked("collie", thread, text, "", "", re, opts)
+	sp.mu.Unlock()
+	var warn string
+	if strings.TrimSpace(reID) != "" && re == nil {
+		warn = "--re " + reID + " is not an event or message I know; the reply went out without it"
+	}
+	if n := replyLen(text); limit > 0 && n > limit {
+		warn = fmt.Sprintf("reply is %d characters; chat replies are usually ≤%d. Fine if the human asked for detail or the result needs a list; otherwise keep the next one shorter", n, limit)
+	}
+	return e, warn
 }
 
 func (sp *Super) threadLocked(id string) *Thread {
@@ -264,6 +308,9 @@ func sessionID(kind, value string) string {
 }
 
 func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
+	if sp.s == nil || sp.s.herdr == nil {
+		return nil, false
+	}
 	list, err := sp.s.herdr.Agents(ctx)
 	if err != nil {
 		return nil, false
@@ -744,6 +791,9 @@ func (sp *Super) lastAssistant(ctx context.Context, w *Worker) string {
 func (sp *Super) routerDir() string { return filepath.Join(sp.dir, "router") }
 
 func (sp *Super) ensureRouter(ctx context.Context) {
+	if sp.s == nil || sp.s.herdr == nil {
+		return
+	}
 	sp.mu.Lock()
 	if sp.routerLaunching || time.Since(sp.routerLaunchAt) < 45*time.Second {
 		sp.mu.Unlock()
@@ -1232,14 +1282,14 @@ func progressHash(screen string) string {
 
 // ---------------------------------------------------------------- outbox
 
-func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote) {
+func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote, opts ...string) {
 	if sp.st.Settings.NotifyWebhook == "" && !sp.st.Settings.NotifyLark {
 		return
 	}
-	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" {
+	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" && len(opts) == 0 {
 		return
 	}
-	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text, re: re})
+	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text, re: re, options: opts})
 }
 
 // A notice is one thing to tell you: what Collie said (and what about), or
@@ -1247,6 +1297,7 @@ func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote) {
 type notice struct {
 	tone, text string
 	re         *Quote
+	options    []string
 }
 
 // quoteLine is a Quote as one line: "你：首页加一个暗色模式…".
@@ -1322,10 +1373,10 @@ func humanText(t string) string {
 }
 
 func (n notice) label() string {
-	switch n.tone {
-	case "blocked":
+	switch {
+	case n.tone == "blocked" || len(n.options) > 0:
 		return "Collie · 需要你"
-	case "error":
+	case n.tone == "error":
 		return "Collie · 出错了"
 	}
 	return "Collie"
@@ -1338,6 +1389,9 @@ func noticesText(ns []notice) string {
 		p := n.label() + "：" + clip(n.text, 400)
 		if n.re != nil {
 			p = "↩ " + n.re.line() + "\n" + p
+		}
+		if len(n.options) > 0 {
+			p += "\n可选：" + strings.Join(n.options, " / ")
 		}
 		parts = append(parts, p)
 	}

@@ -138,7 +138,7 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 	kind := sp.st.Settings.RouterKind
 	args := sp.dreamArgsLocked()
 	at := sp.dream.at
-	sp.addEntryLocked("event", mainThread, "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", "", "info")
+	entry := sp.addEntryLocked("event", mainThread, "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", "", "info")
 	sp.mu.Unlock()
 
 	go func() {
@@ -158,8 +158,13 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 				if k == "antigravity" {
 					k = "agy"
 				}
-				sp.s.remember(&Ended{Kind: k, Cwd: sp.routerDir(), Name: routerName, Session: a.Session, Ended: time.Now(),
-					Title: "Collie · 做梦前的会话（" + time.Now().Format("01-02 15:04") + "）"})
+				e := &Ended{Kind: k, Cwd: sp.routerDir(), Name: routerName, Session: a.Session, Ended: time.Now(),
+					Title: "Collie · 做梦前的会话（" + time.Now().Format("01-02 15:04") + "）"}
+				sp.s.remember(e)
+				sp.mu.Lock()
+				entry.Ref = "h:" + e.ID
+				sp.changed()
+				sp.mu.Unlock()
 			}
 		}
 		sp.closeWorkspaces(bg, routerLabel)

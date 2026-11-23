@@ -13,7 +13,7 @@ import (
 // Collie's own session grows with every event it handles. Before it fills up,
 // Collie hands over: it writes what matters into memory/, then the hub
 // starts it again in a fresh session that begins by reading it. The
-// old session stays readable under "最近结束".
+// old session stays readable from the handover line in chat.
 
 // What a session reads up front from memory/. upFrontBudget covers the files
 // Collie writes (instructions, notes/index.md, open tasks) and is the number
@@ -151,16 +151,17 @@ This turn is for the files alone: edit them, then stop. Your next session handle
 }
 
 func (sp *Super) finishHandover(ctx context.Context, h *handover) {
-	sp.s.remember(&Ended{
+	e := &Ended{
 		Kind: h.kind, Cwd: sp.routerDir(), Name: routerName, Session: h.session, Ended: time.Now(),
 		Title: "Collie · 交接前的会话（" + h.at.Format("01-02 15:04") + "）",
-	})
+	}
+	sp.s.remember(e)
 	if err := sp.RestartRouter(ctx); err != nil {
 		log.Printf("handover restart: %v", err)
 	}
 	sp.mu.Lock()
 	sp.handover = nil
 	sp.routerUsage = ctxUsage{}
-	sp.addEntryLocked("event", mainThread, "Collie 换了一个新会话，记忆已交接。之前的对话在「最近结束」里可以翻看", "", "info")
+	sp.addEntryLocked("event", mainThread, "Collie 换了一个新会话，记忆已交接，点此翻看之前的对话", "h:"+e.ID, "info")
 	sp.mu.Unlock()
 }

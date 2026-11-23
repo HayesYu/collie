@@ -648,6 +648,22 @@
       // from what is right above: the first answer to your last message, or
       // a word on the worker whose line it follows.
       let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0;
+      const allEntries = chatEntries();
+      const optsAnswered = (idx, id) => {
+        if (!id) return true;
+        for (let j = idx + 1; j < allEntries.length; j++) {
+          const u = allEntries[j];
+          if (u.role !== "user") continue;
+          if (!u.re?.entry || u.re.entry === id) return true;
+        }
+        return false;
+      };
+      const replyOpts = (e, idx) => {
+        const opts = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
+        if (!opts.length || optsAnswered(idx, e.id)) return "";
+        return `<div class="reply-opts" data-entry="${esc(e.id)}">${opts.map((o) =>
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
+      };
       const quote = (e) => {
         const q = e.re;
         if (!q) return "";
@@ -658,7 +674,8 @@
         const attr = q.entry ? `href="#" data-goto="${esc(q.entry)}"` : pane ? `href="#/p/${encodeURIComponent(pane)}"` : past ? `href="#/h/${encodeURIComponent(past.id)}"` : "";
         return `<a class="re" ${attr} title="${esc(q.text)}"><span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}</a>`;
       };
-      for (const e of chatEntries()) {
+      for (let ei = 0; ei < allEntries.length; ei++) {
+        const e = allEntries[ei];
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
         if (e.role === "event" && workerChatter(e)) continue;
         // A quiet line with the time when the talk picks up again after a
@@ -680,15 +697,21 @@
           html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${msgActs(e, at)}</div></div>`;
+          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at)}</div></div>`;
           sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
-          // A worker's line opens the session it was about: its record once
-          // that session ended (a name is reused after), else its pane.
-          const past = e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
-          const pane = !past && e.ref ? paneOf(e.ref) : null;
-          const tag = past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"` : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
+          // A handover/dream line opens the session Collie rotated out of
+          // (explicit h:<id>, or matched by time for older rows); a worker's
+          // line opens its ended record once gone, else its live pane.
+          const hid = e.ref?.startsWith("h:") ? e.ref.slice(2)
+            : (!e.ref && (e.text?.includes("换了一个新会话") || (e.text?.includes("睡一会儿") && e.text?.includes("做梦"))) ? routerHist(e.at)?.id : "");
+          const past = !hid && e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
+          const pane = !hid && !past && e.ref ? paneOf(e.ref) : null;
+          const hTitle = e.text?.includes("做梦") ? "翻看做梦前的对话" : "翻看交接前的对话";
+          const tag = hid ? `a href="#/h/${encodeURIComponent(hid)}" title="${hTitle}"`
+            : past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"`
+            : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
           // A spawn line spins only while that worker is still at it; history stays still.
           const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
           const busy = w && workerBusy(w);
@@ -899,16 +922,14 @@
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest(".re-btn[data-re]");
     if (!b) return;
-    const e = sup.entries.find((x) => x.id === b.dataset.re);
+    const e = chatEntries().find((x) => x.id === b.dataset.re);
     if (e) setReply(e);
   });
 
-  bindComposer($("#super-composer"), $("#super-input"), async (text) => {
+  async function sendSuper(text, re, restoreRe) {
     // Only what was picked here goes along; the hub fills in its current defaults.
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
-    const re = replyTo;
-    setReply(null);
     // Your message shows at once; the hub's copy takes its place when it arrives.
     const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
@@ -921,15 +942,43 @@
       model: "model" in p || "kind" in p ? model : "",
       effort: "effort" in p || "kind" in p ? effort : "" } });
     } catch (err) {
-      pendingSays.splice(pendingSays.indexOf(mine), 1);
-      if (re && !replyTo) setReply(sup.entries.find((x) => x.id === re.entry));
+      const idx = pendingSays.indexOf(mine);
+      if (idx >= 0) pendingSays.splice(idx, 1);
+      if (restoreRe && re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry));
       renderSuper(true);
       throw err;
     }
     // The hub's copy may already be here (its push beat the reply): swap now.
     mine.id = r?.entry || "";
-    if (!mine.id || sup.entries.some((e) => e.id === mine.id)) { pendingSays.splice(pendingSays.indexOf(mine), 1); renderSuper(true); }
+    if (!mine.id || sup.entries.some((e) => e.id === mine.id)) {
+      const idx = pendingSays.indexOf(mine);
+      if (idx >= 0) pendingSays.splice(idx, 1);
+      renderSuper(true);
+    }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
+  }
+
+  $("#super-thread").addEventListener("click", async (ev) => {
+    const b = ev.target.closest(".reply-opt[data-opt]");
+    if (!b) return;
+    const grp = b.closest(".reply-opts[data-entry]");
+    if (!grp || grp.dataset.busy) return;
+    grp.dataset.busy = "1";
+    grp.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+    const id = grp.dataset.entry, text = b.dataset.opt;
+    if (replyTo?.entry === id) setReply(null);
+    const e = chatEntries().find((x) => x.id === id);
+    try {
+      await sendSuper(text, e ? { entry: e.id, who: "Collie", text: e.text } : { entry: id, who: "Collie", text: "" }, false);
+    } catch (err) {
+      toast(err.message, "attn");
+    }
+  });
+
+  bindComposer($("#super-composer"), $("#super-input"), async (text) => {
+    const re = replyTo;
+    setReply(null);
+    await sendSuper(text, re, true);
   }, () => targetNow().machine);
 
   // ───────────────────────────── automation view
@@ -1430,6 +1479,19 @@
     const t = new Date(at);
     let best = null;
     for (const h of hist) if (h.name === name && new Date(h.ended) >= t && (!best || new Date(h.ended) < new Date(best.ended))) best = h;
+    return best;
+  };
+  // routerHist: the ended Collie session closest in time to an older
+  // handover/dream line written before explicit "h:<id>" refs.
+  const routerHist = (at) => {
+    const t = +new Date(at);
+    if (!t) return null;
+    let best = null, bestDiff = 10 * 60e3;
+    for (const h of hist) {
+      if (h.name !== ROUTER) continue;
+      const d = Math.abs(+new Date(h.ended) - t);
+      if (d < bestDiff) { best = h; bestDiff = d; }
+    }
     return best;
   };
   async function loadHistory() {

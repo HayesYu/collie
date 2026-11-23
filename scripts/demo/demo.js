@@ -39,7 +39,7 @@
     entry("event", "派出 release-notes（claude · macbook）", { tone: "spawn", ref: "release-notes", at: ago(14) }),
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
     entry("user", "另外首页首屏好像有点慢，有空看看。", { at: ago(5.8) }),
-    entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" } }),
+    entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
   ];
   const sup = () => ({
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: "claude", context: 23, rotate_at: 70, model: "sonnet" },
@@ -240,7 +240,7 @@
     entries.push(entry("event", `${name} 回报：完成：发现 2 处问题，已修复并补了测试。`, { tone: "done", ref: name }));
     routerStatus = "working"; pushAll();
     await wait(1200);
-    entries.push(entry("collie", `${name} 做完了：发现 2 处问题，都已修复并补了测试，改动在 \`shop-api\` 的工作区里。要我开 PR 吗？`));
+    entries.push(entry("collie", `${name} 做完了：发现 2 处问题，都已修复并补了测试，改动在 \`shop-api\` 的工作区里。要我开 PR 吗？`, { options: ["开 PR", "先不用"] }));
     routerStatus = "idle"; pushAll();
   }
   async function promptPane(id, text) {

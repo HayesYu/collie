@@ -72,6 +72,8 @@ type Entry struct {
 	// What a reply is about, when Collie said (collie reply --re): copied at
 	// the time, so it still reads right after the original is trimmed away.
 	Re *Quote `json:"re,omitempty"`
+	// Quick-reply choices Collie offered with its question; tapped to answer.
+	Options []string `json:"options,omitempty"`
 }
 
 // A Quote is what a reply answers: a message of yours, a worker's work, a timer.

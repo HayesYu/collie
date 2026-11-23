@@ -159,16 +159,47 @@ func printResult(b []byte) {
 	os.Stdout.Write(b)
 }
 
-func cliReply(args []string) error {
-	fs := flag.NewFlagSet("reply", flag.ExitOnError)
+type flagList []string
+
+func (l *flagList) String() string     { return strings.Join(*l, ", ") }
+func (l *flagList) Set(v string) error { *l = append(*l, v); return nil }
+
+func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
+	fs := flag.NewFlagSet("reply", flag.ContinueOnError)
 	thread := fs.String("thread", mainThread, "thread to reply in")
 	re := fs.String("re", "", "the event (#t123) this answers, shown to the human as a quote")
-	fs.Parse(args)
-	t, err := textArg(fs)
+	var opts flagList
+	fs.Var(&opts, "opt", "quick-reply choice button for the human (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	t := strings.Join(fs.Args(), " ")
+	if t == "-" || (t == "" && !tty && in != nil) {
+		b, err := io.ReadAll(in)
+		if err != nil {
+			return nil, err
+		}
+		t = string(b)
+	}
+	if strings.TrimSpace(t) == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	body := map[string]any{"text": t, "thread": *thread, "re": *re}
+	if len(opts) > 0 {
+		body["options"] = []string(opts)
+	}
+	return body, nil
+}
+
+func cliReply(args []string) error {
+	body, err := parseReply(args, os.Stdin, isTerminal(os.Stdin))
+	if err == flag.ErrHelp {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	b, err := cliCall("POST", "/api/super/reply", map[string]any{"text": t, "thread": *thread, "re": *re})
+	b, err := cliCall("POST", "/api/super/reply", body)
 	if err == nil {
 		printResult(b)
 	}
@@ -435,7 +466,9 @@ together. At night a separate session "dreams": it reviews your past sessions an
 tidies memory/. Its journal is in dreams/.
 
 ## Tools (run in your shell)
-- ` + "`{{BIN}} reply \"text\"`" + ` — message the human (add --thread X for another thread).
+- ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... \"text\"`" + ` — message the human (add --thread X for another thread).
+  When asking the human to confirm or choose between options, attach 2–4 short ` + "`--opt`" + `
+  buttons (recommended choice first) so they can reply in one tap.
 - ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--thread T] [--name N] \"task brief\"`" + `
   starts a worker in the background and returns at once. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
   ` + "`{{BIN}} list`" + ` shows the connected computers. Use --machine when the human names a
@@ -509,6 +542,7 @@ You own the outcome of what the human asked for, not just the first attempt.
   sending or publishing something, access beyond their settings, a lasting change
   outside the task they gave (stopping a database they didn't mention, changing global
   config on their computer), or when you genuinely can't tell what they want.
-- When you ask, lead with what you'd do ("我倾向先停掉 persona-postgres，回『不用』我就不动"),
-  then the alternatives; build on the choices they already made.
+- When you ask, lead with what you'd do and attach 2–4 short ` + "`--opt`" + ` buttons on ` + "`reply`" + `
+  (recommended choice first, e.g. ` + "`--opt \"停掉它\" --opt \"不用\"`" + `), so they can confirm in one tap;
+  build on the choices they already made.
 `

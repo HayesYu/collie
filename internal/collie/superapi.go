@@ -244,33 +244,22 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Text   string `json:"text"`
-		Thread string `json:"thread"`
-		Re     string `json:"re"`
+		Text    string   `json:"text"`
+		Thread  string   `json:"thread"`
+		Re      string   `json:"re"`
+		Options []string `json:"options"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	text := strings.TrimSpace(body.Text)
-	if text == "" {
+	if strings.TrimSpace(body.Text) == "" {
 		writeJSON(w, 400, map[string]any{"error": "empty reply"})
 		return
 	}
-	if body.Thread == "" {
-		body.Thread = mainThread
-	}
-	sp := s.sup
-	sp.mu.Lock()
-	limit := sp.st.Settings.ReplyChars
-	re := sp.quoteLocked(body.Re)
-	e := sp.addEntryReLocked("collie", body.Thread, text, "", "", re)
-	sp.mu.Unlock()
+	e, warn := s.sup.Reply(body.Thread, body.Text, body.Re, body.Options)
 	res := map[string]any{"ok": true, "entry": e.ID}
-	if body.Re != "" && re == nil {
-		res["warning"] = "--re " + body.Re + " is not an event or message I know; the reply went out without it"
-	}
-	if n := replyLen(text); limit > 0 && n > limit {
-		res["warning"] = fmt.Sprintf("reply is %d characters; chat replies are usually ≤%d. Fine if the human asked for detail or the result needs a list; otherwise keep the next one shorter", n, limit)
+	if warn != "" {
+		res["warning"] = warn
 	}
 	writeJSON(w, 200, res)
 }

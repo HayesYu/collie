@@ -370,13 +370,12 @@ input[type=checkbox] { width: auto; accent-color: var(--fg); }
   transition: background .14s, border-color .14s, color .14s, transform .1s, opacity .14s;
 }
 .reply-opt:first-child {
-  border-color: color-mix(in srgb, var(--fg) 38%, var(--line-2));
-  background: var(--bg-2); color: var(--fg); font-weight: 500;
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 500;
 }
-.reply-opt:hover { background: var(--bg-2); border-color: var(--fg-3); color: var(--fg); }
-.reply-opt:first-child:hover { background: var(--bg-3); border-color: var(--fg); }
+.reply-opt:not(:first-child):hover { background: var(--bg-2); border-color: var(--fg-3); color: var(--fg); }
+.reply-opt:first-child:not(:disabled):hover { opacity: .9; }
 .reply-opt:active { transform: scale(.98); }
-.reply-opt:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.reply-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .reply-opt:disabled { opacity: .45; pointer-events: none; }
 @media (pointer: coarse) {
   .reply-opt { min-block-size: 44px; min-inline-size: 44px; padding: 8px 16px; border-radius: 22px; font-size: 14px; }

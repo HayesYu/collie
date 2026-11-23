@@ -421,7 +421,11 @@
   document.addEventListener("visibilitychange", seen);
   addEventListener("focus", seen);
 
-  function normSup(s) { s.entries ||= []; s.workers ||= []; s.router ||= { status: "asleep" }; return s; }
+  function normSup(s) {
+    s.hasPending = Array.isArray(s.pending);
+    s.entries ||= []; s.workers ||= []; s.pending ||= []; s.router ||= { status: "asleep" };
+    return s;
+  }
   const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
   const paneOf = (name) => state.agents.find((a) => a.name === name)?.pane_id;
   // A worker's status as the sidebar shows it (which knows when it waits on
@@ -491,6 +495,13 @@
     $("#nav-auto-sub").title = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}（点开看进行中的任务）` : "";
     $("#nav-auto-sub").classList.toggle("follow", !!f?.next);
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
+    const pend = activePending();
+    const np = $("#nav-pending");
+    if (np) {
+      np.hidden = pend.length === 0;
+      np.textContent = pend.length || "";
+      np.title = pend.length ? `${pend.length} 条待你确认` : "";
+    }
     $("#nav-queue").hidden = !sup.queued;
     $("#nav-queue").textContent = sup.queued;
     $("#nav-collie").classList.toggle("active", view === "collie");
@@ -523,6 +534,7 @@
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (view === "auto" && next !== "auto") clearInterval(autoTimer);
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
+    if (next !== "collie") pendingOpen = false;
     view = next; current = next === "ext" ? null : id;
     document.body.classList.toggle("show-main", !!next);
     $("#v-collie").hidden = next !== "collie";
@@ -574,6 +586,93 @@
   const routerQueued = () => sup.queued_router ?? sup.queued;
   // Messages you sent that the hub's stream hasn't shown yet.
   const pendingSays = [];
+  // Items dismissed locally via × before the hub's next stream frame lands.
+  const dismissedLocal = new Set();
+  const ICON_X = `<svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
+  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0;
+
+  function optimisticallyResolved(id, list = chatEntries()) {
+    if (dismissedLocal.has(id)) return true;
+    if (!pendingSays.length) return false;
+    if (pendingSays.some((m) => m.re?.entry === id)) return true;
+    if (!pendingSays.some((m) => !m.re?.entry)) return false;
+    const idx = list.findIndex((e) => e.id === id);
+    if (idx < 0) return false;
+    for (let j = idx + 1; j < list.length; j++) {
+      if (list[j].role === "collie") return false;
+    }
+    return true;
+  }
+  function activePending() {
+    const list = sup.pending || [];
+    if (!list.length) return [];
+    const entries = pendingSays.length ? chatEntries() : sup.entries;
+    return list.filter((p) => p?.id && !optimisticallyResolved(p.id, entries));
+  }
+  function renderPendingBar() {
+    const wrap = $("#pending-wrap"), bar = $("#pending-bar"), listEl = $("#pending-list");
+    if (!wrap) return;
+    const list = activePending();
+    if (list.length < 2) pendingOpen = false;
+    if (!list.length) {
+      wrap.hidden = true;
+      wrap.classList.remove("open");
+      listEl.hidden = true;
+      pendingBarSig = pendingListSig = "";
+      return;
+    }
+    wrap.hidden = false;
+    wrap.classList.toggle("open", pendingOpen);
+    const latest = list[list.length - 1];
+    const barSig = `${list.length}:${latest.id}:${latest.summary}`;
+    if (barSig !== pendingBarSig) {
+      pendingBarSig = barSig;
+      if (list.length === 1) {
+        bar.innerHTML = `<button type="button" class="pending-main" data-goto-pending="${esc(latest.id)}" title="${esc(latest.summary)}">
+            <span class="pending-dot"></span><span class="pending-label">待你确认</span><span class="pending-sep">·</span><span class="pending-sum">${esc(latest.summary)}</span>
+          </button><button type="button" class="pending-x" data-dismiss="${esc(latest.id)}" title="忽略" aria-label="忽略">${ICON_X}</button>`;
+      } else {
+        bar.innerHTML = `<button type="button" class="pending-main" data-toggle-pending aria-expanded="${pendingOpen}" title="${esc(latest.summary)}">
+            <span class="pending-dot"></span><span class="pending-label">待你确认 (${list.length})</span><span class="pending-sep">·</span><span class="pending-sum">${esc(latest.summary)}</span>
+            <svg class="pending-chev" viewBox="0 0 24 24"><path d="M7 14l5-5 5 5"/></svg>
+          </button>`;
+      }
+    } else {
+      bar.querySelector("[data-toggle-pending]")?.setAttribute("aria-expanded", String(pendingOpen));
+    }
+    if (list.length >= 2 && pendingOpen) {
+      const listSig = JSON.stringify(list.map((p) => [p.id, p.summary, p.at]));
+      if (listSig !== pendingListSig) {
+        pendingListSig = listSig;
+        const items = [...list].reverse();
+        listEl.innerHTML = items.map((p) => `<div class="pending-item">
+          <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(p.summary)}">
+            <span class="pending-dot"></span><span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+          </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="忽略" aria-label="忽略">${ICON_X}</button>
+        </div>`).join("");
+      }
+      listEl.hidden = false;
+    } else {
+      listEl.hidden = true;
+      pendingListSig = "";
+    }
+  }
+  async function dismissPending(id) {
+    if (!id || dismissedLocal.has(id)) return;
+    dismissedLocal.add(id);
+    if (replyTo?.entry === id) setReply(null);
+    renderSide();
+    if (view === "collie") renderSuper();
+    try {
+      await api("/api/super/dismiss", { body: { id } });
+    } catch (err) {
+      dismissedLocal.delete(id);
+      renderSide();
+      if (view === "collie") renderSuper();
+      toast(err.message, "attn");
+    }
+  }
+
   // Older chat, loaded a page at a time when you ask: the hub only sends the
   // latest 200 lines. olderMore: whether there is more before that.
   let older = [], olderMore = null, olderBusy = false, superScrollRAF = 0;
@@ -585,21 +684,67 @@
   }
   // More before what is shown? Until asked, guess from a full page.
   const canLoadOlder = () => olderMore ?? !!sup.earlier;
-  async function loadOlder() {
+  async function loadOlder(keepPos = true) {
     const first = chatEntries().find((e) => e.id);
-    if (olderBusy || !first) return;
+    if (olderBusy || !first) return false;
     olderBusy = true;
     renderSuper();
     const scroller = $("#super-thread").parentElement, fromBottom = scroller.scrollHeight - scroller.scrollTop;
+    let added = false;
     try {
       const r = await api(`/api/super/earlier?before=${encodeURIComponent(first.id)}`);
-      older = [...(r.entries || []), ...older];
-      olderMore = !!r.more;
-    } catch (e) { toast(e.message, "attn"); }
+      const batch = r.entries || [];
+      if (batch.length) {
+        older = [...batch, ...older];
+        added = true;
+      }
+      olderMore = batch.length ? !!r.more : false;
+    } catch (e) { olderMore = false; toast(e.message, "attn"); }
     olderBusy = false;
     renderSuper();
+    if (keepPos) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+      scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
+    }
+    return added;
+  }
+  async function jumpToEntry(id) {
+    if (!id) return;
+    const seq = ++jumpSeq;
+    pendingOpen = false;
+    renderPendingBar();
+    const sel = `#v-collie .msg[data-id="${CSS.escape(id)}"]`;
+    let m = document.querySelector(sel);
+    let guards = 0;
+    while (!m && canLoadOlder() && guards++ < 25) {
+      while (olderBusy) await new Promise((r) => setTimeout(r, 35));
+      if (seq !== jumpSeq) return;
+      m = document.querySelector(sel);
+      if (m) break;
+      const ok = await loadOlder(false);
+      if (seq !== jumpSeq) return;
+      m = document.querySelector(sel);
+      if (!ok) break;
+    }
+    if (!m) { toast("这条消息太早了，已经不在这里"); return; }
     if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
-    scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
+    const sc = $("#super-thread").parentElement;
+    const sr = sc.getBoundingClientRect(), mr = m.getBoundingClientRect();
+    const want = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + (mr.top - sr.top) - Math.max(24, (sc.clientHeight - mr.height) / 2)));
+    const dist = want - sc.scrollTop;
+    if (Math.abs(dist) > sc.clientHeight * 2.2) {
+      sc.scrollTop = want - Math.sign(dist) * sc.clientHeight * 0.9;
+    }
+    flashEntry = { id, until: Date.now() + 1650 };
+    m.classList.remove("flash");
+    void m.offsetWidth;
+    m.classList.add("flash");
+    sc.scrollTo({ top: want, behavior: "smooth" });
+    setTimeout(() => {
+      if (flashEntry.id === id && Date.now() >= flashEntry.until) {
+        document.querySelector(sel)?.classList.remove("flash");
+      }
+    }, 1700);
   }
   function renderSuper(force) {
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
@@ -653,18 +798,26 @@
       // a word on the worker whose line it follows.
       let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0;
       const allEntries = chatEntries();
-      const optsAnswered = (idx, id) => {
-        if (!id) return true;
+      const pendIds = new Set(activePending().map((p) => p.id));
+      const optsPending = (idx, id) => {
+        if (!id) return false;
+        if (sup.hasPending) return pendIds.has(id);
+        if (dismissedLocal.has(id)) return false;
+        let otherCollie = false;
         for (let j = idx + 1; j < allEntries.length; j++) {
-          const u = allEntries[j];
-          if (u.role !== "user") continue;
-          if (!u.re?.entry || u.re.entry === id) return true;
+          const next = allEntries[j];
+          if (next.role === "user") {
+            const reId = next.re?.entry || "";
+            if (reId === id || (!reId && !otherCollie)) return false;
+          } else if (next.role === "collie") {
+            otherCollie = true;
+          }
         }
-        return false;
+        return true;
       };
       const replyOpts = (e, idx) => {
         const opts = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
-        if (!opts.length || optsAnswered(idx, e.id)) return "";
+        if (!opts.length || !optsPending(idx, e.id)) return "";
         return `<div class="reply-opts" data-entry="${esc(e.id)}">${opts.map((o) =>
           `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
       };
@@ -740,15 +893,20 @@
         <span class="go">处理 →</span></a>`;
       }).join("") + `</div>`;
     }
+    renderPendingBar();
     if (olderBusy) html = `<div class="earlier-row">加载中…</div>` + html;
     const busyChanged = (busy || "") !== prevBusy, crewChanged = crewHTML !== prevCrew;
     if (html !== superSig || force) {
       superSig = html;
       box.innerHTML = html;
+      if (flashEntry.until > Date.now() && flashEntry.id) {
+        box.querySelector(`.msg[data-id="${CSS.escape(flashEntry.id)}"]`)?.classList.add("flash");
+      }
     } else if (!busyChanged && !crewChanged) {
       return;
     }
-    if (atBottom || force) {
+    const jumping = flashEntry.until > Date.now();
+    if ((atBottom && !jumping) || force) {
       scroller.scrollTop = scroller.scrollHeight;
       const set = scroller.scrollTop;
       if (typeof requestAnimationFrame === "function") {
@@ -937,6 +1095,7 @@
     // Your message shows at once; the hub's copy takes its place when it arrives.
     const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
+    renderSide();
     renderSuper(true);
     let r;
     try {
@@ -949,6 +1108,7 @@
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0) pendingSays.splice(idx, 1);
       if (restoreRe && re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry));
+      renderSide();
       renderSuper(true);
       throw err;
     }
@@ -957,6 +1117,7 @@
     if (!mine.id || sup.entries.some((e) => e.id === mine.id)) {
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0) pendingSays.splice(idx, 1);
+      renderSide();
       renderSuper(true);
     }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
@@ -977,6 +1138,20 @@
     } catch (err) {
       toast(err.message, "attn");
     }
+  });
+
+  $("#pending-wrap").addEventListener("click", (ev) => {
+    const dis = ev.target.closest("[data-dismiss]");
+    if (dis) { ev.preventDefault(); ev.stopPropagation(); dismissPending(dis.dataset.dismiss); return; }
+    if (ev.target.closest("[data-toggle-pending]")) { ev.preventDefault(); pendingOpen = !pendingOpen; renderPendingBar(); return; }
+    const go = ev.target.closest("[data-goto-pending]");
+    if (go) { ev.preventDefault(); jumpToEntry(go.dataset.gotoPending); }
+  });
+  document.addEventListener("click", (ev) => {
+    if (pendingOpen && !ev.composedPath().includes($("#pending-wrap"))) { pendingOpen = false; renderPendingBar(); }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && pendingOpen) { pendingOpen = false; renderPendingBar(); }
   });
 
   bindComposer($("#super-composer"), $("#super-input"), async (text) => {
@@ -2808,10 +2983,7 @@
     const a = e.target.closest("a.re[data-goto]");
     if (!a) return;
     e.preventDefault();
-    const m = document.querySelector(`#v-collie .msg[data-id="${CSS.escape(a.dataset.goto)}"]`);
-    if (!m) return toast("这条消息太早了，已经不在这里");
-    m.scrollIntoView({ block: "center", behavior: "smooth" });
-    m.classList.remove("flash"); void m.offsetWidth; m.classList.add("flash");
+    jumpToEntry(a.dataset.goto);
   });
   // No hover on a phone: tap a Collie chat message to see when it was said.
   document.addEventListener("click", (e) => {

@@ -56,7 +56,7 @@
       <a class="nav-item" id="nav-collie" href="#/collie">
         <span class="nav-ico"><img src="/icon.svg" alt=""></span>
         <span class="body"><div class="name">和 Collie 对话</div><div class="sub" id="nav-collie-sub">休眠中</div></span>
-        <span class="dot" id="nav-collie-dot"></span>
+        <span class="nav-right"><span class="count-pill attn" id="nav-pending" hidden></span><span class="dot" id="nav-collie-dot"></span></span>
       </a>
       <a class="nav-item" id="nav-auto" href="#/auto">
         <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
@@ -136,6 +136,10 @@
       </div>
 
       <form class="composer" id="super-composer">
+        <div class="pending-wrap" id="pending-wrap" hidden>
+          <div class="pending-list" id="pending-list" hidden></div>
+          <div class="pending-bar" id="pending-bar"></div>
+        </div>
         <div class="cbox">
           <div class="re-draft" id="re-draft" hidden><span class="re-who">Collie</span><span class="re-t"></span><button type="button" title="不引用了">×</button></div>
           <div class="files" hidden></div>

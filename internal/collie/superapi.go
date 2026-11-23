@@ -24,6 +24,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("GET /api/super/events", s.superEvents)
 	api("POST /api/super/say", s.superSay)
 	api("POST /api/super/reply", s.superReply)
+	api("POST /api/super/dismiss", s.superDismiss)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
 	api("POST /api/super/report", s.superReport)
@@ -73,8 +74,10 @@ type superView struct {
 	Router  routerView `json:"router"`
 	Entries []*Entry   `json:"entries"`
 	Earlier bool       `json:"earlier,omitempty"` // older chat than Entries: /api/super/earlier
-	Workers []*Worker  `json:"workers"`
-	Queued  int        `json:"queued"`
+	// Pending: Collie's --opt messages in chat:main still waiting on the human.
+	Pending []PendingItem `json:"pending"`
+	Workers []*Worker     `json:"workers"`
+	Queued  int           `json:"queued"`
 	// QueuedRouter: those waiting for Collie itself, not for a worker.
 	QueuedRouter int  `json:"queued_router"`
 	Paused       bool `json:"paused"`
@@ -123,6 +126,10 @@ func (s *Server) superState(ctx context.Context) superView {
 		v.Earlier = true
 	}
 	v.Entries = append([]*Entry{}, es...)
+	v.Pending = sp.pendingLocked(time.Now())
+	if v.Pending == nil {
+		v.Pending = []PendingItem{}
+	}
 	v.Workers = []*Worker{}
 	for _, w := range sp.st.Workers {
 		if !w.Ended || time.Since(w.CreatedAt) < 12*time.Hour {
@@ -262,6 +269,22 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 		res["warning"] = warn
 	}
 	writeJSON(w, 200, res)
+}
+
+func (s *Server) superDismiss(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	if id == "" {
+		writeJSON(w, 400, map[string]any{"error": "id is required"})
+		return
+	}
+	s.sup.Dismiss(id)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // replyLen is a reply's length as people read it: each Chinese/Japanese/Korean

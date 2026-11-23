@@ -1357,7 +1357,133 @@ func (sp *Super) collieQuoteLocked(id string) *Quote {
 			return &Quote{Entry: e.ID, Who: "Collie", Text: clip(e.Text, 600)}
 		}
 	}
+	if sp.db != nil {
+		var raw string
+		var e Entry
+		if sp.db.QueryRow(`SELECT data FROM entries WHERE id = ?`, id).Scan(&raw) == nil &&
+			json.Unmarshal([]byte(raw), &e) == nil && e.Role == "collie" {
+			return &Quote{Entry: e.ID, Who: "Collie", Text: clip(e.Text, 600)}
+		}
+	}
 	return nil
+}
+
+// pendingMaxAge bounds unanswered quick-option prompts so forgotten topics from
+// past weeks never pile up as stale badges.
+const pendingMaxAge = 7 * 24 * time.Hour
+
+// PendingItem is one Collie message in chat:main whose --opt choices still
+// await the human's answer or dismissal.
+type PendingItem struct {
+	ID      string    `json:"id"`
+	At      time.Time `json:"at"`
+	Summary string    `json:"summary"`
+	Options []string  `json:"options"`
+}
+
+// Dismiss marks one option message as ignored by the human and persists it.
+func (sp *Super) Dismiss(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	sp.mu.Lock()
+	if sp.st.Dismissed == nil {
+		sp.st.Dismissed = map[string]bool{}
+	}
+	changed := !sp.st.Dismissed[id]
+	if changed {
+		sp.st.Dismissed[id] = true
+		sp.changed()
+	}
+	hasDB := sp.db != nil
+	sp.mu.Unlock()
+	if changed && hasDB {
+		sp.flush()
+	}
+}
+
+// pendingLocked computes unanswered --opt Collie messages in chat:main.
+// An item resolves when:
+//  1. the human tapped one of its options or quoted it (re.entry == e.id),
+//  2. the human sent a plain unquoted message right after it with no other
+//     role=="collie" reply in between (system/worker events do not interrupt),
+//  3. the human dismissed it with ×.
+func (sp *Super) pendingLocked(now time.Time) []PendingItem {
+	es := sp.st.Entries
+	var out []PendingItem
+	for i, e := range es {
+		if e.Role != "collie" || (e.Thread != "" && e.Thread != mainThread) || len(e.Options) == 0 || e.ID == "" {
+			continue
+		}
+		if sp.st.Dismissed[e.ID] {
+			continue
+		}
+		if !now.IsZero() && !e.At.IsZero() && now.Sub(e.At) > pendingMaxAge {
+			continue
+		}
+		opts := cleanOptions(e.Options)
+		if len(opts) == 0 {
+			continue
+		}
+		resolved, otherCollie := false, false
+		for j := i + 1; j < len(es); j++ {
+			next := es[j]
+			if next.Thread != "" && next.Thread != mainThread {
+				continue
+			}
+			switch next.Role {
+			case "user":
+				reID := ""
+				if next.Re != nil {
+					reID = next.Re.Entry
+				}
+				if reID == e.ID || (reID == "" && !otherCollie) {
+					resolved = true
+				}
+			case "collie":
+				otherCollie = true
+			}
+			if resolved {
+				break
+			}
+		}
+		if !resolved {
+			out = append(out, PendingItem{
+				ID:      e.ID,
+				At:      e.At,
+				Summary: pendingSummary(e.Text, opts),
+				Options: opts,
+			})
+		}
+	}
+	return out
+}
+
+var (
+	pendingFenceRe = regexp.MustCompile("(?s)```.*?```")
+	pendingImgRe   = regexp.MustCompile(`\[image:[^\]]+\]`)
+	pendingLinkRe  = regexp.MustCompile(`\[([^\]\n]+)\]\([^)\n]+\)`)
+	pendingListRe  = regexp.MustCompile(`^\s*(?:[#>*•\-]+|\d+[.)])\s+`)
+)
+
+func pendingSummary(text string, opts []string) string {
+	s := pendingFenceRe.ReplaceAllString(text, " ")
+	s = pendingImgRe.ReplaceAllString(s, " ")
+	s = pendingLinkRe.ReplaceAllString(s, "$1")
+	var parts []string
+	for _, l := range strings.Split(s, "\n") {
+		l = strings.TrimSpace(pendingListRe.ReplaceAllString(l, ""))
+		l = strings.TrimSpace(mdMarks.Replace(l))
+		if l != "" {
+			parts = append(parts, l)
+		}
+	}
+	out := oneLine(strings.Join(parts, " "))
+	if out == "" {
+		out = strings.Join(opts, " / ")
+	}
+	return clip(out, 120)
 }
 
 // humanText is your message as you wrote it: without the attachment list and

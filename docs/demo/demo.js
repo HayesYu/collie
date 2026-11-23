@@ -31,19 +31,49 @@
     { name: "release-notes", kind: "claude", cwd: "/Users/alex/code/shop-web", task: "根据 v1.3..main 的提交写 v1.4 发布说明", thread: "chat:main", pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", machine: "macbook", created_by: "collie", created_at: ago(14), status: "done", last_report: "CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", report_at: ago(6), run: ["sonnet", "low"] },
   ];
   let seq = 100;
+  const dismissed = new Set();
   const entry = (role, text, o = {}) => ({ id: "e" + (++seq), role, thread: "chat:main", text, at: o.at || new Date().toISOString(), ...o });
+  const earlierEntries = [
+    { id: "e80", role: "user", thread: "chat:main", text: "明天早上提醒我看一下 v1.4 的发布清单。", at: ago(60 * 18) },
+    { id: "e81", role: "collie", thread: "chat:main", text: "好，明早 09:00 提醒你。", at: ago(60 * 18) },
+  ];
   const entries = [
     entry("user", "订单接口的分页测试偶尔会挂，帮我查一下。顺便把 v1.4 的发布说明写了。\n\n附件：\n/home/alex/.collie/uploads/20261119/a1b2c3-ci-failure.png", { at: ago(15) }),
     entry("collie", "好，分两路并行：\n\n- **fix-flaky-test**（Codex · devbox）查 `TestOrdersPagination` 为什么偶发失败\n- **release-notes**（Claude · macbook）按 v1.3 以来的提交写发布说明\n\n有结果我再告诉你。", { at: ago(14.5) }),
     entry("event", "派出 fix-flaky-test（codex · devbox）", { tone: "spawn", ref: "fix-flaky-test", at: ago(14) }),
     entry("event", "派出 release-notes（claude · macbook）", { tone: "spawn", ref: "release-notes", at: ago(14) }),
+    entry("user", "另外首页首屏好像有点慢，有空看看。", { at: ago(7.2) }),
+    entry("collie", "顺便问一下，`shop-api/migrations` 整理完了（41 → 33 个文件），那 3 个从没在生产跑过的旧回滚脚本怎么处理？", { at: ago(6.5), options: ["移到 archive 留档", "直接删掉"] }),
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
-    entry("user", "另外首页首屏好像有点慢，有空看看。", { at: ago(5.8) }),
     entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
   ];
+  const pendingSummary = (t) => String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")
+    .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1").split("\n")
+    .map((l) => l.replace(/^\s*(?:[#>*•\-]+|\d+[.)])\s+/, "").replace(/\*\*|__|`/g, "").trim())
+    .filter(Boolean).join(" ").slice(0, 120);
+  function computePending() {
+    const all = [...earlierEntries, ...entries];
+    const out = [];
+    for (let i = 0; i < all.length; i++) {
+      const e = all[i];
+      if (e.role !== "collie" || !e.options?.length || dismissed.has(e.id)) continue;
+      let resolved = false, otherCollie = false;
+      for (let j = i + 1; j < all.length; j++) {
+        const next = all[j];
+        if (next.role === "user") {
+          const reId = next.re?.entry || "";
+          if (reId === e.id || (!reId && !otherCollie)) { resolved = true; break; }
+        } else if (next.role === "collie") {
+          otherCollie = true;
+        }
+      }
+      if (!resolved) out.push({ id: e.id, at: e.at, summary: pendingSummary(e.text), options: e.options });
+    }
+    return out;
+  }
   const sup = () => ({
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: "claude", context: 23, rotate_at: 70, model: "sonnet" },
-    entries, workers, queued: 0, queued_router: 0, paused: false, earlier: true,
+    entries, pending: computePending(), workers, queued: 0, queued_router: 0, paused: false, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
   });
   let routerStatus = "idle";
@@ -297,12 +327,10 @@
     if (p === "/api/super") return json(sup());
     if (p === "/api/super/settings") return json(settings);
     if (p === "/api/super/seen") return json({ ok: true });
+    if (p === "/api/super/dismiss") { if (body.id) dismissed.add(body.id); pushAll(); return json({ ok: true }); }
     if (p === "/api/super/earlier") { // yesterday's chat, made up
-      const y = (h, m) => { const d = new Date(Date.now() - 864e5); d.setHours(h, m, 0, 0); return d.toISOString(); };
-      return json({ more: false, entries: [
-        { id: "e0a", role: "user", thread: "chat:main", text: "明天早上提醒我看一下 v1.4 的发布清单。", at: y(18, 20) },
-        { id: "e0b", role: "collie", thread: "chat:main", text: "好，明早 9:00 提醒你。", at: y(18, 20) },
-      ] });
+      if (q.get("before") === "e80") return json({ more: false, entries: [] });
+      return json({ more: false, entries: earlierEntries });
     }
     if (p === "/api/super/lark") return json({ ready: true, who: "Alex" });
     if (p === "/api/super/triggers") return json({ triggers, threads });

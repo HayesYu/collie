@@ -201,7 +201,13 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub { font-size: 12px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item .sub { font-family: var(--mono); }
-.count-pill { font: 600 11px/1 var(--sans); padding: 4px 7px; border-radius: 999px; background: var(--fg); color: var(--bg); }
+.nav-right { display: inline-flex; align-items: center; gap: 7px; }
+.count-pill { font: 600 11px/1 var(--sans); font-variant-numeric: tabular-nums; min-width: 18px; text-align: center; padding: 4px 6px; border-radius: 999px; background: var(--fg); color: var(--bg); }
+.count-pill.attn {
+  background: color-mix(in srgb, var(--attn) 15%, var(--bg));
+  color: var(--attn);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--attn) 35%, transparent);
+}
 
 .side-scroll { flex: 1; overflow: auto; padding: 0 8px 16px; border-top: 1px solid var(--line); margin-top: 4px; }
 .group { margin-top: 14px; }
@@ -398,8 +404,25 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .re-draft button { flex: none; border: 0; background: none; color: var(--fg-3); font-size: 15px; line-height: 1; padding: 0 4px; cursor: pointer; }
 .re-draft button:hover { color: var(--fg); }
 #v-collie a.re[href]:hover { color: var(--fg-2); border-left-color: var(--fg-3); }
-#v-collie .msg.flash { animation: flash 1.4s ease-out; }
-@keyframes flash { 0%, 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 25%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }
+#v-collie .msg.flash { animation: flash 1.5s ease-out; }
+#v-collie .say .msg.flash { border-radius: 8px; animation: flash-collie 1.5s ease-out; }
+@keyframes flash {
+  0%, 28% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--attn) 42%, transparent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+@keyframes flash-collie {
+  0%, 28% {
+    background: color-mix(in srgb, var(--attn) 13%, transparent);
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--attn) 13%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #v-collie .msg.flash, #v-collie .say .msg.flash { animation-duration: .8s; }
+}
 /* Quick-reply choices under a Collie question: first is the recommended pick. */
 .reply-opts { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 6px; }
 .thumbs + .reply-opts { margin-top: 8px; }
@@ -567,6 +590,71 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 
 /* composer: one box as wide as the conversation column */
 .composer { padding: 6px max(12px, calc((100% - var(--col) - 24px) / 2)) 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.pending-wrap { position: relative; margin-bottom: 6px; min-width: 0; }
+.pending-bar {
+  display: flex; align-items: center; min-width: 0; height: 32px;
+  border: 1px solid color-mix(in srgb, var(--attn) 28%, var(--line-2)); border-radius: 11px;
+  background: color-mix(in srgb, var(--attn) 6%, var(--bg)); box-shadow: var(--shadow-sm);
+  overflow: hidden; transition: border-color .15s, background .15s;
+}
+.pending-bar:hover, .pending-wrap.open .pending-bar {
+  border-color: color-mix(in srgb, var(--attn) 48%, var(--line-2));
+  background: color-mix(in srgb, var(--attn) 9%, var(--bg));
+}
+.pending-main {
+  flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px;
+  padding: 0 10px 0 11px; border: 0; background: none; text-align: left; font-size: 12.5px; color: var(--fg-2);
+}
+.pending-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--attn);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--attn) 20%, transparent);
+}
+.pending-label { flex: none; font-weight: 600; color: var(--attn); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pending-sep { flex: none; color: var(--fg-3); }
+.pending-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+.pending-main:hover .pending-sum { color: var(--fg); }
+.pending-chev { width: 14px; height: 14px; flex: none; color: var(--fg-3); stroke-width: 1.8; margin-left: 2px; transition: transform .16s ease, color .15s; }
+.pending-wrap.open .pending-chev { transform: rotate(180deg); color: var(--fg-2); }
+.pending-x {
+  flex: none; width: 30px; height: 100%; display: grid; place-items: center;
+  border: 0; border-left: 1px solid color-mix(in srgb, var(--attn) 16%, var(--line));
+  background: none; color: var(--fg-3); padding: 0; transition: background .12s, color .12s;
+}
+.pending-x svg { width: 13px; height: 13px; stroke-width: 1.9; }
+.pending-x:hover { background: color-mix(in srgb, var(--attn) 12%, var(--bg-2)); color: var(--fg); }
+.pending-list {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 25;
+  max-height: min(172px, 36vh); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px;
+  box-shadow: var(--shadow-lg); padding: 4px; animation: pending-up .14s ease-out;
+}
+@keyframes pending-up { from { opacity: 0; transform: translateY(4px); } }
+.pending-item { display: flex; align-items: center; min-width: 0; border-radius: 8px; transition: background .12s; }
+.pending-item:hover { background: var(--bg-2); }
+.pending-jump {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 8px 6px 8px 10px; border: 0; background: none; text-align: left; font-size: 13px; color: var(--fg);
+}
+.pending-jump .pending-dot { width: 6px; height: 6px; box-shadow: none; opacity: .85; }
+.pending-jump .pending-sum { color: var(--fg); }
+.pending-time { flex: none; font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pending-item .pending-x { width: 28px; height: 28px; margin-right: 3px; border: 0; border-radius: 6px; }
+.pending-item .pending-x:hover { background: var(--bg-3); color: var(--fg); }
+.pending-main:focus-visible, .pending-jump:focus-visible, .pending-x:focus-visible {
+  outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--attn) 40%, transparent);
+}
+@media (pointer: coarse) {
+  .pending-bar { height: 36px; border-radius: 12px; }
+  .pending-main { font-size: 13px; padding: 0 10px 0 12px; }
+  .pending-x { width: 36px; }
+  .pending-list { max-height: min(196px, 38vh); }
+  .pending-jump { padding: 10px 6px 10px 10px; font-size: 13.5px; }
+  .pending-item .pending-x { width: 32px; height: 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pending-chev { transition: none; }
+  .pending-list { animation: none; }
+}
 .cbox {
   display: flex; flex-direction: column; border: 1px solid var(--line-2); border-radius: 18px; background: var(--bg);
   box-shadow: var(--shadow); transition: border-color .15s;

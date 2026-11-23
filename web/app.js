@@ -572,7 +572,7 @@
   const pendingSays = [];
   // Older chat, loaded a page at a time when you ask: the hub only sends the
   // latest 200 lines. olderMore: whether there is more before that.
-  let older = [], olderMore = null, olderBusy = false;
+  let older = [], olderMore = null, olderBusy = false, superScrollRAF = 0;
   function chatEntries() {
     const have = new Set(sup.entries.map((e) => e.id));
     for (let i = pendingSays.length - 1; i >= 0; i--) if (pendingSays[i].id && have.has(pendingSays[i].id)) pendingSays.splice(i, 1);
@@ -594,9 +594,14 @@
     } catch (e) { toast(e.message, "attn"); }
     olderBusy = false;
     renderSuper();
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
     scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
   }
   function renderSuper(force) {
+    const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
+    const scroller = box.parentElement;
+    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew.innerHTML;
     const r = sup.router || {};
     $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "";
     const st = $("#router-status");
@@ -605,12 +610,11 @@
     // While Collie is busy, say so where the answer will appear, as the
     // other agents' sessions do; the header keeps the resting states.
     const busy = r.replied ? null : { working: "Collie 在想…", starting: "Collie 正在醒来…", blocked: "Collie 在等你在电脑上确认", dreaming: "Collie 在做梦，整理完记忆会自己醒来" }[r.status];
-    const wk = $("#super-working");
     st.hidden = !!busy;
     if (busy) {
       // In Collie's own column, where its next message will appear.
       wk.className = "working-row say " + (r.status === "working" ? "working" : collieDot(r.status));
-      wk.innerHTML = `<span class="avatar"><img src="/icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
+      if (busy !== prevBusy) wk.innerHTML = `<span class="avatar"><img src="/icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
     }
     wk.hidden = !busy;
     $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";
@@ -623,14 +627,11 @@
 
     const active = sup.workers.filter((w) => !w.ended);
     if (view === "collie") renderTarget();
-    $("#crew").innerHTML = active.map((w) => {
+    const crewHTML = active.map((w) => {
       const pane = paneOf(w.name);
       return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
     }).join("");
-
-    const box = $("#super-thread");
-    const scroller = box.parentElement;
-    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    if (crewHTML !== prevCrew) crew.innerHTML = crewHTML;
     let html = "", prevRole = "";
     if (!sup.entries.length && !pendingSays.length) {
       html = `<div class="hello"><img src="/icon.svg" alt="">
@@ -713,10 +714,25 @@
       }).join("") + `</div>`;
     }
     if (olderBusy) html = `<div class="earlier-row">加载中…</div>` + html;
-    if (html === superSig && !force) return;
-    superSig = html;
-    box.innerHTML = html;
-    if (atBottom || force) scroller.scrollTop = scroller.scrollHeight;
+    const busyChanged = (busy || "") !== prevBusy, crewChanged = crewHTML !== prevCrew;
+    if (html !== superSig || force) {
+      superSig = html;
+      box.innerHTML = html;
+    } else if (!busyChanged && !crewChanged) {
+      return;
+    }
+    if (atBottom || force) {
+      scroller.scrollTop = scroller.scrollHeight;
+      const set = scroller.scrollTop;
+      if (typeof requestAnimationFrame === "function") {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+        superScrollRAF = requestAnimationFrame(() => {
+          if (scroller.scrollTop === set) scroller.scrollTop = scroller.scrollHeight;
+        });
+      }
+    } else if (typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(superScrollRAF);
+    }
   }
   $("#super-thread")._loadMore = () => canLoadOlder() && loadOlder();
 
@@ -960,7 +976,10 @@
         return;
       } else if (autoTab === "timers") {
         const r = await api("/api/super/timers");
+        if (view !== "auto" || autoTab !== "timers") return;
+        const endedOpen = !!body.querySelector("details[data-ended-timers][open]");
         body.innerHTML = timersHTML(r.timers || []);
+        if (endedOpen) { const d = body.querySelector("details[data-ended-timers]"); if (d) d.open = true; }
       } else {
         const r = await api("/api/super/settings");
         body.innerHTML = autoTab === "hooks" ? hooksHTML(r) : settingsHTML(r);
@@ -1107,9 +1126,27 @@
     sum.classList.toggle("err", !!r.err);
   }
 
-  function timersHTML(ts) {
+  function timersHTML(ts = []) {
     const soon = new Date(Date.now() + 60 * 60 * 1000); soon.setMinutes(0);
     setTimeout(() => { const f = $("#timer-form"); if (f) syncTimerForm(f); });
+    const idN = (id) => +(/\d+$/.exec(id || "")?.[0] || 0);
+    const ms = (s) => { const n = s ? Date.parse(s) : NaN; return n > 0 ? n : NaN; };
+    const endMs = (t) => { const l = ms(t.last_run); return isNaN(l) ? ms(t.next_run) : l; };
+    const active = ts.filter((t) => t.enabled).sort((a, b) => {
+      const ta = ms(a.next_run), tb = ms(b.next_run);
+      if (isNaN(ta) !== isNaN(tb)) return isNaN(ta) ? 1 : -1;
+      return (ta - tb) || (idN(a.id) - idN(b.id));
+    });
+    const ended = ts.filter((t) => !t.enabled).sort((a, b) => {
+      const ta = endMs(a), tb = endMs(b);
+      if (isNaN(ta) !== isNaN(tb)) return isNaN(ta) ? 1 : -1;
+      return (tb - ta) || (idN(b.id) - idN(a.id));
+    });
+    const timerRow = (t) => `<li class="row">
+        <span class="badge ${t.enabled ? "queued" : "ignored"}">${t.enabled ? "启用" : "已结束"}</span>
+        <div><div class="meta"><b title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b><span>→ ${esc(t.target || "Collie")}</span>${t.enabled ? `<span>下次 ${when(t.next_run)}</span>` : t.last_run ? `<span>上次 ${when(t.last_run)}</span>` : ""}${t.owner ? `<span>${t.owner === "you" ? "你设的" : esc(t.owner) + " 设的"}</span>` : ""}</div>
+        <div class="text">${esc(t.text)}</div></div>
+        <button class="btn ghost small" data-del-timer="${esc(t.id)}">删除</button></li>`;
     return `<p class="panel-intro">到点会给 Collie（或某个 agent）发一条消息：每天的例行检查、过一会儿的跟进提醒。Collie 自己也会设定时来跟进。</p>
       <div class="card"><div class="card-h">新建定时</div>
         <form class="form tm-form" id="timer-form" data-mode="weekdays">
@@ -1131,11 +1168,9 @@
             <button class="btn primary small">添加</button>
           </div>
         </form></div>
-      <div class="card"><ul class="rows">${ts.length ? ts.map((t) => `<li class="row">
-        <span class="badge ${t.enabled ? "queued" : "ignored"}">${t.enabled ? "启用" : "已结束"}</span>
-        <div><div class="meta"><b title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b><span>→ ${esc(t.target || "Collie")}</span>${t.enabled ? `<span>下次 ${when(t.next_run)}</span>` : ""}${t.owner ? `<span>${t.owner === "you" ? "你设的" : esc(t.owner) + " 设的"}</span>` : ""}</div>
-        <div class="text">${esc(t.text)}</div></div>
-        <button class="btn ghost small" data-del-timer="${esc(t.id)}">删除</button></li>`).join("") : `<li class="empty-row">还没有定时</li>`}</ul></div>`;
+      <div class="card"><ul class="rows">${active.length ? active.map(timerRow).join("") : `<li class="empty-row">${ended.length ? "没有启用中的定时" : "还没有定时"}</li>`}</ul></div>
+      ${ended.length ? `<details class="mem-done" data-ended-timers><summary class="mem-h">已结束<span class="muted">${ended.length} 个</span></summary>
+        <div class="card"><ul class="rows">${ended.map(timerRow).join("")}</ul></div></details>` : ""}`;
   }
   // Timer form: mode, days and quick times are buttons; everything re-describes the spec.
   $("#auto-body").addEventListener("click", (e) => {
@@ -1545,8 +1580,10 @@
     const box = $("#x-working");
     const e = !gone && !extCur?.startsWith("h:") && ext.find((x) => x.id === extCur);
     const st = e && e.live ? e.status : "";
-    const text = { working: `${e && e.app || "那边"}里还在跑…`, blocked: "在等你在电脑上确认" }[st];
+    const text = { working: `${e && e.app || "那边"}里还在跑…`, blocked: "在等你在电脑上确认" }[st] || "";
+    const prev = box.hidden ? "" : box.textContent;
     if (!text) { box.hidden = true; return; }
+    if (text === prev) return;
     const was = nearBottom($("#x-thread"));
     box.className = "working-row " + st;
     box.innerHTML = `<span class="dot ${st}"></span>${esc(text)}`;
@@ -2344,10 +2381,10 @@
   let lastLive = null;
   function drawLive(l) {
     lastLive = l;
-    $("#thread").classList.toggle("asking", l.status === "blocked" && !!l.approval);
     const box = $("#live");
     const th = $("#thread");
     const was = nearBottom(th);
+    th.classList.toggle("asking", l.status === "blocked" && !!l.approval);
     let html = "";
     if (l.status === "working" && l.tail) {
       html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre><span class="meta"></span></div>`;

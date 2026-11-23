@@ -566,7 +566,41 @@ func (s *Server) superTimers(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"timers": sp.st.Timers})
+	writeJSON(w, 200, map[string]any{"timers": sortedTimers(sp.st.Timers)})
+}
+
+func sortedTimers(ts []*Timer) []*Timer {
+	out := slices.Clone(ts)
+	endAt := func(t *Timer) time.Time {
+		if t.LastRun != nil && !t.LastRun.IsZero() {
+			return *t.LastRun
+		}
+		return t.NextRun
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Enabled != b.Enabled {
+			return a.Enabled
+		}
+		if a.Enabled {
+			if a.NextRun.IsZero() != b.NextRun.IsZero() {
+				return !a.NextRun.IsZero()
+			}
+			if !a.NextRun.Equal(b.NextRun) {
+				return a.NextRun.Before(b.NextRun)
+			}
+			return idNum(a.ID) < idNum(b.ID)
+		}
+		ta, tb := endAt(a), endAt(b)
+		if ta.IsZero() != tb.IsZero() {
+			return !ta.IsZero()
+		}
+		if !ta.Equal(tb) {
+			return ta.After(tb)
+		}
+		return idNum(a.ID) > idNum(b.ID)
+	})
+	return out
 }
 
 func (s *Server) superAddTimer(w http.ResponseWriter, r *http.Request) {

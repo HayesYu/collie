@@ -133,6 +133,34 @@ func TestFollow(t *testing.T) {
 	}
 }
 
+func TestSortedTimers(t *testing.T) {
+	base := time.Date(2026, 11, 23, 14, 0, 0, 0, time.UTC)
+	t1 := base.Add(10 * time.Minute)
+	t2 := base.Add(2 * time.Hour)
+	past1 := base.Add(-2 * time.Hour)
+	past2 := base.Add(-10 * time.Minute)
+	orig := []*Timer{
+		{ID: "m2", Enabled: false, NextRun: past1},
+		{ID: "m10", Enabled: true, NextRun: t2},
+		{ID: "m4", Enabled: false, NextRun: past2},
+		{ID: "m11", Enabled: false, LastRun: &past2, NextRun: past1},
+		{ID: "m3", Enabled: true, NextRun: t1},
+		{ID: "m1", Enabled: true, NextRun: t2},
+	}
+	got := sortedTimers(orig)
+	var ids []string
+	for _, x := range got {
+		ids = append(ids, x.ID)
+	}
+	want := []string{"m3", "m1", "m10", "m11", "m4", "m2"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("got %v, want %v", ids, want)
+	}
+	if orig[0].ID != "m2" || orig[1].ID != "m10" {
+		t.Fatal("sortedTimers mutated input slice")
+	}
+}
+
 func TestProgressHash(t *testing.T) {
 	a := progressHash("⏺ Bash(collie show t12)\n✻ Thinking… (3m 21s · ↓ 1.2k tokens · esc to interrupt)\n> ")
 	b := progressHash("⏺ Bash(collie show t12)\n✶ Pondering… (4m 02s · ↓ 1.2k tokens · esc to interrupt)\n> ")

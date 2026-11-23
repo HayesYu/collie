@@ -385,8 +385,10 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 
 // streamPane mirrors one pane over SSE.
 //
-//	mode=screen: the visible viewport with ANSI styling, for an exact terminal render.
+//	mode=screen: recent output with ANSI styling, for a scrollable terminal render.
 //	mode=log:    recent output with soft wraps joined, for reading on narrow screens.
+const screenLines = 500
+
 func (s *Server) streamPane(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	mode := r.URL.Query().Get("mode")
@@ -417,7 +419,7 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request) {
 				}
 				sizeAt = time.Now()
 			}
-			res, err = s.herdr.Read(ctx, id, "visible", "ansi", 0)
+			res, err = s.herdr.Read(ctx, id, "recent", "ansi", screenLines)
 		}
 		cancel()
 		if err != nil {
@@ -427,16 +429,22 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request) {
 				sse.send("gone", b)
 				return
 			}
-		} else if res.Text != lastText {
-			lastText = res.Text
-			b, _ := json.Marshal(map[string]any{
-				"text": res.Text, "revision": res.Revision,
-				"cols": lastSize.Width, "rows": lastSize.Height,
-			})
-			if sse.send("frame", b) != nil {
-				return
+		} else {
+			text := res.Text
+			if mode != "log" {
+				text = trimScreenBlankTail(text)
 			}
-			beat = time.Now()
+			if text != lastText {
+				lastText = text
+				b, _ := json.Marshal(map[string]any{
+					"text": text, "revision": res.Revision, "truncated": res.Truncated,
+					"cols": lastSize.Width, "rows": lastSize.Height,
+				})
+				if sse.send("frame", b) != nil {
+					return
+				}
+				beat = time.Now()
+			}
 		}
 		if time.Since(beat) > 15*time.Second {
 			sse.comment()
@@ -448,6 +456,37 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(interval):
 		}
 	}
+}
+
+// trimScreenBlankTail drops unpainted blank rows at the bottom of an ANSI
+// snapshot while keeping internal blank rows and background-styled bars.
+func trimScreenBlankTail(s string) string {
+	for len(s) > 0 {
+		i := strings.LastIndexByte(s, '\n')
+		line := s[i+1:]
+		if !isUnpaintedBlankRow(line) {
+			break
+		}
+		if i < 0 {
+			return ""
+		}
+		if i > 0 && s[i-1] == '\r' {
+			i--
+		}
+		s = s[:i]
+	}
+	return s
+}
+
+func isUnpaintedBlankRow(line string) bool {
+	rest := strings.ReplaceAll(line, "\x1b[0m", "")
+	rest = strings.ReplaceAll(rest, "\x1b[m", "")
+	for i := 0; i < len(rest); i++ {
+		if rest[i] != ' ' && rest[i] != '\r' {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------- actions

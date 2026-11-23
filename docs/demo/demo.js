@@ -112,11 +112,26 @@
       screen: "  Would you like to run the following command?\n\n  $ go test ./internal/orders/...\n\n› 1. Yes, proceed\n  2. Yes, and don't ask again for this command\n  3. No, and tell Codex what to do differently",
     },
   };
+  const demoLogLines = Array.from({ length: 58 }, (_, i) => {
+    const mm = String(Math.floor(i / 4)).padStart(2, "0"), ss = String((i * 13) % 60).padStart(2, "0");
+    if (i % 9 === 0) return `12:${mm}:${ss} \x1b[33mWARN\x1b[0m  slow query orders_by_created_at (${110 + i}ms)`;
+    return `12:${mm}:${ss} \x1b[32mINFO\x1b[0m  GET /orders?page=${(i % 6) + 1} 200 ${12 + (i % 19)}ms`;
+  }).join("\n");
   const screens = {
-    "w2:p1@macbook": "╭───────────────────────────────────────────────╮\n│ ✻ Claude Code                                 │\n│   ~/code/shop-web                             │\n╰───────────────────────────────────────────────╯\n\n> 首页加一个暗色模式：跟随系统，右上角可以手动切换，记住用户的选择。\n\n● 颜色大多已经走 CSS 变量，只有三处写死了。\n\n● Update(src/styles/theme.css)\n  ⎿  Updated with 31 additions and 2 removals\n\n● Update(src/components/Card.tsx)\n  ⎿  Updated with 1 addition and 1 removal\n\n✻ Editing src/components/Header.tsx… (42s · ↓ 1.8k tokens)\n\n╭───────────────────────────────────────────────╮\n│ >                                             │\n╰───────────────────────────────────────────────╯\n  ? for shortcuts                    opus · high",
-    "w7:p1": "alex@devbox:~/code/shop-api$ tail -f logs/api.log\n12:01:44 GET /orders?page=3 200 18ms\n12:01:45 GET /orders?page=4 200 21ms\n12:01:51 POST /orders 201 34ms\n12:02:03 GET /health 200 1ms\n",
+    "w2:p1@macbook": "╭───────────────────────────────────────────────╮\n│ ✻ Claude Code                                 │\n│   ~/code/shop-web                             │\n╰───────────────────────────────────────────────╯\n\n> 首页加一个暗色模式：跟随系统，右上角可以手动切换，记住用户的选择。\n\n● 先看看现在的样式是怎么组织的。\n\n● Read(src/styles/theme.css)\n  ⎿  Read 48 lines\n\n● Grep(color: #)\n  ⎿  src/components/Header.tsx:12\n     src/components/Card.tsx:31\n     src/pages/Home.tsx:77\n\n● Read(src/components/Header.tsx)\n  ⎿  Read 64 lines\n\n● 颜色大多已经走 CSS 变量，只有三处写死了。计划：\n  1. theme.css 里补一套 [data-theme=dark] 变量，默认跟随系统\n  2. 三处硬编码颜色改成变量\n  3. Header 加切换按钮，选择存进 localStorage\n\n● Update(src/styles/theme.css)\n  ⎿  Updated with 31 additions and 2 removals\n     + :root[data-theme=\"dark\"] {\n     +   --surface: #111214;\n     +   --ink: #ededeb;\n     + }\n\n● Update(src/components/Card.tsx)\n  ⎿  Updated with 1 addition and 1 removal\n\n● Update(src/pages/Home.tsx)\n  ⎿  Updated with 2 additions and 2 removals\n\n✻ Editing src/components/Header.tsx… (42s · ↓ 1.8k tokens)\n\n╭───────────────────────────────────────────────╮\n│ >                                             │\n╰───────────────────────────────────────────────╯\n  ? for shortcuts                    opus · high",
+    "w7:p1": "alex@devbox:~/code/shop-api$ tail -n 60 -f logs/api.log\n" + demoLogLines + "\nalex@devbox:~/code/shop-api$ ",
   };
-  const screenOf = (id) => screens[id] || (chats[id] || []).filter((m) => m.kind !== "tool").map((m) => (m.kind === "user" ? "> " : "● ") + m.text).join("\n\n");
+  const wrapCols = (s, max = 88) => s.split("\n").flatMap((line) => {
+    const out = [];
+    let cur = "", w = 0;
+    for (const ch of line) {
+      const cw = ch.codePointAt(0) > 0x2e7f ? 2 : 1;
+      if (w + cw > max) { out.push(cur); cur = ch; w = cw; } else { cur += ch; w += cw; }
+    }
+    out.push(cur);
+    return out;
+  }).join("\n");
+  const screenOf = (id) => screens[id] || wrapCols((chats[id] || []).filter((m) => m.kind !== "tool").map((m) => (m.kind === "user" ? "> " : "● ") + m.text).join("\n\n"));
 
   const external = [
     { id: "x1", kind: "claude", pid: 4242, cwd: "/Users/alex/code/notes", app: "iTerm", started: ago(90), session: "s1", title: "周报草稿", updated: ago(20), machine: "macbook", status: "idle", can_send: false, live: true },

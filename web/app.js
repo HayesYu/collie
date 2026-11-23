@@ -537,7 +537,7 @@
       $("#gone").hidden = true;
       $("#log").textContent = "";
       resetChat();
-      term?.reset();
+      resetScreen();
       renderHead();
       openStream();
       if (!narrow()) $("#input").focus();
@@ -2070,7 +2070,7 @@
     renderWorkerModel(v);
     // The pane may have shown up before the page knew what it is (a fresh
     // terminal): once it does, switch to the view that fits.
-    if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); openStream(); }
+    if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); resetScreen(); openStream(); }
     $("#input").placeholder = v.name === ROUTER ? "直接在 Collie 的终端里输入…" : v.is_agent ? `给 ${KIND_LABEL[v.kind] || v.kind} 发消息…` : "输入命令…";
   }
 
@@ -2108,6 +2108,9 @@
   let stream = null;
   let term = null;
   let size = { cols: 0, rows: 0 };
+  let prevScreenLines = null;
+  let pendingScreen = null;
+  let screenFresh = true;
 
   // A plain shell has no conversation to show, so it opens on the screen.
   const isShell = () => { const v = find(current); return !!v && !v.is_agent; };
@@ -2118,6 +2121,7 @@
     $("#viewer").dataset.mode = m;
     $("#detail").classList.toggle("chat-mode", m === "chat");
     $("#detail").classList.toggle("shell", isShell());
+    if (m === "chat") hideJump();
     $$("#mode-seg button").forEach((b) => {
       b.classList.toggle("on", b.dataset.mode === m);
       if (b.dataset.mode === "chat") b.hidden = isShell();
@@ -2126,9 +2130,33 @@
   function setMode(m) {
     if (view === "pane" && isShell()) shellMode = m; else { mode = m; store.set("mode2", m); }
     applyMode();
-    if (view === "pane" && current) { closeStream(); resetChat(); openStream(); }
+    if (view === "pane" && current) { closeStream(); resetChat(); resetScreen(); openStream(); }
   }
   $$("#mode-seg button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+  const screenNearBottom = () => {
+    const el = $("#screen");
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+  function hideJump() {
+    const j = $("#jump");
+    if (j.hidden) return;
+    const hadFocus = document.activeElement === j;
+    j.hidden = true;
+    if (hadFocus) (curMode() === "screen" ? $("#screen") : $("#log"))?.focus({ preventScroll: true });
+  }
+  function resetScreen() {
+    prevScreenLines = null;
+    pendingScreen = null;
+    screenFresh = true;
+    size = { cols: 0, rows: 0 };
+    hideJump();
+    if (term) {
+      term.reset();
+      $("#screen").scrollTop = 0;
+      $("#screen").scrollLeft = 0;
+    }
+  }
 
   function ensureTerm() {
     if (term || !window.Terminal) return;
@@ -2137,8 +2165,19 @@
       cols: 120, rows: 40, fontFamily: css.getPropertyValue("--mono"), fontSize: 13, lineHeight: 1.15,
       cursorBlink: false, scrollback: 0, allowTransparency: true, theme: termTheme(),
     });
+    // Native #screen handles 2D scrolling: never translate wheel into Up/Down
+    // arrow keys (\x1b[A/\x1b[B) or let xterm cancel horizontal touch pans.
+    term.attachCustomWheelEventHandler(() => false);
+    $("#screen").addEventListener("touchmove", (e) => e.stopPropagation(), { capture: true, passive: true });
     term.open($("#screen"));
     term.onData(typeIntoPane);
+    term.onSelectionChange(() => {
+      if (!term.hasSelection() && pendingScreen && curMode() === "screen") {
+        const p = pendingScreen;
+        pendingScreen = null;
+        drawScreen(p);
+      }
+    });
     // The terminal is the input: tap or click it and type. (A drag that
     // selected text, or scrolled the screen sideways, isn't a tap.)
     $("#screen").addEventListener("click", () => { if (!term.hasSelection()) term.focus(); });
@@ -2158,11 +2197,15 @@
   const narrowScreen = matchMedia("(max-width: 760px)");
   function fitTerm() {
     if (!term || !size.cols) return;
-    const el = $("#screen"), pad = parseFloat(getComputedStyle(el).paddingLeft) * 2;
+    const el = $("#screen"), was = screenNearBottom();
+    const pad = parseFloat(getComputedStyle(el).paddingLeft) * 2;
     const fitW = Math.floor(((el.clientWidth - pad) / size.cols / 0.602) * 2) / 2;
     const overview = store.get("term-overview", false);
     const fs = narrowScreen.matches && !overview ? Math.min(14, Math.max(fitW, 11)) : Math.max(4.5, Math.min(14, fitW));
-    if (term.options.fontSize !== fs) term.options.fontSize = fs;
+    if (term.options.fontSize !== fs) {
+      term.options.fontSize = fs;
+      if (was) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; hideJump(); });
+    }
     $("#term-fit").textContent = overview ? "放大" : "全览";
     $("#term-fit").hidden = !narrowScreen.matches || fitW >= 11;
   }
@@ -2188,12 +2231,61 @@
 
   function drawScreen(f) {
     if (!term) return;
-    if (f.cols && f.rows && (f.cols !== size.cols || f.rows !== size.rows)) {
-      size = { cols: f.cols, rows: f.rows };
-      term.resize(f.cols, f.rows);
-      fitTerm();
+    const el = $("#screen");
+    const stick = screenFresh || screenNearBottom();
+    const raw = (f.text || "").replace(/\r\n/g, "\n").replace(/\r/g, "");
+    const lines = raw ? raw.split("\n") : [""];
+    if (!screenFresh && term.hasSelection()) {
+      pendingScreen = f;
+      return;
     }
-    term.write("\x1b[?25l\x1b[H\x1b[2J" + f.text.replace(/\r?\n/g, "\r\n"));
+    if (!stick && prevScreenLines) {
+      const check = Math.min(6, prevScreenLines.length);
+      const sameHead = lines.length >= prevScreenLines.length &&
+        prevScreenLines.slice(0, check).every((l, i) => lines[i] === l);
+      if (!sameHead) {
+        pendingScreen = f;
+        $("#jump").hidden = false;
+        return;
+      }
+    }
+    pendingScreen = null;
+    const savedTop = el.scrollTop;
+    const cols = f.cols || size.cols || 120;
+    const paneRows = f.rows || size.rows || 40;
+    const rows = Math.max(1, lines.length);
+    const dimChanged = cols !== size.cols || paneRows !== size.rows;
+    if (dimChanged) size = { cols, rows: paneRows };
+    const full = !prevScreenLines || cols !== term.cols || rows < term.rows;
+    if (cols !== term.cols || rows !== term.rows) {
+      if (full) term.reset();
+      term.resize(cols, rows);
+    }
+    if (dimChanged) fitTerm();
+    let out = "\x1b[?25l\x1b[?7l";
+    if (full) {
+      for (let r = 0; r < rows; r++) out += `\x1b[${r + 1};1H\x1b[0m\x1b[2K${lines[r]}`;
+    } else {
+      for (let r = 0; r < rows; r++) {
+        if (prevScreenLines[r] !== lines[r]) out += `\x1b[${r + 1};1H\x1b[0m\x1b[2K${lines[r]}`;
+      }
+    }
+    prevScreenLines = lines;
+    screenFresh = false;
+    const finishScroll = () => {
+      if (stick) {
+        el.scrollTop = el.scrollHeight;
+        hideJump();
+      } else {
+        el.scrollTop = savedTop;
+        if (screenNearBottom()) hideJump(); else $("#jump").hidden = false;
+      }
+    };
+    if (out === "\x1b[?25l\x1b[?7l") { finishScroll(); return; }
+    term.write(out, () => {
+      finishScroll();
+      requestAnimationFrame(finishScroll);
+    });
   }
   function cleanLog(text) {
     return text.split("\n").map((l) => l.replace(/\s+$/, ""))
@@ -2204,11 +2296,34 @@
     const el = $("#log");
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     el.textContent = cleanLog(text);
-    if (atBottom) el.scrollTop = el.scrollHeight;
-    $("#jump").hidden = atBottom;
+    if (atBottom) { el.scrollTop = el.scrollHeight; hideJump(); } else $("#jump").hidden = false;
   }
-  $("#log").addEventListener("scroll", () => { const el = $("#log"); $("#jump").hidden = el.scrollHeight - el.scrollTop - el.clientHeight < 40; });
-  $("#jump").addEventListener("click", () => { const el = $("#log"); el.scrollTop = el.scrollHeight; });
+  $("#screen").addEventListener("scroll", () => {
+    if (curMode() !== "screen") return;
+    if (screenNearBottom()) {
+      hideJump();
+      if (pendingScreen) { const p = pendingScreen; pendingScreen = null; drawScreen(p); }
+    } else {
+      $("#jump").hidden = false;
+    }
+  }, { passive: true });
+  $("#log").addEventListener("scroll", () => {
+    if (curMode() !== "log") return;
+    const el = $("#log");
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) hideJump(); else $("#jump").hidden = false;
+  }, { passive: true });
+  $("#jump").addEventListener("click", () => {
+    if (curMode() === "screen") {
+      const el = $("#screen");
+      el.scrollTop = el.scrollHeight;
+      hideJump();
+      if (pendingScreen) { const p = pendingScreen; pendingScreen = null; drawScreen(p); }
+    } else {
+      const el = $("#log");
+      el.scrollTop = el.scrollHeight;
+      hideJump();
+    }
+  });
 
   // ───────────────────────────── one agent: conversation
   let showRaw = false;
@@ -3234,8 +3349,8 @@
   function setVH() {
     const v = window.visualViewport;
     const root = document.documentElement.style;
-    // Chats that were showing their latest lines keep showing them as the keyboard takes space.
-    const pinned = [...document.querySelectorAll(".viewer, #log")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
+    const pinned = [...document.querySelectorAll(".viewer, #log, #screen")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight < 80);
     root.setProperty("--vh", (v ? v.height : innerHeight) + "px");
     pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
     root.setProperty("--vtop", (v ? Math.max(0, v.offsetTop) : 0) + "px");

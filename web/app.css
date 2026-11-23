@@ -305,6 +305,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .view { display: flex; flex-direction: column; min-height: 0; flex: 1; padding-top: env(safe-area-inset-top); }
 .d-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); min-height: 61px; }
 .back { display: none; margin-left: -6px; }
+#detail .back, #v-ext .back { display: inline-grid; }
 .d-title { flex: 1; min-width: 0; }
 .d-name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
 .d-name > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -340,11 +341,11 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .viewer[data-mode="chat"] > .chat { display: flex; }
 .viewer[data-mode="chat"] { background: var(--bg); }
 .viewer[data-mode="chat"] ~ .keys:not(.open) { display: none; }
-.screen { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; scrollbar-gutter: stable; padding: 14px 16px 28px; outline: none; }
+.screen { position: absolute; inset: 0; overflow: auto; overscroll-behavior-y: contain; overflow-anchor: none; scrollbar-gutter: stable; padding: 14px 16px 28px; outline: none; }
 .screen .xterm { width: max-content; }
 .screen .xterm-viewport { background: transparent !important; overflow: hidden !important; }
 .log {
-  position: absolute; inset: 0; margin: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px 28px; outline: none;
+  position: absolute; inset: 0; margin: 0; overflow: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: 16px 18px 28px; outline: none;
   font: 12.5px/1.6 var(--mono); color: var(--term-fg); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
 }
 .jump {
@@ -356,7 +357,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 /* ─── conversation ─── */
 .chat { position: absolute; inset: 0; flex-direction: column; }
 .thread {
-  flex: 1; overflow: auto; overscroll-behavior: contain;
+  flex: 1; overflow: auto; overscroll-behavior-y: contain;
   padding: 32px max(20px, calc((100% - var(--col)) / 2)) 24px;
   display: flex; flex-direction: column; gap: 0;
 }
@@ -1326,7 +1327,7 @@ select.picked { display: none; }
 /* xterm parks its input at the cursor, which Collie never places (herdr
    doesn't report it): keep it fixed in the corner so focusing or typing
    neither widens the scroll area nor jumps #screen back to the top */
-.screen .xterm-helper-textarea { position: fixed !important; left: 0 !important; top: 0 !important; }
+.screen .xterm-helper-textarea { position: fixed !important; left: 0 !important; top: 0 !important; pointer-events: none !important; }
 
 /* a stuck agent's dialog, answered from Collie's conversation */
 .needs .ask { margin-top: 10px; }

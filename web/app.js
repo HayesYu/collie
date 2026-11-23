@@ -511,8 +511,53 @@
   }
 
   // ───────────────────────────── routing
+  // Track in-app history depth on history.state so the header back button pops
+  // back to the exact caller view when available, and falls back inside Collie
+  // on deep links or fresh standalone PWA launches without exiting the app.
+  let navCur = typeof history.state?.collieIdx === "number" ? history.state.collieIdx : 0;
+  let booted = false;
+  function syncHistoryIndex() {
+    if (typeof history.state?.collieIdx === "number") {
+      navCur = history.state.collieIdx;
+    } else {
+      navCur = booted ? navCur + 1 : 0;
+      history.replaceState({ ...(history.state || {}), collieIdx: navCur }, "");
+    }
+  }
+  function replaceHash(hash) {
+    history.replaceState({ ...(history.state || {}), collieIdx: navCur }, "", hash);
+  }
+  function fallbackHash() {
+    if (!narrow()) return "#/collie";
+    if (view === "pane") {
+      const v = find(current);
+      if (v && isCollieOwned(v)) return "#/collie";
+    } else if (view === "ext" && extCur?.startsWith("h:")) {
+      const h = hist.find((x) => x.id === extCur.slice(2));
+      if (h && (h.name === ROUTER || sup.workers.some((w) => w.name === h.name))) return "#/collie";
+    }
+    return "#/";
+  }
+  function goBack(replaceAtRoot = false) {
+    if (navCur > 0) {
+      history.back();
+      return;
+    }
+    const dest = fallbackHash();
+    if (location.hash === dest || (!location.hash && dest === "#/")) return;
+    if (replaceAtRoot) { replaceHash(dest); route(); }
+    else location.hash = dest;
+  }
+  document.addEventListener("click", (e) => {
+    if (e.target.closest(".back")) { e.preventDefault(); goBack(); return; }
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest('a[href^="#/"]');
+    if (a && a.getAttribute("href") === location.hash) e.preventDefault();
+  });
+
   function route() {
-    const h = location.hash;
+    syncHistoryIndex();
+    let h = location.hash;
     let next = null, id = null;
     if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
     else if (h.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(h.slice(4)); }
@@ -522,14 +567,21 @@
     else if (h === "#/devices") next = "devices";
     else if (h === "#/prefs") next = "prefs";
     else if (!narrow()) {
-      // Desktop has no empty home: reopen where you were, else Collie.
-      const last = store.get("last", "#/collie");
-      const ok = last.startsWith("#/p/") ? !!find(decodeURIComponent(last.slice(4))) : /^#\/(collie|auto|devices|prefs)$/.test(last);
-      location.replace(ok ? last : "#/collie");
-      return;
+      // Desktop has no empty home: reopen where you were on fresh launch, else Collie.
+      let dest = "#/collie";
+      if (!booted && !h) {
+        const last = store.get("last", "#/collie");
+        const ok = last.startsWith("#/p/") ? !!find(decodeURIComponent(last.slice(4))) : /^#\/(collie|auto|devices|prefs)$/.test(last);
+        if (ok) dest = last;
+      }
+      replaceHash(dest);
+      h = dest;
+      if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
+      else next = h.slice(2);
     }
     if (next) store.set("last", h);
     if (next === view && id === (next === "ext" ? extCur : current)) return;
+    if ($("#app").classList.contains("has-file") && matchMedia("(max-width: 1000px)").matches) closeFilePane();
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (view === "auto" && next !== "auto") clearInterval(autoTimer);
@@ -559,7 +611,9 @@
       if (!narrow()) $("#input").focus();
     }
   }
+  addEventListener("popstate", route);
   addEventListener("hashchange", route);
+  addEventListener("resize", () => { if (booted && !view && !narrow()) route(); });
 
   // ───────────────────────────── Collie (super-agent) view
   let superSig = "";
@@ -1750,7 +1804,8 @@
       await api(`/api/history/${encodeURIComponent(h.id)}/delete`, { body: {} }).catch(() => {});
       hist = hist.filter((x) => x.id !== h.id);
       renderHist();
-      location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+      replaceHash("#/p/" + encodeURIComponent(r.pane_id));
+      route();
     } catch (err) {
       toast(err.message, "attn");
       renderHistHead(hid);
@@ -1762,7 +1817,8 @@
     try { await api(`/api/history/${encodeURIComponent(hid)}/delete`, { body: {} }); } catch (err) { toast(err.message, "attn"); return; }
     hist = hist.filter((x) => x.id !== hid);
     renderHist();
-    location.hash = "#/";
+    if (store.get("last") === location.hash) store.set("last", "#/collie");
+    goBack(true);
   });
   const extName = (e) => e.title || (e.cwd ? e.cwd.split("/").filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
   // The sidebar, by what you need: what is going on now (herdr agents, yours
@@ -1961,7 +2017,8 @@
       toast("已在 herdr 里接管");
       ext = ext.filter((x) => x.id !== e.id);
       renderExt();
-      location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+      replaceHash("#/p/" + encodeURIComponent(r.pane_id));
+      route();
     } catch (err) {
       toast(err.message, "attn");
       b.disabled = false;
@@ -2414,7 +2471,7 @@
     });
     stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
   }
-  function closeStream() { stream?.close(); stream = null; }
+  function closeStream() { stream?.close(); stream = null; term?.blur(); }
 
   function drawScreen(f) {
     if (!term) return;
@@ -3755,7 +3812,9 @@
       if (act === "close" && v) {
         if (!confirm(`关闭工作区「${v.workspace_label || v.workspace_id}」？里面的进程会被结束。`)) return;
         await api(`/api/workspaces/${encodeURIComponent(v.workspace_id)}/close`, { method: "POST", body: {} });
-        location.hash = "#/";
+        state = { ...state, agents: state.agents.filter((a) => a.workspace_id !== v.workspace_id), shells: state.shells.filter((a) => a.workspace_id !== v.workspace_id) };
+        if (store.get("last") === location.hash) store.set("last", "#/collie");
+        goBack(true);
       }
       if (act === "router-open") {
         const p = paneOf(ROUTER);
@@ -3963,8 +4022,10 @@
     $("#app").hidden = false;
     setMode(mode);
     connect();
+    booted = false;
     view = undefined;
     route();
+    booted = true;
     loadExternal();
     clearInterval(extTimer);
     loadHistory();

@@ -109,7 +109,7 @@
     <!-- ── Collie: the super-agent conversation ── -->
     <section class="view" id="v-collie" hidden>
       <header class="d-head">
-        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title">
           <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
@@ -164,7 +164,7 @@
     <!-- ── automation ── -->
     <section class="view" id="v-auto" hidden>
       <header class="d-head">
-        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title"><div class="d-name">自动化</div><div class="d-meta muted">Always-on：事件进来，Collie 决定谁去做</div></div>
       </header>
       <div class="tabs" id="auto-tabs">
@@ -181,7 +181,7 @@
     <!-- ── devices: phones, browsers and computers ── -->
     <section class="view" id="v-devices" hidden>
       <header class="d-head">
-        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title"><div class="d-name">设备</div><div class="d-meta muted">这台 hub 管着哪些电脑，谁能连进来</div></div>
       </header>
       <div class="auto-body" id="devices-body"></div>
@@ -190,7 +190,7 @@
     <!-- ── an agent running in another terminal: read-only, can be taken over ── -->
     <section class="view" id="v-ext" hidden>
       <header class="d-head">
-        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title">
           <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag">只读</span></div>
           <div class="d-meta"><span class="status" id="x-status"></span><span class="muted mono" id="x-cwd"></span></div>
@@ -223,7 +223,7 @@
     <!-- ── preferences: this device's look and habits ── -->
     <section class="view" id="v-prefs" hidden>
       <header class="d-head">
-        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title"><div class="d-name">偏好设置</div><div class="d-meta muted">只影响这台设备上的这个浏览器</div></div>
       </header>
       <div class="auto-body" id="prefs-body"></div>
@@ -232,7 +232,7 @@
     <!-- ── one agent terminal, wrapped ── -->
     <section class="view detail" id="detail" hidden>
       <header class="d-head">
-        <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
+        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title">
           <div class="d-name"><span id="d-name"></span><span class="kind" id="d-kind"></span><span class="tag" id="d-worker" hidden></span></div>
           <div class="d-meta"><span class="status" id="d-status"></span><span class="muted" id="d-model" hidden></span><span class="muted mono" id="d-cwd"></span></div>

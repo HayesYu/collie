@@ -12,7 +12,7 @@
   // ───────────────────────────── the scene
   const machines = [
     { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.39", agents: ["claude", "codex"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.40", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -47,14 +47,14 @@
     { id: "e81", role: "collie", thread: "chat:main", text: "好，明早 09:00 提醒你。", at: ago(60 * 18) },
   ];
   const entries = [
-    entry("user", "订单接口的分页测试偶尔会挂，帮我查一下。顺便把 v1.4 的发布说明写了。\n\n附件：\n/home/alex/.collie/uploads/20261119/a1b2c3-ci-failure.png", { at: ago(15) }),
+    entry("user", "订单接口的分页测试偶尔会挂，帮我查一下。顺便把 v1.4 的发布说明写了。\n\n附件：\n/home/alex/.collie/uploads/20261119/a1b2c3-ci-failure.png\n/home/alex/.collie/uploads/20261119/d4e5f6-query-plan.png", { at: ago(15) }),
     entry("collie", "好，分两路并行：\n\n- **fix-flaky-test**（Codex · devbox）查 `TestOrdersPagination` 为什么偶发失败\n- **release-notes**（Claude · macbook）按 v1.3 以来的提交写发布说明\n\n有结果我再告诉你。", { at: ago(14.5) }),
     entry("event", "派出 fix-flaky-test（codex · devbox）", { tone: "spawn", ref: "fix-flaky-test", at: ago(14) }),
     entry("event", "派出 release-notes（claude · macbook）", { tone: "spawn", ref: "release-notes", at: ago(14) }),
     entry("user", "另外首页首屏好像有点慢，有空看看。", { at: ago(7.2) }),
     entry("collie", "顺便问一下，`shop-api/migrations` 整理完了（41 → 33 个文件），那 3 个从没在生产跑过的旧回滚脚本怎么处理？", { at: ago(6.5), options: ["移到 archive 留档", "直接删掉"] }),
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
-    entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
+    entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n顺带附上首页明暗主题验收宽截图与架构图：~/code/shop-web/docs/preview-dark.png 、~/code/shop-web/docs/preview-light.png 、~/code/shop-web/docs/architecture.svg\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
     entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 ~/code/shop-api/internal/orders/list.go 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：~/code/shop-api/bench-pagination.html\n\n顺带扫到一处历史逻辑：已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), check: true }),
   ];
   const pinnedIds = [entries[1].id];
@@ -226,7 +226,7 @@
       memFile("tasks/done/ci-cache.md", "# CI 缓存提速\n- [x] 缓存依赖目录\n已完成：构建从 9 分钟降到 4 分钟。", 90),
       memFile("notes/index.md", "# 笔记索引\n- shop-api.md：订单服务，怎么跑测试、分页的坑\n- shop-web.md：前端，怎么起、发布说明放哪\n- agents.md：哪个 agent 在哪台电脑上好用\n- machines.md：devbox 和 macbook 各装了什么", 60 * 30),
       memFile("notes/shop-api.md", "# shop-api\n- 仓库 ~/code/shop-api（devbox），Go 1.25，测试 `make test`\n- 分页测试偶发失败：同一秒内的订单按 `created_at` 排序不稳定，排序要加 `id` 兜底（fix-flaky-test 查出来的）\n- 测试数据库用 docker 起，`make db`；跑完 `make db-down`\n- CI 只跑 `./internal/...`（截至 11-18）", 60 * 9),
-      memFile("notes/shop-web.md", "# shop-web\n- 仓库 ~/code/shop-web（macbook），Vite + React，`pnpm dev`\n- 发布说明写在 CHANGELOG.md，按「需要注意 / 改动」两段", 60 * 30),
+      memFile("notes/shop-web.md", "# shop-web\n- 仓库 ~/code/shop-web（macbook），Vite + React，`pnpm dev`\n- 发布说明写在 CHANGELOG.md，按「需要注意 / 改动」两段\n- 首页明暗主题基准图：![首页暗色预览](~/code/shop-web/docs/preview-dark.png)", 60 * 30),
       memFile("notes/agents.md", "# agent 经验\n- Codex 在 devbox 上跑 shop-api 的测试更稳，Claude 偶尔会改错测试本身\n- 界面相关的活给 macbook 上的 Claude\n- macbook 上没装 Antigravity", 60 * 9),
       memFile("notes/machines.md", "# 电脑\n- devbox：Linux，claude / codex / agy 都有\n- macbook：claude、codex；周末常关机", 60 * 24 * 3),
       memFile("messages.md", "最近说过的话（自动记录）", 5),
@@ -467,23 +467,33 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
-    if (p === "/api/version") return json({ version: "v0.2.39", latest: "v0.2.39", outdated: [] });
+    if (p === "/api/version") return json({ version: "v0.2.40", latest: "v0.2.40", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
-    if (p === "/api/file" && /images\/0d3a9e5c71b2f4e8a6c1\.png$|uploads\/.*\.png$/.test(q.get("path") || "")) {
-      const b = await (await realFetch(new URL("../img/hero-dark.png", location.href))).blob();
-      return new Response(b, { headers: { "X-File-Kind": "image", "X-File-Size": String(b.size), "X-File-Path": encodeURIComponent(q.get("path")) } });
-    }
     if (p === "/api/file") {
-      const fp = q.get("path") || "";
+      const fp = q.get("path") || "", mach = q.get("machine") || "";
+      const demoImgs = [
+        [/a1b2c3-ci-failure\.png$/i, "../img/screen.png", ""],
+        [/d4e5f6-query-plan\.png$/i, "../img/agent.png", ""],
+        [/images\/0d3a9e5c71b2f4e8a6c1\.png$/i, "../img/hero-dark.png", "macbook"],
+        [/preview-dark\.png$/i, "../img/hero-dark.png", "macbook"],
+        [/preview-light\.png$/i, "../img/hero-light.png", "macbook"],
+        [/architecture\.svg$/i, "../img/architecture-light.svg", "macbook"],
+        [/uploads\/.*\.png$/i, "../img/hero-dark.png", ""],
+      ];
+      const hitImg = demoImgs.find(([re, , wantM]) => re.test(fp) && (!wantM || mach === wantM));
+      if (hitImg) {
+        const b = await (await realFetch(new URL(hitImg[1], location.href))).blob();
+        return new Response(b, { headers: { "X-File-Kind": "image", "X-File-Size": String(b.size), "X-File-Path": encodeURIComponent(fp) } });
+      }
       if (/bench-pagination\.html$/i.test(fp)) {
         const html = await (await realFetch(new URL("bench-pagination.html", location.href))).text();
         return new Response(html, { headers: { "Content-Type": q.get("as") === "html" ? "text/html; charset=utf-8" : "application/octet-stream", "X-File-Kind": q.get("as") === "html" ? "html" : "text", "X-File-Size": String(new Blob([html]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/bench-pagination.html") } });
       }
-      if (q.get("machine") === "macbook" && /CHANGELOG\.md$/.test(fp)) {
+      if (mach === "macbook" && /CHANGELOG\.md$/.test(fp)) {
         return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
       }
-      if (!q.get("machine") && /(?:internal\/orders\/)?list\.go$/.test(fp)) {
+      if (!mach && /(?:internal\/orders\/)?list\.go$/.test(fp)) {
         return new Response(ordersListGo, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([ordersListGo]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/internal/orders/list.go") } });
       }
       return json({ error: "找不到这个文件" }, 404);
@@ -491,11 +501,11 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/dirs") return json({ dirs: ["~/code/shop-api", "~/code/shop-web", "~/code/notes"] });
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.39", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.40", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.39", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.39",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.40", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.40",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

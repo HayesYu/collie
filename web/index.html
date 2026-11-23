@@ -410,6 +410,45 @@
   </form>
 </dialog>
 
+<!-- ───────────── image lightbox ───────────── -->
+<dialog class="lightbox" id="lightbox" closedby="any" aria-labelledby="lb-name">
+  <header class="lb-bar">
+    <div class="lb-info">
+      <div class="lb-title-row">
+        <h2 class="lb-name" id="lb-name">图片预览</h2>
+        <span class="lb-count" id="lb-count" hidden></span>
+      </div>
+      <div class="lb-meta" id="lb-meta"></div>
+    </div>
+    <div class="lb-actions">
+      <button type="button" class="lb-btn lb-zoom-btn" id="lb-zoom" aria-label="放大查看细节" title="放大查看细节" aria-pressed="false" disabled>
+        <svg class="ic-zoom-in" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2M11 8.5v5M8.5 11h5"/></svg>
+        <svg class="ic-zoom-out" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2M8.5 11h5"/></svg>
+        <span class="lb-zoom-pct" id="lb-zoom-pct">1x</span>
+      </button>
+      <a class="lb-btn" id="lb-open" href="#" target="_blank" rel="noopener" aria-label="在新标签页打开原图" title="在新标签页打开原图" aria-disabled="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
+      </a>
+      <a class="lb-btn" id="lb-dl" href="#" download aria-label="下载原图" title="下载原图" aria-disabled="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
+      </a>
+      <button type="button" class="lb-btn lb-close" id="lb-close" autofocus aria-label="关闭大图预览" title="关闭 (Esc)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </header>
+  <div class="lb-stage" id="lb-stage">
+    <div class="lb-status" id="lb-status" hidden></div>
+    <img class="lb-img" id="lb-img" alt="" draggable="false" hidden>
+  </div>
+  <button type="button" class="lb-nav prev" id="lb-prev" aria-label="上一张图片" title="上一张 (←)" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+  </button>
+  <button type="button" class="lb-nav next" id="lb-next" aria-label="下一张图片" title="下一张 (→)" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+  </button>
+</dialog>
+
 <div class="toasts" id="toasts"></div>
 
 <script src="/vendor/xterm.js"></script>

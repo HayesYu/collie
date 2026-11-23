@@ -1803,7 +1803,7 @@
     if (pendingOpen && !ev.composedPath().includes($("#pending-wrap"))) { pendingOpen = false; renderPendingBar(); }
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && pendingOpen) { pendingOpen = false; renderPendingBar(); }
+    if (ev.key === "Escape" && pendingOpen && !document.querySelector("dialog[open]")) { pendingOpen = false; renderPendingBar(); }
   });
 
   bindComposer($("#super-composer"), $("#super-input"), async (text) => {
@@ -3919,8 +3919,14 @@
   };
   const fileLinkAttrs = (rawPath, escapedPath, titleText) => HTML_EXT.test(rawPath)
     ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" target="_blank" rel="noopener" data-path="${escapedPath}" title="${esc("在新标签页打开 " + rawPath)}"`
+    : IMG_EXT.test(rawPath)
+    ? `class="fpath img-link" href="#" data-path="${escapedPath}" title="${esc("查看大图 " + (rawPath.split("/").pop() || rawPath))}"`
     : `class="fpath" href="#" data-path="${escapedPath}" title="${titleText}"`;
   const IMG_TYPE = { svg: "image/svg+xml", jpg: "image/jpeg", jpeg: "image/jpeg", ico: "image/x-icon" };
+  const imgMime = (p) => {
+    const ext = String(p || "").split(".").pop().toLowerCase();
+    return IMG_TYPE[ext] || "image/" + ext;
+  };
   function fileContextMachine() {
     if (view === "pane") return find(current)?.machine;
     if (view === "ext") {
@@ -3954,6 +3960,7 @@
     if (cBtn) { cBtn.removeAttribute("data-copied"); cBtn.removeAttribute("data-failed"); if (cBtn.nextElementSibling) cBtn.nextElementSibling.textContent = ""; }
   }
   async function openFile(path) {
+    if (IMG_EXT.test(path)) { openLightbox([{ path }], 0); return; }
     const body = $("#fv-body"), seq = ++fileSeq;
     fileRawText = "";
     body.classList.remove("is-code");
@@ -4008,11 +4015,12 @@
     body.scrollTop = body.scrollLeft = 0;
   }
   // Images a message carries ("[image:~/.collie/images/….png]", saved from the
-  // agent's transcript on its computer) show as thumbnails; tap for the panel.
-  const IMG_TOKEN = /\[image:(~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp))\]\n?/g;
-  const thumbs = new Map(); // path -> object URL, kept so redraws don't refetch
-  const IMG_RUN = /(?:\[image:~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp)\]\n?)+/g;
-  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="图片"><img alt=""${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`;
+  // agent's transcript on its computer) show as thumbnails; tap for the lightbox.
+  const IMG_TOKEN = /\[image:(~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpe?g|gif|webp|svg))\]\n?/gi;
+  const thumbs = new Map();    // path -> object URL, kept so redraws don't refetch
+  const thumbMeta = new Map(); // path -> { size, machine, path }
+  const IMG_RUN = /(?:\[image:~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpe?g|gif|webp|svg)\]\n?)+/gi;
+  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="${esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt=""${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`;
   const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
   async function loadThumb(img) {
     const p = img.parentElement.dataset.img;
@@ -4022,9 +4030,12 @@
     try {
       const f = await findFile(p);
       if (!f || f.kind !== "image") throw 0;
-      const u = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[p.split(".").pop()] || "image/" + p.split(".").pop() }));
+      const u = URL.createObjectURL(new Blob([f.blob], { type: imgMime(p) }));
       thumbs.set(p, u);
-      for (const el of document.querySelectorAll(".thumb[data-img] img")) if (el.parentElement.dataset.img === p) el.src = u;
+      thumbMeta.set(p, { size: f.size, machine: f.machine, path: f.path });
+      for (const el of document.querySelectorAll(".thumb[data-img] img")) {
+        if (el.parentElement.dataset.img === p) { el.src = u; el.parentElement.classList.remove("broken"); }
+      }
     } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
   }
   // Under each Collie message, on hover: copy, quote, pin, and when it was said.
@@ -4106,13 +4117,444 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, .thumb")) return;
+    if (m && e.target.closest("a, button, .thumb, img")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
   new MutationObserver(() => {
     for (const img of document.querySelectorAll(".thumb img:not([src])")) if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
   }).observe(document.body, { childList: true, subtree: true });
+
+  // ───────────────────────────── fullscreen image lightbox
+  const lightbox = $("#lightbox"), lbStage = $("#lb-stage"), lbImg = $("#lb-img");
+  const lbName = $("#lb-name"), lbCount = $("#lb-count"), lbMeta = $("#lb-meta"), lbStatus = $("#lb-status");
+  const lbZoomBtn = $("#lb-zoom"), lbZoomPct = $("#lb-zoom-pct"), lbOpenLink = $("#lb-open"), lbDlLink = $("#lb-dl");
+  const lbPrevBtn = $("#lb-prev"), lbNextBtn = $("#lb-next"), lbCloseBtn = $("#lb-close");
+  let lbItems = [], lbIdx = 0, lbSeq = 0, lbTempUrl = "", lbCurMeta = null;
+  let lbScale = 1, lbX = 0, lbY = 0, lbSavedScroll = null;
+  const lbTabProtected = new Set();
+
+  let supportsDisplayTransition;
+  function canTransitionDisplay() {
+    if (supportsDisplayTransition !== undefined) return supportsDisplayTransition;
+    if (!window.CSS?.supports?.("transition-behavior", "allow-discrete") || !document.body) return false;
+    const probe = document.createElement("div");
+    probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
+    document.body.appendChild(probe);
+    getComputedStyle(probe).display;
+    probe.style.display = "none";
+    supportsDisplayTransition = getComputedStyle(probe).display === "block";
+    probe.remove();
+    return supportsDisplayTransition;
+  }
+  const supportsTopLayerExit = () => !!(window.CSS?.supports?.("overlay", "auto") && canTransitionDisplay());
+
+  function releaseLbTempUrl() {
+    if (!lbTempUrl) return;
+    const u = lbTempUrl;
+    lbTempUrl = "";
+    // Never revoke an ObjectURL currently shared with the `thumbs` cache.
+    for (const v of thumbs.values()) if (v === u) return;
+    if (lbTabProtected.has(u)) {
+      setTimeout(() => { lbTabProtected.delete(u); URL.revokeObjectURL(u); }, 60000);
+    } else {
+      URL.revokeObjectURL(u);
+    }
+  }
+  const cleanImgName = (raw, fallback = "图片") => {
+    const s = String(raw || "").split(/[?#]/)[0].replace(/\/+$/, "");
+    const n = s.split("/").pop() || "";
+    try { return decodeURIComponent(n) || fallback; } catch { return n || fallback; }
+  };
+  function updateLbMeta() {
+    if (!lbMeta) return;
+    const parts = [];
+    if (lbCurMeta) {
+      const multi = (state.machines || []).length > 1;
+      if (multi || lbCurMeta.machine) parts.push(machineName(lbCurMeta.machine));
+      if (lbCurMeta.isSvg) parts.push("SVG");
+      else if (lbCurMeta.width > 0 && lbCurMeta.height > 0) parts.push(`${lbCurMeta.width} × ${lbCurMeta.height}`);
+      if (lbCurMeta.size > 0) parts.push(fmtSize(lbCurMeta.size));
+    }
+    lbMeta.textContent = parts.join(" · ");
+  }
+  function setLbReady(ready, url = "", dlName = "") {
+    if (lbZoomBtn) {
+      if (!ready && document.activeElement === lbZoomBtn) lbCloseBtn?.focus({ preventScroll: true });
+      lbZoomBtn.disabled = !ready;
+    }
+    for (const a of [lbOpenLink, lbDlLink]) {
+      if (!a) continue;
+      if (ready && url) {
+        a.href = url;
+        a.removeAttribute("aria-disabled");
+        a.tabIndex = 0;
+      } else {
+        a.href = "#";
+        a.setAttribute("aria-disabled", "true");
+        a.tabIndex = -1;
+      }
+    }
+    if (lbDlLink) {
+      if (ready && dlName) lbDlLink.setAttribute("download", dlName);
+      else lbDlLink.removeAttribute("download");
+    }
+  }
+  function clampLbPan() {
+    if (lbScale <= 1.005) { lbScale = 1; lbX = 0; lbY = 0; return; }
+    const st = lbStage.getBoundingClientRect();
+    const bw = lbImg.offsetWidth || 0, bh = lbImg.offsetHeight || 0;
+    const maxX = Math.max(0, (bw * lbScale - st.width) / 2 + 24);
+    const maxY = Math.max(0, (bh * lbScale - st.height) / 2 + 24);
+    lbX = Math.min(maxX, Math.max(-maxX, lbX));
+    lbY = Math.min(maxY, Math.max(-maxY, lbY));
+  }
+  function applyLbTransform(immediate = false) {
+    clampLbPan();
+    const zoomed = lbScale > 1.005;
+    lightbox.classList.toggle("is-zoomed", zoomed);
+    if (immediate) lightbox.classList.add("no-anim");
+    lbImg.style.transform = zoomed ? `translate3d(${lbX.toFixed(1)}px, ${lbY.toFixed(1)}px, 0) scale(${lbScale.toFixed(3)})` : "";
+    if (immediate) requestAnimationFrame(() => lightbox.classList.remove("no-anim"));
+    if (lbZoomBtn) {
+      lbZoomBtn.classList.toggle("zoomed", zoomed);
+      lbZoomBtn.setAttribute("aria-pressed", String(zoomed));
+      const label = zoomed ? "缩回适屏 (1x)" : "放大查看细节";
+      lbZoomBtn.title = label;
+      lbZoomBtn.setAttribute("aria-label", label);
+    }
+    if (lbZoomPct) {
+      lbZoomPct.textContent = !zoomed ? "1x" : (Math.abs(lbScale - Math.round(lbScale)) < 0.06 ? `${Math.round(lbScale)}x` : `${lbScale.toFixed(1)}x`);
+    }
+  }
+  function targetLbZoomScale() {
+    const bw = lbImg.offsetWidth || 0, nw = lbImg.naturalWidth || 0;
+    if (bw > 0 && nw > 0 && !lbImg.classList.contains("is-svg")) {
+      const ratio = nw / bw;
+      if (narrow()) return Math.max(2, Math.min(ratio > 1.2 ? ratio : 2.4, 3));
+      return ratio >= 1.35 ? Math.min(ratio, 4) : 2;
+    }
+    return 2;
+  }
+  function zoomLbTo(nextScale, clientX, clientY, immediate = false) {
+    const clamped = Math.min(6, Math.max(1, nextScale));
+    if (clamped <= 1.005) {
+      lbScale = 1; lbX = 0; lbY = 0;
+      applyLbTransform(immediate);
+      return;
+    }
+    if (typeof clientX === "number" && typeof clientY === "number") {
+      const r = lbStage.getBoundingClientRect();
+      const ox = clientX - (r.left + r.width / 2);
+      const oy = clientY - (r.top + r.height / 2);
+      const factor = clamped / lbScale;
+      lbX = ox - (ox - lbX) * factor;
+      lbY = oy - (oy - lbY) * factor;
+    }
+    lbScale = clamped;
+    applyLbTransform(immediate);
+  }
+  function toggleLbZoom(clientX, clientY) {
+    if (lbImg.hidden || lbZoomBtn?.disabled) return;
+    if (lbScale > 1.005) zoomLbTo(1);
+    else zoomLbTo(targetLbZoomScale(), clientX, clientY);
+  }
+  function collectGallery(triggerEl, fallbackItem) {
+    const scope = triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    if (!scope) return { items: [fallbackItem], index: 0 };
+    const seen = new Set(), items = [];
+    const add = (it) => {
+      const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      items.push(it);
+    };
+    for (const el of scope.querySelectorAll(".thumb[data-img], .md-img-btn[data-img-url], a.fpath[data-path], img")) {
+      if (el.classList.contains("thumb") && el.dataset.img) {
+        add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
+      } else if (el.classList.contains("md-img-btn") && el.dataset.imgUrl) {
+        add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
+      } else if (el.matches("a.fpath[data-path]")) {
+        const p = el.dataset.path || "";
+        if (IMG_EXT.test(p)) add({ path: p, alt: "" });
+      } else if (el.tagName === "IMG" && !el.closest(".thumb, .md-img-btn, .avatar")) {
+        const u = el.currentSrc || el.getAttribute("src") || "";
+        if (u) add({ url: u, alt: el.getAttribute("alt") || "" });
+      }
+    }
+    const wantKey = fallbackItem.path ? "p:" + fallbackItem.path : "u:" + (fallbackItem.url || "");
+    let index = items.findIndex((it) => (it.path ? "p:" + it.path : "u:" + (it.url || "")) === wantKey);
+    if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
+    return { items, index };
+  }
+  async function showLbSlide(idx) {
+    if (!lbItems.length) return;
+    lbIdx = ((idx % lbItems.length) + lbItems.length) % lbItems.length;
+    const item = lbItems[lbIdx], seq = ++lbSeq;
+    releaseLbTempUrl();
+    lbScale = 1; lbX = 0; lbY = 0;
+    applyLbTransform(true);
+    const multi = lbItems.length > 1;
+    lbPrevBtn.hidden = !multi;
+    lbNextBtn.hidden = !multi;
+    lbCount.hidden = !multi;
+    if (multi) lbCount.textContent = `${lbIdx + 1} / ${lbItems.length}`;
+
+    const name = cleanImgName(item.path || item.url, item.alt || "图片");
+    lbName.textContent = item.alt && !item.path ? item.alt : name;
+    lbCurMeta = null;
+    updateLbMeta();
+    setLbReady(false);
+
+    const isSvg = /\.svg(?:$|[?#])/i.test(item.path || item.url || "");
+    lbImg.classList.toggle("is-svg", isSvg);
+    lbImg.alt = item.alt || name;
+
+    const showErr = (msg) => {
+      if (seq !== lbSeq) return;
+      lbImg.hidden = true;
+      lbImg.removeAttribute("src");
+      lbStatus.className = "lb-status";
+      lbStatus.textContent = msg;
+      lbStatus.hidden = false;
+      setLbReady(false);
+    };
+    const showUrl = (u, meta) => {
+      if (seq !== lbSeq) return;
+      lbCurMeta = { ...meta, isSvg, width: 0, height: 0 };
+      updateLbMeta();
+      lbImg.onload = () => {
+        if (seq !== lbSeq) return;
+        lbStatus.hidden = true;
+        lbImg.hidden = false;
+        if (lbCurMeta) {
+          lbCurMeta.width = lbImg.naturalWidth || 0;
+          lbCurMeta.height = lbImg.naturalHeight || 0;
+          updateLbMeta();
+        }
+        setLbReady(true, u, name);
+      };
+      lbImg.onerror = () => showErr("这张图片加载失败了。");
+      lbImg.src = u;
+    };
+
+    // 1. Direct remote/static URL (e.g. Markdown ![alt](https://...))
+    if (!item.path && item.url) {
+      lbImg.hidden = true;
+      lbStatus.className = "lb-status loading";
+      lbStatus.textContent = "加载图片中…";
+      lbStatus.hidden = false;
+      showUrl(item.url, {});
+      return;
+    }
+
+    // 2. Cached in `thumbs`: instant display, zero refetch, never revoked on close.
+    const cached = thumbs.get(item.path);
+    if (cached) {
+      lbStatus.hidden = true;
+      const m = thumbMeta.get(item.path) || {};
+      showUrl(cached, { size: m.size || 0, machine: m.machine ?? fileContextMachine() ?? "" });
+      return;
+    }
+
+    // 3. Cross-machine fetch via `findFile` (hub / node / remote hub Bearer).
+    lbImg.hidden = true;
+    lbImg.removeAttribute("src");
+    lbStatus.className = "lb-status loading";
+    lbStatus.textContent = "读取原图中…";
+    lbStatus.hidden = false;
+    const tries = fileTries();
+    let f = null;
+    try {
+      f = await findFile(item.path, tries);
+    } catch (err) {
+      showErr(err.message || "打不开这张图片。");
+      return;
+    }
+    if (seq !== lbSeq) return;
+    if (!f) {
+      showErr(`在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这张图片。`);
+      return;
+    }
+    if (f.kind !== "image") {
+      showErr(f.size > 20 << 20 ? `这张图片有 ${fmtSize(f.size)}（超过 20 MB），没法直接预览。` : "这个文件不是受支持的图片格式。");
+      return;
+    }
+    const blobUrl = URL.createObjectURL(new Blob([f.blob], { type: imgMime(item.path) }));
+    // If a `.thumb` in the DOM is waiting on this exact path, share it into `thumbs`.
+    if (document.querySelector(`.thumb[data-img="${CSS.escape(item.path)}"]`)) {
+      thumbs.set(item.path, blobUrl);
+      thumbMeta.set(item.path, { size: f.size, machine: f.machine, path: f.path });
+      for (const el of document.querySelectorAll(".thumb[data-img] img")) {
+        if (el.parentElement.dataset.img === item.path) { el.src = blobUrl; el.parentElement.classList.remove("broken"); }
+      }
+    } else {
+      lbTempUrl = blobUrl;
+    }
+    showUrl(blobUrl, { size: f.size, machine: f.machine });
+  }
+  function openLightbox(items, index = 0) {
+    if (!lightbox || !items?.length) return;
+    const sc = viewScroller(view);
+    lbSavedScroll = sc ? { sc, top: sc.scrollTop } : null;
+    lbItems = items;
+    lightbox.removeAttribute("data-closing");
+    if (!lightbox.open) {
+      markProgrammaticScroll(150);
+      lightbox.showModal();
+      if (lbSavedScroll?.sc && lbSavedScroll.sc.scrollTop !== lbSavedScroll.top) {
+        lbSavedScroll.sc.scrollTop = lbSavedScroll.top;
+      }
+    }
+    showLbSlide(index);
+  }
+  async function closeLightbox() {
+    if (!lightbox?.open || lightbox.hasAttribute("data-closing")) return;
+    markProgrammaticScroll(180);
+    if (!supportsTopLayerExit()) {
+      lightbox.setAttribute("data-closing", "");
+      const anims = lightbox.getAnimations({ subtree: true });
+      if (anims.length) {
+        await Promise.race([
+          Promise.allSettled(anims.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 240)),
+        ]);
+      }
+      if (!lightbox.hasAttribute("data-closing")) return;
+      lightbox.removeAttribute("data-closing");
+    }
+    if (lightbox.open) lightbox.close();
+  }
+  if (lightbox) {
+    // Fallback for browsers without native <dialog closedby="any"> support.
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      lightbox.addEventListener("click", (ev) => {
+        if (ev.target !== lightbox) return;
+        const r = lightbox.getBoundingClientRect();
+        const inside = r.top <= ev.clientY && ev.clientY <= r.top + r.height && r.left <= ev.clientX && ev.clientX <= r.left + r.width;
+        if (!inside) closeLightbox();
+      });
+    }
+    lightbox.addEventListener("cancel", (ev) => {
+      markProgrammaticScroll(180);
+      if (!supportsTopLayerExit()) {
+        ev.preventDefault();
+        closeLightbox();
+      }
+    });
+    lightbox.addEventListener("close", () => {
+      lightbox.returnValue = "";
+      lightbox.removeAttribute("data-closing");
+      lightbox.classList.remove("is-zoomed", "is-dragging", "no-anim");
+      lbSeq++;
+      releaseLbTempUrl();
+      lbImg.onload = lbImg.onerror = null;
+      lbImg.removeAttribute("src");
+      lbImg.hidden = true;
+      lbStatus.hidden = true;
+      lbScale = 1; lbX = 0; lbY = 0;
+      if (lbSavedScroll?.sc && lbSavedScroll.sc.scrollTop !== lbSavedScroll.top) {
+        markProgrammaticScroll(120);
+        lbSavedScroll.sc.scrollTop = lbSavedScroll.top;
+      }
+      lbSavedScroll = null;
+    });
+    lbCloseBtn?.addEventListener("click", () => closeLightbox());
+    lbZoomBtn?.addEventListener("click", () => toggleLbZoom());
+    lbOpenLink?.addEventListener("click", (ev) => {
+      if (lbOpenLink.getAttribute("aria-disabled") === "true") { ev.preventDefault(); return; }
+      if (lbTempUrl && lbOpenLink.href === lbTempUrl) lbTabProtected.add(lbTempUrl);
+    });
+    lbDlLink?.addEventListener("click", (ev) => {
+      if (lbDlLink.getAttribute("aria-disabled") === "true") ev.preventDefault();
+    });
+    lbPrevBtn?.addEventListener("click", () => showLbSlide(lbIdx - 1));
+    lbNextBtn?.addEventListener("click", () => showLbSlide(lbIdx + 1));
+    document.addEventListener("keydown", (ev) => {
+      if (!lightbox.open || lightbox.hasAttribute("data-closing") || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      if (ev.key === "ArrowLeft" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx - 1); }
+      else if (ev.key === "ArrowRight" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx + 1); }
+      else if (ev.key === "+" || ev.key === "=") { ev.preventDefault(); if (!lbImg.hidden) zoomLbTo(lbScale * 1.35); }
+      else if (ev.key === "-") { ev.preventDefault(); if (!lbImg.hidden) zoomLbTo(lbScale / 1.35); }
+      else if (ev.key === "0") { ev.preventDefault(); zoomLbTo(1); }
+    });
+    lightbox.addEventListener("wheel", (ev) => {
+      if (lbImg.hidden || lbZoomBtn?.disabled) return;
+      ev.preventDefault();
+      const factor = Math.exp(-ev.deltaY * 0.0022);
+      zoomLbTo(lbScale * factor, ev.clientX, ev.clientY, true);
+    }, { passive: false });
+
+    // Pointer gestures on stage: backdrop light-dismiss, click-to-zoom, 1-finger pan, 2-finger pinch & 1x swipe.
+    const ptrs = new Map();
+    let gesture = null;
+    lbStage.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0 && ev.pointerType === "mouse") return;
+      ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (ptrs.size === 2) {
+        const [a, b] = [...ptrs.values()];
+        gesture = {
+          kind: "pinch", moved: true,
+          dist: Math.hypot(b.x - a.x, b.y - a.y) || 1,
+          scale0: lbScale,
+        };
+        lightbox.classList.add("is-dragging");
+        return;
+      }
+      gesture = {
+        kind: "single", pointerId: ev.pointerId,
+        startX: ev.clientX, startY: ev.clientY,
+        panX0: lbX, panY0: lbY,
+        target: ev.target, moved: false,
+      };
+      if (lbScale > 1.005 && ev.target === lbImg) {
+        try { lbStage.setPointerCapture(ev.pointerId); } catch {}
+      }
+    });
+    lbStage.addEventListener("pointermove", (ev) => {
+      if (!ptrs.has(ev.pointerId)) return;
+      ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (ptrs.size === 2 && gesture?.kind === "pinch" && !lbImg.hidden) {
+        const [a, b] = [...ptrs.values()];
+        const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+        zoomLbTo(gesture.scale0 * (dist / gesture.dist), midX, midY, true);
+        return;
+      }
+      if (!gesture || gesture.kind !== "single" || gesture.pointerId !== ev.pointerId) return;
+      const dx = ev.clientX - gesture.startX, dy = ev.clientY - gesture.startY;
+      if (!gesture.moved && Math.hypot(dx, dy) > 5) {
+        gesture.moved = true;
+        if (lbScale > 1.005) lightbox.classList.add("is-dragging");
+      }
+      if (gesture.moved && lbScale > 1.005) {
+        lbX = gesture.panX0 + dx;
+        lbY = gesture.panY0 + dy;
+        applyLbTransform(true);
+      }
+    });
+    const endPtr = (ev, cancelled = false) => {
+      ptrs.delete(ev.pointerId);
+      if (ptrs.size === 0) lightbox.classList.remove("is-dragging");
+      if (!gesture || cancelled) { if (!ptrs.size) gesture = null; return; }
+      if (gesture.kind === "single" && gesture.pointerId === ev.pointerId) {
+        const g = gesture;
+        gesture = null;
+        const dx = ev.clientX - g.startX, dy = ev.clientY - g.startY;
+        if (!g.moved) {
+          if (g.target === lbImg && !lbImg.hidden) {
+            toggleLbZoom(ev.clientX, ev.clientY);
+          } else if (g.target === lbStage && ev.target === lbStage) {
+            closeLightbox();
+          }
+        } else if (lbScale <= 1.005 && lbItems.length > 1 && Math.abs(dx) > 52 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+          showLbSlide(lbIdx + (dx < 0 ? 1 : -1));
+        }
+      }
+    };
+    lbStage.addEventListener("pointerup", (ev) => endPtr(ev, false));
+    lbStage.addEventListener("pointercancel", (ev) => endPtr(ev, true));
+  }
 
   async function openSandboxedHtmlRemote(path, win) {
     try {
@@ -4153,27 +4595,55 @@
   }
   document.addEventListener("click", (e) => {
     const t = e.target.closest(".thumb[data-img]");
-    if (t) { e.preventDefault(); openFile(t.dataset.img); return; }
+    if (t) {
+      e.preventDefault();
+      const { items, index } = collectGallery(t, { path: t.dataset.img, alt: t.dataset.imgAlt || "" });
+      openLightbox(items, index);
+      return;
+    }
+    const mb = e.target.closest(".md-img-btn[data-img-url]");
+    if (mb) {
+      e.preventDefault();
+      const { items, index } = collectGallery(mb, { url: mb.dataset.imgUrl, alt: mb.dataset.imgAlt || "" });
+      openLightbox(items, index);
+      return;
+    }
     const a = e.target.closest("a.fpath");
-    if (!a) return;
-    const path = a.dataset.path || "";
-    if (HTML_EXT.test(path)) {
-      const ctxMachine = fileContextMachine() || "";
-      const hub = hubOf(ctxMachine);
-      if (!hub && (!window.__collieDemo || window.__collieDemoHtmlUrl?.(path))) {
-        a.href = htmlFileURL(path, ctxMachine);
-        a.target = "_blank";
-        a.rel = "noopener";
+    if (a) {
+      const path = a.dataset.path || "";
+      if (HTML_EXT.test(path)) {
+        const ctxMachine = fileContextMachine() || "";
+        const hub = hubOf(ctxMachine);
+        if (!hub && (!window.__collieDemo || window.__collieDemoHtmlUrl?.(path))) {
+          a.href = htmlFileURL(path, ctxMachine);
+          a.target = "_blank";
+          a.rel = "noopener";
+          return;
+        }
+        e.preventDefault();
+        const win = window.open("", "_blank");
+        if (win) { try { win.opener = null; } catch {} }
+        openSandboxedHtmlRemote(path, win);
         return;
       }
       e.preventDefault();
-      const win = window.open("", "_blank");
-      if (win) { try { win.opener = null; } catch {} }
-      openSandboxedHtmlRemote(path, win);
+      if (IMG_EXT.test(path)) {
+        const { items, index } = collectGallery(a, { path });
+        openLightbox(items, index);
+        return;
+      }
+      openFile(path);
       return;
     }
-    e.preventDefault();
-    openFile(path);
+    const rawImg = e.target.closest(".msg img, .mem-body img, .fv-md img");
+    if (rawImg && !rawImg.closest(".avatar, a[href]")) {
+      const u = rawImg.currentSrc || rawImg.getAttribute("src") || "";
+      if (u) {
+        e.preventDefault();
+        const { items, index } = collectGallery(rawImg, { url: u, alt: rawImg.getAttribute("alt") || "" });
+        openLightbox(items, index);
+      }
+    }
   });
   // Wide screens: a panel to the right of the conversation, which stays
   // usable; its width is dragged and remembered. Narrow ones: full screen.
@@ -4252,6 +4722,17 @@
       let r = s
         .replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${c}</code>`))
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/!\[([^\]\n]*)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, alt, u) => {
+          const rawU = unesc(u), eu = esc(rawU);
+          return keep(`<button type="button" class="md-img-btn" data-img-url="${eu}" data-img-alt="${alt}" aria-label="${alt || "查看大图"}"><img class="md-img" src="${eu}" alt="${alt}" loading="lazy"></button>`);
+        })
+        .replace(/!\[([^\]\n]*)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, alt, p) => {
+          p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
+          try { p = decodeURI(p); } catch {}
+          const ep = esc(p);
+          if (!IMG_EXT.test(p)) return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${alt || ep}</a>`);
+          return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img class="md-img" alt="${alt}"${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`);
+        })
         .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
         .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
@@ -4438,9 +4919,10 @@
   }
   // Images a Collie message points at (a screenshot a worker took) show
   // under it, so you need not open each one.
-  const IMG_PATH = /(?:^|[\s(（`"'：:])((?:~|\/)[^\s`"'()（）<>]*\.(?:png|jpe?g|gif|webp))(?=$|[\s)）`"'，。,;；])/gim;
+  const IMG_PATH = /(?:^|[\s(（`"'：:，、,;；>])((?:~|\/)[^\s`"'()（）<>，、,;；]*\.(?:png|jpe?g|gif|webp|svg))(?=$|[\s)）`"'，。、,;；!?！？])/gim;
   function imagesIn(t) {
-    const ps = [...new Set([...(t || "").matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
+    const clean = String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, " ");
+    const ps = [...new Set([...clean.matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
     return ps.length ? `<span class="thumbs">${ps.map(thumbBtn).join("")}</span>` : "";
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.

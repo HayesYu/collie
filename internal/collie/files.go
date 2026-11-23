@@ -11,15 +11,16 @@ import (
 	"strings"
 )
 
-// readFile lets the web app show a file an agent mentions (a report it
-// wrote, a chart it drew), read-only. Bytes go out as an opaque download so
+// readFile lets the web app show or download a file an agent mentions (a report
+// it wrote, a chart it drew), read-only. Bytes go out as an opaque download so
 // a browser never runs them unless ?as=html is requested for an .html/.htm
 // file, which renders inside a strict opaque-origin CSP sandbox.
 const (
-	fileTextMax    = 1 << 20
-	fileHTMLMax    = 5 << 20
-	fileImageMax   = 20 << 20
-	htmlSandboxCSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+	fileTextMax     = 1 << 20
+	fileHTMLMax     = 5 << 20
+	fileImageMax    = 20 << 20
+	fileDownloadMax = 100 << 20
+	htmlSandboxCSP  = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
 )
 
 func isHTMLPath(p string) bool {
@@ -34,19 +35,47 @@ func setHTMLSandboxHeaders(h http.Header) {
 	h.Set("Cache-Control", "no-store")
 }
 
+func attachmentDisposition(p string) string {
+	name := path.Base(strings.ReplaceAll(strings.TrimSpace(p), "\\", "/"))
+	if name == "" || name == "." || name == "/" {
+		name = "download"
+	}
+	var ascii strings.Builder
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 0x20 && c <= 0x7e && c != '"' && c != '\\' && c != ';' {
+			ascii.WriteByte(c)
+		} else {
+			ascii.WriteByte('_')
+		}
+	}
+	fallback := strings.TrimSpace(ascii.String())
+	if fallback == "" {
+		fallback = "download"
+	}
+	return `attachment; filename="` + fallback + `"; filename*=UTF-8''` + url.PathEscape(name)
+}
+
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
-	rawPath := r.URL.Query().Get("path")
-	as := r.URL.Query().Get("as")
+	q := r.URL.Query()
+	rawPath := q.Get("path")
+	as := q.Get("as")
+	download := q.Get("download") == "1"
 	p := s.expand(rawPath)
-	if as == "html" && (!isHTMLPath(rawPath) || !isHTMLPath(p)) {
+	if !download && as == "html" && (!isHTMLPath(rawPath) || !isHTMLPath(p)) {
 		writeJSON(w, 400, map[string]any{"error": "仅支持直接打开 .html 或 .htm 文件"})
 		return
 	}
 	fi, err := os.Stat(p)
 	switch {
 	case os.IsNotExist(err):
-		if as == "html" && !s.node && s.herdr != nil && s.tryRemoteHTMLFile(w, r, rawPath) {
-			return
+		if !s.node && s.herdr != nil {
+			if download && s.tryRemoteDownloadFile(w, r, rawPath) {
+				return
+			}
+			if !download && as == "html" && s.tryRemoteHTMLFile(w, r, rawPath) {
+				return
+			}
 		}
 		writeJSON(w, 404, map[string]any{"error": "找不到这个文件"})
 		return
@@ -57,12 +86,30 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "这是一个文件夹"})
 		return
 	}
+	if download && fi.Size() > fileDownloadMax {
+		writeJSON(w, 413, map[string]any{"error": "文件超过 100 MB，无法通过网页直接下载"})
+		return
+	}
 	f, err := os.Open(p)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
 	}
 	defer f.Close()
+
+	if download {
+		h := w.Header()
+		h.Set("Content-Type", "application/octet-stream")
+		h.Set("Content-Disposition", attachmentDisposition(p))
+		h.Set("Content-Security-Policy", "sandbox")
+		h.Set("Cache-Control", "no-store")
+		h.Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+		h.Set("X-File-Kind", "download")
+		h.Set("X-File-Size", strconv.FormatInt(fi.Size(), 10))
+		h.Set("X-File-Path", url.PathEscape(s.tilde(p)))
+		io.Copy(w, io.LimitReader(f, fileDownloadMax))
+		return
+	}
 
 	if as == "html" {
 		b, _ := io.ReadAll(io.LimitReader(f, fileHTMLMax))
@@ -102,6 +149,51 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-File-Size", strconv.FormatInt(fi.Size(), 10))
 	h.Set("X-File-Path", url.PathEscape(s.tilde(p)))
 	w.Write(b)
+}
+
+// tryRemoteDownloadFile looks across connected online nodes when a direct
+// ?download=1 link hits the hub without a machine parameter and is not on hub.
+func (s *Server) tryRemoteDownloadFile(w http.ResponseWriter, r *http.Request, rawPath string) bool {
+	for _, m := range s.herdr.Machines() {
+		if m.Local || !m.Online {
+			continue
+		}
+		client, err := s.herdr.Client(m.ID)
+		if err != nil {
+			continue
+		}
+		u := "http://node/api/file?download=1&path=" + url.QueryEscape(rawPath)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			resp.Body.Close()
+			continue
+		}
+		defer resp.Body.Close()
+		h := w.Header()
+		for _, k := range []string{"Content-Type", "Content-Disposition", "Content-Security-Policy", "Cache-Control", "Content-Length", "X-File-Kind", "X-File-Size", "X-File-Path"} {
+			if v := resp.Header.Get(k); v != "" {
+				h.Set(k, v)
+			}
+		}
+		if resp.StatusCode == http.StatusOK {
+			h.Set("Content-Type", "application/octet-stream")
+			if h.Get("Content-Disposition") == "" {
+				h.Set("Content-Disposition", attachmentDisposition(rawPath))
+			}
+			h.Set("Content-Security-Policy", "sandbox")
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, io.LimitReader(resp.Body, fileDownloadMax+4096))
+		return true
+	}
+	return false
 }
 
 // tryRemoteHTMLFile looks across connected online nodes when a direct ?as=html

@@ -193,6 +193,160 @@ func TestReadFileAsHTMLSandboxLimitsAndNodeForwarding(t *testing.T) {
 	}
 }
 
+func TestReadFileDownloadFullUntruncatedAndCrossMachine(t *testing.T) {
+	hubHome := t.TempDir()
+	nodeHome := t.TempDir()
+
+	// 2.4 MiB Markdown report (> fileTextMax 1 MiB): preview truncates, download=1 returns full bytes.
+	bigMD := append([]byte("# Full Report\n\n"), bytes.Repeat([]byte("row-data-0123456789abcdef\n"), 100_000)...)
+	if len(bigMD) <= fileTextMax {
+		t.Fatalf("expected test fixture > %d bytes, got %d", fileTextMax, len(bigMD))
+	}
+	if err := os.WriteFile(filepath.Join(hubHome, "SUMMARY.md"), bigMD, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// UTF-8 filename & binary file containing NUL bytes.
+	utf8Name := "季度复盘报告.md"
+	utf8Body := []byte("# 季度复盘\n完整原文内容\n")
+	if err := os.WriteFile(filepath.Join(hubHome, utf8Name), utf8Body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binBody := []byte{0x89, 'P', 'K', 0x00, 0x01, 0x02, 0xff, 'E', 'N', 'D'}
+	if err := os.WriteFile(filepath.Join(hubHome, "archive.bin"), binBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remote node >1 MiB file & HTML file downloaded as raw attachment.
+	nodeBig := append([]byte("package main\n"), bytes.Repeat([]byte("// remote line padding 0123456789\n"), 40_000)...)
+	if err := os.WriteFile(filepath.Join(nodeHome, "remote_gen.go"), nodeBig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nodeHTML := []byte("<!doctype html><script>alert(1)</script>")
+	if err := os.WriteFile(filepath.Join(nodeHome, "chart.html"), nodeHTML, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	nodeSrv := &Server{home: nodeHome, node: true, web: fstest.MapFS{}}
+	nodeHTTP := httptest.NewServer(nodeSrv.NodeRoutes())
+	defer nodeHTTP.Close()
+	nodeURL, _ := url.Parse(nodeHTTP.URL)
+
+	herdr := newHerdr(filepath.Join(hubHome, "missing.sock"), "hub", hubHome)
+	herdr.attach(&Machine{
+		ID:     "mac",
+		Name:   "mac",
+		Home:   nodeHome,
+		Online: true,
+		client: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				cp := req.Clone(req.Context())
+				cp.URL.Scheme = nodeURL.Scheme
+				cp.URL.Host = nodeURL.Host
+				cp.RequestURI = ""
+				return http.DefaultTransport.RoundTrip(cp)
+			}),
+		},
+	})
+
+	hubSrv := &Server{
+		herdr: herdr,
+		token: "secret-tok",
+		home:  hubHome,
+		web:   fstest.MapFS{"index.html": {Data: []byte("ok")}, "app.js": {Data: []byte("")}, "app.css": {Data: []byte("")}},
+	}
+	handler := hubSrv.Routes()
+
+	get := func(target string, extraHeaders map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		if _, hasAuth := extraHeaders["Authorization"]; !hasAuth {
+			req.AddCookie(&http.Cookie{Name: cookieName, Value: "secret-tok"})
+		}
+		for k, v := range extraHeaders {
+			if v != "" {
+				req.Header.Set(k, v)
+			}
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// 1. Preview truncates >1 MiB text, while download=1 streams the complete file.
+	prev := get("/api/file?path=~/SUMMARY.md", nil)
+	if prev.Code != 200 || prev.Body.Len() != fileTextMax {
+		t.Fatalf("preview SUMMARY.md status=%d len=%d, want 200 len=%d", prev.Code, prev.Body.Len(), fileTextMax)
+	}
+	dl := get("/api/file?path=~/SUMMARY.md&download=1", nil)
+	if dl.Code != 200 {
+		t.Fatalf("download SUMMARY.md status=%d: %s", dl.Code, dl.Body.String())
+	}
+	if !bytes.Equal(dl.Body.Bytes(), bigMD) {
+		t.Fatalf("download SUMMARY.md len=%d, want exact %d bytes", dl.Body.Len(), len(bigMD))
+	}
+	if cd := dl.Header().Get("Content-Disposition"); !strings.Contains(cd, `filename="SUMMARY.md"`) {
+		t.Fatalf("Content-Disposition = %q, want SUMMARY.md", cd)
+	}
+	if csp := dl.Header().Get("Content-Security-Policy"); csp != "sandbox" {
+		t.Fatalf("CSP = %q, want sandbox", csp)
+	}
+
+	// 2. UTF-8 filename & binary file download in full.
+	dlUTF8 := get("/api/file?path="+url.QueryEscape("~/"+utf8Name)+"&download=1", nil)
+	if dlUTF8.Code != 200 || !bytes.Equal(dlUTF8.Body.Bytes(), utf8Body) {
+		t.Fatalf("UTF-8 download failed: code=%d len=%d", dlUTF8.Code, dlUTF8.Body.Len())
+	}
+	if cd := dlUTF8.Header().Get("Content-Disposition"); !strings.Contains(cd, "filename*=UTF-8''"+url.PathEscape(utf8Name)) {
+		t.Fatalf("UTF-8 Content-Disposition = %q", cd)
+	}
+
+	prevBin := get("/api/file?path=~/archive.bin", nil)
+	if prevBin.Header().Get("X-File-Kind") != "binary" || prevBin.Body.Len() != 0 {
+		t.Fatalf("preview archive.bin kind=%q len=%d, want binary len=0", prevBin.Header().Get("X-File-Kind"), prevBin.Body.Len())
+	}
+	dlBin := get("/api/file?path=~/archive.bin&download=1", nil)
+	if dlBin.Code != 200 || !bytes.Equal(dlBin.Body.Bytes(), binBody) {
+		t.Fatalf("download archive.bin code=%d body=%v, want full binary", dlBin.Code, dlBin.Body.Bytes())
+	}
+
+	// 3. Cross-machine >1 MiB download (explicit machine=mac and implicit fallback) + HTML attachment safety.
+	for _, q := range []string{
+		"/api/file?path=~/remote_gen.go&machine=mac&download=1",
+		"/api/file?path=~/remote_gen.go&download=1",
+	} {
+		rec := get(q, nil)
+		if rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), nodeBig) {
+			t.Fatalf("remote download %s code=%d len=%d, want %d", q, rec.Code, rec.Body.Len(), len(nodeBig))
+		}
+		if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, `filename="remote_gen.go"`) {
+			t.Fatalf("remote %s Content-Disposition = %q", q, cd)
+		}
+	}
+	dlHTML := get("/api/file?path=~/chart.html&machine=mac&download=1&as=html", nil)
+	if dlHTML.Code != 200 || dlHTML.Header().Get("Content-Type") != "application/octet-stream" || !strings.HasPrefix(dlHTML.Header().Get("Content-Disposition"), "attachment;") {
+		t.Fatalf("download=1 on .html must stay attachment, got ct=%q cd=%q", dlHTML.Header().Get("Content-Type"), dlHTML.Header().Get("Content-Disposition"))
+	}
+
+	// 4. Multi-Hub cross-origin Bearer request exposes Content-Disposition and streams full bytes.
+	corsDL := get("/api/file?path=~/SUMMARY.md&download=1", map[string]string{
+		"Authorization": "Bearer secret-tok",
+		"Origin":        "http://other-hub.local:7788",
+	})
+	if corsDL.Code != 200 || corsDL.Body.Len() != len(bigMD) {
+		t.Fatalf("multi-hub Bearer download code=%d len=%d", corsDL.Code, corsDL.Body.Len())
+	}
+	if exp := corsDL.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(exp, "Content-Disposition") {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want Content-Disposition", exp)
+	}
+}
+
+func TestAttachmentDispositionSanitizesQuotesAndCRLF(t *testing.T) {
+	got := attachmentDisposition("/tmp/bad\"name\r\n;x.txt")
+	if strings.ContainsAny(got, "\r\n") || strings.Count(got, `"`) != 2 {
+		t.Fatalf("unsafe Content-Disposition = %q", got)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

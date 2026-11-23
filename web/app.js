@@ -503,7 +503,7 @@
     $("#conn").className = "conn " + (online ? "on" : "off");
     $("#herdr-status").textContent = !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
     if (!state.ok && state.error) $("#herdr-status").title = state.error;
-    document.title = blocked.length ? `(${blocked.length}) Collie` : "Collie";
+    if (view !== "file") document.title = blocked.length ? `(${blocked.length}) Collie` : "Collie";
 
     const r = sup.router || {};
     const active = sup.workers.filter((w) => !w.ended);
@@ -553,6 +553,7 @@
     if (v === "auto") return "auto:" + autoTab;
     if (v === "devices") return "devices";
     if (v === "prefs") return "prefs";
+    if (v === "file") return "file:" + (id || "");
     if (v === "ext") return "ext:" + (id || "");
     if (v === "pane") return "pane:" + (id || "") + ":" + ($("#viewer")?.dataset.mode || curMode());
     return "";
@@ -562,6 +563,7 @@
     if (v === "auto") return $("#auto-body");
     if (v === "devices") return $("#devices-body");
     if (v === "prefs") return $("#prefs-body");
+    if (v === "file") return $("#rv-scroller");
     if (v === "ext") return $("#x-thread")?.parentElement || null;
     if (v === "pane") {
       const m = $("#viewer")?.dataset.mode || curMode();
@@ -699,6 +701,7 @@
     if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
     else if (h.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(h.slice(4)); }
     else if (h.startsWith("#/h/")) { next = "ext"; id = "h:" + decodeURIComponent(h.slice(4)); }
+    else if (h === "#/file" || h.startsWith("#/file?")) { next = "file"; id = h.slice(6); }
     else if (h === "#/collie") next = "collie";
     else if (h === "#/auto") next = "auto";
     else if (h === "#/devices") next = "devices";
@@ -716,13 +719,13 @@
       if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
       else next = h.slice(2);
     }
-    if (next) store.set("last", h);
+    if (next && next !== "file") store.set("last", h);
     if (next === view && id === (next === "ext" ? extCur : current)) return;
     // Snapshot the departing view right before its DOM is hidden.
     if (prevView && performance.now() >= programmaticScrollUntil) {
       captureViewScroll(prevView, prevId, prevIdx);
     }
-    if ($("#app").classList.contains("has-file") && matchMedia("(max-width: 1000px)").matches) closeFilePane();
+    if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1000px)").matches)) closeFilePane();
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (view === "auto" && next !== "auto") clearInterval(autoTimer);
@@ -735,8 +738,9 @@
     const nextKey = routeKeyFor(next, id);
     const byIdx = wasExistingIdx ? scrollByIdx.get(navCur) : null;
     const saved = (byIdx && byIdx.routeKey === nextKey ? byIdx : null)
-      || (next === "collie" || next === "auto" || next === "devices" || next === "prefs" ? scrollByRoute.get(nextKey) : null);
+      || (next === "collie" || next === "auto" || next === "devices" || next === "prefs" || next === "file" ? scrollByRoute.get(nextKey) : null);
 
+    document.body.classList.toggle("reading-file", next === "file");
     document.body.classList.toggle("show-main", !!next);
     $("#v-collie").hidden = next !== "collie";
     $("#v-auto").hidden = next !== "auto";
@@ -744,6 +748,7 @@
     $("#v-prefs").hidden = next !== "prefs";
     $("#v-ext").hidden = next !== "ext";
     $("#detail").hidden = next !== "pane";
+    $("#v-file").hidden = next !== "file";
     renderSide();
     if (next === "collie") {
       if (saved && !saved.atBottom) renderSuper({ force: true, restore: saved });
@@ -754,6 +759,7 @@
     if (next === "auto") openAuto(saved);
     if (next === "devices") openDevices(saved);
     if (next === "prefs") renderPrefs(saved);
+    if (next === "file") openWideFile(id, saved);
     if (next === "ext") openExt(id, saved);
     if (next === "pane") {
       $("#gone").hidden = true;
@@ -2658,6 +2664,9 @@
     dispatchEvent(new Event("collie:theme"));
   }
   darkMQ.addEventListener("change", applyLook);
+  addEventListener("storage", (ev) => {
+    if (!ev.key || ev.key === "collie.theme" || ev.key === "collie.text") applyLook();
+  });
   applyLook();
 
   function renderPrefs(restore = null) {
@@ -2905,10 +2914,7 @@
 
   // Clipboard API needs a secure context; plain-http LAN addresses fall back.
   async function copy(text) {
-    if (navigator.clipboard && isSecureContext) return navigator.clipboard.writeText(text);
-    const t = document.createElement("textarea");
-    t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
-    document.body.append(t); t.select(); document.execCommand("copy"); t.remove();
+    if (!await copyText(text)) throw new Error("复制失败");
   }
 
   // ───────────────────────────── one agent: header
@@ -3573,7 +3579,7 @@
 
   // A file path in a message: ~/… or /…, ending in a name with an extension.
   // It runs on escaped text, so it never meets a raw quote or tag.
-  const FILE_RE = /(^|[\s(（：，、；>;])((?:~|\/)[\w.\-+@%~\/]*\/[\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/])/g;
+  const FILE_RE = /(^|[\s`(（：，、；>;])((?:~|\/)[\w.\-+@%~\/]*\/[\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/])/g;
 
   // ───────────────────────────── offline syntax highlighter
   // Pure local single-pass lexical scanner: zero external dependencies, O(N)
@@ -3952,19 +3958,133 @@
     for (const m of tries) { const f = await fetchFile(path, m); if (f) return f; }
     return null;
   }
-  let fileUrl = "", fileSeq = 0, fileRawText = "";
-  function resetFileHead(langLabel = "", copyable = false) {
-    const lEl = $("#fv-lang"), cWrap = $("#fv-copy-wrap"), cBtn = $("#fv-copy");
+  let fileUrl = "", wideFileUrl = "", fileSeq = 0, wideSeq = 0;
+  let fvCur = null, rvCur = null;
+  const FILE_DL_MAX = 100 * (1 << 20), FILE_COPY_MAX = 20 * (1 << 20);
+  const wideFileHash = (path, machine = "") => {
+    const q = new URLSearchParams({ path });
+    if (machine) q.set("machine", machine);
+    return "#/file?" + q.toString();
+  };
+  const baseFileName = (raw) => {
+    const s = String(raw || "").split(/[?#]/)[0].replace(/\/+$/, "");
+    const n = s.split("/").pop() || "";
+    try { return decodeURIComponent(n) || "download"; } catch { return n || "download"; }
+  };
+  function triggerBlobDownload(blob, fileName) {
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = u;
+    a.download = fileName;
+    a.style.display = "none";
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 60000);
+  }
+  async function downloadCurFile(cur) {
+    if (!cur?.reqPath) return;
+    if (cur.size > FILE_DL_MAX) {
+      toast("文件超过 100 MB，无法通过网页直接下载", "attn");
+      return;
+    }
+    const fileName = baseFileName(cur.path || cur.reqPath);
+    const machine = cur.machine || "";
+    const q = `/api/file?path=${encodeURIComponent(cur.reqPath)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&download=1`;
+    if (window.__collieDemo && !cur.truncated && cur.blob) {
+      triggerBlobDownload(cur.blob, fileName);
+      return;
+    }
+    const r = routeReq(q);
+    if (window.__collieDemo || r.hub) {
+      try {
+        const res = await fetch(r.url, {
+          headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {},
+          credentials: r.hub ? "omit" : "same-origin",
+        });
+        if (!res.ok) {
+          let e = {};
+          try { e = await res.json(); } catch {}
+          throw new Error(e.error || "下载失败");
+        }
+        triggerBlobDownload(await res.blob(), fileName);
+      } catch (err) {
+        toast(err.message || "下载失败", "attn");
+      }
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = q;
+    a.download = fileName;
+    a.style.display = "none";
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+  async function fetchFullTextForCopy(cur) {
+    const q = `/api/file?path=${encodeURIComponent(cur.reqPath)}${cur.machine ? "&machine=" + encodeURIComponent(cur.machine) : ""}&download=1`;
+    const r = routeReq(q);
+    const res = await fetch(r.url, {
+      headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {},
+      credentials: r.hub ? "omit" : "same-origin",
+    });
+    if (!res.ok) {
+      let e = {};
+      try { e = await res.json(); } catch {}
+      throw new Error(e.error || "拉取完整原文失败");
+    }
+    const full = await res.text();
+    cur.rawText = full;
+    cur.truncated = false;
+    return full;
+  }
+  function syncFileBar(prefix, { langLabel = "", copyable = false, copyTitle = "复制全文", downloadable = false, wideHref = "" }) {
+    const lEl = $("#" + prefix + "-lang"), cWrap = $("#" + prefix + "-copy-wrap"), cBtn = $("#" + prefix + "-copy");
+    const dlBtn = $("#" + prefix + "-dl"), wideBtn = prefix === "fv" ? $("#fv-wide") : null;
     if (lEl) { lEl.hidden = !langLabel; lEl.textContent = langLabel; }
+    if (dlBtn) dlBtn.hidden = !downloadable;
     if (cWrap) cWrap.hidden = !copyable;
-    if (cBtn) { cBtn.removeAttribute("data-copied"); cBtn.removeAttribute("data-failed"); if (cBtn.nextElementSibling) cBtn.nextElementSibling.textContent = ""; }
+    if (cBtn) {
+      cBtn.title = copyTitle;
+      cBtn.setAttribute("aria-label", copyTitle);
+      cBtn.removeAttribute("data-copied");
+      cBtn.removeAttribute("data-failed");
+      if (cBtn.nextElementSibling) cBtn.nextElementSibling.textContent = "";
+    }
+    if (wideBtn) {
+      wideBtn.hidden = !wideHref;
+      if (wideHref) wideBtn.href = wideHref;
+    }
+  }
+  function renderCodeBody(body, path, text, cut, srcId, wrapCard = false) {
+    const lang = detectCodeLang(path, true);
+    const norm = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
+    let lines = 1;
+    for (let i = 0; i < norm.length && lines <= HL_MAX_LINES + 1; i++) if (norm.charCodeAt(i) === 10) lines++;
+    let inner = "";
+    if (lang && norm.length <= HL_MAX_BYTES && lines <= HL_MAX_LINES) {
+      const nums = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
+      body.classList.add("is-code");
+      inner = `<div class="fv-code"><div class="fv-ln" aria-hidden="true">${nums}</div><pre class="fv-pre"><code id="${srcId}">${highlightCode(norm, lang.id)}</code></pre></div>`;
+    } else if (lang) {
+      body.classList.add("is-code");
+      inner = `<pre class="fv-pre fv-large" id="${srcId}">${esc(norm)}</pre>`;
+    } else if (wrapCard) {
+      body.classList.add("is-code");
+      inner = `<pre class="fv-pre fv-large" id="${srcId}">${esc(text)}</pre>`;
+    } else {
+      inner = `<pre class="fv-pre" id="${srcId}">${esc(text)}</pre>`;
+    }
+    body.innerHTML = wrapCard ? `<div class="rv-code-card">${inner}</div>${cut}` : `${inner}${cut}`;
+    return lang;
   }
   async function openFile(path) {
     if (IMG_EXT.test(path)) { openLightbox([{ path }], 0); return; }
     const body = $("#fv-body"), seq = ++fileSeq;
-    fileRawText = "";
+    fvCur = null;
     body.classList.remove("is-code");
-    resetFileHead("", false);
+    const initMachine = fileContextMachine() || "";
+    syncFileBar("fv", { wideHref: HTML_EXT.test(path) ? "" : wideFileHash(path, initMachine) });
     $("#fv-name").textContent = path.split("/").pop();
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
@@ -3973,47 +4093,113 @@
     let f = null;
     try {
       f = await findFile(path, tries);
-    } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+    } catch (e) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
     if (seq !== fileSeq) return;
-    if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
-    const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
+    if (!f) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+    const where = (state.machines || []).length > 1 || f.machine ? machineName(f.machine) + " · " : "";
     $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
     if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
+    const canDl = f.size <= FILE_DL_MAX;
+    const wHref = HTML_EXT.test(path) ? "" : wideFileHash(path, f.machine || "");
+    fvCur = { reqPath: path, path: f.path, machine: f.machine || "", kind: f.kind, size: f.size, blob: f.blob, rawText: "", truncated: false };
     if (f.kind === "image") {
+      syncFileBar("fv", { downloadable: canDl, wideHref: wHref });
       const ext = path.split(".").pop().toLowerCase();
       fileUrl = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[ext] || "image/" + ext }));
       body.innerHTML = `<div class="fv-img"><img src="${fileUrl}" alt=""></div>`;
       return;
     }
-    if (f.kind !== "text") { body.innerHTML = `<p class="fv-note">这个文件不是文本${f.size > 20 << 20 ? "，也太大了" : ""}，没法在这里预览。</p>`; return; }
+    if (f.kind !== "text") {
+      syncFileBar("fv", { downloadable: canDl });
+      body.innerHTML = `<p class="fv-note">这个文件不是文本${f.size > 20 << 20 ? "，也太大了" : ""}，没法在这里预览${canDl ? "（可点右上角下载原件）" : ""}。</p>`;
+      return;
+    }
     const text = await f.blob.text();
     if (seq !== fileSeq) return;
-    fileRawText = text;
-    const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
+    const truncated = f.size > f.blob.size;
+    fvCur.rawText = text;
+    fvCur.truncated = truncated;
+    const cut = truncated ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只预览前 1 MB（点右上角下载可获取完整原件）。</p>` : "";
     if (MD_EXT.test(path)) {
-      resetFileHead("Markdown", true);
-      body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${mdRender(text)}</div>${cut}`;
+      syncFileBar("fv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl, wideHref: wHref });
+      body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
       body.scrollTop = body.scrollLeft = 0;
       return;
     }
-    const lang = detectCodeLang(path, true);
-    resetFileHead(lang ? lang.label : "", true);
-    const norm = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
-    let lines = 1;
-    for (let i = 0; i < norm.length && lines <= HL_MAX_LINES + 1; i++) if (norm.charCodeAt(i) === 10) lines++;
-    if (lang && norm.length <= HL_MAX_BYTES && lines <= HL_MAX_LINES) {
-      const nums = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
-      body.classList.add("is-code");
-      body.innerHTML = `<div class="fv-code"><div class="fv-ln" aria-hidden="true">${nums}</div><pre class="fv-pre"><code id="fv-code-src">${highlightCode(norm, lang.id)}</code></pre></div>${cut}`;
-    } else if (lang) {
-      // Graceful fallback for very large source files: 4-space tabs, zero main-thread lag.
-      body.classList.add("is-code");
-      body.innerHTML = `<pre class="fv-pre fv-large" id="fv-code-src">${esc(norm)}</pre>${cut}`;
-    } else {
-      body.innerHTML = `<pre class="fv-pre" id="fv-code-src">${esc(text)}</pre>${cut}`;
-    }
+    const lang = renderCodeBody(body, path, text, cut, "fv-code-src", false);
+    syncFileBar("fv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl, wideHref: wHref });
     body.scrollTop = body.scrollLeft = 0;
   }
+  async function openWideFile(rawQuery, restore = null) {
+    const q = new URLSearchParams(String(rawQuery || "").replace(/^\?/, ""));
+    const path = (q.get("path") || "").trim();
+    const machineHint = (q.get("machine") || "").trim();
+    const body = $("#rv-body"), sc = $("#rv-scroller"), seq = ++wideSeq;
+    rvCur = null;
+    body.classList.remove("is-code");
+    syncFileBar("rv", {});
+    if (!path) {
+      $("#rv-name").textContent = "文件阅读";
+      $("#rv-path").textContent = "";
+      document.title = "文件阅读 · Collie";
+      body.innerHTML = `<p class="fv-note muted">缺少文件路径参数。</p>`;
+      return;
+    }
+    const name = path.split("/").pop() || path;
+    $("#rv-name").textContent = name;
+    $("#rv-path").textContent = (machineHint ? machineName(machineHint) + " · " : "") + path;
+    document.title = `${name} · Collie`;
+    body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
+    const tries = [...new Set([machineHint, ...fileTries()])];
+    let f = null;
+    try {
+      f = await findFile(path, tries);
+    } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+    if (seq !== wideSeq || view !== "file") return;
+    if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+    const where = (state.machines || []).length > 1 || f.machine ? machineName(f.machine) + " · " : "";
+    $("#rv-path").textContent = where + f.path + " · " + fmtSize(f.size);
+    if (wideFileUrl) URL.revokeObjectURL(wideFileUrl), wideFileUrl = "";
+    const canDl = f.size <= FILE_DL_MAX;
+    rvCur = { reqPath: path, path: f.path, machine: f.machine || "", kind: f.kind, size: f.size, blob: f.blob, rawText: "", truncated: false };
+    if (f.kind === "image") {
+      syncFileBar("rv", { downloadable: canDl });
+      const ext = path.split(".").pop().toLowerCase();
+      wideFileUrl = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[ext] || "image/" + ext }));
+      body.innerHTML = `<div class="rv-img"><img src="${wideFileUrl}" alt="${esc(name)}" data-wide-img="${esc(path)}"></div>`;
+      if (restore) restoreSimpleScroll(sc, restore); else sc.scrollTop = 0;
+      return;
+    }
+    if (f.kind !== "text") {
+      syncFileBar("rv", { downloadable: canDl });
+      body.innerHTML = `<p class="fv-note">这个文件不是文本${f.size > 20 << 20 ? "，也太大了" : ""}，没法在这里预览${canDl ? "（可点右上角下载原件）" : ""}。</p>`;
+      return;
+    }
+    const text = await f.blob.text();
+    if (seq !== wideSeq || view !== "file") return;
+    const truncated = f.size > f.blob.size;
+    rvCur.rawText = text;
+    rvCur.truncated = truncated;
+    const cut = truncated ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB（点右上角下载可获取完整原件）。</p>` : "";
+    if (MD_EXT.test(path)) {
+      syncFileBar("rv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl });
+      body.innerHTML = `<article class="msg assistant rv-md" id="rv-code-src">${md(text)}</article>${cut}`;
+    } else {
+      const lang = renderCodeBody(body, path, text, cut, "rv-code-src", true);
+      syncFileBar("rv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl });
+    }
+    if (restore) restoreSimpleScroll(sc, restore);
+    else { markProgrammaticScroll(); sc.scrollTop = sc.scrollLeft = 0; }
+  }
+  $("#fv-dl")?.addEventListener("click", () => downloadCurFile(fvCur));
+  $("#rv-dl")?.addEventListener("click", () => downloadCurFile(rvCur));
+  $("#rv-home")?.addEventListener("click", (ev) => {
+    if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    if (navCur > 0) {
+      ev.preventDefault();
+      goBack();
+    }
+  });
   // Images a message carries ("[image:~/.collie/images/….png]", saved from the
   // agent's transcript on its computer) show as thumbnails; tap for the lightbox.
   const IMG_TOKEN = /\[image:(~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpe?g|gif|webp|svg))\]\n?/gi;
@@ -4052,14 +4238,16 @@
       <button type="button" data-copy="${esc(e.id)}" title="复制" aria-label="复制">${ICON_COPY}</button>
       ${pinActBtn(e.id, pinned)}</div>` : "";
   async function copyText(t) {
-    try { await navigator.clipboard.writeText(t); return true; } catch {}
-    // http pages have no clipboard API: the old way still works there
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(t); return true; } catch {}
+    }
+    // Plain-HTTP LAN addresses have no Async Clipboard API: synchronous textarea fallback.
     const ta = Object.assign(document.createElement("textarea"), { value: t });
-    ta.style.cssText = "position:fixed;opacity:0";
-    document.body.append(ta); ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    return ok;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;inset-block-start:0;opacity:0";
+    document.body.append(ta);
+    ta.select();
+    try { return document.execCommand("copy"); } catch { return false; } finally { ta.remove(); }
   }
   const copyTimers = new WeakMap();
   let lastCopyMsg = "";
@@ -4079,10 +4267,33 @@
       button.removeAttribute("data-copied");
       button.removeAttribute("data-failed");
       if (tip) tip.textContent = "";
-    }, 1800));
+    }, 1500));
   }
   async function invokeCopy(button, target) {
-    const text = target?.id === "fv-code-src" && fileRawText ? fileRawText : (target?.textContent || "");
+    const cur = target?.id === "fv-code-src" ? fvCur : target?.id === "rv-code-src" ? rvCur : null;
+    if (cur) {
+      if (cur.truncated) {
+        if (cur.size > FILE_COPY_MAX) {
+          reportCopy(button, false);
+          toast("文件超过 20 MB，请点下载按钮获取完整原件", "attn");
+          return;
+        }
+        try {
+          const full = await fetchFullTextForCopy(cur);
+          const ok = await copyText(full);
+          reportCopy(button, ok);
+          if (!ok) toast("完整全文已加载，再点一次即可复制");
+        } catch (err) {
+          reportCopy(button, false);
+          toast(err.message || "复制失败", "attn");
+        }
+        return;
+      }
+      if (!cur.rawText) return;
+      reportCopy(button, await copyText(cur.rawText));
+      return;
+    }
+    const text = target?.textContent || "";
     if (!text) return;
     reportCopy(button, await copyText(text));
   }
@@ -4260,7 +4471,7 @@
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
-    const scope = triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
     const seen = new Set(), items = [];
     const add = (it) => {
@@ -4580,7 +4791,7 @@
         if (frame) frame.srcdoc = htmlText;
         return;
       }
-      resetFileHead("HTML", false);
+      syncFileBar("fv", { langLabel: "HTML" });
       $("#fv-name").textContent = path.split("/").pop();
       $("#fv-path").textContent = path;
       const body = $("#fv-body");
@@ -4612,7 +4823,7 @@
     if (a) {
       const path = a.dataset.path || "";
       if (HTML_EXT.test(path)) {
-        const ctxMachine = fileContextMachine() || "";
+        const ctxMachine = (view === "file" ? rvCur?.machine : fileContextMachine()) || "";
         const hub = hubOf(ctxMachine);
         if (!hub && (!window.__collieDemo || window.__collieDemoHtmlUrl?.(path))) {
           a.href = htmlFileURL(path, ctxMachine);
@@ -4632,10 +4843,20 @@
         openLightbox(items, index);
         return;
       }
+      if (view === "file") {
+        location.hash = wideFileHash(path, rvCur?.machine || "");
+        return;
+      }
       openFile(path);
       return;
     }
-    const rawImg = e.target.closest(".msg img, .mem-body img, .fv-md img");
+    const wideImg = e.target.closest(".rv-img img[data-wide-img]");
+    if (wideImg) {
+      e.preventDefault();
+      openLightbox([{ path: wideImg.dataset.wideImg, alt: wideImg.getAttribute("alt") || "" }], 0);
+      return;
+    }
+    const rawImg = e.target.closest(".msg img, .mem-body img, .fv-md img, .rv-md img");
     if (rawImg && !rawImg.closest(".avatar, a[href]")) {
       const u = rawImg.currentSrc || rawImg.getAttribute("src") || "";
       if (u) {
@@ -4707,6 +4928,28 @@
     const s = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return s.length > 42 ? s.slice(0, 40) + "…" : s;
   };
+  function parseInlineCodePath(raw) {
+    if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return "";
+    const base = raw.replace(/(?:#L\d+(?:-L?\d+)?|:\d+(?:[-:]\d+)?)$/i, "");
+    if (!/^(?:~\/(?:[\w.\-+@%~\u4e00-\u9fff]+\/)*|\/(?:[\w.\-+@%~\u4e00-\u9fff]+\/)+)[\w.\-+@%~\u4e00-\u9fff]*[A-Za-z0-9_\u4e00-\u9fff][\w.\-+@%~\u4e00-\u9fff]*\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(base)) {
+      return "";
+    }
+    const segs = (base.startsWith("~/") ? base.slice(2) : base.slice(1)).split("/");
+    if (segs.some((seg) => !seg || seg === "." || /^\.{2,}$/.test(seg))) return "";
+    return base;
+  }
+  function isPureHttpUrl(raw) {
+    if (!/^https?:\/\/[^\x00-\x20<>"'`]+$/i.test(raw)) return false;
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      const h = u.hostname;
+      if (!h || h.startsWith(".") || h.endsWith(".")) return false;
+      return h === "localhost" || h.includes(".") || h.startsWith("[") || Boolean(u.port);
+    } catch {
+      return false;
+    }
+  }
   function mdRender(src) {
     const blocks = [];
     let text = String(src || "").replace(/[\u0000\u0001]/g, "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, info, code) => {
@@ -4720,7 +4963,19 @@
       const stash = [];
       const keep = (h) => `\u0001${stash.push(h) - 1}\u0001`;
       let r = s
-        .replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${c}</code>`))
+        .replace(/`([^`\n]+)`/g, (_, c) => {
+          const raw = unesc(c).trim();
+          const cleanP = parseInlineCodePath(raw);
+          if (cleanP) {
+            const ep = esc(cleanP);
+            return keep(`<a ${fileLinkAttrs(cleanP, ep, "打开这个文件")}><code class="code-link">${c}</code></a>`);
+          }
+          if (isPureHttpUrl(raw)) {
+            const eu = esc(raw);
+            return keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
+          }
+          return keep(`<code>${c}</code>`);
+        })
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
         .replace(/!\[([^\]\n]*)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, alt, u) => {
           const rawU = unesc(u), eu = esc(rawU);
@@ -4791,7 +5046,7 @@
           li++;
         }
         li--;
-        out.push(`<div class="md-table"><table><thead><tr>${head.map((c, k) => td("th", c, k)).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
+        out.push(`<div class="md-table" tabindex="0" role="region" aria-label="数据表格"><table><thead><tr>${head.map((c, k) => td("th", c, k)).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
         continue;
       }
       if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }

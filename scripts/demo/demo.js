@@ -12,7 +12,7 @@
   // ───────────────────────────── the scene
   const machines = [
     { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.40", agents: ["claude", "codex"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.41", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -55,7 +55,7 @@
     entry("collie", "顺便问一下，`shop-api/migrations` 整理完了（41 → 33 个文件），那 3 个从没在生产跑过的旧回滚脚本怎么处理？", { at: ago(6.5), options: ["移到 archive 留档", "直接删掉"] }),
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
     entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n顺带附上首页明暗主题验收宽截图与架构图：~/code/shop-web/docs/preview-dark.png 、~/code/shop-web/docs/preview-light.png 、~/code/shop-web/docs/architecture.svg\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
-    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 ~/code/shop-api/internal/orders/list.go 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：~/code/shop-api/bench-pagination.html\n\n顺带扫到一处历史逻辑：已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), check: true }),
+    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 `~/code/shop-api/internal/orders/list.go:362-385` 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：`~/code/shop-api/bench-pagination.html`，全接口压测与索引复盘长报告已整理到 `~/code/shop-api/docs/perf-audit-v1.4.md`（含 8 列宽表，支持顶栏下载、复制原文或新标签宽屏阅读），压测看板见 `https://metrics.example.com/shop-api/run-1020`，暗色首屏基准图见 `~/code/shop-web/docs/preview-dark.png`。\n\n另外冷备归档路径 `hdfs://cluster-east/warehouse/shop_orders/dt=2026-11-20`、`/api/orders` 路由签名与本地复现命令 `go test -count=1 ./...` 均保持不变；顺带扫到已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), check: true }),
   ];
   const pinnedIds = [entries[1].id];
   const pendingSummary = (t) => String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")
@@ -333,6 +333,40 @@
   }
 
   const changelog = "# v1.4\n\n## 需要注意\n\n- **配置项改名**：`cart.ttl` 改为 `cart.expire_after`，旧名字还能用，下个版本移除。\n- **Node 22 起步**：构建和运行都需要 Node 22 以上。\n\n## 改动\n\n- 订单列表支持按状态筛选\n- 结算页显示预计送达时间\n- 修复优惠券在购物车为空时报错\n- 商品图片改为懒加载，首屏快了约 30%\n- 搜索框支持拼音\n- 依赖升级：react 19.2、vite 7\n";
+  const perfAuditMd = `# shop-api v1.4 核心接口压测与分页稳定性复盘
+
+> 测试环境：devbox（8 vCPU / 32 GB · PostgreSQL 16.4），压测基线对比 \`v1.3.8\` 与 \`v1.4.0-rc2\`（1020 并发持续 15 分钟）。
+
+## 1. 全接口延迟与吞吐对比（宽表）
+
+| 接口路由 | 压测场景 | v1.3 P50 | v1.3 P99 | v1.4 P50 | v1.4 P99 | 吞吐提升 | 关键变更与代码位置 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| \`GET /api/orders\` | 同秒多单翻页 + 状态过滤 | 18.4 ms | 146.2 ms | 7.9 ms | 28.5 ms | +118% | 复合索引 \`(user_id, created_at DESC, id DESC)\` · \`~/code/shop-api/internal/orders/list.go\` |
+| \`POST /api/coupons/check\` | 空购物车 + 历史券码校验 | 11.2 ms | 84.0 ms | 6.1 ms | 19.4 ms | +64% | 补齐 \`SCHEMA_AND_ID\` 默认值兜底，消除回表重试 |
+| \`GET /api/catalog/home\` | 首页首屏商品流（含缩略图） | 24.6 ms | 162.8 ms | 12.0 ms | 49.1 ms | +92% | 折叠区懒加载 + Redis 热键预热 · \`~/code/shop-web/CHANGELOG.md\` |
+| \`POST /api/checkout/quote\` | 运费与预计送达时间试算 | 15.8 ms | 112.5 ms | 9.3 ms | 34.7 ms | +57% | 配置切换至 \`cart.expire_after\`，合并区域费率批量查询 |
+| \`GET /api/orders/export\` | 月度账单流式导出（>5 万行） | 42.0 ms | 310.0 ms | 29.5 ms | 118.0 ms | +41% | 游标分页流式写出，冷备落盘 \`hdfs://cluster-east/warehouse/shop_orders/dt=2026-11-20\` |
+
+## 2. 复合索引与查询计划
+
+将原来的单列时间索引替换为覆盖排序键的复合索引后，消除了同秒记录的 \`Incremental Sort\` 抖动：
+
+\`\`\`sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_user_created_id
+\tON orders (user_id, created_at DESC, id DESC)
+\tINCLUDE (status, total_cents);
+\`\`\`
+
+整体架构与读写分离链路示意：
+
+![读写链路架构图](~/code/shop-web/docs/architecture.svg)
+
+## 3. 回归验证清单
+
+1. 连续 200 轮并发翻页回归：\`go test -run TestOrdersPagination -count=200 ./internal/orders\` 零失败。
+2. 线上监控看板：\`https://metrics.example.com/shop-api/run-1020\`
+3. 压测交互式分位曲线：\`~/code/shop-api/bench-pagination.html\`
+`;
   const ordersListGo = `package orders
 
 import (
@@ -467,11 +501,12 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
-    if (p === "/api/version") return json({ version: "v0.2.40", latest: "v0.2.40", outdated: [] });
+    if (p === "/api/version") return json({ version: "v0.2.41", latest: "v0.2.41", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
     if (p === "/api/file") {
-      const fp = q.get("path") || "", mach = q.get("machine") || "";
+      const fp = q.get("path") || "", mach = q.get("machine") || "", dl = q.get("download") === "1";
+      const dlHead = (name) => dl ? { "Content-Disposition": `attachment; filename="${name}"` } : {};
       const demoImgs = [
         [/a1b2c3-ci-failure\.png$/i, "../img/screen.png", ""],
         [/d4e5f6-query-plan\.png$/i, "../img/agent.png", ""],
@@ -484,28 +519,32 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       const hitImg = demoImgs.find(([re, , wantM]) => re.test(fp) && (!wantM || mach === wantM));
       if (hitImg) {
         const b = await (await realFetch(new URL(hitImg[1], location.href))).blob();
-        return new Response(b, { headers: { "X-File-Kind": "image", "X-File-Size": String(b.size), "X-File-Path": encodeURIComponent(fp) } });
+        return new Response(b, { headers: { "X-File-Kind": dl ? "download" : "image", "X-File-Size": String(b.size), "X-File-Path": encodeURIComponent(fp), ...dlHead(fp.split("/").pop() || "image.png") } });
       }
       if (/bench-pagination\.html$/i.test(fp)) {
         const html = await (await realFetch(new URL("bench-pagination.html", location.href))).text();
-        return new Response(html, { headers: { "Content-Type": q.get("as") === "html" ? "text/html; charset=utf-8" : "application/octet-stream", "X-File-Kind": q.get("as") === "html" ? "html" : "text", "X-File-Size": String(new Blob([html]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/bench-pagination.html") } });
+        const isHtml = !dl && q.get("as") === "html";
+        return new Response(html, { headers: { "Content-Type": isHtml ? "text/html; charset=utf-8" : "application/octet-stream", "X-File-Kind": dl ? "download" : (isHtml ? "html" : "text"), "X-File-Size": String(new Blob([html]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/bench-pagination.html"), ...dlHead("bench-pagination.html") } });
+      }
+      if (!mach && /perf-audit-v1\.4\.md$/.test(fp)) {
+        return new Response(perfAuditMd, { headers: { "X-File-Kind": dl ? "download" : "text", "X-File-Size": String(new Blob([perfAuditMd]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/docs/perf-audit-v1.4.md"), ...dlHead("perf-audit-v1.4.md") } });
       }
       if (mach === "macbook" && /CHANGELOG\.md$/.test(fp)) {
-        return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
+        return new Response(changelog, { headers: { "X-File-Kind": dl ? "download" : "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md"), ...dlHead("CHANGELOG.md") } });
       }
       if (!mach && /(?:internal\/orders\/)?list\.go$/.test(fp)) {
-        return new Response(ordersListGo, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([ordersListGo]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/internal/orders/list.go") } });
+        return new Response(ordersListGo, { headers: { "X-File-Kind": dl ? "download" : "text", "X-File-Size": String(new Blob([ordersListGo]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/internal/orders/list.go"), ...dlHead("list.go") } });
       }
       return json({ error: "找不到这个文件" }, 404);
     }
     if (p === "/api/dirs") return json({ dirs: ["~/code/shop-api", "~/code/shop-web", "~/code/notes"] });
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.40", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.41", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.40", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.40",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.41", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.41",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

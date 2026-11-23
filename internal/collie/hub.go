@@ -89,7 +89,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path s
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if r.URL.Path == "/api/file" && r.URL.Query().Get("as") == "html" && resp.StatusCode == http.StatusOK && isHTMLPath(r.URL.Query().Get("path")) {
+			if r.URL.Path == "/api/file" && r.URL.Query().Get("download") != "1" && r.URL.Query().Get("as") == "html" && resp.StatusCode == http.StatusOK && isHTMLPath(r.URL.Query().Get("path")) {
 				setHTMLSandboxHeaders(resp.Header)
 				return nil
 			}

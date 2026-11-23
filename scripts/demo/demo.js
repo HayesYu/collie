@@ -46,6 +46,7 @@
     entry("collie", "顺便问一下，`shop-api/migrations` 整理完了（41 → 33 个文件），那 3 个从没在生产跑过的旧回滚脚本怎么处理？", { at: ago(6.5), options: ["移到 archive 留档", "直接删掉"] }),
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
     entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
+    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 ~/code/shop-api/internal/orders/list.go 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n顺带扫到一处历史逻辑：已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), check: true }),
   ];
   const pendingSummary = (t) => String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")
     .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1").split("\n")
@@ -56,7 +57,7 @@
     const out = [];
     for (let i = 0; i < all.length; i++) {
       const e = all[i];
-      if (e.role !== "collie" || !e.options?.length || dismissed.has(e.id)) continue;
+      if (e.role !== "collie" || (!e.options?.length && !e.check) || dismissed.has(e.id)) continue;
       let resolved = false, otherCollie = false;
       for (let j = i + 1; j < all.length; j++) {
         const next = all[j];
@@ -67,7 +68,7 @@
           otherCollie = true;
         }
       }
-      if (!resolved) out.push({ id: e.id, at: e.at, summary: pendingSummary(e.text), options: e.options });
+      if (!resolved) out.push({ id: e.id, at: e.at, summary: pendingSummary(e.text), ...(e.options?.length ? { options: e.options } : {}), ...(e.check ? { check: true } : {}) });
     }
     return out;
   }
@@ -309,6 +310,57 @@
   }
 
   const changelog = "# v1.4\n\n## 需要注意\n\n- **配置项改名**：`cart.ttl` 改为 `cart.expire_after`，旧名字还能用，下个版本移除。\n- **Node 22 起步**：构建和运行都需要 Node 22 以上。\n\n## 改动\n\n- 订单列表支持按状态筛选\n- 结算页显示预计送达时间\n- 修复优惠券在购物车为空时报错\n- 商品图片改为懒加载，首屏快了约 30%\n- 搜索框支持拼音\n- 依赖升级：react 19.2、vite 7\n";
+  const ordersListGo = `package orders
+
+import (
+\t"context"
+\t"database/sql"
+\t"fmt"
+\t"time"
+)
+
+// Order is a single row in the customer order history page.
+type Order struct {
+\tID         int64     \`json:"id"\`
+\tUserID     int64     \`json:"user_id"\`
+\tStatus     string    \`json:"status"\`
+\tTotalCents int64     \`json:"total_cents"\`
+\tCreatedAt  time.Time \`json:"created_at"\`
+}
+
+const listSQL = \`
+\tSELECT id, user_id, status, total_cents, created_at
+\tFROM orders
+\tWHERE user_id = $1
+\tORDER BY created_at DESC, id DESC
+\tLIMIT $2 OFFSET $3\`
+
+// List returns one 1-indexed page of orders with deterministic tie-breaking.
+func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Order, error) {
+\tif page < 1 {
+\t\tpage = 1
+\t}
+\tif size <= 0 || size > 100 {
+\t\tsize = 20
+\t}
+\toffset := (page - 1) * size
+\trows, err := db.QueryContext(ctx, listSQL, userID, size, offset)
+\tif err != nil {
+\t\treturn nil, fmt.Errorf("query orders page %d: %w", page, err)
+\t}
+\tdefer rows.Close()
+
+\tvar out []Order
+\tfor rows.Next() {
+\t\tvar o Order
+\t\tif err := rows.Scan(&o.ID, &o.UserID, &o.Status, &o.TotalCents, &o.CreatedAt); err != nil {
+\t\t\treturn nil, err
+\t\t}
+\t\tout = append(out, o)
+\t}
+\treturn out, rows.Err()
+}
+`;
 
   // ───────────────────────────── the API
   const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -351,8 +403,14 @@
       return new Response(b, { headers: { "X-File-Kind": "image", "X-File-Size": String(b.size), "X-File-Path": encodeURIComponent(q.get("path")) } });
     }
     if (p === "/api/file") {
-      if (q.get("machine") !== "macbook" || !/CHANGELOG\.md$/.test(q.get("path") || "")) return json({ error: "找不到这个文件" }, 404);
-      return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
+      const fp = q.get("path") || "";
+      if (q.get("machine") === "macbook" && /CHANGELOG\.md$/.test(fp)) {
+        return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
+      }
+      if (!q.get("machine") && /(?:internal\/orders\/)?list\.go$/.test(fp)) {
+        return new Response(ordersListGo, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([ordersListGo]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/internal/orders/list.go") } });
+      }
+      return json({ error: "找不到这个文件" }, 404);
     }
     if (p === "/api/dirs") return json({ dirs: ["~/code/shop-api", "~/code/shop-web", "~/code/notes"] });
     if (p === "/api/devices") return json({

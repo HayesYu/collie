@@ -289,4 +289,59 @@ func TestCLIReplyOptParsingAndCall(t *testing.T) {
 	if gotBody["text"] != "要我开 PR 吗？" || len(rawOpts) != 2 || rawOpts[0] != "开 PR" || rawOpts[1] != "先不用" {
 		t.Fatalf("server got %+v", gotBody)
 	}
+	if _, hasCheck := gotBody["check"]; hasCheck {
+		t.Fatalf("unexpected check field when --check not set: %+v", gotBody)
+	}
+
+	// --check standalone + compatible with --re and --thread.
+	chkBody, err := parseReply([]string{"--check", "--re", "t88", "--thread", "chat:main", "有两条待你本人处理的飞书消息"}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chkBody["check"] != true || chkBody["re"] != "t88" || chkBody["thread"] != "chat:main" || chkBody["text"] != "有两条待你本人处理的飞书消息" {
+		t.Fatalf("unexpected --check body: %+v", chkBody)
+	}
+	if _, hasOpts := chkBody["options"]; hasOpts {
+		t.Fatalf("unexpected options on --check-only reply: %+v", chkBody)
+	}
+
+	gotBody = nil
+	if err := cliReply([]string{"--check", "--re", "t99", "请审阅这份报告"}); err != nil {
+		t.Fatalf("cliReply --check: %v", err)
+	}
+	if gotBody["check"] != true || gotBody["re"] != "t99" || gotBody["text"] != "请审阅这份报告" {
+		t.Fatalf("server got --check %+v", gotBody)
+	}
+
+	// routerDoc documents --check concisely alongside reply.
+	if !strings.Contains(routerDoc, "[--check]") || !strings.Contains(routerDoc, "`--check`") {
+		t.Fatalf("routerDoc missing --check documentation")
+	}
+}
+
+func TestLarkNotifyCheckInQuietMode(t *testing.T) {
+	sent := fakeLark(t)
+	sp := &Super{
+		st:   defaultState("/home/x"),
+		subs: map[chan struct{}]bool{},
+	}
+	sp.st.Settings.NotifyLark = true
+	sp.st.Settings.NotifyLevel = "quiet"
+	sp.seenAt = time.Now().Add(-5 * time.Minute)
+
+	sp.Reply(mainThread, "发现两处异常指标待你过目", "", nil, true)
+	sp.sendNotifications()
+	b, err := os.ReadFile(sent)
+	if err != nil {
+		t.Fatal("reply with --check did not notify in quiet mode")
+	}
+	got := string(b)
+	for _, want := range []string{`"template":"orange"`, "Collie · 需要你", "发现两处异常指标待你过目"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "可选：") {
+		t.Errorf("--check without options should not render options line:\n%s", got)
+	}
 }

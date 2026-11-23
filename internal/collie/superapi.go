@@ -74,7 +74,7 @@ type superView struct {
 	Router  routerView `json:"router"`
 	Entries []*Entry   `json:"entries"`
 	Earlier bool       `json:"earlier,omitempty"` // older chat than Entries: /api/super/earlier
-	// Pending: Collie's --opt messages in chat:main still waiting on the human.
+	// Pending: Collie's --opt and --check messages in chat:main still waiting on the human.
 	Pending []PendingItem `json:"pending"`
 	Workers []*Worker     `json:"workers"`
 	Queued  int           `json:"queued"`
@@ -255,6 +255,7 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 		Thread  string   `json:"thread"`
 		Re      string   `json:"re"`
 		Options []string `json:"options"`
+		Check   bool     `json:"check"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -263,7 +264,7 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "empty reply"})
 		return
 	}
-	e, warn := s.sup.Reply(body.Thread, body.Text, body.Re, body.Options)
+	e, warn := s.sup.Reply(body.Thread, body.Text, body.Re, body.Options, body.Check)
 	res := map[string]any{"ok": true, "entry": e.ID}
 	if warn != "" {
 		res["warning"] = warn

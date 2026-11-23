@@ -135,18 +135,18 @@ func (sp *Super) flush() {
 }
 
 func (sp *Super) addEntryLocked(role, thread, text, ref, tone string) *Entry {
-	return sp.addEntryOptsLocked(role, thread, text, ref, tone, nil, nil)
+	return sp.addEntryReplyLocked(role, thread, text, ref, tone, nil, nil, false)
 }
 
 func (sp *Super) addEntryReLocked(role, thread, text, ref, tone string, re *Quote) *Entry {
-	return sp.addEntryOptsLocked(role, thread, text, ref, tone, re, nil)
+	return sp.addEntryReplyLocked(role, thread, text, ref, tone, re, nil, false)
 }
 
-func (sp *Super) addEntryOptsLocked(role, thread, text, ref, tone string, re *Quote, opts []string) *Entry {
-	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re, Options: opts}
+func (sp *Super) addEntryReplyLocked(role, thread, text, ref, tone string, re *Quote, opts []string, check bool) *Entry {
+	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re, Options: opts, Check: check}
 	sp.st.Entries = append(sp.st.Entries, e)
 	if role == "collie" || tone == "blocked" || tone == "error" {
-		sp.queueNotifyLocked(role, text, tone, re, opts...)
+		sp.queueNotifyLocked(role, text, tone, re, check, opts...)
 	}
 	sp.changed()
 	return e
@@ -169,18 +169,19 @@ func cleanOptions(raw []string) []string {
 	return out
 }
 
-// Reply posts Collie's message to a conversation thread, with optional quote
-// and quick-reply buttons, and returns any soft warning for the CLI.
-func (sp *Super) Reply(thread, text, reID string, options []string) (*Entry, string) {
+// Reply posts Collie's message to a conversation thread, with optional quote,
+// quick-reply buttons or --check review flag, and returns any soft warning for the CLI.
+func (sp *Super) Reply(thread, text, reID string, options []string, check ...bool) (*Entry, string) {
 	text = strings.TrimSpace(text)
 	if thread == "" {
 		thread = mainThread
 	}
 	opts := cleanOptions(options)
+	chk := len(check) > 0 && check[0]
 	sp.mu.Lock()
 	limit := sp.st.Settings.ReplyChars
 	re := sp.quoteLocked(reID)
-	e := sp.addEntryOptsLocked("collie", thread, text, "", "", re, opts)
+	e := sp.addEntryReplyLocked("collie", thread, text, "", "", re, opts, chk)
 	sp.mu.Unlock()
 	var warn string
 	if strings.TrimSpace(reID) != "" && re == nil {
@@ -1282,14 +1283,14 @@ func progressHash(screen string) string {
 
 // ---------------------------------------------------------------- outbox
 
-func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote, opts ...string) {
+func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote, check bool, opts ...string) {
 	if sp.st.Settings.NotifyWebhook == "" && !sp.st.Settings.NotifyLark {
 		return
 	}
-	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" && len(opts) == 0 {
+	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" && len(opts) == 0 && !check {
 		return
 	}
-	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text, re: re, options: opts})
+	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text, re: re, options: opts, check: check})
 }
 
 // A notice is one thing to tell you: what Collie said (and what about), or
@@ -1298,6 +1299,11 @@ type notice struct {
 	tone, text string
 	re         *Quote
 	options    []string
+	check      bool
+}
+
+func (n notice) needsYou() bool {
+	return n.tone == "blocked" || len(n.options) > 0 || n.check
 }
 
 // quoteLine is a Quote as one line: "你：首页加一个暗色模式…".
@@ -1372,16 +1378,17 @@ func (sp *Super) collieQuoteLocked(id string) *Quote {
 // past weeks never pile up as stale badges.
 const pendingMaxAge = 7 * 24 * time.Hour
 
-// PendingItem is one Collie message in chat:main whose --opt choices still
-// await the human's answer or dismissal.
+// PendingItem is one Collie message in chat:main (--opt or --check) that still
+// awaits the human's answer, acknowledgement or dismissal.
 type PendingItem struct {
 	ID      string    `json:"id"`
 	At      time.Time `json:"at"`
 	Summary string    `json:"summary"`
-	Options []string  `json:"options"`
+	Options []string  `json:"options,omitempty"`
+	Check   bool      `json:"check,omitempty"`
 }
 
-// Dismiss marks one option message as ignored by the human and persists it.
+// Dismiss marks one pending message as acknowledged/ignored by the human and persists it.
 func (sp *Super) Dismiss(id string) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -1403,17 +1410,17 @@ func (sp *Super) Dismiss(id string) {
 	}
 }
 
-// pendingLocked computes unanswered --opt Collie messages in chat:main.
+// pendingLocked computes unanswered --opt and --check Collie messages in chat:main.
 // An item resolves when:
-//  1. the human tapped one of its options or quoted it (re.entry == e.id),
-//  2. the human sent a plain unquoted message right after it with no other
-//     role=="collie" reply in between (system/worker events do not interrupt),
-//  3. the human dismissed it with ×.
+//  1. the human tapped「已看」or × (/api/super/dismiss),
+//  2. the human tapped one of its options or quoted it (re.entry == e.id),
+//  3. the human sent a plain unquoted message right after it with no other
+//     role=="collie" reply in between (system/worker events do not interrupt).
 func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 	es := sp.st.Entries
 	var out []PendingItem
 	for i, e := range es {
-		if e.Role != "collie" || (e.Thread != "" && e.Thread != mainThread) || len(e.Options) == 0 || e.ID == "" {
+		if e.Role != "collie" || (e.Thread != "" && e.Thread != mainThread) || (len(e.Options) == 0 && !e.Check) || e.ID == "" {
 			continue
 		}
 		if sp.st.Dismissed[e.ID] {
@@ -1423,7 +1430,7 @@ func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 			continue
 		}
 		opts := cleanOptions(e.Options)
-		if len(opts) == 0 {
+		if len(opts) == 0 && !e.Check {
 			continue
 		}
 		resolved, otherCollie := false, false
@@ -1454,6 +1461,7 @@ func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 				At:      e.At,
 				Summary: pendingSummary(e.Text, opts),
 				Options: opts,
+				Check:   e.Check,
 			})
 		}
 	}
@@ -1483,6 +1491,9 @@ func pendingSummary(text string, opts []string) string {
 	if out == "" {
 		out = strings.Join(opts, " / ")
 	}
+	if out == "" {
+		out = oneLine(text)
+	}
 	return clip(out, 120)
 }
 
@@ -1500,7 +1511,7 @@ func humanText(t string) string {
 
 func (n notice) label() string {
 	switch {
-	case n.tone == "blocked" || len(n.options) > 0:
+	case n.needsYou():
 		return "Collie · 需要你"
 	case n.tone == "error":
 		return "Collie · 出错了"

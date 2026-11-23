@@ -109,7 +109,7 @@ func larkCard(ns []notice, link string) string {
 	title, color := "Collie", "default" // plain white: colour only when it needs you
 	for _, n := range ns {
 		switch {
-		case n.tone == "blocked" || len(n.options) > 0:
+		case n.needsYou():
 			title, color = n.label(), "orange"
 		case n.tone == "error" && color != "orange":
 			title, color = n.label(), "red"
@@ -124,7 +124,7 @@ func larkCard(ns []notice, link string) string {
 		if n.re != nil {
 			t = "<font color='grey'>↩ " + larkEscape(n.re.line()) + "</font>\n" + t
 		}
-		if len(ns) > 1 && ((n.tone != "" && n.tone != "collie") || len(n.options) > 0) {
+		if len(ns) > 1 && ((n.tone != "" && n.tone != "collie") || n.needsYou()) {
 			t = "**" + n.label() + "**\n" + t
 		}
 		if len(n.options) > 0 {
@@ -168,7 +168,7 @@ func cardSummary(ns []notice) string {
 		}
 	}
 	for _, n := range ns {
-		if n.tone == "blocked" || len(n.options) > 0 {
+		if n.needsYou() {
 			pick = n
 		}
 	}

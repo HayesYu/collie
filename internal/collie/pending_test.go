@@ -247,3 +247,120 @@ func TestPendingDismissPersistenceAgeAndTrimmedQuote(t *testing.T) {
 		t.Fatalf("collieQuoteLocked fallback from SQLite failed: %+v", q)
 	}
 }
+
+func TestReplyCheckPersistencePendingAndFourResolutions(t *testing.T) {
+	sp, db, call := newPendingTestEnv(t)
+
+	// Non-main thread --check does not enter chat:main pending.
+	if rec := call("POST", "/api/super/reply", map[string]any{
+		"thread": "github:org/repo#12",
+		"text":   "这条 PR 线程里的待办不进主会话提醒",
+		"check":  true,
+	}); rec.Code != 200 {
+		t.Fatalf("reply status = %d", rec.Code)
+	}
+	if got := pendingIDs(t, call); len(got) != 0 {
+		t.Fatalf("non-main --check pending = %v, want empty", got)
+	}
+
+	// Rule ①: --check without options enters pending; clicking「已看」calls /api/super/dismiss.
+	rec1 := call("POST", "/api/super/reply", map[string]any{
+		"text":  "飞书扫出 2 条需要你本人回复的单聊待办，详见清单。",
+		"check": true,
+	})
+	if rec1.Code != 200 {
+		t.Fatalf("reply --check status = %d: %s", rec1.Code, rec1.Body.String())
+	}
+	var r1 struct {
+		Entry string `json:"entry"`
+	}
+	json.Unmarshal(rec1.Body.Bytes(), &r1)
+	if got := pendingIDs(t, call); !slices.Equal(got, []string{r1.Entry}) {
+		t.Fatalf("pending after --check = %v, want [%s]", got, r1.Entry)
+	}
+	if rec := call("POST", "/api/super/dismiss", map[string]any{"id": r1.Entry}); rec.Code != 200 {
+		t.Fatalf("dismiss --check status = %d", rec.Code)
+	}
+	if got := pendingIDs(t, call); len(got) != 0 {
+		t.Fatalf("pending after dismiss = %v, want empty", got)
+	}
+
+	// Rule ② & ③b: intervening Collie reply preserves --check until quoted (re == e.ID).
+	cQuote, _ := sp.Reply(mainThread, "日报里发现昨天延迟抖动了两次，你空了看一眼原因是什么？", "", nil, true)
+	sp.Reply(mainThread, "顺便说下：定时巡检照常跑完了。", "", nil)
+	call("POST", "/api/super/say", map[string]any{"text": "巡检收到"})
+	if got := pendingIDs(t, call); !slices.Equal(got, []string{cQuote.ID}) {
+		t.Fatalf("cQuote should stay pending across intervening Collie reply, got %v", got)
+	}
+	call("POST", "/api/super/say", map[string]any{"text": "那是昨天机房切流，不用管", "re": cQuote.ID})
+	if got := pendingIDs(t, call); len(got) != 0 {
+		t.Fatalf("quoting cQuote should resolve it, got %v", got)
+	}
+
+	// Rule ③a: direct unquoted user reply (even with worker event in between) resolves --check.
+	cDirect, _ := sp.Reply(mainThread, "这个开放式问题想听你的想法：下周重点先排哪块？", "", nil, true)
+	sp.mu.Lock()
+	sp.addEntryLocked("event", mainThread, "worker-a 完成了一轮", "worker-a", "done")
+	sp.mu.Unlock()
+	if got := pendingIDs(t, call); !slices.Equal(got, []string{cDirect.ID}) {
+		t.Fatalf("cDirect pending = %v, want [%s]", got, cDirect.ID)
+	}
+	call("POST", "/api/super/say", map[string]any{"text": "先做稳定性专项"})
+	if got := pendingIDs(t, call); len(got) != 0 {
+		t.Fatalf("direct reply should resolve cDirect, got %v", got)
+	}
+
+	// Persistence across SQLite saveState/loadState and /api/super/earlier, plus 7-day cutoff.
+	sp.mu.Lock()
+	sp.st.Entries = append(sp.st.Entries, &Entry{
+		ID: sp.st.nextID("e"), Role: "collie", Thread: mainThread,
+		Text: "八天前的陈年 --check", At: time.Now().Add(-8 * 24 * time.Hour), Check: true,
+	})
+	sp.changed()
+	sp.mu.Unlock()
+
+	cKeep, _ := sp.Reply(mainThread, "验收报告放好了，请过目。", "", nil, true)
+	cIgnore, _ := sp.Reply(mainThread, "这条点 × 忽略。", "", nil, true)
+	// Rule ④: × in pending bar calls Dismiss.
+	sp.Dismiss(cIgnore.ID)
+	sp.flush()
+
+	reloaded, err := loadState(db, sp.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv2 := &Server{token: "test-tok", home: sp.dir, web: fstest.MapFS{}}
+	sp2 := &Super{s: srv2, db: db, dir: sp.dir, st: reloaded, subs: map[chan struct{}]bool{}}
+	srv2.sup = sp2
+
+	snap := srv2.superState(t.Context())
+	if len(snap.Pending) != 1 || snap.Pending[0].ID != cKeep.ID || !snap.Pending[0].Check {
+		t.Fatalf("reloaded pending = %+v, want only %s (check=true)", snap.Pending, cKeep.ID)
+	}
+	var foundCheck bool
+	for _, e := range snap.Entries {
+		if e.ID == cKeep.ID && e.Check {
+			foundCheck = true
+		}
+	}
+	if !foundCheck {
+		t.Fatalf("reloaded entries missing Check=true for %s", cKeep.ID)
+	}
+
+	earlierRec := call("GET", "/api/super/earlier?before="+cIgnore.ID, nil)
+	var earlierOut struct {
+		Entries []*Entry `json:"entries"`
+	}
+	if err := json.Unmarshal(earlierRec.Body.Bytes(), &earlierOut); err != nil {
+		t.Fatal(err)
+	}
+	var earlierHasCheck bool
+	for _, e := range earlierOut.Entries {
+		if e.ID == cKeep.ID && e.Check {
+			earlierHasCheck = true
+		}
+	}
+	if !earlierHasCheck {
+		t.Fatalf("/api/super/earlier did not preserve Check=true for %s", cKeep.ID)
+	}
+}

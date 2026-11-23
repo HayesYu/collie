@@ -170,6 +170,7 @@ func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	re := fs.String("re", "", "the event (#t123) this answers, shown to the human as a quote")
 	var opts flagList
 	fs.Var(&opts, "opt", "quick-reply choice button for the human (repeatable)")
+	check := fs.Bool("check", false, "mark as needing the human's review or action (without --opt)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -187,6 +188,9 @@ func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	body := map[string]any{"text": t, "thread": *thread, "re": *re}
 	if len(opts) > 0 {
 		body["options"] = []string(opts)
+	}
+	if *check {
+		body["check"] = true
 	}
 	return body, nil
 }
@@ -467,9 +471,12 @@ together. At night a separate session "dreams": it reviews your past sessions an
 tidies memory/. Its journal is in dreams/.
 
 ## Tools (run in your shell)
-- ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... \"text\"`" + ` — message the human (add --thread X for another thread).
+- ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... [--check] \"text\"`" + ` — message the human (add --thread X for another thread).
   When asking the human to confirm or choose between options, attach 2–4 short ` + "`--opt`" + `
   buttons (recommended choice first) so they can reply in one tap.
+  When a reply has no ` + "`--opt`" + ` buttons yet still needs the human to handle, review or answer
+  (a todo for them, an open question, a report or issue awaiting sign-off), add ` + "`--check`" + `
+  so it stays in their pending reminder; leave ` + "`--check`" + ` off for plain updates or closed items.
 - ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--thread T] [--name N] \"task brief\"`" + `
   starts a worker in the background and returns at once. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
   ` + "`{{BIN}} list`" + ` shows the connected computers. Use --machine when the human names a

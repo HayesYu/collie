@@ -167,7 +167,7 @@
     ],
     files: [
       memFile("instructions.md", "# 指令\n- 发布说明用中文，每条一句话\n- 跑测试优先用 devbox，界面相关的活放 macbook\n- 动生产数据库前先问我", 60 * 24),
-      memFile("tasks/v1.4-release.md", "# v1.4 发布\n- [x] 发布说明\n- [ ] 分页测试修复（fix-flaky-test）\n- [ ] 开 PR", 6),
+      memFile("tasks/v1.4-release.md", "# v1.4 发布\n目标：整理 v1.3 以来的 27 个提交写发布说明（重点提醒配置项改名与 Node 22 起步），定位并修复 /orders 分页同一秒内记录重复的偶发失败（fix-flaky-test），回归通过后一起开 PR。\n- [x] 发布说明（release-notes）\n- [ ] 分页测试修复（fix-flaky-test）\n- [ ] 开 PR", 6),
       memFile("tasks/done/dark-mode-fix.md", "# 首页暗色模式修复\n- [x] 定位对比度问题\n- [x] 合入修复（ux-polish）\n已完成：11 月 18 日合入。", 50),
       memFile("tasks/done/ci-cache.md", "# CI 缓存提速\n- [x] 缓存依赖目录\n已完成：构建从 9 分钟降到 4 分钟。", 90),
       memFile("notes/index.md", "# 笔记索引\n- shop-api.md：订单服务，怎么跑测试、分页的坑\n- shop-web.md：前端，怎么起、发布说明放哪\n- agents.md：哪个 agent 在哪台电脑上好用\n- machines.md：devbox 和 macbook 各装了什么", 60 * 30),

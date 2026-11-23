@@ -342,17 +342,17 @@
       </div>
       <div class="field agent-only">
         <label for="l-model">模型 <span class="muted">可选</span></label>
-        <div class="model-row"><select id="l-model"></select><select id="l-effort"></select></div>
+        <div class="model-row"><select id="l-model"></select><select id="l-effort" data-pick="compact"></select></div>
       </div>
       <div class="field agent-only">
         <label for="l-name">名字 <span class="muted">可选</span></label>
-        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="不填就用会话自己的标题" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="不填就用会话自己的标题" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         <small class="muted">想用命令行或让 Collie 按名字找它时再起，小写字母开头，可含数字、- 和 _</small>
       </div>
       <div class="field">
         <label for="l-cwd">目录</label>
         <div class="dir">
-          <input id="l-cwd" class="mono" value="~" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <input id="l-cwd" class="mono" value="~" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
           <button type="button" class="icon-btn" id="dir-up" title="上一级"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
         </div>
         <div class="recent" id="recent"></div>

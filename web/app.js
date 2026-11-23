@@ -145,11 +145,14 @@
     b.className = "pick" + (sel.dataset.pick ? " " + sel.dataset.pick : "");
     if (sel.title) b.title = sel.title;
     b.setAttribute("aria-haspopup", "listbox");
+    b.setAttribute("aria-expanded", "false");
     b.innerHTML = `<span class="pv"></span><svg class="pc" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>`;
     sel._pick = b;
     sel.classList.add("picked");
     sel.tabIndex = -1;
+    sel.setAttribute("aria-hidden", "true");
     sel.after(b);
+    sel.addEventListener("focus", () => b.focus({ preventScroll: true }));
     b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); pickOpen === sel ? closePick() : openPick(sel); });
     b.addEventListener("keydown", (e) => {
       if ((e.key === "ArrowDown" || e.key === "ArrowUp") && pickOpen !== sel) { e.preventDefault(); openPick(sel); }
@@ -163,7 +166,7 @@
     // to live inside it to show.
     const host = sel.closest("dialog[open]") || document.body;
     if (pickPop.parentNode !== host) host.append(pickBack, pickPop);
-    const row = (o) => `<button type="button" class="po${o.selected ? " on" : ""}" role="option" data-v="${esc(o.value)}" ${o.disabled ? "disabled" : ""}>
+    const row = (o) => `<button type="button" class="po${o.selected ? " on" : ""}" role="option" aria-selected="${o.selected}" data-v="${esc(o.value)}" ${o.disabled ? "disabled" : ""}>
       ${optIcon(o)}<span class="pl"><span>${esc(o.textContent)}</span>${o.dataset.sub ? `<small>${esc(o.dataset.sub)}</small>` : ""}</span>
       <svg class="ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>`;
     let html = sel.dataset.title ? `<div class="ph">${esc(sel.dataset.title)}</div>` : "";
@@ -180,7 +183,8 @@
       pickPop.style.cssText = "";
     } else {
       const r = sel._pick.getBoundingClientRect();
-      pickPop.style.minWidth = Math.max(r.width, 180) + "px";
+      const rich = [...sel.options].some((o) => o.dataset.sub);
+      pickPop.style.minWidth = Math.max(r.width, rich ? 180 : 108) + "px";
       const w = pickPop.offsetWidth, h = pickPop.offsetHeight;
       const left = Math.min(Math.max(8, r.left), innerWidth - w - 8);
       const below = innerHeight - r.bottom - 8;
@@ -1070,8 +1074,9 @@
     };
     const card = (f, o = {}) => {
       const edit = !f.legacy && o.edit !== false;
+      const sub = o.sub ?? firstLine(f.text, "");
       return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
-          <span class="mono mem-name">${esc(o.label || f.name)}</span><span class="grow">${esc(o.sub ?? firstLine(f.text, ""))}</span><span class="muted">${kb(f.size)}</span></summary>
+          <span class="mono mem-name">${esc(o.label || f.name)}</span><span class="grow mem-sub">${esc(sub)}</span><span class="muted mem-size">${kb(f.size)}</span></summary>
         <div class="mem-body msg assistant" data-view>${md(f.text)}</div>
         ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
         <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
@@ -1096,7 +1101,7 @@
       ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
       ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
       ${group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
-      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
+      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow mem-sub">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
       ${done.length ? `<details class="mem-done" data-path="tasks/done/"><summary class="mem-h">已完成<span class="muted">${done.length} 件 · 做完或放弃的任务，不再先读</span></summary>
         <div class="card">${done.map((f) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true })).join("")}</div></details>` : ""}`;
   }
@@ -1199,20 +1204,19 @@
     return `<p class="panel-intro">到点会给 Collie（或某个 agent）发一条消息：每天的例行检查、过一会儿的跟进提醒。Collie 自己也会设定时来跟进。</p>
       <div class="card"><div class="card-h">新建定时</div>
         <form class="form tm-form" id="timer-form" data-mode="weekdays">
-          <div class="tm-row"><span class="tm-lab">什么时候</span>
-            <div class="seg tm-mode">${[["daily", "每天"], ["weekdays", "工作日"], ["weekly", "每周"], ["every", "每隔"], ["once", "一次"]].map(([m, l]) => `<button type="button" data-mode="${m}">${l}</button>`).join("")}</div>
-          </div>
-          <div class="tm-row tm-when">
-            <span class="tm-lab"></span>
-            <div class="tm-days" data-show="weekly">${WEEK.map(([d, l], i) => `<button type="button" data-day="${d}" class="${i === 0 ? "on" : ""}">${l}</button>`).join("")}</div>
-            <input type="time" name="clock" value="09:00" data-show="daily weekdays weekly">
-            <span class="tm-every" data-show="every"><input type="number" name="every_n" min="1" value="2"><select name="every_u" data-title="单位"><option value="m">分钟</option><option value="h" selected>小时</option><option value="d">天</option></select></span>
-            <span class="tm-once" data-show="once"><input type="datetime-local" name="at" value="${localStamp(soon)}">
-              ${[["30 分钟后", 30], ["1 小时后", 60], ["明早 9 点", "am"]].map(([l, v]) => `<button type="button" class="chip-btn" data-at="${v}">${l}</button>`).join("")}</span>
+          <div class="tm-field">
+            <span class="tm-lab">什么时候</span>
+            <div class="tm-when">
+              <div class="seg tm-mode">${[["daily", "每天"], ["weekdays", "工作日"], ["weekly", "每周"], ["every", "每隔"], ["once", "一次"]].map(([m, l]) => `<button type="button" data-mode="${m}">${l}</button>`).join("")}</div>
+              <div class="tm-days" data-show="weekly">${WEEK.map(([d, l], i) => `<button type="button" data-day="${d}" class="${i === 0 ? "on" : ""}">${l}</button>`).join("")}</div>
+              <input type="time" name="clock" value="09:00" data-show="daily weekdays weekly">
+              <span class="tm-every" data-show="every"><input type="number" name="every_n" min="1" value="2"><select name="every_u" data-pick="compact" data-title="单位"><option value="m">分钟</option><option value="h" selected>小时</option><option value="d">天</option></select></span>
+              <span class="tm-once" data-show="once"><input type="datetime-local" name="at" value="${localStamp(soon)}"><span class="tm-chips">${[["30 分钟后", 30], ["1 小时后", 60], ["明早 9 点", "am"]].map(([l, v]) => `<button type="button" class="chip-btn" data-at="${v}">${l}</button>`).join("")}</span></span>
+            </div>
           </div>
           <label class="tm-text"><span class="tm-lab">说什么</span><textarea name="text" rows="2" placeholder="例如：检查各个任务的进展，有卡住的告诉我" required></textarea></label>
           <div class="tm-foot">
-            <label class="tm-target"><span class="tm-lab">交给</span><select name="target" data-title="到点交给谁"><option value="" data-sub="由它决定怎么处理">Collie</option>${sup.workers.filter((w) => !w.ended).map((w) => `<option value="${esc(w.name)}" data-sub="${esc(KIND_LABEL[w.kind] || w.kind)}">${esc(w.name)}</option>`).join("")}</select></label>
+            <label class="tm-target"><span class="tm-lab">交给</span><select name="target" data-pick="compact" data-title="到点交给谁"><option value="" data-sub="由它决定怎么处理">Collie</option>${sup.workers.filter((w) => !w.ended).map((w) => `<option value="${esc(w.name)}" data-sub="${esc(KIND_LABEL[w.kind] || w.kind)}">${esc(w.name)}</option>`).join("")}</select></label>
             <span class="tm-sum muted"></span>
             <button class="btn primary small">添加</button>
           </div>
@@ -1258,10 +1262,10 @@
 
   function policyRow(p = { source: "webhook:", action: "candidate", allow: [] }) {
     return `<div class="policy">
-      <input data-f="source" value="${esc(p.source)}" placeholder="webhook:github">
-      <select data-f="action">${["respond", "candidate", "ignore"].map((a) => `<option value="${a}" ${p.action === a ? "selected" : ""}>${{ respond: "直接响应", candidate: "候选（Collie 判断）", ignore: "忽略" }[a]}</option>`).join("")}</select>
-      <input data-f="allow" value="${esc((p.allow || []).join(", "))}" placeholder="白名单（可选，逗号分隔）">
-      <button class="icon-btn" data-del-policy title="删除"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
+      <input data-f="source" class="mono" value="${esc(p.source)}" placeholder="webhook:github" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <select data-f="action" data-pick="compact">${["respond", "candidate", "ignore"].map((a) => `<option value="${a}" ${p.action === a ? "selected" : ""}>${{ respond: "直接响应", candidate: "候选（Collie 判断）", ignore: "忽略" }[a]}</option>`).join("")}</select>
+      <input data-f="allow" value="${esc((p.allow || []).join(", "))}" placeholder="白名单（可选，逗号分隔）" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <button type="button" class="icon-btn" data-del-policy title="删除"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
   }
 
   // ───────────────────────────── settings: grouped by what they are about
@@ -1313,7 +1317,7 @@
     const kindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
     const modelPick = (who, model, effort) => `
           <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
-          <label>思考强度<select name="${who}_effort" data-title="思考强度" data-value="${esc(effort || "")}"><option value="${esc(effort || "")}" selected>${esc(EFFORT_LABEL[effort] || effort || "默认")}</option></select></label>`;
+          <label>思考强度<select name="${who}_effort" data-pick="compact" data-title="思考强度" data-value="${esc(effort || "")}"><option value="${esc(effort || "")}" selected>${esc(EFFORT_LABEL[effort] || effort || "默认")}</option></select></label>`;
     const many = (state.machines || []).length > 1;
     setTimeout(() => bindSettings($("#settings-form")));
     return `<form class="settings" id="settings-form">
@@ -1324,7 +1328,7 @@
           ${modelPick("router", s.router_model, s.router_effort)}
         </div>
         <details class="set-adv" ${(s.router_args || []).length ? "open" : ""}><summary>更多启动参数</summary>
-          <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="例如 --permission-mode plan"><small>原样加在启动命令后面，一般不用填</small></label>
+          <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="例如 --permission-mode plan" autocorrect="off" autocapitalize="off" spellcheck="false"><small>原样加在启动命令后面，一般不用填</small></label>
         </details>
       </section>
 
@@ -1336,15 +1340,15 @@
         </div>
         <div class="set-grid three">
           ${many ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${state.machines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
-          <label class="${many ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(tilde(s.worker_cwd))}"></label>
+          <label class="${many ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(tilde(s.worker_cwd))}" autocorrect="off" autocapitalize="off" spellcheck="false"></label>
         </div>
       </section>
 
       <section class="card set-sec">
         <header><h4>记忆与会话</h4><p>Collie 的对话变长后会换新会话，要记住的事通过 memory/ 交接；每晚回顾当天的对话，整理记忆。</p></header>
         <div class="set-grid">
-          <label>上下文用到多少时换新会话<select name="rotate_pct" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
-          <label>每晚做梦<select name="dream_at" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
+          <label>上下文用到多少时换新会话<select name="rotate_pct" data-pick="compact" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
+          <label>每晚做梦<select name="dream_at" data-pick="compact" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
         </div>
       </section>
 
@@ -1352,8 +1356,8 @@
         <header><h4>通知</h4></header>
         <div class="set-grid">
           <label class="check span3"><input type="checkbox" name="notify_lark" ${s.notify_lark ? "checked" : ""}> 用 hub 上的 lark-cli 发飞书消息给你<small id="lark-who" class="muted">· 正在看 hub 上的 lark-cli…</small></label>
-          <label>Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"><small>飞书 / Lark 机器人或 Slack</small></label>
-          <label>什么时候推送<select name="notify_level" data-title="什么时候推送"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="卡住、要你确认、出错">只在需要你时</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="外加 Collie 的回复，比如做完事的汇报">也推送 Collie 的回复</option></select><small>你正开着 Collie 的网页时不推</small></label>
+          <label>Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" autocorrect="off" autocapitalize="off" spellcheck="false"><small>飞书 / Lark 机器人或 Slack</small></label>
+          <label>什么时候推送<select name="notify_level" data-pick="compact" data-title="什么时候推送"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="卡住、要你确认、出错">只在需要你时</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="外加 Collie 的回复，比如做完事的汇报">也推送 Collie 的回复</option></select><small>你正开着 Collie 的网页时不推</small></label>
         </div>
       </section>
 
@@ -1909,8 +1913,8 @@
     const installCmd = pm ? `curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub ${devAddr} --code ${pm.code}` : "";
     const machines = r.devices.filter((d) => d.kind === "machine");
     const browsers = r.devices.filter((d) => d.kind !== "machine");
-    const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
-    const keepOpen = document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
+    const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr" data-pick="compact">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
+    const keepOpen = (pickOpen && pickOpen.id === "dev-addr") || document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
     if (keepOpen) return; // don't redraw under an open select or a half-typed form
     const typed = [...document.querySelectorAll("#add-hub input")].map((i) => i.value);
 
@@ -1933,7 +1937,7 @@
                <p class="pair-hint">已经装了 collie 的话：</p>
                <div class="code"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
                <p class="pair-hint"><b>${left(pm)}</b> 内有效，只能用一次。之后它会自动重连。</p>`
-             : `<button class="btn primary" id="new-node-code">生成连接命令</button>`}
+             : `<button class="btn primary small" id="new-node-code">生成连接命令</button>`}
           <p class="pair-hint muted">需要这台电脑能访问上面的地址（同一内网或 VPN）。</p>
         </div>
       </div>
@@ -1957,9 +1961,9 @@
           <button class="btn ghost small" data-del-hub="${esc(h.key)}" data-name="${esc(h.name)}">移除</button></li>`; }).join("")}
         </ul>
         <form id="add-hub" class="hub-add">
-          <input name="link" required autocomplete="off" placeholder="粘贴那个 hub「设备 → 连接手机或平板」里的链接">
+          <input name="link" required autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="粘贴那个 hub「设备 → 连接手机或平板」里的链接">
           <input name="name" autocomplete="off" placeholder="叫它什么（可选）">
-          <button class="btn primary">添加</button>
+          <button class="btn primary small">添加</button>
         </form>
         <p class="pair-hint muted">那个 hub 也要是 v0.2.4 以后的版本。</p>
       </div>

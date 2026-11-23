@@ -203,7 +203,30 @@ func TestAskBox(t *testing.T) {
 		a.Choices[2].Desc != "fresh" || a.Choices[4].Text != "5" || a.Choices[4].Label != "Chat about this" {
 		t.Fatalf("choices: %+v", a.Choices)
 	}
+	if got := strings.Join(a.Choices[0].Keys, ","); got != "enter" {
+		t.Fatalf("choice 0 keys: %q", got)
+	}
+	if got := strings.Join(a.Choices[4].Keys, ","); got != "down,down,down,down,enter" {
+		t.Fatalf("choice 4 keys (across descriptions and rule): %q", got)
+	}
 	if !strings.HasSuffix(a.Question, "Which color for the button?") {
 		t.Fatalf("question: %q", a.Question)
+	}
+}
+
+func TestCodexFolderAccessApproval(t *testing.T) {
+	codexFolder := "Folder access\n  /Users/bytedance/agent-workspace/huanyu1w1/collie\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Back to Agent Command Center\n  enter continue · esc back"
+	if !screenAsks(codexFolder) {
+		t.Fatal("codex folder access dialog not seen as a question")
+	}
+	a := parseApproval(codexFolder)
+	if len(a.Choices) != 2 || !a.Choices[0].Current || a.Choices[0].Text != "1" {
+		t.Fatalf("choices: %+v", a.Choices)
+	}
+	if got := strings.Join(a.Choices[0].Keys, ","); got != "enter" {
+		t.Fatalf("choice 1 keys = %q, want enter (bare '1' does not confirm Codex Folder access)", got)
+	}
+	if got := strings.Join(a.Choices[1].Keys, ","); got != "down,enter" {
+		t.Fatalf("choice 2 keys = %q, want down,enter", got)
 	}
 }

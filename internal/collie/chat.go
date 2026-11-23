@@ -725,14 +725,28 @@ type Approval struct {
 var (
 	numberedRe = regexp.MustCompile(`^\s*([❯›>▸●➜→]\s*)?(\d)[.)]\s+(.{1,90}?)\s*$`)
 	cursorRe   = regexp.MustCompile(`^\s*[❯›>▸●➜→]\s+(.{1,90}?)\s*$`)
-	hintRe     = regexp.MustCompile(`(?i)(enter|esc|↑|↓|tab)\b.*(confirm|cancel|select|navigate|continue)`)
+	hintRe     = regexp.MustCompile(`(?i)(enter|esc|↑|↓|tab)\b.*(confirm|cancel|select|navigate|continue|back|skip|close|review|amend)`)
 	frameRe    = regexp.MustCompile(`^[\s│┃|╭╮╰╯─━═┌┐└┘╌┄┈]*$`)
 	ruleRe     = regexp.MustCompile(`[─━═]{12,}`)
 )
 
+// moveKeys builds the arrow+Enter keystrokes from cur to target idx.
+func moveKeys(cur, idx int) []string {
+	var keys []string
+	for d := cur; d < idx; d++ {
+		keys = append(keys, "down")
+	}
+	for d := cur; d > idx; d-- {
+		keys = append(keys, "up")
+	}
+	return append(keys, "enter")
+}
+
 // parseApproval turns the bottom of a blocked agent's screen into a question
-// and a set of choices. Numbered menus answer with the digit; cursor menus
-// ("❯ Yes / No") answer by moving the cursor and pressing Enter.
+// and a set of choices. Menus with a cursor ("❯ 1. Yes" / "› 1. Trust and
+// continue" / "❯ Yes") answer by moving the cursor and pressing Enter (Codex's
+// numbered Folder access menu does not confirm on a bare digit); cursorless
+// numbered menus answer with the digit.
 func parseApproval(screen string) Approval {
 	// Blank and frame lines become paragraph breaks (""), so the card can
 	// reflow the dialog's text; a long rule marks where the dialog begins.
@@ -862,15 +876,25 @@ func parseApproval(screen string) Approval {
 		}
 		var keys []string
 		if cur >= 0 {
-			for d := cur; d < i; d++ {
-				keys = append(keys, "down")
-			}
-			for d := cur; d > i; d-- {
-				keys = append(keys, "up")
+			keys = moveKeys(cur, i)
+		} else {
+			keys = []string{"enter"}
+		}
+		a.Choices = append(a.Choices, Choice{Label: label, Keys: keys, Current: i == cur})
+	}
+	if numbered {
+		curChoice := -1
+		for i, c := range a.Choices {
+			if c.Current {
+				curChoice = i
+				break
 			}
 		}
-		keys = append(keys, "enter")
-		a.Choices = append(a.Choices, Choice{Label: label, Keys: keys, Current: i == cur})
+		if curChoice >= 0 {
+			for i := range a.Choices {
+				a.Choices[i].Keys = moveKeys(curChoice, i)
+			}
+		}
 	}
 	if len(a.Choices) < 2 || len(a.Choices) > 9 {
 		a.Choices = nil

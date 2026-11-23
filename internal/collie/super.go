@@ -54,6 +54,7 @@ type Super struct {
 	handover    *handover            // set while the router writes its memory before a fresh session
 	dream       *dreamRun            // set while Collie sleeps and a dream session tidies its memory
 	lastTrust   map[string]time.Time // pane → when its trust dialog was last answered
+	lastAnswer  map[string]time.Time // pane → when a dialog there was just answered
 	lastScreen  map[string]screenMark
 	transcripts map[string]*transcript
 	noAgent     map[string]time.Time // worker → since when its pane has had no agent in it
@@ -355,6 +356,9 @@ func (sp *Super) tick(parent context.Context) {
 			sp.dirty = true
 		}
 		prev := w.Status
+		if a.Status == "blocked" && now.Sub(sp.lastAnswer[a.Pane]) < 2*time.Second {
+			continue // give a just-answered dialog a moment to clear (or show the next one)
+		}
 		if a.Status != prev {
 			w.Status = a.Status
 			w.PaneID = a.Pane
@@ -632,6 +636,9 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 	ask := sp.st.Settings.AskPermissions
 	sp.mu.Unlock()
 	if blocked && !ask && sp.answerTrust(ctx, w.PaneID, w.Cwd) {
+		sp.mu.Lock()
+		sp.noteAnsweredLocked(w)
+		sp.mu.Unlock()
 		log.Printf("worker %s: trusted its folder %s", w.Name, w.Cwd)
 		return
 	}
@@ -1501,9 +1508,28 @@ func (sp *Super) trustOwnDir(ctx context.Context, pane string) {
 	}
 }
 
-// answerTrust picks "Yes, I trust this folder" when pane shows a folder-trust
-// dialog for dir, the folder Collie started that agent in. It reports whether
-// it answered. Nothing else is ever answered this way.
+func isTrustChoice(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	return (strings.HasPrefix(l, "yes") && strings.Contains(l, "trust")) || strings.HasPrefix(l, "trust and continue")
+}
+
+func (sp *Super) noteAnsweredLocked(w *Worker) {
+	if sp.lastAnswer == nil {
+		sp.lastAnswer = map[string]time.Time{}
+	}
+	if w != nil {
+		if w.PaneID != "" {
+			sp.lastAnswer[w.PaneID] = time.Now()
+		}
+		if w.Status == "blocked" {
+			w.Status = "idle"
+		}
+	}
+}
+
+// answerTrust picks "Yes, I trust this folder" / "Trust and continue" when
+// pane shows a folder-trust dialog for dir, the folder Collie started that
+// agent in. It reports whether it answered. Nothing else is ever answered this way.
 func (sp *Super) answerTrust(ctx context.Context, pane, dir string) bool {
 	sp.mu.Lock()
 	if sp.lastTrust == nil {
@@ -1516,30 +1542,28 @@ func (sp *Super) answerTrust(ctx context.Context, pane, dir string) bool {
 	sp.lastTrust[pane] = time.Now()
 	sp.mu.Unlock()
 
-	rr, err := sp.s.herdr.Read(ctx, pane, "visible", "text", 0)
+	rr, err := sp.s.herdr.Read(ctx, pane, "detection", "text", 0)
 	if err != nil || !trustDialogFor(rr.Text, dir, sp.s.tilde(dir)) {
 		return false
 	}
 	for _, c := range parseApproval(rr.Text).Choices {
-		l := strings.ToLower(c.Label)
-		if strings.HasPrefix(l, "yes") && strings.Contains(l, "trust") {
+		if isTrustChoice(c.Label) {
 			return sp.choose(ctx, pane, c) == nil
 		}
 	}
 	return false
 }
 
-// choose answers a dialog in pane with one of its choices: its digit for a
-// numbered menu, or the keys that move the cursor there and confirm.
+// choose answers a dialog in pane with one of its choices: cursor movement and
+// Enter when the menu has a cursor, else its digit for a cursorless numbered menu.
 func (sp *Super) choose(ctx context.Context, pane string, c Choice) error {
+	if len(c.Keys) > 0 {
+		return sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": c.Keys}, nil)
+	}
 	if c.Text != "" {
 		return sp.s.herdr.Call(ctx, "pane.send_text", map[string]any{"pane_id": pane, "text": c.Text}, nil)
 	}
-	keys := c.Keys
-	if len(keys) == 0 {
-		keys = []string{"enter"}
-	}
-	return sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": keys}, nil)
+	return sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"enter"}}, nil)
 }
 
 // pickChoice finds the choice the router named: its number as shown ("3"),

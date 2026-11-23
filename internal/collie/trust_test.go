@@ -50,6 +50,13 @@ func TestTrustDialogFor(t *testing.T) {
 	if trustDialogFor(hooks, "/home/u/agent-workspace", "~/agent-workspace") {
 		t.Error("hooks review taken as a folder trust dialog")
 	}
+	codex := "Folder access\n  /Users/u/agent-workspace/collie\n  Trust this folder?\n› 1. Trust and continue\n  2. Back to Agent Command Center\n  enter continue · esc back"
+	if !trustDialogFor(codex, "/Users/u/agent-workspace/collie", "~/agent-workspace/collie") {
+		t.Error("codex trust dialog not recognised")
+	}
+	if !isTrustChoice("Yes, I trust this folder") || !isTrustChoice("Trust and continue") || isTrustChoice("Trust all and continue") || isTrustChoice("No, exit") {
+		t.Error("isTrustChoice mismatch")
+	}
 }
 
 func TestPickChoice(t *testing.T) {

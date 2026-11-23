@@ -988,6 +988,7 @@ func (s *Server) superAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sp.mu.Lock()
+	sp.noteAnsweredLocked(wk)
 	sp.addEntryLocked("event", wk.Thread, "替 "+wk.Name+" 选了："+clip(label, 80), wk.Name, "info")
 	sp.mu.Unlock()
 	writeJSON(w, 200, map[string]any{"ok": true, "picked": label})

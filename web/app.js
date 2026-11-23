@@ -722,14 +722,15 @@
 
   // The dialogs agents are stuck on, read from their screens (pane → {at, a}).
   const superAsks = new Map();
-  async function loadSuperAsk(pane) {
+  async function loadSuperAsk(pane, force) {
     const prev = superAsks.get(pane);
-    if (prev?.loading) return;
-    superAsks.set(pane, { ...prev, at: Date.now(), loading: true });
+    if ((prev?.loading || prev?.sending) && !force) return;
+    superAsks.set(pane, { ...prev, at: Date.now(), loading: true, sending: false });
     let a = null;
     try { const r = await api(paneURL(pane, "ask")); a = r.asking ? r.approval : null; } catch { a = prev?.a || null; }
+    if (superAsks.get(pane)?.sending && !force) return;
     superAsks.set(pane, { at: Date.now(), a });
-    if (JSON.stringify(a) !== JSON.stringify(prev?.a ?? null) && view === "collie") renderSuper();
+    if ((force || JSON.stringify(a) !== JSON.stringify(prev?.a ?? null)) && view === "collie") renderSuper(force);
   }
   setInterval(() => { if (view === "collie" && state.agents.some((x) => x.status === "blocked")) renderSuper(); }, 4000);
   function superAskHTML(a, agent) {
@@ -740,29 +741,45 @@
       <div class="ask-head"><span class="dot blocked"></span><span class="who">${esc(title(agent))}</span><span>需要你确认</span><span class="spacer"></span>
         <a href="#/p/${encodeURIComponent(agent.pane_id)}">打开 →</a></div>
       <div class="ask-q"><div class="q">${esc(q)}</div>${body ? `<div class="ctx">${body}</div>` : ""}</div>
-      ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button class="choice ${c.current ? "current" : ""}" data-choice="${i}">
+      ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button type="button" class="choice ${c.current ? "current" : ""}" data-choice="${i}">
           <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}${c.desc ? `<span class="d">${esc(c.desc)}</span>` : ""}</span></button>`).join("")}</div>
-        <div class="ask-keys"><button data-k="esc">Esc 取消</button></div>`
-      : `<div class="ask-keys"><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="esc">Esc</button><button class="go" data-k="enter">确认 ↵</button></div>`}
+        <div class="ask-keys"><button type="button" data-k="esc">Esc 取消</button></div>`
+      : `<div class="ask-keys"><button type="button" data-k="up">↑</button><button type="button" data-k="down">↓</button><button type="button" data-k="esc">Esc</button><button type="button" class="go" data-k="enter">确认 ↵</button></div>`}
     </div>`;
   }
 
-  $("#super-thread").addEventListener("click", (e) => {
+  $("#super-thread").addEventListener("mousedown", (e) => { if (e.target.closest(".ask button")) e.preventDefault(); });
+  $("#super-thread").addEventListener("click", async (e) => {
     const idea = e.target.closest("[data-idea]")?.dataset.idea;
     if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); }
     // Answering a stuck agent from here.
     const b = e.target.closest("button"), card = b?.closest(".ask[data-pane]");
-    if (!card) return;
+    if (!card || card.dataset.busy) return;
     const pane = card.dataset.pane;
-    const send = (kind, body) => api(paneURL(pane, kind), { body }).catch((err) => toast(err.message));
+    let kind, body;
     if (b.dataset.choice != null) {
       const c = superAsks.get(pane)?.a?.choices?.[+b.dataset.choice];
       if (!c) return;
-      if (c.text) send("text", { text: c.text }); else send("keys", { keys: c.keys || ["enter"] });
-    } else if (b.dataset.k) send("keys", { keys: [b.dataset.k] });
-    else return;
+      if (c.keys?.length) { kind = "keys"; body = { keys: c.keys }; }
+      else if (c.text) { kind = "text"; body = { text: c.text }; }
+      else { kind = "keys"; body = { keys: ["enter"] }; }
+    } else if (b.dataset.k) {
+      kind = "keys"; body = { keys: [b.dataset.k] };
+    } else return;
+    card.dataset.busy = "1";
     card.style.opacity = ".5";
-    superAsks.delete(pane);
+    const cur = superAsks.get(pane);
+    if (cur) cur.sending = true;
+    try {
+      await api(paneURL(pane, kind), { body });
+      await new Promise((r) => setTimeout(r, 350));
+      await loadSuperAsk(pane, true);
+    } catch (err) {
+      if (cur) cur.sending = false;
+      delete card.dataset.busy;
+      card.style.opacity = "";
+      toast(err.message, "attn");
+    }
   });
 
   // Models and thinking efforts each agent offers, per computer (asked once per page).
@@ -2431,18 +2448,28 @@
     </div>`;
   }
 
+  $("#live").addEventListener("mousedown", (e) => { if (e.target.closest(".ask button")) e.preventDefault(); });
   $("#live").addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || !current) return;
     if (b.hasAttribute("data-raw")) { showRaw = !showRaw; if (lastLive) drawLive(lastLive); return; }
+    const ask = b.closest(".ask");
+    if (ask?.dataset.busy) return;
+    let p;
     if (b.dataset.choice != null) {
       const c = lastLive?.approval?.choices?.[+b.dataset.choice];
       if (!c) return;
-      if (c.text) sendText(c.text); else sendKeys(c.keys || ["enter"]);
-      b.closest(".ask").style.opacity = ".5";
-      return;
+      if (c.keys?.length) p = sendKeys(c.keys);
+      else if (c.text) p = sendText(c.text);
+      else p = sendKeys(["enter"]);
+    } else if (b.dataset.k) {
+      p = sendKeys([b.dataset.k]);
+    } else return;
+    if (ask) {
+      ask.dataset.busy = "1";
+      ask.style.opacity = ".5";
+      Promise.resolve(p).finally(() => setTimeout(() => { $("#live")._html = ""; }, 600));
     }
-    if (b.dataset.k) sendKeys([b.dataset.k]);
   });
 
   $("#kbd-toggle").addEventListener("click", () => {
@@ -2641,40 +2668,62 @@
     }
     return out;
   }
-  // A bare link: it ends at a space or Chinese punctuation, and shows as its
-  // host and path, shortened ([name](url) is better still: the name shows).
-  const URL_RE = /(?<![="'>\w\/])https?:\/\/[^\s<>"，。；：、！？）」』】（「『【]+/g;
+  // A bare link: ASCII URL characters up to whitespace, tags or non-ASCII text
+  // and punctuation, shown as its host and path, shortened ([name](url) is
+  // better still: the name shows).
+  const URL_RE = /(?<![A-Za-z0-9_\/])https?:\/\/[^\x00-\x20<>\x7f-\uffff]+/g;
+  const unesc = (s) => s.replace(/&(amp|lt|gt|quot|#39);/g, (m) => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" }[m]));
   const urlLabel = (u) => {
     const s = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return s.length > 42 ? s.slice(0, 40) + "…" : s;
   };
   function mdRender(src) {
     const blocks = [];
-    let text = String(src || "").replace(/```[^\n]*\n([\s\S]*?)(```|$)/g, (_, code) => {
+    let text = String(src || "").replace(/[\u0000\u0001]/g, "").replace(/```[^\n]*\n([\s\S]*?)(```|$)/g, (_, code) => {
       blocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`);
       return `\u0000${blocks.length - 1}\u0000`;
     });
     text = esc(text);
-    const inline = (s) => s
-      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-      // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
-      .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
-        p = p.replace(/:\d+(?:[-:]\d+)?$/, "");
-        try { p = decodeURI(p); } catch {}
-        return `<a class="fpath" href="#" data-path="${p}" title="${p}">${label}</a>`;
-      })
-      .replace(FILE_RE, '$1<a class="fpath" href="#" data-path="$2" title="打开这个文件">$2</a>')
-      .replace(URL_RE, (u) => {
-        let tail = u.match(/[.,;:!?'\]]+$/)?.[0] || ""; // sentence punctuation after a link
-        u = u.slice(0, u.length - tail.length);
-        if (u.endsWith(")") && !u.includes("(")) { u = u.slice(0, -1); tail = ")" + tail; }
-        return `<a class="url" href="${u}" target="_blank" rel="noopener noreferrer" title="${u}">${urlLabel(u)}</a>${tail}`;
-      });
+    const inline = (s) => {
+      const stash = [];
+      const keep = (h) => `\u0001${stash.push(h) - 1}\u0001`;
+      let r = s
+        .replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${c}</code>`))
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
+        // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
+        .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
+          p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
+          try { p = decodeURI(p); } catch {}
+          const ep = esc(p);
+          return keep(`<a class="fpath" href="#" data-path="${ep}" title="${ep}">${label}</a>`);
+        })
+        .replace(URL_RE, (m) => {
+          const raw = unesc(m);
+          const cut = raw.search(/[<>"`]/);
+          let u = cut < 0 ? raw : raw.slice(0, cut);
+          const rest = cut < 0 ? "" : raw.slice(cut);
+          let tail = "";
+          const count = (x, ch) => x.split(ch).length - 1;
+          while (u.length) {
+            if (/[.,;:!?']$/.test(u) ||
+                (u.endsWith(")") && count(u, "(") < count(u, ")")) ||
+                (u.endsWith("]") && count(u, "[") < count(u, "]"))) {
+              tail = u.slice(-1) + tail;
+              u = u.slice(0, -1);
+            } else break;
+          }
+          if (!/^https?:\/\/[^\/.\s]/.test(u)) return m;
+          const eu = esc(u);
+          return keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`) + esc(tail + rest);
+        })
+        .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a class="fpath" href="#" data-path="${p}" title="打开这个文件">${p}</a>`)}`);
+      while (r.includes("\u0001")) r = r.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
+      return r;
+    };
     const out = [];
     let list = null, para = [];
-    const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };
+    const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; } };
     const flushList = () => { if (list) { out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
     // A GFM table: a | row, a |---| row, then more | rows.
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));

@@ -344,6 +344,14 @@ func (h *Herdr) call(ctx context.Context, method string, params any) (json.RawMe
 	if err != nil {
 		return raw, err
 	}
+	if method == "pane.send_keys" || method == "pane.send_text" {
+		if id, _ := p["pane_id"].(string); id != "" {
+			h.mu.Lock()
+			delete(h.asks, id)
+			delete(h.asks, join(id, target))
+			h.mu.Unlock()
+		}
+	}
 	if target != "" {
 		raw = suffixIDs(raw, target)
 	}

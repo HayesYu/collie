@@ -43,6 +43,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/seen", s.superSeen)
 	api("GET /api/super/lark", s.superLark)
 	api("GET /api/super/earlier", s.superEarlier)
+	api("GET /api/super/search", s.superSearch)
 	api("GET /api/super/memory", s.superMemory)
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("POST /api/super/dream", s.superDream)
@@ -728,6 +729,8 @@ func (s *Server) superSeen(w http.ResponseWriter, r *http.Request) {
 
 // superEarlier is Collie's chat before a given entry, a page at a time,
 // oldest first: what the page shows when you scroll back past what it has.
+// Optional `until=<entryID>` jumps straight down to a target message (plus a
+// small context cushion before it) in a single round-trip.
 func (s *Server) superEarlier(w http.ResponseWriter, r *http.Request) {
 	before := idNum(r.URL.Query().Get("before"))
 	if before <= 0 {
@@ -737,15 +740,37 @@ func (s *Server) superEarlier(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	sp.flush() // what memory has but the DB not yet
 	const page = 120
-	es := entryHistory(sp.db, mainThread, before, page+1)
-	more := len(es) > page
-	if more {
-		es = es[:page]
+	var es []*Entry
+	var more bool
+	if until := idNum(r.URL.Query().Get("until")); until > 0 && until < before {
+		es, more = entryHistoryUntil(sp.db, mainThread, before, until, 24, 10000)
+	} else {
+		es = entryHistory(sp.db, mainThread, before, page+1)
+		more = len(es) > page
+		if more {
+			es = es[:page]
+		}
+	}
+	if es == nil {
+		es = []*Entry{}
 	}
 	for i, j := 0, len(es)-1; i < j; i, j = i+1, j-1 {
 		es[i], es[j] = es[j], es[i]
 	}
 	writeJSON(w, 200, map[string]any{"entries": es, "more": more})
+}
+
+// superSearch searches full chat:main history for user/collie messages.
+func (s *Server) superSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	thread := r.URL.Query().Get("thread")
+	limit := defaultSearchLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	writeJSON(w, 200, s.sup.Search(thread, q, limit))
 }
 
 // superLark says whom the hub's lark-cli would write to.

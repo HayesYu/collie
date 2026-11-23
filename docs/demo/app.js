@@ -423,9 +423,25 @@
 
   // Optimistic pin toggles before the hub's next stream frame lands: id -> { pinned, item }.
   const pinnedLocal = new Map();
+  const AT_BOTTOM_PX = 36;
   function normSup(s) {
     s.hasPending = Array.isArray(s.pending);
     s.entries ||= []; s.workers ||= []; s.pending ||= []; s.pinned ||= []; s.router ||= { status: "asleep" };
+    // Preserve entries sliding off the front of the hub's 200-entry window when
+    // earlier pages are loaded or the viewer is reading above the bottom, so an
+    // anchored historical message never vanishes from the DOM on SSE updates.
+    if (sup.entries?.length && s.entries.length) {
+      const sc = $("#super-thread")?.parentElement;
+      const keepSpilled = older.length > 0 || (view === "collie"
+        ? !!(sc && sc.clientHeight > 0 && sc.scrollHeight - sc.scrollTop - sc.clientHeight > AT_BOTTOM_PX)
+        : scrollByRoute.get("collie")?.atBottom === false);
+      if (keepSpilled) {
+        const nextIds = new Set(s.entries.map((e) => e?.id));
+        const oldIds = new Set(older.map((e) => e?.id));
+        const spilled = sup.entries.filter((e) => e?.id && !nextIds.has(e.id) && !oldIds.has(e.id));
+        if (spilled.length) older = [...older, ...spilled];
+      }
+    }
     for (const [id, loc] of pinnedLocal) {
       if (s.pinned.some((p) => p?.id === id) === loc.pinned) pinnedLocal.delete(id);
     }
@@ -515,12 +531,126 @@
     $("#nav-prefs").classList.toggle("active", view === "prefs");
   }
 
-  // ───────────────────────────── routing
+  // ───────────────────────────── routing & scroll restoration
   // Track in-app history depth on history.state so the header back button pops
   // back to the exact caller view when available, and falls back inside Collie
   // on deep links or fresh standalone PWA launches without exiting the app.
   let navCur = typeof history.state?.collieIdx === "number" ? history.state.collieIdx : 0;
   let booted = false;
+  // Saved reading position per history entry (collieIdx) and per logical route.
+  const scrollByIdx = new Map();
+  const scrollByRoute = new Map();
+  let programmaticScrollUntil = 0;
+  let collieRestoreRAF = 0;
+  let activeCollieRestore = null;
+  let scrollTrackRAF = 0;
+
+  const markProgrammaticScroll = (ms = 90) => {
+    programmaticScrollUntil = Math.max(programmaticScrollUntil, performance.now() + ms);
+  };
+  function routeKeyFor(v, id) {
+    if (v === "collie") return "collie";
+    if (v === "auto") return "auto:" + autoTab;
+    if (v === "devices") return "devices";
+    if (v === "prefs") return "prefs";
+    if (v === "ext") return "ext:" + (id || "");
+    if (v === "pane") return "pane:" + (id || "") + ":" + ($("#viewer")?.dataset.mode || curMode());
+    return "";
+  }
+  function viewScroller(v = view) {
+    if (v === "collie") return $("#super-thread")?.parentElement || null;
+    if (v === "auto") return $("#auto-body");
+    if (v === "devices") return $("#devices-body");
+    if (v === "prefs") return $("#prefs-body");
+    if (v === "ext") return $("#x-thread")?.parentElement || null;
+    if (v === "pane") {
+      const m = $("#viewer")?.dataset.mode || curMode();
+      if (m === "screen") return $("#screen");
+      if (m === "log") return $("#log");
+      return scroller($("#thread"));
+    }
+    return null;
+  }
+  function captureCollieAnchor(sc) {
+    const box = $("#super-thread");
+    if (!box || !sc || sc.clientHeight <= 0) return null;
+    const msgs = box.querySelectorAll(".msg[data-id]");
+    if (!msgs.length) return null;
+    const sr = sc.getBoundingClientRect();
+    const edge = sr.top + 4;
+    let lo = 0, hi = msgs.length - 1, pick = msgs[msgs.length - 1];
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const mr = msgs[mid].getBoundingClientRect();
+      if (mr.bottom > edge) {
+        pick = msgs[mid];
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    const anchorId = pick?.dataset.id || "";
+    if (!anchorId) return null;
+    return { anchorId, anchorOffset: pick.getBoundingClientRect().top - sr.top };
+  }
+  function applyCollieAnchor(sc, snap) {
+    if (!sc || !snap) return false;
+    const box = $("#super-thread");
+    if (snap.anchorId && box) {
+      const el = box.querySelector(`.msg[data-id="${CSS.escape(snap.anchorId)}"]`);
+      if (el) {
+        const sr = sc.getBoundingClientRect();
+        const mr = el.getBoundingClientRect();
+        markProgrammaticScroll();
+        sc.scrollTop += (mr.top - sr.top) - snap.anchorOffset;
+        return true;
+      }
+    }
+    markProgrammaticScroll();
+    sc.scrollTop = snap.scrollTop;
+    return false;
+  }
+  function captureViewScroll(v = view, id = (v === "ext" ? extCur : current), idx = navCur) {
+    if (!v) return null;
+    const sc = viewScroller(v);
+    if (!sc || sc.clientHeight <= 0) return null;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    const atBottom = dist <= AT_BOTTOM_PX;
+    const routeKey = routeKeyFor(v, id);
+    const snap = { routeKey, atBottom, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0 };
+    if (v === "collie" && !atBottom) {
+      const anc = captureCollieAnchor(sc);
+      if (anc) {
+        snap.anchorId = anc.anchorId;
+        snap.anchorOffset = anc.anchorOffset;
+      }
+    }
+    if (typeof idx === "number") scrollByIdx.set(idx, snap);
+    if (routeKey) scrollByRoute.set(routeKey, snap);
+    return snap;
+  }
+  function restoreSimpleScroll(el, snap) {
+    if (!el || !snap) return;
+    const apply = () => {
+      if (el.clientHeight <= 0) return;
+      markProgrammaticScroll();
+      el.scrollTop = snap.atBottom ? el.scrollHeight : snap.scrollTop;
+    };
+    apply();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
+  }
+  document.addEventListener("scroll", (ev) => {
+    if (!booted || !view || performance.now() < programmaticScrollUntil) return;
+    const sc = viewScroller(view);
+    if (!sc || ev.target !== sc || sc.clientHeight <= 0) return;
+    if (scrollTrackRAF) return;
+    scrollTrackRAF = requestAnimationFrame(() => {
+      scrollTrackRAF = 0;
+      if (!view || performance.now() < programmaticScrollUntil) return;
+      captureViewScroll(view, view === "ext" ? extCur : current, navCur);
+    });
+  }, { capture: true, passive: true });
+
   function syncHistoryIndex() {
     if (typeof history.state?.collieIdx === "number") {
       navCur = history.state.collieIdx;
@@ -561,6 +691,8 @@
   });
 
   function route() {
+    const prevView = view, prevId = view === "ext" ? extCur : current, prevIdx = navCur;
+    const wasExistingIdx = typeof history.state?.collieIdx === "number";
     syncHistoryIndex();
     let h = location.hash;
     let next = null, id = null;
@@ -586,13 +718,25 @@
     }
     if (next) store.set("last", h);
     if (next === view && id === (next === "ext" ? extCur : current)) return;
+    // Snapshot the departing view right before its DOM is hidden.
+    if (prevView && performance.now() >= programmaticScrollUntil) {
+      captureViewScroll(prevView, prevId, prevIdx);
+    }
     if ($("#app").classList.contains("has-file") && matchMedia("(max-width: 1000px)").matches) closeFilePane();
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (view === "auto" && next !== "auto") clearInterval(autoTimer);
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
-    if (next !== "collie") pendingOpen = false;
+    if (next !== "collie") {
+      pendingOpen = false;
+      hideSearchPanel();
+    }
     view = next; current = next === "ext" ? null : id;
+    const nextKey = routeKeyFor(next, id);
+    const byIdx = wasExistingIdx ? scrollByIdx.get(navCur) : null;
+    const saved = (byIdx && byIdx.routeKey === nextKey ? byIdx : null)
+      || (next === "collie" || next === "auto" || next === "devices" || next === "prefs" ? scrollByRoute.get(nextKey) : null);
+
     document.body.classList.toggle("show-main", !!next);
     $("#v-collie").hidden = next !== "collie";
     $("#v-auto").hidden = next !== "auto";
@@ -601,19 +745,24 @@
     $("#v-ext").hidden = next !== "ext";
     $("#detail").hidden = next !== "pane";
     renderSide();
-    if (next === "collie") { renderSuper(true); renderTarget(true); if (!narrow()) $("#super-input").focus(); }
-    if (next === "auto") openAuto();
-    if (next === "devices") openDevices();
-    if (next === "prefs") renderPrefs();
-    if (next === "ext") openExt(id);
+    if (next === "collie") {
+      if (saved && !saved.atBottom) renderSuper({ force: true, restore: saved });
+      else renderSuper({ force: true, scrollBottom: true });
+      renderTarget(true);
+      if (!narrow() && ($("#super-search")?.hidden ?? true)) $("#super-input").focus({ preventScroll: true });
+    }
+    if (next === "auto") openAuto(saved);
+    if (next === "devices") openDevices(saved);
+    if (next === "prefs") renderPrefs(saved);
+    if (next === "ext") openExt(id, saved);
     if (next === "pane") {
       $("#gone").hidden = true;
       $("#log").textContent = "";
       resetChat();
       resetScreen();
       renderHead();
-      openStream();
-      if (!narrow()) $("#input").focus();
+      openStream(saved);
+      if (!narrow()) $("#input").focus({ preventScroll: true });
     }
   }
   addEventListener("popstate", route);
@@ -844,7 +993,7 @@
   }
   // More before what is shown? Until asked, guess from a full page.
   const canLoadOlder = () => olderMore ?? !!sup.earlier;
-  async function loadOlder(keepPos = true) {
+  async function loadOlder(keepPos = true, untilId = "") {
     const first = chatEntries().find((e) => e.id);
     if (olderBusy || !first) return false;
     olderBusy = true;
@@ -852,11 +1001,17 @@
     const scroller = $("#super-thread").parentElement, fromBottom = scroller.scrollHeight - scroller.scrollTop;
     let added = false;
     try {
-      const r = await api(`/api/super/earlier?before=${encodeURIComponent(first.id)}`);
+      let url = `/api/super/earlier?before=${encodeURIComponent(first.id)}`;
+      if (untilId) url += `&until=${encodeURIComponent(untilId)}`;
+      const r = await api(url);
       const batch = r.entries || [];
       if (batch.length) {
-        older = [...batch, ...older];
-        added = true;
+        const seen = new Set(older.map((x) => x?.id));
+        const fresh = batch.filter((x) => x?.id && !seen.has(x.id));
+        if (fresh.length) {
+          older = [...fresh, ...older];
+          added = true;
+        }
       }
       olderMore = batch.length ? !!r.more : false;
     } catch (e) { olderMore = false; toast(e.message, "attn"); }
@@ -864,6 +1019,7 @@
     renderSuper();
     if (keepPos) {
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+      markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
     }
     return added;
@@ -871,17 +1027,18 @@
   async function jumpToEntry(id) {
     if (!id) return;
     const seq = ++jumpSeq;
+    activeCollieRestore = null;
     pendingOpen = false;
     renderPendingBar();
     const sel = `#v-collie .msg[data-id="${CSS.escape(id)}"]`;
     let m = document.querySelector(sel);
     let guards = 0;
-    while (!m && canLoadOlder() && guards++ < 25) {
+    while (!m && canLoadOlder() && guards++ < 40) {
       while (olderBusy) await new Promise((r) => setTimeout(r, 35));
       if (seq !== jumpSeq) return;
       m = document.querySelector(sel);
       if (m) break;
-      const ok = await loadOlder(false);
+      const ok = await loadOlder(false, id);
       if (seq !== jumpSeq) return;
       m = document.querySelector(sel);
       if (!ok) break;
@@ -898,6 +1055,7 @@
     }
     flashEntry = { id, until: Date.now() + 2200 };
     await scrollToAsync(sc, want, smooth ? "smooth" : "auto");
+    captureViewScroll("collie", null, navCur);
     updateSuperJump();
     if (seq !== jumpSeq) return;
     flashEntry = { id, until: Date.now() + 1550 };
@@ -913,10 +1071,263 @@
       }
     }, 1600);
   }
-  function renderSuper(force) {
+
+  // ───────────────────────────── Collie conversation search
+  let searchTimer = 0, searchAbort = null, searchSeq = 0;
+  let searchQuery = "", searchHits = [], searchTotal = 0, searchHasMore = false, searchIdx = -1;
+  {
+    const btn = $("#super-search-btn"), wrap = $("#super-search"), input = $("#super-search-input");
+    const clearBtn = $("#super-search-clear"), closeBtn = $("#super-search-close");
+    const metaEl = $("#super-search-meta"), panel = $("#super-search-panel");
+    const headEl = $("#super-search-head"), listEl = $("#super-search-list");
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+    if (btn && matchMedia("(pointer: fine)").matches) {
+      btn.title = `搜索对话 (${isMac ? "⌘K" : "Ctrl+K"})`;
+    }
+    const highlightSnippet = (snippet, q) => {
+      const text = String(snippet || "");
+      const terms = [...new Set(String(q || "").trim().split(/\s+/).filter(Boolean))].sort((a, b) => b.length - a.length);
+      if (!terms.length || !text) return esc(text);
+      const re = new RegExp("(" + terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+      let out = "", pos = 0;
+      for (const m of text.matchAll(re)) {
+        if (m.index > pos) out += esc(text.slice(pos, m.index));
+        if (!m[0]) continue;
+        out += `<mark>${esc(m[0])}</mark>`;
+        pos = m.index + m[0].length;
+      }
+      if (pos < text.length) out += esc(text.slice(pos));
+      return out;
+    };
+    const syncSearchActive = (scrollInto = true) => {
+      if (!listEl || !input) return;
+      const items = $$(".ss-item", listEl);
+      items.forEach((el, idx) => {
+        const on = idx === searchIdx;
+        el.classList.toggle("active", on);
+        el.setAttribute("aria-selected", String(on));
+        if (on && scrollInto) el.scrollIntoView({ block: "nearest" });
+      });
+      const activeId = searchIdx >= 0 && items[searchIdx] ? items[searchIdx].id : "";
+      if (activeId) input.setAttribute("aria-activedescendant", activeId);
+      else input.removeAttribute("aria-activedescendant");
+    };
+    function showSearchPanel() {
+      if (!panel || !input) return;
+      panel.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+    }
+    window.__collieHideSearchPanel = () => {
+      if (!panel || !input) return;
+      panel.hidden = true;
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
+    };
+    const renderSearchResults = (q, hits, total, hasMore) => {
+      searchQuery = q;
+      searchHits = hits;
+      searchTotal = total;
+      searchHasMore = hasMore;
+      if (!q) {
+        metaEl.hidden = true;
+        metaEl.textContent = "";
+        headEl.hidden = true;
+        listEl.innerHTML = "";
+        searchIdx = -1;
+        window.__collieHideSearchPanel();
+        return;
+      }
+      metaEl.hidden = false;
+      metaEl.textContent = hasMore ? `${hits.length}/${total} 条` : `${total} 条`;
+      if (!hits.length) {
+        headEl.hidden = true;
+        listEl.innerHTML = `<div class="ss-empty">没有找到包含「${esc(q)}」的对话</div>`;
+        searchIdx = -1;
+        showSearchPanel();
+        input.removeAttribute("aria-activedescendant");
+        return;
+      }
+      headEl.hidden = false;
+      headEl.innerHTML = `<span>${hasMore ? `找到 ${total} 条，显示最近 ${hits.length} 条` : `找到 ${total} 条相关消息`}</span><span class="ss-hint">↑↓ 选择 · ↵ 定位</span>`;
+      searchIdx = 0;
+      listEl.innerHTML = hits.map((h, i) => {
+        const who = h.role === "user" ? "你" : "Collie";
+        const at = +new Date(h.at) || 0;
+        return `<button type="button" class="ss-item${i === 0 ? " active" : ""}" id="ss-opt-${i}" role="option" aria-selected="${i === 0}" data-hit-id="${esc(h.id)}">
+          <div class="ss-top"><span class="ss-who ${h.role === "user" ? "user" : "collie"}">${who}</span><span class="ss-when"${at ? ` title="${esc(fullTime(at))}"` : ""}>${esc(at ? sepTime(at) : "")}</span></div>
+          <div class="ss-snip">${highlightSnippet(h.snippet, q)}</div>
+        </button>`;
+      }).join("");
+      showSearchPanel();
+      syncSearchActive(false);
+    };
+    const runSuperSearch = async (raw) => {
+      const q = String(raw || "").trim();
+      const seq = ++searchSeq;
+      searchAbort?.abort();
+      if (!q) {
+        renderSearchResults("", [], 0, false);
+        return;
+      }
+      const ctrl = new AbortController();
+      searchAbort = ctrl;
+      try {
+        const res = await fetch(`/api/super/search?q=${encodeURIComponent(q)}&limit=30`, {
+          credentials: "same-origin",
+          signal: ctrl.signal,
+        });
+        noteBuild(res.headers.get("X-Collie-Web"));
+        if (res.status === 401) { showLogin(); return; }
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        if (seq !== searchSeq || input.value.trim() !== q) return;
+        renderSearchResults(q, data.results || [], data.total || 0, !!data.has_more);
+      } catch (err) {
+        if (err?.name === "AbortError" || seq !== searchSeq) return;
+      }
+    };
+    const openSuperSearch = (selectExisting = false) => {
+      if (!wrap || !input || !btn) return;
+      const wasHidden = wrap.hidden;
+      wrap.hidden = false;
+      btn.classList.add("on");
+      btn.setAttribute("aria-expanded", "true");
+      input.focus({ preventScroll: true });
+      if (selectExisting && !wasHidden && input.value) input.select();
+      const q = input.value.trim();
+      if (q) {
+        if (q === searchQuery && (searchHits.length || !panel.hidden)) showSearchPanel();
+        else runSuperSearch(q);
+      }
+    };
+    const closeSuperSearch = (refocus = false) => {
+      if (!wrap || !input || !btn) return;
+      clearTimeout(searchTimer);
+      searchAbort?.abort();
+      searchSeq++;
+      window.__collieHideSearchPanel();
+      wrap.hidden = true;
+      btn.classList.remove("on");
+      btn.setAttribute("aria-expanded", "false");
+      if (refocus && view === "collie") {
+        if (!narrow()) $("#super-input")?.focus({ preventScroll: true });
+        else btn.focus({ preventScroll: true });
+      }
+    };
+    const selectSearchHit = (id) => {
+      if (!id) return;
+      window.__collieHideSearchPanel();
+      if (narrow()) input?.blur();
+      jumpToEntry(id);
+    };
+    btn?.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (wrap.hidden) openSuperSearch(false);
+      else closeSuperSearch(true);
+    });
+    clearBtn?.addEventListener("click", () => {
+      clearTimeout(searchTimer);
+      searchAbort?.abort();
+      searchSeq++;
+      input.value = "";
+      clearBtn.hidden = true;
+      renderSearchResults("", [], 0, false);
+      input.focus({ preventScroll: true });
+    });
+    closeBtn?.addEventListener("click", () => closeSuperSearch(true));
+    input?.addEventListener("input", () => {
+      const raw = input.value;
+      clearBtn.hidden = !raw.length;
+      clearTimeout(searchTimer);
+      if (!raw.trim()) {
+        searchAbort?.abort();
+        searchSeq++;
+        renderSearchResults("", [], 0, false);
+        return;
+      }
+      searchTimer = setTimeout(() => runSuperSearch(raw), 180);
+    });
+    input?.addEventListener("focus", () => {
+      const q = input.value.trim();
+      if (q && q === searchQuery && panel.hidden) showSearchPanel();
+    });
+    input?.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "ArrowDown" && searchHits.length) {
+        e.preventDefault();
+        if (panel.hidden) showSearchPanel();
+        searchIdx = (searchIdx + 1) % searchHits.length;
+        syncSearchActive(true);
+      } else if (e.key === "ArrowUp" && searchHits.length) {
+        e.preventDefault();
+        if (panel.hidden) showSearchPanel();
+        searchIdx = (searchIdx - 1 + searchHits.length) % searchHits.length;
+        syncSearchActive(true);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const q = input.value.trim();
+        if (!q) return;
+        if (q === searchQuery && searchHits.length) {
+          const hit = searchHits[Math.max(0, searchIdx)];
+          if (hit?.id) selectSearchHit(hit.id);
+        } else {
+          clearTimeout(searchTimer);
+          runSuperSearch(q);
+        }
+      }
+    });
+    listEl?.addEventListener("mousemove", (e) => {
+      const item = e.target.closest(".ss-item");
+      if (!item) return;
+      const idx = $$(".ss-item", listEl).indexOf(item);
+      if (idx >= 0 && idx !== searchIdx) {
+        searchIdx = idx;
+        syncSearchActive(false);
+      }
+    });
+    listEl?.addEventListener("click", (e) => {
+      const item = e.target.closest(".ss-item[data-hit-id]");
+      if (item) {
+        e.preventDefault();
+        selectSearchHit(item.dataset.hitId);
+      }
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (!wrap || wrap.hidden) return;
+      if (wrap.contains(e.target) || btn?.contains(e.target)) return;
+      if (!input.value.trim()) closeSuperSearch(false);
+      else window.__collieHideSearchPanel();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (view !== "collie" || document.querySelector("dialog[open]")) return;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openSuperSearch(true);
+        return;
+      }
+      if (e.key === "Escape" && wrap && !wrap.hidden && !e.isComposing && e.keyCode !== 229) {
+        if (pickOpen || pendingOpen || !$("#file-view")?.hidden) return;
+        e.preventDefault();
+        closeSuperSearch(true);
+      }
+    });
+  }
+  function hideSearchPanel() {
+    window.__collieHideSearchPanel?.();
+  }
+
+  function renderSuper(opts) {
+    const force = opts === true || !!opts?.force;
+    const forceBottom = !!opts?.scrollBottom;
+    const restore = opts?.restore || null;
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
     const scroller = box.parentElement;
-    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    const holdRestore = !forceBottom && (restore || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
+    const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : distBefore <= AT_BOTTOM_PX;
+    const jumping = flashEntry.until > Date.now();
+    const liveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy ? captureCollieAnchor(scroller) : null;
+    const prevScrollTop = scroller.scrollTop;
     const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew.innerHTML;
     const r = sup.router || {};
     $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "";
@@ -1081,19 +1492,45 @@
     } else if (!busyChanged && !crewChanged) {
       return;
     }
-    const jumping = flashEntry.until > Date.now();
-    if ((atBottom && !jumping) || force) {
+    if (holdRestore && !holdRestore.atBottom) {
+      activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(superScrollRAF);
+        cancelAnimationFrame(collieRestoreRAF);
+      }
+      applyCollieAnchor(scroller, holdRestore);
+      updateSuperJump();
+      if (typeof requestAnimationFrame === "function") {
+        collieRestoreRAF = requestAnimationFrame(() => {
+          if (view !== "collie" || !activeCollieRestore) return;
+          applyCollieAnchor(scroller, activeCollieRestore);
+          captureViewScroll("collie", null, navCur);
+          updateSuperJump();
+        });
+      }
+      return;
+    }
+    if ((atBottom && !jumping) || forceBottom) {
+      activeCollieRestore = null;
+      markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
       const set = scroller.scrollTop;
       if (typeof requestAnimationFrame === "function") {
         if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
         superScrollRAF = requestAnimationFrame(() => {
-          if (scroller.scrollTop === set) scroller.scrollTop = scroller.scrollHeight;
+          if (scroller.scrollTop === set) {
+            markProgrammaticScroll();
+            scroller.scrollTop = scroller.scrollHeight;
+          }
+          captureViewScroll("collie", null, navCur);
           updateSuperJump();
         });
       }
-    } else if (typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(superScrollRAF);
+    } else {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+      if (!jumping && !olderBusy && liveAnchor) {
+        applyCollieAnchor(scroller, { anchorId: liveAnchor.anchorId, anchorOffset: liveAnchor.anchorOffset, scrollTop: prevScrollTop });
+      }
     }
     updateSuperJump();
   }
@@ -1101,12 +1538,20 @@
   {
     const sc = $("#super-thread")?.parentElement;
     sc?.addEventListener("scroll", updateSuperJump, { passive: true });
-    sc?.addEventListener("wheel", (e) => { if (e.deltaY < 0 && superJumpHiding) { superJumpHiding = false; updateSuperJump(); } }, { passive: true });
-    sc?.addEventListener("touchmove", () => { if (superJumpHiding) superJumpHiding = false; }, { passive: true });
+    sc?.addEventListener("wheel", (e) => {
+      activeCollieRestore = null;
+      if (e.deltaY < 0 && superJumpHiding) { superJumpHiding = false; updateSuperJump(); }
+    }, { passive: true });
+    sc?.addEventListener("touchmove", () => {
+      activeCollieRestore = null;
+      if (superJumpHiding) superJumpHiding = false;
+    }, { passive: true });
+    sc?.addEventListener("pointerdown", () => { activeCollieRestore = null; }, { passive: true });
     addEventListener("resize", updateSuperJump);
     $("#super-jump")?.addEventListener("click", async () => {
       if (!sc) return;
       jumpSeq++;
+      activeCollieRestore = null;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       superJumpHiding = true;
       updateSuperJump();
@@ -1115,7 +1560,9 @@
         sc.scrollTop = sc.scrollHeight - sc.clientHeight * 1.8;
       }
       await scrollToAsync(sc, sc.scrollHeight, smooth ? "smooth" : "auto");
+      markProgrammaticScroll();
       sc.scrollTop = sc.scrollHeight;
+      captureViewScroll("collie", null, navCur);
       superJumpHiding = false;
       updateSuperJump();
     });
@@ -1131,7 +1578,7 @@
     try { const r = await api(paneURL(pane, "ask")); a = r.asking ? r.approval : null; } catch { a = prev?.a || null; }
     if (superAsks.get(pane)?.sending && !force) return;
     superAsks.set(pane, { at: Date.now(), a });
-    if ((force || JSON.stringify(a) !== JSON.stringify(prev?.a ?? null)) && view === "collie") renderSuper(force);
+    if ((force || JSON.stringify(a) !== JSON.stringify(prev?.a ?? null)) && view === "collie") renderSuper(force ? { force: true } : undefined);
   }
   setInterval(() => { if (view === "collie" && state.agents.some((x) => x.status === "blocked")) renderSuper(); }, 4000);
   function superAskHTML(a, agent) {
@@ -1295,8 +1742,9 @@
     // Your message shows at once; the hub's copy takes its place when it arrives.
     const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
+    activeCollieRestore = null;
     renderSide();
-    renderSuper(true);
+    renderSuper({ force: true, scrollBottom: true });
     let r;
     try {
       r = await api("/api/super/say", { body: { text, re: re?.entry || "",
@@ -1309,7 +1757,7 @@
       if (idx >= 0) pendingSays.splice(idx, 1);
       if (restoreRe && re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry));
       renderSide();
-      renderSuper(true);
+      renderSuper({ force: true });
       throw err;
     }
     // The hub's copy may already be here (its push beat the reply): swap now.
@@ -1318,7 +1766,7 @@
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0) pendingSays.splice(idx, 1);
       renderSide();
-      renderSuper(true);
+      renderSuper({ force: true });
     }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }
@@ -1370,30 +1818,46 @@
   $("#auto-tabs").addEventListener("click", (e) => {
     const t = e.target.closest("button")?.dataset.tab;
     if (!t) return;
+    if (view === "auto") captureViewScroll("auto", null, navCur);
     autoTab = t; store.set("autoTab", t);
-    openAuto();
+    const saved = scrollByRoute.get("auto:" + autoTab) || null;
+    if (!saved) { markProgrammaticScroll(); $("#auto-body").scrollTop = 0; }
+    openAuto(saved);
   });
 
   // The follow-up line under 自动化 opens the open tasks (top of 记忆).
-  $("#nav-auto-sub").addEventListener("click", () => { if (sup.follow?.next) { autoTab = "memory"; store.set("autoTab", autoTab); if (view === "auto") openAuto(); } });
+  $("#nav-auto-sub").addEventListener("click", () => {
+    if (sup.follow?.next) {
+      autoTab = "memory"; store.set("autoTab", autoTab);
+      scrollByRoute.delete("auto:memory");
+      if (view === "auto") { markProgrammaticScroll(); $("#auto-body").scrollTop = 0; openAuto(); }
+    }
+  });
 
-  function openAuto() {
+  function openAuto(restore = null) {
     memEditing = false;
     $("#auto-body")._memSig = "";
     $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
+    if (restore) restoreSimpleScroll($("#auto-body"), restore);
     clearInterval(autoTimer);
-    loadAuto();
-    if (autoTab === "inbox" || autoTab === "threads") autoTimer = setInterval(loadAuto, 4000);
+    loadAuto(restore);
+    if (autoTab === "inbox" || autoTab === "threads") autoTimer = setInterval(() => loadAuto(), 4000);
     if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
   }
 
-  async function loadAuto() {
+  async function loadAuto(restore = null) {
     const body = $("#auto-body");
+    const keepTop = !restore && body.clientHeight > 0 ? { scrollTop: body.scrollTop, atBottom: body.scrollHeight - body.scrollTop - body.clientHeight <= AT_BOTTOM_PX } : null;
+    const applyAfter = () => {
+      if (restore) restoreSimpleScroll(body, restore);
+      else if (keepTop && !keepTop.atBottom) { markProgrammaticScroll(); body.scrollTop = keepTop.scrollTop; }
+    };
     try {
       if (autoTab === "inbox" || autoTab === "threads") {
         const r = await api("/api/super/triggers");
         if (view !== "auto") return;
         body.innerHTML = autoTab === "inbox" ? inboxHTML(r.triggers || []) : threadsHTML(r.threads || []);
+        applyAfter();
       } else if (autoTab === "memory") {
         const r = await api("/api/super/memory");
         if (view !== "auto" || autoTab !== "memory" || memEditing) return;
@@ -1404,6 +1868,9 @@
           const first = !body._memSig;
           body._memSig = sig; body.innerHTML = memoryHTML(r);
           if (!first) body.querySelectorAll("details").forEach((d) => d.open = open.has(d.dataset.path || d.querySelector("summary")?.textContent));
+          applyAfter();
+        } else if (restore) {
+          restoreSimpleScroll(body, restore);
         }
         return;
       } else if (autoTab === "timers") {
@@ -1412,9 +1879,11 @@
         const endedOpen = !!body.querySelector("details[data-ended-timers][open]");
         body.innerHTML = timersHTML(r.timers || []);
         if (endedOpen) { const d = body.querySelector("details[data-ended-timers]"); if (d) d.open = true; }
+        applyAfter();
       } else {
         const r = await api("/api/super/settings");
         body.innerHTML = autoTab === "hooks" ? hooksHTML(r) : settingsHTML(r);
+        applyAfter();
         if (autoTab !== "hooks") api("/api/super/lark?fresh").then((l) => {
           const el = $("#lark-who");
           if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
@@ -1909,14 +2378,15 @@
     b.disabled = !on;
     $("#x-forget").hidden = !h;
   }
-  async function openHist(hid) {
+  async function openHist(hid, restore = null) {
     const el = $("#x-thread");
     resetEarlier(el, null); el._msgs = null;
+    el._restore = restore && !restore.atBottom ? restore : null;
     primeThread(el, "h:" + hid);
     if (!hist.some((h) => h.id === hid)) await loadHistory();
     renderHistHead(hid);
     const h = hist.find((x) => x.id === hid);
-    if (!h) { el.innerHTML = ""; return; }
+    if (!h) { el.innerHTML = ""; el._restore = null; return; }
     try {
       const q = new URLSearchParams({ kind: h.kind, session: h.session, cwd: h.cwd });
       if (h.machine) q.set("machine", h.machine);
@@ -1929,6 +2399,7 @@
         el._redraw();
       }
     } catch (err) {
+      el._restore = null;
       if (view === "ext" && extCur === "h:" + hid) el.innerHTML = `<div class="thread-empty">${esc(err.message)}</div>`;
     }
   }
@@ -2110,12 +2581,13 @@
     extAll = !extAll; store.set("extAll", extAll);
     renderExt();
   });
-  async function openExt(id) {
+  async function openExt(id, restore = null) {
     closeExt();
     extCur = id;
-    if (id.startsWith("h:")) return openHist(id.slice(2));
+    if (id.startsWith("h:")) return openHist(id.slice(2), restore);
     const el = $("#x-thread");
     el._msgs = null;
+    el._restore = restore && !restore.atBottom ? restore : null;
     primeThread(el, "x:" + id);
     resetEarlier(el, (c) => `/api/external/${encodeURIComponent(id)}/earlier?before=${c}`);
     extSoonN = 0;
@@ -2188,7 +2660,7 @@
   darkMQ.addEventListener("change", applyLook);
   applyLook();
 
-  function renderPrefs() {
+  function renderPrefs(restore = null) {
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
     const sw = (key, on) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"></button>`;
@@ -2212,6 +2684,7 @@
       </div>
       <p class="panel-intro">Collie 本身的设置（它自己用哪个 agent、派活默认在哪台电脑、通知机器人）在 <a href="#/auto" data-auto-tab="settings">自动化 → 设置</a>；电脑和手机的连接在 <a href="#/devices">设备</a>。</p>
     </div>`;
+    if (restore) restoreSimpleScroll($("#prefs-body"), restore);
   }
   $("#prefs-body").addEventListener("click", async (e) => {
     const link = e.target.closest("a[data-auto-tab]");
@@ -2238,10 +2711,11 @@
   let devAddr = store.get("pairAddr", "");
   let pairing = { browser: null, machine: null }; // {code, expires}
 
-  function openDevices() {
+  function openDevices(restore = null) {
     clearInterval(devTimer);
-    loadDevices();
-    devTimer = setInterval(loadDevices, 5000);
+    if (restore) restoreSimpleScroll($("#devices-body"), restore);
+    loadDevices(restore);
+    devTimer = setInterval(() => loadDevices(), 5000);
   }
 
   async function newCode(kind) {
@@ -2280,9 +2754,11 @@
   const updateRow = (have, latest, cmd, note, id, name) => isOld(have, latest)
     ? `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}">更新到 ${esc(latest)}</button></p><p class="pair-hint muted">点了没反应的话，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : "";
 
-  async function loadDevices() {
+  async function loadDevices(restore = null) {
+    const body = $("#devices-body");
+    const keepTop = !restore && body.clientHeight > 0 ? { scrollTop: body.scrollTop, atBottom: body.scrollHeight - body.scrollTop - body.clientHeight <= AT_BOTTOM_PX } : null;
     let r;
-    try { r = await api("/api/devices"); } catch (err) { $("#devices-body").innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; return; }
+    try { r = await api("/api/devices"); } catch (err) { body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; return; }
     if (view !== "devices") return;
     const addrs = r.addresses || [];
     if (!addrs.includes(devAddr)) devAddr = addrs[0] || location.origin;
@@ -2358,6 +2834,8 @@
         : `<li class="empty-row">还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。</li>`}
       </ul></div>`;
     document.querySelectorAll("#add-hub input").forEach((i, n) => { i.value = typed[n] || ""; });
+    if (restore) restoreSimpleScroll(body, restore);
+    else if (keepTop && !keepTop.atBottom) { markProgrammaticScroll(); body.scrollTop = keepTop.scrollTop; }
   }
 
   $("#devices-body").addEventListener("change", (e) => {
@@ -2599,26 +3077,29 @@
   $("#term-fit").addEventListener("click", () => { store.set("term-overview", !store.get("term-overview", false)); fitTerm(); });
   $("#term-kbd").addEventListener("click", () => term?.focus());
 
-  function openStream() {
+  function openStream(restore = null) {
     const id = current;
     applyMode();
     const m = curMode();
-    if (m === "chat") return openChat(id);
+    if (m === "chat") return openChat(id, restore);
     if (m === "screen") ensureTerm();
+    let pendingRestore = restore && !restore.atBottom ? restore : null;
     stream = openES(paneURL(id, "stream") + "?mode=" + m);
     stream.addEventListener("frame", (e) => {
       if (id !== current) return;
       const f = JSON.parse(e.data);
-      if (m === "screen") drawScreen(f); else drawLog(f.text);
+      if (m === "screen") drawScreen(f, pendingRestore);
+      else drawLog(f.text, pendingRestore);
+      pendingRestore = null;
     });
     stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
   }
   function closeStream() { stream?.close(); stream = null; term?.blur(); }
 
-  function drawScreen(f) {
+  function drawScreen(f, restore = null) {
     if (!term) return;
     const el = $("#screen");
-    const stick = screenFresh || screenNearBottom();
+    const stick = restore ? !!restore.atBottom : (screenFresh || screenNearBottom());
     const raw = (f.text || "").replace(/\r\n/g, "\n").replace(/\r/g, "");
     const lines = raw ? raw.split("\n") : [""];
     if (!screenFresh && term.hasSelection()) {
@@ -2636,7 +3117,7 @@
       }
     }
     pendingScreen = null;
-    const savedTop = el.scrollTop;
+    const savedTop = restore && !restore.atBottom ? restore.scrollTop : el.scrollTop;
     const cols = f.cols || size.cols || 120;
     const paneRows = f.rows || size.rows || 40;
     const rows = Math.max(1, lines.length);
@@ -2678,10 +3159,15 @@
       .map((l) => (/^\s*[─━═\-]{16,}\s*$/.test(l) ? "────────────────" : l))
       .join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
   }
-  function drawLog(text) {
+  function drawLog(text, restore = null) {
     const el = $("#log");
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    const atBottom = restore ? !!restore.atBottom : (el.scrollHeight - el.scrollTop - el.clientHeight < 40);
     el.textContent = cleanLog(text);
+    if (restore && !restore.atBottom) {
+      restoreSimpleScroll(el, restore);
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) hideJump(); else $("#jump").hidden = false;
+      return;
+    }
     if (atBottom) { el.scrollTop = el.scrollHeight; hideJump(); } else $("#jump").hidden = false;
   }
   $("#screen").addEventListener("scroll", () => {
@@ -2718,14 +3204,15 @@
     $("#thread").classList.remove("asking");
     $("#live").hidden = true;
     $("#live").innerHTML = "";
-    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; showRaw = false;
+    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; $("#thread")._restore = null; showRaw = false;
   }
-  function openChat(id) {
+  function openChat(id, restore = null) {
     stream = openES(paneURL(id, "chat"));
     const alive = () => id === current && curMode() === "chat";
     stream.addEventListener("reset", () => alive() && resetChat());
     const th = $("#thread");
     resetEarlier(th, (c) => paneURL(id, "earlier") + "?before=" + c);
+    th._restore = restore && !restore.atBottom ? restore : null;
     th._redraw = () => alive() && drawThread(threadMsgs(th));
     if (!th._msgs) primeThread(th, "p:" + id);
     const showPane = (msgs) => { keepThread("p:" + id, msgs); drawThread(msgs); };
@@ -2796,6 +3283,7 @@
   // Any conversation scrolled to its top brings in the page before: each
   // thread says how (_loadMore), this one listener notices.
   document.addEventListener("scroll", (ev) => {
+    if (performance.now() < programmaticScrollUntil) return;
     const s = ev.target;
     if (!(s instanceof Element) || s.scrollTop >= 40 || s.scrollHeight <= s.clientHeight + 100) return;
     const el = s._loadMore ? s : [...s.querySelectorAll(".thread")].find((t) => t._loadMore && (t.parentElement === s || scroller(t) === s));
@@ -2838,8 +3326,9 @@
     form.requestSubmit();
   });
   function drawThread(msgs, el = $("#thread"), empty = "还没有对话。发一条消息开始吧。") {
-    // Just opened: start at the latest message.
-    const was = el._fresh || nearBottom(el) || !el.childElementCount;
+    const rest = el._restore;
+    // Just opened: start at the latest message, unless restoring a scroll position.
+    const was = rest ? !!rest.atBottom : (el._fresh || nearBottom(el) || !el.childElementCount);
     if (msgs.length) el._fresh = false;
     const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
     if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._blocks = null; return; }
@@ -2923,7 +3412,12 @@
       el.innerHTML = sig;
     }
     el._blocks = blocks; el._last = el.lastElementChild;
-    stick(el, was);
+    if (rest && !rest.atBottom) {
+      restoreSimpleScroll(scroller(el), rest);
+      if (msgs.length && !el.querySelector(".thread-skel")) el._restore = null;
+    } else {
+      stick(el, was);
+    }
     // Too short to scroll, with more before it: there is no top to scroll
     // to, so bring the earlier page in now.
     if (el._earlierURL && !el._loadingEarlier && !el._earlierFailed && earlierCursor(el) > 0) {
@@ -3729,7 +4223,7 @@
     let out = mdCache.get(key);
     if (out === undefined) {
       out = mdRender(key);
-      if (mdCache.size > 3000) mdCache.delete(mdCache.keys().next().value);
+      if (mdCache.size > 8000) mdCache.delete(mdCache.keys().next().value);
       mdCache.set(key, out);
     }
     return out;
@@ -4210,7 +4704,7 @@
     const v = window.visualViewport;
     const root = document.documentElement.style;
     // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-    const pinned = [...document.querySelectorAll(".viewer, #log, #screen")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    const pinned = [...document.querySelectorAll(".viewer, #log, #screen")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
     root.setProperty("--vh", (v ? v.height : innerHeight) + "px");
     pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
     root.setProperty("--vtop", (v ? Math.max(0, v.offsetTop) : 0) + "px");

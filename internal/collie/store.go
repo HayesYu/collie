@@ -78,6 +78,22 @@ type Entry struct {
 	Check bool `json:"check,omitempty"`
 }
 
+// SearchHit is one matched user/collie message in a conversation search.
+type SearchHit struct {
+	ID      string    `json:"id"`
+	Role    string    `json:"role"`
+	At      time.Time `json:"at"`
+	Snippet string    `json:"snippet"`
+}
+
+// SearchResult is the response payload of GET /api/super/search.
+type SearchResult struct {
+	Query   string      `json:"query"`
+	Results []SearchHit `json:"results"`
+	Total   int         `json:"total"`
+	HasMore bool        `json:"has_more"`
+}
+
 // A Quote is what a reply answers: a message of yours, a worker's work, a timer.
 type Quote struct {
 	Entry  string `json:"entry,omitempty"`  // your message it answers

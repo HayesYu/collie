@@ -12,7 +12,7 @@
   // ───────────────────────────── the scene
   const machines = [
     { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.38", agents: ["claude", "codex"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.39", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -36,6 +36,13 @@
   const dismissed = new Set();
   const entry = (role, text, o = {}) => ({ id: "e" + (++seq), role, thread: "chat:main", text, at: o.at || new Date().toISOString(), ...o });
   const earlierEntries = [
+    { id: "e62", role: "user", thread: "chat:main", text: "帮我查一下 shop-api 里优惠券接口 SCHEMA_AND_ID 校验报错的栈，看看是不是上周迁移改出来的。", at: ago(60 * 52) },
+    { id: "e63", role: "collie", thread: "chat:main", text: "查到了：`coupon_validator.go` 在空购物车时跳过了 `SCHEMA_AND_ID` 默认值填充，导致老客户端传空串时返回 400。已经在 `~/code/shop-api/internal/coupons/validator.go` 补上兜底并加了单测。", at: ago(60 * 51.8) },
+    { id: "e64", role: "event", thread: "chat:main", tone: "done", ref: "coupon-fix", text: "coupon-fix 回报：已修复 SCHEMA_AND_ID 空值校验并补单测。", at: ago(60 * 51.5) },
+    { id: "e68", role: "user", thread: "chat:main", text: "结算页的缓存过期配置是不是要改名？顺便把压测基线跑一下。", at: ago(60 * 38) },
+    { id: "e69", role: "collie", thread: "chat:main", text: "对，`cart.ttl` 统一改成 `cart.expire_after`（兼容旧字段一个版本）。1020 并发压测跑完了，P99 从 142ms 降到 89ms，报告在 [压测看板](https://metrics.example.com/shop-api/run-1020) 可以直接看。", at: ago(60 * 37.5) },
+    { id: "e74", role: "user", thread: "chat:main", text: "商品图片首屏加载有点慢，让 macbook 上的 Claude 改成懒加载试试。", at: ago(60 * 26) },
+    { id: "e75", role: "collie", thread: "chat:main", text: "已经改好合入了：首屏大图保留高优先级，折叠区下方的商品卡片全部加上 `loading=\"lazy\"`，首屏体积少了约 30%。", at: ago(60 * 25.4) },
     { id: "e80", role: "user", thread: "chat:main", text: "明天早上提醒我看一下 v1.4 的发布清单。", at: ago(60 * 18) },
     { id: "e81", role: "collie", thread: "chat:main", text: "好，明早 09:00 提醒你。", at: ago(60 * 18) },
   ];
@@ -403,9 +410,51 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       pushAll();
       return json({ ok: true, pinned: !!body.pinned });
     }
-    if (p === "/api/super/earlier") { // yesterday's chat, made up
-      if (q.get("before") === "e80") return json({ more: false, entries: [] });
-      return json({ more: false, entries: earlierEntries });
+    if (p === "/api/super/earlier") { // earlier history pages + direct `until` jump
+      const idN = (id) => parseInt(String(id || "").replace(/^[a-z]+/i, ""), 10) || 0;
+      const beforeN = idN(q.get("before")), untilN = idN(q.get("until"));
+      const pool = earlierEntries.filter((e) => idN(e.id) < beforeN);
+      if (!pool.length) return json({ more: false, entries: [] });
+      const pageSize = 4;
+      let slice;
+      if (untilN > 0 && untilN < beforeN) {
+        const idx = pool.findIndex((e) => idN(e.id) >= untilN);
+        const start = idx < 0 ? 0 : Math.max(0, idx - 2);
+        slice = pool.slice(start);
+        return json({ more: start > 0, entries: slice });
+      }
+      const start = Math.max(0, pool.length - pageSize);
+      slice = pool.slice(start);
+      return json({ more: start > 0, entries: slice });
+    }
+    if (p === "/api/super/search") {
+      const rawQ = (q.get("q") || "").trim();
+      const lim = Math.min(50, Math.max(1, parseInt(q.get("limit") || "30", 10) || 30));
+      if (!rawQ) return json({ query: "", results: [], total: 0, has_more: false });
+      const terms = [...new Set(rawQ.toLowerCase().split(/\s+/).filter(Boolean))];
+      const all = [...earlierEntries, ...entries].filter((e) => e.role === "user" || e.role === "collie");
+      const cleanOne = (e, withLinks) => {
+        let t = String(e.text || "").replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " $1 ");
+        if (!withLinks) t = t.replace(/\[image:[^\]]+\]/g, " ").replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
+        else t = t.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, "$1 ($2)") + (e.options?.length ? " " + e.options.join(" / ") : "");
+        return t.split("\n").map((l) => l.replace(/^\s*(?:[#>*•]+|-\s)\s*/, "").replace(/\*\*|__|`/g, "").trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      };
+      const snipOf = (text) => {
+        const low = text.toLowerCase();
+        for (const tm of terms) if (!low.includes(tm)) return null;
+        const i0 = low.indexOf(terms[0]);
+        if (text.length <= 140) return text;
+        let s = Math.max(0, i0 - 36), end = Math.min(text.length, s + 140);
+        s = Math.max(0, end - 140);
+        return (s > 0 ? "…" : "") + text.slice(s, end).trim() + (end < text.length ? "…" : "");
+      };
+      const hits = [];
+      for (const e of all) {
+        const sn = snipOf(cleanOne(e, false)) ?? snipOf(cleanOne(e, true));
+        if (sn !== null) hits.push({ id: e.id, role: e.role, at: e.at, snippet: sn });
+      }
+      hits.sort((a, b) => new Date(b.at) - new Date(a.at));
+      return json({ query: rawQ, results: hits.slice(0, lim), total: hits.length, has_more: hits.length > lim });
     }
     if (p === "/api/super/lark") return json({ ready: true, who: "Alex" });
     if (p === "/api/super/triggers") return json({ triggers, threads });
@@ -418,7 +467,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
-    if (p === "/api/version") return json({ version: "v0.2.38", latest: "v0.2.38", outdated: [] });
+    if (p === "/api/version") return json({ version: "v0.2.39", latest: "v0.2.39", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
     if (p === "/api/file" && /images\/0d3a9e5c71b2f4e8a6c1\.png$|uploads\/.*\.png$/.test(q.get("path") || "")) {
@@ -442,11 +491,11 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/dirs") return json({ dirs: ["~/code/shop-api", "~/code/shop-web", "~/code/notes"] });
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.38", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.39", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.38", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.38",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.39", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.39",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

@@ -26,6 +26,7 @@ CREATE INDEX IF NOT EXISTS triggers_thread ON triggers(thread, n);
 CREATE TABLE IF NOT EXISTS threads  (id TEXT PRIMARY KEY, last_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workers  (name TEXT PRIMARY KEY, created_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS entries  (id TEXT PRIMARY KEY, n INTEGER NOT NULL, at INTEGER NOT NULL, thread TEXT NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS entries_thread ON entries(thread, n);
 CREATE TABLE IF NOT EXISTS timers   (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 `
 
@@ -219,8 +220,37 @@ func threadHistory(db *sql.DB, thread string, before int64, limit int) []*Trigge
 // newest first, straight from the DB (memory keeps only the recent ones).
 func entryHistory(db *sql.DB, thread string, before int64, limit int) []*Entry {
 	var out []*Entry
-	loadRows(db, `SELECT data FROM entries WHERE thread = ? AND n < ? ORDER BY n DESC LIMIT ?`,
-		func(e *Entry) { out = append(out, e) }, thread, before, limit)
+	loadRows(db, `SELECT data FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) AND n < ? ORDER BY n DESC LIMIT ?`,
+		func(e *Entry) { out = append(out, e) }, thread, thread, before, limit)
+	return out
+}
+
+// entryHistoryUntil reads a thread's chat from before `before` down to `until`
+// (inclusive) plus up to `pad` older context entries, newest first, capped at maxRows.
+func entryHistoryUntil(db *sql.DB, thread string, before, until int64, pad, maxRows int) ([]*Entry, bool) {
+	var out []*Entry
+	loadRows(db, `SELECT data FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) AND n < ? AND n >= ? ORDER BY n DESC LIMIT ?`,
+		func(e *Entry) { out = append(out, e) }, thread, thread, before, until, maxRows+1)
+	if len(out) > maxRows {
+		return out[:maxRows], true
+	}
+	if pad < 0 {
+		pad = 0
+	}
+	tail := entryHistory(db, thread, until, pad+1)
+	more := len(tail) > pad
+	if more {
+		tail = tail[:pad]
+	}
+	out = append(out, tail...)
+	return out, more
+}
+
+// threadEntries reads all stored entries of a thread from SQLite, newest first.
+func threadEntries(db *sql.DB, thread string) []*Entry {
+	var out []*Entry
+	loadRows(db, `SELECT data FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) ORDER BY n DESC`,
+		func(e *Entry) { out = append(out, e) }, thread, thread)
 	return out
 }
 

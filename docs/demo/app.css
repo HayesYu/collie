@@ -154,7 +154,12 @@ a { color: inherit; }
   display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
   border: 0; background: transparent; color: var(--fg-2); flex: none;
 }
-.icon-btn:hover { background: var(--bg-3); color: var(--fg); }
+.icon-btn:hover, .icon-btn.on { background: var(--bg-3); color: var(--fg); }
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important; clip-path: inset(50%) !important; overflow: hidden !important;
+  width: 1px !important; height: 1px !important; margin: -1px !important; padding: 0 !important;
+  border: 0 !important; white-space: nowrap !important;
+}
 
 input:where(:not([type=checkbox], [type=radio])), textarea, select {
   width: 100%; border: 1px solid var(--line-2); border-radius: 8px;
@@ -636,6 +641,102 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 
 /* crew strip: active workers */
 .crew { display: flex; gap: 8px; padding: 10px 16px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: none; }
+
+/* super-agent history search: zero footprint when closed, floating results */
+.super-search {
+  position: relative; z-index: 24; border-bottom: 1px solid var(--line); background: var(--bg);
+  animation: ss-bar-in .12s ease-out;
+}
+@keyframes ss-bar-in { from { opacity: 0; transform: translateY(-4px); } }
+.ss-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px max(16px, calc((100% - var(--col)) / 2));
+}
+.ss-field {
+  flex: 1; min-width: 0; height: 34px; display: flex; align-items: center; gap: 6px;
+  padding: 0 5px 0 10px; border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--bg-2); transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.ss-field:focus-within {
+  background: var(--bg); border-color: var(--fg-2);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.ss-ico { display: inline-grid; place-items: center; color: var(--fg-3); cursor: text; flex: none; }
+.ss-ico svg { width: 15px; height: 15px; stroke-width: 1.75; }
+.ss-field input {
+  flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0;
+  background: transparent; box-shadow: none; font-size: 13.5px; color: var(--fg);
+}
+.ss-field input:hover, .ss-field input:focus { border-color: transparent; box-shadow: none; }
+.ss-field input::-webkit-search-cancel-button, .ss-field input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.ss-meta {
+  flex: none; font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums;
+  white-space: nowrap; padding: 0 2px; user-select: none;
+}
+.ss-clear {
+  flex: none; min-inline-size: 24px; min-block-size: 24px; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 6px; display: grid; place-items: center;
+  background: transparent; color: var(--fg-3); transition: background .12s, color .12s;
+}
+.ss-clear svg { width: 13.5px; height: 13.5px; stroke-width: 1.9; }
+.ss-clear:hover { background: var(--bg-3); color: var(--fg); }
+.ss-clear:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 14%, transparent); }
+.ss-close { margin-right: -4px; }
+.ss-panel {
+  position: absolute; top: calc(100% + 5px); z-index: 30;
+  left: max(14px, calc((100% - var(--col)) / 2)); right: max(14px, calc((100% - var(--col)) / 2));
+  display: flex; flex-direction: column; max-height: min(380px, calc(var(--vh) - 160px));
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px;
+  box-shadow: var(--shadow-lg); overflow: hidden; animation: ss-panel-in .12s ease-out;
+}
+@keyframes ss-panel-in { from { opacity: 0; transform: translateY(-3px); } }
+.ss-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--bg-2);
+  font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums;
+}
+.ss-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
+.ss-item {
+  display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px;
+  background: transparent; text-align: left; color: var(--fg); transition: background .1s;
+}
+.ss-item + .ss-item { margin-top: 1px; }
+.ss-item:hover, .ss-item.active { background: var(--bg-2); }
+.ss-item.active { box-shadow: inset 2px 0 0 var(--fg-2); }
+.ss-item:focus-visible { outline: none; background: var(--bg-2); box-shadow: inset 2px 0 0 var(--fg); }
+.ss-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; font-size: 12px; }
+.ss-who { font-weight: 600; color: var(--fg-2); }
+.ss-who.user { color: var(--fg); }
+.ss-when { flex: none; font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ss-snip {
+  font-size: 13px; line-height: 1.5; color: var(--fg-2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.ss-snip mark {
+  background: color-mix(in srgb, var(--attn) 20%, transparent); color: var(--fg);
+  border-radius: 3px; padding: 0 2px; font-weight: 500;
+}
+:root[data-theme="dark"] .ss-snip mark { background: color-mix(in srgb, var(--attn) 28%, transparent); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ss-snip mark { background: color-mix(in srgb, var(--attn) 28%, transparent); }
+}
+.ss-empty { padding: 22px 14px; text-align: center; font-size: 13px; color: var(--fg-3); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .ss-bar { padding: 8px 12px; gap: 6px; }
+  .ss-panel { left: 10px; right: 10px; max-height: min(330px, calc(var(--vh) - 148px)); }
+  .ss-hint { display: none; }
+}
+@media (pointer: coarse) {
+  .ss-field { height: 38px; }
+  .ss-field input { font-size: 16px; height: 100%; }
+  .ss-clear { min-inline-size: 30px; min-block-size: 30px; width: 30px; height: 30px; }
+  .ss-item { padding: 10px; }
+  .ss-hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .super-search, .ss-panel { animation: none; }
+}
 .crew::-webkit-scrollbar { display: none; }
 .crew:empty { display: none; }
 .chip {

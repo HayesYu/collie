@@ -113,6 +113,9 @@
           <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
+        <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
+        </button>
         <div class="menu-wrap">
           <button class="icon-btn" data-menu="collie-menu" title="更多">
             <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
@@ -126,6 +129,29 @@
           </div>
         </div>
       </header>
+
+      <search class="super-search" id="super-search" hidden>
+        <div class="ss-bar">
+          <div class="ss-field">
+            <label class="ss-ico" for="super-search-input">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
+              <span class="visually-hidden">搜索和 Collie 的对话</span>
+            </label>
+            <input id="super-search-input" name="q" type="search" placeholder="搜索对话历史（多词用空格分隔）…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="super-search-list">
+            <span class="ss-meta" id="super-search-meta" hidden></span>
+            <button type="button" class="ss-clear" id="super-search-clear" title="清空输入" aria-label="清空输入" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l8 8M16 8l-8 8"/></svg>
+            </button>
+          </div>
+          <button type="button" class="icon-btn ss-close" id="super-search-close" title="关闭搜索 (Esc)" aria-label="关闭搜索">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+        <div class="ss-panel" id="super-search-panel" hidden>
+          <div class="ss-head" id="super-search-head" hidden></div>
+          <div class="ss-list" id="super-search-list" role="listbox" aria-label="搜索结果"></div>
+        </div>
+      </search>
 
       <div class="crew" id="crew"></div>
 

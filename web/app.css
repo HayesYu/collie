@@ -1064,6 +1064,10 @@ select.picked { display: none; }
 * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .side-scroll { scrollbar-color: transparent transparent; transition: scrollbar-color .2s; }
 .side-scroll:hover, .side-scroll:focus-within { scrollbar-color: var(--line-2) transparent; }
+/* Centered columns keep their scrollbar slot on both sides so unfolding a
+   section neither shifts them nor nudges them off the composer below. */
+.viewer.chatbg, .thread, .auto-body { scrollbar-gutter: stable both-edges; }
+@media (max-width: 760px) { .viewer.chatbg, .thread, .auto-body { scrollbar-gutter: stable; } }
 
 /* a question to you inside a session's thread */
 .ask-card { margin: 10px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 8px; }

@@ -58,6 +58,7 @@ type Super struct {
 	lastScreen  map[string]screenMark
 	transcripts map[string]*transcript
 	noAgent     map[string]time.Time // worker → since when its pane has had no agent in it
+	pinnedCache map[string]*Entry    // older pinned entries resolved from SQLite
 	notifyBuf   []notice
 	notifyAt    time.Time
 	seenAt      time.Time // when a page of Collie was last open in front of you
@@ -1388,6 +1389,110 @@ type PendingItem struct {
 	Check   bool      `json:"check,omitempty"`
 }
 
+// PinnedItem is one message in chat:main manually pinned by the human. Unlike
+// PendingItem, pins never expire on a 7-day timer and stay until unpinned.
+type PinnedItem struct {
+	ID      string    `json:"id"`
+	At      time.Time `json:"at"`
+	Summary string    `json:"summary"`
+	Role    string    `json:"role"`
+}
+
+func pinnableEntry(e *Entry) bool {
+	return e != nil && e.ID != "" && (e.Thread == "" || e.Thread == mainThread) && (e.Role == "collie" || e.Role == "user")
+}
+
+func (sp *Super) entryForPinLocked(id string) *Entry {
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		if e := sp.st.Entries[i]; e.ID == id {
+			if pinnableEntry(e) {
+				return e
+			}
+			return nil
+		}
+	}
+	if e, ok := sp.pinnedCache[id]; ok {
+		return e
+	}
+	if sp.db != nil {
+		var raw string
+		var e Entry
+		if sp.db.QueryRow(`SELECT data FROM entries WHERE id = ?`, id).Scan(&raw) == nil &&
+			json.Unmarshal([]byte(raw), &e) == nil && pinnableEntry(&e) {
+			if sp.pinnedCache == nil {
+				sp.pinnedCache = map[string]*Entry{}
+			}
+			sp.pinnedCache[id] = &e
+			return &e
+		}
+	}
+	return nil
+}
+
+// Pin idempotently pins or unpins one chat:main message and persists it.
+func (sp *Super) Pin(id string, pinned bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("id is required")
+	}
+	sp.mu.Lock()
+	idx := slices.Index(sp.st.Pinned, id)
+	changed := false
+	if pinned {
+		if idx < 0 {
+			if sp.entryForPinLocked(id) == nil {
+				sp.mu.Unlock()
+				return errors.New("找不到这条可钉住的消息")
+			}
+			sp.st.Pinned = append(sp.st.Pinned, id)
+			if n := len(sp.st.Pinned); n > maxPinned {
+				for _, drop := range sp.st.Pinned[:n-maxPinned] {
+					delete(sp.pinnedCache, drop)
+				}
+				sp.st.Pinned = append([]string(nil), sp.st.Pinned[n-maxPinned:]...)
+			}
+			changed = true
+		}
+	} else if idx >= 0 {
+		sp.st.Pinned = slices.Delete(sp.st.Pinned, idx, idx+1)
+		delete(sp.pinnedCache, id)
+		changed = true
+	}
+	if changed {
+		sp.changed()
+	}
+	hasDB := sp.db != nil
+	sp.mu.Unlock()
+	if changed && hasDB {
+		sp.flush()
+	}
+	return nil
+}
+
+func (sp *Super) pinnedLocked() []PinnedItem {
+	if len(sp.st.Pinned) == 0 {
+		return []PinnedItem{}
+	}
+	out := make([]PinnedItem, 0, len(sp.st.Pinned))
+	for _, id := range sp.st.Pinned {
+		e := sp.entryForPinLocked(id)
+		if e == nil {
+			continue
+		}
+		sum := pendingSummary(e.Text, e.Options)
+		if e.Role == "user" {
+			sum = pendingSummary(humanText(e.Text), nil)
+		}
+		out = append(out, PinnedItem{
+			ID:      e.ID,
+			At:      e.At,
+			Summary: sum,
+			Role:    e.Role,
+		})
+	}
+	return out
+}
+
 // Dismiss marks one pending message as acknowledged/ignored by the human and persists it.
 func (sp *Super) Dismiss(id string) {
 	id = strings.TrimSpace(id)
@@ -1567,7 +1672,7 @@ func (sp *Super) sendNotifications() {
 	}
 	if toLark {
 		if link != "" {
-			link += "/#/collie"
+			link = larkJumpURL(strings.TrimRight(link, "/") + "/#/collie")
 		}
 		if err := larkSend(notices, link); err != nil {
 			log.Printf("notify lark: %v", err)

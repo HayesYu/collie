@@ -1,10 +1,12 @@
 package collie
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -70,6 +72,40 @@ func larkLookup() (bin, openID, who, problem string) {
 	return bin, st.Identities.User.OpenID, st.Identities.User.UserName, ""
 }
 
+// larkJumpURL adds Feishu's official external-browser query parameters before
+// any #fragment so both mobile (iOS/Android) and desktop Feishu open Collie in
+// the system default browser (reusing the 1-year login cookie) instead of
+// Feishu's ephemeral built-in WebView.
+func larkJumpURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return raw
+	}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	q := u.Query()
+	var extra []string
+	if !q.Has("lk_mobile_jump_to_browser") {
+		extra = append(extra, "lk_mobile_jump_to_browser=true")
+	}
+	if !q.Has("lk_jump_to_browser") {
+		extra = append(extra, "lk_jump_to_browser=true")
+	}
+	if len(extra) > 0 {
+		if u.RawQuery != "" {
+			u.RawQuery += "&" + strings.Join(extra, "&")
+		} else {
+			u.RawQuery = strings.Join(extra, "&")
+		}
+	}
+	return u.String()
+}
+
 // larkSend writes to the logged-in user, as the bot (a message from yourself
 // would not ring): a card, or plain text if the card is turned down.
 func larkSend(ns []notice, link string) error {
@@ -77,6 +113,7 @@ func larkSend(ns []notice, link string) error {
 	if problem != "" {
 		return errors.New(problem)
 	}
+	jumpLink := larkJumpURL(link)
 	send := func(args ...string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -86,13 +123,13 @@ func larkSend(ns []notice, link string) error {
 		}
 		return nil
 	}
-	err := send("--msg-type", "interactive", "--content", larkCard(ns, link))
+	err := send("--msg-type", "interactive", "--content", larkCard(ns, jumpLink))
 	if err == nil {
 		return nil
 	}
 	text := noticesText(ns)
-	if link != "" {
-		text += "\n\n打开 Collie：" + link
+	if jumpLink != "" {
+		text += "\n\n打开 Collie：" + jumpLink
 	}
 	if err2 := send("--text", text); err2 != nil {
 		lark.get(true) // logged out, or moved: look again next time
@@ -106,6 +143,7 @@ func larkSend(ns []notice, link string) error {
 // (orange when it needs you, as on the page), the body is Collie's own
 // Markdown, and a button opens Collie.
 func larkCard(ns []notice, link string) string {
+	link = larkJumpURL(link)
 	title, color := "Collie", "default" // plain white: colour only when it needs you
 	for _, n := range ns {
 		switch {
@@ -143,13 +181,16 @@ func larkCard(ns []notice, link string) string {
 			"behaviors": []any{map[string]string{"type": "open_url", "default_url": link}},
 		})
 	}
-	b, _ := json.Marshal(map[string]any{
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.Encode(map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{"summary": map[string]string{"content": clip(cardSummary(ns), 60)}},
 		"header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}, "template": color},
 		"body":   map[string]any{"elements": els},
 	})
-	return string(b)
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 // larkEscape keeps quoted text from being read as card Markdown.

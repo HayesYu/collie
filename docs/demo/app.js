@@ -421,9 +421,14 @@
   document.addEventListener("visibilitychange", seen);
   addEventListener("focus", seen);
 
+  // Optimistic pin toggles before the hub's next stream frame lands: id -> { pinned, item }.
+  const pinnedLocal = new Map();
   function normSup(s) {
     s.hasPending = Array.isArray(s.pending);
-    s.entries ||= []; s.workers ||= []; s.pending ||= []; s.router ||= { status: "asleep" };
+    s.entries ||= []; s.workers ||= []; s.pending ||= []; s.pinned ||= []; s.router ||= { status: "asleep" };
+    for (const [id, loc] of pinnedLocal) {
+      if (s.pinned.some((p) => p?.id === id) === loc.pinned) pinnedLocal.delete(id);
+    }
     return s;
   }
   const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
@@ -642,8 +647,40 @@
   const pendingSays = [];
   // Items dismissed locally via × before the hub's next stream frame lands.
   const dismissedLocal = new Set();
-  const ICON_X = `<svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
-  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0;
+  const ICON_X = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
+  const ICON_PIN = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-body" d="M9.5 3.5h5v5l3 3v2h-11v-2l3-3z"/><path d="M8.5 3.5h7M12 13.5v7"/></svg>`;
+  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
+  const SUPER_JUMP_DIST = 160;
+
+  function scrollToAsync(sc, top, behavior = "smooth") {
+    const res = sc.scrollTo({ top, behavior });
+    if (res instanceof Promise) return res;
+    if (behavior !== "smooth" || Math.abs(sc.scrollTop - top) < 2) return Promise.resolve();
+    return new Promise((resolve) => {
+      let tid;
+      const done = () => {
+        clearTimeout(tid);
+        sc.removeEventListener("scrollend", done);
+        sc.removeEventListener("scroll", onScroll);
+        resolve();
+      };
+      const onScroll = () => { clearTimeout(tid); tid = setTimeout(done, 110); };
+      sc.addEventListener("scrollend", done, { once: true });
+      sc.addEventListener("scroll", onScroll, { passive: true });
+      tid = setTimeout(done, 120);
+    });
+  }
+  function updateSuperJump() {
+    const btn = $("#super-jump"), sc = $("#super-thread")?.parentElement;
+    if (!btn || !sc) return;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    if (dist <= 24) superJumpHiding = false;
+    const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > SUPER_JUMP_DIST;
+    if (btn.hidden === !show) return;
+    const hadFocus = !show && document.activeElement === btn;
+    btn.hidden = !show;
+    if (hadFocus) sc.focus({ preventScroll: true });
+  }
 
   function optimisticallyResolved(id, list = chatEntries()) {
     if (dismissedLocal.has(id)) return true;
@@ -663,53 +700,122 @@
     const entries = pendingSays.length ? chatEntries() : sup.entries;
     return list.filter((p) => p?.id && !optimisticallyResolved(p.id, entries));
   }
+  function clientPinSummary(e) {
+    if (!e) return "";
+    let t = String(e.text || "");
+    if (e.role === "user") {
+      const cut = t.indexOf("\n\n[The human picked");
+      if (cut >= 0) t = t.slice(0, cut);
+      const att = t.lastIndexOf("附件：\n");
+      if (att >= 0) t = (t.slice(0, att).trim() + " 📎").trim();
+    }
+    return plainLine(t.replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")).slice(0, 120) || plainLine(t).slice(0, 120);
+  }
+  function activePinned() {
+    const base = (sup.pinned || []).filter((p) => p?.id && pinnedLocal.get(p.id)?.pinned !== false);
+    const have = new Set(base.map((p) => p.id));
+    const added = [];
+    for (const [id, loc] of pinnedLocal) {
+      if (loc.pinned && !have.has(id) && loc.item) added.push(loc.item);
+    }
+    return added.length ? [...base, ...added] : base;
+  }
+  const pinDisplaySummary = (p) => (p.role === "user" && p.summary && !p.summary.startsWith("你：") ? "你：" + p.summary : p.summary || "");
+  async function togglePin(id, forceVal) {
+    if (!id) return;
+    const cur = activePinned().some((p) => p.id === id);
+    const next = typeof forceVal === "boolean" ? forceVal : !cur;
+    if (next === cur) return;
+    const e = chatEntries().find((x) => x.id === id);
+    pinnedLocal.set(id, {
+      pinned: next,
+      item: next ? { id, at: e?.at || new Date().toISOString(), role: e?.role || "collie", summary: clientPinSummary(e) } : null,
+    });
+    if (view === "collie") renderSuper();
+    try {
+      await api("/api/super/pin", { body: { id, pinned: next } });
+    } catch (err) {
+      pinnedLocal.delete(id);
+      if (view === "collie") renderSuper();
+      toast(err.message, "attn");
+    }
+  }
   function renderPendingBar() {
     const wrap = $("#pending-wrap"), bar = $("#pending-bar"), listEl = $("#pending-list");
     if (!wrap) return;
-    const list = activePending();
-    if (list.length < 2) pendingOpen = false;
-    if (!list.length) {
+    const pend = activePending(), pinsAll = activePinned();
+    const pendIds = new Set(pend.map((p) => p.id));
+    const pinIds = new Set(pinsAll.map((p) => p.id));
+    const pinsOnly = pinsAll.filter((p) => !pendIds.has(p.id));
+    const total = pend.length + pinsOnly.length;
+    if (total < 2) pendingOpen = false;
+    if (!total) {
       wrap.hidden = true;
-      wrap.classList.remove("open");
+      wrap.classList.remove("open", "pin-only");
       listEl.hidden = true;
       pendingBarSig = pendingListSig = "";
+      updateSuperJump();
       return;
     }
     wrap.hidden = false;
     wrap.classList.toggle("open", pendingOpen);
-    const latest = list[list.length - 1];
-    const barSig = `${list.length}:${latest.id}:${latest.summary}`;
+    wrap.classList.toggle("pin-only", pend.length === 0);
+    const P = pend.length, M = pinsAll.length;
+    const lastPend = P ? pend[P - 1] : null, lastPin = M ? pinsAll[M - 1] : null;
+    const sum = lastPend ? lastPend.summary : pinDisplaySummary(lastPin);
+    const label = P && M ? (total === 1 ? "待你确认 · 已钉住" : `待你确认 (${P}) · 已钉住 (${M})`)
+      : P ? (total === 1 ? "待你确认" : `待你确认 (${P})`)
+      : (total === 1 ? "已钉住" : `已钉住 (${M})`);
+    const barSig = `${total}:${P}:${M}:${lastPend?.id || ""}:${lastPin?.id || ""}:${sum}`;
     if (barSig !== pendingBarSig) {
       pendingBarSig = barSig;
-      if (list.length === 1) {
-        bar.innerHTML = `<button type="button" class="pending-main" data-goto-pending="${esc(latest.id)}" title="${esc(latest.summary)}">
-            <span class="pending-dot"></span><span class="pending-label">待你确认</span><span class="pending-sep">·</span><span class="pending-sum">${esc(latest.summary)}</span>
-          </button><button type="button" class="pending-x" data-dismiss="${esc(latest.id)}" title="忽略" aria-label="忽略">${ICON_X}</button>`;
+      const lead = P ? `<span class="pending-dot"></span>` : `<span class="pending-pin-ico">${ICON_PIN}</span>`;
+      if (total === 1) {
+        const onlyId = lastPend ? lastPend.id : lastPin.id;
+        const xBtn = lastPend
+          ? `<button type="button" class="pending-x" data-dismiss="${esc(onlyId)}" title="忽略" aria-label="忽略">${ICON_X}</button>`
+          : `<button type="button" class="pending-x" data-unpin="${esc(onlyId)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>`;
+        bar.innerHTML = `<button type="button" class="pending-main" data-goto-pending="${esc(onlyId)}" title="${esc(sum)}">
+            ${lead}<span class="pending-label">${esc(label)}</span><span class="pending-sep">·</span><span class="pending-sum">${esc(sum)}</span>
+          </button>${xBtn}`;
       } else {
-        bar.innerHTML = `<button type="button" class="pending-main" data-toggle-pending aria-expanded="${pendingOpen}" title="${esc(latest.summary)}">
-            <span class="pending-dot"></span><span class="pending-label">待你确认 (${list.length})</span><span class="pending-sep">·</span><span class="pending-sum">${esc(latest.summary)}</span>
-            <svg class="pending-chev" viewBox="0 0 24 24"><path d="M7 14l5-5 5 5"/></svg>
+        bar.innerHTML = `<button type="button" class="pending-main" data-toggle-pending aria-expanded="${pendingOpen}" title="${esc(sum)}">
+            ${lead}<span class="pending-label">${esc(label)}</span><span class="pending-sep">·</span><span class="pending-sum">${esc(sum)}</span>
+            <svg class="pending-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14l5-5 5 5"/></svg>
           </button>`;
       }
     } else {
       bar.querySelector("[data-toggle-pending]")?.setAttribute("aria-expanded", String(pendingOpen));
     }
-    if (list.length >= 2 && pendingOpen) {
-      const listSig = JSON.stringify(list.map((p) => [p.id, p.summary, p.at]));
+    if (total >= 2 && pendingOpen) {
+      const listSig = JSON.stringify([
+        pend.map((p) => [p.id, p.summary, p.at, pinIds.has(p.id) ? 1 : 0]),
+        pinsOnly.map((p) => [p.id, p.summary, p.at, p.role]),
+      ]);
       if (listSig !== pendingListSig) {
         pendingListSig = listSig;
-        const items = [...list].reverse();
-        listEl.innerHTML = items.map((p) => `<div class="pending-item">
+        const pendRows = [...pend].reverse().map((p) => `<div class="pending-item">
           <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(p.summary)}">
-            <span class="pending-dot"></span><span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+            <span class="pending-dot"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="已钉住">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
           </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="忽略" aria-label="忽略">${ICON_X}</button>
-        </div>`).join("");
+        </div>`);
+        const pinRows = [...pinsOnly].reverse().map((p) => {
+          const ps = pinDisplaySummary(p);
+          return `<div class="pending-item is-pin">
+          <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(ps)}">
+            <span class="pending-pin-ico">${ICON_PIN}</span><span class="pending-sum">${esc(ps)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+          </button><button type="button" class="pending-x" data-unpin="${esc(p.id)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>
+        </div>`;
+        });
+        listEl.innerHTML = [...pendRows, ...pinRows].join("");
       }
       listEl.hidden = false;
     } else {
       listEl.hidden = true;
+      listEl.innerHTML = "";
       pendingListSig = "";
     }
+    updateSuperJump();
   }
   async function dismissPending(id) {
     if (!id || dismissedLocal.has(id)) return;
@@ -786,19 +892,26 @@
     const sr = sc.getBoundingClientRect(), mr = m.getBoundingClientRect();
     const want = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + (mr.top - sr.top) - Math.max(24, (sc.clientHeight - mr.height) / 2)));
     const dist = want - sc.scrollTop;
-    if (Math.abs(dist) > sc.clientHeight * 2.2) {
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (smooth && Math.abs(dist) > sc.clientHeight * 2.2) {
       sc.scrollTop = want - Math.sign(dist) * sc.clientHeight * 0.9;
     }
-    flashEntry = { id, until: Date.now() + 1650 };
-    m.classList.remove("flash");
-    void m.offsetWidth;
-    m.classList.add("flash");
-    sc.scrollTo({ top: want, behavior: "smooth" });
+    flashEntry = { id, until: Date.now() + 2200 };
+    await scrollToAsync(sc, want, smooth ? "smooth" : "auto");
+    updateSuperJump();
+    if (seq !== jumpSeq) return;
+    flashEntry = { id, until: Date.now() + 1550 };
+    const hit = document.querySelector(sel);
+    if (hit) {
+      hit.classList.remove("flash");
+      void hit.offsetWidth;
+      hit.classList.add("flash");
+    }
     setTimeout(() => {
       if (flashEntry.id === id && Date.now() >= flashEntry.until) {
         document.querySelector(sel)?.classList.remove("flash");
       }
-    }, 1700);
+    }, 1600);
   }
   function renderSuper(force) {
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
@@ -853,6 +966,7 @@
       let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0;
       const allEntries = chatEntries();
       const pendIds = new Set(activePending().map((p) => p.id));
+      const pinIds = new Set(activePinned().map((p) => p.id));
       const entryPending = (idx, id) => {
         if (!id) return false;
         if (sup.hasPending) return pendIds.has(id);
@@ -910,11 +1024,13 @@
         const cont = e.role === "collie" && prev === "collie";
         prev = prevRole = e.role;
         const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
+        const pinned = !!(e.id && pinIds.has(e.id));
+        const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
         if (e.role === "user") {
-          html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at)}</div>`;
+          html += `<div class="mine${pinned ? " is-pinned" : ""}">${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at, pinned)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at)}</div></div>`;
+          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at, pinned)}</div></div>`;
           sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
@@ -973,13 +1089,37 @@
         if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
         superScrollRAF = requestAnimationFrame(() => {
           if (scroller.scrollTop === set) scroller.scrollTop = scroller.scrollHeight;
+          updateSuperJump();
         });
       }
     } else if (typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(superScrollRAF);
     }
+    updateSuperJump();
   }
   $("#super-thread")._loadMore = () => canLoadOlder() && loadOlder();
+  {
+    const sc = $("#super-thread")?.parentElement;
+    sc?.addEventListener("scroll", updateSuperJump, { passive: true });
+    sc?.addEventListener("wheel", (e) => { if (e.deltaY < 0 && superJumpHiding) { superJumpHiding = false; updateSuperJump(); } }, { passive: true });
+    sc?.addEventListener("touchmove", () => { if (superJumpHiding) superJumpHiding = false; }, { passive: true });
+    addEventListener("resize", updateSuperJump);
+    $("#super-jump")?.addEventListener("click", async () => {
+      if (!sc) return;
+      jumpSeq++;
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+      superJumpHiding = true;
+      updateSuperJump();
+      const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (smooth && sc.scrollHeight - sc.scrollTop > sc.clientHeight * 2.5) {
+        sc.scrollTop = sc.scrollHeight - sc.clientHeight * 1.8;
+      }
+      await scrollToAsync(sc, sc.scrollHeight, smooth ? "smooth" : "auto");
+      sc.scrollTop = sc.scrollHeight;
+      superJumpHiding = false;
+      updateSuperJump();
+    });
+  }
 
   // The dialogs agents are stuck on, read from their screens (pane → {at, a}).
   const superAsks = new Map();
@@ -1205,6 +1345,8 @@
   $("#pending-wrap").addEventListener("click", (ev) => {
     const dis = ev.target.closest("[data-dismiss]");
     if (dis) { ev.preventDefault(); ev.stopPropagation(); dismissPending(dis.dataset.dismiss); return; }
+    const unpin = ev.target.closest("[data-unpin]");
+    if (unpin) { ev.preventDefault(); ev.stopPropagation(); togglePin(unpin.dataset.unpin, false); return; }
     if (ev.target.closest("[data-toggle-pending]")) { ev.preventDefault(); pendingOpen = !pendingOpen; renderPendingBar(); return; }
     const go = ev.target.closest("[data-goto-pending]");
     if (go) { ev.preventDefault(); jumpToEntry(go.dataset.gotoPending); }
@@ -3273,6 +3415,17 @@
   // A file an agent mentions opens here, read-only, from the computer it is on.
   const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
   const MD_EXT = /\.(md|markdown|mdx)$/i;
+  const HTML_EXT = /\.html?$/i;
+  const htmlFileURL = (path, machine = "") => {
+    if (typeof window.__collieDemoHtmlUrl === "function") {
+      const u = window.__collieDemoHtmlUrl(path);
+      if (u) return u;
+    }
+    return `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=html`;
+  };
+  const fileLinkAttrs = (rawPath, escapedPath, titleText) => HTML_EXT.test(rawPath)
+    ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" target="_blank" rel="noopener" data-path="${escapedPath}" title="${esc("在新标签页打开 " + rawPath)}"`
+    : `class="fpath" href="#" data-path="${escapedPath}" title="${titleText}"`;
   const IMG_TYPE = { svg: "image/svg+xml", jpg: "image/jpeg", jpeg: "image/jpeg", ico: "image/x-icon" };
   function fileContextMachine() {
     if (view === "pane") return find(current)?.machine;
@@ -3380,16 +3533,19 @@
       for (const el of document.querySelectorAll(".thumb[data-img] img")) if (el.parentElement.dataset.img === p) el.src = u;
     } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
   }
-  // Under each Collie message, on hover: copy, quote, and when it was said.
-  const ICON_COPY = `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
-  const ICON_QUOTE = `<svg viewBox="0 0 24 24"><path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/></svg>`;
-  const msgActs = (e, at) => e.id ? `<div class="msg-acts">
-      <button type="button" data-copy="${esc(e.id)}" title="复制">${ICON_COPY}</button>
-      <button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用回复">${ICON_QUOTE}</button>
+  // Under each Collie message, on hover: copy, quote, pin, and when it was said.
+  const ICON_COPY = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
+  const ICON_QUOTE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/></svg>`;
+  const pinActBtn = (id, pinned) => `<button type="button" class="pin-btn${pinned ? " on" : ""}" data-pin="${esc(id)}" aria-pressed="${pinned}" title="${pinned ? "取消钉住" : "钉住"}" aria-label="${pinned ? "取消钉住" : "钉住"}">${ICON_PIN}</button>`;
+  const msgActs = (e, at, pinned = false) => e.id ? `<div class="msg-acts">
+      <button type="button" data-copy="${esc(e.id)}" title="复制" aria-label="复制">${ICON_COPY}</button>
+      <button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用回复" aria-label="引用回复">${ICON_QUOTE}</button>
+      ${pinActBtn(e.id, pinned)}
       ${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}</div>` : "";
-  // Under your own message, at its right edge: when you said it, and copy.
-  const mineActs = (e, at) => e.id ? `<div class="msg-acts">${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}
-      <button type="button" data-copy="${esc(e.id)}" title="复制">${ICON_COPY}</button></div>` : "";
+  // Under your own message, at its right edge: when you said it, copy, and pin.
+  const mineActs = (e, at, pinned = false) => e.id ? `<div class="msg-acts">${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}
+      <button type="button" data-copy="${esc(e.id)}" title="复制" aria-label="复制">${ICON_COPY}</button>
+      ${pinActBtn(e.id, pinned)}</div>` : "";
   async function copyText(t) {
     try { await navigator.clipboard.writeText(t); return true; } catch {}
     // http pages have no clipboard API: the old way still works there
@@ -3438,9 +3594,11 @@
     });
   }
   document.addEventListener("click", async (ev) => {
+    const pb = ev.target.closest(".pin-btn[data-pin]");
+    if (pb) { ev.preventDefault(); togglePin(pb.dataset.pin); return; }
     const b = ev.target.closest("[data-copy]");
     if (!b) return;
-    const e = sup.entries.find((x) => x.id === b.dataset.copy);
+    const e = chatEntries().find((x) => x.id === b.dataset.copy);
     if (e) toast(await copyText(e.text) ? "已复制" : "复制失败", "");
   });
   // A reply's quote of your message: take you to it.
@@ -3462,13 +3620,66 @@
     for (const img of document.querySelectorAll(".thumb img:not([src])")) if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
   }).observe(document.body, { childList: true, subtree: true });
 
+  async function openSandboxedHtmlRemote(path, win) {
+    try {
+      const tries = fileTries();
+      let htmlText = null;
+      for (const m of tries) {
+        const q = `/api/file?path=${encodeURIComponent(path)}${m ? "&machine=" + encodeURIComponent(m) : ""}&as=html`;
+        const r = routeReq(q);
+        const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
+        if (res.status === 404) continue;
+        if (!res.ok) { let d = {}; try { d = await res.json(); } catch {} throw new Error(d.error || "打不开这个文件"); }
+        htmlText = await res.text();
+        break;
+      }
+      if (htmlText === null) throw new Error("没找到这个 HTML 文件");
+      const sb = "allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+      if (win && !win.closed) {
+        const doc = win.document;
+        doc.open();
+        doc.write(`<!doctype html><meta charset="utf-8"><title>${esc(path.split("/").pop())}</title><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;display:block}</style><iframe sandbox="${sb}"></iframe>`);
+        doc.close();
+        const frame = doc.querySelector("iframe");
+        if (frame) frame.srcdoc = htmlText;
+        return;
+      }
+      resetFileHead("HTML", false);
+      $("#fv-name").textContent = path.split("/").pop();
+      $("#fv-path").textContent = path;
+      const body = $("#fv-body");
+      body.classList.remove("is-code");
+      body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${sb}"></iframe>`;
+      body.querySelector("iframe").srcdoc = htmlText;
+      showFilePane();
+    } catch (err) {
+      if (win && !win.closed) try { win.close(); } catch {}
+      toast(err.message, "attn");
+    }
+  }
   document.addEventListener("click", (e) => {
     const t = e.target.closest(".thumb[data-img]");
     if (t) { e.preventDefault(); openFile(t.dataset.img); return; }
     const a = e.target.closest("a.fpath");
     if (!a) return;
+    const path = a.dataset.path || "";
+    if (HTML_EXT.test(path)) {
+      const ctxMachine = fileContextMachine() || "";
+      const hub = hubOf(ctxMachine);
+      if (!hub && (!window.__collieDemo || window.__collieDemoHtmlUrl?.(path))) {
+        a.href = htmlFileURL(path, ctxMachine);
+        a.target = "_blank";
+        a.rel = "noopener";
+        return;
+      }
+      e.preventDefault();
+      const win = window.open("", "_blank");
+      if (win) { try { win.opener = null; } catch {} }
+      openSandboxedHtmlRemote(path, win);
+      return;
+    }
     e.preventDefault();
-    openFile(a.dataset.path);
+    openFile(path);
   });
   // Wide screens: a panel to the right of the conversation, which stays
   // usable; its width is dragged and remembered. Narrow ones: full screen.
@@ -3553,7 +3764,7 @@
           p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
           try { p = decodeURI(p); } catch {}
           const ep = esc(p);
-          return keep(`<a class="fpath" href="#" data-path="${ep}" title="${ep}">${label}</a>`);
+          return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${label}</a>`);
         })
         .replace(URL_RE, (m) => {
           const raw = unesc(m);
@@ -3574,7 +3785,10 @@
           const eu = esc(u);
           return keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`) + esc(tail + rest);
         })
-        .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a class="fpath" href="#" data-path="${p}" title="打开这个文件">${p}</a>`)}`);
+        .replace(FILE_RE, (_, pre, p) => {
+          const rawP = unesc(p);
+          return `${pre}${keep(`<a ${fileLinkAttrs(rawP, p, "打开这个文件")}>${p}</a>`)}`;
+        });
       while (r.includes("\u0001")) r = r.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
       return r;
     };
@@ -3740,15 +3954,16 @@
     .replace(/\*\*|__|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
+  const linkUserFiles = (escaped) => escaped.replace(FILE_RE, (_, pre, p) => `${pre}<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`);
   function userText(t) {
     const i = t.lastIndexOf("附件：\n");
-    if (i < 0) return withImages(esc(t));
+    if (i < 0) return withImages(linkUserFiles(esc(t)));
     const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
     const imgs = paths.filter((p) => IMG_EXT.test(p)), rest = paths.filter((p) => !IMG_EXT.test(p));
     const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
-    return withImages(esc(t.slice(0, i).trimEnd()))
+    return withImages(linkUserFiles(esc(t.slice(0, i).trimEnd())))
       + (imgs.length ? `<span class="thumbs">${imgs.map(thumbBtn).join("")}</span>` : "")
-      + (rest.length ? `<span class="att">${rest.map((p) => `<span>📎 ${esc(name(p))}</span>`).join("")}</span>` : "");
+      + (rest.length ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>` : "");
   }
 
   function bindComposer(form, input, send, machine) {
@@ -4006,13 +4221,27 @@
   setVH();
 
   // ───────────────────────────── boot
+  function stripLarkJumpParams() {
+    if (!location.search) return;
+    const q = new URLSearchParams(location.search);
+    let dirty = false;
+    for (const k of ["lk_mobile_jump_to_browser", "lk_jump_to_browser"]) {
+      if (q.has(k)) { q.delete(k); dirty = true; }
+    }
+    if (!dirty) return;
+    const rest = q.toString();
+    history.replaceState(history.state, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
+  }
   async function boot() {
+    stripLarkJumpParams();
     const q = new URLSearchParams(location.search);
     const t = q.get("t"), code = q.get("pair");
     if (t || code) {
       try { if (code) await pair(code); else await login(t); }
       catch (err) { if (code) { $("#login-error").textContent = err.message; } }
-      history.replaceState(null, "", location.pathname + location.hash);
+      q.delete("t"); q.delete("pair");
+      const rest = q.toString();
+      history.replaceState(history.state, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
     }
     try { await api("/api/session"); } catch { return; }
     try { sup = normSup(await api("/api/super")); } catch {}

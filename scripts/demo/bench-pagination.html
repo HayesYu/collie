@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>shop-api · /orders 分页稳定性与延迟压测报告</title>
+  <style>
+    :root {
+      --bg: #ffffff; --surface: #f7f7f6; --line: #e6e6e2;
+      --fg: #141413; --muted: #6e6e68; --accent: #111111;
+      --ok: #15803d; --warn: #b45309;
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0c0c0e; --surface: #151518; --line: #26262a;
+        --fg: #ededeb; --muted: #9a9a93; --accent: #f2f2f0;
+        --ok: #4ade80; --warn: #f0a24a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 32px 20px 48px; background: var(--bg); color: var(--fg);
+      font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", sans-serif;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; }
+    .eyebrow { font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    h1 { margin: 6px 0 8px; font-size: 22px; letter-spacing: -0.02em; }
+    p.lead { margin: 0 0 22px; color: var(--muted); }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .kpi { padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    .kpi .k { font-size: 12px; color: var(--muted); }
+    .kpi .v { margin-top: 4px; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .kpi .v.ok { color: var(--ok); }
+    .card { padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+    .seg { display: inline-flex; padding: 2px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+    .seg button {
+      border: 0; background: transparent; color: var(--muted); padding: 5px 12px; border-radius: 6px;
+      font: inherit; font-size: 12.5px; cursor: pointer;
+    }
+    .seg button.on { background: var(--accent); color: var(--bg); font-weight: 500; }
+    svg { width: 100%; height: auto; display: block; }
+    .bar-before { fill: var(--warn); opacity: 0.55; }
+    .bar-after { fill: var(--ok); }
+    .axis { stroke: var(--line); stroke-width: 1; }
+    .lbl { fill: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, monospace; }
+    .note { margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="eyebrow">shop-api · benchmark · sandboxed html report</div>
+    <h1>/orders 分页稳定性与延迟分布报告</h1>
+    <p class="lead">对比修复前（仅 <code>ORDER BY created_at DESC</code>）与修复后（<code>ORDER BY created_at DESC, id DESC</code>）在 200 轮并发翻页下的表现。</p>
+
+    <div class="kpis">
+      <div class="kpi"><div class="k">跨页重复率</div><div class="v ok" id="kpi-dup">0.0%</div></div>
+      <div class="kpi"><div class="k">200 轮回归通过</div><div class="v ok" id="kpi-pass">200 / 200</div></div>
+      <div class="kpi"><div class="k">P95 查询耗时</div><div class="v" id="kpi-p95">4.8 ms</div></div>
+    </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <strong>各页查询耗时（ms）</strong>
+        <div class="seg" id="metric-seg">
+          <button type="button" data-m="p95" class="on">P95 延迟</button>
+          <button type="button" data-m="p50">P50 延迟</button>
+        </div>
+      </div>
+      <svg viewBox="0 0 640 210" role="img" aria-label="各页延迟柱状对比图" id="chart"></svg>
+      <div class="note">绿柱：修复后复合索引 <code>(user_id, created_at DESC, id DESC)</code>；橙柱：修复前单列排序。</div>
+    </div>
+  </div>
+  <script>
+    const DATA = {
+      p95: [
+        ["Page 1", 4.4, 4.1], ["Page 2", 4.9, 4.3], ["Page 5", 5.8, 4.5],
+        ["Page 10", 7.2, 4.7], ["Page 20", 9.6, 4.8]
+      ],
+      p50: [
+        ["Page 1", 1.9, 1.8], ["Page 2", 2.1, 1.9], ["Page 5", 2.6, 2.0],
+        ["Page 10", 3.4, 2.1], ["Page 20", 4.5, 2.2]
+      ]
+    };
+    const chart = document.getElementById("chart");
+    function draw(mode) {
+      const rows = DATA[mode], max = 11;
+      let s = `<line class="axis" x1="48" y1="172" x2="616" y2="172"/>`;
+      rows.forEach(([label, before, after], i) => {
+        const x = 82 + i * 108;
+        const hb = Math.round((before / max) * 140), ha = Math.round((after / max) * 140);
+        s += `<rect class="bar-before" x="${x}" y="${172 - hb}" width="24" height="${hb}" rx="4"/>`;
+        s += `<rect class="bar-after" x="${x + 28}" y="${172 - ha}" width="24" height="${ha}" rx="4"/>`;
+        s += `<text class="lbl" x="${x + 26}" y="${172 - Math.max(hb, ha) - 6}" text-anchor="middle">${after}ms</text>`;
+        s += `<text class="lbl" x="${x + 26}" y="192" text-anchor="middle">${label}</text>`;
+      });
+      chart.innerHTML = s;
+      document.getElementById("kpi-p95").textContent = mode === "p95" ? "4.8 ms" : "2.2 ms";
+    }
+    document.getElementById("metric-seg").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-m]");
+      if (!b) return;
+      document.querySelectorAll("#metric-seg button").forEach((x) => x.classList.toggle("on", x === b));
+      draw(b.dataset.m);
+    });
+    draw("p95");
+  </script>
+</body>
+</html>

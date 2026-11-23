@@ -130,12 +130,13 @@
 
       <div class="crew" id="crew"></div>
 
-      <div class="viewer chatbg">
+      <div class="viewer chatbg" tabindex="-1">
         <div class="thread" id="super-thread"></div>
         <div class="working-row" id="super-working" hidden></div>
       </div>
 
       <form class="composer" id="super-composer">
+        <button type="button" class="super-jump" id="super-jump" title="回到底部" aria-label="回到底部" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5v11M7.25 12.75L12 17.5l4.75-4.75"/></svg></button>
         <div class="pending-wrap" id="pending-wrap" hidden>
           <div class="pending-list" id="pending-list" hidden></div>
           <div class="pending-bar" id="pending-bar"></div>

@@ -11,6 +11,7 @@
   --on-accent: #ffffff;
   --attn: #b45309;
   --attn-soft: #fbf3e8;
+  --pin: #475569;
   --ok: #15803d;
   --term-bg: #fbfbfa;
   --term-fg: #1b1b1b;
@@ -52,6 +53,7 @@
     --on-accent: #0b0b0c;
     --attn: #f0a24a;
     --attn-soft: #21190f;
+    --pin: #94a3b8;
     --ok: #4ade80;
     --term-bg: #0f0f11;
     --term-fg: #e6e6e3;
@@ -88,6 +90,7 @@
   --on-accent: #0b0b0c;
   --attn: #f0a24a;
   --attn-soft: #21190f;
+  --pin: #94a3b8;
   --ok: #4ade80;
   --term-bg: #0f0f11;
   --term-fg: #e6e6e3;
@@ -335,7 +338,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 
 /* ─── viewer ─── */
 .viewer { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
-.viewer.chatbg { background: var(--bg); overflow: auto; }
+.viewer.chatbg { background: var(--bg); overflow: auto; outline: none; }
 .viewer > .screen, .viewer > .log, .viewer > .chat { display: none; }
 .viewer[data-mode="screen"] > .screen, .viewer[data-mode="log"] > .log { display: block; }
 .viewer[data-mode="chat"] > .chat { display: flex; }
@@ -441,8 +444,17 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 #v-collie .mine:hover .msg-acts, #v-collie .mine .msg.show-time + .msg-acts { opacity: 1; pointer-events: auto; }
 .msg-acts button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
 .msg-acts button:hover { background: var(--bg-2, rgba(127,127,127,.12)); color: var(--fg); }
+.msg-acts button.pin-btn.on { color: var(--pin); }
+.msg-acts button.pin-btn.on .pin-body { fill: color-mix(in srgb, currentColor 22%, transparent); }
 .msg-acts svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .msg-acts .t { margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.pin-ind {
+  display: inline-flex; align-items: center; gap: 4px; margin: 0 0 4px;
+  font-size: 11.5px; line-height: 16px; color: var(--pin); user-select: none;
+}
+#v-collie .mine > .pin-ind { margin: 0 4px 3px 0; }
+.pin-ind svg { width: 12.5px; height: 12.5px; stroke-width: 1.85; }
+.pin-ind .pin-body { fill: color-mix(in srgb, currentColor 18%, transparent); }
 @media (hover: none) {
   .msg-acts, #v-collie .mine .msg-acts { display: none; margin-bottom: 0; }
   #v-collie .msg.show-time .msg-acts, #v-collie .mine .msg.show-time + .msg-acts { display: flex; }
@@ -656,7 +668,29 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .keys button:active { background: var(--bg-3); }
 
 /* composer: one box as wide as the conversation column */
-.composer { padding: 6px max(12px, calc((100% - var(--col) - 24px) / 2)) 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.composer { position: relative; padding: 6px max(12px, calc((100% - var(--col) - 24px) / 2)) 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.super-jump {
+  position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); z-index: 15;
+  width: 36px; height: 36px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--line-2) 72%, var(--line));
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  color: var(--fg-2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .07), 0 1px 2px rgba(0, 0, 0, .04);
+  transition: border-color .15s, background .15s, color .15s, transform .12s, box-shadow .15s;
+  animation: super-jump-in .14s ease-out;
+}
+:root[data-theme="dark"] .super-jump { box-shadow: 0 3px 12px rgba(0, 0, 0, .48), 0 1px 2px rgba(0, 0, 0, .36); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .super-jump { box-shadow: 0 3px 12px rgba(0, 0, 0, .48), 0 1px 2px rgba(0, 0, 0, .36); }
+}
+.super-jump svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.super-jump:hover { background: var(--bg); border-color: var(--fg-3); color: var(--fg); }
+.super-jump:active { transform: translateX(-50%) scale(.94); }
+.super-jump:focus-visible { outline: none; box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--fg) 14%, transparent), var(--shadow-sm); }
+#super-composer:has(.pending-wrap.open) .super-jump { display: none; }
+@keyframes super-jump-in { from { opacity: 0; transform: translate(-50%, 5px) scale(.94); } }
+@media (prefers-reduced-motion: reduce) { .super-jump { animation: none; transition: none; } }
 .pending-wrap { position: relative; margin-bottom: 6px; min-width: 0; }
 .pending-bar {
   display: flex; align-items: center; min-width: 0; height: 32px;
@@ -668,6 +702,23 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   border-color: color-mix(in srgb, var(--attn) 48%, var(--line-2));
   background: color-mix(in srgb, var(--attn) 9%, var(--bg));
 }
+.pending-wrap.pin-only .pending-bar {
+  border-color: color-mix(in srgb, var(--pin) 24%, var(--line-2));
+  background: color-mix(in srgb, var(--pin) 5%, var(--bg));
+}
+.pending-wrap.pin-only .pending-bar:hover, .pending-wrap.pin-only.open .pending-bar {
+  border-color: color-mix(in srgb, var(--pin) 42%, var(--line-2));
+  background: color-mix(in srgb, var(--pin) 8%, var(--bg));
+}
+.pending-wrap.pin-only .pending-label { color: var(--pin); }
+.pending-wrap.pin-only .pending-x { border-left-color: color-mix(in srgb, var(--pin) 15%, var(--line)); }
+.pending-wrap.pin-only .pending-x:hover { background: color-mix(in srgb, var(--pin) 10%, var(--bg-2)); }
+.pending-pin-ico, .pending-both-pin {
+  display: inline-grid; place-items: center; flex: none; color: var(--pin);
+}
+.pending-pin-ico svg { width: 13px; height: 13px; stroke-width: 1.85; }
+.pending-both-pin svg { width: 12px; height: 12px; stroke-width: 1.85; margin-left: -2px; }
+.pending-pin-ico .pin-body, .pending-both-pin .pin-body { fill: color-mix(in srgb, currentColor 20%, transparent); }
 .pending-main {
   flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px;
   padding: 0 10px 0 11px; border: 0; background: none; text-align: left; font-size: 12.5px; color: var(--fg-2);
@@ -758,7 +809,9 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .file button:hover { background: var(--bg-3); color: var(--fg); }
 .detail.shell .attach { display: none; }
 .msg.user .att { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.msg.user .att span { font-size: 12.5px; padding: 2px 8px; border-radius: 8px; background: color-mix(in srgb, var(--on-accent) 14%, transparent); }
+.msg.user .att span, .msg.user .att a { font-size: 12.5px; padding: 2px 8px; border-radius: 8px; background: color-mix(in srgb, var(--on-accent) 14%, transparent); text-decoration: none; }
+.msg.user .att a:hover { background: color-mix(in srgb, var(--on-accent) 22%, transparent); }
+.fv-html-sandbox { width: 100%; height: 100%; min-height: 480px; border: 0; display: block; background: #fff; border-radius: 8px; }
 .send { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; border: 0; background: var(--accent); color: var(--on-accent); transition: transform .1s, opacity .15s; }
 .send svg { width: 17px; height: 17px; }
 .send:active { transform: scale(.94); }

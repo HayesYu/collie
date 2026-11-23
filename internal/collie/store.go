@@ -144,6 +144,7 @@ type State struct {
 	Workers   map[string]*Worker `json:"workers"`
 	Entries   []*Entry           `json:"entries"`
 	Dismissed map[string]bool    `json:"dismissed,omitempty"`
+	Pinned    []string           `json:"pinned,omitempty"`
 	Timers    []*Timer           `json:"timers"`
 	Policies  []Policy           `json:"policies"`
 	Settings  Settings           `json:"settings"`
@@ -171,6 +172,8 @@ func (st *State) nextID(prefix string) string {
 	return prefix + strconv.Itoa(st.Seq)
 }
 
+const maxPinned = 200
+
 func (st *State) trim() {
 	const keepTriggers, keepEntries = 600, 600
 	if n := len(st.Triggers); n > keepTriggers {
@@ -178,6 +181,9 @@ func (st *State) trim() {
 	}
 	if n := len(st.Entries); n > keepEntries {
 		st.Entries = append([]*Entry(nil), st.Entries[n-keepEntries:]...)
+	}
+	if n := len(st.Pinned); n > maxPinned {
+		st.Pinned = append([]string(nil), st.Pinned[n-maxPinned:]...)
 	}
 	for _, th := range st.Threads {
 		if n := len(th.Triggers); n > 60 {

@@ -98,6 +98,22 @@ func loadState(db *sql.DB, home string) (*State, error) {
 			}
 		}
 	}
+	if v, ok := kv["pinned"]; ok {
+		var ids []string
+		if json.Unmarshal([]byte(v), &ids) == nil {
+			seenPin := map[string]bool{}
+			for _, id := range ids {
+				id = strings.TrimSpace(id)
+				if id != "" && !seenPin[id] {
+					seenPin[id] = true
+					st.Pinned = append(st.Pinned, id)
+				}
+			}
+			if n := len(st.Pinned); n > maxPinned {
+				st.Pinned = append([]string(nil), st.Pinned[n-maxPinned:]...)
+			}
+		}
+	}
 
 	var trig []*Trigger
 	err = loadRows(db, `SELECT data FROM (SELECT data, n FROM triggers ORDER BY n DESC LIMIT 600) ORDER BY n`, func(t *Trigger) { trig = append(trig, t) })
@@ -153,6 +169,14 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 		return dismissed[i] < dismissed[j]
 	})
 	put(`INSERT INTO kv(k,v) VALUES('dismissed',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(dismissed))
+	pinned := st.Pinned
+	if pinned == nil {
+		pinned = []string{}
+	}
+	if len(pinned) > maxPinned {
+		pinned = pinned[len(pinned)-maxPinned:]
+	}
+	put(`INSERT INTO kv(k,v) VALUES('pinned',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(pinned))
 	for _, t := range st.Triggers {
 		put(`INSERT INTO triggers(id,n,at,status,source,thread,data) VALUES(?,?,?,?,?,?,?)
 		     ON CONFLICT(id) DO UPDATE SET status=excluded.status, data=excluded.data`,

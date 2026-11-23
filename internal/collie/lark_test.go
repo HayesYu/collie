@@ -48,13 +48,60 @@ func TestLarkNotify(t *testing.T) {
 		t.Fatal("nothing sent")
 	}
 	got := string(b)
-	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "--msg-type\ninteractive", `"schema":"2.0"`, "报告：都好了", `"default_url":"http://hub:7788/#/collie"`} {
+	wantURL := `"default_url":"http://hub:7788/?lk_mobile_jump_to_browser=true&lk_jump_to_browser=true#/collie"`
+	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "--msg-type\ninteractive", `"schema":"2.0"`, "报告：都好了", wantURL} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "做完了") {
 		t.Error("the held-back message went out later")
+	}
+}
+
+func TestLarkJumpURLAndTextFallback(t *testing.T) {
+	cases := map[string]string{
+		"":                                    "",
+		"http://hub:7788/#/collie":            "http://hub:7788/?lk_mobile_jump_to_browser=true&lk_jump_to_browser=true#/collie",
+		"http://hub:7788":                     "http://hub:7788/?lk_mobile_jump_to_browser=true&lk_jump_to_browser=true",
+		"https://collie.example/app?x=1#/p/2": "https://collie.example/app?x=1&lk_mobile_jump_to_browser=true&lk_jump_to_browser=true#/p/2",
+	}
+	for in, want := range cases {
+		got := larkJumpURL(in)
+		if got != want {
+			t.Fatalf("larkJumpURL(%q) = %q, want %q", in, got, want)
+		}
+		// Idempotent when called a second time.
+		if got2 := larkJumpURL(got); got2 != want {
+			t.Fatalf("second larkJumpURL(%q) = %q, want %q", got, got2, want)
+		}
+	}
+
+	// Plain-text fallback when interactive card is rejected also carries jump params.
+	dir := t.TempDir()
+	sent := filepath.Join(dir, "sent")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = auth ]; then echo '{\"identities\":{\"bot\":{\"available\":true},\"user\":{\"openId\":\"ou_test\",\"userName\":\"T\"}}}'; exit 0; fi\n" +
+		"for a in \"$@\"; do if [ \"$a\" = interactive ]; then echo 'card rejected' >&2; exit 1; fi; done\n" +
+		"printf '%s\\n' \"$@\" >> \"" + sent + "\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "lark-cli"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	binCache.Delete("lark-cli")
+	lark.get(true)
+	t.Cleanup(func() { binCache.Delete("lark-cli"); lark.get(true) })
+
+	if err := larkSend([]notice{{text: "降级纯文本"}}, "http://hub:7788/#/collie"); err != nil {
+		t.Fatalf("larkSend fallback err = %v", err)
+	}
+	b, err := os.ReadFile(sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLine := "打开 Collie：http://hub:7788/?lk_mobile_jump_to_browser=true&lk_jump_to_browser=true#/collie"
+	if !strings.Contains(string(b), wantLine) {
+		t.Fatalf("plain-text fallback missing %q in:\n%s", wantLine, string(b))
 	}
 }
 

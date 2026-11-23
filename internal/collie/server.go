@@ -87,7 +87,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.logout)
 
 	api := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.auth(h)) }
-	api("GET /api/session", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
+	api("GET /api/session", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
+			setTokenCookie(w, r, c.Value)
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
 	api("GET /api/events", s.streamState)
 	s.machineRoutes(mux, func(h http.HandlerFunc) http.Handler { return s.auth(s.routed(h)) })
 	s.superRoutes(mux)
@@ -199,7 +204,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{
+		Name: cookieName, Value: "", Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(0, 0), Secure: r.TLS != nil,
+	})
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -792,7 +800,7 @@ func (s *Server) static() http.Handler {
 // hub's web app showing this hub's sessions.
 func crossSite(r *http.Request) bool {
 	o := r.Header.Get("Origin")
-	if o == "" {
+	if o == "" || o == "null" {
 		return false
 	}
 	u, err := url.Parse(o)

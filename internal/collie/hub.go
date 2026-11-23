@@ -89,6 +89,10 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path s
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			if r.URL.Path == "/api/file" && r.URL.Query().Get("as") == "html" && resp.StatusCode == http.StatusOK && isHTMLPath(r.URL.Query().Get("path")) {
+				setHTMLSandboxHeaders(resp.Header)
+				return nil
+			}
 			if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 				return nil
 			}
@@ -429,9 +433,10 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 }
 
 func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
+	const maxAge = 365 * 24 * 3600
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: token, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 3600, Secure: r.TLS != nil,
+		SameSite: http.SameSiteLaxMode, MaxAge: maxAge, Expires: time.Now().Add(maxAge * time.Second), Secure: r.TLS != nil,
 	})
 }
 

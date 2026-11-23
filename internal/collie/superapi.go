@@ -25,6 +25,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/say", s.superSay)
 	api("POST /api/super/reply", s.superReply)
 	api("POST /api/super/dismiss", s.superDismiss)
+	api("POST /api/super/pin", s.superPin)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
 	api("POST /api/super/report", s.superReport)
@@ -76,8 +77,10 @@ type superView struct {
 	Earlier bool       `json:"earlier,omitempty"` // older chat than Entries: /api/super/earlier
 	// Pending: Collie's --opt and --check messages in chat:main still waiting on the human.
 	Pending []PendingItem `json:"pending"`
-	Workers []*Worker     `json:"workers"`
-	Queued  int           `json:"queued"`
+	// Pinned: messages in chat:main manually pinned by the human until unpinned.
+	Pinned  []PinnedItem `json:"pinned"`
+	Workers []*Worker    `json:"workers"`
+	Queued  int          `json:"queued"`
 	// QueuedRouter: those waiting for Collie itself, not for a worker.
 	QueuedRouter int  `json:"queued_router"`
 	Paused       bool `json:"paused"`
@@ -129,6 +132,10 @@ func (s *Server) superState(ctx context.Context) superView {
 	v.Pending = sp.pendingLocked(time.Now())
 	if v.Pending == nil {
 		v.Pending = []PendingItem{}
+	}
+	v.Pinned = sp.pinnedLocked()
+	if v.Pinned == nil {
+		v.Pinned = []PinnedItem{}
 	}
 	v.Workers = []*Worker{}
 	for _, w := range sp.st.Workers {
@@ -286,6 +293,26 @@ func (s *Server) superDismiss(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sup.Dismiss(id)
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) superPin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID     string `json:"id"`
+		Pinned bool   `json:"pinned"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	if id == "" {
+		writeJSON(w, 400, map[string]any{"error": "id is required"})
+		return
+	}
+	if err := s.sup.Pin(id, body.Pinned); err != nil {
+		writeJSON(w, 404, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "pinned": body.Pinned})
 }
 
 // replyLen is a reply's length as people read it: each Chinese/Japanese/Korean

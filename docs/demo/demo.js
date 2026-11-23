@@ -3,6 +3,8 @@
 // screen works without a hub. Nothing leaves the page.
 (() => {
   "use strict";
+  window.__collieDemo = true;
+  window.__collieDemoHtmlUrl = (p) => (/bench-pagination\.html$/i.test(p || "") ? "bench-pagination.html" : "");
   const now = Date.now();
   const ago = (min) => new Date(now - min * 60000).toISOString();
   const later = (min) => new Date(Date.now() + min * 60000).toISOString();
@@ -10,7 +12,7 @@
   // ───────────────────────────── the scene
   const machines = [
     { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.5", agents: ["claude", "codex"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.38", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -46,12 +48,26 @@
     entry("collie", "顺便问一下，`shop-api/migrations` 整理完了（41 → 33 个文件），那 3 个从没在生产跑过的旧回滚脚本怎么处理？", { at: ago(6.5), options: ["移到 archive 留档", "直接删掉"] }),
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
     entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "根据 v1.3..main 的提交写 v1.4 发布说明" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
-    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 ~/code/shop-api/internal/orders/list.go 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n顺带扫到一处历史逻辑：已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), check: true }),
+    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 ~/code/shop-api/internal/orders/list.go 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：~/code/shop-api/bench-pagination.html\n\n顺带扫到一处历史逻辑：已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), check: true }),
   ];
+  const pinnedIds = [entries[1].id];
   const pendingSummary = (t) => String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")
     .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1").split("\n")
     .map((l) => l.replace(/^\s*(?:[#>*•\-]+|\d+[.)])\s+/, "").replace(/\*\*|__|`/g, "").trim())
     .filter(Boolean).join(" ").slice(0, 120);
+  const humanSummary = (e) => {
+    let t = String(e.text || "");
+    if (e.role === "user") {
+      const att = t.lastIndexOf("附件：\n");
+      if (att >= 0) t = (t.slice(0, att).trim() + " 📎").trim();
+    }
+    return pendingSummary(t);
+  };
+  function computePinned() {
+    const all = [...earlierEntries, ...entries];
+    return pinnedIds.map((id) => all.find((e) => e.id === id)).filter(Boolean)
+      .map((e) => ({ id: e.id, at: e.at, role: e.role, summary: humanSummary(e) }));
+  }
   function computePending() {
     const all = [...earlierEntries, ...entries];
     const out = [];
@@ -74,7 +90,7 @@
   }
   const sup = () => ({
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: "claude", context: 23, rotate_at: 70, model: "sonnet" },
-    entries, pending: computePending(), workers, queued: 0, queued_router: 0, paused: false, earlier: true,
+    entries, pending: computePending(), pinned: computePinned(), workers, queued: 0, queued_router: 0, paused: false, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
   });
   let routerStatus = "idle";
@@ -380,6 +396,13 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/super/settings") return json(settings);
     if (p === "/api/super/seen") return json({ ok: true });
     if (p === "/api/super/dismiss") { if (body.id) dismissed.add(body.id); pushAll(); return json({ ok: true }); }
+    if (p === "/api/super/pin") {
+      const idx = pinnedIds.indexOf(body.id);
+      if (body.pinned && body.id && idx < 0) pinnedIds.push(body.id);
+      else if (!body.pinned && idx >= 0) pinnedIds.splice(idx, 1);
+      pushAll();
+      return json({ ok: true, pinned: !!body.pinned });
+    }
     if (p === "/api/super/earlier") { // yesterday's chat, made up
       if (q.get("before") === "e80") return json({ more: false, entries: [] });
       return json({ more: false, entries: earlierEntries });
@@ -395,7 +418,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
-    if (p === "/api/version") return json({ version: "v0.2.5", latest: "v0.2.5", outdated: [] });
+    if (p === "/api/version") return json({ version: "v0.2.38", latest: "v0.2.38", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
     if (p === "/api/file" && /images\/0d3a9e5c71b2f4e8a6c1\.png$|uploads\/.*\.png$/.test(q.get("path") || "")) {
@@ -404,6 +427,10 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/file") {
       const fp = q.get("path") || "";
+      if (/bench-pagination\.html$/i.test(fp)) {
+        const html = await (await realFetch(new URL("bench-pagination.html", location.href))).text();
+        return new Response(html, { headers: { "Content-Type": q.get("as") === "html" ? "text/html; charset=utf-8" : "application/octet-stream", "X-File-Kind": q.get("as") === "html" ? "html" : "text", "X-File-Size": String(new Blob([html]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/bench-pagination.html") } });
+      }
       if (q.get("machine") === "macbook" && /CHANGELOG\.md$/.test(fp)) {
         return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
       }
@@ -415,11 +442,11 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/dirs") return json({ dirs: ["~/code/shop-api", "~/code/shop-web", "~/code/notes"] });
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.5", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.38", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.5", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.5",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.38", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.38",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

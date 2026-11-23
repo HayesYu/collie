@@ -364,3 +364,162 @@ func TestReplyCheckPersistencePendingAndFourResolutions(t *testing.T) {
 		t.Fatalf("/api/super/earlier did not preserve Check=true for %s", cKeep.ID)
 	}
 }
+
+func TestPinPersistenceIdempotencyBeyondWindowAndCap(t *testing.T) {
+	sp, db, call := newPendingTestEnv(t)
+
+	// Validation: empty id -> 400; unknown or event/other-thread entry -> 404.
+	if rec := call("POST", "/api/super/pin", map[string]any{"id": "", "pinned": true}); rec.Code != 400 {
+		t.Fatalf("empty pin status = %d, want 400", rec.Code)
+	}
+	if rec := call("POST", "/api/super/pin", map[string]any{"id": "e999", "pinned": true}); rec.Code != 404 {
+		t.Fatalf("unknown pin status = %d, want 404", rec.Code)
+	}
+	sp.mu.Lock()
+	evEntry := sp.addEntryLocked("event", mainThread, "worker-a 完成了一轮", "worker-a", "done")
+	otherThread, _ := &Entry{ID: sp.st.nextID("e"), Role: "collie", Thread: "github:org/repo#1", Text: "other", At: time.Now()}, ""
+	sp.st.Entries = append(sp.st.Entries, otherThread)
+	// Older than 7 days (30 days ago): unlike pending, pinned entries NEVER auto-expire.
+	oldEntry := &Entry{
+		ID: sp.st.nextID("e"), Role: "collie", Thread: mainThread,
+		Text: "**长期架构约定**：见 [设计文档](https://example.com/arch) 第 3 节",
+		At:   time.Now().Add(-30 * 24 * time.Hour),
+	}
+	sp.st.Entries = append(sp.st.Entries, oldEntry)
+	sp.changed()
+	sp.mu.Unlock()
+
+	if rec := call("POST", "/api/super/pin", map[string]any{"id": evEntry.ID, "pinned": true}); rec.Code != 404 {
+		t.Fatalf("event pin status = %d, want 404", rec.Code)
+	}
+	if rec := call("POST", "/api/super/pin", map[string]any{"id": otherThread.ID, "pinned": true}); rec.Code != 404 {
+		t.Fatalf("other-thread pin status = %d, want 404", rec.Code)
+	}
+
+	// User message with attachment metadata + Collie pending message.
+	sayRec := call("POST", "/api/super/say", map[string]any{
+		"text":   "先把线上监控面板地址记一下\n\n附件：\n/tmp/shot.png",
+		"kind":   "codex",
+		"effort": "high",
+	})
+	if sayRec.Code != 200 {
+		t.Fatalf("say status = %d", sayRec.Code)
+	}
+	var sayOut struct {
+		Entry string `json:"entry"`
+	}
+	json.Unmarshal(sayRec.Body.Bytes(), &sayOut)
+	optEntry, _ := sp.Reply(mainThread, "要现在开启夜间归档吗？", "", []string{"开启", "暂缓"})
+
+	// Subscribe to SSE wakeup to confirm Pin broadcasts immediately.
+	ch, unsub := sp.subscribe()
+	defer unsub()
+
+	// Pin oldEntry, then user sayOut.Entry, then optEntry; repeat oldEntry to verify idempotency & order stability.
+	for _, id := range []string{oldEntry.ID, sayOut.Entry, optEntry.ID, oldEntry.ID} {
+		if rec := call("POST", "/api/super/pin", map[string]any{"id": id, "pinned": true}); rec.Code != 200 {
+			t.Fatalf("pin %s status = %d: %s", id, rec.Code, rec.Body.String())
+		}
+	}
+	select {
+	case <-ch:
+	default:
+		t.Fatal("Pin did not notify SSE subscribers")
+	}
+
+	getSnap := func(c func(string, string, any) *httptest.ResponseRecorder) superView {
+		rec := c("GET", "/api/super", nil)
+		if rec.Code != 200 {
+			t.Fatalf("GET /api/super = %d", rec.Code)
+		}
+		var s superView
+		if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	snap := getSnap(call)
+	gotPinIDs := []string{}
+	for _, p := range snap.Pinned {
+		gotPinIDs = append(gotPinIDs, p.ID)
+	}
+	wantOrder := []string{oldEntry.ID, sayOut.Entry, optEntry.ID}
+	if !slices.Equal(gotPinIDs, wantOrder) {
+		t.Fatalf("pinned order = %v, want %v", gotPinIDs, wantOrder)
+	}
+	if snap.Pinned[0].Role != "collie" || snap.Pinned[0].Summary != "长期架构约定：见 设计文档 第 3 节" {
+		t.Fatalf("pinned[0] = %+v", snap.Pinned[0])
+	}
+	if snap.Pinned[1].Role != "user" || snap.Pinned[1].Summary != "先把线上监控面板地址记一下 📎" {
+		t.Fatalf("pinned[1] (user summary) = %+v", snap.Pinned[1])
+	}
+
+	// Dismissing optEntry removes it from Pending, while keeping it in Pinned!
+	call("POST", "/api/super/dismiss", map[string]any{"id": optEntry.ID})
+	snap = getSnap(call)
+	if len(snap.Pending) != 0 || len(snap.Pinned) != 3 {
+		t.Fatalf("after dismiss: pending=%d pinned=%d, want 0 and 3", len(snap.Pending), len(snap.Pinned))
+	}
+
+	// Push 620 newer events and flush so oldEntry & sayOut.Entry fall out of in-memory st.Entries (trimmed to 600),
+	// then reload from SQLite herd.db to verify restart recovery + SQLite fallback lookup!
+	for i := 0; i < 620; i++ {
+		sp.mu.Lock()
+		sp.addEntryLocked("event", mainThread, fmt.Sprintf("worker-%d 完成了一轮", i), "w", "done")
+		sp.mu.Unlock()
+	}
+	sp.flush()
+
+	reloaded, err := loadState(db, sp.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range reloaded.Entries {
+		if e.ID == oldEntry.ID {
+			t.Fatal("expected oldEntry to be trimmed out of in-memory working window")
+		}
+	}
+	srv2 := &Server{token: "test-tok", home: sp.dir, web: fstest.MapFS{}}
+	sp2 := &Super{s: srv2, db: db, dir: sp.dir, st: reloaded, subs: map[chan struct{}]bool{}}
+	srv2.sup = sp2
+
+	snap2 := srv2.superState(t.Context())
+	gotPinIDs2 := []string{}
+	for _, p := range snap2.Pinned {
+		gotPinIDs2 = append(gotPinIDs2, p.ID)
+	}
+	if !slices.Equal(gotPinIDs2, wantOrder) {
+		t.Fatalf("reloaded + SQLite fallback pinned = %v, want %v", gotPinIDs2, wantOrder)
+	}
+
+	// Unpinning is idempotent (calling pinned:false twice succeeds and removes item).
+	for range 2 {
+		if err := sp2.Pin(sayOut.Entry, false); err != nil {
+			t.Fatalf("unpin err = %v", err)
+		}
+	}
+	snap3 := srv2.superState(t.Context())
+	if len(snap3.Pinned) != 2 || snap3.Pinned[0].ID != oldEntry.ID || snap3.Pinned[1].ID != optEntry.ID {
+		t.Fatalf("after unpin = %+v", snap3.Pinned)
+	}
+
+	// Verify maxPinned (200) cap keeps the newest 200 pins in order.
+	var tailWant []string
+	for i := 0; i < maxPinned+5; i++ {
+		e, _ := sp2.Reply(mainThread, fmt.Sprintf("pin-cap-%d", i), "", nil)
+		if err := sp2.Pin(e.ID, true); err != nil {
+			t.Fatalf("pin cap %d: %v", i, err)
+		}
+		tailWant = append(tailWant, e.ID)
+	}
+	tailWant = tailWant[len(tailWant)-maxPinned:]
+	snapCap := srv2.superState(t.Context())
+	if len(snapCap.Pinned) != maxPinned {
+		t.Fatalf("pinned cap len = %d, want %d", len(snapCap.Pinned), maxPinned)
+	}
+	if snapCap.Pinned[0].ID != tailWant[0] || snapCap.Pinned[maxPinned-1].ID != tailWant[maxPinned-1] {
+		t.Fatalf("pinned cap bounds = [%s .. %s], want [%s .. %s]",
+			snapCap.Pinned[0].ID, snapCap.Pinned[maxPinned-1].ID, tailWant[0], tailWant[maxPinned-1])
+	}
+}

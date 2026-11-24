@@ -310,6 +310,18 @@ const stripTags = (h) => h.replace(/<[^>]+>/g, "");
   const tbl = mdRender("| 项目 | 价格 | 公式 |\n| --- | ---: | :---: |\n| H100 | \\$1.80 | $x^2 + 1$ |");
   assert.ok(tbl.includes('class="md-table"') && tbl.includes("$1.80") && !tbl.includes("\\$1.80") && tbl.includes('class="md-math"'), "table + escape + math works: " + tbl);
 
+  // GFM table with long inline code, file paths, and URLs in middle and last columns
+  const longCodeTbl = mdRender([
+    "| 阶段 | 工具 / 接口 | 实测规模 | 产物路径 |",
+    "| --- | --- | --- | --- |",
+    "| 1. 抽样与候选检索 | Batch SQL（\x60cluster-east / root.serverless_ml_pretrain_pipeline_v2\x60） | 1,869 条去重候选 | \x60~/code/shop-api/internal/orders/very_long_report_filename.md\x60 |",
+    "| 2. 线上回看 | 监控面板（\x60https://metrics.example.com/pipelines/very/long/run-20261125-0001\x60） | 全量验证通过 | \x60ok\x60 |",
+  ].join("\n"));
+  assert.ok(longCodeTbl.includes('class="md-table"'), "long code table renders md-table wrapper");
+  assert.ok(longCodeTbl.includes("<code>cluster-east / root.serverless_ml_pretrain_pipeline_v2</code>"), "middle-column inline code preserved");
+  assert.ok(longCodeTbl.includes('class="code-link">~/code/shop-api/internal/orders/very_long_report_filename.md</code>'), "table clickable path code preserved");
+  assert.ok(longCodeTbl.includes('class="code-link">https://metrics.example.com/pipelines/very/long/run-20261125-0001</code>'), "table clickable URL code preserved");
+
   // XSS safety inside math (trust: false disables \href; HTML tags escaped)
   const xss1 = mdRender("$$\\href{javascript:alert(1)}{click}$$");
   assert.ok(!/<a[\s>]/i.test(xss1) && !xss1.includes("href="), "KaTeX trust:false must not emit anchor/href: " + xss1);
@@ -336,5 +348,26 @@ console.log("ALL_MD_MATH_TESTS_PASSED");
 	}
 	if !strings.Contains(string(out), "ALL_MD_MATH_TESTS_PASSED") {
 		t.Fatalf("unexpected node test output:\n%s", string(out))
+	}
+}
+
+func TestWebMarkdownTableCodeWrapCSS(t *testing.T) {
+	cssBytes, err := fs.ReadFile(web.FS, "app.css")
+	if err != nil {
+		t.Fatalf("read web/app.css: %v", err)
+	}
+	css := string(cssBytes)
+	if strings.Contains(css, ".md-table code { white-space: nowrap") {
+		t.Fatal("web/app.css must not force white-space: nowrap on .md-table code")
+	}
+	required := []string{
+		".md-table { max-width: 100%; overflow-x: auto;",
+		"table-layout: auto;",
+		".md-table th code, .md-table td code { white-space: normal; overflow-wrap: anywhere; word-break: break-word;",
+	}
+	for _, want := range required {
+		if !strings.Contains(css, want) {
+			t.Fatalf("web/app.css missing expected table layout rule %q", want)
+		}
 	}
 }

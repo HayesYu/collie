@@ -15,7 +15,8 @@
 #     sh docs/install.sh [hub | node …]
 #
 # 环境变量：COLLIE_BIN_DIR（默认 ~/.local/bin）、COLLIE_BINARY（直接安装这个现成的文件）、
-# COLLIE_VERSION（下载时的版本，默认 latest）。
+# COLLIE_VERSION（下载时的版本，默认 latest）、COLLIE_NO_HERDR（设为 1 跳过自动装 herdr 和集成）、
+# COLLIE_NO_INTEGRATION（设为 1 跳过自动装 herdr 的 agent 集成）。
 set -eu
 
 REPO=lihuanyu0w0/collie
@@ -198,8 +199,8 @@ WantedBy=default.target"
 # ------------------------------------------------------------------ herdr
 warn() { printf '\033[33m!\033[0m %s\n' "$*"; }
 
-# check_herdr: Collie drives agents through herdr, which is installed and
-# set up on its own. Say what is missing on this computer; change nothing.
+# check_herdr: Collie drives agents through herdr. Install herdr, start its
+# server, and install missing agent integrations unless opted out.
 check_herdr() {
   hb=$(command -v herdr 2>/dev/null || true)
   [ -z "$hb" ] && [ -x "$HOME/.local/bin/herdr" ] && hb=$HOME/.local/bin/herdr
@@ -240,8 +241,23 @@ check_herdr() {
     esac
   done
   if [ -n "$missing" ]; then
-    warn "这些 agent 还没装 herdr 集成：herdr 认不出它们在干什么，Collie 也就没法给它们发消息。运行："
-    for t in $missing; do say "      herdr integration install $t"; done
+    if [ -z "${COLLIE_NO_HERDR:-}" ] && [ -z "${COLLIE_NO_INTEGRATION:-}" ]; then
+      list=${missing# }
+      step "安装 herdr 的 agent 集成：${list}（不想自动改 agent 配置可设 COLLIE_NO_INTEGRATION=1）"
+      failed=""
+      for t in $missing; do
+        if ! "$hb" integration install "$t" </dev/null; then
+          failed="$failed $t"
+        fi
+      done
+      if [ -n "$failed" ]; then
+        warn "以下 agent 的 herdr 集成没装上，可以稍后手动运行："
+        for t in $failed; do say "      herdr integration install $t"; done
+      fi
+    else
+      warn "这些 agent 还没装 herdr 集成：herdr 认不出它们在干什么，Collie 也就没法给它们发消息。运行："
+      for t in $missing; do say "      herdr integration install $t"; done
+    fi
   fi
 }
 

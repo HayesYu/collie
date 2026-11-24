@@ -1901,6 +1901,8 @@
   // ───────────────────────────── memory: what Collie keeps between sessions
   let memEditing = false;
   const kb = (n) => (n / 1024).toFixed(1) + " KB";
+  const kbNum = (n) => (n / 1024).toFixed(1);
+  const kbCap = (n) => (n % 1024 === 0 ? String(n / 1024) : (n / 1024).toFixed(1)) + " KB";
   const dayTime = (t) => {
     const d = new Date(t), today = new Date().toDateString(), tmr = new Date(Date.now() + 864e5).toDateString();
     const hm = d.toTimeString().slice(0, 5);
@@ -1909,7 +1911,6 @@
   function memoryHTML(r) {
     const files = r.files || [];
     const by = (f) => files.filter(f);
-    const over = r.loaded > r.budget;
     const dream = r.dreaming ? `<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。`
       : `上次做梦：${r.last_dream ? dayTime(r.last_dream) : "还没有"}　·　下次：${r.next_dream ? dayTime(r.next_dream) + "（当天有新对话才会做）" : "已关闭"}`;
     const firstLine = (t, dflt) => t.split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || dflt;
@@ -1945,11 +1946,22 @@
     const done = by((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
     const msgs = by((f) => f.name === "messages.md");
     const legacy = by((f) => f.legacy);
+    const msgBytes = r.messages ?? msgs.reduce((s, f) => s + (f.size || 0), 0);
+    const upFront = r.up_front ?? Math.max(0, (r.loaded || 0) - msgBytes);
+    const budget = r.budget || (10 << 10);
+    const over = upFront > budget;
     return `<p class="panel-intro">Collie 的长期记忆在 <code>${esc(r.dir)}/memory</code>，按用途分开：每次新会话只先读<b>指令、笔记索引、进行中的任务和最近说过的话</b>，其余需要时再看。
       「做梦」时，Collie 回顾最近的会话来整理记忆：替换过时的条目，发现只有跨多次对话才看得出的习惯（标记为 inferred）。</p>
       <div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
         <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
-        <div class="mem-dream mem-load"><span class="grow">每次新会话先读：<b class="${over ? "warn" : ""}">${kb(r.loaded)}</b> / 建议 ${kb(r.budget)} 以内${over ? "（偏大，做梦时会精简）" : ""}</span></div></div>
+        <div class="mem-load">
+          <div class="mem-load-row">
+            <span class="mem-load-main" id="mem-front-label">前置记忆 <b class="${over ? "warn" : ""}">${kbNum(upFront)}</b> / ${kbCap(budget)}${over ? `<span class="mem-warn-note">超出预算，做梦时会精简</span>` : ""}</span>
+            <span class="mem-load-msg">近期消息 <b>${kb(msgBytes)}</b><span class="muted"> · 自动记录</span></span>
+          </div>
+          <progress class="mem-meter${over ? " warn" : ""}" max="${budget}" value="${Math.min(upFront, budget)}" aria-labelledby="mem-front-label"></progress>
+          <div class="mem-load-sub muted">仅指令、笔记索引与进行中任务计入 ${kbCap(budget)} 预算；<code>messages.md</code> 由 hub 自动维护，不占预算</div>
+        </div></div>
       ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
       ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "没有进行中的任务" })}
       ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}

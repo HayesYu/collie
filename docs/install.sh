@@ -16,7 +16,8 @@
 #
 # 环境变量：COLLIE_BIN_DIR（默认 ~/.local/bin）、COLLIE_BINARY（直接安装这个现成的文件）、
 # COLLIE_VERSION（下载时的版本，默认 latest）、COLLIE_NO_HERDR（设为 1 跳过自动装 herdr 和集成）、
-# COLLIE_NO_INTEGRATION（设为 1 跳过自动装 herdr 的 agent 集成）。
+# COLLIE_NO_INTEGRATION（设为 1 跳过自动装 herdr 的 agent 集成）、
+# COLLIE_NO_OPEN（设为 1 不在 macOS 桌面自动打开浏览器）。
 set -eu
 
 REPO=lihuanyu0w0/collie
@@ -261,6 +262,70 @@ check_herdr() {
   fi
 }
 
+# ------------------------------------------------------------------ urls & browser
+detect_ip() {
+  ip=""
+  if [ "$os" = darwin ]; then
+    if command -v route >/dev/null 2>&1 && command -v ipconfig >/dev/null 2>&1; then
+      iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
+      if [ -n "$iface" ]; then
+        cand=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
+        case "$cand" in
+          "" | 127.* | 169.254.* | *[!0-9.]*) ;;
+          *.*.*.*) ip=$cand ;;
+        esac
+      fi
+    fi
+    if [ -z "$ip" ] && command -v ipconfig >/dev/null 2>&1; then
+      for iface in en0 en1 en2 en3 en4 en5; do
+        cand=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
+        case "$cand" in
+          "" | 127.* | 169.254.* | *[!0-9.]*) ;;
+          *.*.*.*) ip=$cand; break ;;
+        esac
+      done
+    fi
+  else
+    if command -v ip >/dev/null 2>&1; then
+      cand=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
+      case "$cand" in
+        "" | 127.* | 169.254.* | *[!0-9.]*) ;;
+        *.*.*.*) ip=$cand ;;
+      esac
+    fi
+    if [ -z "$ip" ] && command -v hostname >/dev/null 2>&1; then
+      for cand in $(hostname -I 2>/dev/null || true); do
+        case "$cand" in
+          "" | 127.* | 169.254.* | *[!0-9.]*) ;;
+          *.*.*.*) ip=$cand; break ;;
+        esac
+      done
+    fi
+  fi
+  printf '%s\n' "${ip:-127.0.0.1}"
+}
+
+open_browser() { # open_browser <url> [probe_url]
+  [ "$os" = darwin ] || return 0
+  [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] || return 0
+  [ -z "${COLLIE_NO_OPEN:-}" ] || return 0
+  [ -z "${COLLIE_DRY_SERVICE:-}" ] || return 0
+  command -v open >/dev/null 2>&1 || return 0
+  open_target=$1
+  probe_url=${2:-$1}
+  if command -v curl >/dev/null 2>&1; then
+    w=0
+    while [ "$w" -lt 6 ]; do
+      curl -s --max-time 1 --noproxy '*' -o /dev/null "$probe_url" 2>/dev/null && break
+      sleep 0.5 2>/dev/null || sleep 1
+      w=$((w + 1))
+    done
+  fi
+  if open "$open_target" >/dev/null 2>&1; then
+    say "    已在浏览器打开 ${open_target}（不想自动打开可设 COLLIE_NO_OPEN=1）"
+  fi
+}
+
 # ------------------------------------------------------------------ main
 mode=${1:-}
 [ $# -gt 0 ] && shift
@@ -304,13 +369,62 @@ case "$mode" in
     say "    在 hub 的侧栏里能看到这台电脑了。"
     say "    本机界面：http://127.0.0.1:17788（用 Chrome 打开可以安装成 app）"
     check_herdr
+    open_browser "http://127.0.0.1:17788"
     ;;
   hub)
     install_binary
     service hub serve "$@"
-    say "    打开 hub 的地址；手机配对：collie pair（或在「设备」页扫码）。"
+    hub_url=""
+    hub_addr=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -url | --url)
+          if [ $# -ge 2 ]; then hub_url=$2; shift 2; else shift; fi ;;
+        -url=*) hub_url=${1#-url=}; shift ;;
+        --url=*) hub_url=${1#--url=}; shift ;;
+        -addr | --addr)
+          if [ $# -ge 2 ]; then hub_addr=$2; shift 2; else shift; fi ;;
+        -addr=*) hub_addr=${1#-addr=}; shift ;;
+        --addr=*) hub_addr=${1#--addr=}; shift ;;
+        *) shift ;;
+      esac
+    done
+    hub_port=7788
+    case "$hub_addr" in
+      *:*)
+        p=${hub_addr##*:}
+        case "$p" in
+          "" | *[!0-9]*) ;;
+          *) hub_port=$p ;;
+        esac
+        ;;
+    esac
+    local_url="http://127.0.0.1:${hub_port}"
+    if [ -n "$hub_url" ]; then
+      main_url=$hub_url
+      open_url=$hub_url
+    else
+      case "$hub_addr" in
+        127.0.0.1:* | localhost:*) hub_ip=127.0.0.1 ;;
+        *) hub_ip=$(detect_ip) ;;
+      esac
+      main_url="http://${hub_ip}:${hub_port}"
+      open_url=$local_url
+    fi
+    case "$main_url" in
+      http://127.0.0.1:* | http://127.0.0.1 | http://127.0.0.1/* | https://127.0.0.1:* | https://127.0.0.1 | https://127.0.0.1/*)
+        is_loopback=1 ;;
+      *)
+        is_loopback=0 ;;
+    esac
+    say "    打开 hub：${main_url}"
+    if [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] && [ "$is_loopback" -eq 0 ]; then
+      say "    本机访问：${local_url}"
+    fi
+    say "    手机配对：collie pair（或在「设备」页扫码）。"
     say "    首次登录的令牌在 ~/.collie/token。"
     check_herdr "hub 本身照常能用"
+    open_browser "$open_url" "$local_url"
     ;;
   *)
     die "不认识的参数：${mode}（可以是 node、hub，或者不带参数）"

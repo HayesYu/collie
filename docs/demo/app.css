@@ -409,6 +409,21 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .hl-del { color: var(--hl-del); background: color-mix(in srgb, var(--hl-del) 11%, transparent); }
 .msg.assistant blockquote { margin: 0 0 .7em; padding-left: 12px; border-left: 2px solid var(--line-2); color: var(--fg-2); }
 
+/* math (offline KaTeX): inherits light/dark fg, scrolls sideways on narrow screens */
+.msg .katex { font-size: 1.06em; overflow-wrap: normal; word-break: normal; }
+.msg .katex .mord.text, .msg .katex .text { font-family: KaTeX_Main, var(--sans); }
+.msg .md-math { display: inline; }
+.msg .md-math-block {
+  display: block; max-width: 100%; margin: .75em 0 1em; padding: .2em 2px;
+  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain; text-align: center;
+}
+.msg .md-math-block .katex { font-size: 1.12em; }
+.msg .md-math-block > .katex-display { margin: 0; width: max-content; min-width: 100%; }
+.msg .md-math-block > .katex-display > .katex { text-align: center; }
+.msg .md-math-block:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 28%, transparent); outline-offset: 2px; border-radius: 6px; }
+.msg .md-math-fallback { text-align: left; }
+
 /* collie replies carry a small avatar */
 /* hovering a message in Collie's chat shows its time beside it */
 #v-collie .msg[data-time] { position: relative; }

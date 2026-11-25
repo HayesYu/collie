@@ -1772,6 +1772,28 @@ func (sp *Super) collieQuoteLocked(id string) *Quote {
 	return nil
 }
 
+// sayQuoteLocked resolves a chat message the human is replying to (either
+// Collie's message or an earlier message of their own, e.g. continuing a reply
+// thread whose latest node is a user message).
+func (sp *Super) sayQuoteLocked(id string) *Quote {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	e := sp.findEntryLocked(id)
+	if e == nil {
+		return nil
+	}
+	switch e.Role {
+	case "collie":
+		return &Quote{Entry: e.ID, Who: "Collie", Text: clip(e.Text, 600)}
+	case "user":
+		return &Quote{Entry: e.ID, Who: "你", Text: humanText(e.Text)}
+	default:
+		return nil
+	}
+}
+
 // pendingMaxAge bounds unanswered quick-option prompts so forgotten topics from
 // past weeks never pile up as stale badges.
 const pendingMaxAge = 7 * 24 * time.Hour

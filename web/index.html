@@ -390,6 +390,50 @@
     <div class="fv-body" id="fv-body"></div>
     </div>
   </aside>
+  <!-- natural reply-chain thread drawer, beside Collie's main stream -->
+  <div class="thread-scrim" id="thread-scrim" hidden aria-hidden="true"></div>
+  <aside class="threadpane" id="thread-drawer" hidden aria-label="话题抽屉" aria-hidden="true">
+    <div class="td-grip" id="td-grip" title="拖动调整宽度"></div>
+    <div class="td-inner">
+      <header class="td-head">
+        <button type="button" class="icon-btn td-back" id="td-back" aria-label="返回主聊天" title="返回主聊天">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <div class="td-title-wrap">
+          <h2 class="td-title" id="td-title">话题线</h2>
+          <div class="td-meta" id="td-meta"></div>
+        </div>
+        <div class="td-head-acts">
+          <button type="button" class="icon-btn" id="td-locate-root" aria-label="定位到主聊天" title="定位到主聊天流">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="td-close" aria-label="关闭抽屉" title="关闭 (Esc)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+      </header>
+      <div class="td-body" id="td-body" tabindex="-1">
+        <div class="td-list" id="td-list"></div>
+      </div>
+      <form class="td-foot" id="td-composer">
+        <div class="td-cbox">
+          <div class="td-target" id="td-target">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v8a3 3 0 0 0 3 3h9"/><path d="M15 13l3 3-3 3"/></svg>
+            <span class="td-target-text" id="td-target-text">接续最新消息</span>
+            <button type="button" class="td-target-reset" id="td-target-reset" hidden>回到最新</button>
+          </div>
+          <label for="td-input" class="visually-hidden">在这条话题线继续回复</label>
+          <textarea class="td-ta" id="td-input" rows="1" placeholder="在这条线里继续回复…" enterkeyhint="send"></textarea>
+          <div class="td-cbar">
+            <span class="td-hint" id="td-hint">Enter 发送 · 同步写入主聊天流</span>
+            <button class="send" id="td-send" type="submit" title="发送回复 (Enter)" aria-label="发送回复" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </aside>
 </div>
 
 <!-- ───────────── launcher ───────────── -->

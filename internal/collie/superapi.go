@@ -229,12 +229,16 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"entry": prev.entry, "trigger": prev.trigger, "duplicate": true})
 		return
 	}
-	re := sp.collieQuoteLocked(body.Re)
+	re := sp.sayQuoteLocked(body.Re)
 	e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
 	// The composer's "派到" chip: a one-off choice the router should honour.
 	text := body.Text
-	if re != nil { // which of your messages they mean: Collie need not guess
-		text = "[In reply to what you said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
+	if re != nil { // which message they mean: Collie need not guess
+		if re.Who == "你" {
+			text = "[In reply to what the human said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
+		} else {
+			text = "[In reply to what you said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
+		}
 	}
 	st := sp.st.Settings
 	var hint []string

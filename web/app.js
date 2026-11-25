@@ -912,6 +912,7 @@
     const ev = new EventSource("/api/events");
     ev.addEventListener("super", (e) => {
       sup = normSup(JSON.parse(e.data));
+      syncCollieNotifyWatermark(sup.entries, true);
       renderSide();
       renderRouterPendingBars();
       if (view === "collie") renderSuper();
@@ -951,6 +952,114 @@
   }
   document.addEventListener("visibilitychange", () => { if (view === "pane" && find(current)) markSeen(find(current)); });
 
+  // ───────────────────────────── browser notifications (Collie replies + agents)
+  const entryIdNum = (id) => parseInt(String(id || "").replace(/^[a-z]+/i, ""), 10) || 0;
+  function notifyEnvState() {
+    if (window.isSecureContext === false) {
+      return {
+        supported: false, insecure: true, permission: "unsupported", active: false, warn: true,
+        text: "当前为非 HTTPS 内网地址，浏览器禁止桌面通知；通过本机 127.0.0.1 或 HTTPS 打开即可生效",
+      };
+    }
+    if (!("Notification" in window)) {
+      return {
+        supported: false, insecure: false, permission: "unsupported", active: false, warn: true,
+        text: "当前浏览器不支持桌面通知（手机上通常需要先添加到主屏幕）",
+      };
+    }
+    const perm = Notification.permission || "default";
+    if (perm === "denied") {
+      return {
+        supported: true, insecure: false, permission: "denied", active: false, warn: true,
+        text: "已被浏览器拦截，请在地址栏左侧站点设置中重新开启",
+      };
+    }
+    if (perm === "granted") {
+      const active = !!prefs.notify();
+      return {
+        supported: true, insecure: false, permission: "granted", active, warn: false,
+        text: active
+          ? "已开启：页面在后台时，Collie 回复、agent 完成或需要你确认都会弹桌面通知"
+          : "已关闭：开启后，页面在后台时 Collie 回复和 agent 状态变化会弹桌面通知",
+      };
+    }
+    return {
+      supported: true, insecure: false, permission: "default", active: false, warn: false,
+      text: "开启后会请求浏览器授权；页面在后台时，Collie 回复、agent 完成或需要你确认都会弹桌面通知",
+    };
+  }
+  const canBrowserNotify = () => notifyEnvState().active;
+  const pageInBackground = () => !!document.hidden || (typeof document.hasFocus === "function" && !document.hasFocus());
+  function collieNotifySummary(text) {
+    const cleaned = String(text || "")
+      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+      .replace(/\[image:[^\]]+\]/g, " ")
+      .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
+    for (const raw of cleaned.split("\n")) {
+      const line = raw.replace(/^\s*(?:[#>*•\-]+|\d+[.)])\s+/, "").replace(/\*\*|__|`/g, "").replace(/\s+/g, " ").trim();
+      if (line) return line.length > 120 ? line.slice(0, 120) + "…" : line;
+    }
+    const fallback = plainLine(text);
+    return fallback ? (fallback.length > 120 ? fallback.slice(0, 120) + "…" : fallback) : "Collie 有新回复";
+  }
+  let collieNotifyPrimed = false;
+  let lastCollieNotifyNum = 0;
+  const seenCollieNotifyIds = new Set();
+  function syncCollieNotifyWatermark(entries, allowNotify) {
+    const list = Array.isArray(entries) ? entries : [];
+    const collies = list.filter((e) => e && e.role === "collie" && e.id);
+    if (!collieNotifyPrimed || !allowNotify) {
+      for (const e of collies) {
+        seenCollieNotifyIds.add(e.id);
+        const n = entryIdNum(e.id);
+        if (n > lastCollieNotifyNum) lastCollieNotifyNum = n;
+      }
+      collieNotifyPrimed = true;
+      return;
+    }
+    const fresh = [];
+    for (const e of collies) {
+      if (seenCollieNotifyIds.has(e.id)) continue;
+      const n = entryIdNum(e.id);
+      seenCollieNotifyIds.add(e.id);
+      if (n === 0 || n > lastCollieNotifyNum) {
+        if (n > lastCollieNotifyNum) lastCollieNotifyNum = n;
+        fresh.push(e);
+      }
+    }
+    if (seenCollieNotifyIds.size > 600) {
+      const keep = [...seenCollieNotifyIds].slice(-300);
+      seenCollieNotifyIds.clear();
+      for (const id of keep) seenCollieNotifyIds.add(id);
+    }
+    if (!fresh.length || !pageInBackground() || !canBrowserNotify()) return;
+    const latest = fresh[fresh.length - 1];
+    try {
+      const n = new Notification("Collie", { body: collieNotifySummary(latest.text), icon: "/icon.svg", tag: "collie-reply" });
+      n.onclick = () => { try { focus(); } catch {} location.hash = "#/collie"; };
+    } catch {}
+  }
+  function sendTestNotification() {
+    const env = notifyEnvState();
+    if (!env.active) {
+      toast(env.text, "attn");
+      return false;
+    }
+    try {
+      const n = new Notification("Collie", {
+        body: "浏览器通知工作正常，Collie 回复和 agent 状态变化会这样提醒你。",
+        icon: "/icon.svg",
+        tag: "collie-test",
+      });
+      n.onclick = () => { try { focus(); } catch {} location.hash = "#/collie"; };
+      toast("已发送测试通知");
+      return true;
+    } catch (err) {
+      toast("发送通知失败：" + (err?.message || "浏览器拒绝了通知"), "attn");
+      return false;
+    }
+  }
+
   function notifyTransitions(next) {
     for (const a of next.agents) {
       const before = prevStatus.get(a.pane_id);
@@ -967,9 +1076,11 @@
   function ping(msg, a, kind) {
     if (a.pane_id !== current || document.hidden) {
       toast(msg, kind);
-      if (document.hidden && prefs.notify() && "Notification" in window && Notification.permission === "granted") {
-        const n = new Notification("Collie", { body: msg, icon: "/icon.svg", tag: a.pane_id });
-        n.onclick = () => { focus(); location.hash = "#/p/" + encodeURIComponent(a.pane_id); };
+      if (pageInBackground() && canBrowserNotify()) {
+        try {
+          const n = new Notification("Collie", { body: msg, icon: "/icon.svg", tag: a.pane_id });
+          n.onclick = () => { try { focus(); } catch {} location.hash = "#/p/" + encodeURIComponent(a.pane_id); };
+        } catch {}
       }
     }
   }
@@ -992,7 +1103,7 @@
     // anchored historical message never vanishes from the DOM on SSE updates.
     if (sup.entries?.length && s.entries.length) {
       const sc = $("#super-thread")?.parentElement;
-      const keepSpilled = older.length > 0 || (view === "collie"
+      const keepSpilled = older.length > 0 || !!activeThreadRoot || (view === "collie"
         ? !!(sc && sc.clientHeight > 0 && sc.scrollHeight - sc.scrollTop - sc.clientHeight > AT_BOTTOM_PX)
         : scrollByRoute.get("collie")?.atBottom === false);
       if (keepSpilled) {
@@ -1296,6 +1407,7 @@
     if (next !== "collie") {
       pendingOpen = false;
       hideSearchPanel();
+      if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
     }
     view = next; current = next === "ext" ? null : id;
     const nextKey = routeKeyFor(next, id);
@@ -1379,6 +1491,138 @@
   const routerQueued = () => sup.queued_router ?? sup.queued;
   // Messages you sent that the hub's stream hasn't shown yet.
   const pendingSays = [];
+  let pendingSaySeq = 0;
+  // Natural reply-chain thread drawer state.
+  let activeThreadRoot = null;
+  let activeThreadAnchor = "";
+  let drawerReplyTarget = null;
+  let tdLastSig = "";
+  let tdLastCount = 0;
+  let tdForceScroll = false;
+  const tdRootFetchTried = new Set();
+  const ICON_THREAD_BRANCH = `<svg class="te-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v9a4 4 0 0 0 4 4h8"/><path d="M14 14l4 4-4 4"/></svg>`;
+  const ICON_THREAD_CHEV = `<svg class="te-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+  const ICON_TD_REPLY = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>`;
+  const ICON_TD_LOCATE = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>`;
+  const ICON_TD_USER = `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="23.5" r="10.2"/><path d="M14 52.5c2.2-10.2 9.2-15.5 18-15.5s15.8 5.3 18 15.5"/></svg>`;
+  const entryKey = (e) => (e && (e.id || e._localId)) || "";
+  const threadWhoLabel = (e) => (e?.role === "user" ? "你" : "Collie");
+  function threadCleanText(e) {
+    let t = String(e?.text || "");
+    if (e?.role === "user") {
+      const cut = t.indexOf("\n\n[The human picked");
+      if (cut >= 0) t = t.slice(0, cut);
+      const att = t.lastIndexOf("附件：\n");
+      if (att >= 0) t = t.slice(0, att).trim() || "附件消息";
+    }
+    return collieNotifySummary(t);
+  }
+  function threadTitleFromText(text, fallback = "话题线") {
+    const clean = String(text || "").replace(/\s+/g, " ").trim();
+    if (!clean) return fallback;
+    const first = clean.split(/[？?。！!\n]/)[0].trim() || clean;
+    return first.length > 48 ? first.slice(0, 48) + "…" : first;
+  }
+  function threadSnippet(text, max = 24) {
+    const clean = String(text || "").replace(/\s+/g, " ").trim();
+    return clean.length > max ? clean.slice(0, max) + "…" : clean;
+  }
+  // Group user/collie messages connected by `re.entry` into natural reply threads.
+  // Standalone messages and single replies to worker events stay clean with zero chrome.
+  function computeReplyThreads(allEntries) {
+    const byId = new Map();
+    for (const e of allEntries || []) {
+      const k = entryKey(e);
+      if (k) byId.set(k, e);
+    }
+    const parentOf = (m) => {
+      const pid = m?.re?.entry;
+      if (!pid) return "";
+      const target = byId.get(pid);
+      if (target) return (target.role === "user" || target.role === "collie") ? pid : "";
+      if (m.re.worker) return "";
+      return pid;
+    };
+    const rootCache = new Map();
+    const missingRoots = new Map();
+    const getRoot = (id) => {
+      if (rootCache.has(id)) return rootCache.get(id);
+      let curId = id;
+      const seen = new Set();
+      while (curId && !seen.has(curId)) {
+        seen.add(curId);
+        const cur = byId.get(curId);
+        if (!cur) break;
+        const pid = parentOf(cur);
+        if (!pid) break;
+        if (!byId.has(pid) && !missingRoots.has(pid)) {
+          missingRoots.set(pid, {
+            id: pid,
+            who: cur.re?.who || "历史消息",
+            text: cur.re?.text || "",
+            missing: true,
+          });
+        }
+        curId = pid;
+      }
+      rootCache.set(id, curId);
+      return curId;
+    };
+    const groups = new Map();
+    for (const m of allEntries || []) {
+      if (!m || (m.role !== "user" && m.role !== "collie")) continue;
+      const k = entryKey(m);
+      if (!k) continue;
+      const r = getRoot(k);
+      if (!groups.has(r)) groups.set(r, []);
+      groups.get(r).push(m);
+    }
+    const threads = new Map();
+    const msgToRoot = new Map();
+    for (const [rootId, list] of groups.entries()) {
+      const missingRoot = missingRoots.get(rootId) || null;
+      const totalCount = missingRoot ? list.length + 1 : list.length;
+      if (totalCount < 3) continue;
+      const root = byId.get(rootId) || null;
+      let branchCount = 0;
+      for (let i = 1; i < list.length; i++) {
+        const prevK = entryKey(list[i - 1]);
+        const pid = parentOf(list[i]);
+        if (pid && pid !== prevK) branchCount++;
+      }
+      const latest = list[list.length - 1];
+      const replyCount = totalCount - 1;
+      const rootSummary = root ? threadCleanText(root) : (missingRoot?.text ? collieNotifySummary(missingRoot.text) : threadCleanText(list[0]));
+      threads.set(rootId, {
+        rootId,
+        root,
+        missingRoot,
+        list,
+        latest,
+        replyCount,
+        totalCount,
+        branchCount,
+        title: threadTitleFromText(rootSummary),
+        fullTitle: rootSummary,
+      });
+      for (const x of list) msgToRoot.set(entryKey(x), rootId);
+    }
+    // Only show `↳ N 条回复 >` at the end of each contiguous run of a thread,
+    // avoiding stacked duplicate links when messages of the same thread are adjacent.
+    const showEntryOn = new Set();
+    const visibleTalk = [];
+    for (const m of allEntries || []) {
+      if (m && (m.role === "user" || m.role === "collie")) visibleTalk.push(m);
+    }
+    for (let i = 0; i < visibleTalk.length; i++) {
+      const k = entryKey(visibleTalk[i]);
+      const r = msgToRoot.get(k);
+      if (!r) continue;
+      const nextR = i + 1 < visibleTalk.length ? msgToRoot.get(entryKey(visibleTalk[i + 1])) : null;
+      if (nextR !== r) showEntryOn.add(k);
+    }
+    return { byId, threads, msgToRoot, showEntryOn, parentOf };
+  }
   // Items dismissed locally via × before the hub's next stream frame lands.
   const dismissedLocal = new Set();
   const ICON_X = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
@@ -1936,7 +2180,7 @@
         return;
       }
       if (e.key === "Escape" && wrap && !wrap.hidden && !e.isComposing && e.keyCode !== 229) {
-        if (pickOpen || pendingOpen || !$("#file-view")?.hidden) return;
+        if (pickOpen || pendingOpen || !$("#file-view")?.hidden || activeThreadRoot) return;
         e.preventDefault();
         closeSuperSearch(true);
       }
@@ -2007,6 +2251,11 @@
       // a word on the worker whose line it follows.
       let lastUser = "", sinceUser = 0, lastEvent = "", lastEventId = "", lastCollie = "", sinceCollie = 0;
       const allEntries = chatEntries();
+      const threadInfo = computeReplyThreads(allEntries);
+      if (activeThreadRoot && !threadInfo.threads.has(activeThreadRoot) && activeThreadAnchor) {
+        const migrated = threadInfo.msgToRoot.get(activeThreadAnchor);
+        if (migrated && threadInfo.threads.has(migrated)) activeThreadRoot = migrated;
+      }
       const pendIds = new Set(activePending().map((p) => p.id));
       const pinIds = new Set(activePinned().map((p) => p.id));
       const entryPending = (idx, id) => {
@@ -2057,13 +2306,24 @@
         if (!q.entry && q.worker && q.worker === lastEvent) return "";
         const targetId = q.entry || (q.worker ? findWorkerEventBefore(q.worker, idx) : "");
         const body = `<span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}`;
+        const tr = threadInfo.msgToRoot.get(entryKey(e)) || "";
         if (targetId) {
-          return `<a class="re" href="#" data-goto="${esc(targetId)}" title="${esc(q.text)}">${body}</a>`;
+          return `<a class="re" href="#" data-goto="${esc(targetId)}"${tr ? ` data-thread-root="${esc(tr)}"` : ""} title="${esc(q.text)}">${body}</a>`;
         }
         if (q.worker) {
           return `<a class="re" href="#" data-goto-worker="${esc(q.worker)}" data-before="${esc(e.id || "")}" title="${esc(q.text)}">${body}</a>`;
         }
         return `<div class="re" title="${esc(q.text)}">${body}</div>`;
+      };
+      const threadEntryFor = (e) => {
+        const k = entryKey(e);
+        const r = k ? threadInfo.msgToRoot.get(k) : "";
+        if (!r || !threadInfo.showEntryOn.has(k)) return "";
+        const th = threadInfo.threads.get(r);
+        if (!th) return "";
+        const isOpen = activeThreadRoot === r;
+        return `<button type="button" class="thread-entry${isOpen ? " active" : ""}" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="${isOpen ? "true" : "false"}">` +
+          `<span class="te-live" aria-hidden="true"></span>${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
       };
       for (let ei = 0; ei < allEntries.length; ei++) {
         const e = allEntries[ei];
@@ -2086,11 +2346,19 @@
         const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
         const pinned = !!(e.id && pinIds.has(e.id));
         const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
+        const eKey = entryKey(e);
+        const inActiveTh = !!(activeThreadRoot && eKey && threadInfo.msgToRoot.get(eKey) === activeThreadRoot);
         if (e.role === "user") {
-          html += `<div class="mine${pinned ? " is-pinned" : ""}">${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${mineActs(e, at, pinned)}</div>`;
+          const entryBtn = threadEntryFor(e);
+          const acts = mineActs(e, at, pinned);
+          const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
+          html += `<div class="mine${pinned ? " is-pinned" : ""}${inActiveTh ? " in-active-thread" : ""}">${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${foot}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at, pinned)}</div></div>`;
+          const entryBtn = threadEntryFor(e);
+          const acts = msgActs(e, at, pinned);
+          const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
+          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${inActiveTh ? " in-active-thread" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${foot}</div></div>`;
           sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
@@ -2143,8 +2411,12 @@
         const fid = CSS.escape(flashEntry.id);
         box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`)?.classList.add("flash");
       }
+      if (activeThreadRoot) syncThreadDrawer();
     } else if (!busyChanged && !crewChanged) {
+      if (activeThreadRoot) syncThreadDrawer();
       return;
+    } else if (activeThreadRoot) {
+      syncThreadDrawer();
     }
     if (holdRestore && !holdRestore.atBottom) {
       activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
@@ -2422,7 +2694,7 @@
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
     // Your message shows at once; the hub's copy takes its place when it arrives.
-    const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
+    const mine = { id: "", _localId: "_p" + (++pendingSaySeq), role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
     activeCollieRestore = null;
     renderSide();
@@ -3073,7 +3345,13 @@
       <div class="set-top-meta"><span class="set-save-state" id="settings-save-state" role="status" aria-live="polite">改动自动保存</span></div>
 
       <section class="card set-sec">
-        <header><h4>Collie 自己</h4><p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p></header>
+        <header>
+          <div class="set-head-row">
+            <h4>Collie 自己</h4>
+            <button type="button" class="btn small set-restart-btn" data-act="router-restart" title="手动重启 Collie（保留记忆与排队消息）">重启 Collie</button>
+          </div>
+          <p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p>
+        </header>
         <div class="set-grid three">
           <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${routerKindOpts(s.router_kind)}</select></label>
           ${modelPick("router", s.router_kind, s.router_model, s.router_effort)}
@@ -3121,8 +3399,6 @@
         <label class="check"><input type="checkbox" name="bypass" ${s.ask_permissions ? "" : "checked"}> 跳过权限确认：Collie 和它派出的 agent 直接跑命令、改文件，不停下来问你（重启 Collie、新派的 agent 生效）</label>
         <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> 暂停投递：事件照收，先不交给 agent</label>
       </section>
-
-      <div class="set-foot"><button type="button" class="btn small" data-act="router-restart">重启 Collie</button><span class="grow"></span><span class="muted">所有修改自动保存</span></div>
     </form>`;
   }
 
@@ -3575,11 +3851,12 @@
   function renderPrefs(restore = null) {
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
-    const sw = (key, on) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"></button>`;
-    const row = (title, sub, ctl) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small>${sub}</small>` : ""}</div>${ctl}</div>`;
-    const perm = !("Notification" in window) ? "这个浏览器不支持通知（手机上通常要先添加到主屏幕）"
-      : Notification.permission === "denied" ? "浏览器已拒绝通知，需要在浏览器的网站设置里打开"
-      : "页面在后台时，agent 需要你确认或完成任务会弹通知";
+    const sw = (key, on, disabled = false) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"${disabled ? " disabled" : ""}></button>`;
+    const row = (title, sub, ctl, warn = false) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small${warn ? ' class="pref-hint-warn"' : ""}>${sub}</small>` : ""}</div>${ctl}</div>`;
+    const env = notifyEnvState();
+    const notifyCtl = env.active
+      ? `<div class="pref-ctls"><button type="button" class="btn small ghost pref-test-btn" data-act="test-notify">测试</button>${sw("notify", true)}</div>`
+      : sw("notify", false, !env.supported);
     const mac = /Mac|iPhone|iPad/.test(navigator.platform);
     $("#prefs-body").innerHTML = `<div class="prefs">
       <div class="card"><div class="card-h">外观</div>
@@ -3592,7 +3869,7 @@
         ${row("折叠连续的工具步骤", "超过 3 步时收成一行，只露出最后一步", sw("fold", prefs.fold()))}
       </div>
       <div class="card"><div class="card-h">通知</div>
-        ${row("浏览器通知", esc(perm), sw("notify", prefs.notify() && (!("Notification" in window) || Notification.permission !== "denied")))}
+        ${row("浏览器通知", esc(env.text), notifyCtl, env.warn)}
       </div>
       <div class="card"><div class="card-h">登录状态</div>
         ${row("退出登录", "清除当前浏览器的登录凭证，下次需要重新配对或输入访问令牌", `<button type="button" class="btn small danger-ghost" data-act="logout">退出登录</button>`)}
@@ -3605,18 +3882,33 @@
     const link = e.target.closest("a[data-auto-tab]");
     if (link) autoTab = link.dataset.autoTab;
     const b = e.target.closest(".seg[data-pref] button, button.switch[data-pref]");
-    if (!b) return;
+    if (!b || b.disabled) return;
     if (b.classList.contains("switch")) {
       const key = b.dataset.pref, on = b.getAttribute("aria-checked") !== "true";
-      if (key === "notify" && on && "Notification" in window && Notification.permission !== "granted") {
-        const p = await Notification.requestPermission();
-        if (p !== "granted") { toast("浏览器没有允许通知", "attn"); renderPrefs(); return; }
+      if (key === "notify" && on) {
+        const env = notifyEnvState();
+        if (!env.supported) { toast(env.text, "attn"); renderPrefs(); return; }
+        if (env.permission === "denied") {
+          toast("已被浏览器拦截，请在地址栏左侧站点设置中重新开启", "attn");
+          renderPrefs();
+          return;
+        }
+        if (env.permission !== "granted") {
+          let p = "denied";
+          try { p = await Notification.requestPermission(); } catch { p = "denied"; }
+          if (p !== "granted") {
+            toast(p === "denied" ? "已被浏览器拦截，请在地址栏左侧站点设置中重新开启" : "浏览器没有允许通知", "attn");
+            renderPrefs();
+            return;
+          }
+        }
       }
       store.set(key, on);
     } else {
       const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
       if (key === "mode2") setMode(v); else store.set(key, v);
       if (key === "theme" || key === "text") applyLook();
+      if (key === "sendKey") syncThreadComposerHint();
     }
     renderPrefs();
   });
@@ -5520,12 +5812,29 @@
     const e = chatEntries().find((x) => x.id === b.dataset.copy);
     if (e) toast(await copyText(e.text) ? "已复制" : "复制失败", "");
   });
-  // A reply's quote: scroll to and highlight the referenced message or timeline event in main chat.
+  // A reply's quote: open the reply-thread drawer when part of a chain (or locate in main chat when already open / standalone).
   document.addEventListener("click", (e) => {
+    const openTh = e.target.closest("[data-open-thread]");
+    if (openTh) {
+      e.preventDefault();
+      openThreadDrawer(openTh.dataset.openThread, openTh.dataset.focusMsg || "", openTh.dataset.focusMsg || "");
+      return;
+    }
     const a = e.target.closest("a.re[data-goto], a.re[data-goto-worker]");
     if (!a) return;
     e.preventDefault();
     const opts = e.detail === 0 && a.matches(":focus-visible") ? { focus: true } : undefined;
+    if (a.dataset.threadRoot && !a.closest("#thread-drawer")) {
+      const rootId = a.dataset.threadRoot;
+      const targetId = a.dataset.goto || "";
+      const msgId = a.closest(".msg[data-id]")?.dataset.id || targetId;
+      if (activeThreadRoot === rootId) {
+        if (targetId) jumpToEntry(targetId, opts);
+      } else {
+        openThreadDrawer(rootId, targetId || msgId, msgId);
+      }
+      return;
+    }
     if (a.dataset.goto) jumpToEntry(a.dataset.goto, opts);
     else if (a.dataset.gotoWorker) jumpToWorkerEvent(a.dataset.gotoWorker, a.dataset.before || "", opts);
   });
@@ -6079,6 +6388,7 @@
   const fileMax = () => innerWidth - $(".side").offsetWidth - 420;
   let paneTimer;
   function showFilePane() {
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: view === "collie" });
     clearTimeout(paneTimer);
     // Until it has been dragged: a little under half the window.
     setFileW(Math.max(Math.min(store.get("fileW", 0) || innerWidth * 0.45, fileMax()), 360));
@@ -6111,6 +6421,404 @@
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up, { once: true });
   });
+
+  // ───────────────────────────── natural reply-chain thread drawer
+  const tdDrawer = $("#thread-drawer");
+  const tdScrim = $("#thread-scrim");
+  const tdTitleEl = $("#td-title");
+  const tdMetaEl = $("#td-meta");
+  const tdBodyEl = $("#td-body");
+  const tdListEl = $("#td-list");
+  const tdComposer = $("#td-composer");
+  const tdInput = $("#td-input");
+  const tdSendBtn = $("#td-send");
+  const tdTargetText = $("#td-target-text");
+  const tdTargetReset = $("#td-target-reset");
+  const tdHintEl = $("#td-hint");
+  const tdLocateRootBtn = $("#td-locate-root");
+  const tdCloseBtn = $("#td-close");
+  const tdBackBtn = $("#td-back");
+  const tdGripEl = $("#td-grip");
+  const setThreadW = (w) => document.documentElement.style.setProperty("--thread-w", Math.round(w) + "px");
+  const threadMax = () => Math.max(360, Math.min(560, innerWidth - ($(".side")?.offsetWidth || 0) - 420));
+  let tdHideTimer = 0, tdFocusTimer = 0, tdSending = false, tdLoadingRoot = false;
+
+  function syncThreadComposerHint() {
+    if (!tdHintEl) return;
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+    const keyLabel = prefs.sendKey() === "mod" ? (isMac ? "⌘Enter" : "Ctrl+Enter") : "Enter";
+    tdHintEl.textContent = `${keyLabel} 发送 · 同步写入主聊天流`;
+    if (tdSendBtn) tdSendBtn.title = `发送回复 (${keyLabel})`;
+  }
+  function syncThreadSendBtn() {
+    if (!tdSendBtn || !tdInput) return;
+    tdSendBtn.disabled = tdSending || !String(tdInput.value || "").trim();
+  }
+  function growThreadInput() {
+    if (!tdInput) return;
+    if (window.CSS?.supports?.("field-sizing", "content")) return;
+    tdInput.style.height = "auto";
+    tdInput.style.height = Math.min(tdInput.scrollHeight, 160) + "px";
+  }
+  function updateThreadTargetBanner(th, byId) {
+    if (!tdTargetText || !tdTargetReset) return;
+    const latest = th.latest;
+    const explicit = drawerReplyTarget && drawerReplyTarget !== entryKey(latest) && byId.has(drawerReplyTarget)
+      ? byId.get(drawerReplyTarget)
+      : null;
+    if (explicit) {
+      const at = +new Date(explicit.at) || 0;
+      tdTargetText.innerHTML = `分叉回复 <b>${esc(at ? sepTime(at) + " " : "")}${esc(threadWhoLabel(explicit))}</b> · ${esc(threadSnippet(threadCleanText(explicit), 18))}`;
+      tdTargetReset.hidden = false;
+    } else {
+      drawerReplyTarget = null;
+      const at = +new Date(latest.at) || 0;
+      tdTargetText.innerHTML = `自动接续最新 · <b>${esc(at ? sepTime(at) + " " : "")}${esc(threadWhoLabel(latest))}</b>`;
+      tdTargetReset.hidden = true;
+    }
+  }
+  function focusNodeInDrawer(msgId) {
+    if (!tdListEl || !msgId) return;
+    const node = tdListEl.querySelector(`.td-node[data-td-id="${CSS.escape(msgId)}"]`);
+    if (!node) return;
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    node.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "auto" });
+    clearTimeout(tdFocusTimer);
+    tdListEl.querySelectorAll(".td-node.is-focused").forEach((n) => n.classList.remove("is-focused"));
+    void node.offsetWidth;
+    node.classList.add("is-focused");
+    tdFocusTimer = setTimeout(() => node.classList.remove("is-focused"), 1450);
+  }
+  async function ensureThreadRootLoaded(rootId, manual = false) {
+    if (!rootId || tdLoadingRoot || !canLoadOlder()) return;
+    if (!manual && tdRootFetchTried.has(rootId)) return;
+    tdRootFetchTried.add(rootId);
+    tdLoadingRoot = true;
+    syncThreadDrawer();
+    try {
+      let guards = 0;
+      while (activeThreadRoot && canLoadOlder() && guards++ < 10) {
+        const info = computeReplyThreads(chatEntries());
+        const curRoot = info.threads.has(activeThreadRoot) ? activeThreadRoot : (activeThreadAnchor ? info.msgToRoot.get(activeThreadAnchor) : "");
+        const th = curRoot ? info.threads.get(curRoot) : null;
+        if (!th || !th.missingRoot) break;
+        const targetId = th.missingRoot.id;
+        while (olderBusy) await new Promise((r) => setTimeout(r, 35));
+        const ok = await loadOlder(true, targetId);
+        if (!ok) break;
+      }
+    } finally {
+      tdLoadingRoot = false;
+      if (activeThreadRoot) syncThreadDrawer();
+    }
+  }
+  function renderThreadDrawer(opts = {}) {
+    if (!tdDrawer || !tdListEl) return;
+    const info = computeReplyThreads(chatEntries());
+    if (activeThreadRoot && !info.threads.has(activeThreadRoot) && activeThreadAnchor) {
+      const migrated = info.msgToRoot.get(activeThreadAnchor);
+      if (migrated && info.threads.has(migrated)) activeThreadRoot = migrated;
+    }
+    const th = activeThreadRoot ? info.threads.get(activeThreadRoot) : null;
+    if (!th) {
+      closeThreadDrawer({ rerender: false });
+      return;
+    }
+    const prevCount = tdLastCount;
+    const wasAtBottom = tdBodyEl ? (tdBodyEl.scrollHeight - tdBodyEl.scrollTop - tdBodyEl.clientHeight <= AT_BOTTOM_PX + 20) : true;
+    const scrollBottom = !!opts.scrollBottom || tdForceScroll || (prevCount > 0 && th.list.length > prevCount && wasAtBottom);
+    tdForceScroll = false;
+
+    if (tdTitleEl) {
+      tdTitleEl.textContent = th.title;
+      tdTitleEl.title = th.fullTitle || th.title;
+    }
+    if (tdMetaEl) {
+      const parts = th.missingRoot
+        ? [`已加载 ${th.list.length} 条`, "含更早起点"]
+        : [`共 ${th.totalCount} 条消息`];
+      if (th.branchCount > 0) parts.push(`含 ${th.branchCount} 处分支`);
+      tdMetaEl.textContent = parts.join(" · ");
+    }
+    if (tdLocateRootBtn) {
+      tdLocateRootBtn.hidden = !th.root?.id && !th.list[0]?.id;
+    }
+
+    const sig = JSON.stringify([
+      th.rootId,
+      th.missingRoot?.id || "",
+      tdLoadingRoot ? 1 : 0,
+      canLoadOlder() ? 1 : 0,
+      th.list.map((m) => [entryKey(m), m.id || "", m.role, m.text, m.re?.entry || "", m.at || ""]),
+    ]);
+    if (sig !== tdLastSig || opts.force) {
+      tdLastSig = sig;
+      tdLastCount = th.list.length;
+      let html = "";
+      if (th.missingRoot) {
+        const statusText = tdLoadingRoot
+          ? "正在拉取更早的话题起点…"
+          : canLoadOlder()
+            ? "起点消息在更早的历史记录中"
+            : "起点消息已超出当前历史窗口";
+        const loadBtn = !tdLoadingRoot && canLoadOlder()
+          ? `<button type="button" class="btn small td-older-btn" data-td-load-older>加载更早起点</button>`
+          : "";
+        const qPreview = th.missingRoot.text
+          ? `<div class="td-older-quote"><b>${esc(th.missingRoot.who || "历史消息")}</b>${esc(plainLine(th.missingRoot.text))}</div>`
+          : "";
+        html += `<div class="td-older"><div class="td-older-top"><span>${esc(statusText)}</span></div>${qPreview}${loadBtn}</div>`;
+      }
+      for (let i = 0; i < th.list.length; i++) {
+        const m = th.list[i];
+        const k = entryKey(m);
+        const isRoot = !th.missingRoot && i === 0;
+        const prevInThread = i > 0 ? th.list[i - 1] : null;
+        const pid = info.parentOf(m);
+        const isBranch = !isRoot && !!pid && !!prevInThread && pid !== entryKey(prevInThread);
+        const parent = pid ? info.byId.get(pid) : null;
+        const at = +new Date(m.at) || 0;
+        const who = threadWhoLabel(m);
+        const avHtml = m.role === "user"
+          ? `<span class="td-av user" aria-hidden="true">${ICON_TD_USER}</span>`
+          : `<span class="td-av collie" aria-hidden="true"><img src="/icon.svg" alt=""></span>`;
+        const tagHtml = isRoot
+          ? `<span class="td-tag">起点</span>`
+          : isBranch
+            ? `<span class="td-tag">分支</span>`
+            : "";
+        const branchRefHtml = isBranch && parent
+          ? `<button type="button" class="td-branch-ref" data-jump-drawer="${esc(entryKey(parent))}" title="跳到分支来源消息">` +
+            `<span>↳ 回复 ${esc(+new Date(parent.at) ? sepTime(+new Date(parent.at)) + " " : "")}${esc(threadWhoLabel(parent))}「${esc(threadSnippet(threadCleanText(parent), 24))}」</span></button>`
+          : "";
+        const rootQuoteHtml = isRoot && m.re && m.re.text
+          ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
+          : "";
+        const bodyHtml = m.role === "user"
+          ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
+          : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}</div>`;
+        const canAct = !!m.id;
+        const actsHtml = canAct
+          ? `<div class="td-node-acts">
+              <button type="button" class="td-act" data-td-reply="${esc(m.id)}" title="回复这条（新建分支）" aria-label="回复这条">${ICON_TD_REPLY}<span>回复</span></button>
+              <button type="button" class="td-act" data-td-locate="${esc(m.id)}" title="在主聊天流中定位" aria-label="在主聊天流中定位">${ICON_TD_LOCATE}<span>定位</span></button>
+            </div>`
+          : "";
+        html += `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
+          <div class="td-rail">${avHtml}</div>
+          <div class="td-content">
+            <div class="td-node-top">
+              <span class="td-who">${esc(who)}</span>
+              ${at ? `<span class="td-when" title="${esc(fullTime(at))}">${esc(sepTime(at))}</span>` : ""}
+              ${tagHtml}
+              ${actsHtml}
+            </div>
+            ${branchRefHtml}
+            ${bodyHtml}
+          </div>
+        </article>`;
+      }
+      tdListEl.innerHTML = html;
+    }
+    updateThreadTargetBanner(th, info.byId);
+    syncThreadComposerHint();
+    syncThreadSendBtn();
+
+    if (opts.focusMsgId) {
+      requestAnimationFrame(() => focusNodeInDrawer(opts.focusMsgId));
+    } else if (scrollBottom && tdBodyEl) {
+      requestAnimationFrame(() => { tdBodyEl.scrollTop = tdBodyEl.scrollHeight; });
+    }
+  }
+  function syncThreadDrawer(opts = {}) {
+    if (!activeThreadRoot) return;
+    renderThreadDrawer(opts);
+  }
+  function openThreadDrawer(rootId, focusMsgId = "", anchorId = "") {
+    if (!tdDrawer || !rootId) return;
+    if ($("#app").classList.contains("has-file")) closeFilePane();
+    clearTimeout(tdHideTimer);
+    const switched = activeThreadRoot !== rootId;
+    activeThreadRoot = rootId;
+    activeThreadAnchor = anchorId || focusMsgId || rootId;
+    if (switched) {
+      drawerReplyTarget = null;
+      tdLastSig = "";
+      tdLastCount = 0;
+    }
+    const defW = innerWidth <= 1120 ? 420 : 432;
+    setThreadW(Math.max(360, Math.min(store.get("threadW", 0) || defW, threadMax())));
+    if (tdDrawer.hidden) { tdDrawer.hidden = false; tdDrawer.offsetWidth; }
+    if (tdScrim) tdScrim.hidden = false;
+    tdDrawer.setAttribute("aria-hidden", "false");
+    $("#app").classList.add("has-thread");
+    renderSuper({ force: true });
+    renderThreadDrawer({ focusMsgId, scrollBottom: !focusMsgId, force: true });
+    const info = computeReplyThreads(chatEntries());
+    const th = info.threads.get(activeThreadRoot);
+    if (th?.missingRoot && canLoadOlder()) {
+      ensureThreadRootLoaded(activeThreadRoot, false);
+    }
+  }
+  function closeThreadDrawer(opts = {}) {
+    if (!tdDrawer) return;
+    const wasOpen = !!activeThreadRoot || !tdDrawer.hidden;
+    activeThreadRoot = null;
+    activeThreadAnchor = "";
+    drawerReplyTarget = null;
+    tdLastSig = "";
+    tdLastCount = 0;
+    $("#app").classList.remove("has-thread");
+    tdDrawer.setAttribute("aria-hidden", "true");
+    clearTimeout(tdHideTimer);
+    const hideNow = () => {
+      tdDrawer.hidden = true;
+      if (tdScrim) tdScrim.hidden = true;
+    };
+    if (opts.immediate) hideNow();
+    else tdHideTimer = setTimeout(hideNow, 340);
+    if (wasOpen && opts.rerender !== false && view === "collie") {
+      renderSuper({ force: true });
+    }
+  }
+  function locateFromDrawer(msgId) {
+    if (!msgId) return;
+    if (innerWidth <= 1000 && activeThreadRoot) closeThreadDrawer();
+    requestAnimationFrame(() => jumpToEntry(msgId));
+  }
+
+  if (tdDrawer) {
+    tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
+    tdBackBtn?.addEventListener("click", () => closeThreadDrawer());
+    tdScrim?.addEventListener("click", () => closeThreadDrawer());
+    tdLocateRootBtn?.addEventListener("click", () => {
+      const info = computeReplyThreads(chatEntries());
+      const th = activeThreadRoot ? info.threads.get(activeThreadRoot) : null;
+      const target = th?.root?.id || th?.list?.[0]?.id || "";
+      if (target) locateFromDrawer(target);
+    });
+    tdTargetReset?.addEventListener("click", () => {
+      drawerReplyTarget = null;
+      const info = computeReplyThreads(chatEntries());
+      const th = activeThreadRoot ? info.threads.get(activeThreadRoot) : null;
+      if (th) updateThreadTargetBanner(th, info.byId);
+      tdInput?.focus();
+    });
+    tdListEl?.addEventListener("click", (e) => {
+      const loadBtn = e.target.closest("[data-td-load-older]");
+      if (loadBtn) {
+        e.preventDefault();
+        ensureThreadRootLoaded(activeThreadRoot, true);
+        return;
+      }
+      const replyBtn = e.target.closest("[data-td-reply]");
+      if (replyBtn) {
+        e.preventDefault();
+        const info = computeReplyThreads(chatEntries());
+        const th = activeThreadRoot ? info.threads.get(activeThreadRoot) : null;
+        if (!th) return;
+        drawerReplyTarget = replyBtn.dataset.tdReply;
+        updateThreadTargetBanner(th, info.byId);
+        tdInput?.focus();
+        return;
+      }
+      const locBtn = e.target.closest("[data-td-locate]");
+      if (locBtn) {
+        e.preventDefault();
+        locateFromDrawer(locBtn.dataset.tdLocate);
+        return;
+      }
+      const jumpBtn = e.target.closest("[data-jump-drawer]");
+      if (jumpBtn) {
+        e.preventDefault();
+        focusNodeInDrawer(jumpBtn.dataset.jumpDrawer);
+        return;
+      }
+      if (e.target.closest("a, button, .thumb, img, pre, code")) return;
+      if (window.getSelection?.()?.toString()) return;
+      const node = e.target.closest(".td-node[data-entry-id]");
+      const eid = node?.dataset.entryId || "";
+      if (eid) locateFromDrawer(eid);
+    });
+    tdInput?.addEventListener("input", () => {
+      growThreadInput();
+      syncThreadSendBtn();
+    });
+    tdInput?.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (prefs.sendKey() === "mod" ? mod : !mod) {
+        e.preventDefault();
+        if (e.isComposing || e.keyCode === 229 || e.repeat || tdSending || tdSendBtn?.disabled) return;
+        tdComposer?.requestSubmit();
+      }
+    });
+    tdComposer?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (tdSending || !activeThreadRoot || !tdInput) return;
+      const draft = tdInput.value;
+      const text = draft.trim();
+      if (!text) return;
+      const info = computeReplyThreads(chatEntries());
+      const th = info.threads.get(activeThreadRoot);
+      if (!th) return;
+      const fallbackLatest = [...th.list].reverse().find((x) => x.id) || th.latest;
+      const targetMsg = (drawerReplyTarget && info.byId.get(drawerReplyTarget)?.id)
+        ? info.byId.get(drawerReplyTarget)
+        : fallbackLatest;
+      if (!targetMsg?.id) return;
+      const targetRe = { entry: targetMsg.id, who: threadWhoLabel(targetMsg), text: targetMsg.text };
+      const prevBranch = drawerReplyTarget;
+
+      tdSending = true;
+      tdForceScroll = true;
+      drawerReplyTarget = null;
+      tdInput.value = "";
+      growThreadInput();
+      syncThreadSendBtn();
+      try {
+        await sendSuper(text, targetRe, false);
+        if (tdBodyEl) requestAnimationFrame(() => { tdBodyEl.scrollTop = tdBodyEl.scrollHeight; });
+      } catch (err) {
+        tdInput.value = tdInput.value ? draft + "\n" + tdInput.value : draft;
+        drawerReplyTarget = prevBranch;
+        growThreadInput();
+        if (activeThreadRoot) syncThreadDrawer();
+        toast(err.message, "attn");
+      } finally {
+        tdSending = false;
+        syncThreadSendBtn();
+      }
+    });
+    tdGripEl?.addEventListener("pointerdown", (e) => {
+      if (innerWidth <= 1000) return;
+      e.preventDefault();
+      const grip = e.currentTarget;
+      grip.setPointerCapture(e.pointerId);
+      document.body.classList.add("dragging");
+      const max = threadMax();
+      const move = (ev) => setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)));
+      const up = () => {
+        grip.removeEventListener("pointermove", move);
+        grip.removeEventListener("pointerup", up);
+        grip.removeEventListener("pointercancel", up);
+        document.body.classList.remove("dragging");
+        store.set("threadW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--thread-w")) || 432);
+      };
+      grip.addEventListener("pointermove", move);
+      grip.addEventListener("pointerup", up, { once: true });
+      grip.addEventListener("pointercancel", up, { once: true });
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !activeThreadRoot || tdDrawer.hidden) return;
+      if (e.isComposing || e.keyCode === 229) return;
+      if (document.querySelector("dialog[open]") || pickOpen || dirCtx) return;
+      e.preventDefault();
+      closeThreadDrawer();
+    });
+    syncThreadComposerHint();
+    syncThreadSendBtn();
+  }
 
   // Minimal, safe Markdown: escape first, then add a little structure.
   const mdCache = new Map();
@@ -6796,6 +7504,38 @@
       };
     }, (err) => ({ ok: false, reason: "unreadable", err, file }));
   }
+  const CLIP_IMG_TYPES = ["image/png", "image/jpeg", "image/webp"];
+  async function readClipboardBitmapFallback(baseName) {
+    if (typeof navigator === "undefined" || typeof navigator.clipboard?.read !== "function") return null;
+    if (window.isSecureContext === false) return null;
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items || []) {
+        const types = Array.isArray(item?.types) ? item.types : [];
+        const match = CLIP_IMG_TYPES.find((t) => types.includes(t))
+          || types.find((t) => typeof t === "string" && t.startsWith("image/"));
+        if (!match || typeof item.getType !== "function") continue;
+        const raw = await item.getType(match);
+        if (!raw) continue;
+        const buf = typeof raw.arrayBuffer === "function" ? await raw.arrayBuffer() : null;
+        const byteLen = buf ? buf.byteLength : (raw.size || 0);
+        if (!byteLen || byteLen > MAX_UPLOAD_BYTES) continue;
+        const sniffed = buf ? sniffImageMime(buf) : "";
+        const finalMime = sniffed || raw.type || match;
+        const blob = buf && typeof Blob === "function" ? new Blob([buf], { type: finalMime }) : raw;
+        return {
+          ok: true,
+          blob,
+          name: swapExtForMime(baseName || "粘贴的图片.png", finalMime),
+          type: finalMime,
+          size: byteLen,
+          sniffed: sniffed || finalMime,
+          synthetic: true,
+        };
+      }
+    } catch {}
+    return null;
+  }
   function readFailInfo(source, isImg) {
     if (source === "paste") {
       return {
@@ -6912,6 +7652,7 @@
     };
     const addEntries = (entries, source = "pick") => {
       const now = Date.now();
+      let pasteClipReadUsed = false;
       for (const entry of entries) {
         const cands = entry.candidates || [];
         if (!cands.length) continue;
@@ -6941,12 +7682,17 @@
           const results = await Promise.all(attempts);
           if (f.removed) return;
           const good = results.filter((r) => r.ok);
-          const winner = good.find((r) => !r.synthetic && r.sniffed)
+          let winner = good.find((r) => !r.synthetic && r.sniffed)
             || good.find((r) => r.sniffed)
             || good.find((r) => !r.synthetic && !isUnpreviewableImage(r.type))
             || good[0];
+          const tooBig = !winner && results.some((r) => r.reason === "too-large");
+          if (!winner && !tooBig && source === "paste" && f.isImage && !pasteClipReadUsed) {
+            pasteClipReadUsed = true;
+            winner = await readClipboardBitmapFallback(f.name);
+            if (f.removed) return;
+          }
           if (!winner) {
-            const tooBig = results.some((r) => r.reason === "too-large");
             const info = tooBig
               ? { msg: "文件太大了（最多 25 MB）", tag: "过大" }
               : readFailInfo(source, f.isImage);
@@ -7216,6 +7962,9 @@
       if (act === "logout") {
         await doLogout();
       }
+      if (act === "test-notify") {
+        sendTestNotification();
+      }
       if (act === "pause") {
         const cur = (await api("/api/super/settings")).settings;
         await api("/api/super/settings", { body: { settings: { ...cur, paused: !cur.paused } } });
@@ -7369,7 +8118,7 @@
     const v = window.visualViewport;
     const root = document.documentElement.style;
     // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-    const pinned = [...document.querySelectorAll(".viewer, #log, #screen")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
+    const pinned = [...document.querySelectorAll(".viewer, #log, #screen, #td-body")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
     root.setProperty("--vh", (v ? v.height : innerHeight) + "px");
     pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
     root.setProperty("--vtop", (v ? Math.max(0, v.offsetTop) : 0) + "px");
@@ -7403,7 +8152,7 @@
       history.replaceState(history.state, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
     }
     try { await api("/api/session"); } catch { return; }
-    try { sup = normSup(await api("/api/super")); } catch {}
+    try { sup = normSup(await api("/api/super")); syncCollieNotifyWatermark(sup.entries, false); } catch {}
     try { setLocalState(await api("/api/state")); } catch {}
     await loadHubs();
     checkUpdates();

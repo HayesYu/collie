@@ -468,6 +468,61 @@ function makeFakeFile({ name, type, bytes, failRead = false, readOnce = false, s
   assert.equal(toastLog.length, 1, "deferred toast shown after modal dialog closes");
   openDialog = null;
 
+  // 11) All pasted files unreadable (e.g. macOS sandboxed temp .jpg path) -> falls back to navigator.clipboard.read() bitmap Blob
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  createdUrls.length = 0;
+  nextUploadHandler = null;
+  let clipReadCalls = 0;
+  ctx.isSecureContext = true;
+  ctx.navigator.clipboard = {
+    async read() {
+      clipReadCalls++;
+      return [{
+        types: ["text/html", "image/png"],
+        async getType(t) {
+          assert.equal(t, "image/png");
+          return new Blob([PNG_BYTES], { type: "image/png" });
+        },
+      }];
+    },
+  };
+  const blockedJpg = makeFakeFile({ name: "9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e.jpg", type: "image/jpeg", size: 28000, failRead: true });
+  input.dispatch("paste", {
+    clipboardData: {
+      items: [{ kind: "file", type: "image/jpeg", getAsFile: () => blockedJpg }],
+      files: [blockedJpg],
+      getData: () => "",
+    },
+  });
+  await settle();
+  assert.equal(clipReadCalls, 1, "clipboard.read() called once as fallback");
+  assert.equal(toastLog.length, 0, "no error toast when clipboard.read() recovers bitmap: " + JSON.stringify(toastLog));
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 1, "recovered bitmap uploaded once");
+  const upClip = fetchCalls.find((c) => c.url.startsWith("/api/uploads"));
+  assert.ok(upClip.body instanceof Blob && upClip.body.size === PNG_BYTES.byteLength, "uploaded memory Blob matches PNG bitmap");
+  assert.ok(decodeURIComponent(upClip.url).includes(".png"), "filename extension swapped to .png: " + upClip.url);
+  assert.equal(form._files[0].path, "/tmp/uploads/abc123-file.png");
+  form._clearFiles();
+
+  // 12) clipboard.read() rejects or returns no image -> preserves friendly Chinese error
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  ctx.navigator.clipboard = { async read() { throw new Error("NotAllowedError"); } };
+  const blockedJpg2 = makeFakeFile({ name: "9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e.jpg", type: "image/jpeg", size: 28000, failRead: true });
+  input.dispatch("paste", {
+    clipboardData: {
+      items: [{ kind: "file", type: "image/jpeg", getAsFile: () => blockedJpg2 }],
+      files: [blockedJpg2],
+      getData: () => "",
+    },
+  });
+  await settle();
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 0, "must not upload when fallback fails");
+  assert.ok(form._files[0].err.includes("剪贴板里的图片已失效"), "keeps friendly Chinese error after clipboard.read() failure");
+  form._clearFiles();
+  delete ctx.navigator.clipboard;
+
   console.log("ALL_PASTE_UPLOAD_TESTS_OK");
 })().catch((e) => { console.error(e); process.exit(1); });
 `

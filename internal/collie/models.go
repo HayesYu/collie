@@ -21,10 +21,13 @@ import (
 // support), Codex's app-server model/list, `agy models`.
 
 type ModelOpt struct {
-	ID      string   `json:"id"`
-	Label   string   `json:"label,omitempty"`
-	Note    string   `json:"note,omitempty"`
-	Efforts []string `json:"efforts,omitempty"` // empty: the kind's efforts
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+	Note  string `json:"note,omitempty"`
+	// Efforts lists the thinking efforts this model accepts independently.
+	// nil (JSON null) inherits ModelInfo.Efforts; an empty non-nil slice
+	// (JSON []) explicitly means this model does not accept --effort.
+	Efforts []string `json:"efforts"`
 }
 
 type ModelInfo struct {
@@ -37,8 +40,47 @@ type ModelInfo struct {
 
 var allEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 
+// splitAgyModelEffort splits an agy model ID that bakes the thinking effort
+// into its suffix (e.g. "gemini-4-neon-medium" -> "gemini-4-neon", "medium").
+func splitAgyModelEffort(model string) (base, effort string, ok bool) {
+	m := strings.TrimSpace(model)
+	low := strings.ToLower(m)
+	for _, e := range allEfforts {
+		suf := "-" + e
+		if len(low) > len(suf) && strings.HasSuffix(low, suf) {
+			return m[:len(m)-len(suf)], e, true
+		}
+	}
+	return m, "", false
+}
+
+// agyRejectsEffort reports whether agy rejects an independent --effort flag
+// for this model ID (suffixed models conflict with --effort; orchestrator
+// models explicitly reject --effort).
+func agyRejectsEffort(model string) bool {
+	if _, _, ok := splitAgyModelEffort(model); ok {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "orchestrator")
+}
+
+// effectiveEffort drops effort when the chosen agent/model cannot accept an
+// independent effort flag, preventing startup errors from stale settings or
+// CLI arguments.
+func effectiveEffort(kind, model, effort string) string {
+	effort = strings.TrimSpace(effort)
+	if effort == "" {
+		return ""
+	}
+	if kinds[kind] == "agy" && agyRejectsEffort(model) {
+		return ""
+	}
+	return effort
+}
+
 // modelArgs are the launch flags for a model and effort ("" = the agent's own default).
 func modelArgs(kind, model, effort string) []string {
+	effort = effectiveEffort(kind, model, effort)
 	var a []string
 	switch kinds[kind] {
 	case "codex":
@@ -124,6 +166,9 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		if info.Models == nil {
 			info.Models = []ModelOpt{}
 		}
+		if info.Efforts == nil {
+			info.Efforts = []string{}
+		}
 		mk = modelMark{at: time.Now(), info: info}
 		modelCache.Lock()
 		modelCache.m[kind] = mk
@@ -174,19 +219,22 @@ func (s *Server) claudeModels(info *ModelInfo) {
 	// "model=effort,xhigh_effort,max_effort;other=effort".
 	var gw []ModelOpt
 	for _, part := range strings.Split(cfg.env("CLAUDE_CODE_MODEL_CAPABILITIES"), ";") {
-		id, caps, _ := strings.Cut(strings.TrimSpace(part), "=")
+		id, caps, hasCaps := strings.Cut(strings.TrimSpace(part), "=")
 		if id == "" {
 			continue
 		}
-		o := ModelOpt{ID: id, Efforts: []string{}}
-		for _, c := range strings.Split(caps, ",") {
-			switch strings.TrimSpace(c) {
-			case "effort":
-				o.Efforts = append(o.Efforts, "low", "medium", "high")
-			case "xhigh_effort":
-				o.Efforts = append(o.Efforts, "xhigh")
-			case "max_effort":
-				o.Efforts = append(o.Efforts, "max")
+		o := ModelOpt{ID: id}
+		if hasCaps {
+			o.Efforts = []string{}
+			for _, c := range strings.Split(caps, ",") {
+				switch strings.TrimSpace(c) {
+				case "effort":
+					o.Efforts = append(o.Efforts, "low", "medium", "high")
+				case "xhigh_effort":
+					o.Efforts = append(o.Efforts, "xhigh")
+				case "max_effort":
+					o.Efforts = append(o.Efforts, "max")
+				}
 			}
 		}
 		gw = append(gw, o)
@@ -304,9 +352,12 @@ func codexModelList(ctx context.Context, bin string) []ModelOpt {
 		if id == "" {
 			id = d.ID
 		}
-		o := ModelOpt{ID: id, Label: d.Display, Note: d.Desc, Efforts: []string{}}
-		for _, e := range d.Efforts {
-			o.Efforts = append(o.Efforts, e.Effort)
+		o := ModelOpt{ID: id, Label: d.Display, Note: d.Desc}
+		if d.Efforts != nil {
+			o.Efforts = make([]string, 0, len(d.Efforts))
+			for _, e := range d.Efforts {
+				o.Efforts = append(o.Efforts, e.Effort)
+			}
 		}
 		list = append(list, o)
 	}
@@ -315,7 +366,93 @@ func codexModelList(ctx context.Context, bin string) []ModelOpt {
 
 var agyModelRe = regexp.MustCompile(`^(\S+)\t(.+)$`)
 
+func orderedAgyEfforts(set map[string]bool) []string {
+	out := []string{}
+	for _, e := range allEfforts {
+		if set[e] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (s *Server) readAgyDefaultModel() string {
+	var cfg struct {
+		Model string `json:"model"`
+	}
+	if b, err := os.ReadFile(filepath.Join(s.agyCLIHome(), "settings.json")); err == nil {
+		json.Unmarshal(b, &cfg)
+	}
+	return strings.TrimSpace(cfg.Model)
+}
+
+func parseAgyModels(raw string) []ModelOpt {
+	var out []ModelOpt
+	for _, l := range strings.Split(raw, "\n") {
+		if m := agyModelRe.FindStringSubmatch(strings.TrimSpace(l)); m != nil {
+			out = append(out, ModelOpt{ID: m[1], Label: strings.TrimSpace(m[2])})
+		}
+	}
+	return out
+}
+
+// applyAgyModelCapabilities annotates agy models and default-model efforts.
+// Concrete agy models either bake their thinking level into the ID suffix
+// (conflicting with --effort) or are fixed profiles like orchestrators (which
+// reject --effort). Omitting --model lets agy apply --effort to the configured
+// default model's base family, limited to the efforts that family actually has.
+func applyAgyModelCapabilities(info *ModelInfo, defaultSetting string) {
+	familyEfforts := map[string]map[string]bool{}
+	for _, m := range info.Models {
+		if base, eff, ok := splitAgyModelEffort(m.ID); ok {
+			if familyEfforts[base] == nil {
+				familyEfforts[base] = map[string]bool{}
+			}
+			familyEfforts[base][eff] = true
+		}
+	}
+	for i := range info.Models {
+		m := &info.Models[i]
+		if agyRejectsEffort(m.ID) {
+			m.Efforts = []string{}
+		} else if fam := orderedAgyEfforts(familyEfforts[m.ID]); len(fam) > 0 {
+			m.Efforts = fam
+		} else {
+			m.Efforts = []string{}
+		}
+	}
+
+	info.Default = ""
+	info.DefaultEffort = ""
+	info.Efforts = []string{}
+	defaultSetting = strings.TrimSpace(defaultSetting)
+	if defaultSetting == "" {
+		return
+	}
+	var matched *ModelOpt
+	for i := range info.Models {
+		if info.Models[i].ID == defaultSetting || strings.EqualFold(info.Models[i].Label, defaultSetting) {
+			matched = &info.Models[i]
+			break
+		}
+	}
+	defID := defaultSetting
+	if matched != nil {
+		defID = matched.ID
+	}
+	info.Default = defID
+	if base, eff, ok := splitAgyModelEffort(defID); ok {
+		info.DefaultEffort = eff
+		info.Efforts = orderedAgyEfforts(familyEfforts[base])
+	} else if matched != nil && len(matched.Efforts) > 0 {
+		info.Efforts = append([]string{}, matched.Efforts...)
+	} else if fam := orderedAgyEfforts(familyEfforts[defID]); len(fam) > 0 {
+		info.Efforts = fam
+	}
+}
+
 func (s *Server) agyModels(ctx context.Context, info *ModelInfo) {
+	info.Efforts = []string{}
 	bin := findBin("agy", s.home)
 	if bin == "" {
 		return
@@ -324,11 +461,8 @@ func (s *Server) agyModels(ctx context.Context, info *ModelInfo) {
 	if err != nil {
 		return
 	}
-	for _, l := range strings.Split(string(out), "\n") {
-		if m := agyModelRe.FindStringSubmatch(strings.TrimSpace(l)); m != nil {
-			info.Models = append(info.Models, ModelOpt{ID: m[1], Label: m[2]})
-		}
-	}
+	info.Models = parseAgyModels(string(out))
+	applyAgyModelCapabilities(info, s.readAgyDefaultModel())
 }
 
 // findBin locates an agent's program: PATH, the usual install places, then

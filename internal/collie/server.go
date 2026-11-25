@@ -608,10 +608,11 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = body.Name
 	}
-	args := append(modelArgs(body.Kind, body.Model, body.Effort), body.Args...)
+	effort := effectiveEffort(body.Kind, body.Model, body.Effort)
+	args := append(modelArgs(body.Kind, body.Model, effort), body.Args...)
 	paneID, wsID, err := s.startAgent(ctx, "", kind, body.Name, cwd, label, args)
 	if paneID != "" {
-		s.herdr.RememberRun(paneID, body.Model, body.Effort)
+		s.herdr.RememberRun(paneID, body.Model, effort)
 	}
 	if err != nil {
 		var he *HerdrError

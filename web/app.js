@@ -1707,13 +1707,27 @@
 
   // Models and thinking efforts each agent offers, per computer (asked once per page).
   const EFFORT_LABEL = { none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极致" };
+  const AGY_EFFORT_RE = /-(low|medium|high|xhigh|max)$/i;
+  function agyRejectsEffort(model) {
+    const m = (model || "").trim();
+    return AGY_EFFORT_RE.test(m) || /orchestrator/i.test(m);
+  }
+  function effortsFor(info, kind, model) {
+    if ((kind === "agy" || kind === "antigravity") && model && agyRejectsEffort(model)) return [];
+    const m = (info?.models || []).find((x) => x.id === model);
+    if (m && Array.isArray(m.efforts)) return m.efforts;
+    return Array.isArray(info?.efforts) ? info.efforts : [];
+  }
   const modelInfo = {};
   async function modelsFor(kind, machine) {
     const key = kind + "@" + (machine || "");
     if (!modelInfo[key]) {
       const q = new URLSearchParams({ kind });
       if (machine) q.set("machine", machine);
-      modelInfo[key] = api("/api/models?" + q).catch(() => ({ models: [], efforts: ["low", "medium", "high", "xhigh", "max"] }));
+      modelInfo[key] = api("/api/models?" + q).catch(() => ({
+        models: [],
+        efforts: kind === "agy" || kind === "antigravity" ? [] : ["low", "medium", "high", "xhigh", "max"],
+      }));
     }
     return modelInfo[key];
   }
@@ -1767,24 +1781,27 @@
     html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc((m.label && m.label !== m.id ? m.id : "") + mark(m.id, d.model))}" ${m.id === model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
     if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
     mSel.value = model;
-    const cur = list.find((m) => m.id === model);
-    const effs = cur?.efforts?.length ? cur.efforts : (info.efforts || []);
+    const effs = effortsFor(info, t.kind, model);
     const eff = effs.includes(effort) ? effort : "";
-    const defE = d.effort || info.default_effort || "";
-    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="${esc(d.effort ? "派活默认" : "agent 自己的设置")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>`;
+    const defOwn = effs.includes(d.effort) ? d.effort : "";
+    const defE = defOwn || (effs.includes(info.default_effort) ? info.default_effort : "") || "";
+    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="${esc(defOwn ? "派活默认" : "agent 自己的设置")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>`;
     ehtml += effs.map((e) => `<option value="${esc(e)}" data-short="思考 · ${esc(EFFORT_LABEL[e] || e)}" data-sub="${esc(e)}" ${e === eff ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
     if (eSel._html !== ehtml) { eSel._html = ehtml; eSel.innerHTML = ehtml; }
-    eSel.value = eff === d.effort ? "" : eff;
-    eSel.hidden = effs.length === 0;
+    eSel.value = eff && eff !== defOwn ? eff : "";
+    const hideEff = effs.length === 0;
+    eSel.hidden = hideEff;
+    eSel.disabled = hideEff;
+    if (hideEff && pickOpen === eSel) closePick();
     syncPick(mSel); syncPick(eSel);
     mSel._pick?.classList.toggle("changed", model !== d.model);
-    eSel._pick?.classList.toggle("changed", eff !== d.effort && eff !== "");
+    eSel._pick?.classList.toggle("changed", !hideEff && eff !== defOwn && eff !== "");
   }
   const pick = (o) => { target = { ...(target || {}), ...o }; };
   $("#t-machine").addEventListener("change", (e) => { pick({ machine: e.target.value }); renderTarget(); });
   $("#t-kind").addEventListener("change", (e) => { pick({ kind: e.target.value, model: undefined, effort: undefined }); renderTarget(); });
-  $("#t-model").addEventListener("change", (e) => { pick({ model: e.target.value }); renderModelChips(); });
-  $("#t-effort").addEventListener("change", (e) => { pick({ effort: e.target.value || modelDefaults(targetNow()).effort }); renderModelChips(); });
+  $("#t-model").addEventListener("change", (e) => { pick({ model: e.target.value, effort: undefined }); renderModelChips(); });
+  $("#t-effort").addEventListener("change", (e) => { pick({ effort: e.target.value || undefined }); renderModelChips(); });
   const targetNow = () => {
     const d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
     const t = { ...d };
@@ -1814,6 +1831,8 @@
     // Only what was picked here goes along; the hub fills in its current defaults.
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
+    const info = await modelsFor(t.kind, t.machine);
+    const sendEffort = effortsFor(info, t.kind, model).includes(effort) ? effort : "";
     // Your message shows at once; the hub's copy takes its place when it arrives.
     const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
@@ -1826,7 +1845,7 @@
       machine: "machine" in p ? (t.machine || "local") : "",
       kind: "kind" in p ? t.kind : "",
       model: "model" in p || "kind" in p ? model : "",
-      effort: "effort" in p || "kind" in p ? effort : "" } });
+      effort: "effort" in p || "kind" in p ? sendEffort : "" } });
     } catch (err) {
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0) pendingSays.splice(idx, 1);
@@ -2207,25 +2226,38 @@
   // Fills a model picker and its effort picker from what that agent offers.
   async function fillModels(form, who) {
     const kindSel = form[who + "_kind"], modelSel = form[who + "_model"], effSel = form[who + "_effort"];
+    const effField = effSel.closest("label");
     const machine = who === "worker" && form.worker_machine ? form.worker_machine.value : "";
-    const want = modelSel.dataset.value ?? modelSel.value, wantEff = effSel.dataset.value ?? effSel.value;
+    const seq = (modelSel._seq = (modelSel._seq || 0) + 1);
+    const want = modelSel.dataset.value ?? modelSel.value;
     modelSel.innerHTML = `<option value="">读取中…</option>`;
+    syncPick(modelSel);
     const info = await modelsFor(kindSel.value, machine);
+    if (seq !== modelSel._seq) return;
     const list = [...(info.models || [])];
     if (want && !list.some((m) => m.id === want)) list.unshift({ id: want });
     const sub = (m) => [m.label && m.label !== m.id ? m.id : "", m.note && m.note !== m.id && !(m.label && m.note.startsWith(m.label)) ? m.note : ""].filter(Boolean).join(" · ");
     modelSel.innerHTML = `<option value="" data-sub="${esc(info.default ? "现在是 " + info.default : "用 agent 自己的设置")}">默认</option>`
       + list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(sub(m))}" ${m.id === want ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("")
       + `<option value="__custom" data-sub="输入列表里没有的模型名">其他…</option>`;
+    modelSel.value = want || "";
     delete modelSel.dataset.value;
+    syncPick(modelSel);
     const fillEffort = () => {
-      const m = list.find((x) => x.id === modelSel.value);
-      const effs = m?.efforts?.length ? m.efforts : (info.efforts || []);
-      const cur = effSel.dataset.value ?? effSel.value;
-      effSel.innerHTML = `<option value="" data-sub="${esc(info.default_effort ? "现在是 " + (EFFORT_LABEL[info.default_effort] || info.default_effort) : "用 agent 自己的设置")}">默认</option>`
+      const effs = effortsFor(info, kindSel.value, modelSel.value);
+      const rawCur = effSel.dataset.value ?? effSel.value;
+      const cur = effs.includes(rawCur) ? rawCur : "";
+      const defE = effs.includes(info.default_effort) ? info.default_effort : "";
+      effSel.innerHTML = `<option value="" data-sub="${esc(defE ? "现在是 " + (EFFORT_LABEL[defE] || defE) : "用 agent 自己的设置")}">默认</option>`
         + effs.map((e) => `<option value="${esc(e)}" data-sub="${esc(e)}" ${e === cur ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
+      effSel.value = cur;
       delete effSel.dataset.value;
-      effSel.disabled = effs.length === 0;
+      const hide = effs.length === 0;
+      effSel.hidden = hide;
+      effSel.disabled = hide;
+      if (effField) effField.hidden = hide;
+      if (hide && pickOpen === effSel) closePick();
+      syncPick(effSel);
     };
     fillEffort();
     modelSel.onchange = () => {
@@ -2233,6 +2265,7 @@
         const v = (prompt("模型名（照 agent 的 --model 参数写）") || "").trim();
         if (v) modelSel.add(new Option(v, v, true, true), 1);
         else modelSel.value = "";
+        syncPick(modelSel);
       }
       fillEffort();
     };
@@ -2242,7 +2275,13 @@
     form._bound = true;
     for (const who of ["router", "worker"]) {
       fillModels(form, who);
-      form[who + "_kind"].addEventListener("change", () => { form[who + "_model"].value = ""; form[who + "_effort"].value = ""; fillModels(form, who); });
+      form[who + "_kind"].addEventListener("change", () => {
+        delete form[who + "_model"].dataset.value;
+        delete form[who + "_effort"].dataset.value;
+        form[who + "_model"].value = "";
+        form[who + "_effort"].value = "";
+        fillModels(form, who);
+      });
     }
     form.worker_machine?.addEventListener("change", () => fillModels(form, "worker"));
   }
@@ -2250,9 +2289,13 @@
   function settingsHTML(r) {
     const s = r.settings;
     const kindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
-    const modelPick = (who, model, effort) => `
+    const modelPick = (who, kind, model, effort) => {
+      const hideEff = (kind === "antigravity" || kind === "agy") && agyRejectsEffort(model);
+      const eff = hideEff ? "" : (effort || "");
+      return `
           <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
-          <label>思考强度<select name="${who}_effort" data-pick="compact" data-title="思考强度" data-value="${esc(effort || "")}"><option value="${esc(effort || "")}" selected>${esc(EFFORT_LABEL[effort] || effort || "默认")}</option></select></label>`;
+          <label${hideEff ? " hidden" : ""}>思考强度<select name="${who}_effort" data-pick="compact" data-title="思考强度" data-value="${esc(eff)}"${hideEff ? " hidden disabled" : ""}><option value="${esc(eff)}" selected>${esc(EFFORT_LABEL[eff] || eff || "默认")}</option></select></label>`;
+    };
     const many = (state.machines || []).length > 1;
     setTimeout(() => bindSettings($("#settings-form")));
     return `<form class="settings" id="settings-form">
@@ -2260,7 +2303,7 @@
         <header><h4>Collie 自己</h4><p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p></header>
         <div class="set-grid three">
           <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${kindOpts(s.router_kind)}</select></label>
-          ${modelPick("router", s.router_model, s.router_effort)}
+          ${modelPick("router", s.router_kind, s.router_model, s.router_effort)}
         </div>
         <details class="set-adv" ${(s.router_args || []).length ? "open" : ""}><summary>更多启动参数</summary>
           <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="例如 --permission-mode plan" autocorrect="off" autocapitalize="off" spellcheck="false"><small>原样加在启动命令后面，一般不用填</small></label>
@@ -2271,7 +2314,7 @@
         <header><h4>派活默认</h4><p>Collie 派 agent 干活时默认这样启动；你说「用 Codex…」「在 Mac 上…」时它会自己换。</p></header>
         <div class="set-grid three">
           <label>Agent<select name="worker_kind" data-title="派活默认用">${kindOpts(s.worker_kind)}</select></label>
-          ${modelPick("worker", s.worker_model, s.worker_effort)}
+          ${modelPick("worker", s.worker_kind, s.worker_model, s.worker_effort)}
         </div>
         <div class="set-grid three">
           ${many ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${state.machines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
@@ -2330,9 +2373,9 @@
         const s = {
           ...cur,
           router_kind: f.router_kind.value, router_args: f.router_args.value.split(/\s+/).filter(Boolean),
-          router_model: f.router_model.value === "__custom" ? "" : f.router_model.value, router_effort: f.router_effort.value,
+          router_model: f.router_model.value === "__custom" ? "" : f.router_model.value, router_effort: f.router_effort.disabled ? "" : f.router_effort.value,
           worker_kind: f.worker_kind.value, worker_cwd: f.worker_cwd.value,
-          worker_model: f.worker_model.value === "__custom" ? "" : f.worker_model.value, worker_effort: f.worker_effort.value,
+          worker_model: f.worker_model.value === "__custom" ? "" : f.worker_model.value, worker_effort: f.worker_effort.disabled ? "" : f.worker_effort.value,
           worker_machine: f.worker_machine ? f.worker_machine.value : (cur.worker_machine || ""),
           reply_chars: +f.reply_chars.value, stall_minutes: +f.stall_minutes.value,
           rotate_pct: +f.rotate_pct.value, dream_at: f.dream_at.value,
@@ -5664,14 +5707,18 @@
     syncPick(mSel);
   }
   function fillLaunchEfforts(info, want) {
+    const kind = $("input[name=kind]:checked")?.value || "";
+    const model = $("#l-model").value;
     const eSel = $("#l-effort");
-    const cur = (info.models || []).find((m) => m.id === $("#l-model").value);
-    const effs = cur?.efforts?.length ? cur.efforts : (info.efforts || []);
-    const defE = info.default_effort || "";
+    const effs = effortsFor(info, kind, model);
+    const defE = effs.includes(info.default_effort) ? info.default_effort : "";
     eSel.innerHTML = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>` +
       effs.map((e) => `<option value="${esc(e)}" data-short="思考 · ${esc(EFFORT_LABEL[e] || e)}">${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
     eSel.value = effs.includes(want) ? want : "";
-    eSel.hidden = effs.length === 0;
+    const hide = effs.length === 0;
+    eSel.hidden = hide;
+    eSel.disabled = hide;
+    if (hide && pickOpen === eSel) closePick();
     syncPick(eSel);
   }
   $("#l-model").addEventListener("change", async () => {
@@ -5769,7 +5816,7 @@
     const shell = kind === "shell";
     const body = shell ? { kind, cwd: cwdInput.value.trim(), machine: pickMachine }
       : { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine,
-          model: $("#l-model").value, effort: $("#l-effort").value };
+          model: $("#l-model").value, effort: $("#l-effort").disabled ? "" : $("#l-effort").value };
     const go = $("#launch-go");
     go.disabled = true; go.textContent = shell ? "打开中…" : "启动中…";
     $("#launch-error").textContent = "";

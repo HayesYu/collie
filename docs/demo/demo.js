@@ -241,8 +241,19 @@
   };
   const models = {
     claude: { models: [{ id: "opus", label: "Opus", efforts: ["low", "medium", "high", "max"] }, { id: "sonnet", label: "Sonnet", efforts: ["low", "medium", "high"] }, { id: "haiku", label: "Haiku" }], default: "sonnet", efforts: ["low", "medium", "high", "max"], default_effort: "" },
-    codex: { models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["low", "medium", "high", "xhigh"] }, { id: "gpt-6.1-mini", label: "GPT-6.1-Mini" }], default: "gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh"], default_effort: "medium" },
-    agy: { models: [{ id: "gemini-4-pro", label: "Gemini 4 Pro" }], default: "gemini-4-pro", efforts: [] },
+    codex: { models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["low", "medium", "high", "xhigh"] }, { id: "gpt-6.1-mini", label: "GPT-6.1-Mini", efforts: null }], default: "gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh"], default_effort: "medium" },
+    agy: {
+      models: [
+        { id: "gemini-4-pro-xhigh", label: "Gemini 4 Pro (XHigh)", efforts: [] },
+        { id: "gemini-4-pro-high", label: "Gemini 4 Pro (High)", efforts: [] },
+        { id: "gemini-4-pro-medium", label: "Gemini 4 Pro (Medium)", efforts: [] },
+        { id: "gemini-4-pro-low", label: "Gemini 4 Pro (Low)", efforts: [] },
+        { id: "gemini-pro-orchestrator", label: "Orchestrator", efforts: [] },
+      ],
+      default: "gemini-4-pro-high",
+      default_effort: "high",
+      efforts: ["low", "medium", "high", "xhigh"],
+    },
   };
 
   // ───────────────────────────── streams
@@ -514,7 +525,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/hubs") return json({ hubs: [] });
     if (p === "/api/version") return json({ version: "v0.2.41", latest: "v0.2.41", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
-    if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
+    if (p === "/api/models") { const k = q.get("kind") === "antigravity" ? "agy" : q.get("kind"); return json(models[k] || { models: [], efforts: [] }); }
     if (p === "/api/file") {
       const fp = q.get("path") || "", mach = q.get("machine") || "", dl = q.get("download") === "1";
       const dlHead = (name) => dl ? { "Content-Disposition": `attachment; filename="${name}"` } : {};

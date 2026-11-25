@@ -116,10 +116,11 @@ func (s *Server) superState(ctx context.Context) superView {
 	v.Router.Context, v.Router.RotateAt, v.Router.Handover = sp.routerUsage.Pct(), sp.rotateAtLocked(), sp.handover != nil
 	v.Router.Dreaming = sp.dream != nil
 	st := sp.st.Settings
-	v.Router.Model, v.Router.Effort = st.RouterModel, st.RouterEffort
+	routerEff := effectiveEffort(st.RouterKind, st.RouterModel, st.RouterEffort)
+	v.Router.Model, v.Router.Effort = st.RouterModel, routerEff
 	if run := sp.routerRunLocked(); run != nil && v.Router.Alive {
 		v.Router.Model, v.Router.Effort = run[0], run[1]
-		v.Router.Pending = *run != [2]string{st.RouterModel, st.RouterEffort} || kinds[v.Router.Kind] != kinds[st.RouterKind]
+		v.Router.Pending = *run != [2]string{st.RouterModel, routerEff} || kinds[v.Router.Kind] != kinds[st.RouterKind]
 	}
 	if sp.dream != nil {
 		v.Router.Status = "dreaming"
@@ -243,10 +244,18 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	if !known || kinds[body.Kind] == kinds[st.WorkerKind] {
 		defModel, defEffort = st.WorkerModel, st.WorkerEffort
 	}
+	effKind := body.Kind
+	if !known {
+		effKind = st.WorkerKind
+	}
+	effModel := strings.TrimSpace(body.Model)
+	if effModel == "" {
+		effModel = defModel
+	}
 	if m := strings.TrimSpace(body.Model); m != "" && m != defModel && modelNameRe.MatchString(m) {
 		hint = append(hint, "--model "+m)
 	}
-	if e := strings.TrimSpace(body.Effort); e != "" && e != defEffort && modelNameRe.MatchString(e) {
+	if e := effectiveEffort(effKind, effModel, body.Effort); e != "" && e != effectiveEffort(effKind, effModel, defEffort) && modelNameRe.MatchString(e) {
 		hint = append(hint, "--effort "+e)
 	}
 	if len(hint) > 0 {
@@ -806,6 +815,8 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 				*p = ""
 			}
 		}
+		ns.RouterEffort = effectiveEffort(ns.RouterKind, ns.RouterModel, ns.RouterEffort)
+		ns.WorkerEffort = effectiveEffort(ns.WorkerKind, ns.WorkerModel, ns.WorkerEffort)
 		ns.migrateReply()
 		if ns.DreamAt != "off" {
 			var h, m int

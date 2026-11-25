@@ -810,7 +810,7 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 	sp.routerLaunching, sp.routerLaunchAt = true, time.Now()
 	kind := sp.st.Settings.RouterKind
 	args := sp.routerArgsLocked()
-	sp.setRouterRun([2]string{sp.st.Settings.RouterModel, sp.st.Settings.RouterEffort})
+	sp.setRouterRun([2]string{sp.st.Settings.RouterModel, effectiveEffort(kind, sp.st.Settings.RouterModel, sp.st.Settings.RouterEffort)})
 	sp.mu.Unlock()
 
 	go func() {
@@ -1048,6 +1048,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 			effort = sp.st.Settings.WorkerEffort
 		}
 	}
+	effort = effectiveEffort(kind, model, effort)
 	w.Run = &[2]string{model, effort}
 	ask := sp.st.Settings.AskPermissions
 	sp.mu.Unlock()

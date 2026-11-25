@@ -1031,13 +1031,17 @@
     }
     return added;
   }
-  async function jumpToEntry(id) {
+  const entrySelector = (id) => {
+    const eid = CSS.escape(id);
+    return `#v-collie .msg[data-id="${eid}"], #v-collie .event[data-id="${eid}"]`;
+  };
+  async function jumpToEntry(id, opts) {
     if (!id) return;
     const seq = ++jumpSeq;
     activeCollieRestore = null;
     pendingOpen = false;
     renderPendingBar();
-    const sel = `#v-collie .msg[data-id="${CSS.escape(id)}"]`;
+    const sel = entrySelector(id);
     let m = document.querySelector(sel);
     let guards = 0;
     while (!m && canLoadOlder() && guards++ < 40) {
@@ -1071,12 +1075,53 @@
       hit.classList.remove("flash");
       void hit.offsetWidth;
       hit.classList.add("flash");
+      if (opts?.focus) {
+        if (hit.tagName !== "A" && !hit.hasAttribute("tabindex")) hit.setAttribute("tabindex", "-1");
+        hit.focus({ preventScroll: true });
+      }
     }
     setTimeout(() => {
       if (flashEntry.id === id && Date.now() >= flashEntry.until) {
         document.querySelector(sel)?.classList.remove("flash");
       }
     }, 1600);
+  }
+  // Legacy quotes created before worker events stored quote.entry: locate the
+  // worker's nearest preceding timeline event in main chat without leaving it.
+  async function jumpToWorkerEvent(worker, beforeId, opts) {
+    if (!worker) return;
+    const seq = ++jumpSeq;
+    activeCollieRestore = null;
+    pendingOpen = false;
+    renderPendingBar();
+    const findTarget = () => {
+      const all = chatEntries();
+      const stop = beforeId ? all.findIndex((x) => x.id === beforeId) : all.length;
+      const end = stop >= 0 ? stop - 1 : all.length - 1;
+      for (let i = end; i >= 0; i--) {
+        const x = all[i];
+        if (x.role !== "event" || x.ref !== worker || !x.id) continue;
+        if (x.ref === ROUTER && x.tone === "info") continue;
+        if (workerChatter(x)) continue;
+        return x.id;
+      }
+      return "";
+    };
+    let id = findTarget();
+    let guards = 0;
+    while (!id && canLoadOlder() && guards++ < 40) {
+      while (olderBusy) await new Promise((r) => setTimeout(r, 35));
+      if (seq !== jumpSeq) return;
+      id = findTarget();
+      if (id) break;
+      const ok = await loadOlder(false);
+      if (seq !== jumpSeq) return;
+      id = findTarget();
+      if (!ok) break;
+    }
+    if (seq !== jumpSeq) return;
+    if (!id) { toast("这条记录太早了，已经不在这里"); return; }
+    await jumpToEntry(id, opts);
   }
 
   // ───────────────────────────── Collie conversation search
@@ -1381,7 +1426,7 @@
       // What a reply is about shows as a quoted line, unless it is plain
       // from what is right above: the first answer to your last message, or
       // a word on the worker whose line it follows.
-      let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0;
+      let lastUser = "", sinceUser = 0, lastEvent = "", lastEventId = "", lastCollie = "", sinceCollie = 0;
       const allEntries = chatEntries();
       const pendIds = new Set(activePending().map((p) => p.id));
       const pinIds = new Set(activePinned().map((p) => p.id));
@@ -1413,15 +1458,33 @@
         }
         return "";
       };
-      const quote = (e) => {
+      const findWorkerEventBefore = (worker, idx) => {
+        if (!worker) return "";
+        for (let j = idx - 1; j >= 0; j--) {
+          const prev = allEntries[j];
+          if (prev.role !== "event" || prev.ref !== worker || !prev.id) continue;
+          if (prev.ref === ROUTER && prev.tone === "info") continue;
+          if (workerChatter(prev)) continue;
+          return prev.id;
+        }
+        return "";
+      };
+      const quote = (e, idx) => {
         const q = e.re;
         if (!q) return "";
         if (q.entry && q.entry === lastUser && !sinceUser) return "";
         if (q.entry && q.entry === lastCollie && !sinceCollie) return "";
-        if (q.worker && q.worker === lastEvent) return "";
-        const pane = q.worker && paneOf(q.worker), past = q.worker && !pane ? workerHist(q.worker, e.at) : null;
-        const attr = q.entry ? `href="#" data-goto="${esc(q.entry)}"` : pane ? `href="#/p/${encodeURIComponent(pane)}"` : past ? `href="#/h/${encodeURIComponent(past.id)}"` : "";
-        return `<a class="re" ${attr} title="${esc(q.text)}"><span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}</a>`;
+        if (q.entry && q.entry === lastEventId) return "";
+        if (!q.entry && q.worker && q.worker === lastEvent) return "";
+        const targetId = q.entry || (q.worker ? findWorkerEventBefore(q.worker, idx) : "");
+        const body = `<span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}`;
+        if (targetId) {
+          return `<a class="re" href="#" data-goto="${esc(targetId)}" title="${esc(q.text)}">${body}</a>`;
+        }
+        if (q.worker) {
+          return `<a class="re" href="#" data-goto-worker="${esc(q.worker)}" data-before="${esc(e.id || "")}" title="${esc(q.text)}">${body}</a>`;
+        }
+        return `<div class="re" title="${esc(q.text)}">${body}</div>`;
       };
       for (let ei = 0; ei < allEntries.length; ei++) {
         const e = allEntries[ei];
@@ -1445,13 +1508,14 @@
         const pinned = !!(e.id && pinIds.has(e.id));
         const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
         if (e.role === "user") {
-          html += `<div class="mine${pinned ? " is-pinned" : ""}">${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at, pinned)}</div>`;
-          lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
+          html += `<div class="mine${pinned ? " is-pinned" : ""}">${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${mineActs(e, at, pinned)}</div>`;
+          lastUser = e.id; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at, pinned)}</div></div>`;
-          sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
+          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at, pinned)}</div></div>`;
+          sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
+          lastEventId = e.id || "";
           // A handover/dream line opens the session Collie rotated out of
           // (explicit h:<id>, or matched by time for older rows); a worker's
           // line opens its ended record once gone, else its live pane.
@@ -1471,7 +1535,9 @@
           const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "running" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
           // A spawn line carries its worker's state, in place of a line per change.
           const state = w ? (w.ended ? "已结束" : busy ? "还在跑" : stuck ? "等你确认" : "") : "";
-          html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span>${state ? `<span class="wstate">${state}</span>` : ""}</${tag.split(" ")[0]}>`;
+          const idAttr = e.id ? ` data-id="${esc(e.id)}"` : "";
+          const refAttr = e.ref ? ` data-ref="${esc(e.ref)}"` : "";
+          html += `<${tag} class="event${e.tone === "error" ? " error" : ""}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span>${state ? `<span class="wstate">${state}</span>` : ""}</${tag.split(" ")[0]}>`;
         }
       }
     }
@@ -1495,7 +1561,8 @@
       superSig = html;
       box.innerHTML = html;
       if (flashEntry.until > Date.now() && flashEntry.id) {
-        box.querySelector(`.msg[data-id="${CSS.escape(flashEntry.id)}"]`)?.classList.add("flash");
+        const fid = CSS.escape(flashEntry.id);
+        box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`)?.classList.add("flash");
       }
     } else if (!busyChanged && !crewChanged) {
       return;
@@ -4333,12 +4400,14 @@
     const e = chatEntries().find((x) => x.id === b.dataset.copy);
     if (e) toast(await copyText(e.text) ? "已复制" : "复制失败", "");
   });
-  // A reply's quote of your message: take you to it.
+  // A reply's quote: scroll to and highlight the referenced message or timeline event in main chat.
   document.addEventListener("click", (e) => {
-    const a = e.target.closest("a.re[data-goto]");
+    const a = e.target.closest("a.re[data-goto], a.re[data-goto-worker]");
     if (!a) return;
     e.preventDefault();
-    jumpToEntry(a.dataset.goto);
+    const opts = e.detail === 0 && a.matches(":focus-visible") ? { focus: true } : undefined;
+    if (a.dataset.goto) jumpToEntry(a.dataset.goto, opts);
+    else if (a.dataset.gotoWorker) jumpToWorkerEvent(a.dataset.gotoWorker, a.dataset.before || "", opts);
   });
   // No hover on a phone: tap a Collie chat message to see when it was said.
   document.addEventListener("click", (e) => {

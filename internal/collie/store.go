@@ -22,8 +22,9 @@ type Trigger struct {
 	Action  string    `json:"action"` // respond | candidate | ignore (fast-path decision)
 	Status  string    `json:"status"` // queued | delivered | ignored
 	Targets []string  `json:"targets,omitempty"`
-	Key     string    `json:"key,omitempty"` // idempotency key
-	Ref     string    `json:"ref,omitempty"` // related object id (worker, timer…)
+	Key     string    `json:"key,omitempty"`   // idempotency key
+	Ref     string    `json:"ref,omitempty"`   // related object id (worker, timer…)
+	Entry   string    `json:"entry,omitempty"` // main-chat timeline entry created for this trigger, if any
 }
 
 type Thread struct {
@@ -94,11 +95,11 @@ type SearchResult struct {
 	HasMore bool        `json:"has_more"`
 }
 
-// A Quote is what a reply answers: a message of yours, a worker's work, a timer.
+// A Quote is what a reply answers: a message of yours, a worker report/event, or a timer.
 type Quote struct {
-	Entry  string `json:"entry,omitempty"`  // your message it answers
-	Worker string `json:"worker,omitempty"` // or the worker it is about
-	Who    string `json:"who"`              // 你 | the worker's name | 定时
+	Entry  string `json:"entry,omitempty"`  // main-chat entry (message or timeline event) to locate
+	Worker string `json:"worker,omitempty"` // worker involved, if any
+	Who    string `json:"who"`              // 你 | Collie | the worker's name | 定时
 	Text   string `json:"text"`
 }
 

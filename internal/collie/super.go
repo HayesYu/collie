@@ -648,14 +648,17 @@ func (sp *Super) workerDead(ctx context.Context, w *Worker) {
 	log.Printf("worker %s: no agent in its pane %s; marked failed", w.Name, w.PaneID)
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf(
+	t := sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf(
 		"worker %s failed: %s isn't running in its pane (it never started, or it quit), so its task was not delivered. Last lines on its screen:\n%s\nFix the cause or tell the human; spawn a new worker to retry.",
 		w.Name, w.Kind, tail), "", "", w.Name)
 	msg := w.Name + " 的 " + w.Kind + " 没有跑起来（或已退出），任务没发出去"
 	if why != "" {
 		msg += "：" + why
 	}
-	sp.addEntryLocked("event", w.Thread, msg, w.Name, "error")
+	e := sp.addEntryLocked("event", w.Thread, msg, w.Name, "error")
+	if t != nil {
+		t.Entry = e.ID
+	}
 	sp.changed()
 }
 
@@ -703,9 +706,12 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 	if msg := sp.workerAgentError(ctx, w, summary); msg != "" {
 		// Its agent stopped it (out of quota, logged out, the API down):
 		// the turn ended, the work did not.
-		sp.ingestLocked("worker", w.Thread, w.Name,
+		t := sp.ingestLocked("worker", w.Thread, w.Name,
 			fmt.Sprintf("worker %s stopped on an error from its agent, not because it was done:\n%s\nLast message before it:\n%s\nIf this is a usage limit, a login or an outage, it won't get better by itself soon: hand the job to another kind of agent (spawn a fresh one with the brief and what this one got done; --resume only works with the same agent), then tell the human in one line what happened and who carries on.", w.Name, msg, summary), "", "", w.Name)
-		sp.addEntryLocked("event", w.Thread, w.Name+" 出错了："+msg, w.Name, "error")
+		e := sp.addEntryLocked("event", w.Thread, w.Name+" 出错了："+msg, w.Name, "error")
+		if t != nil {
+			t.Entry = e.ID
+		}
 		return
 	}
 	sp.ingestLocked("worker", w.Thread, w.Name,
@@ -1084,10 +1090,14 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		blocked := err != nil && errors.As(err, &he) && he.Code == "agent_not_ready"
 		if err != nil && !blocked {
 			w.Status, w.Ended, w.Note = "failed", true, err.Error()
-			sp.addEntryLocked("event", thread, name+" 启动失败："+err.Error(), name, "error")
+			e := sp.addEntryLocked("event", thread, name+" 启动失败："+err.Error(), name, "error")
 			sp.mu.Unlock()
 			if !tell(err) {
-				sp.Ingest("worker", thread, name, fmt.Sprintf("worker %s failed to start: %v", name, err), "", "", name)
+				sp.mu.Lock()
+				if t := sp.ingestLocked("worker", thread, name, fmt.Sprintf("worker %s failed to start: %v", name, err), "", "", name); t != nil {
+					t.Entry = e.ID
+				}
+				sp.mu.Unlock()
 			}
 			return
 		}
@@ -1148,8 +1158,11 @@ func (sp *Super) Report(name, text string) error {
 		return fmt.Errorf("unknown worker %s", name)
 	}
 	w.LastReport, w.ReportAt = text, time.Now()
-	sp.ingestLocked("worker", w.Thread, name, fmt.Sprintf("report from %s:\n%s", name, text), "", "", name)
-	sp.addEntryLocked("event", w.Thread, name+" 回报："+clip(text, 160), name, "done")
+	t := sp.ingestLocked("worker", w.Thread, name, fmt.Sprintf("report from %s:\n%s", name, text), "", "", name)
+	e := sp.addEntryLocked("event", w.Thread, name+" 回报："+clip(text, 160), name, "done")
+	if t != nil {
+		t.Entry = e.ID
+	}
 	return nil
 }
 
@@ -1313,6 +1326,273 @@ func (q *Quote) line() string {
 	return q.Who + "：" + clip(t, 60)
 }
 
+// workerChatterRe mirrors web/app.js CHATTER so quotes never target an event
+// row that the timeline intentionally hides.
+var workerChatterRe = regexp.MustCompile(`\s(完成了一轮|等你确认|已停止|已退出|回来了（herdr 恢复了它的窗格）)$`)
+
+func isVisibleTimelineEvent(e *Entry) bool {
+	if e == nil || e.ID == "" || e.Role != "event" {
+		return false
+	}
+	if e.Ref == routerName && e.Tone == "info" {
+		return false
+	}
+	if e.Ref != "" && e.Ref != routerName && (e.Tone == "done" || e.Tone == "info" || e.Tone == "blocked") && workerChatterRe.MatchString(e.Text) {
+		return false
+	}
+	return true
+}
+
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):], true
+	}
+	return s, false
+}
+
+func (sp *Super) findEntryLocked(eid string) *Entry {
+	if eid == "" {
+		return nil
+	}
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		if e := sp.st.Entries[i]; e.ID == eid {
+			return e
+		}
+	}
+	if sp.db != nil {
+		var raw string
+		var e Entry
+		if sp.db.QueryRow(`SELECT data FROM entries WHERE id = ?`, eid).Scan(&raw) == nil &&
+			json.Unmarshal([]byte(raw), &e) == nil {
+			return &e
+		}
+	}
+	return nil
+}
+
+func (sp *Super) findTriggerLocked(tid string) *Trigger {
+	if tid == "" {
+		return nil
+	}
+	if t := sp.st.trigger(tid); t != nil {
+		return t
+	}
+	if sp.db != nil {
+		var raw string
+		var t Trigger
+		if sp.db.QueryRow(`SELECT data FROM triggers WHERE id = ?`, tid).Scan(&raw) == nil &&
+			json.Unmarshal([]byte(raw), &t) == nil {
+			return &t
+		}
+	}
+	return nil
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// workerTriggerEntryLocked finds the visible main-chat timeline entry that
+// corresponds to a worker trigger (its explicit Report/error event, or for
+// older/chatter-only triggers the nearest matching visible event of that worker).
+func (sp *Super) workerTriggerEntryLocked(t *Trigger, name string) (string, *Entry) {
+	var linked *Entry
+	if t.Entry != "" {
+		if e := sp.findEntryLocked(t.Entry); e != nil {
+			linked = e
+			if isVisibleTimelineEvent(e) {
+				return e.ID, e
+			}
+		}
+	}
+	if name == "" {
+		return "", linked
+	}
+	raw := strings.TrimSpace(t.Text)
+	reportBody, isReport := cutPrefixFold(raw, "report from "+name+":")
+	reportBody = strings.TrimSpace(reportBody)
+	isError := strings.HasPrefix(raw, "worker "+name+" stopped on an error") ||
+		strings.HasPrefix(raw, "worker "+name+" failed:") ||
+		strings.HasPrefix(raw, "worker "+name+" failed to start:")
+	sameThread := func(e *Entry) bool {
+		if t.Thread == "" || e.Thread == "" {
+			return true
+		}
+		return e.Thread == t.Thread
+	}
+
+	if isReport {
+		wantPrefix := name + " 回报："
+		wantClip := clip(reportBody, 160)
+		var best *Entry
+		var bestDiff time.Duration
+		for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+			e := sp.st.Entries[i]
+			if !isVisibleTimelineEvent(e) || e.Ref != name || e.Tone != "done" || !strings.HasPrefix(e.Text, wantPrefix) || !sameThread(e) {
+				continue
+			}
+			gotBody := strings.TrimPrefix(e.Text, wantPrefix)
+			exact := wantClip != "" && gotBody == wantClip
+			if !t.At.IsZero() && !e.At.IsZero() {
+				diff := absDuration(e.At.Sub(t.At))
+				if diff <= 10*time.Second && (best == nil || diff < bestDiff) {
+					best, bestDiff = e, diff
+					if exact && diff <= 2*time.Second {
+						break
+					}
+				}
+			} else if exact {
+				return e.ID, e
+			} else if best == nil {
+				best = e
+			}
+		}
+		if best != nil {
+			return best.ID, best
+		}
+	}
+
+	if isError {
+		var best *Entry
+		var bestDiff time.Duration
+		for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+			e := sp.st.Entries[i]
+			if !isVisibleTimelineEvent(e) || e.Ref != name || e.Tone != "error" || !sameThread(e) {
+				continue
+			}
+			if !t.At.IsZero() && !e.At.IsZero() {
+				diff := absDuration(e.At.Sub(t.At))
+				if diff <= 10*time.Second && (best == nil || diff < bestDiff) {
+					best, bestDiff = e, diff
+				}
+			} else if best == nil {
+				best = e
+				break
+			}
+		}
+		if best != nil {
+			return best.ID, best
+		}
+	}
+
+	// Chatter-only triggers (finished a turn, blocked dialog, exited, watchdog)
+	// have no dedicated visible timeline row: anchor to the worker's latest
+	// visible event (typically its spawn line) at or before the trigger.
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		e := sp.st.Entries[i]
+		if !isVisibleTimelineEvent(e) || e.Ref != name || !sameThread(e) {
+			continue
+		}
+		if !t.At.IsZero() && !e.At.IsZero() && e.At.After(t.At.Add(2*time.Second)) {
+			continue
+		}
+		if linked == nil {
+			linked = e
+		}
+		return e.ID, linked
+	}
+	return "", linked
+}
+
+func cleanWorkerEventText(text, name string) string {
+	s := strings.TrimSpace(text)
+	if name == "" {
+		return s
+	}
+	for _, p := range []string{name + " 回报：", name + " 的 ", name + " "} {
+		if strings.HasPrefix(s, p) {
+			return strings.TrimSpace(strings.TrimPrefix(s, p))
+		}
+	}
+	return s
+}
+
+func workerQuoteText(t *Trigger, linked *Entry, w *Worker, name string) string {
+	raw := strings.TrimSpace(t.Text)
+	if raw != "" {
+		if body, ok := cutPrefixFold(raw, "report from "+name+":"); ok {
+			if body = strings.TrimSpace(body); body != "" {
+				return clip(body, 600)
+			}
+		}
+		if body, ok := cutPrefixFold(raw, "worker "+name+" finished a turn. Last message:"); ok {
+			body = strings.TrimSpace(body)
+			if body != "" && body != "(no output captured)" {
+				return clip(body, 600)
+			}
+			return "完成了一轮"
+		}
+		if body, ok := cutPrefixFold(raw, "worker "+name+" stopped on an error from its agent, not because it was done:"); ok {
+			if i := strings.Index(body, "\nLast message before it:"); i >= 0 {
+				body = body[:i]
+			}
+			if body = strings.TrimSpace(body); body != "" {
+				return clip("出错了："+body, 600)
+			}
+			return "出错了"
+		}
+		if strings.HasPrefix(raw, "worker "+name+" is BLOCKED on a dialog") {
+			body := ""
+			if _, after, ok := strings.Cut(raw, "Screen:\n"); ok {
+				body = after
+				if i := strings.Index(body, "\nIf the answer follows"); i >= 0 {
+					body = body[:i]
+				}
+				body = strings.TrimSpace(body)
+			}
+			if body != "" && body != "(no output captured)" {
+				return clip("等你确认："+body, 600)
+			}
+			return "等你确认"
+		}
+		if body, ok := cutPrefixFold(raw, "worker "+name+" failed to start:"); ok {
+			if body = strings.TrimSpace(body); body != "" {
+				return clip("启动失败："+body, 600)
+			}
+			return "启动失败"
+		}
+		if strings.HasPrefix(raw, "worker "+name+" failed:") {
+			if linked != nil && linked.Tone == "error" && strings.TrimSpace(linked.Text) != "" {
+				return clip(cleanWorkerEventText(linked.Text, name), 600)
+			}
+			body := raw
+			if i := strings.Index(body, "\nFix the cause"); i >= 0 {
+				body = body[:i]
+			}
+			return clip(strings.TrimSpace(strings.TrimPrefix(body, "worker "+name+" ")), 600)
+		}
+		if strings.HasPrefix(raw, "worker "+name+" exited") {
+			return "已退出"
+		}
+		if strings.HasPrefix(raw, "worker "+name+" is back") {
+			return "回来了（herdr 恢复了它的窗格）"
+		}
+		if t.From == "watchdog" && strings.HasPrefix(raw, "watchdog:") {
+			body := strings.TrimSpace(strings.TrimPrefix(raw, "watchdog:"))
+			if i := strings.Index(body, " Inspect with"); i >= 0 {
+				body = body[:i]
+			}
+			if body != "" {
+				return clip(strings.TrimSpace(body), 600)
+			}
+		}
+		if t.Source == "system" && strings.HasPrefix(raw, "You are worker ") && w != nil && strings.TrimSpace(w.Task) != "" {
+			return clip(strings.TrimSpace(w.Task), 600)
+		}
+		return clip(raw, 600)
+	}
+	if linked != nil && linked.Tone != "spawn" && strings.TrimSpace(linked.Text) != "" {
+		return clip(cleanWorkerEventText(linked.Text, name), 600)
+	}
+	if w != nil && strings.TrimSpace(w.Task) != "" {
+		return clip(strings.TrimSpace(w.Task), 600)
+	}
+	return ""
+}
+
 // quoteLocked finds what a reply's --re points at: an event Collie was given
 // (#t942), or an entry. Unknown ids give nil: the reply goes out anyway.
 func (sp *Super) quoteLocked(id string) *Quote {
@@ -1320,24 +1600,49 @@ func (sp *Super) quoteLocked(id string) *Quote {
 	if id == "" {
 		return nil
 	}
-	entry := func(eid string) *Quote {
-		for i := len(sp.st.Entries) - 1; i >= 0; i-- {
-			if e := sp.st.Entries[i]; e.ID == eid && e.Role == "user" {
-				return &Quote{Entry: e.ID, Who: "你", Text: humanText(e.Text)}
+	entryQuote := func(eid string, allowAny bool) *Quote {
+		e := sp.findEntryLocked(eid)
+		if e == nil {
+			return nil
+		}
+		if e.Role == "user" {
+			return &Quote{Entry: e.ID, Who: "你", Text: humanText(e.Text)}
+		}
+		if !allowAny {
+			return nil
+		}
+		if e.Role == "collie" {
+			return &Quote{Entry: e.ID, Who: "Collie", Text: clip(e.Text, 600)}
+		}
+		if e.Role == "event" {
+			who, worker, text := "事件", "", strings.TrimSpace(e.Text)
+			if e.Ref != "" && !strings.HasPrefix(e.Ref, "h:") {
+				who = e.Ref
+				if e.Ref != routerName {
+					worker = e.Ref
+				}
+				text = cleanWorkerEventText(e.Text, e.Ref)
 			}
+			targetID := ""
+			if isVisibleTimelineEvent(e) {
+				targetID = e.ID
+			} else if worker != "" {
+				targetID, _ = sp.workerTriggerEntryLocked(&Trigger{Thread: e.Thread, At: e.At}, worker)
+			}
+			return &Quote{Entry: targetID, Worker: worker, Who: who, Text: clip(text, 600)}
 		}
 		return nil
 	}
-	if q := entry(id); q != nil {
+	if q := entryQuote(id, true); q != nil {
 		return q
 	}
-	t := sp.st.trigger(id)
+	t := sp.findTriggerLocked(id)
 	if t == nil {
 		return nil
 	}
 	switch t.Source {
 	case "chat":
-		if q := entry(t.Ref); q != nil {
+		if q := entryQuote(t.Ref, false); q != nil {
 			return q
 		}
 		return &Quote{Who: "你", Text: humanText(t.Text)}
@@ -1348,8 +1653,14 @@ func (sp *Super) quoteLocked(id string) *Quote {
 	if name == "" {
 		name = t.From
 	}
-	if w := sp.st.Workers[name]; w != nil {
-		return &Quote{Worker: w.Name, Who: w.Name, Text: w.Task}
+	w := sp.st.Workers[name]
+	if w != nil || (t.Source == "worker" && name != "") {
+		entryID, linked := sp.workerTriggerEntryLocked(t, name)
+		text := workerQuoteText(t, linked, w, name)
+		if text == "" {
+			return nil
+		}
+		return &Quote{Entry: entryID, Worker: name, Who: name, Text: text}
 	}
 	return nil
 }

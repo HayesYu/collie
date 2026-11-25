@@ -1257,6 +1257,7 @@
   let programmaticScrollUntil = 0;
   let collieRestoreRAF = 0;
   let activeCollieRestore = null;
+  let collieLayoutLock = null;
   let scrollTrackRAF = 0;
 
   const markProgrammaticScroll = (ms = 90) => {
@@ -1290,41 +1291,180 @@
   function captureCollieAnchor(sc) {
     const box = $("#super-thread");
     if (!box || !sc || sc.clientHeight <= 0) return null;
-    const msgs = box.querySelectorAll(".msg[data-id]");
+    const msgs = box.querySelectorAll(".msg[data-id], .event[data-id]");
     if (!msgs.length) return null;
     const sr = sc.getBoundingClientRect();
     const edge = sr.top + 4;
-    let lo = 0, hi = msgs.length - 1, pick = msgs[msgs.length - 1];
+    let lo = 0, hi = msgs.length - 1, pickIdx = msgs.length - 1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
       const mr = msgs[mid].getBoundingClientRect();
       if (mr.bottom > edge) {
-        pick = msgs[mid];
+        pickIdx = mid;
         hi = mid - 1;
       } else {
         lo = mid + 1;
       }
     }
+    let pick = msgs[pickIdx];
+    let pr = pick.getBoundingClientRect();
+    if (pr.top < sr.top - 4 && pickIdx + 1 < msgs.length) {
+      const next = msgs[pickIdx + 1];
+      const nr = next.getBoundingClientRect();
+      if (nr.top >= sr.top - 4 && nr.top < sr.bottom - 24) {
+        pick = next;
+        pr = nr;
+      }
+    }
     const anchorId = pick?.dataset.id || "";
     if (!anchorId) return null;
-    return { anchorId, anchorOffset: pick.getBoundingClientRect().top - sr.top };
+    return { anchorId, anchorOffset: pr.top - sr.top };
   }
   function applyCollieAnchor(sc, snap) {
     if (!sc || !snap) return false;
     const box = $("#super-thread");
     if (snap.anchorId && box) {
-      const el = box.querySelector(`.msg[data-id="${CSS.escape(snap.anchorId)}"]`);
+      const eid = CSS.escape(snap.anchorId);
+      const el = box.querySelector(`.msg[data-id="${eid}"], .event[data-id="${eid}"]`);
       if (el) {
         const sr = sc.getBoundingClientRect();
         const mr = el.getBoundingClientRect();
-        markProgrammaticScroll();
-        sc.scrollTop += (mr.top - sr.top) - snap.anchorOffset;
+        const delta = (mr.top - sr.top) - snap.anchorOffset;
+        if (Math.abs(delta) > 0.5) {
+          markProgrammaticScroll(120);
+          sc.scrollTop += delta;
+        }
         return true;
       }
     }
-    markProgrammaticScroll();
-    sc.scrollTop = snap.scrollTop;
+    const fallback = (snap.useFromBottom && typeof snap.fromBottom === "number")
+      ? Math.max(0, sc.scrollHeight - snap.fromBottom)
+      : snap.scrollTop;
+    if (Math.abs(sc.scrollTop - fallback) > 0.5) {
+      markProgrammaticScroll(120);
+      sc.scrollTop = fallback;
+    }
     return false;
+  }
+  function captureColliePos(sc = viewScroller("collie")) {
+    if (!sc || sc.clientHeight <= 0) return null;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    const atBottom = dist <= AT_BOTTOM_PX;
+    const anc = !atBottom ? captureCollieAnchor(sc) : null;
+    return {
+      atBottom,
+      scrollTop: sc.scrollTop,
+      fromBottom: sc.scrollHeight - sc.scrollTop,
+      anchorId: anc?.anchorId || "",
+      anchorOffset: anc?.anchorOffset || 0,
+    };
+  }
+  function applyColliePos(sc, snap) {
+    if (!sc || !snap || sc.clientHeight <= 0) return false;
+    if (snap.atBottom) {
+      const target = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      if (Math.abs(sc.scrollTop - target) > 0.5) {
+        markProgrammaticScroll(120);
+        sc.scrollTop = sc.scrollHeight;
+      }
+      return true;
+    }
+    return applyCollieAnchor(sc, snap);
+  }
+  function cancelCollieLayoutLock() {
+    const lock = collieLayoutLock;
+    if (!lock) return;
+    collieLayoutLock = null;
+    if (lock.raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(lock.raf);
+    if (lock.timer) clearTimeout(lock.timer);
+    if (lock.ro) try { lock.ro.disconnect(); } catch {}
+    if (lock.app && lock.onEnd) lock.app.removeEventListener("transitionend", lock.onEnd);
+  }
+  function beginCollieLayoutLock(snap, opts = {}) {
+    if (!snap || view !== "collie") return;
+    cancelCollieLayoutLock();
+    const sc = viewScroller("collie");
+    if (!sc) return;
+    const track = opts.trackTransition !== false;
+    const dur = opts.duration || 460;
+    const lock = { snap, raf: 0, timer: 0, ro: null, app: null, onEnd: null, until: performance.now() + dur };
+    collieLayoutLock = lock;
+    applyColliePos(sc, snap);
+    updateSuperJump();
+    const finish = () => {
+      if (collieLayoutLock !== lock) return;
+      cancelCollieLayoutLock();
+      if (view === "collie") {
+        applyColliePos(sc, snap);
+        captureViewScroll("collie", null, navCur);
+        updateSuperJump();
+      }
+    };
+    if (!track) {
+      if (typeof requestAnimationFrame === "function") {
+        let sync = true;
+        lock.raf = requestAnimationFrame(() => {
+          if (sync) { finish(); return; }
+          finish();
+        });
+        sync = false;
+      } else {
+        finish();
+      }
+      return;
+    }
+    if (typeof ResizeObserver === "function") {
+      lock.ro = new ResizeObserver(() => {
+        if (collieLayoutLock !== lock || view !== "collie") return;
+        applyColliePos(sc, snap);
+        updateSuperJump();
+      });
+      try { lock.ro.observe(sc); } catch {}
+    }
+    const appEl = $("#app");
+    if (appEl) {
+      lock.app = appEl;
+      lock.onEnd = (ev) => {
+        if (ev.target !== appEl || ev.propertyName !== "grid-template-columns") return;
+        if (collieLayoutLock !== lock) return;
+        applyColliePos(sc, snap);
+        updateSuperJump();
+        if (typeof requestAnimationFrame === "function") {
+          let sync = true;
+          lock.raf = requestAnimationFrame(() => { if (sync) { finish(); return; } finish(); });
+          sync = false;
+        } else {
+          finish();
+        }
+      };
+      appEl.addEventListener("transitionend", lock.onEnd);
+    }
+    lock.timer = setTimeout(finish, dur + 40);
+    if (typeof requestAnimationFrame === "function") {
+      let frames = 0;
+      const tick = () => {
+        if (collieLayoutLock !== lock || view !== "collie") return;
+        applyColliePos(sc, snap);
+        updateSuperJump();
+        frames++;
+        if (performance.now() >= lock.until || frames >= 45) {
+          finish();
+          return;
+        }
+        let sync = true;
+        lock.raf = requestAnimationFrame(() => {
+          if (sync) { finish(); return; }
+          tick();
+        });
+        sync = false;
+      };
+      let sync = true;
+      lock.raf = requestAnimationFrame(() => {
+        if (sync) { finish(); return; }
+        tick();
+      });
+      sync = false;
+    }
   }
   function captureViewScroll(v = view, id = (v === "ext" ? extCur : current), idx = navCur) {
     if (!v) return null;
@@ -1447,6 +1587,7 @@
     if (view === "auto" && next !== "auto") clearInterval(autoTimer);
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
     if (next !== "collie") {
+      cancelCollieLayoutLock();
       pendingOpen = false;
       hideSearchPanel();
       closeCollieThreadsPop();
@@ -1868,9 +2009,13 @@
   async function loadOlder(keepPos = true, untilId = "") {
     const first = chatEntries().find((e) => e.id);
     if (olderBusy || !first) return false;
+    const scroller = $("#super-thread")?.parentElement || null;
+    const keepSnap = keepPos && scroller
+      ? (collieLayoutLock?.snap ? { ...collieLayoutLock.snap, useFromBottom: true } : { ...captureColliePos(scroller), useFromBottom: true })
+      : null;
+    const bgFetch = !!(keepPos && untilId);
     olderBusy = true;
-    renderSuper();
-    const scroller = $("#super-thread").parentElement, fromBottom = scroller.scrollHeight - scroller.scrollTop;
+    if (!bgFetch) renderSuper(keepSnap ? { restore: keepSnap } : undefined);
     let added = false;
     try {
       let url = `/api/super/earlier?before=${encodeURIComponent(first.id)}`;
@@ -1888,11 +2033,14 @@
       olderMore = batch.length ? !!r.more : false;
     } catch (e) { olderMore = false; toast(e.message, "attn"); }
     olderBusy = false;
-    renderSuper();
-    if (keepPos) {
+    const finalSnap = keepPos ? (collieLayoutLock?.snap || keepSnap) : null;
+    if (!bgFetch || added) {
+      renderSuper(finalSnap ? { restore: finalSnap } : undefined);
+    }
+    if (finalSnap && scroller) {
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
-      markProgrammaticScroll();
-      scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
+      applyColliePos(scroller, finalSnap);
+      updateSuperJump();
     }
     return added;
   }
@@ -1903,6 +2051,7 @@
   async function jumpToEntry(id, opts) {
     if (!id) return;
     const seq = ++jumpSeq;
+    cancelCollieLayoutLock();
     activeCollieRestore = null;
     pendingOpen = false;
     renderPendingBar();
@@ -1956,6 +2105,7 @@
   async function jumpToWorkerEvent(worker, beforeId, opts) {
     if (!worker) return;
     const seq = ++jumpSeq;
+    cancelCollieLayoutLock();
     activeCollieRestore = null;
     pendingOpen = false;
     renderPendingBar();
@@ -2239,7 +2389,7 @@
     const restore = opts?.restore || null;
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
     const scroller = box.parentElement;
-    const holdRestore = !forceBottom && (restore || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
+    const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
     const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : distBefore <= AT_BOTTOM_PX;
     const jumping = flashEntry.until > Date.now();
@@ -2277,9 +2427,9 @@
       return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
     }).join("");
     if (crewHTML !== prevCrew) crew.innerHTML = crewHTML;
-    let html = "", prevRole = "";
+    let html = "", prevRole = "", curThreadInfo = { threads: new Map(), msgToRoot: new Map() };
     if (!sup.entries.length && !pendingSays.length) {
-      renderCollieThreadsMenu({ threads: new Map() });
+      renderCollieThreadsMenu(curThreadInfo);
       html = `<div class="hello"><img src="/icon.svg" alt="">
         <h3>一个入口，管一群 agent</h3>
         <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
@@ -2296,6 +2446,7 @@
       let lastUser = "", sinceUser = 0, lastEvent = "", lastEventId = "", lastCollie = "", sinceCollie = 0;
       const allEntries = chatEntries();
       const threadInfo = computeReplyThreads(allEntries);
+      curThreadInfo = threadInfo;
       if (activeThreadRoot && !threadInfo.threads.has(activeThreadRoot) && activeThreadAnchor) {
         const migrated = threadInfo.msgToRoot.get(activeThreadAnchor);
         if (migrated && threadInfo.threads.has(migrated)) activeThreadRoot = migrated;
@@ -2365,8 +2516,7 @@
         if (!r || !threadInfo.showEntryOn.has(k)) return "";
         const th = threadInfo.threads.get(r);
         if (!th) return "";
-        const isOpen = activeThreadRoot === r;
-        return `<button type="button" class="thread-entry${isOpen ? " active" : ""}" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="${isOpen ? "true" : "false"}">` +
+        return `<button type="button" class="thread-entry" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="false">` +
           `${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
       };
       renderCollieThreadsMenu(threadInfo);
@@ -2392,18 +2542,19 @@
         const pinned = !!(e.id && pinIds.has(e.id));
         const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
         const eKey = entryKey(e);
-        const inActiveTh = !!(activeThreadRoot && eKey && threadInfo.msgToRoot.get(eKey) === activeThreadRoot);
+        const eRoot = eKey ? (threadInfo.msgToRoot.get(eKey) || "") : "";
+        const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
         if (e.role === "user") {
           const entryBtn = threadEntryFor(e);
           const acts = mineActs(e, at, pinned);
           const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-          html += `<div class="mine${pinned ? " is-pinned" : ""}${inActiveTh ? " in-active-thread" : ""}">${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${foot}</div>`;
+          html += `<div class="mine${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${foot}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
         } else if (e.role === "collie") {
           const entryBtn = threadEntryFor(e);
           const acts = msgActs(e, at, pinned);
           const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${inActiveTh ? " in-active-thread" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${foot}</div></div>`;
+          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${foot}</div></div>`;
           sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
@@ -2452,16 +2603,19 @@
     if (html !== superSig || force) {
       superSig = html;
       box.innerHTML = html;
+      syncActiveThreadMarks(curThreadInfo);
       if (flashEntry.until > Date.now() && flashEntry.id) {
         const fid = CSS.escape(flashEntry.id);
         box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`)?.classList.add("flash");
       }
       if (activeThreadRoot) syncThreadDrawer();
     } else if (!busyChanged && !crewChanged) {
+      syncActiveThreadMarks(curThreadInfo);
       if (activeThreadRoot) syncThreadDrawer();
       return;
-    } else if (activeThreadRoot) {
-      syncThreadDrawer();
+    } else {
+      syncActiveThreadMarks(curThreadInfo);
+      if (activeThreadRoot) syncThreadDrawer();
     }
     if (holdRestore && !holdRestore.atBottom) {
       activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
@@ -2510,18 +2664,21 @@
     const sc = $("#super-thread")?.parentElement;
     sc?.addEventListener("scroll", updateSuperJump, { passive: true });
     sc?.addEventListener("wheel", (e) => {
+      cancelCollieLayoutLock();
       activeCollieRestore = null;
       if (e.deltaY < 0 && superJumpHiding) { superJumpHiding = false; updateSuperJump(); }
     }, { passive: true });
     sc?.addEventListener("touchmove", () => {
+      cancelCollieLayoutLock();
       activeCollieRestore = null;
       if (superJumpHiding) superJumpHiding = false;
     }, { passive: true });
-    sc?.addEventListener("pointerdown", () => { activeCollieRestore = null; }, { passive: true });
+    sc?.addEventListener("pointerdown", () => { cancelCollieLayoutLock(); activeCollieRestore = null; }, { passive: true });
     addEventListener("resize", updateSuperJump);
     $("#super-jump")?.addEventListener("click", async () => {
       if (!sc) return;
       jumpSeq++;
+      cancelCollieLayoutLock();
       activeCollieRestore = null;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       superJumpHiding = true;
@@ -3451,7 +3608,7 @@
       const edit = !f.legacy && o.edit !== false;
       const sub = o.sub ?? firstLine(f.text, "");
       return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
-          <span class="mono mem-name">${esc(o.label || f.name)}</span><span class="grow mem-sub">${esc(sub)}</span><span class="muted mem-size">${kb(f.size)}</span></summary>
+          <span class="mem-name">${esc(o.label || f.name)}</span><span class="grow mem-sub">${esc(sub)}</span><span class="muted mem-size">${kb(f.size)}</span></summary>
         <div class="mem-body msg assistant" data-view>${md(f.text)}</div>
         ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
         <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
@@ -3485,7 +3642,7 @@
       ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
       ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
       ${group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
-      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow mem-sub">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
+      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow mem-sub">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
       ${done.length ? `<details class="mem-done" data-path="tasks/done/"><summary class="mem-h">已完成<span class="muted">${done.length} 件 · 做完或放弃的任务，不再先读</span></summary>
         <div class="card">${done.map((f) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true })).join("")}</div></details>` : ""}`;
   }
@@ -7199,9 +7356,24 @@
   const thPopList = $("#collie-threads-list");
   let thPopSig = "";
 
+  function syncActiveThreadMarks(threadInfo) {
+    const box = $("#super-thread");
+    if (box) {
+      for (const el of box.querySelectorAll(".say[data-thread-root], .mine[data-thread-root], .in-active-thread")) {
+        el.classList.toggle("in-active-thread", !!activeThreadRoot && el.dataset.threadRoot === activeThreadRoot);
+      }
+      for (const btn of box.querySelectorAll(".thread-entry[data-open-thread]")) {
+        const isOpen = !!activeThreadRoot && btn.dataset.openThread === activeThreadRoot;
+        btn.classList.toggle("active", isOpen);
+        btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      }
+    }
+    if (thPopWrap) renderCollieThreadsMenu(threadInfo || computeReplyThreads(chatEntries()));
+  }
   function closeCollieThreadsPop() {
     if (!thPop || thPop.hidden) return;
     thPop.hidden = true;
+    thPop.style.top = "";
     thHeadBtn?.setAttribute("aria-expanded", "false");
   }
   function renderCollieThreadsMenu(threadInfo) {
@@ -7246,6 +7418,12 @@
     $$(".menu").forEach((m) => { m.hidden = true; });
     if (willOpen) {
       renderCollieThreadsMenu(computeReplyThreads(chatEntries()));
+      if (narrow()) {
+        const hr = $("#v-collie .d-head")?.getBoundingClientRect?.();
+        thPop.style.top = hr && hr.bottom > 0 ? Math.round(hr.bottom + 6) + "px" : "";
+      } else {
+        thPop.style.top = "";
+      }
       thPop.hidden = false;
       thHeadBtn.setAttribute("aria-expanded", "true");
     } else {
@@ -7266,7 +7444,7 @@
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && thPop && !thPop.hidden) {
       closeCollieThreadsPop();
-      thHeadBtn?.focus();
+      thHeadBtn?.focus({ preventScroll: true });
     }
   });
 
@@ -7329,7 +7507,17 @@
     const node = tdListEl.querySelector(`.td-node[data-td-id="${CSS.escape(msgId)}"]`);
     if (!node) return;
     const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    node.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "auto" });
+    if (tdBodyEl) {
+      const br = tdBodyEl.getBoundingClientRect();
+      const nr = node.getBoundingClientRect();
+      const maxTop = Math.max(0, tdBodyEl.scrollHeight - tdBodyEl.clientHeight);
+      const want = Math.max(0, Math.min(
+        maxTop,
+        tdBodyEl.scrollTop + (nr.top - br.top) - Math.max(16, (tdBodyEl.clientHeight - nr.height) / 2),
+      ));
+      if (typeof tdBodyEl.scrollTo === "function") tdBodyEl.scrollTo({ top: want, behavior: smooth ? "smooth" : "auto" });
+      else tdBodyEl.scrollTop = want;
+    }
     clearTimeout(tdFocusTimer);
     tdListEl.querySelectorAll(".td-node.is-focused").forEach((n) => n.classList.remove("is-focused"));
     void node.offsetWidth;
@@ -7483,7 +7671,12 @@
   }
   function openThreadDrawer(rootId, focusMsgId = "", anchorId = "") {
     if (!tdDrawer || !rootId) return;
-    if ($("#app").classList.contains("has-file")) closeFilePane();
+    const appEl = $("#app");
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    const hadFile = appEl.classList.contains("has-file");
+    const hadThread = appEl.classList.contains("has-thread");
+    if (hadFile) closeFilePane();
     clearTimeout(tdHideTimer);
     const switched = activeThreadRoot !== rootId;
     activeThreadRoot = rootId;
@@ -7500,10 +7693,13 @@
     tdDrawer.style.transform = "";
     if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = false; }
     tdDrawer.setAttribute("aria-hidden", "false");
-    $("#app").classList.add("has-thread");
-    renderSuper({ force: true });
-    renderThreadDrawer({ focusMsgId, scrollBottom: !focusMsgId, force: true });
+    appEl.classList.add("has-thread");
     const info = computeReplyThreads(chatEntries());
+    syncActiveThreadMarks(info);
+    renderThreadDrawer({ focusMsgId, scrollBottom: !focusMsgId, force: true });
+    if (lockSnap) {
+      beginCollieLayoutLock(lockSnap, { trackTransition: !hadThread && innerWidth > 1000 });
+    }
     const th = info.threads.get(activeThreadRoot);
     if (th?.missingRoot && canLoadOlder()) {
       ensureThreadRootLoaded(activeThreadRoot, false);
@@ -7511,7 +7707,11 @@
   }
   function closeThreadDrawer(opts = {}) {
     if (!tdDrawer) return;
+    const appEl = $("#app");
     const wasOpen = !!activeThreadRoot || !tdDrawer.hidden;
+    const hadThread = appEl.classList.contains("has-thread");
+    const sc = wasOpen && opts.rerender !== false && view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     activeThreadRoot = null;
     activeThreadAnchor = "";
     drawerReplyTarget = null;
@@ -7520,7 +7720,7 @@
     tdDrawer.classList.remove("is-dragging");
     tdDrawer.style.transform = "";
     if (tdScrim) tdScrim.style.opacity = "";
-    $("#app").classList.remove("has-thread");
+    appEl.classList.remove("has-thread");
     tdDrawer.setAttribute("aria-hidden", "true");
     clearTimeout(tdHideTimer);
     const hideNow = () => {
@@ -7530,7 +7730,10 @@
     if (opts.immediate) hideNow();
     else tdHideTimer = setTimeout(hideNow, 340);
     if (wasOpen && opts.rerender !== false && view === "collie") {
-      renderSuper({ force: true });
+      syncActiveThreadMarks();
+      if (lockSnap) {
+        beginCollieLayoutLock(lockSnap, { trackTransition: hadThread && innerWidth > 1000 && !opts.immediate });
+      }
     }
   }
   function locateFromDrawer(msgId) {
@@ -7618,7 +7821,7 @@
       const info = computeReplyThreads(chatEntries());
       const th = activeThreadRoot ? info.threads.get(activeThreadRoot) : null;
       if (th) updateThreadTargetBanner(th, info.byId);
-      tdInput?.focus();
+      tdInput?.focus({ preventScroll: true });
     });
     tdListEl?.addEventListener("click", (e) => {
       const loadBtn = e.target.closest("[data-td-load-older]");
@@ -7635,7 +7838,7 @@
         if (!th) return;
         drawerReplyTarget = replyBtn.dataset.tdReply;
         updateThreadTargetBanner(th, info.byId);
-        tdInput?.focus();
+        tdInput?.focus({ preventScroll: true });
         return;
       }
       const locBtn = e.target.closest("[data-td-locate]");
@@ -7709,17 +7912,31 @@
     tdGripEl?.addEventListener("pointerdown", (e) => {
       if (innerWidth <= 1000) return;
       e.preventDefault();
+      cancelCollieLayoutLock();
+      const sc = view === "collie" ? viewScroller("collie") : null;
+      const gripSnap = sc ? captureColliePos(sc) : null;
       const grip = e.currentTarget;
       grip.setPointerCapture(e.pointerId);
       document.body.classList.add("dragging");
       const max = threadMax();
-      const move = (ev) => setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)));
+      const move = (ev) => {
+        setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)));
+        if (gripSnap && sc) {
+          applyColliePos(sc, gripSnap);
+          updateSuperJump();
+        }
+      };
       const up = () => {
         grip.removeEventListener("pointermove", move);
         grip.removeEventListener("pointerup", up);
         grip.removeEventListener("pointercancel", up);
         document.body.classList.remove("dragging");
         store.set("threadW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--thread-w")) || 432);
+        if (gripSnap && sc) {
+          applyColliePos(sc, gripSnap);
+          captureViewScroll("collie", null, navCur);
+          updateSuperJump();
+        }
       };
       grip.addEventListener("pointermove", move);
       grip.addEventListener("pointerup", up, { once: true });

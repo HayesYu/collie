@@ -114,34 +114,36 @@
           <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
-        <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
-        <div class="th-pop-wrap" id="collie-threads-wrap" hidden>
-          <button type="button" class="th-head-btn" id="collie-threads-btn" aria-haspopup="true" aria-expanded="false" aria-controls="collie-threads-pop" title="当前对话中的话题线">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v9a4 4 0 0 0 4 4h8"/><path d="M14 14l4 4-4 4"/></svg>
-            <span class="th-head-lbl">话题线</span>
-            <span class="th-head-cnt" id="collie-threads-cnt"></span>
-          </button>
-          <div class="th-pop" id="collie-threads-pop" role="region" aria-label="话题线列表" hidden>
-            <div class="th-pop-head">
-              <span>话题线</span>
-              <span class="th-pop-sub" id="collie-threads-sub"></span>
+        <div class="d-head-acts">
+          <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
+          <div class="th-pop-wrap" id="collie-threads-wrap" hidden>
+            <button type="button" class="th-head-btn" id="collie-threads-btn" aria-expanded="false" aria-controls="collie-threads-pop" title="当前对话中的话题线">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 11a2 2 0 0 1-2 2H7l-3.5 3V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M15.5 8.5h3a2 2 0 0 1 2 2V20L17 17h-6.5a2 2 0 0 1-2-2v-2"/></svg>
+              <span class="th-head-lbl">话题线</span>
+              <span class="th-head-cnt" id="collie-threads-cnt"></span>
+            </button>
+            <div class="th-pop" id="collie-threads-pop" role="region" aria-label="话题线列表" hidden>
+              <div class="th-pop-head">
+                <span>话题线</span>
+                <span class="th-pop-sub" id="collie-threads-sub"></span>
+              </div>
+              <div class="th-pop-list" id="collie-threads-list" role="list"></div>
             </div>
-            <div class="th-pop-list" id="collie-threads-list" role="list"></div>
           </div>
-        </div>
-        <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
-        </button>
-        <div class="menu-wrap">
-          <button class="icon-btn" data-menu="collie-menu" title="更多">
-            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
           </button>
-          <div class="menu" id="collie-menu" hidden>
-            <button data-act="router-open">查看 Collie 的终端</button>
-            <button data-act="router-restart">重启 Collie</button>
-            <button data-act="pause">暂停投递</button>
-            <hr>
-            <button data-act="auto">自动化与设置</button>
+          <div class="menu-wrap">
+            <button class="icon-btn" data-menu="collie-menu" title="更多">
+              <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+            </button>
+            <div class="menu" id="collie-menu" hidden>
+              <button data-act="router-open">查看 Collie 的终端</button>
+              <button data-act="router-restart">重启 Collie</button>
+              <button data-act="pause">暂停投递</button>
+              <hr>
+              <button data-act="auto">自动化与设置</button>
+            </div>
           </div>
         </div>
       </header>

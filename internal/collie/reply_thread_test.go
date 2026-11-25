@@ -434,8 +434,25 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   // Branched >=3-message quote bar carries data-thread-root="e10"
   assert.ok(mainHtml.includes('data-goto="e11" data-thread-root="e10"'), "thread quote opens drawer");
 
-  // ─── 2. Open drawer, verify contents, IME-safe + reentrancy-safe send chaining onto user message e14, and live Collie SSE sync ───
-  T.openThreadDrawer("e10");
+  // ─── 2. Open drawer, verify contents, zero main-chat DOM rebuild, IME-safe + reentrancy-safe send chaining onto user message e14, and live Collie SSE sync ───
+  const mainThreadEl = getEl("#super-thread");
+  let innerWrites = 0;
+  let storedMainHTML = mainThreadEl.innerHTML;
+  Object.defineProperty(mainThreadEl, "innerHTML", {
+    get() { return storedMainHTML; },
+    set(v) { innerWrites++; storedMainHTML = v; },
+    configurable: true,
+  });
+  let drawerScrollIntoViewCalls = 0;
+  const origMakeNode = getEl("#td-list").querySelector.bind(getEl("#td-list"));
+  getEl("#td-list").querySelector = (sel) => {
+    const n = origMakeNode(sel);
+    n.scrollIntoView = () => { drawerScrollIntoViewCalls++; };
+    return n;
+  };
+  T.openThreadDrawer("e10", "e14", "e14");
+  assert.equal(innerWrites, 0, "opening thread drawer must NOT rebuild #super-thread.innerHTML");
+  assert.equal(drawerScrollIntoViewCalls, 0, "focusNodeInDrawer must scroll #td-body directly without calling scrollIntoView");
   assert.equal(T.getActiveThreadRoot(), "e10");
   assert.equal(getEl("#thread-drawer").hidden, false);
   assert.ok(getEl("#app").classList.contains("has-thread"));
@@ -509,10 +526,24 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   });
   assert.equal(notified.length, 0, "foreground page must not pop desktop notification");
 
-  // Esc closes thread drawer
+  // Esc closes thread drawer without rebuilding main chat DOM
+  const writesBeforeClose = innerWrites;
   doc.dispatchDoc("keydown", { key: "Escape", isComposing: false, keyCode: 27 });
+  assert.equal(innerWrites, writesBeforeClose, "closing thread drawer must NOT rebuild #super-thread.innerHTML");
   assert.equal(T.getActiveThreadRoot(), null, "Esc closes thread drawer");
   assert.ok(!getEl("#app").classList.contains("has-thread"));
+
+  // ─── 2b. CSS & HTML contracts: restrained header threads button + unified sans typography on UI chrome ───
+  const indexHtml = fs.readFileSync(path.join(process.argv[1], "web", "index.html"), "utf8");
+  const appCss = fs.readFileSync(path.join(process.argv[1], "web", "app.css"), "utf8");
+  assert.ok(indexHtml.includes('<div class="d-head-acts">'), "header actions grouped cleanly");
+  assert.ok(!indexHtml.includes('id="collie-threads-btn" aria-haspopup='), "non-menu region trigger omits aria-haspopup");
+  assert.ok(!appCss.includes(".item .sub { font-family: var(--mono); }"), "sidebar subtitles use unified sans font");
+  assert.ok(!/\.kind\s*\{[^}]*--mono/.test(appCss), "header .kind badge uses unified sans font");
+  assert.ok(!/\.chip \.k\s*\{[^}]*--mono/.test(appCss), "crew strip .chip .k uses unified sans font");
+  const idxMax1000HasThread = appCss.lastIndexOf(".app.has-thread { grid-template-columns: var(--side-w) 1fr; }");
+  const idxMax760HasThread = appCss.lastIndexOf(".app.has-thread { grid-template-columns: 1fr; }");
+  assert.ok(idxMax1000HasThread > 0 && idxMax760HasThread > idxMax1000HasThread, "mobile 760px has-thread 1fr rule must override 1000px side-w rule");
 
   // ─── 3. Missing-root auto-fetch via /api/super/earlier ───
   const partialEntries = [

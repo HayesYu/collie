@@ -451,18 +451,54 @@ func applyAgyModelCapabilities(info *ModelInfo, defaultSetting string) {
 	}
 }
 
+// fetchAgyModels runs `<bin> models` within ctx and parses its tab-separated
+// model list.
+func fetchAgyModels(ctx context.Context, bin string) ([]ModelOpt, error) {
+	if bin == "" {
+		return nil, nil
+	}
+	cmd := exec.CommandContext(ctx, bin, "models")
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseAgyModels(string(out)), nil
+}
+
 func (s *Server) agyModels(ctx context.Context, info *ModelInfo) {
 	info.Efforts = []string{}
 	bin := findBin("agy", s.home)
 	if bin == "" {
 		return
 	}
-	out, err := exec.CommandContext(ctx, bin, "models").Output()
+	models, err := fetchAgyModels(ctx, bin)
 	if err != nil {
 		return
 	}
-	info.Models = parseAgyModels(string(out))
+	info.Models = models
 	applyAgyModelCapabilities(info, s.readAgyDefaultModel())
+}
+
+// detectInitialSettings probes local agents for a brand-new installation and,
+// when `agy models` succeeds, warms modelCache so the first settings/composer
+// load does not pay for a second CLI round-trip.
+func (s *Server) detectInitialSettings(home string) Settings {
+	return resolveDefaultSettings(home, findBin, func(ctx context.Context, bin string) ([]ModelOpt, error) {
+		models, err := fetchAgyModels(ctx, bin)
+		if err == nil && len(models) > 0 && s != nil {
+			info := &ModelInfo{
+				Kind:    "agy",
+				Models:  append([]ModelOpt(nil), models...),
+				Efforts: []string{},
+			}
+			applyAgyModelCapabilities(info, s.readAgyDefaultModel())
+			modelCache.Lock()
+			modelCache.m["agy"] = modelMark{at: time.Now(), info: info}
+			modelCache.Unlock()
+		}
+		return models, err
+	}, defaultAgyProbeTimeout)
 }
 
 // findBin locates an agent's program: PATH, the usual install places, then

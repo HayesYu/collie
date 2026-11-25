@@ -67,11 +67,40 @@ func loadRows[T any](db *sql.DB, q string, into func(*T), args ...any) error {
 }
 
 func loadState(db *sql.DB, home string) (*State, error) {
+	st, _, err := loadStateWithMeta(db, home)
+	return st, err
+}
+
+// initState loads durable state from db and, only on first initialization when
+// no persisted "settings" row exists yet, auto-detects default agent settings
+// and persists them without ever overwriting existing settings.
+func initState(db *sql.DB, home string, detect func(string) Settings) (*State, error) {
+	st, hasSettings, err := loadStateWithMeta(db, home)
+	if err != nil {
+		return nil, err
+	}
+	if !hasSettings {
+		if detect == nil {
+			detect = detectDefaultSettings
+		}
+		st.Settings = detect(home)
+		b, err := json.Marshal(st.Settings)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := db.Exec(`INSERT INTO kv(k,v) VALUES('settings',?) ON CONFLICT(k) DO NOTHING`, string(b)); err != nil {
+			return nil, err
+		}
+	}
+	return st, nil
+}
+
+func loadStateWithMeta(db *sql.DB, home string) (*State, bool, error) {
 	st := defaultState(home)
 	kv := map[string]string{}
 	rows, err := db.Query(`SELECT k, v FROM kv`)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for rows.Next() {
 		var k, v string
@@ -82,7 +111,8 @@ func loadState(db *sql.DB, home string) (*State, error) {
 	if v, ok := kv["seq"]; ok {
 		st.Seq, _ = strconv.Atoi(v)
 	}
-	if v, ok := kv["settings"]; ok {
+	v, hasSettings := kv["settings"]
+	if hasSettings {
 		json.Unmarshal([]byte(v), &st.Settings)
 		st.Settings.migrateReply()
 	}
@@ -119,7 +149,7 @@ func loadState(db *sql.DB, home string) (*State, error) {
 	var trig []*Trigger
 	err = loadRows(db, `SELECT data FROM (SELECT data, n FROM triggers ORDER BY n DESC LIMIT 600) ORDER BY n`, func(t *Trigger) { trig = append(trig, t) })
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// Anything still queued but older than the working set is pulled in too.
 	seen := map[string]bool{}
@@ -136,7 +166,7 @@ func loadState(db *sql.DB, home string) (*State, error) {
 	loadRows(db, `SELECT data FROM threads ORDER BY last_at DESC LIMIT 500`, func(t *Thread) { st.Threads[t.ID] = t })
 	loadRows(db, `SELECT data FROM workers`, func(w *Worker) { st.Workers[w.Name] = w })
 	loadRows(db, `SELECT data FROM timers`, func(t *Timer) { st.Timers = append(st.Timers, t) })
-	return st, nil
+	return st, hasSettings, nil
 }
 
 // saveState upserts the in-memory working set in one transaction.

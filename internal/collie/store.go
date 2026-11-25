@@ -1,6 +1,7 @@
 package collie
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -167,6 +168,19 @@ type State struct {
 	Settings  Settings           `json:"settings"`
 }
 
+const (
+	defaultAgyRouterModel  = "gemini-4-neon-medium"
+	defaultAgyWorkerModel  = "gemini-4-neon-xhigh"
+	defaultAgyProbeTimeout = 15 * time.Second
+)
+
+func defaultSettings(home string) Settings {
+	return Settings{
+		RouterKind: "claude", WorkerKind: "claude", WorkerCwd: home,
+		NotifyLevel: "quiet", StallMinutes: 12, ReplyChars: 200,
+	}
+}
+
 func defaultState(home string) *State {
 	return &State{
 		Threads:   map[string]*Thread{},
@@ -177,11 +191,70 @@ func defaultState(home string) *State {
 			{Source: "webhook:feishu", Action: "candidate"},
 			{Source: "webhook:*", Action: "candidate"},
 		},
-		Settings: Settings{
-			RouterKind: "claude", WorkerKind: "claude", WorkerCwd: home,
-			NotifyLevel: "quiet", StallMinutes: 12, ReplyChars: 200,
-		},
+		Settings: defaultSettings(home),
 	}
+}
+
+// detectDefaultSettings picks initial agent settings for a brand-new install
+// (when no persisted settings exist yet). It checks local `agy`, then `claude`,
+// then `codex`, falling back to "claude" if none are installed. When `agy` is
+// found, it queries `agy models` with a bounded timeout and only selects the
+// preferred models if that installation actually offers them; otherwise model
+// fields stay empty so `agy` uses its own default.
+func detectDefaultSettings(home string) Settings {
+	return resolveDefaultSettings(home, findBin, fetchAgyModels, defaultAgyProbeTimeout)
+}
+
+func resolveDefaultSettings(
+	home string,
+	lookupBin func(name, home string) string,
+	probeAgy func(ctx context.Context, bin string) ([]ModelOpt, error),
+	timeout time.Duration,
+) Settings {
+	s := defaultSettings(home)
+	if lookupBin == nil {
+		lookupBin = findBin
+	}
+	if agyBin := lookupBin("agy", home); agyBin != "" {
+		s.RouterKind = "antigravity"
+		s.WorkerKind = "antigravity"
+		s.RouterModel = ""
+		s.WorkerModel = ""
+		s.RouterEffort = ""
+		s.WorkerEffort = ""
+		if probeAgy != nil {
+			if timeout <= 0 {
+				timeout = defaultAgyProbeTimeout
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			models, err := probeAgy(ctx, agyBin)
+			cancel()
+			if err == nil {
+				has := make(map[string]bool, len(models))
+				for _, m := range models {
+					has[m.ID] = true
+				}
+				if has[defaultAgyRouterModel] {
+					s.RouterModel = defaultAgyRouterModel
+				}
+				if has[defaultAgyWorkerModel] {
+					s.WorkerModel = defaultAgyWorkerModel
+				}
+			}
+		}
+		return s
+	}
+	if lookupBin("claude", home) != "" {
+		s.RouterKind = "claude"
+		s.WorkerKind = "claude"
+		return s
+	}
+	if lookupBin("codex", home) != "" {
+		s.RouterKind = "codex"
+		s.WorkerKind = "codex"
+		return s
+	}
+	return s
 }
 
 func (st *State) nextID(prefix string) string {

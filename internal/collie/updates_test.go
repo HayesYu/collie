@@ -1,20 +1,79 @@
 package collie
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
+
+func saveUpdateHooks(t *testing.T) {
+	t.Helper()
+	origVer := version
+	origURL := releaseRepoURL
+	origExe := executablePath
+	origExec := execUpdated
+	origTimeout := selfUpdateTimeout
+	origFwdTimeout := selfUpdateForwardTimeout
+	origMaxAttempts := updateMaxAttempts
+	origRetryDelay := updateRetryBaseDelay
+	origDialTimeout := updateDialTimeout
+	origTLSTimeout := updateTLSTimeout
+	origHeaderTimeout := updateHeaderTimeout
+	origIdleTimeout := updateIdleReadTimeout
+	origTagTimeout := updateTagAttemptTimeout
+	origFileTimeout := updateFileAttemptTimeout
+	origBinTimeout := updateBinAttemptTimeout
+	origProxy := updateProxyFunc
+	origDial := updateDialContext
+
+	// Tests should run fast and deterministically without inheriting host proxies.
+	updateRetryBaseDelay = 5 * time.Millisecond
+	updateProxyFunc = func(*http.Request) (*url.URL, error) { return nil, nil }
+
+	t.Cleanup(func() {
+		version = origVer
+		releaseRepoURL = origURL
+		executablePath = origExe
+		execUpdated = origExec
+		selfUpdateTimeout = origTimeout
+		selfUpdateForwardTimeout = origFwdTimeout
+		updateMaxAttempts = origMaxAttempts
+		updateRetryBaseDelay = origRetryDelay
+		updateDialTimeout = origDialTimeout
+		updateTLSTimeout = origTLSTimeout
+		updateHeaderTimeout = origHeaderTimeout
+		updateIdleReadTimeout = origIdleTimeout
+		updateTagAttemptTimeout = origTagTimeout
+		updateFileAttemptTimeout = origFileTimeout
+		updateBinAttemptTimeout = origBinTimeout
+		updateProxyFunc = origProxy
+		updateDialContext = origDial
+		if !selfUpdateMu.TryLock() {
+			selfUpdateMu.Unlock()
+		} else {
+			selfUpdateMu.Unlock()
+		}
+	})
+}
 
 func TestOutdated(t *testing.T) {
 	for _, c := range []struct {
@@ -36,6 +95,8 @@ func TestOutdated(t *testing.T) {
 }
 
 func TestSelfUpdateConcurrencyMutexAndTempCleanup(t *testing.T) {
+	saveUpdateHooks(t)
+
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "collie")
 	oldScript := "#!/bin/sh\necho collie v0.2.41\n"
@@ -76,7 +137,6 @@ func TestSelfUpdateConcurrencyMutexAndTempCleanup(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	origVer, origURL, origExe, origExec := version, releaseRepoURL, executablePath, execUpdated
 	restarted := make(chan string, 1)
 	version = "v0.2.41"
 	releaseRepoURL = ts.URL
@@ -84,15 +144,6 @@ func TestSelfUpdateConcurrencyMutexAndTempCleanup(t *testing.T) {
 	execUpdated = func(p string) {
 		restarted <- p
 	}
-	t.Cleanup(func() {
-		version, releaseRepoURL, executablePath, execUpdated = origVer, origURL, origExe, origExec
-		// Ensure the package-level lock is clean after test completion.
-		if !selfUpdateMu.TryLock() {
-			selfUpdateMu.Unlock()
-		} else {
-			selfUpdateMu.Unlock()
-		}
-	})
 
 	srv := &Server{}
 
@@ -103,6 +154,9 @@ func TestSelfUpdateConcurrencyMutexAndTempCleanup(t *testing.T) {
 	srv.selfUpdate(recFail, httptest.NewRequest("POST", "/api/update", nil))
 	if recFail.Code != 502 {
 		t.Fatalf("bad checksum status = %d, want 502: %s", recFail.Code, recFail.Body.String())
+	}
+	if !strings.Contains(recFail.Body.String(), "校验失败") {
+		t.Fatalf("expected clear checksum error message, got %s", recFail.Body.String())
 	}
 	if leftovers, _ := filepath.Glob(filepath.Join(dir, ".collie.new.*")); len(leftovers) != 0 {
 		t.Fatalf("temp files left after failed update: %v", leftovers)
@@ -189,6 +243,518 @@ func TestSelfUpdateConcurrencyMutexAndTempCleanup(t *testing.T) {
 	fi, err := os.Stat(exe)
 	if err != nil || fi.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("updated binary mode = %v, want executable", fi.Mode())
+	}
+}
+
+func TestFetchLatestTagRetryAndIPv4Fallback(t *testing.T) {
+	t.Run("retries transient 5xx without forcing ipv4", func(t *testing.T) {
+		saveUpdateHooks(t)
+		var hits atomic.Int32
+		var mu sync.Mutex
+		var networks []string
+		realDial := (&net.Dialer{Timeout: 5 * time.Second}).DialContext
+		updateDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			mu.Lock()
+			networks = append(networks, network)
+			mu.Unlock()
+			return realDial(ctx, network, addr)
+		}
+
+		var ts *httptest.Server
+		ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := hits.Add(1)
+			if n < 3 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			w.Header().Set("Location", ts.URL+"/releases/tag/v0.2.57")
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer ts.Close()
+		releaseRepoURL = ts.URL
+
+		tag, usedIPv4, err := fetchLatestTagErr(context.Background())
+		if err != nil {
+			t.Fatalf("fetchLatestTagErr failed: %v", err)
+		}
+		if tag != "v0.2.57" || usedIPv4 {
+			t.Fatalf("got tag=%q usedIPv4=%v, want v0.2.57 false", tag, usedIPv4)
+		}
+		if hits.Load() != 3 {
+			t.Fatalf("hits = %d, want 3", hits.Load())
+		}
+		for _, netw := range networks {
+			if netw == "tcp4" {
+				t.Fatalf("5xx should not force tcp4, got dial networks %v", networks)
+			}
+		}
+	})
+
+	t.Run("falls back to tcp4 on direct connection reset", func(t *testing.T) {
+		saveUpdateHooks(t)
+		var mu sync.Mutex
+		var networks []string
+		realDial := (&net.Dialer{Timeout: 5 * time.Second}).DialContext
+		updateDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			mu.Lock()
+			networks = append(networks, network)
+			n := len(networks)
+			mu.Unlock()
+			if n == 1 {
+				return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNRESET}
+			}
+			return realDial(ctx, network, addr)
+		}
+
+		var ts *httptest.Server
+		ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", ts.URL+"/releases/tag/v0.2.58")
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer ts.Close()
+		releaseRepoURL = ts.URL
+
+		tag, usedIPv4, err := fetchLatestTagErr(context.Background())
+		if err != nil {
+			t.Fatalf("fetchLatestTagErr failed: %v", err)
+		}
+		if tag != "v0.2.58" || !usedIPv4 {
+			t.Fatalf("got tag=%q usedIPv4=%v, want v0.2.58 true", tag, usedIPv4)
+		}
+		if len(networks) != 2 || networks[0] != "tcp" || networks[1] != "tcp4" {
+			t.Fatalf("dial networks = %v, want [tcp tcp4]", networks)
+		}
+	})
+
+	t.Run("keeps standard dial when proxy is configured", func(t *testing.T) {
+		saveUpdateHooks(t)
+		var ts *httptest.Server
+		ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "https://github.com/lihuanyu0w0/collie/releases/tag/v0.2.59")
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer ts.Close()
+		proxyURL, err := url.Parse(ts.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updateProxyFunc = func(*http.Request) (*url.URL, error) { return proxyURL, nil }
+		releaseRepoURL = "http://example.invalid/repo"
+
+		var mu sync.Mutex
+		var networks []string
+		realDial := (&net.Dialer{Timeout: 5 * time.Second}).DialContext
+		updateDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			mu.Lock()
+			networks = append(networks, network)
+			n := len(networks)
+			mu.Unlock()
+			if n == 1 {
+				return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ETIMEDOUT}
+			}
+			return realDial(ctx, network, addr)
+		}
+
+		tag, usedIPv4, err := fetchLatestTagErr(context.Background())
+		if err != nil {
+			t.Fatalf("fetchLatestTagErr via proxy failed: %v", err)
+		}
+		if tag != "v0.2.59" || usedIPv4 {
+			t.Fatalf("got tag=%q usedIPv4=%v, want v0.2.59 false", tag, usedIPv4)
+		}
+		if len(networks) != 2 || networks[0] != "tcp" || networks[1] != "tcp" {
+			t.Fatalf("proxied dial networks = %v, want [tcp tcp]", networks)
+		}
+	})
+
+	t.Run("does not retry 404", func(t *testing.T) {
+		saveUpdateHooks(t)
+		var hits atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			http.NotFound(w, r)
+		}))
+		defer ts.Close()
+		releaseRepoURL = ts.URL
+
+		_, _, err := fetchLatestTagErr(context.Background())
+		if err == nil {
+			t.Fatal("expected error on 404")
+		}
+		if hits.Load() != 1 {
+			t.Fatalf("hits = %d, want 1 (no retry on 404)", hits.Load())
+		}
+		if msg := formatUpdateError(err); !strings.Contains(msg, "HTTP 404") {
+			t.Fatalf("formatUpdateError = %q, want HTTP 404 hint", msg)
+		}
+	})
+}
+
+func TestDownloadReleaseRetryEOFIdleTimeoutAndPermissions(t *testing.T) {
+	t.Run("retries checksum 503 and truncated binary EOF then succeeds", func(t *testing.T) {
+		saveUpdateHooks(t)
+		dir := t.TempDir()
+		exe := filepath.Join(dir, "collie")
+		if err := os.WriteFile(exe, []byte("#!/bin/sh\necho collie v0.2.55\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		tag := "v0.2.57"
+		newScript := "#!/bin/sh\necho collie " + tag + "\n"
+		sum := sha256.Sum256([]byte(newScript))
+		goodSum := hex.EncodeToString(sum[:])
+		asset := "collie-" + runtime.GOOS + "-" + runtime.GOARCH
+
+		var csHits, binHits atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/releases/download/" + tag + "/checksums.txt":
+				if csHits.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				fmt.Fprintf(w, "%s  %s\n", goodSum, asset)
+			case "/releases/download/" + tag + "/" + asset:
+				if binHits.Add(1) == 1 {
+					// Advertise full length but abruptly close connection after partial bytes.
+					w.Header().Set("Content-Length", fmt.Sprintf("%d", len(newScript)+100))
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(newScript[:8]))
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+					if hj, ok := w.(http.Hijacker); ok {
+						if conn, _, err := hj.Hijack(); err == nil {
+							conn.Close()
+						}
+					}
+					return
+				}
+				w.Write([]byte(newScript))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ts.Close()
+		releaseRepoURL = ts.URL
+
+		if err := downloadRelease(context.Background(), tag, exe); err != nil {
+			t.Fatalf("downloadRelease failed: %v", err)
+		}
+		if csHits.Load() != 2 || binHits.Load() != 2 {
+			t.Fatalf("hits cs=%d bin=%d, want 2 and 2", csHits.Load(), binHits.Load())
+		}
+		if leftovers, _ := filepath.Glob(filepath.Join(dir, ".collie.new.*")); len(leftovers) != 0 {
+			t.Fatalf("leftover temp files: %v", leftovers)
+		}
+		got, err := os.ReadFile(exe)
+		if err != nil || string(got) != newScript {
+			t.Fatalf("exe content = %q err=%v", string(got), err)
+		}
+	})
+
+	t.Run("aborts stalled body via idle timeout and recovers on tcp4", func(t *testing.T) {
+		saveUpdateHooks(t)
+		updateIdleReadTimeout = 80 * time.Millisecond
+
+		dir := t.TempDir()
+		exe := filepath.Join(dir, "collie")
+		if err := os.WriteFile(exe, []byte("#!/bin/sh\necho collie v0.2.55\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		tag := "v0.2.58"
+		newScript := "#!/bin/sh\necho collie " + tag + "\n"
+		sum := sha256.Sum256([]byte(newScript))
+		goodSum := hex.EncodeToString(sum[:])
+		asset := "collie-" + runtime.GOOS + "-" + runtime.GOARCH
+
+		var mu sync.Mutex
+		var binNetworks []string
+		realDial := (&net.Dialer{Timeout: 5 * time.Second}).DialContext
+		var inBin atomic.Bool
+		updateDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if inBin.Load() {
+				mu.Lock()
+				binNetworks = append(binNetworks, network)
+				mu.Unlock()
+			}
+			return realDial(ctx, network, addr)
+		}
+
+		var binHits atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/releases/download/" + tag + "/checksums.txt":
+				fmt.Fprintf(w, "%s  %s\n", goodSum, asset)
+				inBin.Store(true)
+			case "/releases/download/" + tag + "/" + asset:
+				if binHits.Add(1) == 1 {
+					w.Header().Set("Content-Length", fmt.Sprintf("%d", len(newScript)))
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(newScript[:4]))
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+					select {
+					case <-r.Context().Done():
+					case <-time.After(2 * time.Second):
+					}
+					return
+				}
+				w.Write([]byte(newScript))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ts.Close()
+		releaseRepoURL = ts.URL
+
+		if err := downloadRelease(context.Background(), tag, exe); err != nil {
+			t.Fatalf("downloadRelease after idle stall failed: %v", err)
+		}
+		if binHits.Load() != 2 {
+			t.Fatalf("binHits = %d, want 2", binHits.Load())
+		}
+		mu.Lock()
+		gotNets := append([]string(nil), binNetworks...)
+		mu.Unlock()
+		if len(gotNets) < 2 || gotNets[0] != "tcp" || gotNets[1] != "tcp4" {
+			t.Fatalf("binary dial networks = %v, want [tcp tcp4]", gotNets)
+		}
+	})
+
+	t.Run("fails fast on unwritable directory with clear permission message", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores chmod 0500")
+		}
+		saveUpdateHooks(t)
+		dir := t.TempDir()
+		exe := filepath.Join(dir, "collie")
+		if err := os.WriteFile(exe, []byte("#!/bin/sh\necho collie v0.2.55\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+		var hits atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			http.NotFound(w, r)
+		}))
+		defer ts.Close()
+		releaseRepoURL = ts.URL
+
+		err := downloadRelease(context.Background(), "v0.2.57", exe)
+		if err == nil {
+			t.Fatal("expected permission error")
+		}
+		if hits.Load() != 0 {
+			t.Fatalf("expected 0 HTTP requests for unwritable dir, got %d", hits.Load())
+		}
+		msg := formatUpdateError(err)
+		if !strings.Contains(msg, "无写权限") {
+			t.Fatalf("formatUpdateError = %q, want 无写权限", msg)
+		}
+	})
+}
+
+func TestSelfUpdateContextShieldAndLogs(t *testing.T) {
+	saveUpdateHooks(t)
+
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "collie")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho collie v0.2.55\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tag := "v0.2.57"
+	newScript := "#!/bin/sh\necho collie " + tag + "\n"
+	sum := sha256.Sum256([]byte(newScript))
+	goodSum := hex.EncodeToString(sum[:])
+	asset := "collie-" + runtime.GOOS + "-" + runtime.GOARCH
+
+	inBin := make(chan struct{})
+	releaseBin := make(chan struct{})
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			w.Header().Set("Location", ts.URL+"/releases/tag/"+tag)
+			w.WriteHeader(http.StatusFound)
+		case "/releases/download/" + tag + "/checksums.txt":
+			fmt.Fprintf(w, "%s  %s\n", goodSum, asset)
+		case "/releases/download/" + tag + "/" + asset:
+			close(inBin)
+			<-releaseBin
+			w.Write([]byte(newScript))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+
+	restarted := make(chan string, 1)
+	version = "v0.2.55"
+	releaseRepoURL = ts.URL
+	executablePath = func() (string, error) { return exe, nil }
+	execUpdated = func(p string) { restarted <- p }
+
+	// 1) Request context canceled mid-download must NOT abort downloadRelease.
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	req := httptest.NewRequest("POST", "/api/update", nil).WithContext(reqCtx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	srv := &Server{}
+	go func() {
+		defer close(done)
+		srv.selfUpdate(rec, req)
+	}()
+
+	<-inBin
+	cancelReq()
+	close(releaseBin)
+	<-done
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := <-restarted; got != exe {
+		t.Fatalf("restarted = %q, want %q", got, exe)
+	}
+	selfUpdateMu.Unlock()
+
+	if !strings.Contains(logBuf.String(), "self-update start") || !strings.Contains(logBuf.String(), "updated v0.2.55 → "+tag) {
+		t.Fatalf("expected start and success log lines, got:\n%s", logBuf.String())
+	}
+
+	// 2) Failure logs must record stage/reason and sanitize credentials.
+	logBuf.Reset()
+	badProxy, _ := url.Parse("http://alice:supersecret@127.0.0.1:1")
+	updateProxyFunc = func(*http.Request) (*url.URL, error) { return badProxy, nil }
+	updateDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return nil, errors.New("proxyconnect tcp: http://alice:supersecret@127.0.0.1:1: connection refused")
+	}
+	recFail := httptest.NewRecorder()
+	srv.selfUpdate(recFail, httptest.NewRequest("POST", "/api/update", nil))
+	if recFail.Code != 502 {
+		t.Fatalf("proxy failure status = %d, want 502", recFail.Code)
+	}
+	if !strings.Contains(recFail.Body.String(), "代理") {
+		t.Fatalf("expected proxy error in response, got %s", recFail.Body.String())
+	}
+	if strings.Contains(recFail.Body.String(), "supersecret") || strings.Contains(logBuf.String(), "supersecret") {
+		t.Fatalf("proxy credentials leaked! resp=%s log=%s", recFail.Body.String(), logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "self-update failed") {
+		t.Fatalf("expected failure log entry, got:\n%s", logBuf.String())
+	}
+}
+
+type updateRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f updateRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestForwardUpdateErrorPropagationAndTimeout(t *testing.T) {
+	saveUpdateHooks(t)
+
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+
+	h := newHerdr("/nonexistent.sock", "hubbox", t.TempDir())
+	srv := &Server{herdr: h}
+	handler := srv.routed(srv.selfUpdate)
+
+	// 1) Offline node returns 503 JSON and logs failure.
+	recOff := httptest.NewRecorder()
+	handler.ServeHTTP(recOff, httptest.NewRequest("POST", "/api/update?machine=ghost", nil))
+	if recOff.Code != 503 || !strings.Contains(recOff.Body.String(), "不在线") {
+		t.Fatalf("offline node: status=%d body=%s", recOff.Code, recOff.Body.String())
+	}
+	if !strings.Contains(logBuf.String(), "remote-update failed (machine=ghost") {
+		t.Fatalf("missing offline remote-update log: %s", logBuf.String())
+	}
+
+	// 2) Remote node returns 502 JSON error: hub preserves real message and logs it.
+	logBuf.Reset()
+	h.attach(&Machine{
+		ID: "mac", Name: "mac", Online: true,
+		client: &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			body := `{"error":"更新失败：连接 GitHub 超时（已自动重试并尝试 IPv4）"}`
+			return &http.Response{
+				StatusCode: 502,
+				Status:     "502 Bad Gateway",
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		})},
+	})
+	recErr := httptest.NewRecorder()
+	handler.ServeHTTP(recErr, httptest.NewRequest("POST", "/api/update?machine=mac", nil))
+	if recErr.Code != 502 || !strings.Contains(recErr.Body.String(), "已自动重试并尝试 IPv4") {
+		t.Fatalf("remote JSON error: status=%d body=%s", recErr.Code, recErr.Body.String())
+	}
+	if !strings.Contains(logBuf.String(), "remote-update failed (machine=mac status=502") {
+		t.Fatalf("missing remote JSON failure log: %s", logBuf.String())
+	}
+
+	// 3) Remote node hangs past selfUpdateForwardTimeout: hub times out cleanly with JSON error.
+	logBuf.Reset()
+	selfUpdateForwardTimeout = 60 * time.Millisecond
+	h.attach(&Machine{
+		ID: "slow", Name: "slow", Online: true,
+		client: &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		})},
+	})
+	recSlow := httptest.NewRecorder()
+	handler.ServeHTTP(recSlow, httptest.NewRequest("POST", "/api/update?machine=slow", nil))
+	if recSlow.Code != 502 || !strings.Contains(recSlow.Body.String(), "更新超时") {
+		t.Fatalf("remote timeout: status=%d body=%s", recSlow.Code, recSlow.Body.String())
+	}
+	if !strings.Contains(logBuf.String(), "remote-update failed (machine=slow") {
+		t.Fatalf("missing remote timeout log: %s", logBuf.String())
+	}
+}
+
+func TestFormatUpdateErrorMessages(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"404", &httpStatusError{file: "checksums.txt", statusCode: 404, status: "404 Not Found"}, "HTTP 404"},
+		{"503", &httpStatusError{file: "collie-linux-amd64", statusCode: 503, status: "503 Service Unavailable"}, "暂时异常"},
+		{"429", &httpStatusError{file: "releases/latest", statusCode: 429, status: "429 Too Many Requests"}, "限流"},
+		{"checksum", errBadChecksum, "校验失败"},
+		{"perm", &updateFileError{dir: "/usr/local/bin", err: os.ErrPermission}, "无写权限"},
+		{"enospc", &updateFileError{dir: "/tmp", err: syscall.ENOSPC}, "磁盘空间不足"},
+		{"proxy", &updateOpError{err: errors.New("proxyconnect tcp: connection refused"), usedProxy: true}, "代理服务器"},
+		{"dns", &updateOpError{err: &net.DNSError{Err: "no such host", Name: "github.com"}}, "DNS"},
+		{"tls", &updateOpError{err: errors.New("x509: certificate signed by unknown authority")}, "TLS"},
+		{"timeout-ipv4", &updateOpError{err: context.DeadlineExceeded, triedIPv4: true}, "尝试 IPv4"},
+		{"timeout-proxy", &updateOpError{err: context.DeadlineExceeded, usedProxy: true}, "经代理访问 GitHub 超时"},
+		{"eof-ipv4", &updateOpError{err: io.ErrUnexpectedEOF, triedIPv4: true}, "尝试 IPv4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatUpdateError(tc.err)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("formatUpdateError(%v) = %q, want substring %q", tc.err, got, tc.want)
+			}
+		})
+	}
+	if got := sanitizeUpdateErr("http://user:pass@proxy.example:8080 failed"); strings.Contains(got, "pass") || !strings.Contains(got, "http://***@proxy.example:8080") {
+		t.Errorf("sanitizeUpdateErr failed: %q", got)
 	}
 }
 

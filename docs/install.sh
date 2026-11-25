@@ -107,6 +107,7 @@ install_binary() {
 
 # ------------------------------------------------------------------ services
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+systemd_env_val() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g'; }
 
 # service <name> <args…>: run `collie <args…>` in the background, now and
 # after every login (macOS) or boot (Linux, with linger).
@@ -149,17 +150,32 @@ $args
     say "    日志：tail -f $log"
   else
     unitdir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
-    file=$unitdir/collie-$name.service
+    file=${unitdir}/collie-${name}.service
     quoted=""
-    for a in "$@"; do quoted="$quoted \"$a\""; done
+    for a in "$@"; do quoted="${quoted} \"${a}\""; done
+    env_lines="Environment=\"PATH=$(systemd_env_val "${path}")\""
+    for pair in \
+      "HTTP_PROXY:${HTTP_PROXY:-}" \
+      "HTTPS_PROXY:${HTTPS_PROXY:-}" \
+      "NO_PROXY:${NO_PROXY:-}" \
+      "http_proxy:${http_proxy:-}" \
+      "https_proxy:${https_proxy:-}" \
+      "no_proxy:${no_proxy:-}"; do
+      k=${pair%%:*}
+      v=${pair#*:}
+      if [ -n "${v}" ]; then
+        env_lines="${env_lines}
+Environment=\"${k}=$(systemd_env_val "${v}")\""
+      fi
+    done
     unit="[Unit]
-Description=Collie $name
+Description=Collie ${name}
 After=network-online.target
 
 [Service]
-ExecStart=\"$BIN\"$quoted
+ExecStart=\"${BIN}\"${quoted}
 WorkingDirectory=%h
-Environment=PATH=$path
+${env_lines}
 Restart=always
 RestartSec=5
 

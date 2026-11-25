@@ -93,23 +93,52 @@
     for (const [f, x] of Object.entries(out)) if (x && typeof x === "object") out[f] = tagIds(x, k, depth + 1);
     return out;
   }
+  function timeoutSignal(ms) {
+    if (!(ms > 0)) return { signal: undefined, clear() {} };
+    if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+      return { signal: AbortSignal.timeout(ms), clear() {} };
+    }
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(new DOMException("Timed out", "TimeoutError")), ms);
+    return { signal: ctrl.signal, clear: () => clearTimeout(id) };
+  }
   async function api(path, opts = {}) {
     const r = routeReq(path, opts.body, opts.hub);
     const headers = opts.body ? { "Content-Type": "application/json" } : {};
     if (r.hub) headers.Authorization = "Bearer " + r.hub.token;
-    const res = await fetch(r.url, {
-      method: opts.body ? "POST" : (opts.method || "GET"),
-      headers, body: r.body,
-      credentials: r.hub ? "omit" : "same-origin",
-    });
-    if (!r.hub) noteBuild(res.headers.get("X-Collie-Web"));
-    let data = {};
-    try { data = await res.json(); } catch {}
+    const t = timeoutSignal(opts.timeout);
+    let res;
+    try {
+      res = await fetch(r.url, {
+        method: opts.body ? "POST" : (opts.method || "GET"),
+        headers, body: r.body,
+        credentials: r.hub ? "omit" : "same-origin",
+        signal: t.signal,
+      });
+    } catch (err) {
+      if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+        throw new Error(opts.timeoutMessage || "请求超时，请检查网络后重试", { cause: err });
+      }
+      throw new Error(opts.networkMessage || "网络连接中断，请检查服务是否在线后重试", { cause: err });
+    } finally {
+      t.clear();
+    }
+    if (!r.hub) noteBuild(res.headers?.get?.("X-Collie-Web"));
+    let raw = "", data = {};
+    if (typeof res.text === "function") {
+      raw = await res.text();
+      if (raw) { try { data = JSON.parse(raw); } catch {} }
+    } else if (typeof res.json === "function") {
+      try { data = await res.json(); } catch {}
+    }
     if (res.status === 401) {
       if (r.hub) throw new Error(`${r.hub.name} 不认这个浏览器了，在「设备」里重新添加它`);
       showLogin(); throw new Error("unauthorized");
     }
-    if (!res.ok) throw new Error(data.error || res.statusText);
+    if (!res.ok) {
+      const fallback = raw && !/^\s*</.test(raw) ? raw.trim().slice(0, 240) : "";
+      throw new Error(data.error || fallback || res.statusText || `HTTP ${res.status}`);
+    }
     return r.hub ? tagIds(data, r.hub.key) : data;
   }
   // EventSource can't set headers: a remote hub takes its token in the URL.
@@ -767,7 +796,7 @@
     closeBtn.textContent = "×";
     t.append(body, closeBtn);
     t.dataset.msg = text;
-    const ttl = kind === "attn" ? 5200 : 2600;
+    const ttl = kind === "attn" ? Math.min(10000, Math.max(5200, text.length * 140)) : 2600;
     let timer = 0, hovered = false, focused = false;
     const dismiss = (manual = false) => {
       clearTimeout(timer);
@@ -3943,17 +3972,50 @@
     for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
     return false;
   };
+  const UPDATE_REQUEST_TIMEOUT_MS = 185_000;
+  const UPDATE_REQ_OPTS = {
+    body: {},
+    timeout: UPDATE_REQUEST_TIMEOUT_MS,
+    timeoutMessage: "更新请求超时（可能下载较慢或网络卡顿），请检查网络后重试或刷新查看版本",
+    networkMessage: "连接中断，请检查网络或稍候刷新查看是否已更新",
+  };
+  const cleanUpdateError = (err) => String(err?.message || "更新失败").replace(/^更新失败[：:]\s*/, "").trim() || "更新失败";
   let versionInfo = { version: "", latest: "", outdated: [], machines: [] };
   let versionRetryT = null, versionRetries = 0;
   const updateFlow = {
     busy: false, phase: "idle", scope: "", targetVersion: "",
-    total: 0, index: 0, currentId: null, currentName: "", failedMachine: "", error: "",
+    total: 0, index: 0, currentId: null, currentName: "", failedId: "", failedMachine: "", error: "",
+    errors: new Map(),
   };
-  function resetUpdateFlow() {
+  function resetUpdateFlow(keepErrors = false) {
     updateFlow.busy = false; updateFlow.phase = "idle"; updateFlow.scope = "";
     updateFlow.targetVersion = ""; updateFlow.total = 0; updateFlow.index = 0;
     updateFlow.currentId = null; updateFlow.currentName = "";
-    updateFlow.failedMachine = ""; updateFlow.error = "";
+    updateFlow.failedId = ""; updateFlow.failedMachine = ""; updateFlow.error = "";
+    if (!keepErrors) updateFlow.errors.clear();
+  }
+  function updateNoteState(id) {
+    if (updateFlow.busy && updateFlow.currentId === id) {
+      if (updateFlow.phase === "restarting") {
+        return { cls: "busy", text: "新版本已就绪，正在重启并等待页面自动刷新…", alert: false };
+      }
+      if (updateFlow.phase === "reconnecting") {
+        return { cls: "busy", text: "节点已更新，正在等待重新上线…", alert: false };
+      }
+      const ver = updateFlow.targetVersion || versionInfo.latest || "新版本";
+      return { cls: "busy", text: `正在下载并校验 ${ver}，完成后自动重启（运行中的 agent 不受影响）…`, alert: false };
+    }
+    const err = updateFlow.errors.get(id);
+    if (err) return { cls: "error", text: `更新失败：${err}`, alert: true };
+    return null;
+  }
+  function updateBtnHtml(id, latest) {
+    if (updateFlow.busy && updateFlow.currentId === id) {
+      const label = updateFlow.phase === "restarting" ? "重启中…" : updateFlow.phase === "reconnecting" ? "重连中…" : "更新中…";
+      return `<span class="up-spin" aria-hidden="true"></span><span>${esc(label)}</span>`;
+    }
+    if (updateFlow.errors.has(id)) return esc(latest ? `重试更新到 ${latest}` : "重试更新");
+    return esc(latest ? `更新到 ${latest}` : "更新");
   }
   function outdatedOnlineMachines() {
     const latest = versionInfo.latest;
@@ -3998,9 +4060,13 @@
     const btns = updatePillButtons();
     if (!btns.length) return;
     const list = outdatedOnlineMachines();
+    for (const k of [...updateFlow.errors.keys()]) {
+      const m = (versionInfo.machines || []).find((x) => (x.local ? "" : (x.id || "")) === k);
+      if (m && versionInfo.latest && !isOld(m.version, versionInfo.latest)) updateFlow.errors.delete(k);
+    }
     const latest = updateFlow.targetVersion || versionInfo.latest;
     if (!updateFlow.busy && !list.length) {
-      if (updateFlow.phase === "failed") resetUpdateFlow();
+      if (updateFlow.phase === "failed" && !updateFlow.errors.size) resetUpdateFlow();
       for (const b of btns) {
         b.hidden = true;
         b.removeAttribute("aria-disabled");
@@ -4062,14 +4128,24 @@
     const latest = versionInfo.latest;
     for (const b of $$("#devices-body button[data-update]")) {
       const id = b.dataset.update;
-      if (updateFlow.busy) {
-        b.disabled = true;
-        if (updateFlow.currentId === id) {
-          b.textContent = updateFlow.phase === "restarting" ? "重启中…" : updateFlow.phase === "reconnecting" ? "重连中…" : "更新中…";
-        }
+      const isMe = updateFlow.busy && updateFlow.currentId === id;
+      b.disabled = updateFlow.busy;
+      b.setAttribute("aria-busy", isMe ? "true" : "false");
+      const nextHtml = updateBtnHtml(id, latest);
+      if (b.innerHTML !== nextHtml) b.innerHTML = nextHtml;
+    }
+    for (const n of $$("#devices-body [data-update-note]")) {
+      const st = updateNoteState(n.dataset.updateNote);
+      if (!st) {
+        n.hidden = true;
+        n.className = "update-note";
+        n.removeAttribute("role");
+        n.textContent = "";
       } else {
-        b.disabled = false;
-        if (latest) b.textContent = `更新到 ${latest}`;
+        n.hidden = false;
+        n.className = `update-note ${st.cls}`;
+        if (st.alert) n.setAttribute("role", "alert"); else n.removeAttribute("role");
+        n.textContent = st.text;
       }
     }
   }
@@ -4081,8 +4157,9 @@
     let sawDown = false;
     const maxTries = 60;
     for (let i = 0; i < maxTries; i++) {
+      const t = timeoutSignal(5000);
       try {
-        const res = await fetch("/api/version", { cache: "no-store", credentials: "same-origin" });
+        const res = await fetch("/api/version", { cache: "no-store", credentials: "same-origin", signal: t.signal });
         if (res.ok) {
           const wb = res.headers.get("X-Collie-Web");
           const data = await res.json().catch(() => ({}));
@@ -4095,13 +4172,17 @@
         }
       } catch {
         sawDown = true;
+      } finally {
+        t.clear();
       }
       await sleep(1500);
     }
     updateFlow.busy = false;
     updateFlow.phase = "failed";
+    updateFlow.failedId = "";
     updateFlow.failedMachine = updateFlow.currentName || "hub";
     updateFlow.error = "等待重启恢复超时，请刷新页面或重试";
+    updateFlow.errors.set("", updateFlow.error);
     toast("等待 hub 重启恢复超时，请手动刷新页面", "attn");
     renderUpdateEntry();
     return false;
@@ -4138,6 +4219,7 @@
     updateFlow.index = 0;
     updateFlow.currentId = null;
     updateFlow.currentName = "";
+    updateFlow.failedId = "";
     updateFlow.failedMachine = "";
     updateFlow.error = "";
     renderUpdateEntry();
@@ -4148,10 +4230,11 @@
       updateFlow.index = i + 1;
       updateFlow.currentId = m.id;
       updateFlow.currentName = m.name;
+      updateFlow.errors.delete(m.id);
       renderUpdateEntry();
       try {
         const qs = m.id ? "?" + new URLSearchParams({ machine: m.id }) : "";
-        const r = await api("/api/update" + qs, { body: {} });
+        const r = await api("/api/update" + qs, UPDATE_REQ_OPTS);
         if (m.local) {
           if (!r.latest) {
             restartedHub = true;
@@ -4166,11 +4249,13 @@
           }
         }
       } catch (err) {
-        const msg = String(err.message || "更新失败").replace(/^更新失败[：:]\s*/, "") || "更新失败";
+        const msg = cleanUpdateError(err);
         updateFlow.busy = false;
         updateFlow.phase = "failed";
+        updateFlow.failedId = m.id;
         updateFlow.failedMachine = m.name;
         updateFlow.error = msg;
+        updateFlow.errors.set(m.id, msg);
         toast(`更新 ${m.name} 失败：${msg}`, "attn");
         renderUpdateEntry();
         checkUpdates();
@@ -4220,8 +4305,11 @@
     if (!isOld(have, latest)) return "";
     const busy = updateFlow.busy;
     const isMe = busy && updateFlow.currentId === id;
-    const label = isMe ? (updateFlow.phase === "restarting" ? "重启中…" : updateFlow.phase === "reconnecting" ? "重连中…" : "更新中…") : `更新到 ${latest}`;
-    return `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}"${busy ? " disabled" : ""}>${esc(label)}</button></p><p class="pair-hint muted">点了没反应的话，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>`;
+    const st = updateNoteState(id);
+    const noteHtml = st
+      ? `<div class="update-note ${st.cls}" data-update-note="${esc(id)}"${st.alert ? ' role="alert"' : ""}>${esc(st.text)}</div>`
+      : `<div class="update-note" data-update-note="${esc(id)}" hidden></div>`;
+    return `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}" aria-busy="${isMe ? "true" : "false"}"${busy ? " disabled" : ""}>${updateBtnHtml(id, latest)}</button></p>${noteHtml}<p class="pair-hint muted">如果自动更新失败或需要手动安装，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>`;
   };
 
   async function loadDevices(restore = null) {
@@ -4360,7 +4448,6 @@
       else if (b.dataset.update !== undefined) {
         if (updateFlow.busy) return;
         const id = b.dataset.update, name = b.dataset.name || (id || "hub");
-        if (!confirm(`更新「${name}」上的 Collie？它会下载新版并重启，大约十几秒连不上${id ? "" : "（这是 hub，页面会短暂断开）"}；里面的 agent 不受影响。`)) return;
         updateFlow.busy = true;
         updateFlow.phase = "updating";
         updateFlow.scope = "single";
@@ -4369,11 +4456,14 @@
         updateFlow.index = 1;
         updateFlow.currentId = id;
         updateFlow.currentName = name;
+        updateFlow.failedId = "";
         updateFlow.failedMachine = "";
         updateFlow.error = "";
+        updateFlow.errors.delete(id);
         renderUpdateEntry();
         try {
-          const r = await api("/api/update?" + new URLSearchParams(id ? { machine: id } : {}), { body: {} });
+          const qs = id ? "?" + new URLSearchParams({ machine: id }) : "";
+          const r = await api("/api/update" + qs, UPDATE_REQ_OPTS);
           if (!id && !r.latest) {
             toast(`已更新到 ${r.version}，正在重启`);
             await waitForHubRestartAndReload(r.version || versionInfo.latest);
@@ -4388,9 +4478,16 @@
             loadDevices();
           }
         } catch (err) {
-          resetUpdateFlow();
+          const msg = cleanUpdateError(err);
+          updateFlow.busy = false;
+          updateFlow.phase = "failed";
+          updateFlow.failedId = id;
+          updateFlow.failedMachine = name;
+          updateFlow.error = msg;
+          updateFlow.errors.set(id, msg);
           renderUpdateEntry();
-          throw err;
+          toast(`更新 ${name} 失败：${msg}`, "attn");
+          checkUpdates();
         }
       }
       else if (b.dataset.delHub) {

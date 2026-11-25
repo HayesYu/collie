@@ -67,10 +67,25 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path string, body []byte) {
+	isUpdate := r.URL.Path == "/api/update"
+	start := time.Now()
+	if isUpdate {
+		log.Printf("remote-update start (machine=%s)", machine)
+	}
 	client, err := s.herdr.Client(machine)
 	if err != nil {
+		if isUpdate {
+			log.Printf("remote-update failed (machine=%s dur=%s): node offline", machine, time.Since(start).Round(time.Millisecond))
+		}
 		writeJSON(w, 503, map[string]any{"error": "这台电脑现在不在线（" + machine + "）"})
 		return
+	}
+	if isUpdate && selfUpdateForwardTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, c := context.WithTimeout(r.Context(), selfUpdateForwardTimeout)
+		cancel = c
+		defer cancel()
+		r = r.WithContext(ctx)
 	}
 	rp := &httputil.ReverseProxy{
 		Transport:     client.Transport,
@@ -94,12 +109,42 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path s
 				return nil
 			}
 			if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+				if isUpdate && resp.StatusCode != http.StatusOK {
+					raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+					resp.Body.Close()
+					msg := strings.TrimSpace(string(raw))
+					if msg == "" {
+						msg = resp.Status
+					}
+					log.Printf("remote-update failed (machine=%s status=%d dur=%s): %s", machine, resp.StatusCode, time.Since(start).Round(time.Millisecond), sanitizeUpdateErr(msg))
+					jb, _ := json.Marshal(map[string]any{"error": "节点 " + machine + " 返回异常：" + sanitizeUpdateErr(msg)})
+					resp.Body = io.NopCloser(bytes.NewReader(jb))
+					resp.ContentLength = int64(len(jb))
+					resp.Header.Set("Content-Type", "application/json; charset=utf-8")
+					resp.Header.Set("Content-Length", strconv.Itoa(len(jb)))
+				}
 				return nil
 			}
 			b, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
 				return err
+			}
+			if isUpdate {
+				dur := time.Since(start).Round(time.Millisecond)
+				var res struct {
+					OK      bool   `json:"ok"`
+					From    string `json:"from"`
+					Version string `json:"version"`
+					Latest  bool   `json:"latest"`
+					Error   string `json:"error"`
+				}
+				_ = json.Unmarshal(b, &res)
+				if resp.StatusCode == http.StatusOK {
+					log.Printf("remote-update ok (machine=%s from=%s version=%s latest=%v dur=%s)", machine, res.From, res.Version, res.Latest, dur)
+				} else {
+					log.Printf("remote-update failed (machine=%s status=%d dur=%s): %s", machine, resp.StatusCode, dur, sanitizeUpdateErr(res.Error))
+				}
 			}
 			b = suffixIDs(b, machine)
 			resp.Body = io.NopCloser(bytes.NewReader(b))
@@ -108,6 +153,19 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path s
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if isUpdate {
+				dur := time.Since(start).Round(time.Millisecond)
+				log.Printf("remote-update failed (machine=%s dur=%s): %s", machine, dur, sanitizeUpdateErr(err.Error()))
+				msg := "转发到 " + machine + " 失败：" + sanitizeUpdateErr(err.Error())
+				switch {
+				case isTimeoutErr(err):
+					msg = "转发到 " + machine + " 更新超时：节点未在规定时间内返回，可能下载较慢或网络卡顿，请稍后刷新查看版本"
+				case isConnResetOrEOF(err):
+					msg = "转发到 " + machine + " 时连接中断：节点可能正在重启或暂时掉线，请稍候刷新查看版本；若未升级可重试"
+				}
+				writeJSON(w, 502, map[string]any{"error": msg})
+				return
+			}
 			writeJSON(w, 502, map[string]any{"error": "转发到 " + machine + " 失败：" + err.Error()})
 		},
 	}

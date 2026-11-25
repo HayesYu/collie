@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -42,9 +43,14 @@ func startLocalUI(ctx context.Context, addr, hub string) string {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
+			msg := "连不上 hub（" + hub + "）：" + err.Error()
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": msg})
+				return
+			}
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusBadGateway)
-			w.Write([]byte("连不上 hub（" + hub + "）：" + err.Error() + "\n"))
+			w.Write([]byte(msg + "\n"))
 		},
 	}
 	ln, err := net.Listen("tcp", addr)

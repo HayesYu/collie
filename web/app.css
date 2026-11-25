@@ -529,14 +529,14 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   #v-collie .msg.flash, #v-collie .say .msg.flash, #v-collie .event.flash { animation-duration: .8s; }
 }
 /* Quick-reply choices under a Collie question: first is the recommended pick. */
-.reply-opts { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 6px; }
+.reply-opts { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 6px; min-width: 0; max-width: 100%; }
 .thumbs + .reply-opts { margin-top: 8px; }
 .reply-opt {
   display: inline-flex; align-items: center; justify-content: center;
   min-block-size: 32px; min-inline-size: 32px; max-inline-size: 100%;
-  padding: 5px 13px; border: 1px solid var(--line-2); border-radius: 16px;
+  padding: 6px 14px; border: 1px solid var(--line-2); border-radius: 16px;
   background: var(--bg); color: var(--fg-2); font-size: 13px; line-height: 1.4;
-  text-align: left; overflow-wrap: break-word;
+  white-space: normal; text-align: left; overflow-wrap: anywhere;
   transition: background .14s, border-color .14s, color .14s, transform .1s, opacity .14s;
 }
 .reply-opt:first-child {
@@ -548,7 +548,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .reply-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .reply-opt:disabled { opacity: .45; pointer-events: none; }
 @media (pointer: coarse) {
-  .reply-opt { min-block-size: 44px; min-inline-size: 44px; padding: 8px 16px; border-radius: 22px; font-size: 14px; }
+  .reply-opt { min-block-size: 44px; min-inline-size: 44px; padding: 8px 15px; border-radius: 18px; font-size: 14px; line-height: 1.4; }
 }
 @media (prefers-reduced-motion: reduce) { .reply-opt { transition: none; } }
 /* Quiet acknowledgement pill under a --check message that has no options. */
@@ -569,7 +569,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 }
 @media (prefers-reduced-motion: reduce) { .reply-ack { transition: none; } }
 .time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
-.say { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
+.say { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; align-items: start; }
 .avatar { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; background: var(--bg); margin-top: 2px; }
 .avatar img { width: 20px; height: 20px; }
 

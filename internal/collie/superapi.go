@@ -199,12 +199,13 @@ func (s *Server) superEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Text    string `json:"text"`
-		Machine string `json:"machine"` // where to dispatch this time, "" = the default
-		Kind    string `json:"kind"`
-		Model   string `json:"model"`
-		Effort  string `json:"effort"`
-		Re      string `json:"re"` // a message of Collie's this answers
+		Text        string `json:"text"`
+		Machine     string `json:"machine"` // where to dispatch this time, "" = the default
+		Kind        string `json:"kind"`
+		Model       string `json:"model"`
+		Effort      string `json:"effort"`
+		Re          string `json:"re"`            // a message of Collie's this answers
+		ClientMsgID string `json:"client_msg_id"` // optional client idempotency token
 	}
 	if !decode(w, r, &body) || strings.TrimSpace(body.Text) == "" {
 		if strings.TrimSpace(body.Text) == "" {
@@ -212,8 +213,18 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	cid := strings.TrimSpace(body.ClientMsgID)
+	if len(cid) > 128 {
+		cid = cid[:128]
+	}
+	now := time.Now()
 	sp := s.sup
 	sp.mu.Lock()
+	if prev, ok := sp.lookupSayDedupLocked(cid, now); ok {
+		sp.mu.Unlock()
+		writeJSON(w, 200, map[string]any{"entry": prev.entry, "trigger": prev.trigger, "duplicate": true})
+		return
+	}
 	re := sp.collieQuoteLocked(body.Re)
 	e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
 	// The composer's "派到" chip: a one-off choice the router should honour.
@@ -262,6 +273,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		text += "\n\n[The human picked where this runs: spawn with " + strings.Join(hint, " ") + "]"
 	}
 	t := sp.ingestLocked("chat", mainThread, "you", text, "", "", e.ID)
+	sp.recordSayDedupLocked(cid, e.ID, t.ID, now)
 	sp.mu.Unlock()
 	writeJSON(w, 200, map[string]any{"entry": e.ID, "trigger": t.ID})
 }

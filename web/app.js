@@ -1774,7 +1774,7 @@
   }
   // The default model and effort belong to the default kind of agent; any
   // other kind starts from that agent's own settings.
-  const modelDefaults = (t) => t.kind === targetDefault.kind ? { model: targetDefault.model, effort: targetDefault.effort } : { model: "", effort: "" };
+  const modelDefaults = (t) => targetDefault && t.kind === targetDefault.kind ? { model: targetDefault.model, effort: targetDefault.effort } : { model: "", effort: "" };
   const modelNow = (t) => { const d = modelDefaults(t); return { model: t.model ?? d.model, effort: t.effort ?? d.effort, d }; };
   let chipSeq = 0;
   async function renderModelChips() {
@@ -1837,12 +1837,14 @@
     if (e) setReply(e);
   });
 
-  async function sendSuper(text, re, restoreRe) {
+  const newClientMsgID = () => (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+    ? crypto.randomUUID()
+    : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+  async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID()) {
     // Only what was picked here goes along; the hub fills in its current defaults.
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
-    const info = await modelsFor(t.kind, t.machine);
-    const sendEffort = effortsFor(info, t.kind, model).includes(effort) ? effort : "";
     // Your message shows at once; the hub's copy takes its place when it arrives.
     const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
@@ -1851,7 +1853,9 @@
     renderSuper({ force: true, scrollBottom: true });
     let r;
     try {
-      r = await api("/api/super/say", { body: { text, re: re?.entry || "",
+      const info = await modelsFor(t.kind, t.machine);
+      const sendEffort = effortsFor(info, t.kind, model).includes(effort) ? effort : "";
+      r = await api("/api/super/say", { body: { text, re: re?.entry || "", client_msg_id: clientMsgID,
       machine: "machine" in p ? (t.machine || "local") : "",
       kind: "kind" in p ? t.kind : "",
       model: "model" in p || "kind" in p ? model : "",
@@ -1875,22 +1879,29 @@
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }
 
+  const busyReplyOpts = new Set();
   $("#super-thread").addEventListener("click", async (ev) => {
     const ack = ev.target.closest(".reply-ack[data-ack]");
     if (ack) { ev.preventDefault(); dismissPending(ack.dataset.ack); return; }
     const b = ev.target.closest(".reply-opt[data-opt]");
     if (!b) return;
     const grp = b.closest(".reply-opts[data-entry]");
-    if (!grp || grp.dataset.busy) return;
+    const id = grp?.dataset.entry;
+    if (!grp || !id || grp.dataset.busy || busyReplyOpts.has(id)) return;
+    busyReplyOpts.add(id);
     grp.dataset.busy = "1";
     grp.querySelectorAll("button").forEach((x) => { x.disabled = true; });
-    const id = grp.dataset.entry, text = b.dataset.opt;
+    const text = b.dataset.opt;
     if (replyTo?.entry === id) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
     try {
       await sendSuper(text, e ? { entry: e.id, who: "Collie", text: e.text } : { entry: id, who: "Collie", text: "" }, false);
     } catch (err) {
+      delete grp.dataset.busy;
+      grp.querySelectorAll("button").forEach((x) => { x.disabled = false; });
       toast(err.message, "attn");
+    } finally {
+      busyReplyOpts.delete(id);
     }
   });
 
@@ -1910,11 +1921,12 @@
     if (ev.key === "Escape" && pendingOpen && !document.querySelector("dialog[open]")) { pendingOpen = false; renderPendingBar(); }
   });
 
-  bindComposer($("#super-composer"), $("#super-input"), async (text) => {
-    const re = replyTo;
-    setReply(null);
+  bindComposer($("#super-composer"), $("#super-input"), async (text, re) => {
     await sendSuper(text, re, true);
-  }, () => targetNow().machine);
+  }, () => targetNow().machine, {
+    beforeSend: () => { const re = replyTo; setReply(null); return re; },
+    onError: (re) => { if (re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry)); },
+  });
 
   // ───────────────────────────── automation view
   let autoTab = store.get("autoTab", "inbox");
@@ -5862,11 +5874,13 @@
       if (!e.dataTransfer?.files?.length) return;
       e.preventDefault(); add([...e.dataTransfer.files]);
     });
-    form._clearFiles = () => { form._files.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb)); form._files = []; draw(); };
+    form._takeFiles = () => { const taken = form._files; form._files = []; draw(); return taken; };
+    form._restoreFiles = (files) => { if (!files?.length) return; form._files = [...files, ...form._files]; draw(); };
+    form._revokeFiles = (files) => { (files || []).forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb)); };
+    form._clearFiles = () => { form._revokeFiles(form._files); form._files = []; draw(); };
   }
-  async function withFiles(form, text) {
-    const files = form._files || [];
-    if (!files.length) return text;
+  async function withFiles(files, text) {
+    if (!files?.length) return text;
     await Promise.all(files.map((f) => f.done));
     if (files.some((f) => f.err)) throw new Error("有文件没传上去，移除后再发");
     return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
@@ -5897,26 +5911,53 @@
       + (rest.length ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>` : "");
   }
 
-  function bindComposer(form, input, send, machine) {
+  function bindComposer(form, input, send, machine, opts = {}) {
     if (machine) bindFiles(form, machine);
+    const btn = $(".send", form);
+    let sending = false;
     input.addEventListener("input", () => grow(input));
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
       const mod = e.metaKey || e.ctrlKey;
       // "mod": Enter makes a new line and ⌘/Ctrl+Enter sends.
-      if (prefs.sendKey() === "mod" ? mod : !mod) { e.preventDefault(); form.requestSubmit(); }
+      if (prefs.sendKey() === "mod" ? mod : !mod) {
+        e.preventDefault();
+        if (e.repeat || sending || btn?.disabled) return;
+        form.requestSubmit();
+      }
     });
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const btn = $(".send", form);
-      btn.disabled = true;
-      try {
-        const text = await withFiles(form, input.value);
-        await send(text);
-        input.value = ""; grow(input); form._clearFiles?.();
+      if (sending) return;
+      const curFiles = form._files || [];
+      if (curFiles.some((f) => f.err)) {
+        toast("有文件没传上去，移除后再发", "attn");
+        return;
       }
-      catch (err) { toast(err.message, "attn"); }
-      finally { btn.disabled = false; }
+      const draft = input.value;
+      if (!opts.allowEmpty && !draft.trim() && !curFiles.length) return;
+      sending = true;
+      if (btn) btn.disabled = true;
+      const files = form._takeFiles ? form._takeFiles() : [];
+      const ctx = opts.beforeSend ? opts.beforeSend() : undefined;
+      input.value = "";
+      grow(input);
+      try {
+        const text = await withFiles(files, draft);
+        await send(text, ctx);
+        form._revokeFiles?.(files);
+      } catch (err) {
+        if (draft) {
+          input.value = input.value ? draft + "\n" + input.value : draft;
+          grow(input);
+        }
+        form._restoreFiles?.(files);
+        opts.onError?.(ctx);
+        toast(err.message, "attn");
+      } finally {
+        sending = false;
+        if (btn) btn.disabled = false;
+      }
     });
   }
 
@@ -5935,7 +5976,7 @@
     } catch (err) {
       throw new Error(err.message.includes("blocked") ? "agent 正在等你确认，先处理上面的确认卡片" : err.message);
     }
-  }, () => (current || "").includes("@") ? current.slice(current.lastIndexOf("@") + 1) : "");
+  }, () => (current || "").includes("@") ? current.slice(current.lastIndexOf("@") + 1) : "", { allowEmpty: true });
 
   // ───────────────────────────── menus
   document.addEventListener("click", (e) => {

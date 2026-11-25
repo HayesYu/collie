@@ -57,12 +57,19 @@ type Super struct {
 	lastAnswer  map[string]time.Time // pane → when a dialog there was just answered
 	lastScreen  map[string]screenMark
 	transcripts map[string]*transcript
-	noAgent     map[string]time.Time // worker → since when its pane has had no agent in it
-	pinnedCache map[string]*Entry    // older pinned entries resolved from SQLite
+	noAgent     map[string]time.Time  // worker → since when its pane has had no agent in it
+	pinnedCache map[string]*Entry     // older pinned entries resolved from SQLite
+	sayDedup    map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
 	notifyBuf   []notice
 	notifyAt    time.Time
 	seenAt      time.Time // when a page of Collie was last open in front of you
 	seenURL     string    // where that page was, for the link in a notification
+}
+
+type sayReceipt struct {
+	entry   string
+	trigger string
+	at      time.Time
 }
 
 type screenMark struct {
@@ -89,6 +96,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 		lastScreen:  map[string]screenMark{},
 		transcripts: map[string]*transcript{},
 		noAgent:     map[string]time.Time{},
+		sayDedup:    map[string]sayReceipt{},
 	}
 	db, err := openDB(filepath.Join(dir, "herd.db")) // ~/.collie/collie.db belongs to another app
 	if err != nil {
@@ -153,12 +161,20 @@ func (sp *Super) addEntryReplyLocked(role, thread, text, ref, tone string, re *Q
 	return e
 }
 
-const maxReplyOptions = 6
+const (
+	maxReplyOptions     = 6
+	maxReplyOptionRunes = 240
+	sayDedupTTL         = 2 * time.Minute
+	maxSayDedup         = 512
+)
 
 func cleanOptions(raw []string) []string {
 	var out []string
 	for _, s := range raw {
-		s = clip(oneLine(s), 80)
+		s = oneLine(s)
+		if r := []rune(s); len(r) > maxReplyOptionRunes {
+			s = strings.TrimSpace(string(r[:maxReplyOptionRunes]))
+		}
 		if s == "" || slices.Contains(out, s) {
 			continue
 		}
@@ -168,6 +184,49 @@ func cleanOptions(raw []string) []string {
 		}
 	}
 	return out
+}
+
+func (sp *Super) lookupSayDedupLocked(id string, now time.Time) (sayReceipt, bool) {
+	if id == "" || len(sp.sayDedup) == 0 {
+		return sayReceipt{}, false
+	}
+	r, ok := sp.sayDedup[id]
+	if !ok {
+		return sayReceipt{}, false
+	}
+	if now.Sub(r.at) > sayDedupTTL {
+		delete(sp.sayDedup, id)
+		return sayReceipt{}, false
+	}
+	return r, true
+}
+
+func (sp *Super) recordSayDedupLocked(id, entryID, triggerID string, now time.Time) {
+	if id == "" {
+		return
+	}
+	if sp.sayDedup == nil {
+		sp.sayDedup = map[string]sayReceipt{}
+	}
+	for k, v := range sp.sayDedup {
+		if now.Sub(v.at) > sayDedupTTL {
+			delete(sp.sayDedup, k)
+		}
+	}
+	for len(sp.sayDedup) >= maxSayDedup {
+		var oldestKey string
+		var oldestAt time.Time
+		for k, v := range sp.sayDedup {
+			if oldestKey == "" || v.at.Before(oldestAt) {
+				oldestKey, oldestAt = k, v.at
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(sp.sayDedup, oldestKey)
+	}
+	sp.sayDedup[id] = sayReceipt{entry: entryID, trigger: triggerID, at: now}
 }
 
 // Reply posts Collie's message to a conversation thread, with optional quote,

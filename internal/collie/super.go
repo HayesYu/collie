@@ -65,6 +65,10 @@ type Super struct {
 	notifyAt     time.Time
 	seenAt       time.Time // when a page of Collie was last open in front of you
 	seenURL      string    // where that page was, for the link in a notification
+
+	secrets      *SecretStore
+	integrations *IntegrationManager
+	feishu       *FeishuAdapter
 }
 
 type sayReceipt struct {
@@ -107,6 +111,14 @@ func newSuper(s *Server, dir string) (*Super, error) {
 	if sp.st, err = initState(db, s.home, s.detectInitialSettings); err != nil {
 		return nil, err
 	}
+	sec, err := openSecretStore(dir)
+	if err != nil {
+		return nil, err
+	}
+	sp.secrets = sec
+	sp.integrations = newIntegrationManager(sp, db, sec)
+	sp.feishu = newFeishuAdapter(sp, sp.integrations)
+	sp.integrations.Register(sp.feishu)
 	return sp, nil
 }
 
@@ -157,6 +169,9 @@ func (sp *Super) addEntryReplyLocked(role, thread, text, ref, tone string, re *Q
 	sp.st.Entries = append(sp.st.Entries, e)
 	if role == "collie" || tone == "blocked" || tone == "error" {
 		sp.queueNotifyLocked(role, text, tone, re, check, opts...)
+		if n := len(sp.notifyBuf); n > 0 {
+			sp.notifyBuf[n-1].entryID = e.ID
+		}
 	}
 	sp.changed()
 	return e
@@ -242,8 +257,23 @@ func (sp *Super) Reply(thread, text, reID string, options []string, check ...boo
 	sp.mu.Lock()
 	limit := sp.st.Settings.ReplyChars
 	re := sp.quoteLocked(reID)
+	reFromFeishu := false
+	if re != nil && re.Entry != "" {
+		if ref := sp.findEntryLocked(re.Entry); ref != nil && ref.Channel == feishuKind {
+			reFromFeishu = true
+		}
+	}
 	e := sp.addEntryReplyLocked("collie", thread, text, "", "", re, opts, chk)
+	instant := sp.feishu != nil && sp.feishu.ShouldInstantSync(e, reFromFeishu)
+	if instant && len(sp.notifyBuf) > 0 && sp.notifyBuf[len(sp.notifyBuf)-1].entryID == e.ID {
+		sp.notifyBuf[len(sp.notifyBuf)-1].instantSent = true
+	}
+	link := sp.jumpLinkLocked()
+	eCopy := *e
 	sp.mu.Unlock()
+	if instant && sp.integrations != nil {
+		go sp.integrations.SendReply(context.Background(), &eCopy, link)
+	}
 	var warn string
 	if strings.TrimSpace(reID) != "" && re == nil {
 		warn = "--re " + reID + " is not an event or message I know; the reply went out without it"
@@ -321,6 +351,9 @@ func (sp *Super) Run(ctx context.Context) {
 	if err := sp.writeRouterFiles(); err != nil {
 		log.Printf("router files: %v", err)
 	}
+	if sp.integrations != nil {
+		sp.integrations.Start(ctx)
+	}
 	tick := time.NewTicker(1500 * time.Millisecond)
 	defer tick.Stop()
 	save := time.NewTicker(2 * time.Second)
@@ -328,6 +361,9 @@ func (sp *Super) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			if sp.integrations != nil {
+				sp.integrations.Stop(3 * time.Second)
+			}
 			sp.flush()
 			return
 		case <-save.C:
@@ -1384,7 +1420,8 @@ func progressHash(screen string) string {
 // ---------------------------------------------------------------- outbox
 
 func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote, check bool, opts ...string) {
-	if sp.st.Settings.NotifyWebhook == "" && !sp.st.Settings.NotifyLark {
+	hasFeishuWS := sp.feishu != nil && sp.feishu.CanSendFallback()
+	if sp.st.Settings.NotifyWebhook == "" && !sp.st.Settings.NotifyLark && !hasFeishuWS {
 		return
 	}
 	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" && len(opts) == 0 && !check {
@@ -1396,10 +1433,12 @@ func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote, check boo
 // A notice is one thing to tell you: what Collie said (and what about), or
 // what needs you.
 type notice struct {
-	tone, text string
-	re         *Quote
-	options    []string
-	check      bool
+	tone, text  string
+	re          *Quote
+	options     []string
+	check       bool
+	entryID     string
+	instantSent bool
 }
 
 func (n notice) needsYou() bool {
@@ -1914,6 +1953,14 @@ func (sp *Super) pinnedLocked() []PinnedItem {
 
 // Dismiss marks one pending message as acknowledged/ignored by the human and persists it.
 func (sp *Super) Dismiss(id string) {
+	sp.dismiss(id, true)
+}
+
+func (sp *Super) dismissWithoutSync(id string) {
+	sp.dismiss(id, false)
+}
+
+func (sp *Super) dismiss(id string, syncExternal bool) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return
@@ -1928,9 +1975,13 @@ func (sp *Super) Dismiss(id string) {
 		sp.changed()
 	}
 	hasDB := sp.db != nil
+	mgr := sp.integrations
 	sp.mu.Unlock()
 	if changed && hasDB {
 		sp.flush()
+	}
+	if changed && syncExternal && mgr != nil {
+		go mgr.SyncResolved(context.Background(), id, "已在网页端标记已看", "")
 	}
 }
 
@@ -2337,6 +2388,19 @@ func (sp *Super) Seen(url string) {
 	sp.mu.Unlock()
 }
 
+func (sp *Super) jumpLinkLocked() string {
+	if sp.seenURL == "" {
+		return ""
+	}
+	return larkJumpURL(strings.TrimRight(sp.seenURL, "/") + "/#/collie")
+}
+
+func (sp *Super) jumpLink() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.jumpLinkLocked()
+}
+
 // sendNotifications paces outgoing notifications: messages are coalesced and
 // sent at most every 20 seconds, and not at all while you are looking at
 // Collie (you see them there).
@@ -2351,15 +2415,29 @@ func (sp *Super) sendNotifications() {
 	url, toLark := sp.st.Settings.NotifyWebhook, sp.st.Settings.NotifyLark
 	looking := time.Since(sp.seenAt) < 75*time.Second
 	link := sp.seenURL
+	feishuWS := sp.feishu
+	useFeishuWS := feishuWS != nil && feishuWS.CanSendFallback()
 	sp.notifyBuf, sp.notifyAt = nil, time.Now()
 	sp.mu.Unlock()
 	if looking {
 		return
 	}
-	if toLark {
-		if link != "" {
-			link = larkJumpURL(strings.TrimRight(link, "/") + "/#/collie")
+	if link != "" {
+		link = larkJumpURL(strings.TrimRight(link, "/") + "/#/collie")
+	}
+	if useFeishuWS {
+		var pending []notice
+		for _, n := range notices {
+			if !n.instantSent {
+				pending = append(pending, n)
+			}
 		}
+		if len(pending) > 0 {
+			if err := feishuWS.SendNotices(context.Background(), pending, link); err != nil {
+				log.Printf("notify feishu ws: %v", err)
+			}
+		}
+	} else if toLark {
 		if err := larkSend(notices, link); err != nil {
 			log.Printf("notify lark: %v", err)
 		}

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -28,6 +29,30 @@ CREATE TABLE IF NOT EXISTS workers  (name TEXT PRIMARY KEY, created_at INTEGER N
 CREATE TABLE IF NOT EXISTS entries  (id TEXT PRIMARY KEY, n INTEGER NOT NULL, at INTEGER NOT NULL, thread TEXT NOT NULL, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS entries_thread ON entries(thread, n);
 CREATE TABLE IF NOT EXISTS timers   (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS integrations (
+    kind       TEXT PRIMARY KEY,
+    enabled    INTEGER NOT NULL DEFAULT 0,
+    config     TEXT NOT NULL DEFAULT '{}',
+    cursor     TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS integration_dedup (
+    source     TEXT NOT NULL,
+    dedup_key  TEXT NOT NULL,
+    seen_at    INTEGER NOT NULL,
+    PRIMARY KEY (source, dedup_key)
+);
+CREATE INDEX IF NOT EXISTS integration_dedup_seen ON integration_dedup(seen_at);
+CREATE TABLE IF NOT EXISTS integration_messages (
+    entry_id    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    chat_id     TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    resolved    INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (entry_id, kind)
+);
+CREATE INDEX IF NOT EXISTS integration_messages_ext ON integration_messages(kind, external_id);
 `
 
 func openDB(path string) (*sql.DB, error) {
@@ -313,4 +338,202 @@ func loadAgentNames(db *sql.DB, h *Herdr) {
 			log.Printf("save agent names: %v", err)
 		}
 	})
+}
+
+// ---------------------------------------------------------------- integrations storage
+
+type IntegrationRecord struct {
+	Kind      string
+	Enabled   bool
+	Config    json.RawMessage
+	Cursor    json.RawMessage
+	UpdatedAt int64
+}
+
+type IntegrationMessage struct {
+	EntryID    string
+	Kind       string
+	ChatID     string
+	ExternalID string
+	Resolved   bool
+	CreatedAt  int64
+}
+
+func loadIntegrations(db *sql.DB) (map[string]IntegrationRecord, error) {
+	out := map[string]IntegrationRecord{}
+	if db == nil {
+		return out, nil
+	}
+	rows, err := db.Query(`SELECT kind, enabled, config, cursor, updated_at FROM integrations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rec IntegrationRecord
+		var enabled int
+		var cfg, cur string
+		if err := rows.Scan(&rec.Kind, &enabled, &cfg, &cur, &rec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		rec.Enabled = enabled != 0
+		if strings.TrimSpace(cfg) == "" {
+			cfg = "{}"
+		}
+		if strings.TrimSpace(cur) == "" {
+			cur = "{}"
+		}
+		rec.Config = json.RawMessage(cfg)
+		rec.Cursor = json.RawMessage(cur)
+		out[rec.Kind] = rec
+	}
+	return out, rows.Err()
+}
+
+func saveIntegration(db *sql.DB, rec IntegrationRecord) error {
+	if db == nil {
+		return nil
+	}
+	cfg := strings.TrimSpace(string(rec.Config))
+	if cfg == "" {
+		cfg = "{}"
+	}
+	cur := strings.TrimSpace(string(rec.Cursor))
+	if cur == "" {
+		cur = "{}"
+	}
+	enabled := 0
+	if rec.Enabled {
+		enabled = 1
+	}
+	if rec.UpdatedAt == 0 {
+		rec.UpdatedAt = time.Now().Unix()
+	}
+	_, err := db.Exec(`
+		INSERT INTO integrations(kind, enabled, config, cursor, updated_at)
+		VALUES(?, ?, ?, ?, ?)
+		ON CONFLICT(kind) DO UPDATE SET
+			enabled=excluded.enabled,
+			config=excluded.config,
+			cursor=CASE WHEN excluded.cursor='{}' AND integrations.cursor!='{}' THEN integrations.cursor ELSE excluded.cursor END,
+			updated_at=excluded.updated_at`,
+		rec.Kind, enabled, cfg, cur, rec.UpdatedAt)
+	return err
+}
+
+func saveIntegrationCursor(db *sql.DB, kind string, cursor json.RawMessage) error {
+	if db == nil {
+		return nil
+	}
+	cur := strings.TrimSpace(string(cursor))
+	if cur == "" {
+		cur = "{}"
+	}
+	_, err := db.Exec(`
+		INSERT INTO integrations(kind, enabled, config, cursor, updated_at)
+		VALUES(?, 0, '{}', ?, ?)
+		ON CONFLICT(kind) DO UPDATE SET cursor=excluded.cursor, updated_at=excluded.updated_at`,
+		kind, cur, time.Now().Unix())
+	return err
+}
+
+// dedupInsert atomically records (source, dedupKey) in SQLite. It returns true
+// if the key is new and false if it was already processed.
+func dedupInsert(db *sql.DB, source, dedupKey string, now time.Time) (bool, error) {
+	if db == nil || source == "" || dedupKey == "" {
+		return true, nil
+	}
+	res, err := db.Exec(`INSERT OR IGNORE INTO integration_dedup(source, dedup_key, seen_at) VALUES(?, ?, ?)`,
+		source, dedupKey, now.Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func dedupPrune(db *sql.DB, cutoff time.Time) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	res, err := db.Exec(`DELETE FROM integration_dedup WHERE seen_at < ?`, cutoff.Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func saveIntegrationMessage(db *sql.DB, m IntegrationMessage) error {
+	if db == nil || m.EntryID == "" || m.Kind == "" || m.ExternalID == "" {
+		return nil
+	}
+	resolved := 0
+	if m.Resolved {
+		resolved = 1
+	}
+	if m.CreatedAt == 0 {
+		m.CreatedAt = time.Now().Unix()
+	}
+	_, err := db.Exec(`
+		INSERT INTO integration_messages(entry_id, kind, chat_id, external_id, resolved, created_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(entry_id, kind) DO UPDATE SET
+			chat_id=excluded.chat_id,
+			external_id=excluded.external_id,
+			resolved=excluded.resolved`,
+		m.EntryID, m.Kind, m.ChatID, m.ExternalID, resolved, m.CreatedAt)
+	return err
+}
+
+func getIntegrationMessage(db *sql.DB, entryID, kind string) (*IntegrationMessage, error) {
+	if db == nil || entryID == "" || kind == "" {
+		return nil, nil
+	}
+	var m IntegrationMessage
+	var resolved int
+	err := db.QueryRow(`SELECT entry_id, kind, chat_id, external_id, resolved, created_at FROM integration_messages WHERE entry_id=? AND kind=?`,
+		entryID, kind).Scan(&m.EntryID, &m.Kind, &m.ChatID, &m.ExternalID, &resolved, &m.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	m.Resolved = resolved != 0
+	return &m, nil
+}
+
+func getIntegrationMessageByExternal(db *sql.DB, kind, externalID string) (*IntegrationMessage, error) {
+	if db == nil || kind == "" || externalID == "" {
+		return nil, nil
+	}
+	var m IntegrationMessage
+	var resolved int
+	err := db.QueryRow(`SELECT entry_id, kind, chat_id, external_id, resolved, created_at FROM integration_messages WHERE kind=? AND external_id=? LIMIT 1`,
+		kind, externalID).Scan(&m.EntryID, &m.Kind, &m.ChatID, &m.ExternalID, &resolved, &m.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	m.Resolved = resolved != 0
+	return &m, nil
+}
+
+// markIntegrationMessageResolved flips resolved 0 -> 1 atomically and reports
+// whether this call performed the transition.
+func markIntegrationMessageResolved(db *sql.DB, entryID, kind string) (bool, error) {
+	if db == nil || entryID == "" || kind == "" {
+		return false, nil
+	}
+	res, err := db.Exec(`UPDATE integration_messages SET resolved=1 WHERE entry_id=? AND kind=? AND resolved=0`, entryID, kind)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }

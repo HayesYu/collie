@@ -60,8 +60,8 @@
       </a>
       <a class="nav-item" id="nav-auto" href="#/auto">
         <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
-        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">记忆 · 定时 · 收件箱</div></span>
-        <span class="count-pill" id="nav-queue" hidden></span>
+        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">记忆 · 定时 · 接入</div></span>
+        <span class="nav-right"><span class="count-pill attn" id="nav-int-err" hidden></span><span class="count-pill" id="nav-queue" hidden></span></span>
       </a>
     </nav>
 
@@ -110,6 +110,20 @@
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
         <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
+        <div class="th-pop-wrap" id="collie-threads-wrap" hidden>
+          <button type="button" class="th-head-btn" id="collie-threads-btn" aria-haspopup="true" aria-expanded="false" aria-controls="collie-threads-pop" title="当前对话中的话题线">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v9a4 4 0 0 0 4 4h8"/><path d="M14 14l4 4-4 4"/></svg>
+            <span class="th-head-lbl">话题线</span>
+            <span class="th-head-cnt" id="collie-threads-cnt"></span>
+          </button>
+          <div class="th-pop" id="collie-threads-pop" role="region" aria-label="话题线列表" hidden>
+            <div class="th-pop-head">
+              <span>话题线</span>
+              <span class="th-pop-sub" id="collie-threads-sub"></span>
+            </div>
+            <div class="th-pop-list" id="collie-threads-list" role="list"></div>
+          </div>
+        </div>
         <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
         </button>
@@ -196,6 +210,7 @@
         <button data-tab="memory" class="on">记忆</button>
         <button data-tab="timers">定时</button>
         <button data-tab="inbox">收件箱</button>
+        <button data-tab="integrations">接入</button>
         <button data-tab="settings">设置</button>
       </div>
       <div class="auto-body" id="auto-body"></div>
@@ -487,6 +502,25 @@
       <button class="btn primary" id="launch-go" value="go">启动</button>
     </footer>
   </form>
+</dialog>
+
+<!-- ───────────── integration config modal ───────────── -->
+<dialog class="sheet int-sheet" id="int-modal" closedby="any" aria-labelledby="int-modal-title">
+  <header class="int-sheet-head">
+    <span class="int-logo" id="int-modal-icon" aria-hidden="true"></span>
+    <div class="int-sheet-info">
+      <div class="int-sheet-title-row">
+        <h2 id="int-modal-title">配置接入</h2>
+        <span class="int-sheet-state" id="int-modal-state"></span>
+      </div>
+      <p class="int-sheet-sub" id="int-modal-sub"></p>
+    </div>
+    <button type="button" class="icon-btn" id="int-modal-close" autofocus aria-label="关闭配置弹窗" title="关闭 (Esc)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </header>
+  <div class="int-sheet-body" id="int-modal-body"></div>
+  <footer class="int-sheet-foot" id="int-modal-foot"></footer>
 </dialog>
 
 <!-- ───────────── image lightbox ───────────── -->

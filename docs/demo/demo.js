@@ -120,7 +120,37 @@
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: routerRun.kind, context: 23, rotate_at: 70, model: routerRun.model, effort: routerRun.effort, pending: routerPending() },
     entries, pending: computePending(), pinned: computePinned(), workers, queued: 0, queued_router: 0, paused: !!settings.settings.paused, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
+    integrations_summary: {
+      connected: demoFeishu.enabled && demoFeishu.health.state === "connected" ? 1 : 0,
+      error: demoFeishu.enabled && demoFeishu.health.state === "error" ? 1 : 0,
+      total: 1,
+    },
   });
+  const demoFeishu = {
+    kind: "feishu",
+    name: "飞书机器人",
+    subtitle: "长连接双向对话 · 零公网门槛",
+    description: "在飞书私信或群里 @Collie 直接派活，回复与选项按钮自动同步，点一下就能拍板。",
+    enabled: true,
+    configured: true,
+    secret_set: true,
+    config: {
+      region: "cn",
+      app_id: "cli_demo84f00009f21",
+      allow_open_ids: ["ou_demo9a2f7c10"],
+      allow_open_id: "ou_demo9a2f7c10",
+      group_mention_only: true,
+      instant_chat_sync: true,
+    },
+    health: {
+      state: "connected",
+      detail: "长连接在线",
+      last_ok_at: ago(3),
+      last_active_at: ago(3),
+      today_count: 6,
+    },
+    extra: { pairing: { active: false }, bot_name: "Collie" },
+  };
   let routerStatus = "idle";
 
   // Conversations, by pane. Tool steps read as one quiet line in the app.
@@ -551,6 +581,56 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       return json({ query: rawQ, results: hits.slice(0, lim), total: hits.length, has_more: hits.length > lim });
     }
     if (p === "/api/super/lark") return json({ ready: true, who: "Alex" });
+    if (p === "/api/super/integrations") {
+      return json({
+        integrations: [demoFeishu],
+        summary: sup().integrations_summary,
+        hook_key: settings.hook_key,
+        notify: {
+          notify_webhook: settings.settings.notify_webhook || "",
+          notify_lark: !!settings.settings.notify_lark,
+          notify_level: settings.settings.notify_level || "quiet",
+        },
+      });
+    }
+    if (p === "/api/super/integrations/feishu" && method === "POST") {
+      if (body.clear_secret) {
+        demoFeishu.secret_set = false;
+      } else if (body.secrets?.app_secret) {
+        demoFeishu.secret_set = true;
+      }
+      if (body.config) {
+        const oid = String(body.config.allow_open_id || "").trim();
+        demoFeishu.config = {
+          ...demoFeishu.config,
+          ...body.config,
+          allow_open_id: oid,
+          allow_open_ids: oid ? oid.split(/[,\s]+/).filter(Boolean) : [],
+        };
+      }
+      demoFeishu.configured = !!(demoFeishu.config.app_id && demoFeishu.secret_set);
+      if (typeof body.enabled === "boolean") demoFeishu.enabled = body.enabled && demoFeishu.configured;
+      demoFeishu.health = !demoFeishu.configured
+        ? { state: "unconfigured", today_count: 0 }
+        : !demoFeishu.enabled
+          ? { state: "disabled", today_count: demoFeishu.health.today_count || 0 }
+          : { state: "connected", detail: "长连接在线", last_ok_at: new Date().toISOString(), last_active_at: new Date().toISOString(), today_count: demoFeishu.health.today_count || 0 };
+      pushAll();
+      return json({ integration: demoFeishu, summary: sup().integrations_summary });
+    }
+    if (p === "/api/super/integrations/feishu/test" && method === "POST") {
+      return json({ ok: true, latency_ms: 42, message: "已连通（42ms），验证卡片已发至飞书（演示模式）" });
+    }
+    if (p === "/api/super/integrations/feishu/probe") {
+      return json({ ready: true, open_id: "ou_demo9a2f7c10", who: "Alex" });
+    }
+    if (p === "/api/super/integrations/feishu/pair" && method === "POST") {
+      demoFeishu.extra.pairing = { active: !body.cancel, remaining_sec: 120 };
+      return json({ ok: true, active: !body.cancel, message: "请在 2 分钟内用飞书给机器人发任意一条私信（演示模式）" });
+    }
+    if (p === "/api/super/notify/test" && method === "POST") {
+      return json({ ok: true, message: "测试提醒已发送（演示模式 HTTP 200）" });
+    }
     if (p === "/api/super/triggers") return json({ triggers, threads });
     if (p === "/api/super/subscribe" && method === "POST") {
       const th = threads.find((x) => x.id === body.thread);

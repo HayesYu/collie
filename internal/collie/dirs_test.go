@@ -455,12 +455,12 @@ assert.match(appJs, /enhanceDirInput\(cwdInput/, "launcher #l-cwd must use unifi
 assert.doesNotMatch(html, /<select[^>]*data-native/, "no HTML select may opt out of custom dropdown");
 assert.doesNotMatch(appJs, /<select[^>]*data-native/, "no dynamic JS select may opt out of custom dropdown");
 
-// 3b. Automation 4-tab simplification contracts (#t6546):
+// 3b. Automation 5-tab contracts (memory, timers, inbox, integrations, settings):
 const tabsMatch = html.match(/<div class="tabs" id="auto-tabs">([\s\S]*?)<\/div>/);
 assert.ok(tabsMatch, "auto-tabs must exist");
 const tabKeys = [...tabsMatch[1].matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
-assert.deepEqual(tabKeys, ["memory", "timers", "inbox", "settings"], "auto-tabs must contain exactly memory, timers, inbox, settings");
-assert.match(html, /id="nav-auto-sub">记忆 · 定时 · 收件箱</, "nav-auto-sub default text must be 记忆 · 定时 · 收件箱");
+assert.deepEqual(tabKeys, ["memory", "timers", "inbox", "integrations", "settings"], "auto-tabs must contain memory, timers, inbox, integrations, settings");
+assert.match(html, /id="nav-auto-sub">记忆 · 定时 · 接入</, "nav-auto-sub default text must be 记忆 · 定时 · 接入");
 assert.doesNotMatch(appJs, /id="settings-hooks-fold"/, "hooks UI must not be rendered in settings");
 assert.match(appJs, /id="inbox-thread-filter"/, "multi-thread filter must live in inbox");
 
@@ -489,7 +489,8 @@ vm.runInNewContext([
 ].join("\n"), sandbox);
 
 const { tildeForMachine, joinDirPath, buildDirBreadcrumbs, normalizeAutoTab } = sandbox.api;
-assert.equal(normalizeAutoTab("hooks"), "inbox");
+assert.equal(normalizeAutoTab("hooks"), "integrations");
+assert.equal(normalizeAutoTab("integrations"), "integrations");
 assert.equal(normalizeAutoTab("threads"), "inbox");
 assert.equal(normalizeAutoTab("bogus"), "memory");
 assert.equal(normalizeAutoTab("timers"), "timers");

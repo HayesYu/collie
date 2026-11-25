@@ -940,11 +940,16 @@
   function connect() {
     const ev = new EventSource("/api/events");
     ev.addEventListener("super", (e) => {
+      const prevSum = JSON.stringify(sup.integrations_summary || null);
       sup = normSup(JSON.parse(e.data));
       syncCollieNotifyWatermark(sup.entries, true);
       renderSide();
       renderRouterPendingBars();
       if (view === "collie") renderSuper();
+      if (view === "auto" && autoTab === "integrations") {
+        const nextSum = JSON.stringify(sup.integrations_summary || null);
+        if (nextSum !== prevSum && !$("#int-modal")?.open) loadAuto();
+      }
     });
     ev.addEventListener("state", (e) => {
       localState = JSON.parse(e.data);
@@ -1213,7 +1218,7 @@
     // The next time Collie set itself to look again, under 自动化 where its
     // timers are: "明天 09:00 再看：复查 paper_df…".
     const f = sup.follow;
-    $("#nav-auto-sub").textContent = f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "记忆 · 定时 · 收件箱";
+    $("#nav-auto-sub").textContent = f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "记忆 · 定时 · 接入";
     $("#nav-auto-sub").title = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}（点开看进行中的任务）` : "";
     $("#nav-auto-sub").classList.toggle("follow", !!f?.next);
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
@@ -1223,6 +1228,13 @@
       np.hidden = pend.length === 0;
       np.textContent = pend.length || "";
       np.title = pend.length ? `${pend.length} 条待你确认` : "";
+    }
+    const intErr = sup.integrations_summary?.error || 0;
+    const nie = $("#nav-int-err");
+    if (nie) {
+      nie.hidden = intErr === 0;
+      nie.textContent = intErr || "";
+      nie.title = intErr ? `${intErr} 个外部接入异常` : "";
     }
     $("#nav-queue").hidden = !sup.queued;
     $("#nav-queue").textContent = sup.queued;
@@ -1436,6 +1448,7 @@
     if (next !== "collie") {
       pendingOpen = false;
       hideSearchPanel();
+      closeCollieThreadsPop();
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
     }
     view = next; current = next === "ext" ? null : id;
@@ -2265,6 +2278,7 @@
     if (crewHTML !== prevCrew) crew.innerHTML = crewHTML;
     let html = "", prevRole = "";
     if (!sup.entries.length && !pendingSays.length) {
+      renderCollieThreadsMenu({ threads: new Map() });
       html = `<div class="hello"><img src="/icon.svg" alt="">
         <h3>一个入口，管一群 agent</h3>
         <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
@@ -2352,8 +2366,9 @@
         if (!th) return "";
         const isOpen = activeThreadRoot === r;
         return `<button type="button" class="thread-entry${isOpen ? " active" : ""}" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="${isOpen ? "true" : "false"}">` +
-          `<span class="te-live" aria-hidden="true"></span>${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
+          `${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
       };
+      renderCollieThreadsMenu(threadInfo);
       for (let ei = 0; ei < allEntries.length; ei++) {
         const e = allEntries[ei];
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
@@ -2807,12 +2822,43 @@
 
   // ───────────────────────────── automation view
   function normalizeAutoTab(t) {
-    if (t === "hooks" || t === "threads") return "inbox";
-    return ["memory", "timers", "inbox", "settings"].includes(t) ? t : "memory";
+    if (t === "hooks") return "integrations";
+    if (t === "threads") return "inbox";
+    return ["memory", "timers", "inbox", "integrations", "settings"].includes(t) ? t : "memory";
   }
   let autoTab = normalizeAutoTab(store.get("autoTab", "memory"));
   let inboxThread = "";
   let autoTimer;
+  let intPayload = null;
+  let intModalKind = null;
+  let intModalDraft = null;
+  let intPairTimer = null;
+  const INT_STATUS_TEXT = {
+    connected: "已连通",
+    connecting: "连接中",
+    error: "连接异常",
+    unconfigured: "未配置",
+    disabled: "已暂停",
+  };
+  const INT_ICONS = {
+    feishu: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 17.5V6.8l7.2 4.2L19 5.5v10.2c0 1.4-.9 2.6-2.3 2.9L9.8 20c-2.6.5-4.8-1-4.8-2.5Z"/><path d="M12.2 11 19 15.2"/></svg>`,
+    github: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.5 1.4-4.5-2.3-6.2-2.8m12.4 5.6v-3.5a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.3a4.9 4.9 0 0 0-1.3-3.4 4.6 4.6 0 0 0-.1-3.4s-1.1-.3-3.5 1.3a12.1 12.1 0 0 0-6.4 0C6.5 2.6 5.4 2.9 5.4 2.9a4.6 4.6 0 0 0-.1 3.4A4.9 4.9 0 0 0 4 9.7c0 4.9 3 6 5.8 6.3a3 3 0 0 0-.8 2.3v3.5"/></svg>`,
+    gitforge: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.2"/><circle cx="6.5" cy="17.5" r="2.2"/><circle cx="17.5" cy="9.5" r="2.2"/><path d="M6.5 8.7v6.6M17.5 11.7c0 3.2-2.2 5.8-8.8 5.8"/></svg>`,
+  };
+  const INT_COMING_SOON = [
+    {
+      kind: "github",
+      name: "GitHub",
+      subtitle: "PR · Issue · CI 主动追踪",
+      description: "零公网增量拉取关注仓库与 @我 的动态，支持只提醒、自动调研出建议，或交给负责该 PR 的 Agent。",
+    },
+    {
+      kind: "gitforge",
+      name: "代码托管 CLI 插件",
+      subtitle: "MR 评审 · 评论 @我 · 流水线失败",
+      description: "通过本机可插拔 CLI 适配器接入任意 Git 托管平台，免公网追踪待评审变更与失败检查。",
+    },
+  ];
   $("#auto-tabs").addEventListener("click", (e) => {
     const t = e.target.closest("button")?.dataset.tab;
     if (!t) return;
@@ -2837,16 +2883,19 @@
     store.set("autoTab", autoTab);
     memEditing = false;
     $("#auto-body")._memSig = "";
+    $("#auto-body").classList.toggle("is-integrations", autoTab === "integrations");
     $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
     if (restore) restoreSimpleScroll($("#auto-body"), restore);
     clearInterval(autoTimer);
     loadAuto(restore);
     if (autoTab === "inbox") autoTimer = setInterval(() => loadAuto(), 4000);
     if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
+    if (autoTab === "integrations") autoTimer = setInterval(() => { if (!$("#int-modal")?.open) loadAuto(); }, 6000);
   }
 
   async function loadAuto(restore = null) {
     const body = $("#auto-body");
+    body.classList.toggle("is-integrations", autoTab === "integrations");
     const keepTop = !restore && body.clientHeight > 0 ? { scrollTop: body.scrollTop, atBottom: body.scrollHeight - body.scrollTop - body.clientHeight <= AT_BOTTOM_PX } : null;
     const applyAfter = () => {
       if (restore) restoreSimpleScroll(body, restore);
@@ -2885,6 +2934,24 @@
         body.innerHTML = timersHTML(r.timers || []);
         if (endedOpen) { const d = body.querySelector("details[data-ended-timers]"); if (d) d.open = true; }
         applyAfter();
+      } else if (autoTab === "integrations") {
+        const r = await api("/api/super/integrations");
+        if (view !== "auto" || autoTab !== "integrations") return;
+        const advOpen = !!body.querySelector("#int-adv-fold[open]");
+        const focusedWebhook = document.activeElement?.id === "int-adv-webhook";
+        const draftWebhook = focusedWebhook ? document.activeElement.value : null;
+        intPayload = r;
+        if (!focusedWebhook) {
+          body.innerHTML = integrationsHTML(r);
+          if (advOpen) { const d = body.querySelector("#int-adv-fold"); if (d) d.open = true; }
+          applyAfter();
+        } else if (draftWebhook !== null && $("#int-adv-webhook")) {
+          $("#int-adv-webhook").value = draftWebhook;
+        }
+        api("/api/super/lark?fresh").then((l) => {
+          const el = $("#int-adv-lark-who");
+          if (el) el.textContent = l.ready ? `已就绪：发给 ${l.who || "本机登录用户"}（以机器人身份）` : `${l.problem}，当前不可用`;
+        }).catch(() => {});
       } else {
         const r = await api("/api/super/settings");
         if (view !== "auto" || autoTab !== "settings") return;
@@ -2896,6 +2963,459 @@
         }).catch(() => {});
       }
     } catch (err) { body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
+  }
+
+  // ───────────────────────────── integrations store & centered modal
+  function intEffectiveState(item) {
+    const raw = item?.health?.state;
+    if (raw && INT_STATUS_TEXT[raw]) return raw;
+    if (!item?.configured) return "unconfigured";
+    return item.enabled ? "connecting" : "disabled";
+  }
+  function intTimeHint(item, st) {
+    if (st === "unconfigured") return "尚未连接";
+    if (st === "disabled") return "已关闭接入";
+    if (st === "connecting") return item.health?.detail || "正在连接…";
+    if (st === "error") return item.health?.last_error ? item.health.last_error.slice(0, 32) : "需要检查配置";
+    if (item.health?.last_active_at) return `${ago(item.health.last_active_at)}活跃`;
+    if (item.health?.last_ok_at) return `${ago(item.health.last_ok_at)}连通`;
+    return "长连接在线";
+  }
+  function integrationsHTML(r) {
+    const live = Array.isArray(r?.integrations) ? r.integrations : [];
+    const liveKinds = new Set(live.map((x) => x.kind));
+    const coming = INT_COMING_SOON.filter((c) => !liveKinds.has(c.kind));
+    const notify = r?.notify || {};
+    const hasWebhook = !!String(notify.notify_webhook || "").trim();
+    const okCount = live.filter((x) => intEffectiveState(x) === "connected").length + (hasWebhook ? 1 : 0);
+    const errCount = live.filter((x) => intEffectiveState(x) === "error").length;
+    const summaryText = `已连通 ${okCount} 项 · ${errCount > 0 ? `${errCount} 项需处理` : "运行正常"}`;
+    const hookURL = `${location.origin}/hooks/ci?key=${encodeURIComponent(r?.hook_key || "")}`;
+    const advPill = hasWebhook
+      ? `<span class="sdot connected" aria-hidden="true"></span><span style="color:var(--fg);font-weight:500">已配置推送</span>`
+      : notify.notify_lark
+        ? `<span class="sdot disabled" aria-hidden="true"></span><span>仅兜底开启</span>`
+        : `<span class="sdot unconfigured" aria-hidden="true"></span><span>未配置</span>`;
+
+    const cards = live.map((item) => {
+      const st = intEffectiveState(item);
+      const actLabel = st === "error" ? "去修复 ›" : st === "unconfigured" ? "去配置 ›" : "配置 ›";
+      return `<article class="int-card${st === "error" ? " is-error" : ""}">
+        <div class="int-card-top">
+          <span class="int-logo">${INT_ICONS[item.kind] || INT_ICONS.gitforge}</span>
+          <div class="int-head">
+            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-open="${esc(item.kind)}" aria-label="配置 ${esc(item.name)}">${esc(item.name)}</button></h3>
+            <p class="int-sub">${esc(item.subtitle || "")}</p>
+          </div>
+          <div class="int-switch-wrap">
+            <button type="button" class="switch" role="switch" aria-checked="${item.enabled ? "true" : "false"}" aria-label="开关 ${esc(item.name)}" data-int-toggle="${esc(item.kind)}"></button>
+          </div>
+        </div>
+        <p class="int-desc">${esc(item.description || "")}</p>
+        <div class="int-foot">
+          <span class="int-status is-${esc(st)}">
+            <span class="sdot ${esc(st)}" aria-hidden="true"></span>
+            <span class="int-status-txt"><span class="int-state-lbl">${esc(INT_STATUS_TEXT[st] || st)}</span> · ${esc(intTimeHint(item, st))}</span>
+          </span>
+          <span class="int-act" aria-hidden="true">${actLabel}</span>
+        </div>
+      </article>`;
+    }).join("") + coming.map((item) => `
+      <article class="int-card is-coming">
+        <div class="int-card-top">
+          <span class="int-logo">${INT_ICONS[item.kind] || INT_ICONS.gitforge}</span>
+          <div class="int-head">
+            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-soon="${esc(item.name)}" aria-label="${esc(item.name)}（二期即将支持）">${esc(item.name)}</button></h3>
+            <p class="int-sub">${esc(item.subtitle)}</p>
+          </div>
+          <span class="int-coming-pill">即将支持</span>
+        </div>
+        <p class="int-desc">${esc(item.description)}</p>
+        <div class="int-foot">
+          <span class="int-status is-unconfigured">
+            <span class="sdot unconfigured" aria-hidden="true"></span>
+            <span class="int-status-txt"><span class="int-state-lbl">二期计划</span> · 敬请期待</span>
+          </span>
+          <span class="int-act" aria-hidden="true">规划中</span>
+        </div>
+      </article>`).join("");
+
+    return `<div class="int-intro-row">
+        <p class="panel-intro">接通你的日常工具，无需公网地址或开放端口。点开卡片在弹窗中完成配置与连通自检，Collie 会实时同步并按你选定的方式处理。</p>
+        <span class="int-summary-stat">${esc(summaryText)}</span>
+      </div>
+      <section class="int-grid" aria-label="可用接入">${cards}</section>
+      <details class="adv-fold" id="int-adv-fold">
+        <summary>
+          <span class="adv-sum-title">自定义通知与本地脚本（高级）</span>
+          <span class="adv-sum-desc">单向群机器人推送 · 本地脚本触发入口 · 旧版 lark-cli 兜底</span>
+          <span class="adv-sum-right">${advPill}</span>
+        </summary>
+        <div class="adv-inner">
+          <div class="adv-block">
+            <div class="adv-block-head">
+              <span class="adv-block-title">通用单向推送地址</span>
+              <button type="button" class="btn small" data-int-adv-save>保存地址</button>
+            </div>
+            <p class="adv-block-hint">把 Collie 的提醒推送到任意群机器人或通知地址；你正在浏览 Collie 网页时自动静默。</p>
+            <div class="adv-url-row">
+              <input id="int-adv-webhook" type="url" value="${esc(notify.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" autocomplete="off" spellcheck="false">
+              <button type="button" class="btn small" data-int-adv-test>发送测试提醒</button>
+            </div>
+          </div>
+          <div class="adv-block">
+            <span class="adv-block-title">本地脚本事件入口</span>
+            <p class="adv-block-hint">给本地 CI、定时脚本或监控工具向 Collie 推送事件，带上密钥直接 POST JSON 即可。</p>
+            <div class="int-code-line">
+              <span id="int-local-hook-url">${esc(hookURL)}</span>
+              <button type="button" class="btn ghost small" data-copy="${esc(hookURL)}">复制</button>
+            </div>
+          </div>
+          <div class="adv-block">
+            <div class="int-toggle-row">
+              <div class="tl">
+                <b>保留本机 lark-cli 单向提醒作为兜底</b>
+                <small>仅在未启用上方「飞书机器人」长连接时生效，启用长连接后会自动接管双向卡片推送。<span id="int-adv-lark-who"></span></small>
+              </div>
+              <button type="button" class="switch" role="switch" aria-checked="${notify.notify_lark ? "true" : "false"}" aria-label="保留本机 lark-cli 兜底" data-int-adv-lark></button>
+            </div>
+          </div>
+        </div>
+      </details>`;
+  }
+
+  const intModal = $("#int-modal");
+  async function closeIntModal(reason = "cancel") {
+    if (!intModal?.open || intModal.hasAttribute("data-closing")) return;
+    clearInterval(intPairTimer);
+    intPairTimer = null;
+    if (!supportsTopLayerExit()) {
+      intModal.setAttribute("data-closing", "");
+      const anims = intModal.getAnimations({ subtree: true });
+      if (anims.length) {
+        await Promise.race([
+          Promise.allSettled(anims.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 240)),
+        ]);
+      }
+      if (!intModal.hasAttribute("data-closing")) return;
+      intModal.removeAttribute("data-closing");
+    }
+    if (intModal.open) intModal.close(reason);
+  }
+  if (intModal) {
+    $("#int-modal-close")?.addEventListener("click", () => closeIntModal("cancel"));
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      let pressedOutside = false;
+      const outside = (ev) => {
+        const r = intModal.getBoundingClientRect();
+        return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+      };
+      intModal.addEventListener("pointerdown", (ev) => { pressedOutside = ev.target === intModal && outside(ev); });
+      intModal.addEventListener("pointerup", (ev) => { if (pressedOutside && outside(ev)) closeIntModal("cancel"); pressedOutside = false; });
+    }
+    intModal.addEventListener("cancel", (ev) => {
+      if (!supportsTopLayerExit()) {
+        ev.preventDefault();
+        closeIntModal("cancel");
+      }
+    });
+    intModal.addEventListener("close", () => {
+      clearInterval(intPairTimer);
+      intPairTimer = null;
+      intModal.returnValue = "";
+      intModal.removeAttribute("data-closing");
+      intModalKind = null;
+      intModalDraft = null;
+    });
+  }
+
+  function openIntModal(kind) {
+    const item = (intPayload?.integrations || []).find((x) => x.kind === kind);
+    if (!item || !intModal) return;
+    intModalKind = kind;
+    const cfg = item.config || {};
+    intModalDraft = {
+      kind,
+      region: cfg.region || "cn",
+      app_id: cfg.app_id || "",
+      app_secret: "",
+      secret_set: !!item.secret_set,
+      allow_open_id: cfg.allow_open_id || (Array.isArray(cfg.allow_open_ids) ? cfg.allow_open_ids.join(", ") : ""),
+      group_mention_only: cfg.group_mention_only !== false,
+      instant_chat_sync: cfg.instant_chat_sync !== false,
+      enabled: !!item.enabled,
+      health: item.health || { state: "unconfigured" },
+      pairing: item.extra?.pairing || { active: false },
+      testState: null,
+      testMsg: "",
+      saving: false,
+    };
+    renderIntModal(item);
+    if (!intModal.open) intModal.showModal();
+    $("#int-modal-body").scrollTop = 0;
+    if (intModalDraft.pairing?.active) startPairPoll();
+  }
+
+  function startPairPoll() {
+    clearInterval(intPairTimer);
+    intPairTimer = setInterval(async () => {
+      if (!intModal?.open || intModalKind !== "feishu" || !intModalDraft) {
+        clearInterval(intPairTimer);
+        intPairTimer = null;
+        return;
+      }
+      try {
+        const r = await api("/api/super/integrations");
+        intPayload = r;
+        const item = (r.integrations || []).find((x) => x.kind === "feishu");
+        if (!item) return;
+        const pairing = item.extra?.pairing || { active: false };
+        intModalDraft.pairing = pairing;
+        intModalDraft.health = item.health || intModalDraft.health;
+        if (pairing.captured_open_id) {
+          intModalDraft.allow_open_id = item.config?.allow_open_id || pairing.captured_open_id;
+          clearInterval(intPairTimer);
+          intPairTimer = null;
+          toast("已自动捕获并锁定你的飞书 OpenID");
+          if (view === "auto" && autoTab === "integrations") loadAuto();
+        } else if (!pairing.active) {
+          clearInterval(intPairTimer);
+          intPairTimer = null;
+        }
+        renderIntModal(item);
+      } catch {}
+    }, 2000);
+  }
+
+  function renderIntModal(item) {
+    if (!intModal || !intModalDraft) return;
+    const d = intModalDraft;
+    const st = intEffectiveState({ configured: !!d.app_id && (d.secret_set || !!d.app_secret), enabled: d.enabled, health: d.health });
+    $("#int-modal-icon").innerHTML = INT_ICONS[d.kind] || INT_ICONS.gitforge;
+    $("#int-modal-title").textContent = item?.name || "飞书机器人";
+    $("#int-modal-sub").textContent = item?.subtitle || "长连接双向对话 · 零公网门槛";
+    $("#int-modal-state").innerHTML = `<span class="sdot ${esc(st)}" aria-hidden="true"></span><span>${esc(INT_STATUS_TEXT[st] || st)}</span>`;
+
+    const testRow = () => {
+      if (d.testState === "testing") {
+        return `<span class="int-test-status"><span class="int-spinner" aria-hidden="true"></span><span>正在校验应用凭据并尝试发送验证卡片…</span></span>`;
+      }
+      if (d.testState === "ok") {
+        return `<span class="int-test-status ok"><svg viewBox="0 0 24 24" style="width:15px;height:15px" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>${esc(d.testMsg)}</span></span>`;
+      }
+      if (d.testState === "err") {
+        return `<span class="int-test-status err">${esc(d.testMsg)}</span>`;
+      }
+      return `<span class="int-test-status muted">不会写入正式对话或唤醒 Collie</span>`;
+    };
+
+    const pairBanner = d.pairing?.active ? `
+      <div class="int-pair-box" role="status">
+        <span>等待私信配对中（剩余约 ${Math.max(1, d.pairing.remaining_sec || 120)} 秒）：请用飞书给机器人发任意一条私信，系统将自动锁定你的 OpenID。</span>
+        <button type="button" class="btn ghost small" id="fs-pair-cancel">取消</button>
+      </div>` : "";
+
+    $("#int-modal-body").innerHTML = `
+      ${st === "error" && d.health?.last_error ? `
+        <div class="int-modal-alert" role="alert">
+          <span class="sdot error" aria-hidden="true"></span>
+          <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+        </div>` : ""}
+
+      <section class="int-sec">
+        <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+        <div class="int-field">
+          <span class="int-field-label">平台区域</span>
+          <div class="seg" role="group" aria-label="平台区域">
+            <button type="button" class="${d.region === "cn" ? "on" : ""}" data-fs-region="cn">国内飞书</button>
+            <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">海外 Lark</button>
+          </div>
+        </div>
+        <label class="int-field">
+          <span class="int-field-label">App ID</span>
+          <input id="fs-app-id" class="mono" value="${esc(d.app_id)}" placeholder="cli_xxxxxxxxxxxx" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="int-field">
+          <span class="int-field-label">App Secret <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></span>
+          <input id="fs-app-secret" type="password" value="${esc(d.app_secret)}" placeholder="${d.secret_set ? "已保存在 ~/.collie/secrets.json（留空则保持不变）" : "粘贴应用的 App Secret"}" autocomplete="new-password">
+          <p class="int-field-help">凭据以 <code>0600</code> 权限单独落盘，界面、接口与日志永不回显明文。</p>
+        </label>
+      </section>
+
+      <section class="int-sec">
+        <h3 class="int-sec-title">安全白名单与对话方式</h3>
+        <div class="int-field">
+          <label class="int-field-label" for="fs-openid">允许对话的本人 OpenID <span class="opt">强烈建议</span></label>
+          <div class="int-input-row">
+            <input id="fs-openid" class="mono" value="${esc(d.allow_open_id)}" placeholder="ou_xxxxxxxxxxxx（多个可用逗号隔开）" autocomplete="off" spellcheck="false">
+            <button type="button" class="btn small" id="fs-detect-id" title="从本机 lark-cli 读取当前登录账号">自动填入</button>
+            <button type="button" class="btn small" id="fs-pair-btn" ${d.pairing?.active ? "disabled" : ""} title="给机器人发一条私信自动抓拍锁定">私信配对</button>
+          </div>
+          ${pairBanner}
+          <p class="int-field-help">仅白名单账号可唤醒 Collie 与点击卡片拍板按钮，防止他人借机器人操作你的电脑。</p>
+        </div>
+        <div class="int-toggle-row">
+          <div class="tl">
+            <b>群聊中仅响应 @Collie</b>
+            <small>私信默认直接回复；拉进群后只有 @机器人 才会触发，不打扰群聊。</small>
+          </div>
+          <button type="button" class="switch" id="fs-mention-sw" role="switch" aria-checked="${d.group_mention_only ? "true" : "false"}" aria-label="群聊中仅响应 @Collie"></button>
+        </div>
+        <div class="int-toggle-row">
+          <div class="tl">
+            <b>飞书对话立即同步卡片</b>
+            <small>从飞书发出的消息会立刻回传交互卡片，不受「网页在线静默」限制。</small>
+          </div>
+          <button type="button" class="switch" id="fs-sync-sw" role="switch" aria-checked="${d.instant_chat_sync ? "true" : "false"}" aria-label="飞书对话立即同步卡片"></button>
+        </div>
+      </section>
+
+      <section class="int-sec">
+        <h3 class="int-sec-title">连通自检</h3>
+        <div class="int-test-box">
+          <div class="int-test-head">
+            <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
+            ${testRow()}
+          </div>
+        </div>
+      </section>
+    `;
+
+    $("#int-modal-foot").innerHTML = `
+      <button type="button" class="btn ghost small" id="fs-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>
+      <div class="int-sheet-foot-right">
+        <button type="button" class="btn" id="fs-cancel-btn">取消</button>
+        <button type="button" class="btn primary" id="fs-save-btn" ${d.saving ? "disabled" : ""}>${d.saving ? "保存中…" : "保存并应用"}</button>
+      </div>
+    `;
+
+    const draftConfigPayload = () => ({
+      region: d.region,
+      app_id: d.app_id.trim(),
+      allow_open_id: d.allow_open_id.trim(),
+      group_mention_only: d.group_mention_only,
+      instant_chat_sync: d.instant_chat_sync,
+    });
+    const draftSecretsPayload = () => {
+      const s = {};
+      if (d.app_id.trim()) s.app_id = d.app_id.trim();
+      if (d.app_secret.trim()) s.app_secret = d.app_secret.trim();
+      return s;
+    };
+
+    intModal.querySelectorAll("[data-fs-region]").forEach((b) => {
+      b.addEventListener("click", () => { d.region = b.dataset.fsRegion; renderIntModal(item); });
+    });
+    $("#fs-app-id")?.addEventListener("input", (ev) => { d.app_id = ev.target.value; });
+    $("#fs-app-secret")?.addEventListener("input", (ev) => { d.app_secret = ev.target.value; });
+    $("#fs-openid")?.addEventListener("input", (ev) => { d.allow_open_id = ev.target.value; });
+    $("#fs-mention-sw")?.addEventListener("click", () => { d.group_mention_only = !d.group_mention_only; renderIntModal(item); });
+    $("#fs-sync-sw")?.addEventListener("click", () => { d.instant_chat_sync = !d.instant_chat_sync; renderIntModal(item); });
+
+    $("#fs-detect-id")?.addEventListener("click", async () => {
+      try {
+        const res = await api("/api/super/integrations/feishu/probe");
+        if (res.ready && res.open_id) {
+          d.allow_open_id = res.open_id;
+          const inp = $("#fs-openid");
+          if (inp) inp.value = d.allow_open_id;
+          toast(`已识别本机飞书账号${res.who ? `（${res.who}）` : ""}并填入`);
+        } else {
+          toast(res.problem || "未检测到本机 lark-cli 登录账号，可使用「私信配对」", "attn");
+        }
+      } catch (err) { toast(err.message, "attn"); }
+    });
+
+    $("#fs-pair-btn")?.addEventListener("click", async () => {
+      try {
+        const res = await api("/api/super/integrations/feishu/pair", { body: {} });
+        d.pairing = { active: true, remaining_sec: 120 };
+        renderIntModal(item);
+        startPairPoll();
+        toast(res.message || "已开启 2 分钟私信配对");
+      } catch (err) { toast(err.message, "attn"); }
+    });
+    $("#fs-pair-cancel")?.addEventListener("click", async () => {
+      try {
+        await api("/api/super/integrations/feishu/pair", { body: { cancel: true } });
+        d.pairing = { active: false };
+        clearInterval(intPairTimer);
+        intPairTimer = null;
+        renderIntModal(item);
+      } catch (err) { toast(err.message, "attn"); }
+    });
+
+    $("#fs-test-btn")?.addEventListener("click", async () => {
+      if (!d.app_id.trim() || (!d.secret_set && !d.app_secret.trim())) {
+        d.testState = "err";
+        d.testMsg = "请先填写 App ID 和 App Secret 再测试连通";
+        renderIntModal(item);
+        return;
+      }
+      d.testState = "testing";
+      d.testMsg = "";
+      renderIntModal(item);
+      try {
+        const res = await api("/api/super/integrations/feishu/test", {
+          body: { config: draftConfigPayload(), secrets: draftSecretsPayload() },
+        });
+        if (!intModal.open || intModalKind !== "feishu") return;
+        d.testState = res.ok ? "ok" : "err";
+        d.testMsg = res.message || (res.ok ? "测试连通成功" : "测试失败");
+        renderIntModal(item);
+      } catch (err) {
+        if (!intModal.open || intModalKind !== "feishu") return;
+        d.testState = "err";
+        d.testMsg = err.message;
+        renderIntModal(item);
+      }
+    });
+
+    $("#fs-reset-btn")?.addEventListener("click", async () => {
+      d.saving = true;
+      renderIntModal(item);
+      try {
+        await api("/api/super/integrations/feishu", {
+          body: {
+            enabled: false,
+            clear_secret: true,
+            config: { region: "cn", app_id: "", allow_open_id: "", group_mention_only: true, instant_chat_sync: true },
+          },
+        });
+        toast("已清空飞书本地配置与凭据");
+        await closeIntModal("reset");
+        if (view === "auto" && autoTab === "integrations") loadAuto();
+      } catch (err) {
+        d.saving = false;
+        renderIntModal(item);
+        toast(err.message, "attn");
+      }
+    });
+
+    $("#fs-cancel-btn")?.addEventListener("click", () => closeIntModal("cancel"));
+
+    $("#fs-save-btn")?.addEventListener("click", async () => {
+      const hasCreds = !!d.app_id.trim() && (d.secret_set || !!d.app_secret.trim());
+      d.saving = true;
+      renderIntModal(item);
+      try {
+        await api("/api/super/integrations/feishu", {
+          body: {
+            enabled: hasCreds,
+            config: draftConfigPayload(),
+            secrets: draftSecretsPayload(),
+          },
+        });
+        toast(hasCreds ? "飞书长连接配置已保存并热重载" : "配置已保存（补充凭据后自动启用）");
+        await closeIntModal("saved");
+        if (view === "auto" && autoTab === "integrations") loadAuto();
+      } catch (err) {
+        d.saving = false;
+        renderIntModal(item);
+        toast(err.message, "attn");
+      }
+    });
   }
 
   // ───────────────────────────── memory: what Collie keeps between sessions
@@ -3412,6 +3932,7 @@
 
       <section class="card set-sec">
         <header><h4>通知</h4></header>
+        <p class="int-set-note">想在飞书里双向对话、直接点交互卡片按钮拍板？前往 <button type="button" data-go-tab="integrations">接入 → 飞书机器人</button> 一键配置。</p>
         <div class="set-grid">
           <label class="check span3"><input type="checkbox" name="notify_lark" ${s.notify_lark ? "checked" : ""}> 用 hub 上的 lark-cli 发飞书消息给你<small id="lark-who" class="muted">· 正在看 hub 上的 lark-cli…</small></label>
           <label>Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" autocorrect="off" autocapitalize="off" spellcheck="false"><small>飞书 / Lark 机器人或 Slack</small></label>
@@ -3472,6 +3993,70 @@
   $("#auto-body").addEventListener("click", async (e) => {
     const t = e.target.closest("button");
     if (!t) return;
+    if (t.dataset.goTab) {
+      autoTab = normalizeAutoTab(t.dataset.goTab);
+      store.set("autoTab", autoTab);
+      openAuto();
+      return;
+    }
+    if (t.dataset.intSoon) {
+      toast(`${t.dataset.intSoon} 将在二期上线，敬请期待`);
+      return;
+    }
+    if (t.dataset.intOpen) {
+      openIntModal(t.dataset.intOpen);
+      return;
+    }
+    if (t.dataset.intToggle) {
+      e.stopPropagation();
+      const kind = t.dataset.intToggle;
+      const item = (intPayload?.integrations || []).find((x) => x.kind === kind);
+      if (!item) return;
+      if (!item.enabled && !item.configured) {
+        openIntModal(kind);
+        toast("请先完成必要配置再开启");
+        return;
+      }
+      t.disabled = true;
+      try {
+        await api(`/api/super/integrations/${encodeURIComponent(kind)}`, { body: { enabled: !item.enabled } });
+        toast(!item.enabled ? `已开启 ${item.name}` : `已暂停 ${item.name}`);
+        await loadAuto();
+      } catch (err) { toast(err.message, "attn"); t.disabled = false; }
+      return;
+    }
+    if (t.hasAttribute("data-int-adv-save")) {
+      const url = ($("#int-adv-webhook")?.value || "").trim();
+      try {
+        const cur = await api("/api/super/settings");
+        await api("/api/super/settings", { body: { settings: { ...cur.settings, notify_webhook: url } } });
+        toast(url ? "已保存通用单向推送地址" : "已清空通用单向推送地址");
+        loadAuto();
+      } catch (err) { toast(err.message, "attn"); }
+      return;
+    }
+    if (t.hasAttribute("data-int-adv-test")) {
+      const url = ($("#int-adv-webhook")?.value || "").trim();
+      if (!url) { toast("请先填写推送地址再测试", "attn"); $("#int-adv-webhook")?.focus(); return; }
+      t.disabled = true;
+      try {
+        const res = await api("/api/super/notify/test", { body: { url } });
+        toast(res.message || "测试提醒已发送");
+      } catch (err) { toast(err.message, "attn"); }
+      finally { t.disabled = false; }
+      return;
+    }
+    if (t.hasAttribute("data-int-adv-lark")) {
+      const next = t.getAttribute("aria-checked") !== "true";
+      t.disabled = true;
+      try {
+        const cur = await api("/api/super/settings");
+        await api("/api/super/settings", { body: { settings: { ...cur.settings, notify_lark: next } } });
+        toast(next ? "已开启本机 lark-cli 兜底提醒" : "已关闭本机 lark-cli 兜底提醒");
+        await loadAuto();
+      } catch (err) { toast(err.message, "attn"); t.disabled = false; }
+      return;
+    }
     if (t.dataset.unsubWorker && t.dataset.unsubThread) {
       try {
         await api("/api/super/subscribe", { body: { worker: t.dataset.unsubWorker, thread: t.dataset.unsubThread, off: true } });
@@ -6520,6 +7105,85 @@
   });
 
   // ───────────────────────────── natural reply-chain thread drawer
+  const thPopWrap = $("#collie-threads-wrap");
+  const thHeadBtn = $("#collie-threads-btn");
+  const thHeadCnt = $("#collie-threads-cnt");
+  const thPop = $("#collie-threads-pop");
+  const thPopSub = $("#collie-threads-sub");
+  const thPopList = $("#collie-threads-list");
+  let thPopSig = "";
+
+  function closeCollieThreadsPop() {
+    if (!thPop || thPop.hidden) return;
+    thPop.hidden = true;
+    thHeadBtn?.setAttribute("aria-expanded", "false");
+  }
+  function renderCollieThreadsMenu(threadInfo) {
+    if (!thPopWrap || !thHeadBtn || !thHeadCnt || !thPop || !thPopList) return;
+    const all = [...(threadInfo?.threads?.values() || [])].sort((a, b) => {
+      const ta = +new Date(a.latest?.at || 0) || 0;
+      const tb = +new Date(b.latest?.at || 0) || 0;
+      if (tb !== ta) return tb - ta;
+      return String(b.latest?.id || "").localeCompare(String(a.latest?.id || ""));
+    });
+    if (!all.length) {
+      thPopWrap.hidden = true;
+      closeCollieThreadsPop();
+      thPopSig = "";
+      return;
+    }
+    thPopWrap.hidden = false;
+    thHeadCnt.textContent = String(all.length);
+    thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
+    const shown = all.slice(0, 30);
+    if (thPopSub) {
+      thPopSub.textContent = all.length > shown.length ? `最近活跃前 ${shown.length} / ${all.length} 条` : `共 ${all.length} 条 · 按最近活跃`;
+    }
+    const sig = JSON.stringify([activeThreadRoot || "", shown.map((th) => [th.rootId, th.replyCount, th.latest?.id || "", th.latest?.at || "", th.title])]);
+    if (sig === thPopSig) return;
+    thPopSig = sig;
+    thPopList.innerHTML = shown.map((th) => {
+      const isAct = activeThreadRoot === th.rootId;
+      const lastAt = th.latest?.at ? sepTime(+new Date(th.latest.at)) : "";
+      const metaParts = [`${th.replyCount} 条回复`];
+      if (th.branchCount > 0) metaParts.push("含分支");
+      return `<button type="button" class="th-pop-item${isAct ? " active" : ""}" role="listitem" data-th-pick="${esc(th.rootId)}" data-th-latest="${esc(entryKey(th.latest))}">
+        <div class="th-pop-title" title="${esc(th.fullTitle || th.title)}">${esc(th.title)}</div>
+        <div class="th-pop-meta"><span>${esc(metaParts.join(" · "))}</span><span>${esc(lastAt)}</span></div>
+      </button>`;
+    }).join("");
+  }
+  thHeadBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!thPop) return;
+    const willOpen = thPop.hidden;
+    $$(".menu").forEach((m) => { m.hidden = true; });
+    if (willOpen) {
+      renderCollieThreadsMenu(computeReplyThreads(chatEntries()));
+      thPop.hidden = false;
+      thHeadBtn.setAttribute("aria-expanded", "true");
+    } else {
+      closeCollieThreadsPop();
+    }
+  });
+  thPopList?.addEventListener("click", (e) => {
+    const item = e.target.closest("[data-th-pick]");
+    if (!item) return;
+    const rootId = item.dataset.thPick;
+    const latestId = item.dataset.thLatest || "";
+    closeCollieThreadsPop();
+    if (rootId) openThreadDrawer(rootId, latestId, latestId);
+  });
+  document.addEventListener("click", (e) => {
+    if (thPop && !thPop.hidden && !e.target.closest("#collie-threads-wrap")) closeCollieThreadsPop();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && thPop && !thPop.hidden) {
+      closeCollieThreadsPop();
+      thHeadBtn?.focus();
+    }
+  });
+
   const tdDrawer = $("#thread-drawer");
   const tdScrim = $("#thread-scrim");
   const tdTitleEl = $("#td-title");
@@ -8009,7 +8673,11 @@
   document.addEventListener("click", (e) => {
     const opener = e.target.closest("[data-menu]");
     $$(".menu").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
-    if (opener) { const m = $("#" + opener.dataset.menu); m.hidden = !m.hidden; }
+    if (opener) {
+      closeCollieThreadsPop();
+      const m = $("#" + opener.dataset.menu);
+      m.hidden = !m.hidden;
+    }
   });
 
   document.addEventListener("click", async (e) => {

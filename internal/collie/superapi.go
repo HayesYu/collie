@@ -48,6 +48,12 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("POST /api/super/dream", s.superDream)
 	api("POST /api/super/router/restart", s.superRestartRouter)
+	api("GET /api/super/integrations", s.superIntegrations)
+	api("POST /api/super/integrations/{kind}", s.superSaveIntegration)
+	api("POST /api/super/integrations/{kind}/test", s.superTestIntegration)
+	api("GET /api/super/integrations/{kind}/probe", s.superProbeIntegration)
+	api("POST /api/super/integrations/feishu/pair", s.superFeishuPair)
+	api("POST /api/super/notify/test", s.superTestNotify)
 	mux.HandleFunc("POST /hooks/{source}", s.webhook)
 }
 
@@ -87,6 +93,8 @@ type superView struct {
 	Paused       bool `json:"paused"`
 	// Follow: the next time Collie set itself to look at something again.
 	Follow *followView `json:"follow,omitempty"`
+	// IntegrationsSummary: live counts of connected/error integrations for sidebar & UI badges.
+	IntegrationsSummary *IntegrationsSummary `json:"integrations_summary,omitempty"`
 }
 
 type followView struct {
@@ -152,6 +160,10 @@ func (s *Server) superState(ctx context.Context) superView {
 	}
 	sort.Slice(v.Workers, func(i, j int) bool { return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt) })
 	v.Follow = sp.followLocked()
+	if sp.integrations != nil {
+		sum := sp.integrations.Summary()
+		v.IntegrationsSummary = &sum
+	}
 	for _, t := range sp.st.Triggers {
 		if t.Status == "queued" {
 			v.Queued++
@@ -229,6 +241,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"entry": prev.entry, "trigger": prev.trigger, "duplicate": true})
 		return
 	}
+	beforePending := sp.pendingLocked(now)
 	re := sp.sayQuoteLocked(body.Re)
 	e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
 	// The composer's "派到" chip: a one-off choice the router should honour.
@@ -282,7 +295,31 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	}
 	t := sp.ingestLocked("chat", mainThread, "you", text, "", "", e.ID)
 	sp.recordSayDedupLocked(cid, e.ID, t.ID, now)
+	afterPending := sp.pendingLocked(now)
+	mgr := sp.integrations
 	sp.mu.Unlock()
+	if mgr != nil {
+		stillPending := make(map[string]bool, len(afterPending))
+		for _, p := range afterPending {
+			stillPending[p.ID] = true
+		}
+		resolvedIDs := map[string]bool{}
+		for _, p := range beforePending {
+			if !stillPending[p.ID] {
+				resolvedIDs[p.ID] = true
+			}
+		}
+		if re != nil && re.Entry != "" && re.Who == "Collie" {
+			resolvedIDs[re.Entry] = true
+		}
+		if len(resolvedIDs) > 0 {
+			summary := "已在网页端回复：" + clip(oneLine(body.Text), 40)
+			for rid := range resolvedIDs {
+				id := rid
+				go mgr.SyncResolved(context.Background(), id, summary, "")
+			}
+		}
+	}
 	writeJSON(w, 200, map[string]any{"entry": e.ID, "trigger": t.ID})
 }
 
@@ -900,6 +937,169 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) superRestartRouter(w http.ResponseWriter, r *http.Request) {
 	s.sup.RestartRouter(r.Context())
 	writeJSON(w, 202, map[string]any{"ok": true})
+}
+
+// ---------------------------------------------------------------- integrations
+
+func (s *Server) superIntegrations(w http.ResponseWriter, r *http.Request) {
+	sp := s.sup
+	var list []IntegrationView
+	var sum IntegrationsSummary
+	if sp.integrations != nil {
+		list = sp.integrations.ListViews()
+		sum = sp.integrations.Summary()
+	} else {
+		list = []IntegrationView{}
+	}
+	sp.mu.Lock()
+	st := sp.st.Settings
+	sp.mu.Unlock()
+	writeJSON(w, 200, map[string]any{
+		"integrations": list,
+		"summary":      sum,
+		"hook_key":     s.hookKey(),
+		"notify": map[string]any{
+			"notify_webhook": st.NotifyWebhook,
+			"notify_lark":    st.NotifyLark,
+			"notify_level":   st.NotifyLevel,
+		},
+	})
+}
+
+func (s *Server) superSaveIntegration(w http.ResponseWriter, r *http.Request) {
+	if s.sup.integrations == nil {
+		writeJSON(w, 503, map[string]any{"error": "integrations manager not ready"})
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
+	var req SaveRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	view, err := s.sup.integrations.Save(kind, req)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"integration": view,
+		"summary":     s.sup.integrations.Summary(),
+	})
+}
+
+func (s *Server) superTestIntegration(w http.ResponseWriter, r *http.Request) {
+	if s.sup.integrations == nil {
+		writeJSON(w, 503, map[string]any{"error": "integrations manager not ready"})
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
+	var req SaveRequest
+	// Allow empty body or partial JSON overlay.
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeJSON(w, 400, map[string]any{"error": "invalid JSON body"})
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	res, err := s.sup.integrations.Test(ctx, kind, req)
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, res)
+}
+
+func (s *Server) superProbeIntegration(w http.ResponseWriter, r *http.Request) {
+	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
+	switch kind {
+	case feishuKind:
+		_, openID, who, problem := lark.get(true)
+		writeJSON(w, 200, map[string]any{
+			"ready":   problem == "" && openID != "",
+			"open_id": openID,
+			"who":     who,
+			"problem": problem,
+		})
+	default:
+		writeJSON(w, 404, map[string]any{"error": "不支持探测该接入：" + kind})
+	}
+}
+
+func (s *Server) superFeishuPair(w http.ResponseWriter, r *http.Request) {
+	if s.sup.feishu == nil {
+		writeJSON(w, 503, map[string]any{"error": "feishu integration not available"})
+		return
+	}
+	var body struct {
+		Cancel bool `json:"cancel"`
+	}
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		_ = json.Unmarshal(raw, &body)
+	}
+	if body.Cancel {
+		s.sup.feishu.StopPairing()
+		writeJSON(w, 200, map[string]any{"ok": true, "active": false})
+		return
+	}
+	exp, err := s.sup.feishu.StartPairing(feishuDefaultPairWindow)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":         true,
+		"active":     true,
+		"expires_at": exp,
+		"message":    "请在 2 分钟内用飞书给机器人发任意一条私信，系统将自动锁定你的 OpenID。",
+	})
+}
+
+func (s *Server) superTestNotify(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL string `json:"url"`
+	}
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 16384))
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		_ = json.Unmarshal(raw, &body)
+	}
+	targetURL := strings.TrimSpace(body.URL)
+	if targetURL == "" {
+		s.sup.mu.Lock()
+		targetURL = strings.TrimSpace(s.sup.st.Settings.NotifyWebhook)
+		s.sup.mu.Unlock()
+	}
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		writeJSON(w, 400, map[string]any{"error": "请填写以 http:// 或 https:// 开头的推送地址"})
+		return
+	}
+	msg := "Collie · 测试提醒：通用单向推送通路正常。"
+	payload, _ := json.Marshal(map[string]any{
+		"msg_type": "text", "content": map[string]string{"text": msg},
+		"text": msg,
+	})
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, strings.NewReader(string(payload)))
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": "推送地址格式无效"})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"error": "发送失败：" + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		writeJSON(w, 502, map[string]any{"error": fmt.Sprintf("目标地址返回 HTTP %d", resp.StatusCode)})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "message": fmt.Sprintf("测试提醒已发送（HTTP %d）", resp.StatusCode)})
 }
 
 // ---------------------------------------------------------------- webhooks

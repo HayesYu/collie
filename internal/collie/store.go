@@ -78,6 +78,8 @@ type Entry struct {
 	Options []string `json:"options,omitempty"`
 	// Marked by Collie (--check) when a reply without options still awaits the human's review or action.
 	Check bool `json:"check,omitempty"`
+	// External chat channel that originated this entry (e.g. "feishu"), empty for Web UI.
+	Channel string `json:"channel,omitempty"`
 }
 
 // SearchHit is one matched user/collie message in a conversation search.

@@ -644,6 +644,12 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       if (method === "POST") timers.push({ id: "tm" + (++seq), spec: body.spec, text: body.text, target: body.target, enabled: true, next_run: later(60), owner: "you" });
       return json({ timers });
     }
+    const delTimerM = /^\/api\/super\/timers\/([^/]+)\/delete$/.exec(p);
+    if (delTimerM && method === "POST") {
+      const idx = timers.findIndex((t) => t.id === delTimerM[1]);
+      if (idx >= 0) timers.splice(idx, 1);
+      return json({ ok: true });
+    }
     if (p === "/api/super/memory") {
       if (method === "POST" && body.path) {
         const f = memory.files.find((x) => x.name === body.path);

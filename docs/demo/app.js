@@ -1242,6 +1242,7 @@
     $("#nav-auto").classList.toggle("active", view === "auto");
     $("#nav-devices").classList.toggle("active", view === "devices");
     $("#nav-prefs").classList.toggle("active", view === "prefs");
+    $("#nav-prefs-mobile")?.classList.toggle("active", view === "prefs");
   }
 
   // ───────────────────────────── routing & scroll restoration
@@ -3041,7 +3042,6 @@
       </article>`).join("");
 
     return `<div class="int-intro-row">
-        <p class="panel-intro">接通你的日常工具，无需公网地址或开放端口。点开卡片在弹窗中完成配置与连通自检，Collie 会实时同步并按你选定的方式处理。</p>
         <span class="int-summary-stat">${esc(summaryText)}</span>
       </div>
       <section class="int-grid" aria-label="可用接入">${cards}</section>
@@ -3470,9 +3470,7 @@
     const upFront = r.up_front ?? Math.max(0, (r.loaded || 0) - msgBytes);
     const budget = r.budget || (10 << 10);
     const over = upFront > budget;
-    return `<p class="panel-intro">Collie 的长期记忆在 <code>${esc(r.dir)}/memory</code>，按用途分开：每次新会话只先读<b>指令、笔记索引、进行中的任务和最近说过的话</b>，其余需要时再看。
-      「做梦」时，Collie 回顾最近的会话来整理记忆：替换过时的条目，发现只有跨多次对话才看得出的习惯（标记为 inferred）。</p>
-      <div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
+    return `<div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
         <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
         <div class="mem-load">
           <div class="mem-load-row">
@@ -3526,8 +3524,7 @@
         ${selTh ? subsChips(selTh) : ""}
       </div>${allSubsFold}`;
     }
-    return `<p class="panel-intro">你的消息、外部事件、定时器，以及派出的 agent 完成或卡住，都会进这里。先按来源策略过滤；订阅了线程的 agent 直接收到，其余交给 Collie 判断。对方正忙时事件会先攒着，空闲后一次送过去。</p>
-      ${threadBar}
+    return `${threadBar}
       <div class="card"><ul class="rows">${shown.length ? shown.map((t) => `<li class="row">
         <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
         <div><div class="meta"><b>#${esc(t.id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
@@ -3592,9 +3589,112 @@
     sum.classList.toggle("err", !!r.err);
   }
 
+  const timerModal = $("#timer-modal");
+  const timerForm = $("#timer-form");
+  async function closeTimerModal(reason = "cancel") {
+    if (!timerModal?.open || timerModal.hasAttribute("data-closing")) return;
+    if (pickOpen && timerModal.contains(pickOpen)) closePick();
+    if (!supportsTopLayerExit()) {
+      timerModal.setAttribute("data-closing", "");
+      const anims = timerModal.getAnimations({ subtree: true });
+      if (anims.length) {
+        await Promise.race([
+          Promise.allSettled(anims.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 240)),
+        ]);
+      }
+      if (!timerModal.hasAttribute("data-closing")) return;
+      timerModal.removeAttribute("data-closing");
+    }
+    if (timerModal.open) timerModal.close(reason);
+  }
+  function openTimerModal() {
+    if (!timerModal || !timerForm) return;
+    const soon = new Date(Date.now() + 60 * 60 * 1000); soon.setMinutes(0, 0, 0);
+    timerForm.reset();
+    timerForm.dataset.mode = "weekdays";
+    timerForm.clock.value = "09:00";
+    timerForm.every_n.value = "2";
+    timerForm.every_u.value = "h";
+    timerForm.at.value = localStamp(soon);
+    timerForm.text.value = "";
+    timerForm.querySelectorAll(".tm-days button").forEach((b, i) => b.classList.toggle("on", i === 0));
+    const liveWorkers = (sup.workers || []).filter((w) => !w.ended);
+    timerForm.target.innerHTML = `<option value="" data-sub="由它决定怎么处理">Collie</option>`
+      + liveWorkers.map((w) => `<option value="${esc(w.name)}" data-sub="${esc(KIND_LABEL[w.kind] || w.kind)}">${esc(w.name)}</option>`).join("");
+    timerForm.target.value = "";
+    syncPick(timerForm.every_u);
+    syncPick(timerForm.target);
+    syncTimerForm(timerForm);
+    timerModal.removeAttribute("data-closing");
+    if (!timerModal.open) timerModal.showModal();
+  }
+  if (timerModal && timerForm) {
+    $("#tm-modal-close")?.addEventListener("click", () => closeTimerModal("cancel"));
+    $("#tm-modal-cancel")?.addEventListener("click", () => closeTimerModal("cancel"));
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      let pressedOutside = false;
+      const outside = (ev) => {
+        const r = timerModal.getBoundingClientRect();
+        return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+      };
+      timerModal.addEventListener("pointerdown", (ev) => { pressedOutside = ev.target === timerModal && outside(ev); });
+      timerModal.addEventListener("pointerup", (ev) => { if (pressedOutside && outside(ev)) closeTimerModal("cancel"); pressedOutside = false; });
+    }
+    timerModal.addEventListener("cancel", (ev) => {
+      if (pickOpen && timerModal.contains(pickOpen)) {
+        ev.preventDefault();
+        closePick(true);
+        return;
+      }
+      if (!supportsTopLayerExit()) {
+        ev.preventDefault();
+        closeTimerModal("cancel");
+      }
+    });
+    timerModal.addEventListener("close", () => {
+      if (pickOpen && timerModal.contains(pickOpen)) closePick();
+      timerModal.returnValue = "";
+      timerModal.removeAttribute("data-closing");
+    });
+    // Timer form: mode, days and quick times are buttons; everything re-describes the spec.
+    timerForm.addEventListener("click", (e) => {
+      const b = e.target.closest("button[type=button]");
+      if (!b || b.id === "tm-modal-close" || b.id === "tm-modal-cancel") return;
+      if (b.dataset.mode) timerForm.dataset.mode = b.dataset.mode;
+      if (b.dataset.day) b.classList.toggle("on");
+      if (b.dataset.at) {
+        let d = new Date();
+        if (b.dataset.at === "am") { d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); }
+        else d = new Date(d.getTime() + +b.dataset.at * 60000);
+        timerForm.at.value = localStamp(d);
+      }
+      syncTimerForm(timerForm);
+    });
+    timerForm.addEventListener("input", () => syncTimerForm(timerForm));
+    timerForm.addEventListener("change", () => syncTimerForm(timerForm));
+    timerForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const r = timerSpec(timerForm);
+      if (r.err) { toast(r.err, "attn"); return; }
+      const text = timerForm.text.value.trim();
+      if (!text) { timerForm.text.focus(); return; }
+      const btn = $("#tm-modal-submit");
+      if (btn) btn.disabled = true;
+      try {
+        await api("/api/super/timers", { body: { spec: r.spec, text, target: timerForm.target.value, owner: "you" } });
+        toast(`已添加：${describeSpec(r.spec)}`);
+        await closeTimerModal("ok");
+        loadAuto();
+      } catch (err) {
+        toast(err.message, "attn");
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
   function timersHTML(ts = []) {
-    const soon = new Date(Date.now() + 60 * 60 * 1000); soon.setMinutes(0);
-    setTimeout(() => { const f = $("#timer-form"); if (f) syncTimerForm(f); });
     const idN = (id) => +(/\d+$/.exec(id || "")?.[0] || 0);
     const ms = (s) => { const n = s ? Date.parse(s) : NaN; return n > 0 ? n : NaN; };
     const endMs = (t) => { const l = ms(t.last_run); return isNaN(l) ? ms(t.next_run) : l; };
@@ -3608,55 +3708,35 @@
       if (isNaN(ta) !== isNaN(tb)) return isNaN(ta) ? 1 : -1;
       return (tb - ta) || (idN(b.id) - idN(a.id));
     });
-    const timerRow = (t) => `<li class="row">
-        <span class="badge ${t.enabled ? "queued" : "ignored"}">${t.enabled ? "启用" : "已结束"}</span>
-        <div><div class="meta"><b title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b><span>→ ${esc(t.target || "Collie")}</span>${t.enabled ? `<span>下次 ${when(t.next_run)}</span>` : t.last_run ? `<span>上次 ${when(t.last_run)}</span>` : ""}${t.owner ? `<span>${t.owner === "you" ? "你设的" : esc(t.owner) + " 设的"}</span>` : ""}</div>
-        <div class="text">${esc(t.text)}</div></div>
-        <button class="btn ghost small" data-del-timer="${esc(t.id)}">删除</button></li>`;
-    return `<p class="panel-intro">到点会给 Collie（或某个 agent）发一条消息：每天的例行检查、过一会儿的跟进提醒。Collie 自己也会设定时来跟进。</p>
-      <div class="card"><div class="card-h">新建定时</div>
-        <form class="form tm-form" id="timer-form" data-mode="weekdays">
-          <div class="tm-field">
-            <span class="tm-lab">什么时候</span>
-            <div class="tm-when">
-              <div class="seg tm-mode">${[["daily", "每天"], ["weekdays", "工作日"], ["weekly", "每周"], ["every", "每隔"], ["once", "一次"]].map(([m, l]) => `<button type="button" data-mode="${m}">${l}</button>`).join("")}</div>
-              <div class="tm-days" data-show="weekly">${WEEK.map(([d, l], i) => `<button type="button" data-day="${d}" class="${i === 0 ? "on" : ""}">${l}</button>`).join("")}</div>
-              <input type="time" name="clock" value="09:00" data-show="daily weekdays weekly">
-              <span class="tm-every" data-show="every"><input type="number" name="every_n" min="1" value="2"><select name="every_u" data-pick="compact" data-title="单位"><option value="m">分钟</option><option value="h" selected>小时</option><option value="d">天</option></select></span>
-              <span class="tm-once" data-show="once"><input type="datetime-local" name="at" value="${localStamp(soon)}"><span class="tm-chips">${[["30 分钟后", 30], ["1 小时后", 60], ["明早 9 点", "am"]].map(([l, v]) => `<button type="button" class="chip-btn" data-at="${v}">${l}</button>`).join("")}</span></span>
-            </div>
-          </div>
-          <label class="tm-text"><span class="tm-lab">说什么</span><textarea name="text" rows="2" placeholder="例如：检查各个任务的进展，有卡住的告诉我" required></textarea></label>
-          <div class="tm-foot">
-            <label class="tm-target"><span class="tm-lab">交给</span><select name="target" data-pick="compact" data-title="到点交给谁"><option value="" data-sub="由它决定怎么处理">Collie</option>${sup.workers.filter((w) => !w.ended).map((w) => `<option value="${esc(w.name)}" data-sub="${esc(KIND_LABEL[w.kind] || w.kind)}">${esc(w.name)}</option>`).join("")}</select></label>
-            <span class="tm-sum muted"></span>
-            <button class="btn primary small">添加</button>
-          </div>
-        </form></div>
-      <div class="card"><ul class="rows">${active.length ? active.map(timerRow).join("") : `<li class="empty-row">${ended.length ? "没有启用中的定时" : "还没有定时"}</li>`}</ul></div>
+    const timerRow = (t) => {
+      const meta = [
+        t.enabled ? `下次 ${when(t.next_run)}` : t.last_run ? `上次 ${when(t.last_run)}` : "已结束",
+        t.owner ? (t.owner === "you" ? "你设的" : `${t.owner} 设的`) : "",
+      ].filter(Boolean);
+      return `<li class="tm-row${t.enabled ? "" : " is-ended"}">
+        <div class="tm-row-head">
+          <span class="sdot ${t.enabled ? "connected" : "disabled"}" aria-hidden="true"></span>
+          <b class="tm-spec" title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b>
+          <span class="tm-target-tag">→ ${esc(t.target || "Collie")}</span>
+          <button type="button" class="icon-btn tm-del" data-del-timer="${esc(t.id)}" title="删除定时" aria-label="删除定时">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>
+          </button>
+        </div>
+        <div class="tm-row-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join('<span class="tm-sep" aria-hidden="true">·</span>')}</div>
+        <div class="tm-row-text">${esc(t.text)}</div>
+      </li>`;
+    };
+    return `<div class="tm-bar">
+        <span class="tm-bar-stat">${active.length ? `启用中 · ${active.length}` : "定时任务"}</span>
+        <button type="button" class="btn primary small tm-new-btn" id="tm-open-btn" data-act="timer-open">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>新建定时</span>
+        </button>
+      </div>
+      <div class="card"><ul class="rows">${active.length ? active.map(timerRow).join("") : `<li class="empty-row">${ended.length ? "没有启用中的定时" : "还没有定时，点右上角新建"}</li>`}</ul></div>
       ${ended.length ? `<details class="mem-done" data-ended-timers><summary class="mem-h">已结束<span class="muted">${ended.length} 个</span></summary>
         <div class="card"><ul class="rows">${ended.map(timerRow).join("")}</ul></div></details>` : ""}`;
   }
-  // Timer form: mode, days and quick times are buttons; everything re-describes the spec.
-  $("#auto-body").addEventListener("click", (e) => {
-    const f = e.target.closest("#timer-form");
-    if (!f) return;
-    const b = e.target.closest("button[type=button]");
-    if (!b) return;
-    if (b.dataset.mode) f.dataset.mode = b.dataset.mode;
-    if (b.dataset.day) {
-      b.classList.toggle("on");
-    }
-    if (b.dataset.at) {
-      let d = new Date();
-      if (b.dataset.at === "am") { d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); }
-      else d = new Date(d.getTime() + +b.dataset.at * 60000);
-      f.at.value = localStamp(d);
-    }
-    syncTimerForm(f);
-  });
-  $("#auto-body").addEventListener("input", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
-  $("#auto-body").addEventListener("change", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
 
   // ───────────────────────────── settings: grouped by what they are about
   // Fills a model picker and its effort picker from what that agent offers.
@@ -3721,15 +3801,23 @@
       const el = statusEl();
       if (!el) return;
       clearTimeout(statusTimer);
-      el.className = "set-save-state" + (mode ? " " + mode : "");
+      if (!mode) {
+        el.className = "set-save-state";
+        el.textContent = "";
+        el.hidden = true;
+        return;
+      }
+      el.className = "set-save-state " + mode;
       el.textContent = text;
+      el.hidden = false;
       if (mode === "saved") {
         statusTimer = setTimeout(() => {
           if (el.classList.contains("saved")) {
             el.className = "set-save-state";
-            el.textContent = "改动自动保存";
+            el.textContent = "";
+            el.hidden = true;
           }
-        }, 2200);
+        }, 1800);
       }
     };
     const readModel = (sel, fallback) => {
@@ -3891,7 +3979,7 @@
     setTimeout(() => bindSettings($("#settings-form")));
     return `<form class="settings" id="settings-form">
       <div class="router-pending-bar" id="settings-pending-bar" hidden></div>
-      <div class="set-top-meta"><span class="set-save-state" id="settings-save-state" role="status" aria-live="polite">改动自动保存</span></div>
+      <span class="set-save-state" id="settings-save-state" role="status" aria-live="polite" hidden></span>
 
       <section class="card set-sec">
         <header>
@@ -3899,19 +3987,19 @@
             <h4>Collie 自己</h4>
             <button type="button" class="btn small set-restart-btn" data-act="router-restart" title="手动重启 Collie（保留记忆与排队消息）">重启 Collie</button>
           </div>
-          <p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p>
+          <p>负责理解、分派与回复，选轻量快速的模型即可。</p>
         </header>
         <div class="set-grid three">
           <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${routerKindOpts(s.router_kind)}</select></label>
           ${modelPick("router", s.router_kind, s.router_model, s.router_effort)}
         </div>
         <details class="set-adv" ${(s.router_args || []).length ? "open" : ""}><summary>更多启动参数</summary>
-          <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="例如 --permission-mode plan" autocorrect="off" autocapitalize="off" spellcheck="false"><small>原样加在启动命令后面，一般不用填</small></label>
+          <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="例如 --permission-mode plan" autocorrect="off" autocapitalize="off" spellcheck="false"><small>原样加在启动命令后面；工作目录 <code>${esc(tilde(r.router_dir))}</code></small></label>
         </details>
       </section>
 
       <section class="card set-sec">
-        <header><h4>派活默认</h4><p>Collie 派 agent 干活时默认这样启动；你说「用 Codex…」「在 Mac 上…」时它会自己换。</p></header>
+        <header><h4>派活默认</h4><p>派发任务的默认配置，对话中可随时口头指定。</p></header>
         <div class="set-grid three">
           <label>Agent<select name="worker_kind" data-title="派活默认用">${workerKindOpts(s.worker_kind)}</select></label>
           ${modelPick("worker", s.worker_kind, s.worker_model, s.worker_effort)}
@@ -3923,7 +4011,7 @@
       </section>
 
       <section class="card set-sec">
-        <header><h4>记忆与会话</h4><p>Collie 的对话变长后会换新会话，要记住的事通过 memory/ 交接；每晚回顾当天的对话，整理记忆。</p></header>
+        <header><h4>记忆与会话</h4><p>对话超限时自动交接新会话，夜间自动整理记忆。</p></header>
         <div class="set-grid">
           <label>上下文用到多少时换新会话<select name="rotate_pct" data-pick="compact" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
           <label>每晚做梦<select name="dream_at" data-pick="compact" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
@@ -3943,10 +4031,10 @@
       <section class="card set-sec">
         <header><h4>其他</h4></header>
         <div class="set-grid">
-          <label>聊天回复长度<input name="reply_chars" type="number" min="40" step="20" value="${s.reply_chars || 200}"><small>Collie 平时每条回复大约多少字（英文按词算）；你要详细时它会写长</small></label>
+          <label>聊天回复长度<input name="reply_chars" type="number" min="40" step="20" value="${s.reply_chars || 200}"><small>平时每条回复的大致字数，要求详述时会自动写长</small></label>
           <label>多久没进展算卡住<input name="stall_minutes" type="number" min="0" value="${s.stall_minutes}"><small>分钟；0 表示不检查</small></label>
         </div>
-        <label class="check"><input type="checkbox" name="bypass" ${s.ask_permissions ? "" : "checked"}> 跳过权限确认：Collie 和它派出的 agent 直接跑命令、改文件，不停下来问你（重启 Collie、新派的 agent 生效）</label>
+        <label class="check"><input type="checkbox" name="bypass" ${s.ask_permissions ? "" : "checked"}> 跳过权限确认：自动执行命令与改文件（重启 Collie、新派 agent 生效）</label>
         <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> 暂停投递：事件照收，先不交给 agent</label>
       </section>
     </form>`;
@@ -3956,13 +4044,7 @@
     e.preventDefault();
     const f = e.target;
     try {
-      if (f.id === "timer-form") {
-        const r = timerSpec(f);
-        if (r.err) { toast(r.err, "attn"); return; }
-        await api("/api/super/timers", { body: { spec: r.spec, text: f.text.value, target: f.target.value, owner: "you" } });
-        toast(`已添加：${describeSpec(r.spec)}`);
-        loadAuto();
-      } else if (f.classList.contains("mem-edit")) {
+      if (f.classList.contains("mem-edit")) {
         await api("/api/super/memory", { body: { path: f.closest("[data-path]").dataset.path, text: f.text.value } });
         memEditing = false;
         toast("已保存");
@@ -4073,6 +4155,10 @@
       box.querySelector(".mem-tools").hidden = memEditing;
       if (memEditing) box.querySelector("textarea").focus();
       else { $("#auto-body")._memSig = ""; loadAuto(); }
+      return;
+    }
+    if (t.dataset.act === "timer-open") {
+      openTimerModal();
       return;
     }
     if (t.dataset.act === "dream-now") {
@@ -7410,7 +7496,9 @@
     const defW = innerWidth <= 1120 ? 420 : 432;
     setThreadW(Math.max(360, Math.min(store.get("threadW", 0) || defW, threadMax())));
     if (tdDrawer.hidden) { tdDrawer.hidden = false; tdDrawer.offsetWidth; }
-    if (tdScrim) tdScrim.hidden = false;
+    tdDrawer.classList.remove("is-dragging");
+    tdDrawer.style.transform = "";
+    if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = false; }
     tdDrawer.setAttribute("aria-hidden", "false");
     $("#app").classList.add("has-thread");
     renderSuper({ force: true });
@@ -7429,6 +7517,9 @@
     drawerReplyTarget = null;
     tdLastSig = "";
     tdLastCount = 0;
+    tdDrawer.classList.remove("is-dragging");
+    tdDrawer.style.transform = "";
+    if (tdScrim) tdScrim.style.opacity = "";
     $("#app").classList.remove("has-thread");
     tdDrawer.setAttribute("aria-hidden", "true");
     clearTimeout(tdHideTimer);
@@ -7449,9 +7540,73 @@
   }
 
   if (tdDrawer) {
+    const tdHandleBtn = $("#td-handle");
+    const tdHeadEl = tdDrawer.querySelector(".td-head");
+    let tdSkipHandleClickUntil = 0;
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
     tdBackBtn?.addEventListener("click", () => closeThreadDrawer());
     tdScrim?.addEventListener("click", () => closeThreadDrawer());
+    tdHandleBtn?.addEventListener("click", () => {
+      if (performance.now() < tdSkipHandleClickUntil) return;
+      closeThreadDrawer();
+    });
+    // Mobile bottom-sheet drag-to-dismiss on the grabber handle and header area.
+    const bindSheetDrag = (zone) => {
+      if (!zone) return;
+      let startY = 0, startX = 0, startT = 0, lastY = 0, pid = null, dragging = false;
+      const resetDrag = () => {
+        pid = null;
+        dragging = false;
+        tdDrawer.classList.remove("is-dragging");
+        tdDrawer.style.transform = "";
+        if (tdScrim) tdScrim.style.opacity = "";
+      };
+      zone.addEventListener("pointerdown", (e) => {
+        if (innerWidth > 760 || !activeThreadRoot) return;
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        if (e.target.closest("button:not(#td-handle)")) return;
+        pid = e.pointerId;
+        startY = lastY = e.clientY;
+        startX = e.clientX;
+        startT = performance.now();
+        dragging = false;
+      });
+      zone.addEventListener("pointermove", (e) => {
+        if (pid !== e.pointerId) return;
+        const dy = e.clientY - startY, dx = e.clientX - startX;
+        lastY = e.clientY;
+        if (!dragging) {
+          if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { pid = null; return; }
+          if (dy <= 8) return;
+          dragging = true;
+          tdDrawer.classList.add("is-dragging");
+          try { zone.setPointerCapture(e.pointerId); } catch {}
+        }
+        const offset = Math.max(0, dy);
+        tdDrawer.style.transform = `translateY(${offset}px)`;
+        if (tdScrim) {
+          const ratio = Math.min(1, offset / Math.max(240, tdDrawer.offsetHeight * 0.5));
+          tdScrim.style.opacity = String(Math.max(0, 1 - ratio));
+        }
+      });
+      const finish = (e, cancelled) => {
+        if (pid !== e.pointerId) return;
+        const wasDragging = dragging;
+        const dy = Math.max(0, lastY - startY);
+        const dt = Math.max(1, performance.now() - startT);
+        const vy = dy / dt;
+        const threshold = Math.min(120, (tdDrawer.offsetHeight || 600) * 0.22);
+        resetDrag();
+        if (wasDragging) {
+          tdSkipHandleClickUntil = performance.now() + 80;
+          if (!cancelled && (dy > threshold || (dy > 40 && vy > 0.45))) closeThreadDrawer();
+        }
+      };
+      zone.addEventListener("pointerup", (e) => finish(e, false));
+      zone.addEventListener("pointercancel", (e) => finish(e, true));
+    };
+    bindSheetDrag(tdHandleBtn);
+    bindSheetDrag(tdHeadEl);
     tdLocateRootBtn?.addEventListener("click", () => {
       const info = computeReplyThreads(chatEntries());
       const th = activeThreadRoot ? info.threads.get(activeThreadRoot) : null;

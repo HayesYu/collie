@@ -464,6 +464,20 @@ assert.match(html, /id="nav-auto-sub">记忆 · 定时 · 接入</, "nav-auto-su
 assert.doesNotMatch(appJs, /id="settings-hooks-fold"/, "hooks UI must not be rendered in settings");
 assert.match(appJs, /id="inbox-thread-filter"/, "multi-thread filter must live in inbox");
 
+// 3c. Mobile UI polish contracts (automation header, timer dialog & rows, settings alignment, sidebar mobile footer):
+const autoHeadMatch = html.match(/<section class="view" id="v-auto"[\s\S]*?<header class="d-head">([\s\S]*?)<\/header>/);
+assert.ok(autoHeadMatch, "v-auto header must exist");
+assert.doesNotMatch(autoHeadMatch[1], /Always-on/, "v-auto header must drop verbose Always-on subtitle");
+assert.match(html, /<dialog class="sheet tm-sheet" id="timer-modal" closedby="any" aria-labelledby="tm-modal-title">/, "timer modal must use native dialog with closedby=any");
+assert.match(html, /id="nav-prefs-mobile"/, "sidebar header must provide mobile prefs icon");
+assert.doesNotMatch(appJs, /class="set-top-meta"/, "settings must not reserve static top auto-save row");
+assert.match(appJs, /id="settings-save-state"[^>]*hidden/, "settings save indicator must be hidden when idle");
+assert.match(appJs, /data-act="timer-open"/, "timers tab must render compact + 新建定时 button");
+assert.match(appJs, /class="tm-row/, "timers list must use full-width tm-row layout");
+assert.match(css, /\.set-sec \.pick,\s*\.set-sec \.pick\.compact\s*\{[\s\S]*?width:\s*100%/, "settings dropdown triggers must stretch full width");
+assert.match(html, /id="td-handle"/, "thread drawer must include mobile bottom-sheet grabber handle");
+assert.match(css, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.threadpane\s*\{[\s\S]*?border-radius:\s*20px 20px 0 0;[\s\S]*?transform:\s*translateY\(100%\);/, "mobile thread drawer must render as rounded bottom sheet");
+
 // 4. Pure helper logic tests extracted from app.js via vm.
 const extractFn = (name) => {
   const idx = appJs.indexOf("function " + name + "(");

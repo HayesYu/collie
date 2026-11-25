@@ -75,6 +75,49 @@ func TestAgyTranscript(t *testing.T) {
 	}
 }
 
+func TestDoubaoTranscript(t *testing.T) {
+	msgs := parse(t, "doubao", `{"type":"user","text":"check sample.txt"}
+{"type":"assistant_chunk","id":"m1","text":"我先"}
+{"type":"assistant_chunk","id":"m1","text":"看看。"}
+{"type":"tool","id":"t1","title":"继续处理任务中","kind":"read","status":"in_progress"}
+{"type":"tool","id":"t1","title":"已读取 sample.txt","kind":"read","status":"completed","locations":["/tmp/sample.txt"],"output":"magic=42\n"}
+{"type":"assistant_chunk","id":"m2","text":"结果是 42"}
+{"type":"error","text":"rate limit"}
+`)
+	if len(msgs) != 5 {
+		t.Fatalf("got %d msgs: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Kind != "user" || msgs[0].Text != "check sample.txt" {
+		t.Errorf("msg[0] = %+v", msgs[0])
+	}
+	if msgs[1].Kind != "assistant" || msgs[1].Text != "我先看看。" {
+		t.Errorf("msg[1] = %+v", msgs[1])
+	}
+	if msgs[2].Kind != "tool" || msgs[2].Name != "已读取 sample.txt" || msgs[2].Input != "/tmp/sample.txt" || msgs[2].Output != "magic=42" || msgs[2].Error {
+		t.Errorf("msg[2] = %+v", msgs[2])
+	}
+	if msgs[3].Kind != "assistant" || msgs[3].Text != "结果是 42" {
+		t.Errorf("msg[3] = %+v", msgs[3])
+	}
+	if msgs[4].Kind != "assistant" || msgs[4].Text != "⚠ rate limit" {
+		t.Errorf("msg[4] = %+v", msgs[4])
+	}
+}
+
+func TestDoubaoApprovalMenuParsed(t *testing.T) {
+	screen := "────────────────────────────────────────\nDoubao 请求执行权限：Bash\n  echo hello\n\n1. Allow once\n2. Reject\nEnter number (1-2) to confirm · Esc to cancel\n"
+	if !screenAsks(screen) {
+		t.Fatal("screenAsks should detect doubao permission menu")
+	}
+	a := parseApproval(screen)
+	if len(a.Choices) != 2 || a.Choices[0].Text != "1" || a.Choices[0].Label != "Allow once" || a.Choices[1].Text != "2" || a.Choices[1].Label != "Reject" {
+		t.Fatalf("choices = %+v", a.Choices)
+	}
+	if !strings.Contains(a.Question, "echo hello") || a.Hint == "" {
+		t.Fatalf("question=%q hint=%q", a.Question, a.Hint)
+	}
+}
+
 func TestApprovalNumbered(t *testing.T) {
 	a := parseApproval("╭────╮\n│ Bash command\n│   git push origin main\n│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. Yes, and don't ask again\n│   3. No, and tell Claude what to do differently (esc)\n╰────╯")
 	if len(a.Choices) != 3 || a.Choices[0].Text != "1" || !a.Choices[0].Current || a.Choices[1].Label != "Yes, and don't ask again" {

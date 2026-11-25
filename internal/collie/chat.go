@@ -242,6 +242,8 @@ func (t *transcript) line(line []byte) bool {
 		return t.codexLine(line)
 	case "agy":
 		return t.agyLine(line)
+	case "doubao":
+		return t.doubaoLine(line)
 	}
 	return t.claudeLine(line)
 }
@@ -619,6 +621,93 @@ func agyOutput(s string) string {
 	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
+// doubaoLine parses one incremental event line persisted by `collie _bridge doubao`.
+func (t *transcript) doubaoLine(line []byte) bool {
+	var e doubaoLogEntry
+	if json.Unmarshal(line, &e) != nil {
+		return false
+	}
+	switch e.Type {
+	case "user":
+		if e.Text == "" {
+			return false
+		}
+		if e.ID != "" && len(t.msgs) > 0 && t.lastID == "u:"+e.ID && t.msgs[len(t.msgs)-1].Kind == "user" {
+			t.msgs[len(t.msgs)-1].Text += e.Text
+			return true
+		}
+		if strings.TrimSpace(e.Text) == "" {
+			return false
+		}
+		t.add(&Message{Kind: "user", Text: e.Text})
+		if e.ID != "" {
+			t.lastID = "u:" + e.ID
+		} else {
+			t.lastID = ""
+		}
+		return true
+	case "assistant_chunk", "assistant":
+		if e.Text == "" {
+			return false
+		}
+		if e.ID != "" && len(t.msgs) > 0 && t.lastID == e.ID && t.msgs[len(t.msgs)-1].Kind == "assistant" {
+			t.msgs[len(t.msgs)-1].Text += e.Text
+			return true
+		}
+		t.add(&Message{Kind: "assistant", Text: e.Text})
+		t.lastID = e.ID
+		return true
+	case "tool":
+		var m *Message
+		if e.ID != "" {
+			m = t.tools[e.ID]
+		}
+		if m == nil {
+			m = &Message{Kind: "tool"}
+			if e.ID != "" {
+				t.tools[e.ID] = m
+			}
+			t.add(m)
+			t.lastID = ""
+		}
+		title := strings.TrimSpace(e.Title)
+		if title != "" && (m.Name == "" || title != doubaoPlaceholderTool) {
+			m.Name = title
+		}
+		if m.Name == "" {
+			m.Name = orStr(strings.TrimSpace(e.Kind), "Tool")
+		}
+		if inp := strings.TrimSpace(e.Input); inp != "" {
+			m.Input = clip(inp, maxInput)
+		} else if len(e.Locations) > 0 {
+			var paths []string
+			for _, p := range e.Locations {
+				if p = strings.TrimSpace(p); p != "" {
+					paths = append(paths, p)
+				}
+			}
+			if len(paths) > 0 {
+				m.Input = clip(strings.Join(paths, ", "), maxInput)
+			}
+		}
+		if out := strings.TrimSpace(e.Output); out != "" {
+			m.Output = clip(out, maxOutput)
+		}
+		if e.Error || strings.EqualFold(e.Status, "failed") || strings.EqualFold(e.Status, "error") {
+			m.Error = true
+		}
+		return true
+	case "error":
+		if strings.TrimSpace(e.Text) == "" {
+			return false
+		}
+		t.add(&Message{Kind: "assistant", Text: "⚠ " + strings.TrimSpace(e.Text)})
+		t.lastID = ""
+		return true
+	}
+	return false
+}
+
 // ---------------------------------------------------------------- locating
 
 type agentDetail struct {
@@ -658,7 +747,7 @@ func (s *Server) transcriptFor(key, pane string, a agentDetail, cache map[string
 
 func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, format string) {
 	format = kind
-	if kind != "codex" && kind != "agy" {
+	if kind != "codex" && kind != "agy" && kind != "doubao" {
 		format = "claude"
 	}
 	if sessKind == "path" {
@@ -700,6 +789,26 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 			}
 		}
 		return s.guessAgy(brain, pane, cwd), "agy"
+	case "doubao":
+		dir := s.doubaoTranscriptDir()
+		if value != "" {
+			if p := filepath.Join(dir, value+".jsonl"); isFile(p) {
+				return p, "doubao"
+			}
+		}
+		if pane != "" {
+			local, _ := split(pane)
+			if meta, ok := readDoubaoPaneMeta(dir, local); ok {
+				if meta.Path != "" && isFile(meta.Path) {
+					return meta.Path, "doubao"
+				}
+				if meta.SessionID != "" {
+					if p := filepath.Join(dir, meta.SessionID+".jsonl"); isFile(p) {
+						return p, "doubao"
+					}
+				}
+			}
+		}
 	}
 	return "", ""
 }

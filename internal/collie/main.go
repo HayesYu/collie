@@ -36,6 +36,10 @@ func Main(v string) {
 			runNode(os.Args[2:])
 			return
 		}
+		if os.Args[1] == "_bridge" {
+			runBridge(os.Args[2:])
+			return
+		}
 		if _, ok := cliCommands[os.Args[1]]; ok {
 			runCLI(os.Args[1], os.Args[2:])
 			return

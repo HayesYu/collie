@@ -29,6 +29,9 @@ func TestResumeFrom(t *testing.T) {
 	if got := resumeArgs("claude", "c"); !slices.Equal(got, []string{"--resume", "c"}) {
 		t.Errorf("claude: %v", got)
 	}
+	if got := resumeArgs("doubao", "c"); !slices.Equal(got, []string{"--resume", "c"}) {
+		t.Errorf("doubao: %v", got)
+	}
 }
 
 func TestRouterDocChanged(t *testing.T) {
@@ -65,6 +68,9 @@ func TestAgentStopLine(t *testing.T) {
 		{"■ stream error: unexpected status 429 Too Many Requests\n", "", "stream error: unexpected status 429 Too Many Requests"},
 		{"⏺ 加了 rate limit 中间件，测试通过\n> ", "加了 rate limit 中间件，测试通过", ""}, // the work talking
 		{"  ⎿  Error: ENOENT no such file\n⏺ 改好了\n> ", "改好了", ""},      // a tool's error, not the agent's
+		{"⚠ Error: 登录已失效，请重新登录\n❯ ", "上次正常回复", "Error: 登录已失效，请重新登录"},
+		{"⚠ Error: auth_unavailable: 登录二维码已过期\n❯ ", "", "Error: auth_unavailable: 登录二维码已过期"},
+		{"⚠ 触发风控，当前请求已被拦截\n❯ ", "", "触发风控，当前请求已被拦截"},
 	}
 	for _, c := range cases {
 		if got := agentStopLine(c.screen, c.summary); got != c.want {

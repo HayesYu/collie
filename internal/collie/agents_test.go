@@ -6,7 +6,7 @@ import (
 )
 
 func TestAgentsHeader(t *testing.T) {
-	if got := parseAgentsHeader(agentsHeader([]string{"claude", "agy"})); len(got) != 2 || got[0] != "claude" || got[1] != "agy" {
+	if got := parseAgentsHeader(agentsHeader([]string{"claude", "agy", "doubao"})); len(got) != 3 || got[0] != "claude" || got[1] != "agy" || got[2] != "doubao" {
 		t.Fatalf("round trip: %v", got)
 	}
 	if got := parseAgentsHeader(agentsHeader(nil)); got == nil || len(got) != 0 {

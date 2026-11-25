@@ -325,7 +325,7 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 			if a.Session != nil {
 				la.Session = sessionID(a.Session.Kind, a.Session.Value)
 			}
-			if la.Session == "" && (la.Kind == "codex" || la.Kind == "agy" || la.Kind == "antigravity") {
+			if la.Session == "" && (la.Kind == "codex" || la.Kind == "agy" || la.Kind == "antigravity" || la.Kind == "doubao") {
 				local, machine := split(a.PaneID)
 				if byMachine == nil {
 					byMachine = map[string]map[string]paneSession{}
@@ -340,6 +340,10 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 				} else if machine == "" && la.Kind == "codex" {
 					if p, _ := sp.s.findTranscript("codex", "", "", local, deref(a.Cwd)); p != "" {
 						la.Session = codexSessionID(p)
+					}
+				} else if machine == "" && la.Kind == "doubao" {
+					if meta, ok := readDoubaoPaneMeta(sp.s.doubaoTranscriptDir(), local); ok {
+						la.Session = meta.SessionID
 					}
 				}
 			}
@@ -741,7 +745,7 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 // workerQuotaRe is an agent CLI saying it can't go on: a usage limit, the
 // login, the API. Narrower than agentErrRe: a worker's screen is full of its
 // work, and "error:" there is mostly the work's own.
-var workerQuotaRe = regexp.MustCompile(`(?i)(usage limit|limit reached|hit your( \w+)? limit|reached your( \w+)? limit|quota exceeded|exceeded your( current)? quota|resource.?exhausted|daily limit|rate.?limit(ed)?\b|credit balance|out of credits|please run /login|not logged in|invalid api key|api error|overloaded|unexpected status \d{3}|try again (at|in) )`)
+var workerQuotaRe = regexp.MustCompile(`(?i)(usage limit|limit reached|hit your( \w+)? limit|reached your( \w+)? limit|quota exceeded|exceeded your( current)? quota|resource.?exhausted|daily limit|rate.?limit(ed)?\b|credit balance|out of credits|please run /login|not logged in|invalid api key|api error|overloaded|unexpected status \d{3}|try again (at|in) |auth_unavailable|登录已?失效|未登录|请重新登录|账号被禁用|账号异常|触发风控|内容审核|额度已?用完|配额不足|登录二维码已过期|请求频率过高)`)
 
 // workerAgentError reads the bottom of a worker's terminal after a turn:
 // what its agent printed when it gave up, or "". A line that is also in its
@@ -994,7 +998,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	}
 	if _, ok := kinds[kind]; !ok {
 		sp.mu.Unlock()
-		return nil, nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity)", kind)
+		return nil, nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity, doubao)", kind)
 	}
 	// Say so now, while the router can still pick another computer or kind.
 	have := m.Agents

@@ -21,7 +21,7 @@ import (
 // The files live on the agent's machine, so every machine reads its own and
 // the hub collects them from the nodes.
 
-var genericTitles = map[string]bool{"": true, "claude": true, "claude code": true, "codex": true, "agy": true, "antigravity": true, "bash": true, "zsh": true}
+var genericTitles = map[string]bool{"": true, "claude": true, "claude code": true, "codex": true, "agy": true, "antigravity": true, "doubao": true, "bash": true, "zsh": true}
 
 // cleanTitle drops the spinner/status glyphs claude puts in front of the topic.
 func cleanTitle(t string) string {
@@ -176,6 +176,15 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 				}
 			}
 			t = s.agyTitle(sess)
+		case "doubao":
+			if meta, ok := readDoubaoPaneMeta(s.doubaoTranscriptDir(), local); ok {
+				if sess == "" {
+					sess = meta.SessionID
+				}
+				if meta.Title != "" {
+					t = meta.Title
+				}
+			}
 		}
 		if t = cleanTitle(t); t == "" {
 			tt := a.TerminalTitle

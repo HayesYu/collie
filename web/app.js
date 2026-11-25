@@ -9,7 +9,7 @@
     set(k, v) { try { localStorage.setItem("collie." + k, JSON.stringify(v)); } catch {} },
   };
   const narrow = () => matchMedia("(max-width: 760px)").matches;
-  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity" };
+  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", doubao: "Doubao" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
   const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
@@ -32,11 +32,12 @@
     claude: '<svg viewBox="0 0 32 32"><path d="M16 5v22M5 16h22M8.2 8.2l15.6 15.6M23.8 8.2L8.2 23.8"/></svg>',
     codex: '<svg viewBox="0 0 32 32"><path d="M16 4l10.4 6v12L16 28 5.6 22V10z"/><path d="M13 13l-3 3 3 3M19 13l3 3-3 3"/></svg>',
     agy: '<svg viewBox="0 0 32 32"><ellipse cx="16" cy="16" rx="11" ry="5" transform="rotate(-30 16 16)"/><path d="M16 21V9M12 13l4-4 4 4"/></svg>',
+    doubao: '<svg viewBox="0 0 32 32"><path d="M16 5c5.8 0 10 4.2 10 10.2C26 21.8 21.8 27 16 27S6 21.8 6 15.2C6 9.2 10.2 5 16 5z"/><circle cx="12.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="19.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><path d="M12.5 19.5c1.1 1.1 2.2 1.6 3.5 1.6s2.4-.5 3.5-1.6"/></svg>',
     agent: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="10"/><path d="M12 15h.01M20 15h.01M12 20c2.4 1.8 5.6 1.8 8 0"/></svg>',
     shell: '<svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg>',
     collie: '<img src="/icon.svg" alt="" style="width:20px;height:20px">',
   };
-  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity" };
+  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity", doubao: "doubao" };
   const STATUS_LABEL = {
     idle: "空闲", working: "工作中", waiting: "在等后台任务", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
     asleep: "休眠中", starting: "启动中", gone: "已退出", failed: "启动失败",
@@ -456,7 +457,7 @@
   const find = (id) => state.agents.find((a) => a.pane_id === id) || state.shells.find((a) => a.pane_id === id);
   // What to call an agent: the session's own title; a handle like "agy-1" says
   // nothing, so until there's a title use the folder it works in.
-  const autoName = (n) => /^(claude|codex|agy|antigravity)-\d+$/.test(n || "");
+  const autoName = (n) => /^(claude|codex|agy|antigravity|doubao)-\d+$/.test(n || "");
   const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "~";
   function title(v) {
     if (!v) return "";
@@ -1718,6 +1719,12 @@
     if (m && Array.isArray(m.efforts)) return m.efforts;
     return Array.isArray(info?.efforts) ? info.efforts : [];
   }
+  function defaultModelName(info) {
+    const def = info?.default || "";
+    if (!def) return "";
+    const m = (info?.models || []).find((x) => x.id === def);
+    return m?.label || def.split("/").pop();
+  }
   const modelInfo = {};
   async function modelsFor(kind, machine) {
     const key = kind + "@" + (machine || "");
@@ -1751,7 +1758,7 @@
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
       data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
     const have = ms.find((m) => m.id === t.machine)?.agents;
-    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"]].map(([k, l]) => {
+    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["doubao", "Doubao"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
       const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
       return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${sub}"` : ""} ${missing && k !== t.kind ? "disabled" : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`;
@@ -1777,7 +1784,8 @@
     if (model && !list.some((m) => m.id === model)) list.unshift({ id: model });
     const short = (id) => id.split("/").pop();
     const mark = (v, dv) => (v === dv ? " · 默认" : "");
-    let html = d.model ? "" : `<option value="" data-short="默认模型" data-sub="${esc(info.default ? "现在是 " + info.default + " · 默认" : "agent 自己的设置 · 默认")}">默认</option>`;
+    const defName = defaultModelName(info);
+    let html = d.model ? "" : `<option value="" data-short="${esc(defName ? "默认 · " + defName : "默认模型")}" data-sub="${esc(defName ? "现在是 " + defName + " · 默认" : "agent 自己的设置 · 默认")}">默认</option>`;
     html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc((m.label && m.label !== m.id ? m.id : "") + mark(m.id, d.model))}" ${m.id === model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
     if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
     mSel.value = model;
@@ -2237,7 +2245,8 @@
     const list = [...(info.models || [])];
     if (want && !list.some((m) => m.id === want)) list.unshift({ id: want });
     const sub = (m) => [m.label && m.label !== m.id ? m.id : "", m.note && m.note !== m.id && !(m.label && m.note.startsWith(m.label)) ? m.note : ""].filter(Boolean).join(" · ");
-    modelSel.innerHTML = `<option value="" data-sub="${esc(info.default ? "现在是 " + info.default : "用 agent 自己的设置")}">默认</option>`
+    const defName = defaultModelName(info);
+    modelSel.innerHTML = `<option value="" data-sub="${esc(defName ? "现在是 " + defName : "用 agent 自己的设置")}">默认</option>`
       + list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(sub(m))}" ${m.id === want ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("")
       + `<option value="__custom" data-sub="输入列表里没有的模型名">其他…</option>`;
     modelSel.value = want || "";
@@ -2288,7 +2297,8 @@
 
   function settingsHTML(r) {
     const s = r.settings;
-    const kindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
+    const routerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
+    const workerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["doubao", "Doubao", "doubao"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
     const modelPick = (who, kind, model, effort) => {
       const hideEff = (kind === "antigravity" || kind === "agy") && agyRejectsEffort(model);
       const eff = hideEff ? "" : (effort || "");
@@ -2302,7 +2312,7 @@
       <section class="card set-sec">
         <header><h4>Collie 自己</h4><p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p></header>
         <div class="set-grid three">
-          <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${kindOpts(s.router_kind)}</select></label>
+          <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${routerKindOpts(s.router_kind)}</select></label>
           ${modelPick("router", s.router_kind, s.router_model, s.router_effort)}
         </div>
         <details class="set-adv" ${(s.router_args || []).length ? "open" : ""}><summary>更多启动参数</summary>
@@ -2313,7 +2323,7 @@
       <section class="card set-sec">
         <header><h4>派活默认</h4><p>Collie 派 agent 干活时默认这样启动；你说「用 Codex…」「在 Mac 上…」时它会自己换。</p></header>
         <div class="set-grid three">
-          <label>Agent<select name="worker_kind" data-title="派活默认用">${kindOpts(s.worker_kind)}</select></label>
+          <label>Agent<select name="worker_kind" data-title="派活默认用">${workerKindOpts(s.worker_kind)}</select></label>
           ${modelPick("worker", s.worker_kind, s.worker_model, s.worker_effort)}
         </div>
         <div class="set-grid three">
@@ -2533,7 +2543,7 @@
       if (view === "ext" && extCur === "h:" + hid) el.innerHTML = `<div class="thread-empty">${esc(err.message)}</div>`;
     }
   }
-  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s] };
+  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s], doubao: (s) => ["--resume", s] };
   async function continueHist(hid) {
     const h = hist.find((x) => x.id === hid);
     if (!h || !RESUME[h.kind]) return;
@@ -2883,7 +2893,7 @@
   // Which agents a computer has: nothing when not known (an older node).
   const agentsTag = (list) => !Array.isArray(list) ? ""
     : list.length ? `<span title="这台电脑上装了的 agent">${list.map((k) => esc(AGENT_LABEL[k] || k)).join(" · ")}</span>`
-    : `<span class="tag attn" title="找不到 claude、codex、agy 命令：装一个，再重连这台电脑">没装 agent</span>`;
+    : `<span class="tag attn" title="找不到 claude、codex、agy、doubao 命令：装一个，再重连这台电脑">没装 agent</span>`;
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
     ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
   const updateRow = (have, latest, cmd, note, id, name) => isOld(have, latest)
@@ -3086,6 +3096,7 @@
     const own = !model;
     const info = hubOf(v.pane_id) ? {} : await modelsFor(kind, machine || "").catch(() => ({}));
     if (own) model = info.default || "";
+    if (!effort && info.default_effort && effortsFor(info, kind, model).includes(info.default_effort)) effort = info.default_effort;
     if (el._key !== key) return;
     // The model list's own name ("Gemini 4 Neon (XHigh)"), its bracket read
     // as the thinking level when the id carries one, as Antigravity's do.
@@ -5699,8 +5710,8 @@
     const same = keep.key === kind + "@" + pickMachine;
     mSel._key = kind + "@" + pickMachine;
     const list = info.models || [];
-    const def = info.default ? info.default.split("/").pop() : "";
-    mSel.innerHTML = `<option value="" data-short="默认模型" data-sub="${esc(info.default ? "现在是 " + info.default : "agent 自己的设置")}">默认${def ? "（" + esc(def) + "）" : ""}</option>` +
+    const def = defaultModelName(info);
+    mSel.innerHTML = `<option value="" data-short="${esc(def ? "默认 · " + def : "默认模型")}" data-sub="${esc(def ? "现在是 " + def : "agent 自己的设置")}">默认${def ? "（" + esc(def) + "）" : ""}</option>` +
       list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(m.label && m.label !== m.id ? m.id : "")}">${esc(m.label || m.id)}</option>`).join("");
     mSel.value = same && list.some((m) => m.id === keep.model) ? keep.model : "";
     fillLaunchEfforts(info, same ? keep.effort : "");

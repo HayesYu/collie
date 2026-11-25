@@ -226,7 +226,7 @@ func cliSay(args []string) error {
 
 func cliSpawn(args []string) error {
 	fs := flag.NewFlagSet("spawn", flag.ExitOnError)
-	kind := fs.String("kind", "", "claude | codex | antigravity (default from settings)")
+	kind := fs.String("kind", "", "claude | codex | antigravity | doubao (default from settings)")
 	cwd := fs.String("cwd", "", "working directory (default from settings)")
 	thread := fs.String("thread", mainThread, "thread this work belongs to")
 	name := fs.String("name", "", "worker name (default kind-N)")

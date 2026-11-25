@@ -193,6 +193,19 @@ func TestResolveDefaultSettings(t *testing.T) {
 			t.Fatalf("kinds = %q / %q, want claude / claude", got.RouterKind, got.WorkerKind)
 		}
 	})
+
+	t.Run("only doubao installed does not auto-select doubao for router or default worker", func(t *testing.T) {
+		lookup := func(name, _ string) string {
+			if name == "doubao" {
+				return "/usr/local/bin/doubao"
+			}
+			return ""
+		}
+		got := resolveDefaultSettings(home, lookup, nil, time.Second)
+		if got.RouterKind != "claude" || got.WorkerKind != "claude" {
+			t.Fatalf("kinds = %q / %q, want claude / claude (doubao excluded from auto-detect)", got.RouterKind, got.WorkerKind)
+		}
+	})
 }
 
 func TestInitStatePersistsFreshAndNeverOverwritesSavedSettings(t *testing.T) {

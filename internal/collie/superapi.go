@@ -807,7 +807,7 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 	defer sp.mu.Unlock()
 	if body.Settings != nil {
 		ns := *body.Settings
-		if _, ok := kinds[ns.RouterKind]; !ok {
+		if _, ok := kinds[ns.RouterKind]; !ok || kinds[ns.RouterKind] == "doubao" {
 			ns.RouterKind = sp.st.Settings.RouterKind
 		}
 		if _, ok := kinds[ns.WorkerKind]; !ok {

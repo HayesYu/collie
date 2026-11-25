@@ -1,11 +1,13 @@
 package collie
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestModelArgs(t *testing.T) {
@@ -93,6 +95,41 @@ func TestModelArgs(t *testing.T) {
 			effort: "xhigh",
 			want:   []string{"-m", "gpt-6.2-sol", "-c", `model_reasoning_effort="xhigh"`},
 		},
+		{
+			name:   "doubao empty defaults to Auto + high",
+			kind:   "doubao",
+			model:  "",
+			effort: "",
+			want:   []string{"--model", "Auto", "--effort", "high"},
+		},
+		{
+			name:   "doubao Auto ID without effort defaults effort to high",
+			kind:   "doubao",
+			model:  "9",
+			effort: "",
+			want:   []string{"--model", "9", "--effort", "high"},
+		},
+		{
+			name:   "doubao empty model with explicit effort uses Auto + effort",
+			kind:   "doubao",
+			model:  "",
+			effort: "low",
+			want:   []string{"--model", "Auto", "--effort", "low"},
+		},
+		{
+			name:   "doubao explicit model and effort",
+			kind:   "doubao",
+			model:  "5101",
+			effort: "max",
+			want:   []string{"--model", "5101", "--effort", "max"},
+		},
+		{
+			name:   "doubao explicit non-default model omits empty effort",
+			kind:   "doubao",
+			model:  "5101",
+			effort: "",
+			want:   []string{"--model", "5101"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,6 +138,9 @@ func TestModelArgs(t *testing.T) {
 				t.Fatalf("modelArgs(%q, %q, %q) = %#v, want %#v", tc.kind, tc.model, tc.effort, got, tc.want)
 			}
 		})
+	}
+	if got := bypassArgs("doubao"); !reflect.DeepEqual(got, []string{"-y"}) {
+		t.Fatalf("bypassArgs(doubao) = %#v, want [-y]", got)
 	}
 }
 
@@ -250,5 +290,57 @@ func TestClaudeModelsPreservesInheritAndExplicitEmptyEfforts(t *testing.T) {
 	}
 	if byID["gw/bare"].Efforts != nil {
 		t.Fatalf("gw/bare without '=' should inherit (nil), got %#v", byID["gw/bare"].Efforts)
+	}
+}
+
+func TestParseAndFetchDoubaoModels(t *testing.T) {
+	sample := `{"type":"result","subtype":"success","is_error":false,"result":{"type":"model_list","models":[{"id":"9","name":"Auto","is_default":true,"efforts":["low","medium","high"],"default_effort":"high"},{"id":"5","name":"Doubao 2.1 Pro","is_default":false,"efforts":["low","medium","high"],"default_effort":"high"},{"id":"5101","name":"DeepSeek V4.1 Flash","is_default":false,"efforts":["low","high","max"],"default_effort":"high"}]}}`
+
+	models, defID, defEffort, defEfforts, ok := parseDoubaoModels([]byte(sample))
+	if !ok {
+		t.Fatal("parseDoubaoModels failed on valid output")
+	}
+	if defID != "9" || defEffort != "high" {
+		t.Fatalf("default = %q / %q, want 9 / high", defID, defEffort)
+	}
+	if !reflect.DeepEqual(defEfforts, []string{"low", "medium", "high"}) {
+		t.Fatalf("defEfforts = %#v", defEfforts)
+	}
+	if len(models) != 3 || models[0].Label != "Auto" || !reflect.DeepEqual(models[2].Efforts, []string{"low", "high", "max"}) {
+		t.Fatalf("models = %#v", models)
+	}
+
+	// Error envelope must be rejected.
+	if _, _, _, _, ok := parseDoubaoModels([]byte(`{"type":"result","subtype":"error","is_error":true}`)); ok {
+		t.Fatal("expected error envelope to fail")
+	}
+
+	// End-to-end doubaoModels with noisy stderr (must only parse stdout).
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "doubao")
+	script := "#!/bin/sh\necho '正在拉取必要资源，请稍后...' >&2\necho '[cli-chat] {\"level\":\"info\"}' >&2\nprintf '%s\\n' '" + sample + "'\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev, hadPrev := binCache.Load("doubao")
+	binCache.Store("doubao", fakeBin)
+	defer func() {
+		if hadPrev {
+			binCache.Store("doubao", prev)
+		} else {
+			binCache.Delete("doubao")
+		}
+	}()
+
+	s := &Server{home: dir}
+	info := &ModelInfo{Kind: "doubao", Efforts: allEfforts}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s.doubaoModels(ctx, info)
+	if info.Default != "9" || info.DefaultEffort != "high" || len(info.Models) != 3 {
+		t.Fatalf("doubaoModels = %+v", info)
+	}
+	if !reflect.DeepEqual(info.Efforts, []string{"low", "medium", "high"}) {
+		t.Fatalf("info.Efforts = %#v, want [low medium high]", info.Efforts)
 	}
 }

@@ -11,7 +11,7 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy", "doubao"] },
     { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.41", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
@@ -253,6 +253,17 @@
       default: "gemini-4-pro-high",
       default_effort: "high",
       efforts: ["low", "medium", "high", "xhigh"],
+    },
+    doubao: {
+      models: [
+        { id: "9", label: "Auto", efforts: ["low", "medium", "high"] },
+        { id: "5", label: "Doubao 2.1 Pro", efforts: ["low", "medium", "high"] },
+        { id: "5101", label: "DeepSeek V4.1 Flash", efforts: ["low", "high", "max"] },
+        { id: "5262373378", label: "GPT 6.1 Sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+      ],
+      default: "9",
+      default_effort: "high",
+      efforts: ["low", "medium", "high"],
     },
   };
 

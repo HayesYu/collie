@@ -40,6 +40,12 @@ type ModelInfo struct {
 
 var allEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 
+const (
+	defaultDoubaoModel   = "Auto"
+	defaultDoubaoModelID = "9"
+	defaultDoubaoEffort  = "high"
+)
+
 // splitAgyModelEffort splits an agy model ID that bakes the thinking effort
 // into its suffix (e.g. "gemini-4-neon-medium" -> "gemini-4-neon", "medium").
 func splitAgyModelEffort(model string) (base, effort string, ok bool) {
@@ -97,6 +103,17 @@ func modelArgs(kind, model, effort string) []string {
 		if effort != "" {
 			a = append(a, "--effort", effort)
 		}
+	case "doubao":
+		if model == "" {
+			model = defaultDoubaoModel
+		}
+		if effort == "" && (strings.EqualFold(model, defaultDoubaoModel) || model == defaultDoubaoModelID) {
+			effort = defaultDoubaoEffort
+		}
+		a = append(a, "--model", model)
+		if effort != "" {
+			a = append(a, "--effort", effort)
+		}
 	}
 	return a
 }
@@ -108,6 +125,8 @@ func bypassArgs(kind string) []string {
 		return []string{"--dangerously-skip-permissions"}
 	case "codex":
 		return []string{"--dangerously-bypass-approvals-and-sandbox"}
+	case "doubao":
+		return []string{"-y"}
 	}
 	return nil
 }
@@ -162,6 +181,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			s.codexModels(ctx, info)
 		case "agy":
 			s.agyModels(ctx, info)
+		case "doubao":
+			s.doubaoModels(ctx, info)
 		}
 		if info.Models == nil {
 			info.Models = []ModelOpt{}
@@ -478,6 +499,128 @@ func (s *Server) agyModels(ctx context.Context, info *ModelInfo) {
 	}
 	info.Models = models
 	applyAgyModelCapabilities(info, s.readAgyDefaultModel())
+}
+
+// parseDoubaoModels parses `doubao model list --json` stdout into Collie's
+// ModelInfo fields, aligning default model/effort with the `is_default: true`
+// entry (Auto + high).
+func parseDoubaoModels(raw []byte) (models []ModelOpt, defID, defEffort string, defEfforts []string, ok bool) {
+	var env struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+		IsError bool   `json:"is_error"`
+		Result  struct {
+			Type   string `json:"type"`
+			Models []struct {
+				ID            string   `json:"id"`
+				Name          string   `json:"name"`
+				IsDefault     bool     `json:"is_default"`
+				Efforts       []string `json:"efforts"`
+				DefaultEffort string   `json:"default_effort"`
+			} `json:"models"`
+		} `json:"result"`
+	}
+	decode := func(b []byte) bool {
+		return json.Unmarshal(b, &env) == nil && env.Subtype == "success" && !env.IsError && len(env.Result.Models) > 0
+	}
+	if !decode(raw) {
+		lines := strings.Split(string(raw), "\n")
+		matched := false
+		for i := len(lines) - 1; i >= 0; i-- {
+			l := strings.TrimSpace(lines[i])
+			if strings.HasPrefix(l, "{") && decode([]byte(l)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, "", "", nil, false
+		}
+	}
+
+	models = make([]ModelOpt, 0, len(env.Result.Models))
+	autoIdx := -1
+	defIdx := -1
+	for i, m := range env.Result.Models {
+		if m.ID == "" {
+			continue
+		}
+		effs := make([]string, 0, len(m.Efforts))
+		for _, e := range m.Efforts {
+			if e = strings.TrimSpace(e); e != "" {
+				effs = append(effs, e)
+			}
+		}
+		models = append(models, ModelOpt{
+			ID:      m.ID,
+			Label:   strings.TrimSpace(m.Name),
+			Efforts: effs,
+		})
+		idx := len(models) - 1
+		if m.IsDefault && defIdx < 0 {
+			defIdx = idx
+			defID = m.ID
+			defEffort = strings.TrimSpace(m.DefaultEffort)
+			defEfforts = effs
+		}
+		if autoIdx < 0 && (strings.EqualFold(strings.TrimSpace(m.Name), defaultDoubaoModel) || m.ID == defaultDoubaoModelID) {
+			autoIdx = idx
+		}
+		_ = i
+	}
+	if len(models) == 0 {
+		return nil, "", "", nil, false
+	}
+	if defIdx < 0 {
+		pick := autoIdx
+		if pick < 0 {
+			pick = 0
+		}
+		defID = models[pick].ID
+		defEfforts = models[pick].Efforts
+		for _, m := range env.Result.Models {
+			if m.ID == defID && strings.TrimSpace(m.DefaultEffort) != "" {
+				defEffort = strings.TrimSpace(m.DefaultEffort)
+				break
+			}
+		}
+	}
+	if defEffort == "" {
+		defEffort = defaultDoubaoEffort
+	}
+	return models, defID, defEffort, defEfforts, true
+}
+
+func (s *Server) doubaoModels(ctx context.Context, info *ModelInfo) {
+	// Default alignment ("Auto" + "high") even if the probe fails or times out.
+	info.Default = defaultDoubaoModel
+	info.DefaultEffort = defaultDoubaoEffort
+	info.Efforts = []string{"low", "medium", "high"}
+
+	bin := findBin("doubao", s.home)
+	if bin == "" {
+		return
+	}
+	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(dctx, bin, "model", "list", "--json")
+	cmd.Env = doubaoEnv(os.Environ())
+	cmd.WaitDelay = 500 * time.Millisecond
+	// Read stdout only: `doubao model list --json` prints progress/telemetry on stderr.
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	models, defID, defEffort, defEfforts, ok := parseDoubaoModels(out)
+	if !ok {
+		return
+	}
+	info.Models = models
+	info.Default = defID
+	info.DefaultEffort = defEffort
+	if len(defEfforts) > 0 {
+		info.Efforts = append([]string(nil), defEfforts...)
+	}
 }
 
 // detectInitialSettings probes local agents for a brand-new installation and,

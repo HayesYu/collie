@@ -60,12 +60,16 @@
     entry("user", "先把 `orders` 复合索引的上线窗口排到今晚 23:00，用 `CONCURRENTLY` 建索引避免锁表。", { at: ago(2.0) }),
     entry("collie", "明白，已经按 `CREATE INDEX CONCURRENTLY` 整理进今晚 23:00 的变更单，建完自动跑一遍 200 轮翻页回归。", { at: ago(1.8) }),
     entry("user", "另外把旧的单列索引先留 3 天观察慢查询，确认 P99 稳在 30ms 内再下线。", { at: ago(1.4) }),
+    entry("collie", "收到，首页首屏慢的事先记下了；等分页变更落完，我会先量手机端 LCP 和资源瀑布图，再拆具体优化项。", { at: ago(1.1) }),
+    entry("user", "好，优先排查手机端首屏，桌面端目前体感还可以。", { at: ago(0.8) }),
   ];
   entries[8].re.entry = entries[6].id;
   entries[9].re = { entry: entries[1].id, who: "Collie", text: "好，分两路并行：fix-flaky-test 查 TestOrdersPagination 为什么偶发失败" };
   entries[10].re = { entry: entries[9].id, who: "Collie", text: "fix-flaky-test 找到根因了：同一秒创建的订单只按 created_at 排序，顺序不稳定。" };
   entries[11].re = { entry: entries[10].id, who: "你", text: "先把 orders 复合索引的上线窗口排到今晚 23:00，用 CONCURRENTLY 建索引避免锁表。" };
   entries[12].re = { entry: entries[9].id, who: "Collie", text: "fix-flaky-test 找到根因了：同一秒创建的订单只按 created_at 排序，顺序不稳定。" };
+  entries[13].re = { entry: entries[4].id, who: "你", text: "另外首页首屏好像有点慢，有空看看。" };
+  entries[14].re = { entry: entries[13].id, who: "Collie", text: "收到，首页首屏慢的事先记下了；等分页变更落完，我会先量手机端 LCP 和资源瀑布图，再拆具体优化项。" };
   const pinnedIds = [entries[1].id];
   const pendingSummary = (t) => String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")
     .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1").split("\n")

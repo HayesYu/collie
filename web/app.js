@@ -1352,6 +1352,7 @@
   // Saved reading position per history entry (collieIdx) and per logical route.
   const scrollByIdx = new Map();
   const scrollByRoute = new Map();
+  const threadByIdx = new Map();
   let programmaticScrollUntil = 0;
   let collieRestoreRAF = 0;
   let activeCollieRestore = null;
@@ -1684,6 +1685,17 @@
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (view === "auto" && next !== "auto") clearInterval(autoTimer);
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
+    if (prevView === "collie" && next !== "collie") {
+      if (activeThreadRoot) {
+        threadByIdx.set(prevIdx, {
+          rootId: activeThreadRoot,
+          anchorId: activeThreadAnchor,
+          scrollTop: $("#td-body")?.scrollTop || 0,
+        });
+      } else {
+        threadByIdx.delete(prevIdx);
+      }
+    }
     if (next !== "collie") {
       cancelCollieLayoutLock();
       pendingOpen = false;
@@ -1708,10 +1720,17 @@
     $("#v-file").hidden = next !== "file";
     renderSide();
     if (next === "collie") {
+      const savedThread = wasExistingIdx ? threadByIdx.get(navCur) : null;
       if (saved && !saved.atBottom) renderSuper({ force: true, restore: saved });
       else renderSuper({ force: true, scrollBottom: true });
       renderTarget(true);
-      if (!narrow() && ($("#super-search")?.hidden ?? true)) $("#super-input").focus({ preventScroll: true });
+      if (savedThread?.rootId) {
+        openThreadDrawer(savedThread.rootId, "", savedThread.anchorId || savedThread.rootId, {
+          restoreScrollTop: savedThread.scrollTop,
+          immediate: true,
+        });
+      }
+      if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot) $("#super-input").focus({ preventScroll: true });
     }
     if (next === "auto") openAuto(saved);
     if (next === "devices") openDevices(saved);
@@ -8144,6 +8163,7 @@
   const tdScrim = $("#thread-scrim");
   const tdTitleEl = $("#td-title");
   const tdMetaEl = $("#td-meta");
+  const tdWorkersEl = $("#td-workers");
   const tdBodyEl = $("#td-body");
   const tdListEl = $("#td-list");
   const tdComposer = $("#td-composer");
@@ -8158,7 +8178,211 @@
   const tdGripEl = $("#td-grip");
   const setThreadW = (w) => document.documentElement.style.setProperty("--thread-w", Math.round(w) + "px");
   const threadMax = () => Math.max(360, Math.min(560, innerWidth - ($(".side")?.offsetWidth || 0) - 420));
-  let tdHideTimer = 0, tdFocusTimer = 0, tdSending = false, tdLoadingRoot = false;
+  let tdHideTimer = 0, tdFocusTimer = 0, tdSending = false, tdLoadingRoot = false, tdWorkersSig = "";
+
+  const escRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const THREAD_IGNORED_WORKERS = new Set(["", ROUTER, "you", "你", "Collie", "collie", "定时", "system", "router"]);
+  function threadWorkerRank(status, ended) {
+    if (ended || status === "gone" || status === "failed") return 4;
+    if (status === "blocked") return 0;
+    if (status === "working" || status === "starting") return 1;
+    if (status === "waiting") return 2;
+    return 3;
+  }
+  function cleanTextForWorkerMatch(raw, role) {
+    let t = String(raw || "");
+    if (!t) return "";
+    if (role === "user") {
+      const cut = t.indexOf("\n\n[The human picked");
+      if (cut >= 0) t = t.slice(0, cut);
+      const att = t.lastIndexOf("附件：\n");
+      if (att >= 0) t = t.slice(0, att);
+    }
+    return t
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/\]\([^)\n]+\)/g, "]")
+      .replace(/https?:\/\/\S+/gi, " ");
+  }
+  function extractThreadWorkers(th, info, allEntries) {
+    if (!th) return [];
+    const entries = allEntries || chatEntries();
+    const byId = info?.byId || new Map(entries.map((e) => [entryKey(e), e]).filter(([k]) => !!k));
+
+    // Deduplicate sup.workers by name: prefer active (!ended), then newest created_at.
+    const workerByName = new Map();
+    for (const w of sup.workers || []) {
+      const name = typeof w?.name === "string" ? w.name.trim() : "";
+      if (!name || name === ROUTER) continue;
+      const prev = workerByName.get(name);
+      if (!prev) {
+        workerByName.set(name, w);
+      } else {
+        const prevEnded = !!prev.ended, curEnded = !!w.ended;
+        if ((prevEnded && !curEnded) || (prevEnded === curEnded && (+new Date(w.created_at) || 0) >= (+new Date(prev.created_at) || 0))) {
+          workerByName.set(name, w);
+        }
+      }
+    }
+    const liveAgentByName = new Map();
+    for (const a of state.agents || []) {
+      if (a?.name && a.name !== ROUTER && !liveAgentByName.has(a.name)) liveAgentByName.set(a.name, a);
+    }
+    const latestEventAtByName = new Map();
+    for (const ev of entries) {
+      if (ev?.role === "event" && ev.ref && ev.ref !== ROUTER && !ev.ref.startsWith("h:")) {
+        const t = +new Date(ev.at) || 0;
+        if (t > (latestEventAtByName.get(ev.ref) || 0)) latestEventAtByName.set(ev.ref, t);
+      }
+    }
+
+    const found = new Map(); // name -> { lastMentionAt }
+    const record = (rawName, atMs, viaStructured) => {
+      const name = typeof rawName === "string" ? rawName.trim() : "";
+      if (!name || THREAD_IGNORED_WORKERS.has(name) || name.startsWith("h:")) return;
+      if (viaStructured) {
+        const known = workerByName.has(name) || liveAgentByName.has(name) || hist.some((h) => h.name === name);
+        if (!known) return;
+      }
+      const prev = found.get(name);
+      const at = atMs || 0;
+      if (!prev) found.set(name, { lastMentionAt: at });
+      else if (at > prev.lastMentionAt) prev.lastMentionAt = at;
+    };
+    const recordAction = (act, at) => {
+      if (!act || typeof act !== "object") return;
+      if (Array.isArray(act)) { for (const x of act) recordAction(x, at); return; }
+      record(act.worker, at, true);
+      record(act.ref, at, true);
+      record(act.target, at, true);
+      if (act.name && (!act.type || /spawn|worker|send|agent|report/i.test(String(act.type)))) {
+        record(act.name, at, true);
+      }
+    };
+
+    const nodeIds = new Set();
+    if (th.rootId) nodeIds.add(th.rootId);
+    const textParts = [];
+    for (let i = 0; i < (th.list || []).length; i++) {
+      const m = th.list[i];
+      if (!m) continue;
+      const k = entryKey(m);
+      if (k) nodeIds.add(k);
+      const at = +new Date(m.at) || 0;
+      record(m.worker, at, true);
+      record(m.from, at, true);
+      record(m.ref, at, true);
+      record(m.re?.worker, at, true);
+      recordAction(m.action, at);
+      recordAction(m.actions, at);
+      if (m.re?.entry) {
+        const target = byId.get(m.re.entry);
+        if (target && target.role === "event") {
+          const tat = +new Date(target.at) || at;
+          record(target.ref, tat, true);
+          record(target.worker, tat, true);
+          record(target.from, tat, true);
+        }
+      }
+      const cleaned = cleanTextForWorkerMatch(m.text, m.role);
+      if (cleaned) textParts.push({ text: cleaned, at });
+      if (i === 0 && !th.missingRoot && m.re?.text) {
+        const rq = cleanTextForWorkerMatch(m.re.text, "");
+        if (rq) textParts.push({ text: rq, at });
+      }
+    }
+    if (th.missingRoot?.text) {
+      const mq = cleanTextForWorkerMatch(th.missingRoot.text, "");
+      if (mq) textParts.push({ text: mq, at: 0 });
+    }
+    for (const ev of entries) {
+      if (!ev || ev.role !== "event") continue;
+      const linked = (ev.re?.entry && nodeIds.has(ev.re.entry)) || (ev.thread && th.rootId && ev.thread === th.rootId);
+      if (!linked) continue;
+      const at = +new Date(ev.at) || 0;
+      record(ev.ref, at, true);
+      record(ev.worker, at, true);
+      record(ev.from, at, true);
+    }
+    for (const [name, w] of workerByName.entries()) {
+      if (w.thread && th.rootId && w.thread === th.rootId) {
+        record(name, +new Date(w.report_at || w.created_at) || 0, true);
+      }
+    }
+    if (textParts.length && workerByName.size) {
+      for (const name of workerByName.keys()) {
+        const re = new RegExp(`(?:^|[^A-Za-z0-9_\\-/.\\\\])${escRegex(name)}(?![A-Za-z0-9_\\-/\\\\]|\\.[A-Za-z0-9_])`);
+        for (const part of textParts) {
+          if (re.test(part.text)) record(name, part.at, false);
+        }
+      }
+    }
+
+    const out = [];
+    for (const [name, meta] of found.entries()) {
+      const w = workerByName.get(name) || null;
+      const live = liveAgentByName.get(name) || null;
+      const ended = w ? !!w.ended : !live;
+      const status = ended
+        ? (w?.status === "failed" ? "failed" : "gone")
+        : (live?.status || w?.status || "unknown");
+      const pane = !ended ? (live?.pane_id || w?.pane_id || "") : "";
+      const past = !pane ? (workerHist(name, w?.created_at || 0) || hist.find((h) => h.name === name) || null) : null;
+      const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+      const kind = live?.kind || w?.kind || past?.kind || "";
+      const lastActive = Math.max(
+        meta.lastMentionAt || 0,
+        +new Date(w?.report_at || 0) || 0,
+        +new Date(w?.created_at || 0) || 0,
+        latestEventAtByName.get(name) || 0,
+        +new Date(past?.ended || 0) || 0,
+      );
+      out.push({
+        name,
+        status,
+        ended,
+        kind,
+        pane,
+        href,
+        isHist: !pane && !!past,
+        rank: threadWorkerRank(status, ended),
+        lastActive,
+      });
+    }
+    out.sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      if (b.lastActive !== a.lastActive) return b.lastActive - a.lastActive;
+      return a.name.localeCompare(b.name);
+    });
+    return out;
+  }
+  function renderThreadWorkers(th, info, allEntries, force = false) {
+    if (!tdWorkersEl) return;
+    const list = extractThreadWorkers(th, info, allEntries);
+    if (!list.length) {
+      if (!tdWorkersEl.hidden || tdWorkersSig !== "") {
+        tdWorkersEl.hidden = true;
+        tdWorkersEl.innerHTML = "";
+        tdWorkersSig = "";
+      }
+      return;
+    }
+    const sig = JSON.stringify(list.map((w) => [w.name, w.status, w.ended ? 1 : 0, w.href, w.kind]));
+    if (!force && sig === tdWorkersSig && !tdWorkersEl.hidden) return;
+    tdWorkersSig = sig;
+    tdWorkersEl.hidden = false;
+    tdWorkersEl.innerHTML = list.map((w) => {
+      const stLabel = STATUS_LABEL[w.status] || (w.ended ? "已停止" : w.status);
+      const kindLabel = KIND_LABEL[w.kind] || w.kind || "";
+      const tip = [w.name, kindLabel, stLabel].filter(Boolean).join(" · ");
+      const cls = `td-worker${w.ended ? " is-ended" : ""}${w.href ? "" : " is-static"}`;
+      const inner = `<span class="dot ${esc(w.status)}" aria-hidden="true"></span><span class="td-worker-name">${esc(w.name)}</span>`;
+      if (w.href) {
+        const act = w.isHist ? "查看记录" : "打开终端";
+        return `<a class="${cls}" href="${esc(w.href)}" data-td-worker="${esc(w.name)}" data-td-status="${esc(w.status)}" title="${esc(tip)}" aria-label="${esc(`${w.name}，${stLabel}，${act}`)}">${inner}</a>`;
+      }
+      return `<span class="${cls}" data-td-worker="${esc(w.name)}" data-td-status="${esc(w.status)}" title="${esc(tip)}">${inner}</span>`;
+    }).join("");
+  }
 
   function syncThreadComposerHint() {
     if (!tdHintEl) return;
@@ -8241,7 +8465,8 @@
   }
   function renderThreadDrawer(opts = {}) {
     if (!tdDrawer || !tdListEl) return;
-    const info = computeReplyThreads(chatEntries());
+    const allEntries = chatEntries();
+    const info = computeReplyThreads(allEntries);
     if (activeThreadRoot && !info.threads.has(activeThreadRoot) && activeThreadAnchor) {
       const migrated = info.msgToRoot.get(activeThreadAnchor);
       if (migrated && info.threads.has(migrated)) activeThreadRoot = migrated;
@@ -8270,6 +8495,7 @@
     if (tdLocateRootBtn) {
       tdLocateRootBtn.hidden = !th.root?.id && !th.list[0]?.id;
     }
+    renderThreadWorkers(th, info, allEntries, !!opts.force);
 
     const sig = JSON.stringify([
       th.rootId,
@@ -8353,6 +8579,8 @@
 
     if (opts.focusMsgId) {
       requestAnimationFrame(() => focusNodeInDrawer(opts.focusMsgId));
+    } else if (typeof opts.restoreScrollTop === "number" && tdBodyEl) {
+      requestAnimationFrame(() => { tdBodyEl.scrollTop = opts.restoreScrollTop; });
     } else if (scrollBottom && tdBodyEl) {
       requestAnimationFrame(() => { tdBodyEl.scrollTop = tdBodyEl.scrollHeight; });
     }
@@ -8361,7 +8589,7 @@
     if (!activeThreadRoot) return;
     renderThreadDrawer(opts);
   }
-  function openThreadDrawer(rootId, focusMsgId = "", anchorId = "") {
+  function openThreadDrawer(rootId, focusMsgId = "", anchorId = "", opts = {}) {
     if (!tdDrawer || !rootId) return;
     const appEl = $("#app");
     const sc = view === "collie" ? viewScroller("collie") : null;
@@ -8376,6 +8604,7 @@
     if (switched) {
       drawerReplyTarget = null;
       tdLastSig = "";
+      tdWorkersSig = "";
       tdLastCount = 0;
     }
     const defW = innerWidth <= 1120 ? 420 : 432;
@@ -8388,7 +8617,13 @@
     appEl.classList.add("has-thread");
     const info = computeReplyThreads(chatEntries());
     syncActiveThreadMarks(info);
-    renderThreadDrawer({ focusMsgId, scrollBottom: !focusMsgId, force: true });
+    const hasRestore = typeof opts.restoreScrollTop === "number";
+    renderThreadDrawer({
+      focusMsgId,
+      scrollBottom: !focusMsgId && !hasRestore,
+      restoreScrollTop: hasRestore ? opts.restoreScrollTop : undefined,
+      force: true,
+    });
     if (lockSnap) {
       beginCollieLayoutLock(lockSnap, { trackTransition: !hadThread && innerWidth > 1000 });
     }
@@ -8408,7 +8643,9 @@
     activeThreadAnchor = "";
     drawerReplyTarget = null;
     tdLastSig = "";
+    tdWorkersSig = "";
     tdLastCount = 0;
+    if (tdWorkersEl) { tdWorkersEl.hidden = true; tdWorkersEl.innerHTML = ""; }
     tdDrawer.classList.remove("is-dragging");
     tdDrawer.style.transform = "";
     if (tdScrim) tdScrim.style.opacity = "";

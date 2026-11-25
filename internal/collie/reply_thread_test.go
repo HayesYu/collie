@@ -369,7 +369,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, connect, renderSuper, computeReplyThreads, openThreadDrawer, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setState: (st) => { localState = st; state = mergedState(); }, setHist: (h) => { hist = h || []; }, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, connect, renderSuper, computeReplyThreads, extractThreadWorkers, openThreadDrawer, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 
@@ -601,6 +601,128 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(prefsInsecure.includes("当前为非 HTTPS 内网地址，浏览器禁止桌面通知"), "insecure HTTP hint shown");
   assert.ok(prefsInsecure.includes('data-pref="notify" disabled'), "notify switch disabled in insecure HTTP context");
   assert.ok(!prefsInsecure.includes('data-act="test-notify"'), "no test button in insecure context");
+
+  // ─── 6. Thread drawer associated Agent pills: precision, sorting, zero-noise hide, live SSE, and history back ───
+  const wTs = (m) => new Date(now - m * 60000).toISOString();
+  const sampleWorkers = [
+    { name: "test", kind: "codex", status: "working", pane_id: "w90:p1", created_at: wTs(20) },
+    { name: "wk-working", kind: "codex", status: "working", pane_id: "w91:p1", created_at: wTs(15) },
+    { name: "wk-blocked", kind: "claude", status: "blocked", pane_id: "w92:p1", created_at: wTs(18) },
+    { name: "wk-waiting", kind: "agy", status: "waiting", pane_id: "w93:p1", created_at: wTs(12) },
+    { name: "wk-done-old", kind: "claude", status: "done", pane_id: "w94:p1", created_at: wTs(25), report_at: wTs(10) },
+    { name: "wk-done-new", kind: "claude", status: "done", pane_id: "w95:p1", created_at: wTs(22), report_at: wTs(2) },
+    { name: "wk-ended", kind: "codex", status: "gone", ended: true, created_at: wTs(30), report_at: wTs(14) },
+  ];
+  const sampleAgents = [
+    { pane_id: "w90:p1", name: "test", kind: "codex", status: "working", is_agent: true },
+    { pane_id: "w91:p1", name: "wk-working", kind: "codex", status: "working", is_agent: true },
+    { pane_id: "w92:p1", name: "wk-blocked", kind: "claude", status: "blocked", is_agent: true },
+    { pane_id: "w93:p1", name: "wk-waiting", kind: "agy", status: "waiting", is_agent: true },
+    { pane_id: "w94:p1", name: "wk-done-old", kind: "claude", status: "done", is_agent: true },
+    { pane_id: "w95:p1", name: "wk-done-new", kind: "claude", status: "done", is_agent: true },
+  ];
+  const sampleHist = [
+    { id: "h-ended-1", name: "wk-ended", kind: "codex", ended: wTs(13), cwd: "/tmp/demo" },
+  ];
+  const workerEntries = [
+    // Thread A: NO associated workers (contains substring traps for worker "test"!)
+    { id: "ea1", role: "user", text: "请看 ~/code/test/main.go 和 https://example.com/test 以及 fix-flaky-test 的 testing 逻辑。", at: wTs(25) },
+    { id: "ea2", role: "collie", text: "看了 test.go 和 my_test：\n\x60\x60\x60go\nfunc test() {}\n\x60\x60\x60\n不需要派 worker。", at: wTs(24), from: "feishu-user", re: { entry: "ea1", who: "你", text: "请看 ~/code/test/main.go" } },
+    { id: "ea3", role: "user", text: "好的，先这样。", at: wTs(23), re: { entry: "ea2", who: "Collie", text: "看了 test.go" } },
+    // Worker report event quoted by Thread B root
+    { id: "eb0", role: "event", ref: "wk-done-old", tone: "done", text: "wk-done-old 回报：旧报告", at: wTs(10) },
+    // Thread B: multiple workers via structured fields (re.worker, re.entry->event, e.worker, e.from, e.action) + exact prose boundary
+    { id: "eb1", role: "collie", text: "已派出 **wk-working** 和 \x60wk-done-new\x60 并行推进。", at: wTs(9), re: { entry: "eb0", worker: "wk-done-old", who: "wk-done-old", text: "旧报告" } },
+    { id: "eb2", role: "user", text: "顺便盯着点 wk-waiting，另外 wk-ended 的记录也能看吗？", at: wTs(7), action: { type: "spawn", worker: "wk-blocked" }, re: { entry: "eb1", who: "Collie", text: "已派出 wk-working" } },
+    { id: "eb3", role: "collie", text: "可以，wk-working 还在跑（重复提及去重）。", at: wTs(5), worker: "wk-working", re: { entry: "eb2", who: "你", text: "顺便盯着点 wk-waiting" } },
+  ];
+
+  T.setState({ ok: true, agents: sampleAgents, shells: [], machines: [{ id: "", name: "local", local: true, online: true }] });
+  T.setHist(sampleHist);
+  T.setSup({ router: { status: "idle", alive: true }, entries: workerEntries, workers: sampleWorkers });
+  T.setView("collie");
+  T.renderSuper({ force: true });
+
+  // 6a) Thread A: zero false positives against worker "test" & unknown e.from -> #td-workers completely hidden
+  T.openThreadDrawer("ea1");
+  const tdWorkersEl = getEl("#td-workers");
+  assert.equal(tdWorkersEl.hidden, true, "worker-less thread must hide #td-workers completely");
+  assert.equal(tdWorkersEl.innerHTML, "", "worker-less thread must render empty #td-workers");
+
+  // 6b) Thread B: exact deduplication, priority order (blocked > working > waiting > done-new > done-old > ended), links & dot classes
+  T.openThreadDrawer("eb1");
+  assert.equal(tdWorkersEl.hidden, false, "thread with associated workers must display #td-workers");
+  const threadInfoB = T.computeReplyThreads(workerEntries);
+  const extractedB = T.extractThreadWorkers(threadInfoB.threads.get("eb1"), threadInfoB, workerEntries);
+  assert.deepEqual(
+    Array.from(extractedB, (w) => w.name),
+    ["wk-blocked", "wk-working", "wk-waiting", "wk-done-new", "wk-done-old", "wk-ended"],
+    "workers deduplicated and sorted by blocked > working > waiting > recent done > ended",
+  );
+  assert.equal(extractedB.find((w) => w.name === "wk-working").href, "#/p/w91%3Ap1");
+  assert.equal(extractedB.find((w) => w.name === "wk-ended").href, "#/h/h-ended-1");
+  const wHtml = tdWorkersEl.innerHTML;
+  assert.ok(wHtml.includes('class="dot blocked"'), "blocked dot rendered");
+  assert.ok(wHtml.includes('class="dot working"'), "working dot rendered");
+  assert.ok(wHtml.includes('class="dot waiting"'), "waiting dot rendered");
+  assert.ok(wHtml.includes('class="dot done"'), "done dot rendered");
+  assert.ok(wHtml.includes('class="dot gone"'), "ended gone dot rendered");
+  assert.ok(wHtml.includes('href="#/p/w91%3Ap1"') && wHtml.includes('href="#/h/h-ended-1"'), "live and history links rendered");
+  assert.ok(!wHtml.includes('data-td-worker="test"'), "substring trap worker must not appear in Thread B");
+
+  // 6c) Real-time SSE worker status update refreshes #td-workers live WITHOUT rebuilding #td-list
+  let tdListWrites = 0;
+  let tdListHtmlVal = getEl("#td-list").innerHTML;
+  Object.defineProperty(getEl("#td-list"), "innerHTML", {
+    get() { return tdListHtmlVal; },
+    set(v) { tdListWrites++; tdListHtmlVal = v; },
+    configurable: true,
+  });
+  const updatedAgents = sampleAgents.map((a) => a.name === "wk-working" ? { ...a, status: "waiting" } : a);
+  const updatedWorkers = sampleWorkers.map((w) => w.name === "wk-working" ? { ...w, status: "waiting" } : w);
+  lastES.emit("state", { ok: true, agents: updatedAgents, shells: [], machines: [{ id: "", name: "local", local: true, online: true }] });
+  lastES.emit("super", { router: { status: "idle", alive: true }, entries: workerEntries, workers: updatedWorkers });
+  assert.equal(tdListWrites, 0, "live worker status refresh must not needlessly rebuild #td-list");
+  assert.ok(tdWorkersEl.innerHTML.includes('data-td-worker="wk-working" data-td-status="waiting"'), "SSE update refreshes pill status in place");
+
+  // 6d) Navigating from drawer to Agent terminal and returning via history.back() restores drawer context
+  let histState = { collieIdx: 0 };
+  ctx.history = {
+    get state() { return histState; },
+    replaceState(s) { histState = s; },
+    back() {},
+  };
+  T.setBooted(true);
+  ctx.location.hash = "#/collie";
+  T.route();
+  T.openThreadDrawer("eb1");
+  assert.equal(T.getActiveThreadRoot(), "eb1");
+  // Navigate to agent terminal (new history entry without collieIdx -> gets idx 1)
+  histState = {};
+  ctx.location.hash = "#/p/w91%3Ap1";
+  T.route();
+  assert.equal(T.getActiveThreadRoot(), null, "navigating to agent terminal closes thread drawer");
+  // Simulate history.back() back to collieIdx 0
+  histState = { collieIdx: 0 };
+  ctx.location.hash = "#/collie";
+  T.route();
+  assert.equal(T.getActiveThreadRoot(), "eb1", "returning via history.back() restores the open thread drawer");
+  assert.equal(getEl("#td-workers").hidden, false, "restored thread drawer re-renders associated worker pills");
+  // Navigating fresh to #/collie (not back) does NOT spuriously reopen drawer after closing
+  T.closeThreadDrawer({ immediate: true });
+  histState = {};
+  ctx.location.hash = "#/p/w91%3Ap1";
+  T.route();
+  histState = { collieIdx: 0 };
+  ctx.location.hash = "#/collie";
+  T.route();
+  assert.equal(T.getActiveThreadRoot(), null, "closing drawer before navigating away keeps drawer closed on back");
+
+  // 6e) HTML & CSS contracts for .td-workers / .td-worker
+  assert.ok(indexHtml.includes('<nav class="td-workers" id="td-workers"'), "index.html defines semantic nav.td-workers");
+  assert.ok(appCss.includes(".td-head:has(+ .td-workers:not([hidden]))"), "CSS merges header border when .td-workers visible");
+  assert.ok(appCss.includes("scrollbar-width: none;") && appCss.includes("@supports not (scrollbar-width: none)"), "CSS hides horizontal scrollbar with modern @supports fallback");
+  assert.ok(!/\.td-worker\b[^}]*--mono/.test(appCss), ".td-worker pills strictly use --sans typography, never --mono");
 
   console.log("OK: all reply-thread, settings, and notification JS tests passed");
 })().catch((err) => {

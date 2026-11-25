@@ -85,31 +85,42 @@ func (s *Server) loadCodexNames() {
 
 var agyTitles struct {
 	sync.Mutex
-	at time.Time
-	m  map[string]string
+	home string
+	at   time.Time
+	m    map[string]string
 }
 
 func (s *Server) agyTitle(id string) string {
 	agyTitles.Lock()
 	defer agyTitles.Unlock()
-	if time.Since(agyTitles.at) > 5*time.Second {
-		agyTitles.at = time.Now()
+	if agyTitles.home != s.home || time.Since(agyTitles.at) > 5*time.Second {
+		agyTitles.home, agyTitles.at = s.home, time.Now()
 		m := map[string]string{}
-		path := filepath.Join(s.agyCLIHome(), "conversation_summaries.db")
-		if isFile(path) {
-			if db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)"); err == nil {
-				if rows, err := db.Query(`SELECT conversation_id, title FROM conversation_summaries WHERE last_modified_time > ?`,
-					time.Now().Add(-7*24*time.Hour).UTC().Format("2006-01-02 15:04:05")); err == nil {
-					for rows.Next() {
-						var cid, t string
-						if rows.Scan(&cid, &t) == nil {
-							m[cid] = t
-						}
-					}
-					rows.Close()
-				}
-				db.Close()
+		// Read desktop app first, then CLI so CLI overrides when both exist.
+		roots := []string{filepath.Join(s.home, ".gemini", "antigravity")}
+		if cli := s.agyCLIHome(); cli != roots[0] {
+			roots = append(roots, cli)
+		}
+		cutoff := time.Now().Add(-7 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+		for _, root := range roots {
+			path := filepath.Join(root, "conversation_summaries.db")
+			if !isFile(path) {
+				continue
 			}
+			db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)")
+			if err != nil {
+				continue
+			}
+			if rows, err := db.Query(`SELECT conversation_id, title FROM conversation_summaries WHERE last_modified_time > ?`, cutoff); err == nil {
+				for rows.Next() {
+					var cid, t string
+					if rows.Scan(&cid, &t) == nil && t != "" {
+						m[cid] = t
+					}
+				}
+				rows.Close()
+			}
+			db.Close()
 		}
 		agyTitles.m = m
 	}

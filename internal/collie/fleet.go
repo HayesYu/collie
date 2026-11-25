@@ -237,6 +237,7 @@ func (h *Herdr) Machines() []Machine {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	out := []Machine{*h.local}
+	out[0].Version = version
 	out[0].Agents = localAgents(h.local.Home, false)
 	var rs []Machine
 	for _, m := range h.remote {

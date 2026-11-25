@@ -58,7 +58,7 @@
   function noteBuild(v) {
     if (!v) return;
     if (webBuild === null) { webBuild = v; return; }
-    if (v === webBuild || document.getElementById("update-bar")) return;
+    if (v === webBuild || updateFlow.phase === "restarting" || document.getElementById("update-bar")) return;
     const bar = document.createElement("button");
     bar.id = "update-bar"; bar.type = "button";
     bar.textContent = "Collie 有新版本，点这里刷新";
@@ -247,6 +247,7 @@
   function toast(msg, kind = "") {
     const t = document.createElement("div");
     t.className = "toast " + kind;
+    t.setAttribute("role", kind === "attn" ? "alert" : "status");
     t.textContent = msg;
     $("#toasts").append(t);
     setTimeout(() => t.remove(), kind === "attn" ? 5000 : 2600);
@@ -364,6 +365,7 @@
       notifyTransitions(next);
       state = next;
       renderSide();
+      renderUpdateEntry();
       if (view === "pane") renderHead();
       if (view === "collie") renderSuper();
     });
@@ -2690,7 +2692,9 @@
     $("#x-takeover").hidden = !e.can_take_over;
     $("#x-note").textContent = gone ? "这个进程已经退出了。"
       : !e.session ? `它跑在 ${app} 里，还没有会话记录，所以没法接管。`
-      : `它跑在 ${app} 里，Collie 只能看，不能往里面打字。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续，之后就能在这里和它对话。`;
+      : e.can_take_over
+        ? `它跑在 ${app} 里，Collie 只能看，不能往里面打字。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续，之后就能在这里和它对话。`
+        : `它跑在 ${app} 里，Collie 目前只能查看。`;
     $("#x-takeover").disabled = !!gone || !e.session;
     if (e.status && !gone) {
       $("#x-status").textContent = `${{ working: "正在跑", waiting: "在等后台任务", idle: "空闲，等你发话", blocked: "等电脑那边确认" }[e.status] || "正在运行"} · ${app}`;
@@ -2703,8 +2707,10 @@
       $("#x-takeover").className = "btn small";
       $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : e.app === "Codex 桌面版" ? "经 Codex App 送达" : e.kind === "codex" ? "经 Codex 后台送达" : "经会话收件箱送达";
       $("#x-note").textContent = "";
-    } else if (!gone && e.read_only && e.session) {
-      $("#x-note").textContent = e.read_only + "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。";
+    } else if (!gone && e.read_only) {
+      $("#x-note").textContent = e.read_only + (e.session && e.can_take_over
+        ? "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。"
+        : "");
     }
   }
   bindComposer($("#x-composer"), $("#x-input"), async (text) => {
@@ -2767,10 +2773,11 @@
     const app = e.app || "另一个终端";
     if (e.live && !confirm(`接管「${extName(e)}」？\n\n会先结束 ${app} 里的这个 ${KIND_LABEL[e.kind] || e.kind} 进程（相当于按 Ctrl-C），然后在 herdr 里用同一个会话继续。${app} 那边会回到命令行。`)) return;
     const b = $("#x-takeover");
-    b.disabled = true; b.textContent = "接管中…";
+    const prevLabel = b.textContent;
+    b.disabled = true; b.textContent = e.live ? "接管中…" : "启动中…";
     try {
       const r = await api(`/api/external/${encodeURIComponent(e.id)}/takeover`, { body: {} });
-      toast("已在 herdr 里接管");
+      toast(e.live ? "已在 herdr 里接管" : "已在 herdr 里继续");
       ext = ext.filter((x) => x.id !== e.id);
       renderExt();
       replaceHash("#/p/" + encodeURIComponent(r.pane_id));
@@ -2778,7 +2785,7 @@
     } catch (err) {
       toast(err.message, "attn");
       b.disabled = false;
-    } finally { b.textContent = "在 herdr 里接管"; }
+    } finally { b.textContent = prevLabel; }
   });
 
   // ───────────────────────────── preferences (per device, in localStorage)
@@ -2871,7 +2878,8 @@
 
   const left = (p) => { const s = Math.max(0, Math.round((p.expires - Date.now()) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
-  // A newer release: the footer says so, the devices page says where and how.
+  // A newer release: one restrained primary capsule when any online machine
+  // lags behind, and per-machine controls on the devices page kept in sync.
   const INSTALL = "curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s --";
   const isOld = (have, latest) => {
     const p = (v) => /^v\d+\.\d+\.\d+$/.test(v || "") ? v.slice(1).split(".").map(Number) : null;
@@ -2880,15 +2888,265 @@
     for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
     return false;
   };
+  let versionInfo = { version: "", latest: "", outdated: [], machines: [] };
+  let versionRetryT = null, versionRetries = 0;
+  const updateFlow = {
+    busy: false, phase: "idle", scope: "", targetVersion: "",
+    total: 0, index: 0, currentId: null, currentName: "", failedMachine: "", error: "",
+  };
+  function resetUpdateFlow() {
+    updateFlow.busy = false; updateFlow.phase = "idle"; updateFlow.scope = "";
+    updateFlow.targetVersion = ""; updateFlow.total = 0; updateFlow.index = 0;
+    updateFlow.currentId = null; updateFlow.currentName = "";
+    updateFlow.failedMachine = ""; updateFlow.error = "";
+  }
+  function outdatedOnlineMachines() {
+    const latest = versionInfo.latest;
+    if (!latest) return [];
+    const byId = new Map();
+    for (const m of versionInfo.machines || []) {
+      const id = m.local ? "" : (m.id || "");
+      byId.set(id, { id, name: m.name || (m.local ? "hub" : id), version: m.version || "", local: !!m.local, online: m.local ? true : !!m.online });
+    }
+    for (const m of localState.machines || []) {
+      const id = m.local ? "" : (m.id || "");
+      const prev = byId.get(id);
+      byId.set(id, {
+        id,
+        name: m.name || prev?.name || (m.local ? "hub" : id),
+        version: m.local ? (m.version || versionInfo.version || prev?.version || "") : (m.version || prev?.version || ""),
+        local: !!m.local,
+        online: m.local ? true : !!m.online,
+      });
+    }
+    let out = [];
+    if (byId.size) {
+      for (const m of byId.values()) {
+        if ((m.local || m.online) && isOld(m.version, latest)) out.push(m);
+      }
+    } else if (versionInfo.outdated?.length) {
+      // Backwards-compatible fallback when talking to an older hub without `machines`.
+      const names = new Set(versionInfo.outdated);
+      if (isOld(versionInfo.version, latest)) out.push({ id: "", name: versionInfo.outdated[0] || "hub", version: versionInfo.version, local: true, online: true });
+      for (const m of localState.machines || []) {
+        if (!m.local && m.online && names.has(m.name)) out.push({ id: m.id, name: m.name, version: m.version || "", local: false, online: true });
+      }
+    }
+    // Always update remote nodes first so restarting the hub never drops node tunnels.
+    out.sort((a, b) => (a.local === b.local ? a.name.localeCompare(b.name) : a.local ? 1 : -1));
+    return out;
+  }
+  function updatePillButtons() {
+    return [$("#update-all-btn"), $("#collie-update-btn")].filter(Boolean);
+  }
+  function renderUpdateEntry() {
+    const btns = updatePillButtons();
+    if (!btns.length) return;
+    const list = outdatedOnlineMachines();
+    const latest = updateFlow.targetVersion || versionInfo.latest;
+    if (!updateFlow.busy && !list.length) {
+      if (updateFlow.phase === "failed") resetUpdateFlow();
+      for (const b of btns) {
+        b.hidden = true;
+        b.removeAttribute("aria-disabled");
+        b.classList.remove("busy", "failed");
+      }
+      syncDeviceUpdateButtons();
+      return;
+    }
+    let html = "", tip = "", aria = "", cls = "";
+    const busy = updateFlow.busy;
+    if (updateFlow.phase === "updating") {
+      const step = updateFlow.total > 1 ? ` ${updateFlow.index}/${updateFlow.total}` : "";
+      const label = `更新中${step}…`;
+      html = `<span class="up-spin" aria-hidden="true"></span><span>${esc(label)}</span>`;
+      tip = `正在更新 ${updateFlow.currentName}${step ? `（${updateFlow.index}/${updateFlow.total}）` : ""}…`;
+      aria = `${label}，正在更新 ${updateFlow.currentName}`;
+      cls = "busy";
+    } else if (updateFlow.phase === "restarting") {
+      html = `<span class="up-spin" aria-hidden="true"></span><span>重启中…</span>`;
+      tip = `正在重启 ${updateFlow.currentName || "hub"}，恢复后自动刷新`;
+      aria = `重启中…，恢复后自动刷新`;
+      cls = "busy";
+    } else if (updateFlow.phase === "reconnecting") {
+      html = `<span class="up-spin" aria-hidden="true"></span><span>重连中…</span>`;
+      tip = "节点已更新，正在等待重连…";
+      aria = "重连中…，等待节点上线";
+      cls = "busy";
+    } else if (updateFlow.phase === "failed") {
+      html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span>重试更新</span>`;
+      tip = `更新 ${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}（点此重试）`;
+      aria = `重试更新（${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}）`;
+      cls = "failed";
+    } else {
+      const names = list.map((m) => m.name).join("、");
+      html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span>${esc(latest)}</span>`;
+      tip = `一键更新到 ${latest}（待更新：${names}）`;
+      aria = `一键更新到 ${latest}（待更新：${names}）`;
+    }
+    for (const b of btns) {
+      b.hidden = false;
+      b.classList.toggle("busy", cls === "busy");
+      b.classList.toggle("failed", cls === "failed");
+      if (busy) b.setAttribute("aria-disabled", "true"); else b.removeAttribute("aria-disabled");
+      b.title = tip;
+      b.setAttribute("aria-label", aria);
+      if (b.innerHTML !== html) b.innerHTML = html;
+    }
+    syncDeviceUpdateButtons();
+  }
+  function syncDeviceUpdateButtons() {
+    if (view !== "devices") return;
+    const latest = versionInfo.latest;
+    for (const b of $$("#devices-body button[data-update]")) {
+      const id = b.dataset.update;
+      if (updateFlow.busy) {
+        b.disabled = true;
+        if (updateFlow.currentId === id) {
+          b.textContent = updateFlow.phase === "restarting" ? "重启中…" : updateFlow.phase === "reconnecting" ? "重连中…" : "更新中…";
+        }
+      } else {
+        b.disabled = false;
+        if (latest) b.textContent = `更新到 ${latest}`;
+      }
+    }
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function waitForHubRestartAndReload(targetVersion) {
+    updateFlow.phase = "restarting";
+    renderUpdateEntry();
+    await sleep(window.__collieDemo ? 300 : 1200);
+    let sawDown = false;
+    const maxTries = 60;
+    for (let i = 0; i < maxTries; i++) {
+      try {
+        const res = await fetch("/api/version", { cache: "no-store", credentials: "same-origin" });
+        if (res.ok) {
+          const wb = res.headers.get("X-Collie-Web");
+          const data = await res.json().catch(() => ({}));
+          if (sawDown || (data.version && !isOld(data.version, targetVersion)) || (wb && webBuild && wb !== webBuild)) {
+            location.reload();
+            return true;
+          }
+        } else if (res.status >= 500) {
+          sawDown = true;
+        }
+      } catch {
+        sawDown = true;
+      }
+      await sleep(1500);
+    }
+    updateFlow.busy = false;
+    updateFlow.phase = "failed";
+    updateFlow.failedMachine = updateFlow.currentName || "hub";
+    updateFlow.error = "等待重启恢复超时，请刷新页面或重试";
+    toast("等待 hub 重启恢复超时，请手动刷新页面", "attn");
+    renderUpdateEntry();
+    return false;
+  }
+  async function waitForNodesReconnect(targetVersion) {
+    updateFlow.phase = "reconnecting";
+    renderUpdateEntry();
+    for (let i = 0; i < 16; i++) {
+      await sleep(window.__collieDemo ? 200 : 1500);
+      await checkUpdates();
+      if (!outdatedOnlineMachines().length) {
+        resetUpdateFlow();
+        renderUpdateEntry();
+        if (view === "devices") loadDevices();
+        toast(`已全部更新到 ${targetVersion}`);
+        return;
+      }
+    }
+    resetUpdateFlow();
+    renderUpdateEntry();
+    if (view === "devices") loadDevices();
+    toast("已触发更新，等待节点重连");
+  }
+  async function runUpdateAll() {
+    if (updateFlow.busy) return;
+    const targets = outdatedOnlineMachines();
+    if (!targets.length) { await checkUpdates(); return; }
+    const targetVersion = versionInfo.latest;
+    updateFlow.busy = true;
+    updateFlow.phase = "updating";
+    updateFlow.scope = "all";
+    updateFlow.targetVersion = targetVersion;
+    updateFlow.total = targets.length;
+    updateFlow.index = 0;
+    updateFlow.currentId = null;
+    updateFlow.currentName = "";
+    updateFlow.failedMachine = "";
+    updateFlow.error = "";
+    renderUpdateEntry();
+    let restartedHub = false;
+    let updatedAnyRemote = false;
+    for (let i = 0; i < targets.length; i++) {
+      const m = targets[i];
+      updateFlow.index = i + 1;
+      updateFlow.currentId = m.id;
+      updateFlow.currentName = m.name;
+      renderUpdateEntry();
+      try {
+        const qs = m.id ? "?" + new URLSearchParams({ machine: m.id }) : "";
+        const r = await api("/api/update" + qs, { body: {} });
+        if (m.local) {
+          if (!r.latest) {
+            restartedHub = true;
+            await waitForHubRestartAndReload(r.version || targetVersion);
+            return;
+          }
+        } else {
+          updatedAnyRemote = true;
+          // Give the remote node's self-exec a moment before touching the hub.
+          if (!r.latest && i + 1 < targets.length && targets[i + 1].local) {
+            await sleep(window.__collieDemo ? 150 : 1000);
+          }
+        }
+      } catch (err) {
+        const msg = String(err.message || "更新失败").replace(/^更新失败[：:]\s*/, "") || "更新失败";
+        updateFlow.busy = false;
+        updateFlow.phase = "failed";
+        updateFlow.failedMachine = m.name;
+        updateFlow.error = msg;
+        toast(`更新 ${m.name} 失败：${msg}`, "attn");
+        renderUpdateEntry();
+        checkUpdates();
+        return;
+      }
+    }
+    if (!restartedHub) {
+      if (updatedAnyRemote) {
+        await waitForNodesReconnect(targetVersion);
+      } else {
+        resetUpdateFlow();
+        await checkUpdates();
+        if (view === "devices") loadDevices();
+        toast("全端已是最新版本");
+      }
+    }
+  }
+  for (const b of updatePillButtons()) b.addEventListener("click", runUpdateAll);
+
   async function checkUpdates() {
+    clearTimeout(versionRetryT);
     try {
       const r = await api("/api/version");
-      const n = $("#update-note");
-      n.hidden = !r.outdated?.length;
-      n.title = r.outdated?.length ? `Collie ${r.latest} 已发布，可以更新：${r.outdated.join("、")}（看「设备」页）` : "";
+      versionInfo = {
+        version: r.version || "",
+        latest: r.latest || "",
+        outdated: Array.isArray(r.outdated) ? r.outdated : [],
+        machines: Array.isArray(r.machines) ? r.machines : [],
+      };
+      if (r.latest) {
+        versionRetries = 0;
+      } else if (versionRetries < 6) {
+        versionRetries++;
+        versionRetryT = setTimeout(checkUpdates, 5000);
+      }
+      renderUpdateEntry();
     } catch {}
   }
-  checkUpdates();
   setInterval(checkUpdates, 30 * 60 * 1000);
   // Which agents a computer has: nothing when not known (an older node).
   const agentsTag = (list) => !Array.isArray(list) ? ""
@@ -2896,8 +3154,13 @@
     : `<span class="tag attn" title="找不到 claude、codex、agy、doubao 命令：装一个，再重连这台电脑">没装 agent</span>`;
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
     ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
-  const updateRow = (have, latest, cmd, note, id, name) => isOld(have, latest)
-    ? `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}">更新到 ${esc(latest)}</button></p><p class="pair-hint muted">点了没反应的话，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : "";
+  const updateRow = (have, latest, cmd, note, id, name) => {
+    if (!isOld(have, latest)) return "";
+    const busy = updateFlow.busy;
+    const isMe = busy && updateFlow.currentId === id;
+    const label = isMe ? (updateFlow.phase === "restarting" ? "重启中…" : updateFlow.phase === "reconnecting" ? "重连中…" : "更新中…") : `更新到 ${latest}`;
+    return `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}"${busy ? " disabled" : ""}>${esc(label)}</button></p><p class="pair-hint muted">点了没反应的话，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>`;
+  };
 
   async function loadDevices(restore = null) {
     const body = $("#devices-body");
@@ -2905,6 +3168,11 @@
     let r;
     try { r = await api("/api/devices"); } catch (err) { body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; return; }
     if (view !== "devices") return;
+    if (r.latest && r.latest !== versionInfo.latest) {
+      versionInfo.latest = r.latest;
+      if (r.hub?.version) versionInfo.version = r.hub.version;
+      checkUpdates();
+    }
     const addrs = r.addresses || [];
     if (!addrs.includes(devAddr)) devAddr = addrs[0] || location.origin;
     const fresh = (k) => pairing[k] && pairing[k].expires - Date.now() > 15000;
@@ -3028,12 +3296,40 @@
       if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
       else if (b.id === "new-node-code") { await newCode("machine"); loadDevices(); }
       else if (b.dataset.update !== undefined) {
-        const id = b.dataset.update;
-        if (!confirm(`更新「${b.dataset.name}」上的 Collie？它会下载新版并重启，大约十几秒连不上${id ? "" : "（这是 hub，页面会短暂断开）"}；里面的 agent 不受影响。`)) return;
-        b.disabled = true; b.textContent = "更新中…";
-        const r = await api("/api/update?" + new URLSearchParams(id ? { machine: id } : {}), { body: {} });
-        toast(r.latest ? "已经是最新版" : `已更新到 ${r.version}，正在重启`);
-        setTimeout(() => { loadDevices(); checkUpdates(); }, 12000);
+        if (updateFlow.busy) return;
+        const id = b.dataset.update, name = b.dataset.name || (id || "hub");
+        if (!confirm(`更新「${name}」上的 Collie？它会下载新版并重启，大约十几秒连不上${id ? "" : "（这是 hub，页面会短暂断开）"}；里面的 agent 不受影响。`)) return;
+        updateFlow.busy = true;
+        updateFlow.phase = "updating";
+        updateFlow.scope = "single";
+        updateFlow.targetVersion = versionInfo.latest;
+        updateFlow.total = 1;
+        updateFlow.index = 1;
+        updateFlow.currentId = id;
+        updateFlow.currentName = name;
+        updateFlow.failedMachine = "";
+        updateFlow.error = "";
+        renderUpdateEntry();
+        try {
+          const r = await api("/api/update?" + new URLSearchParams(id ? { machine: id } : {}), { body: {} });
+          if (!id && !r.latest) {
+            toast(`已更新到 ${r.version}，正在重启`);
+            await waitForHubRestartAndReload(r.version || versionInfo.latest);
+            return;
+          }
+          toast(r.latest ? "已经是最新版" : `已更新到 ${r.version}，正在重启`);
+          if (id && !r.latest) {
+            await waitForNodesReconnect(r.version || versionInfo.latest);
+          } else {
+            resetUpdateFlow();
+            await checkUpdates();
+            loadDevices();
+          }
+        } catch (err) {
+          resetUpdateFlow();
+          renderUpdateEntry();
+          throw err;
+        }
       }
       else if (b.dataset.delHub) {
         if (!confirm(`不再显示「${b.dataset.name}」的会话？那个 hub 本身不受影响。`)) return;
@@ -5886,6 +6182,7 @@
     try { sup = normSup(await api("/api/super")); } catch {}
     try { setLocalState(await api("/api/state")); } catch {}
     await loadHubs();
+    checkUpdates();
     $("#login").hidden = true;
     $("#app").hidden = false;
     setMode(mode);

@@ -91,8 +91,9 @@
     </div>
     <footer class="side-foot">
       <a class="foot-status" href="#/devices" id="nav-devices" title="设备">
-        <span class="conn" id="conn"></span><span class="update-note" id="update-note" hidden>有新版</span><span id="herdr-status" class="muted">connecting…</span>
+        <span class="conn" id="conn"></span><span id="herdr-status" class="muted">connecting…</span>
       </a>
+      <button type="button" class="update-pill" id="update-all-btn" hidden></button>
       <a class="icon-btn" href="#/devices" title="设备与连接">
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="13" height="10" rx="1.5"/><path d="M7 18h5M9.5 14v4"/><rect x="17" y="9" width="5" height="11" rx="1.2"/></svg>
       </a>
@@ -115,6 +116,7 @@
           <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
+        <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
         <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
         </button>
@@ -494,7 +496,7 @@
   </button>
 </dialog>
 
-<div class="toasts" id="toasts"></div>
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/katex/katex.min.js"></script>

@@ -191,3 +191,90 @@ func TestSelfUpdateConcurrencyMutexAndTempCleanup(t *testing.T) {
 		t.Fatalf("updated binary mode = %v, want executable", fi.Mode())
 	}
 }
+
+func TestGetVersionAndStateMachinesVersion(t *testing.T) {
+	origVer := version
+	// Prevent background refresh from hitting GitHub during tests.
+	latestRel.once.Do(func() {})
+	latestRel.Lock()
+	origTag, origChecked, origBusy := latestRel.tag, latestRel.checked, latestRel.busy
+	latestRel.tag = "v0.2.51"
+	latestRel.busy = true
+	latestRel.Unlock()
+	t.Cleanup(func() {
+		version = origVer
+		latestRel.Lock()
+		latestRel.tag, latestRel.checked, latestRel.busy = origTag, origChecked, origBusy
+		latestRel.Unlock()
+	})
+
+	h := newHerdr("/nonexistent.sock", "hubbox", t.TempDir())
+	h.attach(&Machine{ID: "mac", Name: "mac", Version: "v0.2.50", Online: true})
+	h.attach(&Machine{ID: "old-off", Name: "old-off", Version: "v0.2.40", Online: false})
+	srv := &Server{herdr: h}
+
+	// 1) Hub already up to date, one online node outdated, one offline node outdated.
+	version = "v0.2.51"
+	ms := h.Machines()
+	if len(ms) != 3 || !ms[0].Local || ms[0].Version != "v0.2.51" {
+		t.Fatalf("Machines() local version = %+v, want v0.2.51", ms)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.getVersion(rec, httptest.NewRequest("GET", "/api/version", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Version  string           `json:"version"`
+		Latest   string           `json:"latest"`
+		Outdated []string         `json:"outdated"`
+		Machines []versionMachine `json:"machines"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != "v0.2.51" || got.Latest != "v0.2.51" {
+		t.Fatalf("version/latest = %q/%q", got.Version, got.Latest)
+	}
+	if len(got.Outdated) != 1 || got.Outdated[0] != "mac" {
+		t.Fatalf("outdated = %v, want [mac]", got.Outdated)
+	}
+	if len(got.Machines) != 3 {
+		t.Fatalf("machines len = %d, want 3", len(got.Machines))
+	}
+	byID := map[string]versionMachine{}
+	for _, m := range got.Machines {
+		byID[m.ID] = m
+	}
+	if !byID[""].Local || !byID[""].Online || byID[""].Outdated || byID[""].Version != "v0.2.51" {
+		t.Fatalf("hub entry = %+v", byID[""])
+	}
+	if byID["mac"].Local || !byID["mac"].Online || !byID["mac"].Outdated || byID["mac"].Version != "v0.2.50" {
+		t.Fatalf("mac entry = %+v", byID["mac"])
+	}
+	if byID["old-off"].Online || byID["old-off"].Outdated {
+		t.Fatalf("offline node should not be outdated: %+v", byID["old-off"])
+	}
+
+	// 2) Both hub and online node outdated.
+	version = "v0.2.50"
+	rec2 := httptest.NewRecorder()
+	srv.getVersion(rec2, httptest.NewRequest("GET", "/api/version", nil))
+	got.Outdated = nil
+	if err := json.Unmarshal(rec2.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Outdated) != 2 || got.Outdated[0] != "hubbox" || got.Outdated[1] != "mac" {
+		t.Fatalf("outdated = %v, want [hubbox mac]", got.Outdated)
+	}
+
+	// 3) All online machines up to date: outdated must marshal as JSON null for backwards compatibility.
+	version = "v0.2.51"
+	h.attach(&Machine{ID: "mac", Name: "mac", Version: "v0.2.51", Online: true})
+	rec3 := httptest.NewRecorder()
+	srv.getVersion(rec3, httptest.NewRequest("GET", "/api/version", nil))
+	if !strings.Contains(rec3.Body.String(), `"outdated":null`) {
+		t.Fatalf("expected outdated:null when up to date, got %s", rec3.Body.String())
+	}
+}

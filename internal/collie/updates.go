@@ -148,19 +148,41 @@ func outdated(have, latest string) bool {
 	return false
 }
 
+type versionMachine struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Version  string `json:"version,omitempty"`
+	Local    bool   `json:"local"`
+	Online   bool   `json:"online"`
+	Outdated bool   `json:"outdated"`
+}
+
 func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
-	latest := latestVersion(false)
+	latest := latestVersion(r.URL.Query().Get("refresh") == "1")
 	var old []string
-	for _, m := range s.herdr.Machines() {
-		v := m.Version
-		if m.Local {
-			v = version
-		}
-		if (m.Local || m.Online) && outdated(v, latest) {
-			old = append(old, m.Name)
+	machines := []versionMachine{}
+	if s.herdr != nil {
+		for _, m := range s.herdr.Machines() {
+			v := m.Version
+			if m.Local {
+				v = version
+			}
+			online := m.Local || m.Online
+			isOutdated := online && outdated(v, latest)
+			if isOutdated {
+				old = append(old, m.Name)
+			}
+			machines = append(machines, versionMachine{
+				ID:       m.ID,
+				Name:     m.Name,
+				Version:  v,
+				Local:    m.Local,
+				Online:   online,
+				Outdated: isOutdated,
+			})
 		}
 	}
-	writeJSON(w, 200, map[string]any{"version": version, "latest": latest, "outdated": old})
+	writeJSON(w, 200, map[string]any{"version": version, "latest": latest, "outdated": old, "machines": machines})
 }
 
 // selfUpdate replaces this computer's collie with the latest release and

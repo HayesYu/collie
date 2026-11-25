@@ -149,10 +149,13 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 			} else if d.waiting {
 				e.Status = "waiting"
 			}
-			if agyDesktopServer() != nil {
+			if len(s.agyDesktopServers()) > 0 {
 				e.CanSend, e.via = true, "app"
 			} else {
 				e.ReadOnly = "Antigravity 没有打开：打开它之后就能从这里发消息"
+			}
+			if !e.Live && e.Session != "" && e.Cwd != "" {
+				e.CanTakeOver = true
 			}
 		}
 		out = append(out, e)
@@ -581,7 +584,7 @@ func (s *Server) agyDesktopRows() []desktopRow {
 		json.Unmarshal([]byte(uris), &ws)
 		cwd := ""
 		if len(ws) > 0 {
-			cwd = strings.TrimSuffix(strings.TrimPrefix(ws[0], "file://"), "/")
+			cwd = fileURIToPath(ws[0])
 		}
 		d := desktopRow{id: "ag-" + id, kind: "agy", app: appAgy, session: id, title: messageTitle(title), cwd: cwd,
 			created: sqlTime(input), updated: sqlTime(mod), running: status == "CASCADE_RUN_STATUS_RUNNING"}

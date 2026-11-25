@@ -348,24 +348,28 @@ func (s *Server) locateExternal(e *External, p *proc) {
 		}
 	case "agy":
 		brain := filepath.Join(s.agyCLIHome(), "brain")
-		for i, a := range p.args {
-			if (a == "--conversation" || a == "-c") && i+1 < len(p.args) && conversationRe.MatchString(p.args[i+1]) {
-				f := filepath.Join(brain, p.args[i+1], ".system_generated", "logs", "transcript.jsonl")
-				if isFile(f) {
-					e.Session, e.path, e.format = p.args[i+1], f, "agy"
-					return
-				}
+		if id := agyConversationArg(p.args); id != "" {
+			if f := s.agyTranscriptByID(brain, id); f != "" {
+				e.Session, e.path, e.format = id, f, "agy"
+				return
 			}
+			// Even before the transcript file appears, record the explicit
+			// conversation id so the session remains identifiable/takeoverable.
+			e.Session = id
 		}
 		if e.Cwd == "" {
 			return
 		}
+		wantCwd := normPath(e.Cwd)
 		index := agyWorkspaces(filepath.Dir(brain))
 		var bestAt time.Time
 		for id, wss := range index {
 			match := false
 			for _, w := range wss {
-				match = match || w == strings.TrimSuffix(filepath.Clean(e.Cwd), "/")
+				if normPath(w) == wantCwd {
+					match = true
+					break
+				}
 			}
 			if !match {
 				continue

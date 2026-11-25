@@ -3,6 +3,7 @@ package collie
 import (
 	"database/sql"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,26 +16,122 @@ import (
 // pair them ourselves. Showing the wrong conversation would leak an unrelated
 // session into this pane, so a candidate must be provably this pane's:
 //
+//   - Collie itself started the pane with --conversation/--resume <id>; or
 //   - agy's own index (conversation_summaries.db) lists the pane's cwd as the
-//     conversation's workspace, exactly; and
-//   - the conversation was born after the agent started (when Collie knows the
-//     start time), or within the last few hours otherwise.
+//     conversation's workspace (after resolving symlinks), and the conversation
+//     was born after the agent started (or within the last few hours).
 //
 // Each transcript is claimed by at most one pane.
 
 var agyIndex struct {
 	sync.Mutex
-	at time.Time
-	ws map[string][]string // conversation id → workspace paths
+	root string
+	at   time.Time
+	ws   map[string][]string // conversation id → workspace paths
+}
+
+// agyPaneSessions remembers the conversation id Collie explicitly passed to
+// `agy --conversation <id>` (e.g., when taking over an idle Antigravity app
+// session or resuming from history) so the pane maps directly to its transcript
+// even when the conversation is older than the pane or lives in the app dir.
+var agyPaneSessions = struct {
+	sync.Mutex
+	m map[string]string // pane id → conversation id
+}{m: map[string]string{}}
+
+func (s *Server) rememberAgySession(pane, session string) {
+	if pane == "" || session == "" {
+		return
+	}
+	local, _ := split(pane)
+	agyPaneSessions.Lock()
+	agyPaneSessions.m[local] = session
+	if pane != local {
+		agyPaneSessions.m[pane] = session
+	}
+	agyPaneSessions.Unlock()
+}
+
+func forgetAgySession(pane string) {
+	local, _ := split(pane)
+	agyPaneSessions.Lock()
+	delete(agyPaneSessions.m, local)
+	delete(agyPaneSessions.m, pane)
+	agyPaneSessions.Unlock()
+}
+
+func agySessionForPane(pane string) string {
+	if pane == "" {
+		return ""
+	}
+	local, _ := split(pane)
+	agyPaneSessions.Lock()
+	defer agyPaneSessions.Unlock()
+	if id := agyPaneSessions.m[pane]; id != "" {
+		return id
+	}
+	return agyPaneSessions.m[local]
+}
+
+// normPath canonicalizes a filesystem path, resolving symlinks when possible
+// so e.g. /home/<user>/... and /data00/home/<user>/... compare equal.
+func normPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = filepath.Clean(p)
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		p = r
+	}
+	return strings.TrimSuffix(p, string(filepath.Separator))
+}
+
+func fileURIToPath(raw string) string {
+	if strings.HasPrefix(raw, "file://") {
+		if u, err := url.Parse(raw); err == nil && u.Path != "" {
+			if p, err := url.PathUnescape(u.Path); err == nil {
+				return strings.TrimSuffix(p, "/")
+			}
+			return strings.TrimSuffix(u.Path, "/")
+		}
+		raw = strings.TrimPrefix(raw, "file://")
+	}
+	return strings.TrimSuffix(raw, "/")
+}
+
+// agyConversationArg extracts the conversation id from agy CLI arguments
+// (--conversation, --resume, -r, and legacy -c when followed by an id).
+func agyConversationArg(args []string) string {
+	for i, a := range args {
+		switch {
+		case a == "--conversation" || a == "--resume" || a == "-r" || a == "-c":
+			if i+1 < len(args) && conversationRe.MatchString(args[i+1]) {
+				return args[i+1]
+			}
+		case strings.HasPrefix(a, "--conversation="):
+			if v := strings.TrimPrefix(a, "--conversation="); conversationRe.MatchString(v) {
+				return v
+			}
+		case strings.HasPrefix(a, "--resume="):
+			if v := strings.TrimPrefix(a, "--resume="); conversationRe.MatchString(v) {
+				return v
+			}
+		case strings.HasPrefix(a, "-r="):
+			if v := strings.TrimPrefix(a, "-r="); conversationRe.MatchString(v) {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 func agyWorkspaces(root string) map[string][]string {
 	agyIndex.Lock()
 	defer agyIndex.Unlock()
-	if time.Since(agyIndex.at) < 3*time.Second && agyIndex.ws != nil {
+	if agyIndex.root == root && time.Since(agyIndex.at) < 3*time.Second && agyIndex.ws != nil {
 		return agyIndex.ws
 	}
-	agyIndex.at = time.Now()
+	agyIndex.root, agyIndex.at = root, time.Now()
 	m := map[string][]string{}
 	path := filepath.Join(root, "conversation_summaries.db")
 	if !isFile(path) {
@@ -62,14 +159,31 @@ func agyWorkspaces(root string) map[string][]string {
 		var uris []string
 		json.Unmarshal([]byte(raw), &uris)
 		for _, u := range uris {
-			m[id] = append(m[id], strings.TrimSuffix(strings.TrimPrefix(u, "file://"), "/"))
+			m[id] = append(m[id], fileURIToPath(u))
 		}
 	}
 	agyIndex.ws = m
 	return m
 }
 
+func (s *Server) agyTranscriptByID(brain, id string) string {
+	if id == "" {
+		return ""
+	}
+	for _, b := range []string{brain, filepath.Join(s.home, ".gemini", "antigravity", "brain")} {
+		if p := filepath.Join(b, id, ".system_generated", "logs", "transcript.jsonl"); isFile(p) {
+			return p
+		}
+	}
+	return ""
+}
+
 func (s *Server) guessAgy(brain, pane, cwd string) string {
+	if sess := agySessionForPane(pane); sess != "" {
+		if p := s.agyTranscriptByID(brain, sess); p != "" {
+			return p
+		}
+	}
 	claimed.Lock()
 	defer claimed.Unlock()
 	for p, owner := range claimed.m {
@@ -80,7 +194,7 @@ func (s *Server) guessAgy(brain, pane, cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	cwd = strings.TrimSuffix(filepath.Clean(cwd), "/")
+	cwd = normPath(cwd)
 	since, known := s.startedAt(pane)
 	if !known {
 		since = time.Now().Add(-6 * time.Hour)
@@ -100,7 +214,7 @@ func (s *Server) guessAgy(brain, pane, cwd string) string {
 		dir := filepath.Dir(filepath.Dir(filepath.Dir(f)))
 		match := false
 		for _, w := range index[filepath.Base(dir)] {
-			if w == cwd {
+			if normPath(w) == cwd {
 				match = true
 				break
 			}

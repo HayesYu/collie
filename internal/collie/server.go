@@ -61,6 +61,7 @@ func (s *Server) markStarted(pane string) {
 		}
 	}
 	claimed.Unlock()
+	forgetAgySession(pane)
 }
 
 func (s *Server) startedAt(pane string) (time.Time, bool) {
@@ -727,6 +728,11 @@ func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, 
 		if machine == "" && herdrKind == "codex" && len(args) >= 2 && args[0] == "resume" && args[1] != "" {
 			if p, _ := s.findTranscript("codex", "id", args[1], paneID, cwd); p != "" {
 				claimTranscript(p, paneID)
+			}
+		}
+		if machine == "" && herdrKind == "agy" {
+			if sess := agyConversationArg(args); sess != "" {
+				s.rememberAgySession(paneID, sess)
 			}
 		}
 		s.herdr.Remember(paneID, name)

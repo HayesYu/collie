@@ -121,9 +121,9 @@
     entries, pending: computePending(), pinned: computePinned(), workers, queued: 0, queued_router: 0, paused: !!settings.settings.paused, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
     integrations_summary: {
-      connected: demoFeishu.enabled && demoFeishu.health.state === "connected" ? 1 : 0,
-      error: demoFeishu.enabled && demoFeishu.health.state === "error" ? 1 : 0,
-      total: 1,
+      connected: [demoFeishu, demoGitHub, demoGitCLI].filter((x) => x.enabled && x.health.state === "connected").length,
+      error: [demoFeishu, demoGitHub, demoGitCLI].filter((x) => x.enabled && x.health.state === "error").length,
+      total: 3,
     },
   });
   const demoFeishu = {
@@ -150,6 +150,59 @@
       today_count: 6,
     },
     extra: { pairing: { active: false }, bot_name: "Collie" },
+  };
+  const demoGitHub = {
+    kind: "github",
+    name: "GitHub",
+    subtitle: "PR · Issue · CI 主动追踪",
+    description: "零公网增量拉取关注仓库与 @我 的动态，支持只提醒、自动调研出建议，或交给负责该 PR 的 Agent。",
+    enabled: true,
+    configured: true,
+    secret_set: false,
+    config: {
+      auth_mode: "gh",
+      watch_mentions: true,
+      repos: ["example-dev/collie", "example-dev/shop-api"],
+      events: { pr: true, issue: true, ci: true },
+      handle_mode: "advise",
+      configured: true,
+    },
+    health: {
+      state: "connected",
+      detail: "已连通 · @alex",
+      last_ok_at: ago(5),
+      last_active_at: ago(12),
+      today_count: 4,
+    },
+    extra: { engine: "gitforge", term_pr: "PR", supports_gh: true, supports_pat: true, user: "alex" },
+  };
+  const demoGitCLI = {
+    kind: "git-cli",
+    name: "自建 Git CLI",
+    subtitle: "MR 评审 · 评论 @我 · CI 追踪",
+    description: "通过 ~/.collie/providers/*.json 可插拔声明式 CLI 适配器复用本机登录态，免公网追踪 MR 评审与失败检查。",
+    enabled: false,
+    configured: false,
+    secret_set: false,
+    config: {
+      auth_mode: "cli",
+      watch_mentions: true,
+      repos: ["team-core/service-api"],
+      events: { mr: true, mention: true, ci: true },
+      handle_mode: "advise",
+      configured: false,
+    },
+    health: {
+      state: "unconfigured",
+      today_count: 0,
+    },
+    extra: {
+      engine: "gitforge",
+      term_pr: "MR",
+      provider_type: "cli",
+      cli_label: "git-forge-cli",
+      provider_path: "~/.collie/providers/git-cli.json",
+    },
   };
   let routerStatus = "idle";
 
@@ -583,7 +636,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/super/lark") return json({ ready: true, who: "Alex" });
     if (p === "/api/super/integrations") {
       return json({
-        integrations: [demoFeishu],
+        integrations: [demoFeishu, demoGitHub, demoGitCLI],
         summary: sup().integrations_summary,
         hook_key: settings.hook_key,
         notify: {
@@ -627,6 +680,50 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/super/integrations/feishu/pair" && method === "POST") {
       demoFeishu.extra.pairing = { active: !body.cancel, remaining_sec: 120 };
       return json({ ok: true, active: !body.cancel, message: "请在 2 分钟内用飞书给机器人发任意一条私信（演示模式）" });
+    }
+    const demoForgeMap = { github: demoGitHub, "git-cli": demoGitCLI };
+    const forgeMatch = p.match(/^\/api\/super\/integrations\/(github|git-cli)(?:\/(test|probe|sample))?$/);
+    if (forgeMatch) {
+      const target = demoForgeMap[forgeMatch[1]];
+      const sub = forgeMatch[2] || "";
+      const isGH = forgeMatch[1] === "github";
+      const demoSamples = isGH ? [
+        { kind: "pr", repo: "example-dev/collie #214", tag: "PR 评审", title: "@octo 请求复核「补充 SQLite 持久去重索引与单测」", at: ago(6), action: "按当前模式：Collie 自动调研 PR 改动与评审意见并给拍板选项，严禁擅自评论或合并" },
+        { kind: "ci", repo: "example-dev/collie", tag: "CI 失败", title: "Go Test (main) · failure", at: ago(22), action: "按当前模式：Collie 自动拉取失败日志定位原因，给修复拍板选项（不擅自修改远端）" },
+        { kind: "issue", repo: "example-dev/shop-api #58", tag: "Issue 新评论", title: "分页最后一页有重复数据，建议统一按游标翻页", at: ago(54), action: "按当前模式：Collie 结合上下文调研并拟好建议选项，严禁擅自评论" },
+      ] : [
+        { kind: "mr", repo: "team-core/service-api !821", tag: "指派给我评审", title: "feat(dedup): 新增幂等去重表定时清理与并发单测", at: ago(8), action: "按当前模式：Collie 自动调研 MR 改动与评审意见并给拍板选项，严禁擅自评论或合并" },
+        { kind: "mention", repo: "team-core/service-api !821", tag: "评论 @我", title: "@alex 去重保留周期设为 30 天会不会导致 WAL 膨胀？", at: ago(19), action: "按当前模式：Collie 结合上下文调研并拟好建议选项，严禁擅自评论" },
+        { kind: "ci", repo: "team-core/service-api", tag: "流水线失败", title: "unit_test · step #4 静态检查未通过", at: ago(41), action: "按当前模式：Collie 自动拉取失败日志定位原因，给修复拍板选项（不擅自修改远端）" },
+      ];
+      if (sub === "probe") {
+        return json({ ready: true, user: "alex", repos: isGH ? ["example-dev/collie", "example-dev/shop-api", "example-dev/herdr"] : ["team-core/service-api", "team-core/web-console"] });
+      }
+      if (sub === "sample") {
+        return json({ ok: true, samples: demoSamples });
+      }
+      if (sub === "test") {
+        return json({
+          ok: true,
+          latency_ms: isGH ? 128 : 164,
+          message: isGH ? "已连通 @alex（128ms），试拉到最近 3 条动态（剩余额度 4982/5000）" : "已连通 @alex（164ms），试拉到最近 3 条动态",
+          detail: { user: "alex", samples: demoSamples },
+        });
+      }
+      if (method === "POST") {
+        if (body.clear_secret) target.secret_set = false;
+        else if (body.secrets?.pat) target.secret_set = true;
+        if (body.config) target.config = { ...target.config, ...body.config };
+        target.configured = body.config?.configured !== false;
+        if (typeof body.enabled === "boolean") target.enabled = body.enabled && target.configured;
+        target.health = !target.configured
+          ? { state: "unconfigured", today_count: 0 }
+          : !target.enabled
+            ? { state: "disabled", today_count: target.health.today_count || 0 }
+            : { state: "connected", detail: "已连通 · @alex", last_ok_at: new Date().toISOString(), last_active_at: new Date().toISOString(), today_count: target.health.today_count || 0 };
+        pushAll();
+        return json({ integration: target, summary: sup().integrations_summary });
+      }
     }
     if (p === "/api/super/notify/test" && method === "POST") {
       return json({ ok: true, message: "测试提醒已发送（演示模式 HTTP 200）" });

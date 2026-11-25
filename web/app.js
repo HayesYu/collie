@@ -3003,20 +3003,12 @@
     github: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.5 1.4-4.5-2.3-6.2-2.8m12.4 5.6v-3.5a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.3a4.9 4.9 0 0 0-1.3-3.4 4.6 4.6 0 0 0-.1-3.4s-1.1-.3-3.5 1.3a12.1 12.1 0 0 0-6.4 0C6.5 2.6 5.4 2.9 5.4 2.9a4.6 4.6 0 0 0-.1 3.4A4.9 4.9 0 0 0 4 9.7c0 4.9 3 6 5.8 6.3a3 3 0 0 0-.8 2.3v3.5"/></svg>`,
     gitforge: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.2"/><circle cx="6.5" cy="17.5" r="2.2"/><circle cx="17.5" cy="9.5" r="2.2"/><path d="M6.5 8.7v6.6M17.5 11.7c0 3.2-2.2 5.8-8.8 5.8"/></svg>`,
   };
-  const INT_COMING_SOON = [
-    {
-      kind: "github",
-      name: "GitHub",
-      subtitle: "PR · Issue · CI 主动追踪",
-      description: "零公网增量拉取关注仓库与 @我 的动态，支持只提醒、自动调研出建议，或交给负责该 PR 的 Agent。",
-    },
-    {
-      kind: "gitforge",
-      name: "代码托管 CLI 插件",
-      subtitle: "MR 评审 · 评论 @我 · 流水线失败",
-      description: "通过本机可插拔 CLI 适配器接入任意 Git 托管平台，免公网追踪待评审变更与失败检查。",
-    },
-  ];
+  const INT_CLI_HINT_CARD = {
+    kind: "gitforge-cli-hint",
+    name: "自定义代码托管 CLI",
+    subtitle: "可插拔本机 CLI 适配器 · 零公网门槛",
+    description: "在 ~/.collie/providers/ 放入声明式 JSON 插件，即可免公网追踪任意自建或企业 Git 平台的 MR 评审、评论 @我 与流水线失败。",
+  };
   $("#auto-tabs").addEventListener("click", (e) => {
     const t = e.target.closest("button")?.dataset.tab;
     if (!t) return;
@@ -3131,18 +3123,21 @@
     return item.enabled ? "connecting" : "disabled";
   }
   function intTimeHint(item, st) {
-    if (st === "unconfigured") return "尚未连接";
+    if (st === "unconfigured") {
+      if (item.extra?.provider_type === "cli") return "本机 CLI 插件就绪";
+      return "尚未连接";
+    }
     if (st === "disabled") return "已关闭接入";
     if (st === "connecting") return item.health?.detail || "正在连接…";
     if (st === "error") return item.health?.last_error ? item.health.last_error.slice(0, 32) : "需要检查配置";
     if (item.health?.last_active_at) return `${ago(item.health.last_active_at)}活跃`;
     if (item.health?.last_ok_at) return `${ago(item.health.last_ok_at)}连通`;
+    if (item.extra?.engine === "gitforge") return item.health?.detail || "轮询就绪";
     return "长连接在线";
   }
   function integrationsHTML(r) {
     const live = Array.isArray(r?.integrations) ? r.integrations : [];
-    const liveKinds = new Set(live.map((x) => x.kind));
-    const coming = INT_COMING_SOON.filter((c) => !liveKinds.has(c.kind));
+    const hasCLIProvider = live.some((x) => x.extra?.provider_type === "cli");
     const notify = r?.notify || {};
     const hasWebhook = !!String(notify.notify_webhook || "").trim();
     const okCount = live.filter((x) => intEffectiveState(x) === "connected").length + (hasWebhook ? 1 : 0);
@@ -3178,25 +3173,25 @@
           <span class="int-act" aria-hidden="true">${actLabel}</span>
         </div>
       </article>`;
-    }).join("") + coming.map((item) => `
+    }).join("") + (!hasCLIProvider ? `
       <article class="int-card is-coming">
         <div class="int-card-top">
-          <span class="int-logo">${INT_ICONS[item.kind] || INT_ICONS.gitforge}</span>
+          <span class="int-logo">${INT_ICONS.gitforge}</span>
           <div class="int-head">
-            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-soon="${esc(item.name)}" aria-label="${esc(item.name)}（二期即将支持）">${esc(item.name)}</button></h3>
-            <p class="int-sub">${esc(item.subtitle)}</p>
+            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-cli-hint aria-label="${esc(INT_CLI_HINT_CARD.name)}">${esc(INT_CLI_HINT_CARD.name)}</button></h3>
+            <p class="int-sub">${esc(INT_CLI_HINT_CARD.subtitle)}</p>
           </div>
-          <span class="int-coming-pill">即将支持</span>
+          <span class="int-coming-pill">可插拔</span>
         </div>
-        <p class="int-desc">${esc(item.description)}</p>
+        <p class="int-desc">${esc(INT_CLI_HINT_CARD.description)}</p>
         <div class="int-foot">
           <span class="int-status is-unconfigured">
             <span class="sdot unconfigured" aria-hidden="true"></span>
-            <span class="int-status-txt"><span class="int-state-lbl">二期计划</span> · 敬请期待</span>
+            <span class="int-status-txt"><span class="int-state-lbl">未发现插件</span> · ~/.collie/providers/</span>
           </span>
-          <span class="int-act" aria-hidden="true">规划中</span>
+          <span class="int-act" aria-hidden="true">说明</span>
         </div>
-      </article>`).join("");
+      </article>` : "");
 
     return `<div class="int-intro-row">
         <span class="int-summary-stat">${esc(summaryText)}</span>
@@ -3292,26 +3287,61 @@
     if (!item || !intModal) return;
     intModalKind = kind;
     const cfg = item.config || {};
+    if (kind === "feishu") {
+      intModalDraft = {
+        kind,
+        configured: !!item.configured,
+        region: cfg.region || "cn",
+        app_id: cfg.app_id || "",
+        app_secret: "",
+        secret_set: !!item.secret_set,
+        allow_open_id: cfg.allow_open_id || (Array.isArray(cfg.allow_open_ids) ? cfg.allow_open_ids.join(", ") : ""),
+        group_mention_only: cfg.group_mention_only !== false,
+        instant_chat_sync: cfg.instant_chat_sync !== false,
+        enabled: !!item.enabled,
+        health: item.health || { state: "unconfigured" },
+        pairing: item.extra?.pairing || { active: false },
+        testState: null,
+        testMsg: "",
+        saving: false,
+      };
+      renderIntModal(item);
+      if (!intModal.open) intModal.showModal();
+      $("#int-modal-body").scrollTop = 0;
+      if (intModalDraft.pairing?.active) startPairPoll();
+      return;
+    }
+
+    const extra = item.extra || {};
+    const termPR = extra.term_pr || (kind === "github" ? "PR" : "MR");
+    const defaultEvents = termPR === "MR" ? { mr: true, mention: true, ci: true } : { pr: true, issue: true, ci: true };
+    const evs = cfg.events && Object.keys(cfg.events).length ? { ...defaultEvents, ...cfg.events } : defaultEvents;
     intModalDraft = {
       kind,
-      region: cfg.region || "cn",
-      app_id: cfg.app_id || "",
-      app_secret: "",
-      secret_set: !!item.secret_set,
-      allow_open_id: cfg.allow_open_id || (Array.isArray(cfg.allow_open_ids) ? cfg.allow_open_ids.join(", ") : ""),
-      group_mention_only: cfg.group_mention_only !== false,
-      instant_chat_sync: cfg.instant_chat_sync !== false,
+      engine: "gitforge",
+      termPR,
+      configured: !!item.configured,
       enabled: !!item.enabled,
+      secret_set: !!item.secret_set,
       health: item.health || { state: "unconfigured" },
-      pairing: item.extra?.pairing || { active: false },
+      extra,
+      auth_mode: cfg.auth_mode || (extra.supports_gh ? "gh" : "cli"),
+      pat: "",
+      watch_mentions: cfg.watch_mentions !== false,
+      repos: Array.isArray(cfg.repos) ? [...cfg.repos] : [],
+      events: evs,
+      handle_mode: cfg.handle_mode || "advise",
+      probeState: null,
+      probe: null,
       testState: null,
       testMsg: "",
+      samples: null,
       saving: false,
     };
     renderIntModal(item);
     if (!intModal.open) intModal.showModal();
     $("#int-modal-body").scrollTop = 0;
-    if (intModalDraft.pairing?.active) startPairPoll();
+    if (intModalDraft.auth_mode !== "pat") runForgeProbe(item);
   }
 
   function startPairPoll() {
@@ -3345,9 +3375,57 @@
     }, 2000);
   }
 
+  async function runForgeProbe(item) {
+    if (!intModalDraft || intModalKind !== item.kind) return;
+    const d = intModalDraft;
+    d.probeState = "probing";
+    renderIntModal(item);
+    try {
+      const body = {
+        config: { auth_mode: d.auth_mode, watch_mentions: d.watch_mentions, repos: d.repos, events: d.events, handle_mode: d.handle_mode },
+      };
+      if (d.pat.trim()) body.secrets = { pat: d.pat.trim() };
+      const res = await api(`/api/super/integrations/${encodeURIComponent(item.kind)}/probe`, { body });
+      if (!intModal?.open || intModalKind !== item.kind || !intModalDraft) return;
+      d.probeState = res.ready ? "ok" : "err";
+      d.probe = res;
+      renderIntModal(item);
+    } catch (err) {
+      if (!intModal?.open || intModalKind !== item.kind || !intModalDraft) return;
+      d.probeState = "err";
+      d.probe = { ready: false, problem: err.message };
+      renderIntModal(item);
+    }
+  }
+
+  function forgeModeActionPreview(mode, sample, termPR) {
+    if (sample.action && mode === sample._mode) return sample.action;
+    const k = sample.kind || "pr";
+    if (mode === "notify") {
+      if (k === "ci") return "按当前模式：仅推送失败摘要和直达链接，不唤醒 Collie";
+      if (k === "issue" || k === "mention") return "按当前模式：仅把评论/讨论摘要提醒你，不唤醒 Collie";
+      return `按当前模式：仅把 ${termPR} 摘要发给你，不唤醒 Collie`;
+    }
+    if (mode === "agent") {
+      return `按当前模式：若已有 Agent 订阅该 ${termPR} 则直接投递继续修；否则自动转交 Collie 先只读调研汇报`;
+    }
+    if (k === "ci") return "按当前模式：Collie 自动拉取失败日志定位原因，给修复拍板选项（不擅自修改远端）";
+    if (k === "issue" || k === "mention") return "按当前模式：Collie 结合上下文调研并拟好建议选项，严禁擅自评论";
+    return `按当前模式：Collie 自动调研 ${termPR} 改动与评审意见并给拍板选项，严禁擅自评论或合并`;
+  }
+
   function renderIntModal(item) {
     if (!intModal || !intModalDraft) return;
+    if (intModalDraft.kind === "feishu") {
+      renderFeishuIntModal(item);
+    } else {
+      renderGitForgeIntModal(item);
+    }
+  }
+
+  function renderFeishuIntModal(item) {
     const d = intModalDraft;
+    const isConfigured = !!(d.configured || d.secret_set || item?.configured || item?.secret_set);
     const st = intEffectiveState({ configured: !!d.app_id && (d.secret_set || !!d.app_secret), enabled: d.enabled, health: d.health });
     $("#int-modal-icon").innerHTML = INT_ICONS[d.kind] || INT_ICONS.gitforge;
     $("#int-modal-title").textContent = item?.name || "飞书机器人";
@@ -3356,13 +3434,13 @@
 
     const testRow = () => {
       if (d.testState === "testing") {
-        return `<span class="int-test-status"><span class="int-spinner" aria-hidden="true"></span><span>正在校验应用凭据并尝试发送验证卡片…</span></span>`;
+        return `<span class="int-test-status" role="status"><span class="int-spinner" aria-hidden="true"></span><span>正在校验应用凭据并尝试发送验证卡片…</span></span>`;
       }
       if (d.testState === "ok") {
-        return `<span class="int-test-status ok"><svg viewBox="0 0 24 24" style="width:15px;height:15px" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>${esc(d.testMsg)}</span></span>`;
+        return `<span class="int-test-status ok" role="status"><svg viewBox="0 0 24 24" style="width:15px;height:15px" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>${esc(d.testMsg)}</span></span>`;
       }
       if (d.testState === "err") {
-        return `<span class="int-test-status err">${esc(d.testMsg)}</span>`;
+        return `<span class="int-test-status err" role="status">${esc(d.testMsg)}</span>`;
       }
       return `<span class="int-test-status muted">不会写入正式对话或唤醒 Collie</span>`;
     };
@@ -3389,23 +3467,23 @@
             <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">海外 Lark</button>
           </div>
         </div>
-        <label class="int-field">
-          <span class="int-field-label">App ID</span>
-          <input id="fs-app-id" class="mono" value="${esc(d.app_id)}" placeholder="cli_xxxxxxxxxxxx" autocomplete="off" spellcheck="false">
-        </label>
-        <label class="int-field">
-          <span class="int-field-label">App Secret <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></span>
-          <input id="fs-app-secret" type="password" value="${esc(d.app_secret)}" placeholder="${d.secret_set ? "已保存在 ~/.collie/secrets.json（留空则保持不变）" : "粘贴应用的 App Secret"}" autocomplete="new-password">
+        <div class="int-field">
+          <label class="int-field-label" for="fs-app-id">App ID</label>
+          <input id="fs-app-id" value="${esc(d.app_id)}" placeholder="cli_xxxxxxxxxxxx" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+        </div>
+        <div class="int-field">
+          <label class="int-field-label" for="fs-app-secret">App Secret <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></label>
+          <input id="fs-app-secret" type="password" value="${esc(d.app_secret)}" placeholder="${d.secret_set ? "已保存在本机 secrets.json（留空则保持不变）" : "粘贴应用的 App Secret"}" autocomplete="new-password">
           <p class="int-field-help">凭据以 <code>0600</code> 权限单独落盘，界面、接口与日志永不回显明文。</p>
-        </label>
+        </div>
       </section>
 
       <section class="int-sec">
         <h3 class="int-sec-title">安全白名单与对话方式</h3>
         <div class="int-field">
           <label class="int-field-label" for="fs-openid">允许对话的本人 OpenID <span class="opt">强烈建议</span></label>
-          <div class="int-input-row">
-            <input id="fs-openid" class="mono" value="${esc(d.allow_open_id)}" placeholder="ou_xxxxxxxxxxxx（多个可用逗号隔开）" autocomplete="off" spellcheck="false">
+          <div class="int-input-row has-multi">
+            <input id="fs-openid" value="${esc(d.allow_open_id)}" placeholder="ou_xxxxxxxxxxxx，多个逗号隔开" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
             <button type="button" class="btn small" id="fs-detect-id" title="从本机 lark-cli 读取当前登录账号">自动填入</button>
             <button type="button" class="btn small" id="fs-pair-btn" ${d.pairing?.active ? "disabled" : ""} title="给机器人发一条私信自动抓拍锁定">私信配对</button>
           </div>
@@ -3440,7 +3518,7 @@
     `;
 
     $("#int-modal-foot").innerHTML = `
-      <button type="button" class="btn ghost small" id="fs-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>
+      ${isConfigured ? `<button type="button" class="btn ghost small" id="fs-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>` : ""}
       <div class="int-sheet-foot-right">
         <button type="button" class="btn" id="fs-cancel-btn">取消</button>
         <button type="button" class="btn primary" id="fs-save-btn" ${d.saving ? "disabled" : ""}>${d.saving ? "保存中…" : "保存并应用"}</button>
@@ -3565,6 +3643,337 @@
           },
         });
         toast(hasCreds ? "飞书长连接配置已保存并热重载" : "配置已保存（补充凭据后自动启用）");
+        await closeIntModal("saved");
+        if (view === "auto" && autoTab === "integrations") loadAuto();
+      } catch (err) {
+        d.saving = false;
+        renderIntModal(item);
+        toast(err.message, "attn");
+      }
+    });
+  }
+
+  function renderGitForgeIntModal(item) {
+    const d = intModalDraft;
+    const extra = d.extra || {};
+    const isGitHub = !!(extra.supports_gh && extra.supports_pat);
+    const isConfigured = !!(d.configured || d.secret_set || item?.configured || item?.secret_set);
+    const st = intEffectiveState({ configured: isConfigured, enabled: d.enabled, health: d.health });
+    const pr = d.termPR || "PR";
+
+    $("#int-modal-icon").innerHTML = INT_ICONS[d.kind] || INT_ICONS.gitforge;
+    $("#int-modal-title").textContent = item?.name || d.kind;
+    $("#int-modal-sub").textContent = item?.subtitle || "代码托管主动追踪 · 零公网门槛";
+    $("#int-modal-state").innerHTML = `<span class="sdot ${esc(st)}" aria-hidden="true"></span><span>${esc(INT_STATUS_TEXT[st] || st)}</span>`;
+
+    const renderProbeBox = () => {
+      if (d.probeState === "probing") {
+        return `<div class="int-probe-box" role="status"><span class="int-spinner" aria-hidden="true"></span><span class="int-probe-body">正在探测本机登录态…</span></div>`;
+      }
+      if (d.probeState === "ok" && d.probe?.ready) {
+        const who = d.probe.user ? `<strong>@${esc(d.probe.user)}</strong>` : "已登录";
+        const cliTag = extra.cli_label ? `（${esc(extra.cli_label)}）` : "";
+        return `<div class="int-probe-box" role="status">
+          <span class="sdot connected" aria-hidden="true"></span>
+          <span class="int-probe-body">已检测到本机账号 ${who}${cliTag}，自动复用登录态，Collie 自身不落盘明文令牌。</span>
+          <button type="button" class="btn ghost small" id="gf-reprobe-btn">重测</button>
+        </div>`;
+      }
+      if (d.probeState === "err") {
+        return `<div class="int-probe-box" role="status">
+          <span class="sdot error" aria-hidden="true"></span>
+          <span class="int-probe-body">${esc(d.probe?.problem || "未检测到本机登录态")}</span>
+          <button type="button" class="btn ghost small" id="gf-reprobe-btn">重试</button>
+        </div>`;
+      }
+      return `<div class="int-probe-box">
+        <span class="sdot unconfigured" aria-hidden="true"></span>
+        <span class="int-probe-body">点击检测本机 CLI 登录态，自动复用现有凭据。</span>
+        <button type="button" class="btn ghost small" id="gf-reprobe-btn">检测</button>
+      </div>`;
+    };
+
+    const authSection = isGitHub ? `
+      <section class="int-sec">
+        <h3 class="int-sec-title">认证方式（主动条件轮询，无需公网地址）</h3>
+        <div class="int-field">
+          <span class="int-field-label">令牌来源</span>
+          <div class="seg" role="group" aria-label="GitHub 认证方式">
+            <button type="button" class="${d.auth_mode === "gh" ? "on" : ""}" data-gf-auth="gh">复用本机 gh 登录</button>
+            <button type="button" class="${d.auth_mode === "pat" ? "on" : ""}" data-gf-auth="pat">个人令牌（PAT）</button>
+          </div>
+        </div>
+        ${d.auth_mode === "gh" ? renderProbeBox() : `
+          <div class="int-field">
+            <label class="int-field-label" for="gf-pat">Fine-grained PAT <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></label>
+            <input id="gf-pat" type="password" value="${esc(d.pat)}" placeholder="${d.secret_set ? "已保存在本机 secrets.json（留空则保持不变）" : "粘贴只读 Fine-grained PAT"}" autocomplete="new-password">
+            <p class="int-field-help">只需勾选 Notifications、Pull requests、Issues、Actions 只读权限，以 <code>0600</code> 权限单独落盘。</p>
+          </div>`}
+      </section>` : `
+      <section class="int-sec">
+        <h3 class="int-sec-title">本机 CLI 连接（声明式插件加载，无需公网地址）</h3>
+        ${renderProbeBox()}
+        ${extra.provider_path ? `<p class="int-field-help">插件声明位置：<code>${esc(extra.provider_path)}</code></p>` : ""}
+      </section>`;
+
+    const suggested = Array.isArray(d.probe?.repos)
+      ? d.probe.repos.filter((r) => r && !d.repos.includes(r)).slice(0, 4)
+      : [];
+
+    const eventCheckboxes = pr === "MR" ? `
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="mr" ${d.events.mr !== false ? "checked" : ""}> 指派给我的 MR 评审</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="mention" ${d.events.mention !== false ? "checked" : ""}> 评论 @我</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="ci" ${d.events.ci !== false ? "checked" : ""}> 流水线 / CI 失败</label>
+    ` : `
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="pr" ${d.events.pr !== false ? "checked" : ""}> PR 变更与评审</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="issue" ${d.events.issue !== false ? "checked" : ""}> Issue 讨论</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="ci" ${d.events.ci !== false ? "checked" : ""}> CI 构建失败</label>
+    `;
+
+    const testRow = () => {
+      if (d.testState === "testing") {
+        return `<span class="int-test-status" role="status"><span class="int-spinner" aria-hidden="true"></span><span>正在校验身份并试拉最近 3 条动态…</span></span>`;
+      }
+      if (d.testState === "ok") {
+        return `<span class="int-test-status ok" role="status"><svg viewBox="0 0 24 24" style="width:15px;height:15px" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>${esc(d.testMsg)}</span></span>`;
+      }
+      if (d.testState === "err") {
+        return `<span class="int-test-status err" role="status">${esc(d.testMsg)}</span>`;
+      }
+      return `<span class="int-test-status muted">仅只读预览，不推进水位线、不写收件箱也不唤醒 Collie</span>`;
+    };
+
+    const sampleHTML = d.samples !== null ? `
+      <div class="int-preview-shell" id="gf-preview">
+        <div class="int-preview-cap"><span>试拉到的最近 ${d.samples.length} 条命中动态</span><span>只读预览</span></div>
+        ${d.samples.length ? `<ul class="int-forge-list">${d.samples.map((ev) => {
+          const safeHref = /^https?:\/\//i.test(ev.url || "") ? ev.url : "";
+          const titleEl = safeHref
+            ? `<a class="int-forge-title" href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">${esc(ev.title || "(无标题)")}</a>`
+            : `<div class="int-forge-title">${esc(ev.title || "(无标题)")}</div>`;
+          const timeLbl = ev.at && !String(ev.at).startsWith("0001-") ? ago(ev.at) : "";
+          const metaLeft = [ev.repo, ev.tag].filter(Boolean).join(" · ");
+          return `<li class="int-forge-item">
+            <div class="int-forge-top">
+              <span class="int-forge-repo">${esc(metaLeft)}</span>
+              <span>${esc(timeLbl)}</span>
+            </div>
+            ${titleEl}
+            <div class="int-forge-plan">${esc(forgeModeActionPreview(d.handle_mode, ev, pr))}</div>
+          </li>`;
+        }).join("")}</ul>` : `<p class="int-preview-empty">连通正常，当前筛选条件和关注仓库下暂无近期命中动态。</p>`}
+      </div>` : "";
+
+    $("#int-modal-body").innerHTML = `
+      ${st === "error" && d.health?.last_error ? `
+        <div class="int-modal-alert" role="alert">
+          <span class="sdot error" aria-hidden="true"></span>
+          <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+        </div>` : ""}
+
+      ${authSection}
+
+      <section class="int-sec">
+        <h3 class="int-sec-title">关注范围与过滤</h3>
+        <div class="int-toggle-row">
+          <div class="tl">
+            <b>所有指派给我的 ${esc(pr)} 评审与评论 @我</b>
+            <small>首次开启自动记录水位线不回灌旧积压；自动跳过本人评论与常见机器人。</small>
+          </div>
+          <button type="button" class="switch" id="gf-mentions-sw" role="switch" aria-checked="${d.watch_mentions ? "true" : "false"}" aria-label="关注所有指派给我的评审与评论"></button>
+        </div>
+        <div class="int-field">
+          <label class="int-field-label" for="gf-repo-input">重点关注的仓库 <span class="opt">可选</span></label>
+          ${d.repos.length ? `<div class="int-repo-tags">${d.repos.map((r) => `<span class="int-repo-tag"><span>${esc(r)}</span><button type="button" data-gf-rm-repo="${esc(r)}" aria-label="移除 ${esc(r)}">×</button></span>`).join("")}</div>` : ""}
+          <div class="int-input-row">
+            <input id="gf-repo-input" placeholder="输入 org/repo 回车添加" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+            <button type="button" class="btn small" id="gf-add-repo">添加</button>
+          </div>
+          ${suggested.length ? `<div class="int-repo-suggest"><span class="int-repo-suggest-lbl">快捷添加：</span>${suggested.map((r) => `<button type="button" class="int-repo-pick" data-gf-pick-repo="${esc(r)}">+ ${esc(r)}</button>`).join("")}</div>` : ""}
+        </div>
+        <div class="int-field">
+          <span class="int-field-label">关注的动态类型</span>
+          <div class="int-check-row">${eventCheckboxes}</div>
+        </div>
+      </section>
+
+      <section class="int-sec">
+        <h3 class="int-sec-title">收到新动态后如何处理</h3>
+        <div class="int-mode-list" role="radiogroup" aria-label="${esc(item?.name || d.kind)} 事件处理模式">
+          <label class="int-mode-opt">
+            <input type="radio" name="gf_mode" value="notify" ${d.handle_mode === "notify" ? "checked" : ""}>
+            <span><b>仅汇总提醒我</b><small>写入收件箱并推送精简摘要与直达链接，不唤醒 Collie，零模型消耗。</small></span>
+          </label>
+          <label class="int-mode-opt">
+            <input type="radio" name="gf_mode" value="advise" ${d.handle_mode === "advise" ? "checked" : ""}>
+            <span><b>让 Collie 自动调研并出建议（不擅自合并/评论）<span class="rec">推荐</span></b><small>只读阅读 diff、评审意见或失败日志并给出拍板按钮，严禁未经确认擅自操作远端。</small></span>
+          </label>
+          <label class="int-mode-opt">
+            <input type="radio" name="gf_mode" value="agent" ${d.handle_mode === "agent" ? "checked" : ""}>
+            <span><b>交给已订阅该 ${esc(pr)} 的 Agent 直接处理</b><small>若已有在线 Agent 订阅该 ${esc(pr)} 线程则直接投递继续修；否则自动转交 Collie 先调研。</small></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="int-sec">
+        <h3 class="int-sec-title">连通自检与试拉</h3>
+        <div class="int-test-box">
+          <div class="int-test-head">
+            <button type="button" class="btn" id="gf-test-btn" ${d.testState === "testing" ? "disabled" : ""}>立即试拉最近 3 条</button>
+            ${testRow()}
+          </div>
+          ${sampleHTML}
+        </div>
+      </section>
+    `;
+
+    $("#int-modal-foot").innerHTML = `
+      ${isConfigured ? `<button type="button" class="btn ghost small" id="gf-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>` : ""}
+      <div class="int-sheet-foot-right">
+        <button type="button" class="btn" id="gf-cancel-btn">取消</button>
+        <button type="button" class="btn primary" id="gf-save-btn" ${d.saving ? "disabled" : ""}>${d.saving ? "保存中…" : "保存并应用"}</button>
+      </div>
+    `;
+
+    const draftConfigPayload = (configured = true) => ({
+      auth_mode: d.auth_mode,
+      watch_mentions: d.watch_mentions,
+      repos: d.repos,
+      events: d.events,
+      handle_mode: d.handle_mode,
+      configured,
+    });
+    const draftSecretsPayload = () => {
+      const s = {};
+      if (d.pat.trim()) s.pat = d.pat.trim();
+      return s;
+    };
+
+    intModal.querySelectorAll("[data-gf-auth]").forEach((b) => {
+      b.addEventListener("click", () => {
+        d.auth_mode = b.dataset.gfAuth;
+        d.testState = null;
+        renderIntModal(item);
+        if (d.auth_mode === "gh" && !d.probeState) runForgeProbe(item);
+      });
+    });
+    $("#gf-pat")?.addEventListener("input", (ev) => { d.pat = ev.target.value; });
+    $("#gf-reprobe-btn")?.addEventListener("click", () => runForgeProbe(item));
+    $("#gf-mentions-sw")?.addEventListener("click", () => { d.watch_mentions = !d.watch_mentions; renderIntModal(item); });
+
+    const addRepo = () => {
+      const inp = $("#gf-repo-input");
+      if (!inp) return;
+      const v = inp.value.trim().replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
+      if (!v || !v.includes("/")) { toast("请按 org/repo 格式输入", "attn"); inp.focus(); return; }
+      if (!d.repos.includes(v)) d.repos.push(v);
+      renderIntModal(item);
+      $("#gf-repo-input")?.focus();
+    };
+    $("#gf-add-repo")?.addEventListener("click", addRepo);
+    $("#gf-repo-input")?.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); addRepo(); }
+    });
+    intModal.querySelectorAll("[data-gf-rm-repo]").forEach((b) => {
+      b.addEventListener("click", () => {
+        d.repos = d.repos.filter((r) => r !== b.dataset.gfRmRepo);
+        renderIntModal(item);
+      });
+    });
+    intModal.querySelectorAll("[data-gf-pick-repo]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const r = b.dataset.gfPickRepo;
+        if (r && !d.repos.includes(r)) d.repos.push(r);
+        renderIntModal(item);
+      });
+    });
+    intModal.querySelectorAll("[data-gf-ev]").forEach((cb) => {
+      cb.addEventListener("change", () => { d.events[cb.dataset.gfEv] = cb.checked; });
+    });
+    intModal.querySelectorAll('input[name="gf_mode"]').forEach((r) => {
+      r.addEventListener("change", () => {
+        d.handle_mode = r.value;
+        if (d.samples !== null) renderIntModal(item);
+      });
+    });
+
+    $("#gf-test-btn")?.addEventListener("click", async () => {
+      if (isGitHub && d.auth_mode === "pat" && !d.secret_set && !d.pat.trim()) {
+        d.testState = "err";
+        d.testMsg = "请先填写 Fine-grained PAT 再试拉";
+        renderIntModal(item);
+        return;
+      }
+      d.testState = "testing";
+      d.testMsg = "";
+      renderIntModal(item);
+      try {
+        const res = await api(`/api/super/integrations/${encodeURIComponent(item.kind)}/test`, {
+          body: { config: draftConfigPayload(true), secrets: draftSecretsPayload() },
+        });
+        if (!intModal.open || intModalKind !== item.kind) return;
+        d.testState = res.ok ? "ok" : "err";
+        d.testMsg = res.message || (res.ok ? "试拉成功" : "试拉失败");
+        if (res.ok) {
+          const list = Array.isArray(res.detail?.samples) ? res.detail.samples : [];
+          d.samples = list.map((s) => ({ ...s, _mode: d.handle_mode }));
+          if (res.detail?.user && !d.probe?.ready) {
+            d.probeState = "ok";
+            d.probe = { ready: true, user: res.detail.user, repos: res.detail.repos || [] };
+          }
+        }
+        renderIntModal(item);
+        if (res.ok) $("#gf-preview")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      } catch (err) {
+        if (!intModal.open || intModalKind !== item.kind) return;
+        d.testState = "err";
+        d.testMsg = err.message;
+        renderIntModal(item);
+      }
+    });
+
+    $("#gf-reset-btn")?.addEventListener("click", async () => {
+      d.saving = true;
+      renderIntModal(item);
+      try {
+        await api(`/api/super/integrations/${encodeURIComponent(item.kind)}`, {
+          body: {
+            enabled: false,
+            clear_secret: true,
+            reset_cursor: true,
+            config: { configured: false, auth_mode: isGitHub ? "gh" : "cli", watch_mentions: true, repos: [], handle_mode: "advise" },
+          },
+        });
+        toast(`已清空 ${item.name} 配置`);
+        await closeIntModal("reset");
+        if (view === "auto" && autoTab === "integrations") loadAuto();
+      } catch (err) {
+        d.saving = false;
+        renderIntModal(item);
+        toast(err.message, "attn");
+      }
+    });
+
+    $("#gf-cancel-btn")?.addEventListener("click", () => closeIntModal("cancel"));
+
+    $("#gf-save-btn")?.addEventListener("click", async () => {
+      const hasCreds = !isGitHub || d.auth_mode !== "pat" || d.secret_set || !!d.pat.trim();
+      if (!hasCreds) {
+        toast("请填写个人令牌（PAT）或切换为复用本机 gh 登录", "attn");
+        $("#gf-pat")?.focus();
+        return;
+      }
+      d.saving = true;
+      renderIntModal(item);
+      try {
+        await api(`/api/super/integrations/${encodeURIComponent(item.kind)}`, {
+          body: {
+            enabled: true,
+            config: draftConfigPayload(true),
+            secrets: draftSecretsPayload(),
+          },
+        });
+        toast(`${item.name} 主动追踪配置已保存并热重载`);
         await closeIntModal("saved");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
@@ -4238,8 +4647,8 @@
       openAuto();
       return;
     }
-    if (t.dataset.intSoon) {
-      toast(`${t.dataset.intSoon} 将在二期上线，敬请期待`);
+    if (t.hasAttribute("data-int-cli-hint")) {
+      toast("将声明式插件 JSON 放入 ~/.collie/providers/ 并重启 Hub 即可自动出现在这里");
       return;
     }
     if (t.dataset.intOpen) {

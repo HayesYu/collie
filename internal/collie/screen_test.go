@@ -24,7 +24,7 @@ const idleClaude = `           Claude Code v2.1.325
   ⎿  Failed with non-blocking status code:
      node:internal/modules/cjs/loader:1433
 
-● 已回复：自我介绍 + hostname（n37-125-077），两条测试
+● 已回复：自我介绍 + hostname（devbox-01），两条测试
   消息内容相同，合并为一条回复。
 
 ✻ Worked for 14s · done 5:11 AM

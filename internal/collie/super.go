@@ -119,6 +119,10 @@ func newSuper(s *Server, dir string) (*Super, error) {
 	sp.integrations = newIntegrationManager(sp, db, sec)
 	sp.feishu = newFeishuAdapter(sp, sp.integrations)
 	sp.integrations.Register(sp.feishu)
+	sp.integrations.Register(newGitForgeAdapter(sp, sp.integrations, newGitHubProvider()))
+	for _, cliProv := range DiscoverCLIProviders(dir) {
+		sp.integrations.Register(newGitForgeAdapter(sp, sp.integrations, cliProv))
+	}
 	return sp, nil
 }
 
@@ -299,6 +303,74 @@ func (sp *Super) Ingest(source, thread, from, text, key, target, ref string) *Tr
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	return sp.ingestLocked(source, thread, from, text, key, target, ref)
+}
+
+// IngestIntegration puts an active-integration trigger in the inbox with an
+// explicit action override (e.g. "respond") so user-enabled integrations are
+// not downgraded by default webhook policies.
+func (sp *Super) IngestIntegration(source, thread, from, text, key, target, ref, action string) *Trigger {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	t := sp.ingestLocked(source, thread, from, text, key, target, ref)
+	if t == nil {
+		return nil
+	}
+	if action != "" {
+		t.Action = action
+		if action == "ignore" {
+			t.Status = "ignored"
+		} else {
+			t.Status = "queued"
+		}
+		sp.changed()
+	}
+	return t
+}
+
+// IngestNotify records a notify-only integration event in the inbox without
+// waking Router (status="done") and posts a concise summary to the user stream
+// and configured notification channels.
+func (sp *Super) IngestNotify(source, thread, from, text, key, ref, summary, tone string) *Trigger {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if key != "" {
+		for i := len(sp.st.Triggers) - 1; i >= 0 && i > len(sp.st.Triggers)-400; i-- {
+			if sp.st.Triggers[i].Key == key {
+				return nil
+			}
+		}
+	}
+	if thread == "" {
+		thread = mainThread
+	}
+	t := &Trigger{
+		ID: sp.st.nextID("t"), Source: source, Thread: thread, From: from, Text: text,
+		At: time.Now(), Action: "notify", Status: "done", Key: key, Ref: ref,
+	}
+	sp.st.Triggers = append(sp.st.Triggers, t)
+	th := sp.threadLocked(thread)
+	th.LastAt = t.At
+	th.Triggers = append(th.Triggers, t.ID)
+
+	sum := strings.TrimSpace(summary)
+	if sum == "" {
+		sum = clip(oneLine(text), 220)
+	}
+	if tone == "" {
+		tone = "info"
+	}
+	e := sp.addEntryLocked("event", mainThread, sum, ref, tone)
+	t.Entry = e.ID
+	if tone == "info" {
+		// addEntryLocked only auto-queues error/blocked events; notify-only
+		// summaries should still reach Feishu/webhook outbox when away.
+		sp.queueNotifyLocked("event", sum, tone, nil, false)
+		if n := len(sp.notifyBuf); n > 0 {
+			sp.notifyBuf[n-1].entryID = e.ID
+		}
+	}
+	sp.changed()
+	return t
 }
 
 func (sp *Super) ingestLocked(source, thread, from, text, key, target, ref string) *Trigger {

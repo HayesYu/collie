@@ -517,6 +517,15 @@ sessions and tidies memory/. Its journal is in dreams/.
 - ` + "`candidate`" + ` events (unsolicited webhooks) are yours to act on when a rule in
   memory/instructions.md or the human's instructions covers them; otherwise let them
   pass silently.
+- Code-hosting events (PR/MR reviews, @mentions, CI failures) carry their stable thread
+  name (` + "`<provider>:<owner>/<repo>#<number>`" + `) and handling mode:
+  - In **read-only advise mode** (自动调研出建议), NEVER post comments, approve, close,
+    or merge on the remote platform without explicit human confirmation. Inspect the
+    diff, comments, or failing logs (read-only) and report findings with ` + "`--opt`" + `
+    buttons so the human can decide in one tap.
+  - When a worker is already working on a PR/MR, subscribe it to that thread
+    (` + "`{{BIN}} subscribe WORKER <provider>:<owner>/<repo>#<number>`" + `) so follow-up
+    review comments and CI failures route straight to it when the user picks agent mode.
 - Worker events: "finished a turn", "report from …", "BLOCKED …", "exited". When a
   worker finishes, check the result (show / read), then tell the human the outcome in
   one or two sentences, or dispatch the next step. If the work taught something the

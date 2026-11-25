@@ -119,6 +119,12 @@ type IntegrationDescriptor interface {
 	ValidateSave(raw json.RawMessage) (json.RawMessage, error)
 }
 
+// IntegrationProber optionally inspects local environment readiness (such as
+// local CLI login state or suggested repositories) without mutating state.
+type IntegrationProber interface {
+	ProbeView(ctx context.Context, cfg IntegrationConfig) (map[string]any, error)
+}
+
 // ForgeProvider defines the Phase 2 pluggable code-hosting data source contract.
 type ForgeProvider interface {
 	Name() string
@@ -129,34 +135,45 @@ type ForgeProvider interface {
 
 type ForgeConfig struct {
 	Repos         []string          `json:"repos,omitempty"`
-	WatchMentions bool              `json:"watch_mentions,omitempty"`
+	WatchMentions bool              `json:"watch_mentions"`
 	Events        map[string]bool   `json:"events,omitempty"`
 	HandleMode    string            `json:"handle_mode,omitempty"`
 	AuthMode      string            `json:"auth_mode,omitempty"`
+	PollInterval  int               `json:"poll_interval,omitempty"`
+	IgnoreBots    *bool             `json:"ignore_bots,omitempty"`
+	Configured    bool              `json:"configured,omitempty"`
 	Secrets       map[string]string `json:"-"`
 }
 
 type ForgeIdentity struct {
-	User  string   `json:"user,omitempty"`
-	Repos []string `json:"repos,omitempty"`
+	User      string         `json:"user,omitempty"`
+	Repos     []string       `json:"repos,omitempty"`
+	RateLimit map[string]any `json:"rate_limit,omitempty"`
+	Detail    string         `json:"detail,omitempty"`
 }
 
 type ForgeCursor struct {
-	ETag         string    `json:"etag,omitempty"`
-	LastModified string    `json:"last_modified,omitempty"`
-	Watermark    time.Time `json:"watermark,omitempty"`
+	ETag         string            `json:"etag,omitempty"`
+	LastModified string            `json:"last_modified,omitempty"`
+	Watermark    time.Time         `json:"watermark,omitempty"`
+	RepoETags    map[string]string `json:"repo_etags,omitempty"`
+	RepoLastMod  map[string]string `json:"repo_last_mod,omitempty"`
+	Initialized  bool              `json:"initialized,omitempty"`
 }
 
 type ForgeItem struct {
-	DedupKey string    `json:"dedup_key"`
-	Kind     string    `json:"kind"`
-	Repo     string    `json:"repo"`
-	Number   int       `json:"number,omitempty"`
-	Title    string    `json:"title"`
-	Body     string    `json:"body,omitempty"`
-	Author   string    `json:"author,omitempty"`
-	URL      string    `json:"url,omitempty"`
-	At       time.Time `json:"at"`
+	DedupKey   string    `json:"dedup_key"`
+	Kind       string    `json:"kind"`
+	Repo       string    `json:"repo"`
+	Number     int       `json:"number,omitempty"`
+	Tag        string    `json:"tag,omitempty"`
+	Title      string    `json:"title"`
+	Body       string    `json:"body,omitempty"`
+	Author     string    `json:"author,omitempty"`
+	AuthorBot  bool      `json:"author_bot,omitempty"`
+	Conclusion string    `json:"conclusion,omitempty"`
+	URL        string    `json:"url,omitempty"`
+	At         time.Time `json:"at"`
 }
 
 // HumanEvent represents a trusted human message or card action from an external
@@ -177,12 +194,17 @@ type HumanEvent struct {
 // ExternalEvent represents an automated event from an external platform (PR/MR,
 // CI, issue) routed through durable deduplication and rate limiting.
 type ExternalEvent struct {
-	Source   string
-	DedupKey string
-	Thread   string
-	From     string
-	Text     string
-	Ref      string
+	Source     string
+	DedupKey   string
+	Thread     string
+	From       string
+	Text       string
+	Ref        string
+	Action     string // optional override: "respond" | "candidate" | "notify"
+	Target     string // optional explicit target (e.g. "collie"); empty uses thread subscribers fast path
+	NotifyOnly bool   // write inbox + user summary without waking Router
+	Summary    string // concise human-facing summary when NotifyOnly is true
+	Tone       string // event tone when NotifyOnly is true ("info" | "error")
 }
 
 // EventSink is passed by IntegrationManager to each running integration.
@@ -849,6 +871,43 @@ type SaveRequest struct {
 	Config      json.RawMessage   `json:"config,omitempty"`
 	Secrets     map[string]string `json:"secrets,omitempty"`
 	ClearSecret bool              `json:"clear_secret,omitempty"`
+	ResetCursor bool              `json:"reset_cursor,omitempty"`
+}
+
+// ConfigSnapshot returns the latest persisted config + secrets for kind.
+func (m *IntegrationManager) ConfigSnapshot(kind string) IntegrationConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.configLocked(kind)
+}
+
+// Cursor returns the persisted cursor JSON for kind.
+func (m *IntegrationManager) Cursor(kind string) json.RawMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur := m.records[kind].Cursor; len(cur) > 0 {
+		return append(json.RawMessage(nil), cur...)
+	}
+	return json.RawMessage(`{}`)
+}
+
+// SaveCursor persists cursor JSON to SQLite and refreshes the in-memory record
+// so single-point reloads preserve watermarks and ETags.
+func (m *IntegrationManager) SaveCursor(kind string, cursor json.RawMessage) error {
+	if len(cursor) == 0 {
+		cursor = json.RawMessage(`{}`)
+	}
+	if err := saveIntegrationCursor(m.db, kind, cursor); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	rec := m.records[kind]
+	rec.Kind = kind
+	rec.Cursor = append(json.RawMessage(nil), cursor...)
+	rec.UpdatedAt = m.now().Unix()
+	m.records[kind] = rec
+	m.mu.Unlock()
+	return nil
 }
 
 // Save persists non-sensitive config to SQLite and sensitive secrets to 0600
@@ -902,6 +961,10 @@ func (m *IntegrationManager) Save(kind string, req SaveRequest) (IntegrationView
 	if err := saveIntegration(m.db, rec); err != nil {
 		return IntegrationView{}, fmt.Errorf("保存接入配置失败：%w", err)
 	}
+	if req.ResetCursor || req.ClearSecret {
+		rec.Cursor = json.RawMessage(`{}`)
+		_ = saveIntegrationCursor(m.db, kind, rec.Cursor)
+	}
 
 	m.mu.Lock()
 	m.records[kind] = rec
@@ -912,15 +975,12 @@ func (m *IntegrationManager) Save(kind string, req SaveRequest) (IntegrationView
 	return v, nil
 }
 
-// Test executes adapter.Test using temporary form values overlaid onto the
-// saved config and secrets (so blank password fields reuse saved secrets)
-// without persisting or polluting the conversation/inbox.
-func (m *IntegrationManager) Test(ctx context.Context, kind string, req SaveRequest) (TestResult, error) {
+func (m *IntegrationManager) overlayTempConfig(kind string, req SaveRequest) (Integration, IntegrationConfig, error) {
 	m.mu.Lock()
 	item := m.items[kind]
 	if item == nil {
 		m.mu.Unlock()
-		return TestResult{}, fmt.Errorf("未知的接入类型：%s", kind)
+		return nil, IntegrationConfig{}, fmt.Errorf("未知的接入类型：%s", kind)
 	}
 	cfg := m.configLocked(kind)
 	adapter := item.adapter
@@ -930,7 +990,7 @@ func (m *IntegrationManager) Test(ctx context.Context, kind string, req SaveRequ
 		if d, ok := adapter.(IntegrationDescriptor); ok {
 			norm, err := d.ValidateSave(req.Config)
 			if err != nil {
-				return TestResult{OK: false, Message: err.Error()}, nil
+				return adapter, cfg, err
 			}
 			cfg.Config = norm
 		} else {
@@ -945,9 +1005,61 @@ func (m *IntegrationManager) Test(ctx context.Context, kind string, req SaveRequ
 			cfg.Secrets[k] = strings.TrimSpace(v)
 		}
 	}
+	return adapter, cfg, nil
+}
+
+// Test executes adapter.Test using temporary form values overlaid onto the
+// saved config and secrets (so blank password fields reuse saved secrets)
+// without persisting or polluting the conversation/inbox.
+func (m *IntegrationManager) Test(ctx context.Context, kind string, req SaveRequest) (TestResult, error) {
+	adapter, cfg, err := m.overlayTempConfig(kind, req)
+	if err != nil {
+		if adapter == nil {
+			return TestResult{}, err
+		}
+		return TestResult{OK: false, Message: err.Error()}, nil
+	}
 	res := adapter.Test(ctx, cfg)
 	res.Message = m.redact(res.Message)
 	return res, nil
+}
+
+// Probe executes adapter.ProbeView using temporary form values overlaid onto
+// saved config and secrets without mutating state.
+func (m *IntegrationManager) Probe(ctx context.Context, kind string, req SaveRequest) (map[string]any, error) {
+	adapter, cfg, err := m.overlayTempConfig(kind, req)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := adapter.(IntegrationProber)
+	if !ok {
+		return nil, fmt.Errorf("不支持探测该接入：%s", kind)
+	}
+	res, err := p.ProbeView(ctx, cfg)
+	if err != nil {
+		return nil, errors.New(m.redact(err.Error()))
+	}
+	if prob, ok := res["problem"].(string); ok {
+		res["problem"] = m.redact(prob)
+	}
+	return res, nil
+}
+
+// SamplePull executes PullSampler.SamplePull with temporary form overlay.
+func (m *IntegrationManager) SamplePull(ctx context.Context, kind string, req SaveRequest, limit int) ([]SampleEvent, error) {
+	adapter, cfg, err := m.overlayTempConfig(kind, req)
+	if err != nil {
+		return nil, err
+	}
+	ps, ok := adapter.(PullSampler)
+	if !ok {
+		return nil, fmt.Errorf("该接入不支持试拉预览：%s", kind)
+	}
+	evs, err := ps.SamplePull(ctx, cfg, limit)
+	if err != nil {
+		return nil, errors.New(m.redact(err.Error()))
+	}
+	return evs, nil
 }
 
 // ---------------------------------------------------------------- outbound hooks
@@ -1141,7 +1253,13 @@ func (s *managerSink) EmitEvent(ctx context.Context, ev ExternalEvent) (bool, er
 		if thread == "" {
 			thread = src + ":events"
 		}
-		s.mgr.sp.Ingest("webhook:"+src, thread, ev.From, ev.Text, ev.DedupKey, "", ev.Ref)
+		if ev.NotifyOnly {
+			s.mgr.sp.IngestNotify("webhook:"+src, thread, ev.From, ev.Text, ev.DedupKey, ev.Ref, ev.Summary, ev.Tone)
+		} else if ev.Action != "" {
+			s.mgr.sp.IngestIntegration("webhook:"+src, thread, ev.From, ev.Text, ev.DedupKey, ev.Target, ev.Ref, ev.Action)
+		} else {
+			s.mgr.sp.Ingest("webhook:"+src, thread, ev.From, ev.Text, ev.DedupKey, ev.Target, ev.Ref)
+		}
 	}
 	s.mgr.recordActivity(s.kind)
 	return true, nil

@@ -51,7 +51,9 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("GET /api/super/integrations", s.superIntegrations)
 	api("POST /api/super/integrations/{kind}", s.superSaveIntegration)
 	api("POST /api/super/integrations/{kind}/test", s.superTestIntegration)
+	api("POST /api/super/integrations/{kind}/sample", s.superSampleIntegration)
 	api("GET /api/super/integrations/{kind}/probe", s.superProbeIntegration)
+	api("POST /api/super/integrations/{kind}/probe", s.superProbeIntegration)
 	api("POST /api/super/integrations/feishu/pair", s.superFeishuPair)
 	api("POST /api/super/notify/test", s.superTestNotify)
 	mux.HandleFunc("POST /hooks/{source}", s.webhook)
@@ -1012,6 +1014,39 @@ func (s *Server) superTestIntegration(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, res)
 }
 
+func (s *Server) superSampleIntegration(w http.ResponseWriter, r *http.Request) {
+	if s.sup.integrations == nil {
+		writeJSON(w, 503, map[string]any{"error": "integrations manager not ready"})
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
+	var req SaveRequest
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeJSON(w, 400, map[string]any{"error": "invalid JSON body"})
+			return
+		}
+	}
+	limit := forgeDefaultSampleLimit
+	if q := strings.TrimSpace(r.URL.Query().Get("limit")); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 10 {
+			limit = n
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	samples, err := s.sup.integrations.SamplePull(ctx, kind, req, limit)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": cleanAuthError(err), "samples": []SampleEvent{}})
+		return
+	}
+	if samples == nil {
+		samples = []SampleEvent{}
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "samples": samples})
+}
+
 func (s *Server) superProbeIntegration(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
 	switch kind {
@@ -1024,7 +1059,25 @@ func (s *Server) superProbeIntegration(w http.ResponseWriter, r *http.Request) {
 			"problem": problem,
 		})
 	default:
-		writeJSON(w, 404, map[string]any{"error": "不支持探测该接入：" + kind})
+		if s.sup.integrations == nil {
+			writeJSON(w, 503, map[string]any{"error": "integrations manager not ready"})
+			return
+		}
+		var req SaveRequest
+		if r.Body != nil {
+			raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+			if len(strings.TrimSpace(string(raw))) > 0 {
+				_ = json.Unmarshal(raw, &req)
+			}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		res, err := s.sup.integrations.Probe(ctx, kind, req)
+		if err != nil {
+			writeJSON(w, 404, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, res)
 	}
 }
 

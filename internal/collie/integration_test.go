@@ -60,7 +60,7 @@ func TestIntegrationPersistentDedupAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := initState(db, dir, nil)
+	st, err := initState(db, dir, defaultSettings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestIntegrationBackoffAndAuthCircuitBreaker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	st, _ := initState(db, dir, nil)
+	st, _ := initState(db, dir, defaultSettings)
 	sec, _ := openSecretStore(dir)
 	_ = sec.Update("authfail", map[string]string{"app_secret": "sec_top_secret_xyz"})
 	sp := &Super{db: db, st: st, subs: map[chan struct{}]bool{}}
@@ -245,7 +245,7 @@ func TestIntegrationSinglePointHotReload(t *testing.T) {
 	dir := t.TempDir()
 	db, _ := openDB(filepath.Join(dir, "herd.db"))
 	defer db.Close()
-	st, _ := initState(db, dir, nil)
+	st, _ := initState(db, dir, defaultSettings)
 	sec, _ := openSecretStore(dir)
 	sp := &Super{db: db, st: st, subs: map[chan struct{}]bool{}}
 	mgr := newIntegrationManager(sp, db, sec)
@@ -285,7 +285,7 @@ func TestIntegrationRateLimitAntiStorm(t *testing.T) {
 	dir := t.TempDir()
 	db, _ := openDB(filepath.Join(dir, "herd.db"))
 	defer db.Close()
-	st, _ := initState(db, dir, nil)
+	st, _ := initState(db, dir, defaultSettings)
 	sec, _ := openSecretStore(dir)
 	sp := &Super{db: db, st: st, subs: map[chan struct{}]bool{}}
 	mgr := newIntegrationManager(sp, db, sec)

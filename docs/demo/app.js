@@ -727,13 +727,82 @@
   }
 
 
+  let toastPriorFocus = null;
+  const toastHost = $("#toasts");
+  toastHost?.addEventListener("focusin", (e) => {
+    if (e.relatedTarget && !toastHost.contains?.(e.relatedTarget)) toastPriorFocus = e.relatedTarget;
+  });
+  function syncToastPopover(host) {
+    if (!host) return;
+    const count = host.children?.length ?? 0;
+    if (count > 0) {
+      if (typeof host.showPopover === "function") {
+        try { if (!host.matches?.(":popover-open")) host.showPopover(); } catch {}
+      }
+    } else if (typeof host.hidePopover === "function") {
+      try { if (!host.matches || host.matches(":popover-open")) host.hidePopover(); } catch {}
+    }
+  }
   function toast(msg, kind = "") {
+    const text = String(msg ?? "");
+    const openDlg = document.querySelector("dialog[open]");
+    if (openDlg && openDlg.open === true) {
+      openDlg.addEventListener("close", () => toast(text, kind), { once: true });
+      return;
+    }
+    const host = $("#toasts");
+    if (!host) return;
     const t = document.createElement("div");
-    t.className = "toast " + kind;
-    t.setAttribute("role", kind === "attn" ? "alert" : "status");
-    t.textContent = msg;
-    $("#toasts").append(t);
-    setTimeout(() => t.remove(), kind === "attn" ? 5000 : 2600);
+    t.className = "toast" + (kind ? " " + kind : "");
+    const hasAriaNotify = typeof document.ariaNotify === "function";
+    if (!hasAriaNotify) t.setAttribute("role", kind === "attn" ? "alert" : "status");
+    const body = document.createElement("span");
+    body.className = "toast-msg";
+    body.textContent = text;
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "toast-x";
+    closeBtn.setAttribute("aria-label", "关闭通知");
+    closeBtn.title = "关闭";
+    closeBtn.textContent = "×";
+    t.append(body, closeBtn);
+    t.dataset.msg = text;
+    const ttl = kind === "attn" ? 5200 : 2600;
+    let timer = 0, hovered = false, focused = false;
+    const dismiss = (manual = false) => {
+      clearTimeout(timer);
+      if (t._gone) return;
+      t._gone = true;
+      const hadFocus = manual && document.activeElement && (document.activeElement === t || t.contains?.(document.activeElement));
+      const nextBtn = hadFocus ? (t.nextElementSibling?.querySelector?.(".toast-x") || t.previousElementSibling?.querySelector?.(".toast-x")) : null;
+      t.remove();
+      syncToastPopover(host);
+      if (hadFocus) {
+        if (nextBtn) nextBtn.focus?.({ preventScroll: true });
+        else if (toastPriorFocus?.isConnected) { toastPriorFocus.focus?.({ preventScroll: true }); toastPriorFocus = null; }
+      }
+    };
+    const arm = (ms = ttl) => {
+      clearTimeout(timer);
+      if (hovered || focused) return;
+      timer = setTimeout(() => dismiss(false), ms);
+    };
+    closeBtn.addEventListener("click", () => dismiss(true));
+    t.addEventListener("mouseenter", () => { hovered = true; clearTimeout(timer); });
+    t.addEventListener("mouseleave", () => { hovered = false; arm(1600); });
+    t.addEventListener("focusin", () => { focused = true; clearTimeout(timer); });
+    t.addEventListener("focusout", (e) => {
+      if (e.relatedTarget && t.contains?.(e.relatedTarget)) return;
+      focused = false;
+      arm(1600);
+    });
+    while ((host.children?.length ?? 0) >= 4) host.firstElementChild?.remove();
+    host.append(t);
+    syncToastPopover(host);
+    if (hasAriaNotify) {
+      try { document.ariaNotify(text, { priority: kind === "attn" ? "high" : "normal" }); } catch {}
+    }
+    arm();
   }
 
   // ───────────────────────────── auth
@@ -6515,63 +6584,489 @@
   // Files go to the machine where the agent runs, then their paths ride
   // along in the message (agents read images and files by path).
   const fmtSize = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+  const FILE_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+  const IMG_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-4.5-4.5L7 20"/></svg>';
+  const EXT_MIME = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml", avif: "image/avif",
+    ico: "image/x-icon", heic: "image/heic", heif: "image/heif", tif: "image/tiff", tiff: "image/tiff",
+  };
+  const MIME_EXT = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/gif": ".gif",
+    "image/webp": ".webp", "image/bmp": ".bmp", "image/svg+xml": ".svg", "image/avif": ".avif",
+  };
+  const extOf = (name) => {
+    const m = String(name || "").match(/\.([a-z0-9]{1,8})$/i);
+    return m ? m[1].toLowerCase() : "";
+  };
+  const stemOf = (name) => String(name || "").replace(/\.[^.]+$/, "").toLowerCase();
+  const guessMime = (file) => (file?.type || "").toLowerCase() || EXT_MIME[extOf(file?.name)] || "";
+  const isImageFile = (file) => guessMime(file).startsWith("image/");
+  const isUnpreviewableImage = (mime) => /^image\/(heic|heif|tiff|x-adobe-dng|vnd\.adobe\.photoshop)$/i.test(mime || "");
+  const isHashCacheName = (name) => /^[0-9a-f]{24,64}\.[a-z0-9]{1,8}$/i.test(String(name || "").trim());
+  const shortFileName = (name, max = 24) => {
+    const s = String(name || "文件");
+    if (s.length <= max) return s;
+    const dot = s.lastIndexOf(".");
+    const ext = dot > 0 && s.length - dot <= 8 ? s.slice(dot) : "";
+    const stem = ext ? s.slice(0, dot) : s;
+    const keep = Math.max(8, max - ext.length - 1);
+    const head = Math.ceil(keep * 0.65), tail = keep - head;
+    return stem.slice(0, head) + "…" + (tail > 0 ? stem.slice(-tail) : "") + ext;
+  };
+  const swapExtForMime = (name, mime) => {
+    const ext = MIME_EXT[(mime || "").toLowerCase()];
+    const base = String(name || "").trim();
+    if (!ext) return base || "粘贴的图片.png";
+    if (!base || /^image\.[a-z0-9]+$/i.test(base) || isHashCacheName(base)) return "粘贴的图片" + ext;
+    if (/\.[a-z0-9]{1,8}$/i.test(base)) return base.replace(/\.[a-z0-9]{1,8}$/i, ext);
+    return base + ext;
+  };
+  function sniffImageMime(buf) {
+    if (!buf || buf.byteLength < 4) return "";
+    const b = new Uint8Array(buf, 0, Math.min(buf.byteLength, 32));
+    if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a) return "image/png";
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return "image/gif";
+    if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
+    if (b[0] === 0x42 && b[1] === 0x4d) return "image/bmp";
+    return "";
+  }
+  function decodeDataImageUri(uri) {
+    const m = String(uri || "").match(/^data:(image\/[a-z0-9.+-]+)((?:;[^,]*)*),([\s\S]+)$/i);
+    if (!m) return null;
+    const mime = m[1].toLowerCase();
+    const isB64 = /;base64$/i.test(m[2] || "");
+    const raw = m[3];
+    try {
+      let bytes;
+      if (isB64) {
+        const bin = atob(raw.replace(/\s+/g, ""));
+        bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      } else {
+        const str = decodeURIComponent(raw);
+        bytes = typeof TextEncoder === "function"
+          ? new TextEncoder().encode(str)
+          : Uint8Array.from(str, (c) => c.charCodeAt(0) & 0xff);
+      }
+      if (!bytes.byteLength) return null;
+      const sniffed = sniffImageMime(bytes.buffer) || (mime === "image/svg+xml" ? mime : "");
+      const finalMime = sniffed || mime;
+      const ext = MIME_EXT[finalMime] || ".png";
+      const name = "粘贴的图片" + ext;
+      const blob = typeof Blob === "function" ? new Blob([bytes], { type: finalMime }) : { name, size: bytes.byteLength, type: finalMime, _bytes: bytes };
+      return { blob, name, type: finalMime, size: bytes.byteLength, sniffed };
+    } catch {
+      return null;
+    }
+  }
+  function extractHtmlDataImages(html) {
+    if (!html || !/data:image\//i.test(html)) return [];
+    const out = [], seen = new Set();
+    const re = /<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+    let m;
+    while ((m = re.exec(html))) {
+      const src = (m[1] || m[2] || "").replace(/&amp;/g, "&").trim();
+      if (!/^data:image\//i.test(src) || seen.has(src)) continue;
+      seen.add(src);
+      const dec = decodeDataImageUri(src);
+      if (dec) out.push(dec);
+      if (out.length >= 10) break;
+    }
+    return out;
+  }
+  const isSyntheticClipImg = (f, now = Date.now()) => {
+    if (!f || !isImageFile(f)) return false;
+    const n = String(f.name || "").trim();
+    const generic = !n || /^image\.(png|jpe?g|webp|gif|bmp)$/i.test(n) || /^picture\.(png|jpe?g)$/i.test(n);
+    if (!generic) return false;
+    return !f.lastModified || Math.abs(now - f.lastModified) < 5000;
+  };
+  function collectTransferFiles(dt) {
+    if (!dt) return [];
+    const out = [], seenObj = new Set(), itemKeys = new Set();
+    const keyOf = (f) => `${f.name || ""}\0${f.size ?? ""}\0${f.type || ""}\0${f.lastModified ?? ""}`;
+    if (dt.items && dt.items.length) {
+      for (const item of [...dt.items]) {
+        if (item?.kind !== "file") continue;
+        try {
+          const f = item.getAsFile?.();
+          if (f && !seenObj.has(f)) {
+            seenObj.add(f);
+            itemKeys.add(keyOf(f));
+            out.push(f);
+          }
+        } catch {}
+      }
+    }
+    for (const f of [...(dt.files || [])]) {
+      if (!f || seenObj.has(f)) continue;
+      if (itemKeys.size && itemKeys.has(keyOf(f))) continue;
+      seenObj.add(f);
+      out.push(f);
+    }
+    return out;
+  }
+  function buildTransferEntries(rawFiles, htmlImgs, source) {
+    const now = Date.now();
+    if (!rawFiles.length) {
+      return htmlImgs.map((h) => ({ candidates: [{ prebuilt: h }] }));
+    }
+    if (rawFiles.length === 1) {
+      const f = rawFiles[0];
+      const extra = (source === "paste" || source === "drop") && isImageFile(f) && htmlImgs.length
+        ? htmlImgs.slice(0, 1).map((h) => ({ prebuilt: h }))
+        : [];
+      return [{ candidates: [{ file: f }, ...extra] }];
+    }
+    if (source === "paste" && rawFiles.every(isImageFile)) {
+      const nonSynth = rawFiles.filter((f) => !isSyntheticClipImg(f, now));
+      const sameStem = new Set(rawFiles.map((f) => stemOf(f.name)).filter(Boolean)).size <= 1;
+      if (nonSynth.length <= 1 || sameStem) {
+        return [{
+          candidates: [
+            ...rawFiles.map((f) => ({ file: f })),
+            ...htmlImgs.slice(0, 1).map((h) => ({ prebuilt: h })),
+          ],
+        }];
+      }
+    }
+    return rawFiles.map((f) => ({ candidates: [{ file: f }] }));
+  }
+  function startReadCandidate(cand, source, now = Date.now()) {
+    if (cand.prebuilt) {
+      return Promise.resolve({ ok: true, ...cand.prebuilt, synthetic: true });
+    }
+    const file = cand.file;
+    const mime = guessMime(file);
+    const img = isImageFile(file);
+    if ((file?.size || 0) > MAX_UPLOAD_BYTES) {
+      return Promise.resolve({ ok: false, reason: "too-large", file });
+    }
+    let bufPromise = null;
+    try {
+      if (typeof file?.arrayBuffer === "function") {
+        bufPromise = file.arrayBuffer();
+      } else if (typeof FileReader === "function" && typeof Blob === "function" && file instanceof Blob) {
+        bufPromise = new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = () => reject(fr.error || new Error("read-error"));
+          fr.readAsArrayBuffer(file);
+        });
+      }
+    } catch (err) {
+      return Promise.resolve({ ok: false, reason: "unreadable", err, file });
+    }
+    if (!bufPromise) {
+      if ((file?.size || 0) === 0 && (img || source === "paste")) {
+        return Promise.resolve({ ok: false, reason: "unreadable", file });
+      }
+      return Promise.resolve({
+        ok: true,
+        blob: file,
+        name: file?.name || (img ? "粘贴的图片.png" : "文件"),
+        type: mime,
+        size: file?.size || 0,
+        sniffed: img ? mime : "",
+        synthetic: isSyntheticClipImg(file, now),
+        file,
+      });
+    }
+    return bufPromise.then((buf) => {
+      const byteLen = buf?.byteLength || 0;
+      if (byteLen > MAX_UPLOAD_BYTES) return { ok: false, reason: "too-large", file };
+      if (byteLen === 0 && ((file?.size || 0) > 0 || img || source === "paste")) {
+        return { ok: false, reason: "unreadable", file };
+      }
+      const sniffed = sniffImageMime(buf) || (mime === "image/svg+xml" && byteLen > 0 ? mime : "");
+      const finalMime = sniffed || mime || "application/octet-stream";
+      const blob = typeof Blob === "function" ? new Blob([buf], { type: finalMime }) : file;
+      return {
+        ok: true,
+        blob,
+        name: file?.name || (finalMime.startsWith("image/") ? "粘贴的图片" + (MIME_EXT[finalMime] || ".png") : "文件"),
+        type: finalMime,
+        size: byteLen,
+        sniffed,
+        synthetic: isSyntheticClipImg(file, now),
+        file,
+      };
+    }, (err) => ({ ok: false, reason: "unreadable", err, file }));
+  }
+  function readFailInfo(source, isImg) {
+    if (source === "paste") {
+      return {
+        msg: isImg
+          ? "剪贴板里的图片已失效，请重新复制或直接拖入/选择文件"
+          : "剪贴板里的文件已失效，请重新复制或直接拖入/选择文件",
+        tag: "已失效",
+      };
+    }
+    return {
+      msg: isImg
+        ? "无法读取这张图片，可能已被移动或权限受限，请重新选择"
+        : "无法读取这个文件，可能已被移动或权限受限，请重新选择",
+      tag: "读取失败",
+    };
+  }
+  function friendlyUploadError(err, status, serverErr, hub) {
+    const raw = String(serverErr || err?.message || "").trim();
+    const hasCJK = /[\u4e00-\u9fff]/.test(raw);
+    if (status === 413) return { msg: "文件太大了（最多 25 MB）", tag: "过大", retryable: false };
+    if (status === 401 || status === 403) {
+      return {
+        msg: hub ? `${hub.name} 登录已失效，请在「设备」里重新连接` : "登录已失效，请刷新页面后重试",
+        tag: "失败",
+        retryable: false,
+      };
+    }
+    if (hasCJK) return { msg: raw, tag: "失败", retryable: true };
+    if (status === 408 || status === 504) return { msg: "上传超时，请点重试", tag: "超时", retryable: true };
+    if (status === 502 || status === 503) return { msg: "服务正在重启或暂时不可用，请稍后重试", tag: "失败", retryable: true };
+    if (status >= 500) return { msg: "服务暂时出错了，请稍后重试", tag: "失败", retryable: true };
+    if (status >= 400) return { msg: "上传请求被拒绝，请重试", tag: "失败", retryable: true };
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      return { msg: "网络已断开，连上网络后点重试", tag: "断网", retryable: true };
+    }
+    if (err?.name === "AbortError" || /timeout|timed out/i.test(raw)) {
+      return { msg: "上传超时，请点重试", tag: "超时", retryable: true };
+    }
+    if (/failed to fetch|load failed|networkerror|network request failed|fetch failed|err_|net::/i.test(raw)) {
+      return { msg: "网络中断或服务正在重启，请点重试", tag: "失败", retryable: true };
+    }
+    return { msg: "上传失败，请稍后重试", tag: "失败", retryable: true };
+  }
+  const fileErrHint = (files) => files.some((f) => f.err && f.retryable && f.blob)
+    ? "有附件没传上去，点重试或移除后再发"
+    : "有附件没传上去，移除后再发";
+
   function bindFiles(form, machine) {
     const box = $(".files", form), picker = $('input[type="file"]', form);
     form._files = [];
+    const iconFor = (f) => (f.isImage ? IMG_SVG : FILE_SVG);
     const draw = () => {
       box.hidden = !form._files.length;
-      box.innerHTML = form._files.map((f, i) => `<span class="file ${f.err ? "err" : f.path ? "" : "busy"}" title="${esc(f.err || f.path || "上传中…")}">
-        ${f.thumb ? `<img src="${f.thumb}" alt="">` : `<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`}
-        <span class="fn">${esc(f.name)}</span><span class="fs">${f.err ? "失败" : f.path ? fmtSize(f.size) : "上传中"}</span>
-        <button type="button" data-rm="${i}" title="移除">×</button></span>`).join("");
+      box.innerHTML = form._files.map((f, i) => {
+        const cls = f.err ? "err" : f.path ? "" : "busy";
+        const tip = f.err || f.path || "上传中…";
+        const status = f.err ? (f.errTag || "失败") : f.path ? fmtSize(f.size) : "上传中";
+        const media = (f.thumb && !f.thumbFailed)
+          ? `<img class="fi-thumb" src="${f.thumb}" alt="" data-fi="${i}">`
+          : iconFor(f);
+        const retryBtn = (f.err && f.retryable && f.blob)
+          ? `<button type="button" class="retry" data-retry="${i}" title="重新上传" aria-label="重新上传 ${esc(f.name)}">重试</button>`
+          : "";
+        return `<span class="file ${cls}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="移除" aria-label="移除 ${esc(f.name)}">×</button></span>`;
+      }).join("");
     };
-    const add = (list) => {
-      for (const file of list) {
-        const f = { name: file.name || "粘贴的图片.png", size: file.size, thumb: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" };
-        const m = machine();
-        const up = routeReq(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
-        f.done = fetch(up.url, {
-          method: "POST", body: file, credentials: up.hub ? "omit" : "same-origin",
+    const uploadEntry = async (f) => {
+      if (f.removed || !f.blob) return;
+      f.uploading = true;
+      f.err = "";
+      f.errTag = "";
+      f.retryable = false;
+      draw();
+      const m = machine();
+      const up = routeReq(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
+      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+      f.abort = ctrl;
+      try {
+        const init = {
+          method: "POST",
+          body: f.blob,
+          credentials: up.hub ? "omit" : "same-origin",
           headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
-        }).then(async (res) => {
-          const d = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(d.error || res.statusText);
+        };
+        if (ctrl) init.signal = ctrl.signal;
+        const res = await fetch(up.url, init);
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const info = friendlyUploadError(null, res.status, d.error || res.statusText, up.hub);
+          if (!f.removed) {
+            f.err = info.msg;
+            f.errTag = info.tag;
+            f.retryable = info.retryable && !!f.blob;
+            toast(`${shortFileName(f.name)}：${f.err}`, "attn");
+          }
+          return;
+        }
+        if (!f.removed) {
           f.path = d.path;
-        }).catch((err) => { f.err = err.message; toast(`${f.name}：${err.message}`, "attn"); }).finally(draw);
+          if (typeof d.size === "number" && d.size > 0) f.size = d.size;
+        }
+      } catch (err) {
+        if (f.removed) return;
+        const info = friendlyUploadError(err, 0, "", up.hub);
+        f.err = info.msg;
+        f.errTag = info.tag;
+        f.retryable = info.retryable && !!f.blob;
+        toast(`${shortFileName(f.name)}：${f.err}`, "attn");
+      } finally {
+        if (f.abort === ctrl) f.abort = null;
+        f.uploading = false;
+        if (!f.removed) draw();
+      }
+    };
+    const addEntries = (entries, source = "pick") => {
+      const now = Date.now();
+      for (const entry of entries) {
+        const cands = entry.candidates || [];
+        if (!cands.length) continue;
+        // Start reading all candidate handles synchronously before the paste/drop
+        // event finishes so transient clipboard file handles stay accessible.
+        const attempts = cands.map((c) => startReadCandidate(c, source, now));
+        const primary = cands.find((c) => c.file && !isSyntheticClipImg(c.file, now))?.file
+          || cands[0].file
+          || cands[0].prebuilt;
+        const f = {
+          name: primary?.name || (isImageFile(primary) ? "粘贴的图片.png" : "文件"),
+          size: primary?.size || 0,
+          isImage: isImageFile(primary),
+          thumb: "",
+          thumbFailed: false,
+          blob: null,
+          mime: guessMime(primary),
+          path: "",
+          err: "",
+          errTag: "",
+          retryable: false,
+          uploading: true,
+          removed: false,
+          abort: null,
+        };
+        f.done = (async () => {
+          const results = await Promise.all(attempts);
+          if (f.removed) return;
+          const good = results.filter((r) => r.ok);
+          const winner = good.find((r) => !r.synthetic && r.sniffed)
+            || good.find((r) => r.sniffed)
+            || good.find((r) => !r.synthetic && !isUnpreviewableImage(r.type))
+            || good[0];
+          if (!winner) {
+            const tooBig = results.some((r) => r.reason === "too-large");
+            const info = tooBig
+              ? { msg: "文件太大了（最多 25 MB）", tag: "过大" }
+              : readFailInfo(source, f.isImage);
+            f.err = info.msg;
+            f.errTag = info.tag;
+            f.retryable = false;
+            f.uploading = false;
+            toast(`${shortFileName(f.name)}：${f.err}`, "attn");
+            draw();
+            return;
+          }
+          f.blob = winner.blob;
+          f.size = winner.size;
+          f.mime = winner.type;
+          f.isImage = (winner.type || "").startsWith("image/") || f.isImage;
+          if (winner.synthetic && results.length > 1) {
+            f.name = swapExtForMime(f.name, winner.type);
+          } else if (winner.name) {
+            f.name = winner.name;
+          }
+          if (f.isImage && !f.thumbFailed && !isUnpreviewableImage(f.mime)) {
+            try { f.thumb = URL.createObjectURL(f.blob); } catch { f.thumb = ""; }
+          }
+          draw();
+          await uploadEntry(f);
+        })();
         form._files.push(f);
       }
       draw();
     };
+    const add = (list, source = "pick") => addEntries(list.map((file) => ({ candidates: [{ file }] })), source);
     $(".attach", form).addEventListener("click", () => picker.click());
-    picker.addEventListener("change", () => { add([...picker.files]); picker.value = ""; });
+    picker.addEventListener("change", () => { add([...picker.files], "pick"); picker.value = ""; });
+    box.addEventListener("error", (e) => {
+      const img = e.target;
+      if (!img || img.tagName !== "IMG") return;
+      const idx = +(img.dataset?.fi ?? -1);
+      const f = form._files[idx];
+      if (f) {
+        if (f.thumb) { try { URL.revokeObjectURL(f.thumb); } catch {} f.thumb = ""; }
+        f.thumbFailed = true;
+        draw();
+      } else {
+        const wrap = document.createElement("span");
+        wrap.innerHTML = IMG_SVG;
+        if (wrap.firstElementChild) img.replaceWith(wrap.firstElementChild);
+      }
+    }, true);
     box.addEventListener("click", (e) => {
-      const i = e.target.closest("[data-rm]")?.dataset.rm;
-      if (i == null) return;
-      const [f] = form._files.splice(+i, 1);
-      if (f?.thumb) URL.revokeObjectURL(f.thumb);
+      const retryBtn = e.target.closest?.("[data-retry]");
+      if (retryBtn) {
+        const f = form._files[+retryBtn.dataset.retry];
+        if (!f || !f.blob || f.uploading) return;
+        f.done = uploadEntry(f);
+        return;
+      }
+      const rmBtn = e.target.closest?.("[data-rm]");
+      if (!rmBtn) return;
+      const [f] = form._files.splice(+rmBtn.dataset.rm, 1);
+      if (f) {
+        f.removed = true;
+        try { f.abort?.abort(); } catch {}
+        if (f.thumb) { try { URL.revokeObjectURL(f.thumb); } catch {} f.thumb = ""; }
+        f.blob = null;
+      }
       draw();
     });
     const ta = $("textarea", form);
     ta.addEventListener("paste", (e) => {
-      const files = [...(e.clipboardData?.files || [])];
-      if (files.length) { e.preventDefault(); add(files); }
+      const dt = e.clipboardData;
+      const rawFiles = collectTransferFiles(dt);
+      const html = dt?.getData?.("text/html") || "";
+      const plain = dt?.getData?.("text/plain") || "";
+      const htmlImgs = extractHtmlDataImages(html);
+      if (rawFiles.length) {
+        e.preventDefault();
+        addEntries(buildTransferEntries(rawFiles, htmlImgs, "paste"), "paste");
+        return;
+      }
+      if (!plain.trim() && htmlImgs.length) {
+        e.preventDefault();
+        addEntries(buildTransferEntries([], htmlImgs, "paste"), "paste");
+        return;
+      }
+      if (!plain.trim() && /<img\b[^>]*\bsrc\s*=/i.test(html)) {
+        e.preventDefault();
+        toast("剪贴板里的图片已失效或受限，请重新复制或直接拖入/选择文件", "attn");
+      }
     });
     form.addEventListener("dragover", (e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); form.classList.add("drop"); } });
-    form.addEventListener("dragleave", () => form.classList.remove("drop"));
+    form.addEventListener("dragleave", (e) => { if (!e.relatedTarget || !form.contains?.(e.relatedTarget)) form.classList.remove("drop"); });
     form.addEventListener("drop", (e) => {
       form.classList.remove("drop");
-      if (!e.dataTransfer?.files?.length) return;
-      e.preventDefault(); add([...e.dataTransfer.files]);
+      const dt = e.dataTransfer;
+      const rawFiles = collectTransferFiles(dt);
+      const html = dt?.getData?.("text/html") || "";
+      const htmlImgs = extractHtmlDataImages(html);
+      if (!rawFiles.length && !htmlImgs.length) return;
+      e.preventDefault();
+      addEntries(buildTransferEntries(rawFiles, htmlImgs, "drop"), "drop");
     });
     form._takeFiles = () => { const taken = form._files; form._files = []; draw(); return taken; };
     form._restoreFiles = (files) => { if (!files?.length) return; form._files = [...files, ...form._files]; draw(); };
-    form._revokeFiles = (files) => { (files || []).forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb)); };
-    form._clearFiles = () => { form._revokeFiles(form._files); form._files = []; draw(); };
+    form._revokeFiles = (files) => {
+      (files || []).forEach((f) => {
+        if (f.thumb) { try { URL.revokeObjectURL(f.thumb); } catch {} f.thumb = ""; }
+        f.blob = null;
+      });
+    };
+    form._clearFiles = () => {
+      form._files.forEach((f) => { f.removed = true; try { f.abort?.abort(); } catch {} });
+      form._revokeFiles(form._files);
+      form._files = [];
+      draw();
+    };
   }
   async function withFiles(files, text) {
     if (!files?.length) return text;
     await Promise.all(files.map((f) => f.done));
-    if (files.some((f) => f.err)) throw new Error("有文件没传上去，移除后再发");
+    if (files.some((f) => f.err)) throw new Error(fileErrHint(files));
     return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
   }
   // Images a Collie message points at (a screenshot a worker took) show
@@ -6620,7 +7115,7 @@
       if (sending) return;
       const curFiles = form._files || [];
       if (curFiles.some((f) => f.err)) {
-        toast("有文件没传上去，移除后再发", "attn");
+        toast(fileErrHint(curFiles), "attn");
         return;
       }
       const draft = input.value;

@@ -102,6 +102,47 @@
     const id = setTimeout(() => ctrl.abort(new DOMException("Timed out", "TimeoutError")), ms);
     return { signal: ctrl.signal, clear: () => clearTimeout(id) };
   }
+  const AUTH_TOKEN_KEY = "collie.authToken";
+  const authBackup = {
+    get() { try { return (localStorage.getItem(AUTH_TOKEN_KEY) || "").trim(); } catch { return ""; } },
+    set(tok) {
+      const v = String(tok || "").trim();
+      try { if (v) localStorage.setItem(AUTH_TOKEN_KEY, v); else localStorage.removeItem(AUTH_TOKEN_KEY); } catch {}
+    },
+    clear() { try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch {} },
+  };
+  let restoreInFlight = null;
+  async function restoreSession() {
+    if (window.__collieDemo) return false;
+    const tok = authBackup.get();
+    if (!tok) return false;
+    if (restoreInFlight) return restoreInFlight;
+    restoreInFlight = (async () => {
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ token: tok }),
+        });
+        if (res.ok) return true;
+        if (res.status === 401 && authBackup.get() === tok) authBackup.clear();
+        return false;
+      } catch {
+        return false;
+      } finally {
+        restoreInFlight = null;
+      }
+    })();
+    return restoreInFlight;
+  }
+  async function authFetch(url, init, isRemoteHub = false) {
+    const res = await fetch(url, init);
+    if (!isRemoteHub && res.status === 401 && await restoreSession()) {
+      return fetch(url, init);
+    }
+    return res;
+  }
   async function api(path, opts = {}) {
     const r = routeReq(path, opts.body, opts.hub);
     const headers = opts.body ? { "Content-Type": "application/json" } : {};
@@ -133,6 +174,9 @@
     }
     if (res.status === 401) {
       if (r.hub) throw new Error(`${r.hub.name} 不认这个浏览器了，在「设备」里重新添加它`);
+      if (!opts._retried && await restoreSession()) {
+        return api(path, { ...opts, _retried: true });
+      }
       showLogin(); throw new Error("unauthorized");
     }
     if (!res.ok) {
@@ -835,14 +879,36 @@
   }
 
   // ───────────────────────────── auth
-  function showLogin() {
+  let liveEv = null;
+  let loginPairFailed = false;
+  function isStandaloneMode() {
+    try {
+      return window.navigator.standalone === true ||
+        (typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches);
+    } catch { return false; }
+  }
+  function syncLoginTip() {
+    const tip = $("#login-tip");
+    if (tip) tip.hidden = !(isStandaloneMode() || loginPairFailed);
+  }
+  function showLogin(opts = {}) {
+    if (opts.pairFailed) loginPairFailed = true;
+    if (liveEv) { liveEv.close(); liveEv = null; }
     $("#app").hidden = true;
     $("#login").hidden = false;
-    setTimeout(() => $("#login-token").focus(), 50);
+    syncLoginTip();
+    setTimeout(() => $("#login-token")?.focus(), 50);
   }
   async function login(token) {
-    const res = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+    const tok = String(token || "").trim();
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ token: tok }),
+    });
     if (!res.ok) throw new Error("bad token");
+    authBackup.set(tok);
   }
   // A name the hub shows in its device list, e.g. "iPhone · Safari".
   function deviceName() {
@@ -853,22 +919,50 @@
     return `${dev} · ${br}`;
   }
   async function pair(code) {
-    const res = await fetch("/api/pair", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, kind: "browser", name: deviceName() }) });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "配对失败");
+    const res = await fetch("/api/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ code, kind: "browser", name: deviceName() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "配对失败");
+    if (data.token) authBackup.set(data.token);
   }
+  $("#login-token")?.addEventListener("input", () => {
+    $("#login-token").removeAttribute("aria-invalid");
+    if ($("#login-error").textContent) $("#login-error").textContent = "";
+  });
   $("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const input = $("#login-token");
+    const btn = $("#login-form button[type='submit']");
     $("#login-error").textContent = "";
-    const v = $("#login-token").value.trim();
+    input.removeAttribute("aria-invalid");
+    const v = input.value.trim();
+    const isPair = /^[A-Z2-7]{8}$/i.test(v);
+    if (btn) btn.disabled = true;
     try {
-      if (/^[A-Z2-7]{8}$/i.test(v)) await pair(v); else await login(v);
-      boot();
-    } catch (err) { $("#login-error").textContent = /^[A-Z2-7]{8}$/i.test(v) ? err.message : "令牌不对"; }
+      if (isPair) await pair(v); else await login(v);
+      loginPairFailed = false;
+      input.value = "";
+      await boot();
+    } catch (err) {
+      if (isPair) {
+        loginPairFailed = true;
+        syncLoginTip();
+      }
+      input.setAttribute("aria-invalid", "true");
+      $("#login-error").textContent = isPair ? err.message : "令牌不对";
+      input.focus();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   });
   async function doLogout() {
     if (!confirm("确定退出当前浏览器的登录状态吗？")) return;
-    await fetch("/api/logout", { method: "POST" });
+    authBackup.clear();
+    try { await fetch("/api/logout", { method: "POST", credentials: "same-origin" }); } catch {}
     location.reload();
   }
 
@@ -965,15 +1059,15 @@
     ev.onerror = async () => {
       $("#conn").className = "conn off";
       try { await api("/api/session"); } catch {}
+      if (!$("#login").hidden) return;
       // A restart can answer with an error status, which closes the stream
       // for good; open a new one or the page silently goes stale.
       if (ev.readyState === EventSource.CLOSED && liveEv === ev) setTimeout(() => { if (liveEv === ev) connect(); }, 2000);
     };
     liveEv = ev;
   }
-  let liveEv = null;
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && liveEv?.readyState === EventSource.CLOSED) connect();
+    if (!document.hidden && $("#login").hidden && liveEv?.readyState === EventSource.CLOSED) connect();
   });
 
   // A finished agent you have open here has been seen: the hub then shows
@@ -1688,7 +1782,7 @@
   const ICON_THREAD_CHEV = `<svg class="te-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
   const ICON_TD_REPLY = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>`;
   const ICON_TD_LOCATE = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>`;
-  const ICON_TD_USER = `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="23.5" r="10.2"/><path d="M14 52.5c2.2-10.2 9.2-15.5 18-15.5s15.8 5.3 18 15.5"/></svg>`;
+  const ICON_TD_USER = `<svg viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.2 24.4c.4-6.8 5.2-11.2 14.4-11.4 7.2-.2 12.2 2.5 13.8 8.3"/><path d="M18.2 24.4c9.2-3.2 22.2-4.2 35-2.4"/><path d="M43.2 21.5c.2 2.4.8 4.2 3.6 7.4.6.7.1 1.7-.9 2l-2 .5c.2 2.8-.8 5.2-3.6 6.4-2.8 1.2-6.4 1-9.2-.3"/><path d="M20.2 24c-1.6 3.8-1.2 7.8 1.8 10.4"/><path d="M24.2 35.2c.2 2.4-.2 4.6-.8 6.4-5.4 2-9.2 5.8-10.9 11.9"/><path d="M23.4 41.6c4.2 3.6 10.2 3.8 15.2.6 4.6 2.1 8.5 5.6 10.9 11.3"/></g><circle cx="39.4" cy="27.2" r="1.45" fill="currentColor" stroke="none"/></svg>`;
   const entryKey = (e) => (e && (e.id || e._localId)) || "";
   const threadWhoLabel = (e) => (e?.role === "user" ? "你" : "Collie");
   function threadCleanText(e) {
@@ -2239,7 +2333,7 @@
       const ctrl = new AbortController();
       searchAbort = ctrl;
       try {
-        const res = await fetch(`/api/super/search?q=${encodeURIComponent(q)}&limit=30`, {
+        const res = await authFetch(`/api/super/search?q=${encodeURIComponent(q)}&limit=30`, {
           credentials: "same-origin",
           signal: ctrl.signal,
         });
@@ -5396,7 +5490,7 @@
     for (let i = 0; i < maxTries; i++) {
       const t = timeoutSignal(5000);
       try {
-        const res = await fetch("/api/version", { cache: "no-store", credentials: "same-origin", signal: t.signal });
+        const res = await authFetch("/api/version", { cache: "no-store", credentials: "same-origin", signal: t.signal });
         if (res.ok) {
           const wb = res.headers.get("X-Collie-Web");
           const data = await res.json().catch(() => ({}));
@@ -6772,7 +6866,8 @@
   async function fetchFile(path, machine) {
     const q = `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}${IMG_EXT.test(path) ? "&as=image" : ""}`;
     const r = routeReq(q);
-    const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
+    const res = await authFetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" }, !!r.hub);
+    if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
     if (res.status === 404) return null;
     if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || "打不开这个文件"); }
     return { kind: res.headers.get("X-File-Kind"), size: +res.headers.get("X-File-Size") || 0,
@@ -6853,10 +6948,11 @@
   async function fetchFullTextForCopy(cur) {
     const q = `/api/file?path=${encodeURIComponent(cur.reqPath)}${cur.machine ? "&machine=" + encodeURIComponent(cur.machine) : ""}&download=1`;
     const r = routeReq(q);
-    const res = await fetch(r.url, {
+    const res = await authFetch(r.url, {
       headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {},
       credentials: r.hub ? "omit" : "same-origin",
-    });
+    }, !!r.hub);
+    if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
     if (!res.ok) {
       let e = {};
       try { e = await res.json(); } catch {}
@@ -7622,7 +7718,8 @@
       for (const m of tries) {
         const q = `/api/file?path=${encodeURIComponent(path)}${m ? "&machine=" + encodeURIComponent(m) : ""}&as=html`;
         const r = routeReq(q);
-        const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
+        const res = await authFetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" }, !!r.hub);
+        if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
         if (res.status === 404) continue;
         if (!res.ok) { let d = {}; try { d = await res.json(); } catch {} throw new Error(d.error || "打不开这个文件"); }
         htmlText = await res.text();
@@ -9163,7 +9260,8 @@
           headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
         };
         if (ctrl) init.signal = ctrl.signal;
-        const res = await fetch(up.url, init);
+        const res = await authFetch(up.url, init, !!up.hub);
+        if (res.status === 401 && !up.hub) { showLogin(); return; }
         const d = await res.json().catch(() => ({}));
         if (!res.ok) {
           const info = friendlyUploadError(null, res.status, d.error || res.statusText, up.hub);
@@ -9692,12 +9790,20 @@
     const t = q.get("t"), code = q.get("pair");
     if (t || code) {
       try { if (code) await pair(code); else await login(t); }
-      catch (err) { if (code) { $("#login-error").textContent = err.message; } }
+      catch (err) {
+        if (code) {
+          loginPairFailed = true;
+          $("#login-error").textContent = err.message;
+        }
+      }
       q.delete("t"); q.delete("pair");
       const rest = q.toString();
       history.replaceState(history.state, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
     }
     try { await api("/api/session"); } catch { return; }
+    loginPairFailed = false;
+    $("#login-error").textContent = "";
+    syncLoginTip();
     try { sup = normSup(await api("/api/super")); syncCollieNotifyWatermark(sup.entries, false); } catch {}
     try { setLocalState(await api("/api/state")); } catch {}
     await loadHubs();

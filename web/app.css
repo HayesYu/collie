@@ -9,6 +9,8 @@
   --fg-3: #8e8e88;
   --accent: #111111;
   --on-accent: #ffffff;
+  --human-bg: #111111;
+  --human-line: #f7f7f5;
   --attn: #b45309;
   --attn-soft: #fbf3e8;
   --pin: #475569;
@@ -51,6 +53,8 @@
     --fg-3: #6d6d68;
     --accent: #f2f2f0;
     --on-accent: #0b0b0c;
+    --human-bg: #f2f2f0;
+    --human-line: #111111;
     --attn: #f0a24a;
     --attn-soft: #21190f;
     --pin: #94a3b8;
@@ -88,6 +92,8 @@
   --fg-3: #6d6d68;
   --accent: #f2f2f0;
   --on-accent: #0b0b0c;
+  --human-bg: #f2f2f0;
+  --human-line: #111111;
   --attn: #f0a24a;
   --attn-soft: #21190f;
   --pin: #94a3b8;
@@ -214,9 +220,19 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 }
 .login-card input, .login-card .btn { height: 38px; border-radius: 9px; font-size: 14px; }
 .login-card input { padding: 0 12px; }
+.login-card input[aria-invalid="true"] { border-color: var(--attn); }
+@media (pointer: coarse) {
+  .login-card input { font-size: max(1rem, 1em); min-height: 44px; }
+  .login-card .btn { min-height: 44px; }
+}
 .login-mark { width: 64px; height: 64px; margin: 0 auto 4px; border-radius: 16px; border: 1px solid var(--line); }
 .login-card h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .login-card p { margin: 0 0 8px; }
+.login-tip {
+  margin: 0 !important; padding: 9px 12px; border-radius: 10px; text-align: left;
+  background: var(--bg-2); border: 1px solid var(--line);
+  font-size: 12.5px; line-height: 1.5; color: var(--fg-2);
+}
 .login-error { color: var(--attn); min-height: 1.5em; margin: 0 !important; font-size: 13px; }
 
 /* ─── layout ─── */
@@ -305,11 +321,23 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
     border: 1.5px solid transparent; border-top-color: var(--fg); animation: spin .9s linear infinite;
   }
 }
-/* waiting: a dashed ring turning slowly, like a timer: nothing to do
-   right now, something still running. */
-.dot.waiting { box-sizing: border-box; border: 1.5px dashed var(--fg-3); }
+/* waiting: soft solid center + subtle breathing halo ring: nothing to do
+   right now, something still running in the background. */
+.dot.waiting {
+  background: var(--fg-3);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--fg-3) 22%, transparent);
+}
 @media (prefers-reduced-motion: no-preference) {
-  .dot.waiting { animation: spin 6s linear infinite; }
+  .dot.waiting { box-shadow: none; }
+  .dot.waiting::after {
+    content: ""; position: absolute; inset: -3px; border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--fg-3) 50%, transparent);
+    animation: wait-halo 2.8s ease-in-out infinite; pointer-events: none;
+  }
+}
+@keyframes wait-halo {
+  0%, 100% { transform: scale(.8); opacity: .75; }
+  50% { transform: scale(1.16); opacity: .16; }
 }
 /* running (quiet): active state where the sidebar carries the spinner and
    timeline rows already show "还在跑"; restrained static accent dot + halo. */
@@ -413,7 +441,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .msg.assistant li { margin: .4em 0; padding-left: .15em; }
 .msg.assistant li::marker { color: var(--fg-3); }
 .msg.assistant a { text-underline-offset: 2px; }
-.msg code { font: .86em var(--mono); background: color-mix(in srgb, var(--bg-3) 55%, transparent); padding: .08em .3em; border-radius: 4px; }
+.msg code { font: .86em var(--mono); background: color-mix(in srgb, var(--bg-3) 55%, transparent); padding: .08em .3em; border-radius: 4px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .msg.user code { background: color-mix(in srgb, var(--on-accent) 14%, transparent); }
 .msg pre { margin: .2em 0 1em; padding: 14px 16px; overflow: auto; tab-size: 4; background: var(--code-bg); color: var(--code-fg); border: 1px solid var(--line); border-radius: 10px; font: 12.5px/1.55 var(--mono); }
 .msg pre code { background: none; padding: 0; font-size: inherit; tab-size: inherit; }
@@ -850,7 +878,7 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
     animation: none;
   }
-  .crew .dot.working::after, .crew .dot.starting::after { content: none; animation: none; }
+  .crew .dot.working::after, .crew .dot.starting::after, .crew .dot.waiting::after { content: none; animation: none; }
 }
 .chip {
   flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 10px;
@@ -1278,12 +1306,12 @@ body.dragging { cursor: col-resize; user-select: none; }
 .td-rail { position: relative; display: flex; flex-direction: column; align-items: center; }
 .td-av {
   position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 7px;
-  display: grid; place-items: center; flex: none; font-size: 11px; font-weight: 600;
+  display: grid; place-items: center; flex: none; overflow: hidden; font-size: 11px; font-weight: 600;
 }
 .td-av.collie { background: var(--bg); border: 1px solid var(--line); color: var(--fg); }
 .td-av.collie img { width: 18px; height: 18px; display: block; }
-.td-av.user { background: var(--bg-2); border: 1px solid var(--line); color: var(--fg); }
-.td-av.user svg { width: 18px; height: 18px; stroke-width: 2.6; display: block; }
+.td-av.user { background: var(--human-bg); border: 1px solid var(--human-bg); color: var(--human-line); }
+.td-av.user svg { width: 21px; height: 21px; display: block; }
 .td-rail::after {
   content: ""; position: absolute; top: 28px; bottom: -14px; left: 50%;
   width: 1px; transform: translateX(-.5px); background: var(--line);
@@ -1519,11 +1547,13 @@ a.fpath { color: inherit; text-decoration: underline; text-decoration-color: var
 a.fpath.img-link { cursor: zoom-in; }
 a.fpath:hover { text-decoration-color: currentColor; }
 a:is(.fpath, .url):has(> code.code-link) { text-decoration: none; }
-.msg code.code-link, .mem-body code.code-link, .fv-md code.code-link, .rv-md code.code-link {
+.msg code.code-link, .td-text code.code-link, .mem-body code.code-link, .fv-md code.code-link, .rv-md code.code-link {
   color: color-mix(in srgb, var(--hl-ty) 84%, var(--fg));
   background: color-mix(in srgb, var(--hl-ty) 7%, var(--bg-3));
   border: 1px solid color-mix(in srgb, var(--hl-ty) 18%, var(--line));
   padding: .06em .34em; border-radius: 5px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 34%, transparent);
   text-underline-offset: 2.5px;

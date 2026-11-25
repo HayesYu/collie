@@ -186,14 +186,24 @@ type Device struct {
 	LastSeen  time.Time `json:"last_seen"`
 }
 
+const (
+	pairCodeTTL        = 10 * time.Minute
+	pairCodeRetainTTL  = 24 * time.Hour
+	pairCodeMaxHistory = 512
+)
+
+var pairFailDelay = 500 * time.Millisecond
+
 type pairCode struct {
 	kind    string
 	expires time.Time
+	usedAt  time.Time
 }
 
 type Auth struct {
 	db     *sql.DB
 	master string
+	now    func() time.Time
 
 	mu      sync.Mutex
 	devices map[string]*Device // by hash
@@ -201,14 +211,23 @@ type Auth struct {
 	dirty   bool
 }
 
+func (a *Auth) nowTime() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
+
 func newAuth(db *sql.DB, master string) *Auth {
 	a := &Auth{db: db, master: master, devices: map[string]*Device{}, codes: map[string]pairCode{}}
-	var raw string
-	if db.QueryRow(`SELECT v FROM kv WHERE k='devices'`).Scan(&raw) == nil {
-		var list []*Device
-		json.Unmarshal([]byte(raw), &list)
-		for _, d := range list {
-			a.devices[d.Hash] = d
+	if db != nil {
+		var raw string
+		if db.QueryRow(`SELECT v FROM kv WHERE k='devices'`).Scan(&raw) == nil {
+			var list []*Device
+			json.Unmarshal([]byte(raw), &list)
+			for _, d := range list {
+				a.devices[d.Hash] = d
+			}
 		}
 	}
 	return a
@@ -241,19 +260,52 @@ func (a *Auth) who(token string) (master bool, d *Device) {
 	return false, d
 }
 
+func (a *Auth) pruneCodesLocked(now time.Time) {
+	for c, p := range a.codes {
+		ref := p.expires
+		if !p.usedAt.IsZero() && p.usedAt.After(ref) {
+			ref = p.usedAt
+		}
+		if now.Sub(ref) > pairCodeRetainTTL {
+			delete(a.codes, c)
+		}
+	}
+	if len(a.codes) < pairCodeMaxHistory {
+		return
+	}
+	type stale struct {
+		code string
+		ts   time.Time
+	}
+	var inactive []stale
+	for c, p := range a.codes {
+		if !p.usedAt.IsZero() || now.After(p.expires) {
+			ts := p.expires
+			if !p.usedAt.IsZero() {
+				ts = p.usedAt
+			}
+			inactive = append(inactive, stale{c, ts})
+		}
+	}
+	sort.Slice(inactive, func(i, j int) bool { return inactive[i].ts.Before(inactive[j].ts) })
+	for _, it := range inactive {
+		if len(a.codes) < pairCodeMaxHistory {
+			break
+		}
+		delete(a.codes, it.code)
+	}
+}
+
 func (a *Auth) newCode(kind string) (string, time.Time) {
 	b := make([]byte, 5)
 	rand.Read(b)
 	code := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b) // 8 chars
-	exp := time.Now().Add(10 * time.Minute)
+	now := a.nowTime()
+	exp := now.Add(pairCodeTTL)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for c, p := range a.codes {
-		if time.Now().After(p.expires) {
-			delete(a.codes, c)
-		}
-	}
-	a.codes[code] = pairCode{kind, exp}
+	a.pruneCodesLocked(now)
+	a.codes[code] = pairCode{kind: kind, expires: exp}
 	return code, exp
 }
 
@@ -262,16 +314,27 @@ func (a *Auth) redeem(code, kind, name, osName string) (*Device, string, error) 
 	code = strings.ToUpper(strings.TrimSpace(code))
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if code == "" {
+		return nil, "", fmt.Errorf("配对码无效，请核对后重试或重新生成")
+	}
 	p, ok := a.codes[code]
-	if !ok || time.Now().After(p.expires) {
-		return nil, "", fmt.Errorf("配对码无效或已过期")
+	if !ok {
+		return nil, "", fmt.Errorf("配对码无效，请核对后重试或重新生成")
+	}
+	if !p.usedAt.IsZero() {
+		return nil, "", fmt.Errorf("配对码已被使用（每个配对码只能用一次），请重新生成新的配对码")
+	}
+	now := a.nowTime()
+	if now.After(p.expires) {
+		return nil, "", fmt.Errorf("配对码已过期，请重新生成新的配对码")
 	}
 	if p.kind != kind {
 		return nil, "", fmt.Errorf("这个配对码不是给%s用的", map[string]string{"browser": "手机或浏览器", "machine": "电脑"}[kind])
 	}
-	delete(a.codes, code)
+	p.usedAt = now
+	a.codes[code] = p
 	token := randomToken()
-	d := &Device{ID: a.uniqueID(kind, name), Kind: kind, Name: name, OS: osName, Hash: hashToken(token), CreatedAt: time.Now(), LastSeen: time.Now()}
+	d := &Device{ID: a.uniqueID(kind, name), Kind: kind, Name: name, OS: osName, Hash: hashToken(token), CreatedAt: now, LastSeen: now}
 	a.devices[d.Hash] = d
 	a.dirty = true
 	return d, token, nil
@@ -334,6 +397,9 @@ func (a *Auth) save() {
 	}
 	a.dirty = false
 	a.mu.Unlock()
+	if a.db == nil {
+		return
+	}
 	b, _ := json.Marshal(list)
 	if _, err := a.db.Exec(`INSERT INTO kv(k,v) VALUES('devices',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(b)); err != nil {
 		log.Printf("save devices: %v", err)
@@ -454,6 +520,7 @@ func (s *Server) pairNew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var body struct {
 		Code string `json:"code"`
 		Kind string `json:"kind"`
@@ -477,15 +544,15 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 	}
 	d, token, err := s.auths.redeem(body.Code, body.Kind, name, body.OS)
 	if err != nil {
-		time.Sleep(500 * time.Millisecond)
+		if pairFailDelay > 0 {
+			time.Sleep(pairFailDelay)
+		}
 		writeJSON(w, 401, map[string]any{"error": err.Error()})
 		return
 	}
 	go s.auths.save()
 	if d.Kind == "browser" && !body.WantToken {
 		setTokenCookie(w, r, token)
-		writeJSON(w, 200, map[string]any{"ok": true, "id": d.ID})
-		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "id": d.ID, "token": token})
 }

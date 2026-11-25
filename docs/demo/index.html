@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Collie">
   <title>Collie 演示</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icon-512.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
   <link rel="stylesheet" href="vendor/xterm.css">
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
   <link rel="stylesheet" href="app.css">
@@ -32,9 +33,11 @@
     <img src="icon.svg" alt="" class="login-mark">
     <h1>Collie</h1>
     <p class="muted">手机：扫 hub 终端里的二维码，或在已登录的设备上打开「设备 → 连接手机」。<br>也可以输入配对码或访问令牌。</p>
-    <input id="login-token" type="password" autocomplete="current-password" placeholder="配对码或访问令牌" required>
+    <p class="login-tip" id="login-tip" hidden>桌面图标与浏览器登录态独立，请在此直接输入新生成的 8 位配对码或主令牌。</p>
+    <label for="login-token" class="visually-hidden">配对码或访问令牌</label>
+    <input id="login-token" name="token" type="password" autocomplete="current-password" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="配对码或访问令牌" aria-describedby="login-tip login-error" required>
     <button class="btn primary block" type="submit">进入</button>
-    <p class="login-error" id="login-error"></p>
+    <p class="login-error" id="login-error" role="alert" aria-live="polite"></p>
   </form>
 </section>
 

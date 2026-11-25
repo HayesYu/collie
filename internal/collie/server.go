@@ -214,16 +214,36 @@ func (s *Server) webBuild() string {
 	return webBuildOnce.v
 }
 
+var authFailDelay = 400 * time.Millisecond
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var body struct{ Token string }
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
-	a, b := sha256.Sum256([]byte(strings.TrimSpace(body.Token))), sha256.Sum256([]byte(s.token))
-	if subtle.ConstantTimeCompare(a[:], b[:]) != 1 {
-		time.Sleep(400 * time.Millisecond)
+	tok := strings.TrimSpace(body.Token)
+	ok := false
+	if tok != "" {
+		if s.auths != nil {
+			master, d := s.auths.who(tok)
+			if master {
+				ok = true
+			} else if d != nil && d.Kind == "browser" {
+				ok = true
+				go s.auths.save()
+			}
+		} else {
+			a, b := sha256.Sum256([]byte(tok)), sha256.Sum256([]byte(s.token))
+			ok = subtle.ConstantTimeCompare(a[:], b[:]) == 1
+		}
+	}
+	if !ok {
+		if authFailDelay > 0 {
+			time.Sleep(authFailDelay)
+		}
 		writeJSON(w, 401, map[string]any{"error": "invalid token"})
 		return
 	}
-	setTokenCookie(w, r, s.token)
+	setTokenCookie(w, r, tok)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -891,6 +911,8 @@ func isDir(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir
 
 func init() {
 	_ = mime.AddExtensionType(".woff2", "font/woff2")
+	_ = mime.AddExtensionType(".png", "image/png")
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 }
 
 func (s *Server) static() http.Handler {

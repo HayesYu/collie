@@ -306,7 +306,7 @@
 
   const triggers = [
     { id: "t31", source: "chat", thread: "chat:main", from: "you", action: "respond", status: "delivered", text: entries[0].text, at: ago(15), targets: ["collie"] },
-    { id: "t32", source: "worker", thread: "chat:main", from: "release-notes", action: "respond", status: "delivered", text: "report from release-notes: CHANGELOG 已更新", at: ago(6), targets: ["collie"] },
+    { id: "t32", source: "worker", thread: "chat:main", from: "release-notes", action: "respond", status: "delivered", text: "report from release-notes: CHANGELOG 已更新（v1.3..main 共 27 个提交）\n\n需要注意：\n- 配置项 cart.ttl 改名为 cart.expire_after（兼容旧字段一个版本）\n- 构建与运行最低 Node 版本升至 22\n\n主要改动：订单状态筛选、结算预计送达时间、空购物车券码兜底、首屏图片懒加载（体积约降 30%）、拼音搜索与依赖升级。", at: ago(6), targets: ["collie"] },
     { id: "t33", source: "github", thread: "github:alex/shop-api#58", from: "octo-dev", action: "candidate", status: "delivered", text: "issue_comment: 分页最后一页有重复数据，能看一下吗？@collie", at: ago(40), targets: ["collie"] },
     { id: "t34", source: "timer", thread: "chat:main", from: "", action: "respond", status: "delivered", text: "每天 9 点：检查各个任务的进展，有卡住的告诉我", at: ago(60 * 3), targets: ["collie"] },
   ];

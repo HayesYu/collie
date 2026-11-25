@@ -1035,6 +1035,7 @@
     const ev = new EventSource("/api/events");
     ev.addEventListener("super", (e) => {
       const prevSum = JSON.stringify(sup.integrations_summary || null);
+      const prevInboxKey = `${sup.queued}:${(sup.entries || []).length}:${sup.entries?.[sup.entries.length - 1]?.id || ""}`;
       sup = normSup(JSON.parse(e.data));
       syncCollieNotifyWatermark(sup.entries, true);
       renderSide();
@@ -1043,6 +1044,10 @@
       if (view === "auto" && autoTab === "integrations") {
         const nextSum = JSON.stringify(sup.integrations_summary || null);
         if (nextSum !== prevSum && !$("#int-modal")?.open) loadAuto();
+      }
+      if (view === "auto" && autoTab === "inbox") {
+        const nextInboxKey = `${sup.queued}:${(sup.entries || []).length}:${sup.entries?.[sup.entries.length - 1]?.id || ""}`;
+        if (nextInboxKey !== prevInboxKey) loadAuto();
       }
     });
     ev.addEventListener("state", (e) => {
@@ -1336,7 +1341,6 @@
     $("#nav-auto").classList.toggle("active", view === "auto");
     $("#nav-devices").classList.toggle("active", view === "devices");
     $("#nav-prefs").classList.toggle("active", view === "prefs");
-    $("#nav-prefs-mobile")?.classList.toggle("active", view === "prefs");
   }
 
   // ───────────────────────────── routing & scroll restoration
@@ -3080,6 +3084,8 @@
   }
   let autoTab = normalizeAutoTab(store.get("autoTab", "memory"));
   let inboxThread = "";
+  const inboxExpanded = new Set();
+  let inboxLoadSeq = 0;
   let autoTimer;
   let intPayload = null;
   let intModalKind = null;
@@ -3126,15 +3132,142 @@
     autoTab = normalizeAutoTab(autoTab);
     store.set("autoTab", autoTab);
     memEditing = false;
-    $("#auto-body")._memSig = "";
-    $("#auto-body").classList.toggle("is-integrations", autoTab === "integrations");
+    const body = $("#auto-body");
+    body._memSig = "";
+    body._inboxSig = "";
+    body._inboxRendered = false;
+    body.classList.toggle("is-integrations", autoTab === "integrations");
     $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
-    if (restore) restoreSimpleScroll($("#auto-body"), restore);
+    if (restore) restoreSimpleScroll(body, restore);
     clearInterval(autoTimer);
     loadAuto(restore);
     if (autoTab === "inbox") autoTimer = setInterval(() => loadAuto(), 4000);
     if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
     if (autoTab === "integrations") autoTimer = setInterval(() => { if (!$("#int-modal")?.open) loadAuto(); }, 6000);
+  }
+
+  function inboxTextId(id) {
+    return "inbox-text-" + String(id ?? "").replace(/[^A-Za-z0-9_-]/g, "_");
+  }
+  function hasSelectionInside(root) {
+    try {
+      const sel = window.getSelection?.();
+      if (!sel || !sel.toString()) return false;
+      return !!(
+        (sel.anchorNode && root.contains(sel.anchorNode))
+        || (sel.focusNode && root.contains(sel.focusNode))
+      );
+    } catch { return false; }
+  }
+  function captureInboxScrollAnchor(body) {
+    if (!body || body.clientHeight <= 0) return null;
+    const scrollTop = body.scrollTop;
+    if (scrollTop <= 0) return { scrollTop: 0, id: "", offset: 0 };
+    const bodyTop = body.getBoundingClientRect().top;
+    for (const row of body.querySelectorAll(".inbox-row")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom > bodyTop + 1) {
+        return { scrollTop, id: row.dataset.inboxId || "", offset: rect.top - bodyTop };
+      }
+    }
+    return { scrollTop, id: "", offset: 0 };
+  }
+  function restoreInboxScrollAnchor(body, anchor) {
+    if (!body || !anchor || body.clientHeight <= 0) return;
+    if (anchor.id) {
+      const row = [...body.querySelectorAll(".inbox-row")].find((el) => el.dataset.inboxId === anchor.id);
+      if (row) {
+        const bodyTop = body.getBoundingClientRect().top;
+        const rowTop = row.getBoundingClientRect().top;
+        const target = Math.max(0, body.scrollTop + (rowTop - bodyTop) - anchor.offset);
+        markProgrammaticScroll();
+        body.scrollTop = target;
+        return;
+      }
+    }
+    if (anchor.scrollTop > 0) {
+      markProgrammaticScroll();
+      body.scrollTop = anchor.scrollTop;
+    }
+  }
+  function syncInboxRow(row) {
+    if (!row) return false;
+    const id = String(row.dataset?.inboxId || "");
+    const textEl = row.querySelector(".inbox-text");
+    const btn = row.querySelector(".inbox-toggle");
+    if (!id || !textEl || !btn) return false;
+    const expanded = inboxExpanded.has(id);
+    row.classList.toggle("is-expanded", expanded);
+    const truncated = !expanded && textEl.clientHeight > 0 && textEl.scrollHeight > textEl.clientHeight + 1;
+    const expandable = expanded || truncated;
+    row.classList.toggle("is-expandable", expandable);
+    btn.hidden = !expandable;
+    btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+    btn.setAttribute("aria-label", `${expanded ? "收起" : "展开"} #${id}`);
+    const lbl = btn.querySelector(".inbox-toggle-lbl");
+    if (lbl) lbl.textContent = expanded ? "收起" : "展开";
+    return expandable;
+  }
+  function syncInboxOverflow(root = $("#auto-body")) {
+    if (!root) return;
+    root.querySelectorAll(".inbox-row").forEach((row) => syncInboxRow(row));
+  }
+  function toggleInboxRow(row, id, { animate = true } = {}) {
+    const key = String(id ?? row?.dataset?.inboxId ?? "");
+    if (!row || !key) return false;
+    const textEl = row.querySelector(".inbox-text");
+    const wasExpanded = inboxExpanded.has(key);
+    if (textEl?._inboxAnim) {
+      try { textEl._inboxAnim.cancel(); } catch {}
+      textEl._inboxAnim = null;
+      textEl.style.overflow = "";
+    }
+    row.classList.remove("is-collapsing");
+    const reduceMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const canAnim = animate && !reduceMotion && textEl && typeof textEl.animate === "function";
+    const startH = canAnim ? textEl.getBoundingClientRect().height : 0;
+    if (wasExpanded) {
+      inboxExpanded.delete(key);
+    } else {
+      inboxExpanded.add(key);
+      if (inboxExpanded.size > 200) inboxExpanded.delete(inboxExpanded.values().next().value);
+    }
+    syncInboxRow(row);
+    if (canAnim && startH > 0) {
+      const endH = textEl.getBoundingClientRect().height;
+      if (Math.abs(endH - startH) > 1) {
+        if (wasExpanded) row.classList.add("is-collapsing");
+        else textEl.style.overflow = "hidden";
+        const anim = textEl.animate(
+          [{ height: startH + "px" }, { height: endH + "px" }],
+          { duration: wasExpanded ? 160 : 190, easing: "cubic-bezier(.22, 1, .36, 1)" },
+        );
+        textEl._inboxAnim = anim;
+        const done = () => {
+          if (textEl._inboxAnim !== anim) return;
+          textEl._inboxAnim = null;
+          textEl.style.overflow = "";
+          row.classList.remove("is-collapsing");
+        };
+        anim.finished.then(done, done);
+      }
+    }
+    return !wasExpanded;
+  }
+  if (typeof ResizeObserver === "function" && $("#auto-body")) {
+    let lastAutoW = 0, autoResizeRAF = 0;
+    new ResizeObserver(() => {
+      const body = $("#auto-body");
+      if (!body || view !== "auto" || autoTab !== "inbox") return;
+      const w = Math.round(body.clientWidth);
+      if (w <= 0 || w === lastAutoW) return;
+      lastAutoW = w;
+      if (autoResizeRAF) return;
+      autoResizeRAF = requestAnimationFrame(() => {
+        autoResizeRAF = 0;
+        if (view === "auto" && autoTab === "inbox") syncInboxOverflow(body);
+      });
+    }).observe($("#auto-body"));
   }
 
   async function loadAuto(restore = null) {
@@ -3149,13 +3282,44 @@
       if (autoTab === "inbox") {
         // Avoid tearing down the inbox DOM while the user is interacting with its dropdown.
         if (pickOpen && body.contains(pickOpen)) return;
+        const seq = ++inboxLoadSeq;
         const r = await api("/api/super/triggers");
-        if (view !== "auto" || autoTab !== "inbox") return;
+        if (seq !== inboxLoadSeq || view !== "auto" || autoTab !== "inbox") return;
         if (pickOpen && body.contains(pickOpen)) return;
+        const triggers = r.triggers || [];
+        const threads = r.threads || [];
+        const activeWorkers = (sup.workers || []).filter((w) => !w.ended).map((w) => w.name);
+        const sig = JSON.stringify({
+          t: triggers,
+          th: threads,
+          f: inboxThread,
+          w: activeWorkers,
+          tm: triggers.map((x) => when(x.at)),
+          thm: threads.map((x) => when(x.last_at)),
+        });
+        if (sig === body._inboxSig && body._inboxRendered) {
+          if (restore) restoreSimpleScroll(body, restore);
+          return;
+        }
+        // Preserve active user text selection during background refreshes.
+        if (!restore && body._inboxRendered && hasSelectionInside(body)) return;
         const subsOpen = !!body.querySelector(".inbox-subs-fold[open]");
-        body.innerHTML = inboxHTML(r.triggers || [], r.threads || []);
+        const focusToggleId = document.activeElement && body.contains(document.activeElement)
+          ? document.activeElement.closest?.("[data-inbox-toggle]")?.dataset?.inboxToggle || ""
+          : "";
+        const anchor = !restore ? captureInboxScrollAnchor(body) : null;
+        body._inboxSig = sig;
+        body._inboxRendered = true;
+        body.innerHTML = inboxHTML(triggers, threads);
         if (subsOpen) { const d = body.querySelector(".inbox-subs-fold"); if (d) d.open = true; }
-        applyAfter();
+        syncInboxOverflow(body);
+        if (restore) restoreSimpleScroll(body, restore);
+        else restoreInboxScrollAnchor(body, anchor);
+        if (focusToggleId) {
+          const btn = [...body.querySelectorAll("[data-inbox-toggle]")].find((el) => el.dataset.inboxToggle === focusToggleId);
+          if (btn && !btn.hidden) btn.focus?.({ preventScroll: true });
+        }
+        return;
       } else if (autoTab === "memory") {
         const r = await api("/api/super/memory");
         if (view !== "auto" || autoTab !== "memory" || memEditing) return;
@@ -3206,7 +3370,7 @@
           if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
         }).catch(() => {});
       }
-    } catch (err) { body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
+    } catch (err) { body._inboxSig = ""; body._inboxRendered = false; body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
   }
 
   // ───────────────────────────── integrations store & centered modal
@@ -4185,11 +4349,17 @@
       </div>${allSubsFold}`;
     }
     return `${threadBar}
-      <div class="card"><ul class="rows">${shown.length ? shown.map((t) => `<li class="row">
+      <div class="card"><ul class="rows">${shown.length ? shown.map((t) => {
+        const id = String(t.id ?? "");
+        const expanded = inboxExpanded.has(id);
+        const textId = inboxTextId(id);
+        return `<li class="row inbox-row${expanded ? " is-expanded is-expandable" : ""}" data-inbox-id="${esc(id)}">
         <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
-        <div><div class="meta"><b>#${esc(t.id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
-        <div class="text">${esc(t.text)}</div></div>
-        <span class="right">${when(t.at)}</span></li>`).join("") : `<li class="empty-row">${inboxThread ? "这条线程里还没有事件" : "收件箱是空的"}</li>`}</ul></div>`;
+        <div class="inbox-main"><div class="meta"><b>#${esc(id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
+        <div class="text inbox-text" id="${esc(textId)}">${esc(t.text)}</div>
+        <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${expanded ? "收起" : "展开"} #${esc(id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${expanded ? "收起" : "展开"}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
+        <span class="right">${when(t.at)}</span></li>`;
+      }).join("") : `<li class="empty-row">${inboxThread ? "这条线程里还没有事件" : "收件箱是空的"}</li>`}</ul></div>`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -4718,6 +4888,7 @@
   $("#auto-body").addEventListener("change", async (e) => {
     if (e.target.id === "inbox-thread-filter") {
       inboxThread = e.target.value;
+      $("#auto-body")._inboxRendered = false;
       loadAuto();
       return;
     }
@@ -4727,12 +4898,27 @@
       try {
         await api("/api/super/subscribe", { body: { worker, thread, off: false } });
         toast(`已订阅 ${worker} → ${thread}`);
+        $("#auto-body")._inboxRendered = false;
         loadAuto();
       } catch (err) { toast(err.message, "attn"); }
     }
   });
 
   $("#auto-body").addEventListener("click", async (e) => {
+    const inboxBtn = e.target.closest("button[data-inbox-toggle]");
+    if (inboxBtn) {
+      const row = inboxBtn.closest(".inbox-row");
+      if (row) toggleInboxRow(row, inboxBtn.dataset.inboxToggle, { animate: true });
+      return;
+    }
+    const inboxText = e.target.closest(".inbox-row.is-expandable .inbox-text");
+    if (inboxText) {
+      if (e.target.closest("a, button, input, select, textarea, summary, label")) return;
+      if (String(window.getSelection?.()?.toString() || "").length > 0) return;
+      const row = inboxText.closest(".inbox-row");
+      if (row?.dataset.inboxId) toggleInboxRow(row, row.dataset.inboxId, { animate: true });
+      return;
+    }
     const t = e.target.closest("button");
     if (!t) return;
     if (t.dataset.goTab) {

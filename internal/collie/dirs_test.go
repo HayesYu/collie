@@ -469,7 +469,12 @@ const autoHeadMatch = html.match(/<section class="view" id="v-auto"[\s\S]*?<head
 assert.ok(autoHeadMatch, "v-auto header must exist");
 assert.doesNotMatch(autoHeadMatch[1], /Always-on/, "v-auto header must drop verbose Always-on subtitle");
 assert.match(html, /<dialog class="sheet tm-sheet" id="timer-modal" closedby="any" aria-labelledby="tm-modal-title">/, "timer modal must use native dialog with closedby=any");
-assert.match(html, /id="nav-prefs-mobile"/, "sidebar header must provide mobile prefs icon");
+assert.doesNotMatch(html, /id="nav-prefs-mobile"/, "sidebar header must keep only + on mobile; prefs gear stays in side-foot");
+const sideHeadMatch = html.match(/<header class="side-head">([\s\S]*?)<\/header>/);
+assert.ok(sideHeadMatch, "side-head must exist");
+assert.match(sideHeadMatch[1], /id="new-btn"/, "side-head must keep #new-btn");
+assert.doesNotMatch(sideHeadMatch[1], /href="#\/prefs"/, "side-head must not duplicate prefs gear");
+assert.doesNotMatch(css, /\.side-foot\s+\.side-prefs-btn\s*\{\s*display:\s*none;/, "mobile side-foot must keep prefs gear visible");
 assert.doesNotMatch(appJs, /class="set-top-meta"/, "settings must not reserve static top auto-save row");
 assert.match(appJs, /id="settings-save-state"[^>]*hidden/, "settings save indicator must be hidden when idle");
 assert.match(appJs, /data-act="timer-open"/, "timers tab must render compact + 新建定时 button");

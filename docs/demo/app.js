@@ -162,6 +162,7 @@
   }
   function openPick(sel) {
     closePick();
+    closeDirPick(false);
     pickOpen = sel;
     // A modal <dialog> sits in the top layer, above any z-index: the menu has
     // to live inside it to show.
@@ -183,15 +184,31 @@
     if (sheet) {
       pickPop.style.cssText = "";
     } else {
+      pickPop.style.cssText = "";
       const r = sel._pick.getBoundingClientRect();
+      const vv = window.visualViewport;
+      const vh = vv ? vv.height : innerHeight;
+      const vtop = vv ? vv.offsetTop : 0;
       const rich = [...sel.options].some((o) => o.dataset.sub);
-      pickPop.style.minWidth = Math.max(r.width, rich ? 180 : 108) + "px";
-      const w = pickPop.offsetWidth, h = pickPop.offsetHeight;
+      const maxW = Math.min(360, innerWidth - 16);
+      pickPop.style.minWidth = Math.min(Math.max(r.width, rich ? 200 : 124), maxW) + "px";
+      pickPop.style.maxWidth = maxW + "px";
+      const below = Math.max(0, vh - (r.bottom - vtop) - 10);
+      const above = Math.max(0, (r.top - vtop) - 10);
+      const rawH = Math.min(pickPop.scrollHeight + 10, 380);
+      const openBelow = below >= Math.min(rawH, 220) + 6 || below >= above;
+      const avail = Math.max(120, Math.min(380, (openBelow ? below : above) - 6));
+      pickPop.style.maxHeight = avail + "px";
+      const w = pickPop.offsetWidth, h = Math.min(pickPop.offsetHeight, avail);
       const left = Math.min(Math.max(8, r.left), innerWidth - w - 8);
-      const below = innerHeight - r.bottom - 8;
-      const top = below >= h + 6 || below > r.top ? r.bottom + 6 : r.top - h - 6;
       pickPop.style.left = left + "px";
-      pickPop.style.top = Math.max(8, top) + "px";
+      if (openBelow) {
+        pickPop.style.top = Math.round(r.bottom + 6) + "px";
+        pickPop.style.bottom = "auto";
+      } else {
+        pickPop.style.top = Math.max(8, Math.round(r.top - h - 6)) + "px";
+        pickPop.style.bottom = "auto";
+      }
     }
     ($(".po.on", pickPop) || $(".po", pickPop))?.focus({ preventScroll: true });
     $(".po.on", pickPop)?.scrollIntoView({ block: "nearest" });
@@ -218,10 +235,20 @@
   });
   pickPop.addEventListener("keydown", (e) => {
     const items = $$(".po:not([disabled])", pickPop);
+    if (!items.length) {
+      if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closePick(true); }
+      return;
+    }
     const i = items.indexOf(document.activeElement);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      items[0]?.focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      items[items.length - 1]?.focus();
     } else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closePick(true); }
   });
   pickBack.addEventListener("click", () => closePick());
@@ -242,6 +269,462 @@
     }
   }).observe(document.body, { childList: true, subtree: true });
   $$("select").forEach(enhance);
+
+  // ───────────────────────────── directory picker (unified pick + free typing)
+  const DIR_FOLDER_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a2 2 0 0 1 2-2h4.2l2 2h6.8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>';
+  const DIR_CHEV_SVG = '<svg class="dp-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6.5L15 12l-5.5 5.5"/></svg>';
+  const dirBack = document.createElement("div");
+  dirBack.className = "dir-back"; dirBack.hidden = true;
+  const dirPop = document.createElement("div");
+  dirPop.className = "dir-pop"; dirPop.id = "dir-pop"; dirPop.hidden = true;
+  dirPop.setAttribute("role", "dialog");
+  dirPop.setAttribute("aria-label", "选择目录");
+  dirPop.innerHTML = `
+    <header class="dp-head">
+      <span class="dp-title">选择目录</span>
+      <span class="dp-mach" id="dp-mach"></span>
+      <span class="spacer"></span>
+      <button type="button" class="dp-close" id="dp-close" aria-label="关闭目录选择器" title="关闭 (Esc)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="dp-sheet-input">
+      <input type="text" id="dp-sheet-input" class="mono" placeholder="~ 或输入任意目录路径" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="dp-sec" id="dp-recent-sec" hidden>
+      <div class="dp-sec-h">常用 / 最近</div>
+      <div class="dp-recent" id="dp-recent"></div>
+    </div>
+    <div class="dp-nav">
+      <button type="button" class="dp-nav-btn" id="dp-up" title="上一级" aria-label="上一级">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6M7 11l5-5 5 5"/></svg>
+      </button>
+      <div class="dp-crumbs" id="dp-crumbs" aria-label="当前路径"></div>
+      <button type="button" class="dp-nav-btn" id="dp-hidden-btn" title="显示以 . 开头的隐藏目录" aria-pressed="false">.*</button>
+    </div>
+    <div class="dp-body" id="dp-body"></div>
+    <div class="dp-note" id="dp-note" hidden></div>
+    <footer class="dp-foot">
+      <span class="dp-cur" id="dp-cur">~</span>
+      <button type="button" class="btn primary small dp-use" id="dp-use">选定当前目录</button>
+    </footer>`;
+  document.body.append(dirBack, dirPop);
+
+  const dirRecentKey = (machine) => "recentDirs" + (machine ? ":" + machine : "");
+  function recordRecentDir(machine, dir) {
+    const v = String(dir || "").trim();
+    if (!v) return;
+    const key = dirRecentKey(machine);
+    store.set(key, [v, ...store.get(key, []).filter((d) => d !== v)].slice(0, 10));
+  }
+  function tildeForMachine(p, machine, homeHint) {
+    const s = String(p || "").trim();
+    if (!s) return "~";
+    const h = homeHint || (state.machines || []).find((m) => m.id === (machine || ""))?.home || "";
+    if (h) {
+      const ch = h.replace(/\/+$/, "");
+      if (s === ch) return "~";
+      if (s.startsWith(ch + "/")) return "~" + s.slice(ch.length);
+    }
+    return tilde(s);
+  }
+  function joinDirPath(base, name) {
+    const b = String(base || "").trim();
+    if (!b || b === "/") return "/" + name;
+    return b.replace(/\/+$/, "") + "/" + name;
+  }
+  function buildDirBreadcrumbs(displayPath, fullPath, home) {
+    const disp = String(displayPath || fullPath || "~").trim() || "~";
+    const out = [];
+    if (disp === "~" || disp.startsWith("~/")) {
+      out.push({ label: "~", path: "~" });
+      const rest = disp === "~" ? [] : disp.slice(2).split("/").filter(Boolean);
+      let acc = "~";
+      for (const seg of rest) {
+        acc += "/" + seg;
+        out.push({ label: seg, path: acc });
+      }
+      return out;
+    }
+    if (disp.startsWith("/")) {
+      out.push({ label: "/", path: "/" });
+      const parts = disp.slice(1).split("/").filter(Boolean);
+      let acc = "";
+      for (const seg of parts) {
+        acc += "/" + seg;
+        out.push({ label: seg, path: acc });
+      }
+      return out;
+    }
+    out.push({ label: disp, path: disp });
+    return out;
+  }
+
+  let dirCtx = null; // { input, btn, wrap, opts, machine, showHidden, reqSeq, data, hiIndex, debounce, loadTimer }
+  const dpSheetInput = $("#dp-sheet-input", dirPop);
+
+  function positionDirPop() {
+    if (!dirCtx || dirPop.hidden) return;
+    const sheetMode = narrow();
+    dirPop.classList.toggle("sheet", sheetMode);
+    dirBack.hidden = !sheetMode;
+    if (sheetMode) {
+      dirPop.style.cssText = "";
+      return;
+    }
+    const anchor = dirCtx.wrap.getBoundingClientRect();
+    if (!anchor.width || anchor.bottom < 0 || anchor.top > innerHeight) {
+      closeDirPick(false);
+      return;
+    }
+    const vv = window.visualViewport;
+    const vh = vv ? vv.height : innerHeight;
+    const vtop = vv ? vv.offsetTop : 0;
+    const margin = 10;
+    const w = Math.min(Math.max(anchor.width, 360), Math.min(480, innerWidth - 16));
+    const left = Math.min(Math.max(8, anchor.left), innerWidth - w - 8);
+    const below = vh - (anchor.bottom - vtop) - margin;
+    const above = (anchor.top - vtop) - margin;
+    const openBelow = below >= 260 || below >= above;
+    const avail = Math.max(180, Math.min(440, (openBelow ? below : above) - 6));
+    dirPop.style.width = w + "px";
+    dirPop.style.left = left + "px";
+    dirPop.style.maxHeight = avail + "px";
+    if (openBelow) {
+      dirPop.style.top = Math.round(anchor.bottom + 6) + "px";
+      dirPop.style.bottom = "auto";
+    } else {
+      dirPop.style.top = "auto";
+      dirPop.style.bottom = Math.round(innerHeight - anchor.top + 6) + "px";
+    }
+  }
+
+  function mergeDirShortcuts(machine, data) {
+    const out = [];
+    const seen = new Set();
+    const home = data?.home || (state.machines || []).find((m) => m.id === (machine || ""))?.home || "";
+    const push = (rawPath, display, label) => {
+      const d = (display || tildeForMachine(rawPath, machine, home)).replace(/\/+$/, "") || "/";
+      if (!d || seen.has(d)) return;
+      seen.add(d);
+      out.push({ display: d, path: rawPath || d, label: label || "" });
+    };
+    for (const sc of data?.recent || []) push(sc.path, sc.display, sc.label);
+    // Merge live agents/shells cwds on the same machine so active project dirs appear right away.
+    for (const a of [...(state.agents || []), ...(state.shells || [])]) {
+      if ((a.machine || "") === (machine || "") && a.cwd) push(a.cwd, tildeForMachine(a.cwd, machine, home), "");
+    }
+    for (const d of store.get(dirRecentKey(machine), [])) push(d, tildeForMachine(d, machine, home), "");
+    if (!out.length) push("~", "~", "主目录");
+    return out.slice(0, 10);
+  }
+
+  function renderDirPop() {
+    if (!dirCtx) return;
+    const machine = dirCtx.machine || "";
+    const mInfo = (state.machines || []).find((m) => m.id === machine);
+    const mOnline = dirCtx.data ? !dirCtx.data.offline : (mInfo ? (mInfo.local ? state.ok !== false : !!mInfo.online) : true);
+    const mLabel = mInfo ? (mInfo.local ? `${mInfo.name}（hub）` : mInfo.name) : (machine || "本机");
+    $("#dp-mach", dirPop).innerHTML = `<span class="dot ${mOnline ? "online" : "offline"}"></span><span>${esc(mLabel)}</span>`;
+
+    const data = dirCtx.data;
+    const shortcuts = mergeDirShortcuts(machine, data);
+    const curVal = dirCtx.input.value.trim();
+    const curDisp = tildeForMachine(curVal || "~", machine, data?.home);
+    const recSec = $("#dp-recent-sec", dirPop);
+    recSec.hidden = !shortcuts.length;
+    $("#dp-recent", dirPop).innerHTML = shortcuts.map((sc) =>
+      `<button type="button" class="dp-chip${sc.display === curDisp ? " on" : ""}" data-dp-pick="${esc(sc.display)}" title="${esc(sc.display)}"><span class="dp-chip-t">${esc(sc.display)}</span>${sc.label ? `<span class="dp-chip-tag">${esc(sc.label)}</span>` : ""}</button>`
+    ).join("");
+
+    const browseDisp = data?.browse_display || data?.display || curDisp || "~";
+    const crumbs = buildDirBreadcrumbs(browseDisp, data?.browse_path || data?.path || "", data?.home || "");
+    const crumbsEl = $("#dp-crumbs", dirPop);
+    crumbsEl.innerHTML = crumbs.map((c, i) =>
+      `${i > 0 ? '<span class="dp-sep" aria-hidden="true">/</span>' : ""}<button type="button" class="dp-crumb${i === crumbs.length - 1 ? " cur" : ""}" data-dp-go="${esc(c.path)}">${esc(c.label)}</button>`
+    ).join("");
+    crumbsEl.scrollLeft = crumbsEl.scrollWidth;
+
+    const upBtn = $("#dp-up", dirPop);
+    const upTarget = data?.parent_display || data?.parent || "";
+    upBtn.disabled = !upTarget || !!data?.offline;
+    upBtn.dataset.dpGo = upTarget;
+
+    const hidBtn = $("#dp-hidden-btn", dirPop);
+    const effHidden = !!(dirCtx.showHidden || data?.hidden);
+    hidBtn.classList.toggle("on", effHidden);
+    hidBtn.setAttribute("aria-pressed", String(effHidden));
+
+    const body = $("#dp-body", dirPop);
+    if (dirCtx.loading && !data) {
+      body.innerHTML = '<div class="dp-empty">正在读取目录…</div>';
+    } else if (data?.offline) {
+      body.innerHTML = '<div class="dp-empty">这台电脑当前离线，可点上方常用目录或直接手动输入路径</div>';
+    } else if (data && data.dirs.length) {
+      const hi = dirCtx.hiIndex;
+      body.innerHTML = `<ul class="dp-list" role="listbox" aria-label="子目录">${data.dirs.map((d, i) =>
+        `<li><button type="button" class="dp-item${i === hi ? " hi" : ""}" role="option" aria-selected="${i === hi}" data-dp-enter="${esc(d)}"><span class="dp-ico">${DIR_FOLDER_SVG}</span><span class="dp-name">${esc(d)}</span>${DIR_CHEV_SVG}</button></li>`
+      ).join("")}</ul>`;
+    } else if (data) {
+      body.innerHTML = `<div class="dp-empty">${data.prefix ? `「${esc(data.prefix)}」下没有匹配的子目录，可直接手输使用` : "当前目录下没有子目录"}</div>`;
+    } else {
+      body.innerHTML = '<div class="dp-empty">可直接输入任意目录路径</div>';
+    }
+
+    const noteEl = $("#dp-note", dirPop);
+    const noteText = data?.note || "";
+    noteEl.hidden = !noteText;
+    noteEl.className = "dp-note" + (data?.offline ? " warn" : "");
+    noteEl.textContent = noteText;
+
+    // Footer: pick the browsed directory, or the user's custom typed path if non-existent.
+    const commitPath = data && !data.exists && curVal ? curVal : (data?.browse_display || curVal || "~");
+    const useBtn = $("#dp-use", dirPop);
+    $("#dp-cur", dirPop).textContent = commitPath;
+    $("#dp-cur", dirPop).title = commitPath;
+    useBtn.dataset.dpCommit = commitPath;
+    useBtn.textContent = data && !data.exists && curVal ? "使用此路径" : "选定当前目录";
+    positionDirPop();
+  }
+
+  async function loadDirPop(targetPath, opts = {}) {
+    if (!dirCtx) return;
+    const ctx = dirCtx;
+    const seq = ++ctx.reqSeq;
+    const p = targetPath !== undefined ? targetPath : ctx.input.value;
+    ctx.hiIndex = -1;
+    clearTimeout(ctx.loadTimer);
+    ctx.loadTimer = setTimeout(() => {
+      if (dirCtx === ctx && ctx.reqSeq === seq && !ctx.data) {
+        ctx.loading = true;
+        renderDirPop();
+      }
+    }, 120);
+    const q = new URLSearchParams();
+    q.set("path", p || "~");
+    if (ctx.machine) q.set("machine", ctx.machine);
+    if (ctx.showHidden) q.set("hidden", "1");
+    try {
+      const r = await api("/api/dirs?" + q.toString());
+      if (dirCtx !== ctx || ctx.reqSeq !== seq) return;
+      clearTimeout(ctx.loadTimer);
+      ctx.loading = false;
+      ctx.data = {
+        ...r,
+        dirs: Array.isArray(r.dirs) ? r.dirs : [],
+        recent: Array.isArray(r.recent) ? r.recent : [],
+      };
+      if (opts.syncInput && ctx.data.browse_display) {
+        ctx.input.value = ctx.data.browse_display;
+        if (!dirPop.hidden && dirPop.classList.contains("sheet")) dpSheetInput.value = ctx.data.browse_display;
+      }
+      renderDirPop();
+    } catch {
+      if (dirCtx !== ctx || ctx.reqSeq !== seq) return;
+      clearTimeout(ctx.loadTimer);
+      ctx.loading = false;
+      ctx.data = {
+        path: p || "~", display: p || "~", browse_path: p || "~", browse_display: p || "~",
+        exists: false, offline: true, dirs: [], recent: [],
+        note: "无法读取目录列表，仍可直接手动输入路径",
+      };
+      renderDirPop();
+    }
+  }
+
+  function commitDirChoice(pathVal) {
+    if (!dirCtx) return;
+    const ctx = dirCtx;
+    const v = String(pathVal || "").trim() || "~";
+    ctx.input.value = v;
+    recordRecentDir(ctx.machine, v);
+    closeDirPick(false);
+    ctx.input.dispatchEvent(new Event("input", { bubbles: true }));
+    ctx.input.dispatchEvent(new Event("change", { bubbles: true }));
+    ctx.opts.onPick?.(v);
+  }
+
+  function openDirPick(input, { focusSheet = false } = {}) {
+    const ctrl = input?._dir;
+    if (!ctrl) return;
+    closePick();
+    if (dirCtx && dirCtx.input !== input) closeDirPick(false);
+    const host = input.closest("dialog[open]") || document.body;
+    if (dirPop.parentNode !== host) host.append(dirBack, dirPop);
+    const machine = ctrl.opts.getMachine?.() || "";
+    const changedMachine = !dirCtx || dirCtx.machine !== machine;
+    if (!dirCtx) {
+      dirCtx = {
+        input, btn: ctrl.btn, wrap: ctrl.wrap, opts: ctrl.opts,
+        machine, showHidden: false, reqSeq: 0, data: null, loading: false, hiIndex: -1, debounce: null, loadTimer: null,
+      };
+    } else {
+      dirCtx.machine = machine;
+      if (changedMachine) { dirCtx.data = null; dirCtx.showHidden = false; }
+    }
+    dirPop.hidden = false;
+    ctrl.btn.setAttribute("aria-expanded", "true");
+    dpSheetInput.value = input.value;
+    renderDirPop();
+    loadDirPop(input.value);
+    if (narrow()) {
+      if (focusSheet) setTimeout(() => { dpSheetInput.focus(); dpSheetInput.setSelectionRange?.(dpSheetInput.value.length, dpSheetInput.value.length); }, 20);
+      else input.blur?.();
+    }
+  }
+
+  function closeDirPick(refocus = false) {
+    if (!dirCtx) return;
+    const ctx = dirCtx;
+    clearTimeout(ctx.debounce);
+    clearTimeout(ctx.loadTimer);
+    ctx.btn.setAttribute("aria-expanded", "false");
+    dirCtx = null;
+    dirPop.hidden = true;
+    dirBack.hidden = true;
+    if (refocus) ctx.input.focus({ preventScroll: true });
+  }
+
+  dirPop.addEventListener("mousedown", (e) => {
+    // Keep desktop input focus stable while clicking navigation buttons inside the dropdown.
+    if (!dirPop.classList.contains("sheet") && !e.target.closest("input")) e.preventDefault();
+  });
+  dirPop.addEventListener("click", (e) => {
+    if (!dirCtx) return;
+    if (e.target.closest("#dp-close")) { closeDirPick(!narrow()); return; }
+    const pick = e.target.closest("[data-dp-pick]");
+    if (pick) { commitDirChoice(pick.dataset.dpPick); return; }
+    const use = e.target.closest("#dp-use");
+    if (use) { commitDirChoice(use.dataset.dpCommit); return; }
+    if (e.target.closest("#dp-hidden-btn")) {
+      dirCtx.showHidden = !dirCtx.showHidden;
+      const cur = dirCtx.data?.browse_display || dirCtx.input.value || "~";
+      loadDirPop(cur);
+      return;
+    }
+    const go = e.target.closest("[data-dp-go]");
+    if (go && !go.disabled && go.dataset.dpGo) {
+      loadDirPop(go.dataset.dpGo, { syncInput: true });
+      return;
+    }
+    const enter = e.target.closest("[data-dp-enter]");
+    if (enter) {
+      const base = dirCtx.data?.browse_display || dirCtx.input.value || "~";
+      const next = joinDirPath(base, enter.dataset.dpEnter);
+      loadDirPop(next, { syncInput: true });
+    }
+  });
+  dirBack.addEventListener("click", () => closeDirPick(false));
+  dpSheetInput.addEventListener("input", () => {
+    if (!dirCtx) return;
+    dirCtx.input.value = dpSheetInput.value;
+    dirCtx.input.dispatchEvent(new Event("input", { bubbles: true }));
+    clearTimeout(dirCtx.debounce);
+    dirCtx.debounce = setTimeout(() => loadDirPop(dpSheetInput.value), 180);
+  });
+  dpSheetInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeDirPick(false); return; }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (e.isComposing || e.keyCode === 229) return;
+      commitDirChoice(dpSheetInput.value);
+    }
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (dirCtx && !dirPop.contains(e.target) && !dirCtx.wrap.contains(e.target)) closeDirPick(false);
+  });
+  addEventListener("resize", () => positionDirPop());
+  window.visualViewport?.addEventListener("resize", () => positionDirPop());
+  window.visualViewport?.addEventListener("scroll", () => positionDirPop());
+  document.addEventListener("scroll", (e) => {
+    if (!dirCtx || dirPop.hidden || dirPop.classList.contains("sheet")) return;
+    if (dirPop.contains(e.target)) return;
+    positionDirPop();
+  }, true);
+
+  function enhanceDirInput(input, opts = {}) {
+    if (!input || !input.parentNode) return null;
+    if (input._dir) { input._dir.opts = opts; return input._dir; }
+    const wrap = document.createElement("span");
+    wrap.className = "dir-field";
+    input.parentNode.insertBefore(wrap, input);
+    wrap.append(input);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "dir-field-btn";
+    btn.title = "浏览并选择目录";
+    btn.setAttribute("aria-label", "浏览并选择目录");
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML = DIR_FOLDER_SVG;
+    wrap.append(btn);
+
+    const ctrl = {
+      input, btn, wrap, opts,
+      open: (focusSheet = false) => openDirPick(input, { focusSheet }),
+      close: () => { if (dirCtx?.input === input) closeDirPick(false); },
+      refresh: () => {
+        if (dirCtx?.input !== input) return;
+        const m = ctrl.opts.getMachine?.() || "";
+        if (dirCtx.machine !== m) {
+          dirCtx.machine = m;
+          dirCtx.data = null;
+          dirCtx.showHidden = false;
+        }
+        dpSheetInput.value = input.value;
+        loadDirPop(input.value);
+      },
+    };
+    input._dir = ctrl;
+
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (dirCtx?.input === input) closeDirPick(!narrow());
+      else openDirPick(input, { focusSheet: false });
+    });
+    input.addEventListener("focus", () => {
+      if (!narrow()) openDirPick(input, { focusSheet: false });
+    });
+    input.addEventListener("click", () => {
+      if (narrow()) openDirPick(input, { focusSheet: true });
+      else if (dirCtx?.input !== input) openDirPick(input, { focusSheet: false });
+    });
+    input.addEventListener("input", () => {
+      if (dirCtx?.input !== input) return;
+      if (dirPop.classList.contains("sheet")) dpSheetInput.value = input.value;
+      clearTimeout(dirCtx.debounce);
+      dirCtx.debounce = setTimeout(() => loadDirPop(input.value), 180);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (dirCtx?.input !== input) { openDirPick(input, { focusSheet: false }); return; }
+        const n = dirCtx.data?.dirs?.length || 0;
+        if (!n) return;
+        dirCtx.hiIndex = (dirCtx.hiIndex + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+        renderDirPop();
+        $(".dp-item.hi", dirPop)?.scrollIntoView({ block: "nearest" });
+        return;
+      }
+      if (e.key === "Escape" && dirCtx?.input === input) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDirPick(true);
+        return;
+      }
+      if (e.key === "Enter" && dirCtx?.input === input) {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (dirCtx.hiIndex >= 0 && dirCtx.data?.dirs?.[dirCtx.hiIndex]) {
+          e.preventDefault();
+          const base = dirCtx.data.browse_display || input.value || "~";
+          loadDirPop(joinDirPath(base, dirCtx.data.dirs[dirCtx.hiIndex]), { syncInput: true });
+          return;
+        }
+        closeDirPick(false);
+      }
+    });
+    return ctrl;
+  }
 
 
   function toast(msg, kind = "") {
@@ -285,7 +768,11 @@
       boot();
     } catch (err) { $("#login-error").textContent = /^[A-Z2-7]{8}$/i.test(v) ? err.message : "令牌不对"; }
   });
-  $("#logout").addEventListener("click", async () => { await fetch("/api/logout", { method: "POST" }); location.reload(); });
+  async function doLogout() {
+    if (!confirm("确定退出当前浏览器的登录状态吗？")) return;
+    await fetch("/api/logout", { method: "POST" });
+    location.reload();
+  }
 
   // ───────────────────────────── live state
   let state = { ok: false, agents: [], shells: [] };
@@ -357,6 +844,7 @@
     ev.addEventListener("super", (e) => {
       sup = normSup(JSON.parse(e.data));
       renderSide();
+      renderRouterPendingBars();
       if (view === "collie") renderSuper();
     });
     ev.addEventListener("state", (e) => {
@@ -516,7 +1004,7 @@
     // The next time Collie set itself to look again, under 自动化 where its
     // timers are: "明天 09:00 再看：复查 paper_df…".
     const f = sup.follow;
-    $("#nav-auto-sub").textContent = f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "收件箱 · 定时 · 接入";
+    $("#nav-auto-sub").textContent = f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "记忆 · 定时 · 收件箱";
     $("#nav-auto-sub").title = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}（点开看进行中的任务）` : "";
     $("#nav-auto-sub").classList.toggle("follow", !!f?.next);
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
@@ -697,6 +1185,8 @@
   });
 
   function route() {
+    closePick();
+    closeDirPick(false);
     const prevView = view, prevId = view === "ext" ? extCur : current, prevIdx = navCur;
     const wasExistingIdx = typeof history.state?.collieIdx === "number";
     syncHistoryIndex();
@@ -782,9 +1272,25 @@
   // ───────────────────────────── Collie (super-agent) view
   let superSig = "";
   // Which model Collie itself runs with, next to its status.
+  function isRouterBusy(r = sup.router) {
+    if (!r) return false;
+    return ["working", "starting", "dreaming", "blocked"].includes(r.status) || !!r.handover || !!r.dreaming;
+  }
+  function renderRouterPendingBars() {
+    const r = sup.router || {};
+    const show = !!(r.alive && r.pending);
+    const busy = isRouterBusy(r);
+    const text = busy ? "Collie 启动设置已更新（当前正在忙碌，重启后生效）" : "Collie 启动设置已更新 · 重启后生效";
+    const html = show ? `<span class="dot blocked" aria-hidden="true"></span><span class="rp-text">${esc(text)}</span><button type="button" class="rp-btn" data-act="router-restart-apply">点此重启生效</button>` : "";
+    for (const el of [$("#collie-pending-bar"), $("#settings-pending-bar")]) {
+      if (!el) continue;
+      el.hidden = !show;
+      if (el._html !== html) { el._html = html; el.innerHTML = html; }
+    }
+  }
   async function renderRouterModel(r) {
     const el = $("#router-model");
-    const key = [r.kind, r.model, r.effort, r.pending].join("|");
+    const key = [r.kind, r.model, r.effort].join("|");
     if (el._key === key) return;
     el._key = key;
     let model = r.model;
@@ -793,7 +1299,7 @@
     const parts = [];
     if (model) parts.push(esc(model.split("/").pop()) + (r.model ? "" : "（默认）"));
     if (r.effort) parts.push("思考 " + esc(EFFORT_LABEL[r.effort] || r.effort));
-    el.innerHTML = parts.join(" · ") + (r.pending ? ` <button type="button" class="pending" data-act="router-restart" title="Collie 的模型设置改过了，点这里重启 Collie">重启后生效</button>` : "");
+    el.innerHTML = parts.join(" · ");
     el.title = `Collie 自己用的模型${model ? "：" + model : ""}${r.effort ? "，思考强度 " + r.effort : ""}（自动化 → 设置 → Collie 自己）`;
   }
   // A worker's comings and goings: its spawn line shows where it stands, and
@@ -1405,6 +1911,7 @@
     cx.classList.toggle("warn", !!r.handover || (r.rotate_at > 0 && r.context >= r.rotate_at - 10));
     cx.title = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
     renderRouterModel(r);
+    renderRouterPendingBars();
     $$('[data-act="pause"]').forEach((b) => b.textContent = sup.paused ? "恢复投递" : "暂停投递");
 
     const active = sup.workers.filter((w) => !w.ended);
@@ -1929,13 +2436,18 @@
   });
 
   // ───────────────────────────── automation view
-  let autoTab = store.get("autoTab", "inbox");
+  function normalizeAutoTab(t) {
+    if (t === "hooks" || t === "threads") return "inbox";
+    return ["memory", "timers", "inbox", "settings"].includes(t) ? t : "memory";
+  }
+  let autoTab = normalizeAutoTab(store.get("autoTab", "memory"));
+  let inboxThread = "";
   let autoTimer;
   $("#auto-tabs").addEventListener("click", (e) => {
     const t = e.target.closest("button")?.dataset.tab;
     if (!t) return;
     if (view === "auto") captureViewScroll("auto", null, navCur);
-    autoTab = t; store.set("autoTab", t);
+    autoTab = normalizeAutoTab(t); store.set("autoTab", autoTab);
     const saved = scrollByRoute.get("auto:" + autoTab) || null;
     if (!saved) { markProgrammaticScroll(); $("#auto-body").scrollTop = 0; }
     openAuto(saved);
@@ -1951,13 +2463,15 @@
   });
 
   function openAuto(restore = null) {
+    autoTab = normalizeAutoTab(autoTab);
+    store.set("autoTab", autoTab);
     memEditing = false;
     $("#auto-body")._memSig = "";
     $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
     if (restore) restoreSimpleScroll($("#auto-body"), restore);
     clearInterval(autoTimer);
     loadAuto(restore);
-    if (autoTab === "inbox" || autoTab === "threads") autoTimer = setInterval(() => loadAuto(), 4000);
+    if (autoTab === "inbox") autoTimer = setInterval(() => loadAuto(), 4000);
     if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
   }
 
@@ -1969,10 +2483,15 @@
       else if (keepTop && !keepTop.atBottom) { markProgrammaticScroll(); body.scrollTop = keepTop.scrollTop; }
     };
     try {
-      if (autoTab === "inbox" || autoTab === "threads") {
+      if (autoTab === "inbox") {
+        // Avoid tearing down the inbox DOM while the user is interacting with its dropdown.
+        if (pickOpen && body.contains(pickOpen)) return;
         const r = await api("/api/super/triggers");
-        if (view !== "auto") return;
-        body.innerHTML = autoTab === "inbox" ? inboxHTML(r.triggers || []) : threadsHTML(r.threads || []);
+        if (view !== "auto" || autoTab !== "inbox") return;
+        if (pickOpen && body.contains(pickOpen)) return;
+        const subsOpen = !!body.querySelector(".inbox-subs-fold[open]");
+        body.innerHTML = inboxHTML(r.triggers || [], r.threads || []);
+        if (subsOpen) { const d = body.querySelector(".inbox-subs-fold"); if (d) d.open = true; }
         applyAfter();
       } else if (autoTab === "memory") {
         const r = await api("/api/super/memory");
@@ -1998,9 +2517,10 @@
         applyAfter();
       } else {
         const r = await api("/api/super/settings");
-        body.innerHTML = autoTab === "hooks" ? hooksHTML(r) : settingsHTML(r);
+        if (view !== "auto" || autoTab !== "settings") return;
+        body.innerHTML = settingsHTML(r);
         applyAfter();
-        if (autoTab !== "hooks") api("/api/super/lark?fresh").then((l) => {
+        api("/api/super/lark?fresh").then((l) => {
           const el = $("#lark-who");
           if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
         }).catch(() => {});
@@ -2082,21 +2602,47 @@
         <div class="card">${done.map((f) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true })).join("")}</div></details>` : ""}`;
   }
 
-  function inboxHTML(ts) {
+  function inboxHTML(ts, ths = []) {
+    const multiThread = ths.length > 1;
+    if (!multiThread || (inboxThread && !ths.some((th) => th.id === inboxThread))) inboxThread = "";
+    const shown = inboxThread ? ts.filter((t) => t.thread === inboxThread) : ts;
+    const activeWorkers = (sup.workers || []).filter((w) => !w.ended).map((w) => w.name);
+    let threadBar = "";
+    if (multiThread) {
+      const selTh = inboxThread ? ths.find((th) => th.id === inboxThread) : null;
+      const subsChips = (th) => {
+        if (!th) return "";
+        if (th.id === "chat:main") return `<span class="muted">→ Collie（主线程）</span>`;
+        const subs = th.subscribers || [];
+        const pills = subs.length
+          ? subs.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")
+          : `<span class="muted">→ Collie</span>`;
+        const addOpts = activeWorkers.filter((w) => !subs.includes(w));
+        const adder = addOpts.length
+          ? `<select id="inbox-sub-add" data-thread="${esc(th.id)}" data-pick="compact" data-title="添加订阅 agent"><option value="">+ 订阅 agent</option>${addOpts.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select>`
+          : "";
+        return `<div class="inbox-subs"><span>订阅：</span>${pills}${adder}</div>`;
+      };
+      const allSubsFold = !selTh ? `<details class="inbox-subs-fold"><summary>线程与订阅管理（${ths.length} 条线程）</summary>
+        <div class="card"><ul class="rows">${ths.map((th) => `<li class="row">
+          <span class="badge">${th.triggers?.length || 0}</span>
+          <div><div class="meta"><b>${esc(th.id)}</b>${th.id === "chat:main" ? "<span>→ Collie（主线程）</span>" : th.subscribers?.length ? `<span class="inbox-subs">${th.subscribers.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")}</span>` : "<span>→ Collie</span>"}</div></div>
+          <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div></details>` : "";
+      threadBar = `<div class="inbox-bar">
+        <label class="inbox-filter">线程<select id="inbox-thread-filter" data-pick="compact" data-title="按线程筛选">
+          <option value="" ${!inboxThread ? "selected" : ""}>全部线程（${ths.length}）</option>
+          ${ths.map((th) => `<option value="${esc(th.id)}" data-sub="${esc((th.subscribers?.length ? "订阅：" + th.subscribers.join(", ") : "→ Collie") + " · " + (th.triggers?.length || 0) + " 条")}" ${inboxThread === th.id ? "selected" : ""}>${esc(th.id)}</option>`).join("")}
+        </select></label>
+        ${selTh ? subsChips(selTh) : ""}
+      </div>${allSubsFold}`;
+    }
     return `<p class="panel-intro">你的消息、外部事件、定时器，以及派出的 agent 完成或卡住，都会进这里。先按来源策略过滤；订阅了线程的 agent 直接收到，其余交给 Collie 判断。对方正忙时事件会先攒着，空闲后一次送过去。</p>
-      <div class="card"><ul class="rows">${ts.length ? ts.map((t) => `<li class="row">
+      ${threadBar}
+      <div class="card"><ul class="rows">${shown.length ? shown.map((t) => `<li class="row">
         <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
         <div><div class="meta"><b>#${esc(t.id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
         <div class="text">${esc(t.text)}</div></div>
-        <span class="right">${when(t.at)}</span></li>`).join("") : `<li class="empty-row">收件箱是空的</li>`}</ul></div>`;
-  }
-
-  function threadsHTML(ths) {
-    return `<p class="panel-intro">同一个对话、Issue/PR 或群聊话题里的连续事件构成一条线程。Collie 派出的 agent 订阅线程后，后续事件直达它，不再经过 Collie。chat:main 始终由 Collie 自己处理。</p>
-      <div class="card"><ul class="rows">${ths.length ? ths.map((th) => `<li class="row">
-        <span class="badge">${th.triggers?.length || 0}</span>
-        <div><div class="meta"><b>${esc(th.id)}</b>${th.subscribers?.length ? `<span>订阅：${esc(th.subscribers.join(", "))}</span>` : "<span>→ Collie</span>"}</div></div>
-        <span class="right">${when(th.last_at)}</span></li>`).join("") : `<li class="empty-row">还没有线程</li>`}</ul></div>`;
+        <span class="right">${when(t.at)}</span></li>`).join("") : `<li class="empty-row">${inboxThread ? "这条线程里还没有事件" : "收件箱是空的"}</li>`}</ul></div>`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -2222,28 +2768,6 @@
   $("#auto-body").addEventListener("input", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
   $("#auto-body").addEventListener("change", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
 
-  function hooksHTML(r) {
-    const base = location.origin + "/hooks/";
-    const url = (src) => `${base}${src}?key=${r.hook_key}`;
-    return `<p class="panel-intro">把外部事件接进来。Webhook 立即返回 202，过滤和路由在收件箱里异步完成。未经请求的事件默认是 <b>candidate</b>：只有 Collie 的记忆或你的规则覆盖到时才会行动，否则保持安静。</p>
-      <div class="card"><div class="card-h">Webhook 地址</div><div class="form">
-        <label>GitHub <small>Settings → Webhooks，Content type 选 application/json</small><div class="code"><span>${esc(url("github"))}</span><button class="icon-btn" data-copy="${esc(url("github"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
-        <label>飞书 / Lark <small>事件订阅的请求地址，已支持 url_verification</small><div class="code"><span>${esc(url("feishu"))}</span><button class="icon-btn" data-copy="${esc(url("feishu"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
-        <label>通用 <small>POST JSON：{"text","thread","from","id"}，source 名可自取</small><div class="code"><span>curl -X POST '${esc(url("ci"))}' -H 'Content-Type: application/json' -d '{"thread":"build-42","text":"nightly build failed"}'</span></div></label>
-      </div></div>
-      <div class="card"><div class="card-h">来源策略（快路径）<button class="btn small" id="add-policy">添加</button></div>
-        <div id="policies">${(r.policies || []).map(policyRow).join("")}</div>
-        <div class="form"><div class="form-actions"><button class="btn primary small" id="save-policies">保存策略</button></div></div></div>`;
-  }
-
-  function policyRow(p = { source: "webhook:", action: "candidate", allow: [] }) {
-    return `<div class="policy">
-      <input data-f="source" class="mono" value="${esc(p.source)}" placeholder="webhook:github" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <select data-f="action" data-pick="compact">${["respond", "candidate", "ignore"].map((a) => `<option value="${a}" ${p.action === a ? "selected" : ""}>${{ respond: "直接响应", candidate: "候选（Collie 判断）", ignore: "忽略" }[a]}</option>`).join("")}</select>
-      <input data-f="allow" value="${esc((p.allow || []).join(", "))}" placeholder="白名单（可选，逗号分隔）" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <button type="button" class="icon-btn" data-del-policy title="删除"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
-  }
-
   // ───────────────────────────── settings: grouped by what they are about
   // Fills a model picker and its effort picker from what that agent offers.
   async function fillModels(form, who) {
@@ -2252,10 +2776,14 @@
     const machine = who === "worker" && form.worker_machine ? form.worker_machine.value : "";
     const seq = (modelSel._seq = (modelSel._seq || 0) + 1);
     const want = modelSel.dataset.value ?? modelSel.value;
+    modelSel.dataset.loading = "1";
+    modelSel.dataset.pendingValue = want || "";
     modelSel.innerHTML = `<option value="">读取中…</option>`;
     syncPick(modelSel);
     const info = await modelsFor(kindSel.value, machine);
     if (seq !== modelSel._seq) return;
+    delete modelSel.dataset.loading;
+    delete modelSel.dataset.pendingValue;
     const list = [...(info.models || [])];
     if (want && !list.some((m) => m.id === want)) list.unshift({ id: want });
     const sub = (m) => [m.label && m.label !== m.id ? m.id : "", m.note && m.note !== m.id && !(m.label && m.note.startsWith(m.label)) ? m.note : ""].filter(Boolean).join(" · ");
@@ -2291,11 +2819,113 @@
         syncPick(modelSel);
       }
       fillEffort();
+      form._autoSave?.flush();
+    };
+  }
+  let latestSettingsBase = null;
+  function createSettingsAutoSaver(form, initial) {
+    let base = { ...(initial || {}) };
+    let saving = false, queued = false, debounceTimer = null, statusTimer = null;
+    const statusEl = () => $("#settings-save-state", form);
+    const setStatus = (mode, text) => {
+      const el = statusEl();
+      if (!el) return;
+      clearTimeout(statusTimer);
+      el.className = "set-save-state" + (mode ? " " + mode : "");
+      el.textContent = text;
+      if (mode === "saved") {
+        statusTimer = setTimeout(() => {
+          if (el.classList.contains("saved")) {
+            el.className = "set-save-state";
+            el.textContent = "改动自动保存";
+          }
+        }, 2200);
+      }
+    };
+    const readModel = (sel, fallback) => {
+      if (!sel) return fallback || "";
+      if (sel.dataset.loading === "1") return sel.dataset.pendingValue ?? (fallback || "");
+      return sel.value === "__custom" ? "" : sel.value;
+    };
+    const readEffort = (sel, fallback) => {
+      if (!sel) return fallback || "";
+      if (sel.disabled) return "";
+      return sel.dataset.value ?? sel.value;
+    };
+    const readNum = (input, fallback, minVal) => {
+      const raw = input?.value?.trim();
+      if (raw === "" || raw == null) return fallback;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= minVal ? n : fallback;
+    };
+    const collect = () => ({
+      ...base,
+      router_kind: form.router_kind.value,
+      router_args: form.router_args.value.split(/\s+/).filter(Boolean),
+      router_model: readModel(form.router_model, base.router_model),
+      router_effort: readEffort(form.router_effort, base.router_effort),
+      worker_kind: form.worker_kind.value,
+      worker_cwd: form.worker_cwd.value.trim() || "~",
+      worker_model: readModel(form.worker_model, base.worker_model),
+      worker_effort: readEffort(form.worker_effort, base.worker_effort),
+      worker_machine: form.worker_machine ? form.worker_machine.value : (base.worker_machine || ""),
+      reply_chars: readNum(form.reply_chars, base.reply_chars || 200, 40),
+      stall_minutes: readNum(form.stall_minutes, base.stall_minutes || 0, 0),
+      rotate_pct: Number(form.rotate_pct.value),
+      dream_at: form.dream_at.value,
+      notify_webhook: form.notify_webhook.value.trim(),
+      notify_lark: form.notify_lark.checked,
+      notify_level: form.notify_level.value,
+      paused: form.paused.checked,
+      ask_permissions: !form.bypass.checked,
+    });
+    let lastSent = JSON.stringify(collect());
+
+    async function run() {
+      if (!form.isConnected) return;
+      const payload = collect();
+      const sig = JSON.stringify(payload);
+      if (sig === lastSent) return;
+      if (saving) { queued = true; return; }
+      saving = true;
+      setStatus("saving", "保存中…");
+      try {
+        const res = await api("/api/super/settings", { body: { settings: payload } });
+        if (res?.settings) base = { ...base, ...res.settings };
+        lastSent = sig;
+        renderTarget(true);
+        setStatus("saved", "✓ 已保存");
+        // Refresh router.pending immediately so the amber restart bar reflects changes right away.
+        api("/api/super").then((d) => {
+          sup = normSup(d);
+          renderSide();
+          renderRouterPendingBars();
+          if (view === "collie") renderSuper();
+        }).catch(() => {});
+      } catch (err) {
+        setStatus("error", "保存失败：" + err.message);
+        toast(err.message, "attn");
+      } finally {
+        saving = false;
+        if (queued) {
+          queued = false;
+          run();
+        }
+      }
+    }
+    return {
+      flush() { clearTimeout(debounceTimer); run(); },
+      schedule(ms = 500) {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => run(), ms);
+      },
     };
   }
   function bindSettings(form) {
     if (!form || form._bound) return;
     form._bound = true;
+    const saver = (form._autoSave = createSettingsAutoSaver(form, latestSettingsBase));
+    renderRouterPendingBars();
     for (const who of ["router", "worker"]) {
       fillModels(form, who);
       form[who + "_kind"].addEventListener("change", () => {
@@ -2304,13 +2934,58 @@
         form[who + "_model"].value = "";
         form[who + "_effort"].value = "";
         fillModels(form, who);
+        saver.flush();
+      });
+      form[who + "_effort"].addEventListener("change", () => saver.flush());
+    }
+    let prevWorkerMachine = form.worker_machine?.value || "";
+    const dirCtrl = enhanceDirInput(form.worker_cwd, {
+      getMachine: () => form.worker_machine?.value || "",
+      onPick: () => saver.flush(),
+    });
+    form.worker_machine?.addEventListener("change", () => {
+      const nextMachine = form.worker_machine.value;
+      const oldInfo = (state.machines || []).find((m) => m.id === prevWorkerMachine);
+      const curCwd = form.worker_cwd.value.trim();
+      if (oldInfo?.home && curCwd.startsWith(oldInfo.home)) {
+        form.worker_cwd.value = "~" + curCwd.slice(oldInfo.home.length);
+      } else if (prevWorkerMachine !== nextMachine && (/^\/Users\//.test(curCwd) || /^\/home\//.test(curCwd) || /^\/data\d+\/home\//.test(curCwd))) {
+        form.worker_cwd.value = "~";
+      }
+      prevWorkerMachine = nextMachine;
+      fillModels(form, "worker");
+      dirCtrl?.refresh();
+      saver.flush();
+    });
+
+    // Selects and checkboxes save immediately on change.
+    for (const name of ["rotate_pct", "dream_at", "notify_level", "notify_lark", "bypass", "paused"]) {
+      form[name]?.addEventListener("change", () => saver.flush());
+    }
+    // Text & number inputs auto-save after 500ms debounce or immediately on blur / IME-safe Enter.
+    for (const name of ["router_args", "worker_cwd", "notify_webhook", "reply_chars", "stall_minutes"]) {
+      const el = form[name];
+      if (!el) continue;
+      el.addEventListener("input", () => saver.schedule(500));
+      el.addEventListener("blur", () => {
+        if (name === "reply_chars" && (!el.value.trim() || Number(el.value) < 40)) el.value = "200";
+        if (name === "stall_minutes" && (!el.value.trim() || Number(el.value) < 0)) el.value = "0";
+        saver.flush();
+      });
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          if (e.isComposing || e.keyCode === 229) return;
+          e.preventDefault();
+          saver.flush();
+        }
       });
     }
-    form.worker_machine?.addEventListener("change", () => fillModels(form, "worker"));
+    form.worker_cwd.addEventListener("change", () => saver.flush());
   }
 
   function settingsHTML(r) {
     const s = r.settings;
+    latestSettingsBase = s;
     const routerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
     const workerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["doubao", "Doubao", "doubao"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
     const modelPick = (who, kind, model, effort) => {
@@ -2320,9 +2995,14 @@
           <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
           <label${hideEff ? " hidden" : ""}>思考强度<select name="${who}_effort" data-pick="compact" data-title="思考强度" data-value="${esc(eff)}"${hideEff ? " hidden disabled" : ""}><option value="${esc(eff)}" selected>${esc(EFFORT_LABEL[eff] || eff || "默认")}</option></select></label>`;
     };
-    const many = (state.machines || []).length > 1;
+    const localMs = (state.machines || []).filter((m) => !m.hub);
+    const many = localMs.length > 1;
+    const cwdDisp = tildeForMachine(s.worker_cwd, s.worker_machine || "");
     setTimeout(() => bindSettings($("#settings-form")));
     return `<form class="settings" id="settings-form">
+      <div class="router-pending-bar" id="settings-pending-bar" hidden></div>
+      <div class="set-top-meta"><span class="set-save-state" id="settings-save-state" role="status" aria-live="polite">改动自动保存</span></div>
+
       <section class="card set-sec">
         <header><h4>Collie 自己</h4><p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p></header>
         <div class="set-grid three">
@@ -2341,8 +3021,8 @@
           ${modelPick("worker", s.worker_kind, s.worker_model, s.worker_effort)}
         </div>
         <div class="set-grid three">
-          ${many ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${state.machines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
-          <label class="${many ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(tilde(s.worker_cwd))}" autocorrect="off" autocapitalize="off" spellcheck="false"></label>
+          ${many ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${localMs.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
+          <label class="${many ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(cwdDisp)}" placeholder="~ 或输入任意目录路径" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label>
         </div>
       </section>
 
@@ -2373,7 +3053,7 @@
         <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> 暂停投递：事件照收，先不交给 agent</label>
       </section>
 
-      <div class="set-actions"><button type="button" class="btn small" data-act="router-restart">重启 Collie</button><span class="grow"></span><button class="btn primary small">保存</button></div>
+      <div class="set-foot"><button type="button" class="btn small" data-act="router-restart">重启 Collie</button><span class="grow"></span><span class="muted">所有修改自动保存</span></div>
     </form>`;
   }
 
@@ -2393,30 +3073,39 @@
         toast("已保存");
         loadAuto();
       } else if (f.id === "settings-form") {
-        const cur = (await api("/api/super/settings")).settings;
-        const s = {
-          ...cur,
-          router_kind: f.router_kind.value, router_args: f.router_args.value.split(/\s+/).filter(Boolean),
-          router_model: f.router_model.value === "__custom" ? "" : f.router_model.value, router_effort: f.router_effort.disabled ? "" : f.router_effort.value,
-          worker_kind: f.worker_kind.value, worker_cwd: f.worker_cwd.value,
-          worker_model: f.worker_model.value === "__custom" ? "" : f.worker_model.value, worker_effort: f.worker_effort.disabled ? "" : f.worker_effort.value,
-          worker_machine: f.worker_machine ? f.worker_machine.value : (cur.worker_machine || ""),
-          reply_chars: +f.reply_chars.value, stall_minutes: +f.stall_minutes.value,
-          rotate_pct: +f.rotate_pct.value, dream_at: f.dream_at.value,
-          notify_webhook: f.notify_webhook.value.trim(), notify_lark: f.notify_lark.checked, notify_level: f.notify_level.value, paused: f.paused.checked,
-          ask_permissions: !f.bypass.checked,
-        };
-        await api("/api/super/settings", { body: { settings: s } });
-        renderTarget(true);
-        const relaunch = s.router_kind !== cur.router_kind || s.router_model !== (cur.router_model || "") || s.router_effort !== (cur.router_effort || "") || s.router_args.join(" ") !== (cur.router_args || []).join(" ") || s.ask_permissions !== !!cur.ask_permissions;
-        toast(relaunch ? "已保存。Collie 自己的启动设置在重启 Collie 后生效" : "已保存");
+        f._autoSave?.flush();
       }
     } catch (err) { toast(err.message, "attn"); }
+  });
+
+  $("#auto-body").addEventListener("change", async (e) => {
+    if (e.target.id === "inbox-thread-filter") {
+      inboxThread = e.target.value;
+      loadAuto();
+      return;
+    }
+    if (e.target.id === "inbox-sub-add") {
+      const worker = e.target.value, thread = e.target.dataset.thread;
+      if (!worker || !thread) return;
+      try {
+        await api("/api/super/subscribe", { body: { worker, thread, off: false } });
+        toast(`已订阅 ${worker} → ${thread}`);
+        loadAuto();
+      } catch (err) { toast(err.message, "attn"); }
+    }
   });
 
   $("#auto-body").addEventListener("click", async (e) => {
     const t = e.target.closest("button");
     if (!t) return;
+    if (t.dataset.unsubWorker && t.dataset.unsubThread) {
+      try {
+        await api("/api/super/subscribe", { body: { worker: t.dataset.unsubWorker, thread: t.dataset.unsubThread, off: true } });
+        toast(`已取消 ${t.dataset.unsubWorker} 订阅`);
+        loadAuto();
+      } catch (err) { toast(err.message, "attn"); }
+      return;
+    }
     if (t.dataset.act === "mem-edit" || t.dataset.act === "mem-cancel") {
       const box = t.closest("[data-path]");
       memEditing = t.dataset.act === "mem-edit";
@@ -2439,16 +3128,6 @@
       loadAuto();
     } else if (t.dataset.copy) {
       await copy(t.dataset.copy); toast("已复制");
-    } else if (t.id === "add-policy") {
-      $("#policies").insertAdjacentHTML("beforeend", policyRow());
-    } else if (t.hasAttribute("data-del-policy")) {
-      t.closest(".policy").remove();
-    } else if (t.id === "save-policies") {
-      const policies = $$(".policy").map((row) => ({
-        source: $("[data-f=source]", row).value.trim(), action: $("[data-f=action]", row).value,
-        allow: $("[data-f=allow]", row).value.split(",").map((x) => x.trim()).filter(Boolean),
-      })).filter((p) => p.source);
-      try { await api("/api/super/settings", { body: { policies } }); toast("策略已保存"); } catch (err) { toast(err.message, "attn"); }
     }
   });
 
@@ -2846,6 +3525,9 @@
       <div class="card"><div class="card-h">通知</div>
         ${row("浏览器通知", esc(perm), sw("notify", prefs.notify() && (!("Notification" in window) || Notification.permission !== "denied")))}
       </div>
+      <div class="card"><div class="card-h">登录状态</div>
+        ${row("退出登录", "清除当前浏览器的登录凭证，下次需要重新配对或输入访问令牌", `<button type="button" class="btn small danger-ghost" data-act="logout">退出登录</button>`)}
+      </div>
       <p class="panel-intro">Collie 本身的设置（它自己用哪个 agent、派活默认在哪台电脑、通知机器人）在 <a href="#/auto" data-auto-tab="settings">自动化 → 设置</a>；电脑和手机的连接在 <a href="#/devices">设备</a>。</p>
     </div>`;
     if (restore) restoreSimpleScroll($("#prefs-body"), restore);
@@ -2966,44 +3648,51 @@
       syncDeviceUpdateButtons();
       return;
     }
-    let html = "", tip = "", aria = "", cls = "";
+    let html = "", compactHtml = "", tip = "", aria = "", cls = "";
     const busy = updateFlow.busy;
     if (updateFlow.phase === "updating") {
       const step = updateFlow.total > 1 ? ` ${updateFlow.index}/${updateFlow.total}` : "";
       const label = `更新中${step}…`;
       html = `<span class="up-spin" aria-hidden="true"></span><span>${esc(label)}</span>`;
+      compactHtml = html;
       tip = `正在更新 ${updateFlow.currentName}${step ? `（${updateFlow.index}/${updateFlow.total}）` : ""}…`;
       aria = `${label}，正在更新 ${updateFlow.currentName}`;
       cls = "busy";
     } else if (updateFlow.phase === "restarting") {
       html = `<span class="up-spin" aria-hidden="true"></span><span>重启中…</span>`;
+      compactHtml = html;
       tip = `正在重启 ${updateFlow.currentName || "hub"}，恢复后自动刷新`;
       aria = `重启中…，恢复后自动刷新`;
       cls = "busy";
     } else if (updateFlow.phase === "reconnecting") {
       html = `<span class="up-spin" aria-hidden="true"></span><span>重连中…</span>`;
+      compactHtml = html;
       tip = "节点已更新，正在等待重连…";
       aria = "重连中…，等待节点上线";
       cls = "busy";
     } else if (updateFlow.phase === "failed") {
       html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span>重试更新</span>`;
+      compactHtml = html;
       tip = `更新 ${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}（点此重试）`;
       aria = `重试更新（${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}）`;
       cls = "failed";
     } else {
       const names = list.map((m) => m.name).join("、");
-      html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span>${esc(latest)}</span>`;
+      const arrow = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>`;
+      html = `${arrow}<span>更新到 ${esc(latest)}</span>`;
+      compactHtml = `${arrow}<span>${esc(latest)}</span>`;
       tip = `一键更新到 ${latest}（待更新：${names}）`;
       aria = `一键更新到 ${latest}（待更新：${names}）`;
     }
     for (const b of btns) {
+      const nextHtml = b.id === "collie-update-btn" ? compactHtml : html;
       b.hidden = false;
       b.classList.toggle("busy", cls === "busy");
       b.classList.toggle("failed", cls === "failed");
       if (busy) b.setAttribute("aria-disabled", "true"); else b.removeAttribute("aria-disabled");
       b.title = tip;
       b.setAttribute("aria-label", aria);
-      if (b.innerHTML !== html) b.innerHTML = html;
+      if (b.innerHTML !== nextHtml) b.innerHTML = nextHtml;
     }
     syncDeviceUpdateButtons();
   }
@@ -5986,7 +6675,8 @@
   });
 
   document.addEventListener("click", async (e) => {
-    const act = e.target.closest("[data-act]")?.dataset.act;
+    const btn = e.target.closest("[data-act]");
+    const act = btn?.dataset.act;
     if (!act) return;
     const v = find(current);
     try {
@@ -6011,6 +6701,25 @@
         if (!confirm("重启 Collie？它会读自己的记忆恢复上下文，排队的消息不会丢。")) return;
         await api("/api/super/router/restart", { method: "POST", body: {} });
         toast("Collie 正在重启");
+      }
+      if (act === "router-restart-apply") {
+        if (isRouterBusy() && !confirm("Collie 当前正在处理任务，现在重启会中断当前一轮，但记忆和排队中的消息不会丢。确定立即重启生效吗？")) return;
+        btn.disabled = true;
+        try {
+          await api("/api/super/router/restart", { method: "POST", body: {} });
+          toast("Collie 正在重启应用新设置");
+          api("/api/super").then((d) => {
+            sup = normSup(d);
+            renderSide();
+            renderRouterPendingBars();
+            if (view === "collie") renderSuper();
+          }).catch(() => {});
+        } finally {
+          btn.disabled = false;
+        }
+      }
+      if (act === "logout") {
+        await doLogout();
       }
       if (act === "pause") {
         const cur = (await api("/api/super/settings")).settings;
@@ -6073,7 +6782,8 @@
     fillLaunchEfforts(await modelsFor($("input[name=kind]:checked").value, pickMachine), $("#l-effort").value);
   });
   let pickMachine = "";
-  const recentKey = () => "recentDirs" + (pickMachine ? ":" + pickMachine : "");
+  const recentKey = () => dirRecentKey(pickMachine);
+  const launchDirCtrl = enhanceDirInput(cwdInput, { getMachine: () => pickMachine });
   function renderMachinePick() {
     const ms = (state.machines || []).filter((m) => m.local ? state.ok : m.online);
     $("#l-machine-field").hidden = ms.length < 2;
@@ -6103,8 +6813,7 @@
   function resetDir() {
     const recent = store.get(recentKey(), []);
     cwdInput.value = recent[0] || "~";
-    $("#recent").innerHTML = recent.slice(0, 6).map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join("");
-    browse(cwdInput.value);
+    launchDirCtrl?.refresh();
   }
   $("#l-machines").addEventListener("click", (e) => {
     const b = e.target.closest("[data-m]");
@@ -6123,43 +6832,22 @@
     renderMachinePick();
     const recent = store.get(recentKey(), []);
     cwdInput.value = recent[0] || "~";
-    $("#recent").innerHTML = recent.slice(0, 6).map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join("");
     const radio = $(`input[name=kind][value="${store.get("kind", "claude")}"]`);
     if (radio && !radio.disabled) radio.checked = true;
     markKinds();
     suggestName();
-    browse(cwdInput.value);
+    launchDirCtrl?.close();
     sheet.showModal();
     if (prefs.notify() && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
   }
+  sheet.addEventListener("close", () => { closePick(); launchDirCtrl?.close(); });
   $("#new-btn").addEventListener("click", openLauncher);
   $$("input[name=kind]").forEach((r) => r.addEventListener("change", suggestName));
   nameInput.addEventListener("input", () => { nameTouched = true; });
-  $("#recent").addEventListener("click", (e) => { const d = e.target.closest("button")?.dataset.d; if (d) { cwdInput.value = d; browse(d); } });
-
-  let browseTimer;
-  async function browse(p) {
-    try {
-      const r = await api("/api/dirs?path=" + encodeURIComponent(p) + (pickMachine ? "&machine=" + encodeURIComponent(pickMachine) : ""));
-      $("#dirs").innerHTML = r.dirs.map((d) => `<li data-d="${esc(d)}">${esc(d)}</li>`).join("");
-    } catch { $("#dirs").innerHTML = ""; }
-  }
-  cwdInput.addEventListener("input", () => { clearTimeout(browseTimer); browseTimer = setTimeout(() => browse(cwdInput.value), 250); });
-  $("#dirs").addEventListener("click", (e) => {
-    const d = e.target.closest("li")?.dataset.d;
-    if (!d) return;
-    cwdInput.value = (cwdInput.value.replace(/\/+$/, "") || "~") + "/" + d;
-    browse(cwdInput.value);
-  });
-  $("#dir-up").addEventListener("click", () => {
-    const v = cwdInput.value.replace(/\/+$/, "");
-    const up = v.includes("/") ? v.slice(0, v.lastIndexOf("/")) || "/" : "~";
-    cwdInput.value = up;
-    browse(up);
-  });
   $("#launch-form").addEventListener("submit", async (e) => {
     if (e.submitter?.value !== "go") return;
     e.preventDefault();
+    launchDirCtrl?.close();
     const kind = $("input[name=kind]:checked").value;
     const shell = kind === "shell";
     const body = shell ? { kind, cwd: cwdInput.value.trim(), machine: pickMachine }
@@ -6171,7 +6859,7 @@
     try {
       const r = await api("/api/agents", { body });
       store.set("kind", body.kind);
-      store.set(recentKey(), [body.cwd, ...store.get(recentKey(), []).filter((d) => d !== body.cwd)].slice(0, 8));
+      recordRecentDir(pickMachine, body.cwd);
       sheet.close();
       if (r.warning) toast(r.warning, "attn");
       location.hash = "#/p/" + encodeURIComponent(r.pane_id);

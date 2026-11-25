@@ -858,29 +858,6 @@ func (s *Server) closeWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// listDirs powers the directory picker in the launcher.
-func (s *Server) listDirs(w http.ResponseWriter, r *http.Request) {
-	dir := s.expand(r.URL.Query().Get("path"))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		writeJSON(w, 400, map[string]any{"error": err.Error()})
-		return
-	}
-	out := []string{}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		if e.IsDir() || (e.Type()&os.ModeSymlink != 0 && isDir(filepath.Join(dir, e.Name()))) {
-			out = append(out, e.Name())
-		}
-		if len(out) >= 300 {
-			break
-		}
-	}
-	writeJSON(w, 200, map[string]any{"path": dir, "display": s.tilde(dir), "parent": filepath.Dir(dir), "dirs": out})
-}
-
 // ---------------------------------------------------------------- helpers
 
 func (s *Server) expand(p string) string { return expandIn(s.home, p) }

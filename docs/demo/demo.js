@@ -11,8 +11,8 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.52", agents: ["claude", "codex", "agy", "doubao"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.52", agents: ["claude", "codex"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.53", agents: ["claude", "codex", "agy", "doubao"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.53", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -97,9 +97,21 @@
     }
     return out;
   }
+  let routerRun = { kind: "claude", model: "sonnet", effort: "", args: "", ask_permissions: false };
+  const routerSig = (s) => ({
+    kind: s.router_kind === "antigravity" ? "agy" : (s.router_kind || "claude"),
+    model: s.router_model || "",
+    effort: s.router_effort || "",
+    args: (s.router_args || []).join(" "),
+    ask_permissions: !!s.ask_permissions,
+  });
+  const routerPending = () => {
+    const cur = routerSig(settings.settings);
+    return cur.kind !== routerRun.kind || cur.model !== routerRun.model || cur.effort !== routerRun.effort || cur.args !== routerRun.args || cur.ask_permissions !== routerRun.ask_permissions;
+  };
   const sup = () => ({
-    router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: "claude", context: 23, rotate_at: 70, model: "sonnet" },
-    entries, pending: computePending(), pinned: computePinned(), workers, queued: 0, queued_router: 0, paused: false, earlier: true,
+    router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: routerRun.kind, context: 23, rotate_at: 70, model: routerRun.model, effort: routerRun.effort, pending: routerPending() },
+    entries, pending: computePending(), pinned: computePinned(), workers, queued: 0, queued_router: 0, paused: !!settings.settings.paused, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
   });
   let routerStatus = "idle";
@@ -461,7 +473,20 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/session") return json({ ok: true });
     if (p === "/api/state") return json(state());
     if (p === "/api/super") return json(sup());
-    if (p === "/api/super/settings") return json(settings);
+    if (p === "/api/super/settings") {
+      if (method === "POST") {
+        if (body.settings) settings.settings = { ...settings.settings, ...body.settings };
+        if (body.policies) settings.policies = body.policies;
+        pushAll();
+      }
+      return json(settings);
+    }
+    if (p === "/api/super/router/restart" && method === "POST") {
+      routerRun = routerSig(settings.settings);
+      routerStatus = "idle";
+      pushAll();
+      return json({ ok: true });
+    }
     if (p === "/api/super/seen") return json({ ok: true });
     if (p === "/api/super/dismiss") { if (body.id) dismissed.add(body.id); pushAll(); return json({ ok: true }); }
     if (p === "/api/super/pin") {
@@ -519,6 +544,14 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/super/lark") return json({ ready: true, who: "Alex" });
     if (p === "/api/super/triggers") return json({ triggers, threads });
+    if (p === "/api/super/subscribe" && method === "POST") {
+      const th = threads.find((x) => x.id === body.thread);
+      if (th && body.worker) {
+        if (body.off) th.subscribers = (th.subscribers || []).filter((w) => w !== body.worker);
+        else if (!(th.subscribers || []).includes(body.worker)) (th.subscribers ||= []).push(body.worker);
+      }
+      return json({ thread: body.thread, subscribers: th?.subscribers || [] });
+    }
     if (p === "/api/super/timers") {
       if (method === "POST") timers.push({ id: "tm" + (++seq), spec: body.spec, text: body.text, target: body.target, enabled: true, next_run: later(60), owner: "you" });
       return json({ timers });
@@ -538,7 +571,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
     if (p === "/api/version") return json({
-      version: "v0.2.52", latest: "v0.2.52", outdated: null,
+      version: "v0.2.53", latest: "v0.2.53", outdated: null,
       machines: machines.map((x) => ({ id: x.id, name: x.name, version: x.version, local: !!x.local, online: !!x.online, outdated: false })),
     });
     if (p === "/api/local-app") return json({ url: "" });
@@ -576,14 +609,87 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       }
       return json({ error: "找不到这个文件" }, 404);
     }
-    if (p === "/api/dirs") return json({ dirs: ["~/code/shop-api", "~/code/shop-web", "~/code/notes"] });
+    if (p === "/api/dirs") {
+      const mach = q.get("machine") || "";
+      const isMac = mach === "macbook";
+      const home = isMac ? "/Users/alex" : "/home/alex";
+      const tree = isMac ? {
+        "/Users/alex": ["agent-workspace", "code", "Desktop", "Documents", ".config"],
+        "/Users/alex/agent-workspace": ["collie", "shop-web"],
+        "/Users/alex/code": ["shop-web", "notes", "design-system", ".cache"],
+        "/Users/alex/code/shop-web": ["src", "public", "tests"],
+        "/Users/alex/code/notes": ["2026", "drafts"],
+        "/Users/alex/code/design-system": ["tokens", "components"],
+        "/Users/alex/.config": ["collie", "herdr"],
+      } : {
+        "/home/alex": ["agent-workspace", "code", "logs", ".collie", ".config"],
+        "/home/alex/agent-workspace": ["collie", "shop-api", "bench"],
+        "/home/alex/code": ["shop-api", "migrations", "scripts", ".git"],
+        "/home/alex/code/shop-api": ["cmd", "internal", "docs"],
+        "/home/alex/code/shop-api/internal": ["orders", "payments", "auth"],
+        "/home/alex/code/shop-api/docs": ["rfcs", "runbooks"],
+        "/home/alex/.collie": ["router", "transcripts"],
+        "/home/alex/.config": ["herdr"],
+      };
+      const recent = isMac ? [
+        { path: "/Users/alex", display: "~", label: "主目录" },
+        { path: "/Users/alex/agent-workspace", display: "~/agent-workspace", label: "工作区" },
+        { path: "/Users/alex/code/shop-web", display: "~/code/shop-web" },
+        { path: "/Users/alex/code/notes", display: "~/code/notes" },
+      ] : [
+        { path: "/home/alex", display: "~", label: "主目录" },
+        { path: "/home/alex/agent-workspace", display: "~/agent-workspace", label: "工作区" },
+        { path: "/home/alex/code/shop-api", display: "~/code/shop-api" },
+        { path: "/home/alex/code", display: "~/code" },
+      ];
+      const toDisp = (fp) => fp === home ? "~" : fp.startsWith(home + "/") ? "~" + fp.slice(home.length) : fp;
+      const raw = (q.get("path") || "").trim();
+      const hiddenParam = q.get("hidden") === "1";
+      const trailingSlash = raw.endsWith("/");
+      const norm = (s) => {
+        const exp = !s || s === "~" ? home : s.startsWith("~/") ? home + "/" + s.slice(2) : s.startsWith("/") ? s : home + "/" + s;
+        const parts = [];
+        for (const seg of exp.split("/")) {
+          if (!seg || seg === ".") continue;
+          if (seg === "..") parts.pop(); else parts.push(seg);
+        }
+        return "/" + parts.join("/");
+      };
+      const target = norm(raw);
+      const exists = Object.prototype.hasOwnProperty.call(tree, target);
+      const parentOf = (fp) => fp === "/" ? "" : (fp.slice(0, fp.lastIndexOf("/")) || "/");
+      let browse = target, prefix = "", wantHidden = hiddenParam || raw === "." || raw.endsWith("/.");
+      if (!exists) {
+        const par = parentOf(target);
+        if (!trailingSlash && Object.prototype.hasOwnProperty.call(tree, par)) {
+          browse = par;
+          prefix = target.slice(target.lastIndexOf("/") + 1);
+          if (prefix.startsWith(".")) wantHidden = true;
+        } else {
+          let anc = par;
+          while (anc && !Object.prototype.hasOwnProperty.call(tree, anc)) anc = parentOf(anc);
+          browse = anc || home;
+        }
+      }
+      const dirs = (tree[browse] || [])
+        .filter((d) => (wantHidden || !d.startsWith(".")) && (!prefix || d.toLowerCase().startsWith(prefix.toLowerCase())))
+        .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+      const par = parentOf(browse);
+      return json({
+        machine: mach || undefined, home, path: target, display: toDisp(target),
+        browse_path: browse, browse_display: toDisp(browse),
+        parent: par, parent_display: par ? toDisp(par) : "",
+        prefix, exists, hidden: wantHidden, dirs, recent,
+        note: !exists && !dirs.length ? "路径暂不存在，仍可直接手输使用" : "",
+      });
+    }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.52", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.53", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.52", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.52",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.53", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.53",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

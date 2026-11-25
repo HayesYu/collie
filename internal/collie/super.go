@@ -50,20 +50,21 @@ type Super struct {
 	routerNudged    bool      // the watchdog interrupted this turn once already
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
-	routerRun   *[2]string
-	handover    *handover            // set while the router writes its memory before a fresh session
-	dream       *dreamRun            // set while Collie sleeps and a dream session tidies its memory
-	lastTrust   map[string]time.Time // pane → when its trust dialog was last answered
-	lastAnswer  map[string]time.Time // pane → when a dialog there was just answered
-	lastScreen  map[string]screenMark
-	transcripts map[string]*transcript
-	noAgent     map[string]time.Time  // worker → since when its pane has had no agent in it
-	pinnedCache map[string]*Entry     // older pinned entries resolved from SQLite
-	sayDedup    map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
-	notifyBuf   []notice
-	notifyAt    time.Time
-	seenAt      time.Time // when a page of Collie was last open in front of you
-	seenURL     string    // where that page was, for the link in a notification
+	routerRun    *[2]string
+	routerLaunch *routerLaunchConfig
+	handover     *handover            // set while the router writes its memory before a fresh session
+	dream        *dreamRun            // set while Collie sleeps and a dream session tidies its memory
+	lastTrust    map[string]time.Time // pane → when its trust dialog was last answered
+	lastAnswer   map[string]time.Time // pane → when a dialog there was just answered
+	lastScreen   map[string]screenMark
+	transcripts  map[string]*transcript
+	noAgent      map[string]time.Time  // worker → since when its pane has had no agent in it
+	pinnedCache  map[string]*Entry     // older pinned entries resolved from SQLite
+	sayDedup     map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
+	notifyBuf    []notice
+	notifyAt     time.Time
+	seenAt       time.Time // when a page of Collie was last open in front of you
+	seenURL      string    // where that page was, for the link in a notification
 }
 
 type sayReceipt struct {
@@ -893,6 +894,8 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 	kind := sp.st.Settings.RouterKind
 	args := sp.routerArgsLocked()
 	sp.setRouterRun([2]string{sp.st.Settings.RouterModel, effectiveEffort(kind, sp.st.Settings.RouterModel, sp.st.Settings.RouterEffort)})
+	sp.setRouterLaunch(routerLaunchOf(sp.st.Settings))
+	sp.changed()
 	sp.mu.Unlock()
 
 	go func() {
@@ -2766,4 +2769,79 @@ func (sp *Super) routerRunLocked() *[2]string {
 		}
 	}
 	return sp.routerRun
+}
+
+// routerLaunchConfig captures every setting that requires a fresh Collie router
+// session to take effect.
+type routerLaunchConfig struct {
+	Kind           string   `json:"kind"`
+	Model          string   `json:"model,omitempty"`
+	Effort         string   `json:"effort,omitempty"`
+	Args           []string `json:"args,omitempty"`
+	AskPermissions bool     `json:"ask_permissions,omitempty"`
+}
+
+func routerLaunchOf(st Settings) routerLaunchConfig {
+	k := kinds[st.RouterKind]
+	if k == "" {
+		k = st.RouterKind
+	}
+	args := make([]string, 0, len(st.RouterArgs))
+	for _, a := range st.RouterArgs {
+		if t := strings.TrimSpace(a); t != "" {
+			args = append(args, t)
+		}
+	}
+	return routerLaunchConfig{
+		Kind:           k,
+		Model:          strings.TrimSpace(st.RouterModel),
+		Effort:         effectiveEffort(st.RouterKind, st.RouterModel, st.RouterEffort),
+		Args:           args,
+		AskPermissions: st.AskPermissions,
+	}
+}
+
+func routerLaunchEqual(a, b routerLaunchConfig) bool {
+	if a.Kind != b.Kind || a.Model != b.Model || a.Effort != b.Effort || a.AskPermissions != b.AskPermissions {
+		return false
+	}
+	return slices.Equal(a.Args, b.Args)
+}
+
+func (sp *Super) setRouterLaunch(cfg routerLaunchConfig) {
+	cp := cfg
+	sp.routerLaunch = &cp
+	if sp.db != nil {
+		b, _ := json.Marshal(cp)
+		sp.db.Exec(`INSERT INTO kv(k,v) VALUES('router_launch',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(b))
+	}
+}
+
+func (sp *Super) routerLaunchLocked() *routerLaunchConfig {
+	if sp.routerLaunch == nil && sp.db != nil {
+		var raw string
+		var cfg routerLaunchConfig
+		if sp.db.QueryRow(`SELECT v FROM kv WHERE k='router_launch'`).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &cfg) == nil && cfg.Kind != "" {
+			sp.routerLaunch = &cfg
+		}
+	}
+	return sp.routerLaunch
+}
+
+func (sp *Super) routerPendingLocked(liveKind string, st Settings) bool {
+	want := routerLaunchOf(st)
+	if launch := sp.routerLaunchLocked(); launch != nil {
+		if !routerLaunchEqual(*launch, want) {
+			return true
+		}
+	} else if run := sp.routerRunLocked(); run != nil {
+		if *run != [2]string{want.Model, want.Effort} {
+			return true
+		}
+	}
+	liveNorm := kinds[liveKind]
+	if liveNorm == "" {
+		liveNorm = liveKind
+	}
+	return liveNorm != "" && want.Kind != "" && liveNorm != want.Kind
 }

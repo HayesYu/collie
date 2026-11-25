@@ -61,7 +61,7 @@
       </a>
       <a class="nav-item" id="nav-auto" href="#/auto">
         <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
-        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">收件箱 · 定时 · 接入</div></span>
+        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">记忆 · 定时 · 收件箱</div></span>
         <span class="count-pill" id="nav-queue" hidden></span>
       </a>
     </nav>
@@ -90,19 +90,13 @@
       <button class="icon-btn" id="local-app-x" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
     <footer class="side-foot">
-      <a class="foot-status" href="#/devices" id="nav-devices" title="设备">
+      <a class="foot-status" href="#/devices" id="nav-devices" title="管理电脑与连接">
         <span class="conn" id="conn"></span><span id="herdr-status" class="muted">connecting…</span>
       </a>
       <button type="button" class="update-pill" id="update-all-btn" hidden></button>
-      <a class="icon-btn" href="#/devices" title="设备与连接">
-        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="13" height="10" rx="1.5"/><path d="M7 18h5M9.5 14v4"/><rect x="17" y="9" width="5" height="11" rx="1.2"/></svg>
+      <a class="icon-btn side-prefs-btn" href="#/prefs" id="nav-prefs" title="偏好设置" aria-label="偏好设置">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       </a>
-      <a class="icon-btn" href="#/prefs" id="nav-prefs" title="偏好设置">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      </a>
-      <button class="icon-btn" id="logout" title="退出">
-        <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>
-      </button>
     </footer>
   </aside>
 
@@ -157,6 +151,8 @@
         </div>
       </search>
 
+      <div class="router-pending-bar" id="collie-pending-bar" hidden></div>
+
       <div class="crew" id="crew"></div>
 
       <div class="viewer chatbg" tabindex="-1">
@@ -198,11 +194,9 @@
         <div class="d-title"><div class="d-name">自动化</div><div class="d-meta muted">Always-on：事件进来，Collie 决定谁去做</div></div>
       </header>
       <div class="tabs" id="auto-tabs">
-        <button data-tab="inbox" class="on">收件箱</button>
-        <button data-tab="threads">线程</button>
+        <button data-tab="memory" class="on">记忆</button>
         <button data-tab="timers">定时</button>
-        <button data-tab="memory">记忆</button>
-        <button data-tab="hooks">接入</button>
+        <button data-tab="inbox">收件箱</button>
         <button data-tab="settings">设置</button>
       </div>
       <div class="auto-body" id="auto-body"></div>
@@ -437,12 +431,7 @@
       </div>
       <div class="field">
         <label for="l-cwd">目录</label>
-        <div class="dir">
-          <input id="l-cwd" class="mono" value="~" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-          <button type="button" class="icon-btn" id="dir-up" title="上一级"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
-        </div>
-        <div class="recent" id="recent"></div>
-        <ul class="dirs" id="dirs"></ul>
+        <input id="l-cwd" class="mono" value="~" placeholder="~ 或输入任意目录路径" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       </div>
       <div class="field agent-only">
         <label for="l-prompt">第一个任务 <span class="muted">（可选）</span></label>

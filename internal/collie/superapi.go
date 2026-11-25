@@ -118,9 +118,13 @@ func (s *Server) superState(ctx context.Context) superView {
 	st := sp.st.Settings
 	routerEff := effectiveEffort(st.RouterKind, st.RouterModel, st.RouterEffort)
 	v.Router.Model, v.Router.Effort = st.RouterModel, routerEff
-	if run := sp.routerRunLocked(); run != nil && v.Router.Alive {
-		v.Router.Model, v.Router.Effort = run[0], run[1]
-		v.Router.Pending = *run != [2]string{st.RouterModel, routerEff} || kinds[v.Router.Kind] != kinds[st.RouterKind]
+	if v.Router.Alive {
+		if run := sp.routerRunLocked(); run != nil {
+			v.Router.Model, v.Router.Effort = run[0], run[1]
+		} else if launch := sp.routerLaunchLocked(); launch != nil {
+			v.Router.Model, v.Router.Effort = launch.Model, launch.Effort
+		}
+		v.Router.Pending = sp.routerPendingLocked(v.Router.Kind, st)
 	}
 	if sp.dream != nil {
 		v.Router.Status = "dreaming"
@@ -818,6 +822,7 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	if body.Settings != nil {
+		prev := sp.st.Settings
 		ns := *body.Settings
 		if _, ok := kinds[ns.RouterKind]; !ok || kinds[ns.RouterKind] == "doubao" {
 			ns.RouterKind = sp.st.Settings.RouterKind
@@ -855,6 +860,16 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 			ns.WorkerCwd = s.expand(ns.WorkerCwd)
 		} else if ns.WorkerCwd == "" {
 			ns.WorkerCwd = "~"
+		}
+		// If a pre-upgrade router is already running without a saved router_launch
+		// snapshot, remember the settings it was running with so changes to
+		// router_args or ask_permissions also surface router.pending accurately.
+		if sp.routerLaunchLocked() == nil && !routerLaunchEqual(routerLaunchOf(prev), routerLaunchOf(ns)) {
+			prevLaunch := routerLaunchOf(prev)
+			if run := sp.routerRunLocked(); run != nil {
+				prevLaunch.Model, prevLaunch.Effort = run[0], run[1]
+			}
+			sp.setRouterLaunch(prevLaunch)
 		}
 		sp.st.Settings = ns
 	}

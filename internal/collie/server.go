@@ -40,18 +40,37 @@ type Server struct {
 }
 
 func (s *Server) markStarted(pane string) {
+	local, _ := split(pane)
+	now := time.Now()
 	s.startMu.Lock()
-	defer s.startMu.Unlock()
 	if s.started == nil {
 		s.started = map[string]time.Time{}
 	}
-	s.started[pane] = time.Now()
+	s.started[local] = now
+	if pane != local {
+		s.started[pane] = now
+	}
+	s.startMu.Unlock()
+
+	// Retire any transcript previously claimed by this pane id (herdr reuses
+	// pane ids) while keeping it marked taken so a fast restart won't steal it.
+	claimed.Lock()
+	for p, owner := range claimed.m {
+		if owner != "" && (owner == pane || owner == local) {
+			claimed.m[p] = ""
+		}
+	}
+	claimed.Unlock()
 }
 
 func (s *Server) startedAt(pane string) (time.Time, bool) {
+	local, _ := split(pane)
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
-	t, ok := s.started[pane]
+	if t, ok := s.started[pane]; ok {
+		return t, true
+	}
+	t, ok := s.started[local]
 	return t, ok
 }
 
@@ -695,6 +714,11 @@ func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, 
 	var he *HerdrError
 	if err == nil || (errors.As(err, &he) && he.Code == "agent_not_ready") {
 		s.markStarted(paneID)
+		if machine == "" && herdrKind == "codex" && len(args) >= 2 && args[0] == "resume" && args[1] != "" {
+			if p, _ := s.findTranscript("codex", "id", args[1], paneID, cwd); p != "" {
+				claimTranscript(p, paneID)
+			}
+		}
 		s.herdr.Remember(paneID, name)
 	}
 	return paneID, wsID, err

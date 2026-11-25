@@ -605,13 +605,23 @@ func (h *Herdr) ScreenAsks(ctx context.Context, pane string) bool {
 	return screenAsks(res.Text)
 }
 
-// screenAsks: a menu with a key hint ("Enter to confirm · Esc to cancel") or
-// numbered options, at the bottom of the screen. An idle prompt ("❯ Try …")
-// over a status line is neither, and nor is a dialog an agent quoted in its
-// transcript, which has more conversation and the input box below it.
+// screenAsks: a live interactive dialog at the bottom of the screen. Ordinary
+// prose (including Markdown numbered lists above an idle prompt) and dialogs
+// quoted in the transcript must not match:
+//   - an idle prompt (">", "❯", "›") or idle footer ("? for shortcuts") below
+//     the menu disqualifies it;
+//   - a cursorless numbered list needs a key hint ("Enter to confirm · Esc to cancel");
+//   - a numbered list without a key hint needs a single selection cursor ("❯ 1." / "› 1.");
+//   - a non-numbered cursor menu needs both a key hint and a single selection cursor.
 func screenAsks(screen string) bool {
 	a := parseApproval(screen)
-	return len(a.Choices) >= 2 && (a.Hint != "" || a.Choices[0].Text != "") && a.after <= maxBelowMenu
+	if len(a.Choices) < 2 || a.idleBelow || a.after > maxBelowMenu {
+		return false
+	}
+	if a.Choices[0].Text == "" {
+		return a.Hint != "" && a.cursors == 1
+	}
+	return a.Hint != "" || a.cursors == 1
 }
 
 // maxBelowMenu: a live dialog has at most a footer or status line or two

@@ -143,13 +143,30 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 			continue
 		}
 		sess := ""
-		if a.Session != nil && !strings.ContainsAny(a.Session.Value, "/") {
-			sess = a.Session.Value
+		if a.Session != nil {
+			if id := sessionID(a.Session.Kind, a.Session.Value); !strings.ContainsAny(id, "/") {
+				sess = id
+			}
 		}
 		kind := deref(a.Agent)
 		var t string
 		switch kind {
 		case "codex":
+			if sess == "" {
+				if tt := codexTitlePart(a.TerminalTitle); cleanTitle(tt) != "" {
+					if id := s.codexIDByName(tt); id != "" {
+						sess = id
+						if p, _ := s.findTranscript("codex", "id", sess, local, deref(a.Cwd)); p != "" {
+							claimTranscript(p, local)
+						}
+					}
+				}
+			}
+			if sess == "" {
+				if p, _ := s.findTranscript("codex", "", "", local, deref(a.Cwd)); p != "" {
+					sess = codexSessionID(p)
+				}
+			}
 			t = s.codexThreadName(sess)
 		case "agy":
 			if sess == "" {
@@ -164,11 +181,9 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 			tt := a.TerminalTitle
 			if kind == "codex" {
 				// codex titles its terminal "<thread name> | <user>"
-				if i := strings.LastIndex(tt, " | "); i > 0 {
-					tt = tt[:i]
-				}
+				tt = codexTitlePart(tt)
 				if sess == "" {
-					sess = s.codexIDByName(strings.TrimSpace(tt))
+					sess = s.codexIDByName(tt)
 				}
 			}
 			t = cleanTitle(tt)

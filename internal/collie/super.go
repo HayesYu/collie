@@ -318,11 +318,30 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 		return nil, false
 	}
 	m := map[string]liveAgent{}
+	var byMachine map[string]map[string]paneSession
 	for _, a := range list {
 		if a.Name != nil {
 			la := liveAgent{Pane: a.PaneID, Status: a.AgentStatus, Ready: a.Ready, Kind: deref(a.Agent)}
 			if a.Session != nil {
 				la.Session = sessionID(a.Session.Kind, a.Session.Value)
+			}
+			if la.Session == "" && (la.Kind == "codex" || la.Kind == "agy" || la.Kind == "antigravity") {
+				local, machine := split(a.PaneID)
+				if byMachine == nil {
+					byMachine = map[string]map[string]paneSession{}
+				}
+				ts, ok := byMachine[machine]
+				if !ok {
+					ts = sp.s.titlesFor(machine, ctx)
+					byMachine[machine] = ts
+				}
+				if ps := ts[local]; ps.Session != "" {
+					la.Session = ps.Session
+				} else if machine == "" && la.Kind == "codex" {
+					if p, _ := sp.s.findTranscript("codex", "", "", local, deref(a.Cwd)); p != "" {
+						la.Session = codexSessionID(p)
+					}
+				}
 			}
 			m[*a.Name] = la
 		}

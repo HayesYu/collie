@@ -49,7 +49,7 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 
 ## 安装
 
-每台电脑上都要先有 herdr 服务端在跑，并装好 agent 集成（`herdr integration install claude`、`codex`、`antigravity-cli`）。没装集成时，herdr 认不出 agent 在干什么，Collie 也就没法给它发消息。
+每台电脑上都要先有 herdr 服务端在跑；Claude Code 和 Antigravity 建议装好 herdr 的 agent 集成（`herdr integration install claude`、`herdr integration install antigravity-cli`，安装脚本仅对未安装项自动补装，不会静默覆写已有配置）。**Codex 无需安装 herdr hook** 即可被 Collie 正常发现、收发消息、读取结构化对话和恢复会话（`herdr integration install codex` 会改写全局 `~/.codex/hooks.json` 并触发 Codex 信任审核弹窗，默认跳过；如确需安装可显式传入 `COLLIE_INSTALL_CODEX_HOOK=1`）。
 
 安装脚本下载对应平台的二进制（校验 SHA-256），装到 `~/.local/bin/collie`，并装成后台服务（macOS 用 launchd，Linux 用 `systemd --user`）。以后重跑同一条命令就是升级。
 
@@ -184,7 +184,7 @@ Webhook 立即返回 202，过滤和路由在收件箱里异步完成。
 ## 直接管 agent
 
 - **新建 Agent**：选类型、名字、目录，可以顺手给它第一个任务
-- **对话视图**：消息来自 agent 自己的会话记录——Claude `~/.claude/projects/*/<id>.jsonl`、Codex `~/.codex/sessions/**/rollout-*.jsonl`、Antigravity `~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`（桌面版在 `~/.gemini/antigravity`）。Antigravity 不向 herdr 报告会话 id，Collie 用它自己的会话索引按工作目录精确配对，配不上时宁可显示终端输出，也不会串到别的会话
+- **对话视图**：消息来自 agent 自己的会话记录——Claude `~/.claude/projects/*/<id>.jsonl`、Codex `~/.codex/sessions/**/rollout-*.jsonl`、Antigravity `~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`（桌面版在 `~/.gemini/antigravity`）。Antigravity 和未装 herdr hook 的 Codex 都不向 herdr 报告会话 id，Collie 会按工作目录与启动时间精确配对并独占认领各自的会话记录，配不上时宁可显示终端输出，也不会串到别的会话
 - **决策卡片**：agent 停在确认框时，把问题用一句话讲清楚，选项变成列表；编号菜单发数字，光标菜单发方向键 + 回车。「查看终端」可以展开原始屏幕
 - **屏幕 / 日志视图**：xterm.js 原样呈现，或自动换行的滚动日志（适合窄屏）
 - **需要你**：blocked 的 agent 置顶，标签页标题带计数，后台时弹浏览器通知

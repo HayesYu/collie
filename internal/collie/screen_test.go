@@ -224,7 +224,7 @@ func TestAskBox(t *testing.T) {
 }
 
 func TestCodexFolderAccessApproval(t *testing.T) {
-	codexFolder := "Folder access\n  /Users/bytedance/agent-workspace/huanyu1w1/collie\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Back to Agent Command Center\n  enter continue · esc back"
+	codexFolder := "Folder access\n  /Users/u/agent-workspace/collie\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Back to Agent Command Center\n  enter continue · esc back"
 	if !screenAsks(codexFolder) {
 		t.Fatal("codex folder access dialog not seen as a question")
 	}
@@ -237,6 +237,113 @@ func TestCodexFolderAccessApproval(t *testing.T) {
 	}
 	if got := strings.Join(a.Choices[1].Keys, ","); got != "down,enter" {
 		t.Fatalf("choice 2 keys = %q, want down,enter", got)
+	}
+}
+
+// Antigravity finished replying with an ordinary Markdown numbered list above
+// its empty idle input box; must never be treated as an interactive dialog.
+const agyIdleNumberedReply = `○ Thought for 31.7s (MR merged, verifying deployment...) ● Ran 2 commands (+1 · herdr agent read worker-a --source recent-unwrapped --lines 40) ● Explored 1 file (notes.md) ● Edited 1 file (notes.md) (ctrl+o to expand)
+
+  - **keep changes minimal** ... [spilled; run ` + "`collie show t101`" + `]
+
+  #t102 · chat:main · worker · from worker-a · 17:46
+    worker worker-a exited (its herdr pane is gone).
+
+  #t103 · chat:main · worker · from worker-a · 17:46
+    worker worker-a is back: herdr restored its pane (status unknown).
+
+  Reply with ` + "`collie reply`" + `, usually ≤200 characters.
+
+  已完成：
+
+  1. 发现 worker-a 启动漏掉了主任务说明，已补发完整说明。
+  2. 汇报 worker-b 已上线新版本，停掉 worker、归档任务并更新
+     相关记录。
+
+───────────────────────────────────────────────────────────────────────────────
+> 
+───────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                         auto · Gemini 4 Neon · medium`
+
+func TestScreenAsksFalsePositivesAndRealDialogs(t *testing.T) {
+	negatives := map[string]string{
+		"agy idle reply with markdown numbered list": agyIdleNumberedReply,
+		"plain markdown numbered list at bottom":     "已完成：\n1. 修复第一项\n2. 补齐回归测试\n",
+		"markdown blockquote numbered list":          "> 1. 第一条引用\n> 2. 第二条引用\n",
+		"claude idle empty prompt after numbered list": `● 已完成两件事：
+
+  1. 更新配置
+  2. 跑通测试
+
+──────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts`,
+		"codex idle empty prompt after numbered list": `• Done:
+  1. Updated installer
+  2. Added unit tests
+
+› 
+
+  gpt-5.4 xhigh · 95% left · ~/repo`,
+		"quoted dialog right above agy idle prompt": `  worker 卡在了这个弹窗：
+  ❯ 1. Yes, I trust this folder
+    2. No, exit
+  Enter to confirm · Esc to cancel
+
+───────────────────────────────────────────────────────────────────────────────
+> 
+───────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                         auto · Gemini 4 Neon · medium`,
+	}
+	for name, screen := range negatives {
+		if screenAsks(screen) {
+			t.Errorf("%s: falsely detected as an interactive dialog", name)
+		}
+	}
+
+	positives := map[string]string{
+		"codex hooks review without hint": `Hooks need review
+ 1 hook is new or changed.
+ Hooks can run outside the sandbox after you trust them.
+› 1. Review hooks
+  2. Trust all and continue`,
+		"codex hooks review with hint": `Hooks need review
+ 1 hook needs review before it can run.
+› 1. Trust all and continue
+  2. Continue without trusting (hooks won't run)
+  enter continue · esc back`,
+		"codex folder trust": "Folder access\n  /home/u/repo\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Back to Agent Command Center\n  enter continue · esc back",
+		"codex model picker": `Select Model and Effort
+Access legacy models by running codex -m <model_name>
+
+› 1. GPT-6.2-Sol (current)   Latest workhorse model
+  2. GPT-6-Astra             Frontier intelligence
+  3. GPT-6.1 Terra           Codex model
+
+Press enter to select reasoning effort, or esc to dismiss.`,
+		"claude bash approval without hint": "╭────╮\n│ Bash command\n│   git push origin main\n│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. Yes, and don't ask again\n│   3. No, and tell Claude what to do differently (esc)\n╰────╯",
+		"claude wrapped approval":           wrappedMenu,
+		"claude trust dialog":               trustDialog,
+		"claude cursor trust":               cursorTrust,
+		"claude ask box":                    askBox,
+		"agy folder trust":                  agyTrust,
+		"agy numbered confirm dialog": `Run command?
+  rm -rf /tmp/demo
+> 1. Allow once
+  2. Always allow
+  3. Deny
+  ↑/↓ Navigate · enter Confirm · esc Cancel
+                                                    auto · Gemini 4 Neon · medium`,
+		"cursorless numbered dialog with hint": `Choose an option:
+  1. Continue
+  2. Cancel
+  Enter to confirm · Esc to cancel`,
+	}
+	for name, screen := range positives {
+		if !screenAsks(screen) {
+			t.Errorf("%s: real dialog was NOT detected", name)
+		}
 	}
 }
 

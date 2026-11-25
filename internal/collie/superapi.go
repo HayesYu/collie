@@ -531,11 +531,17 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wk.Session == "" && wk.PaneID != "" {
-		// herdr does not always know (Antigravity): ask the pane's machine.
+		// herdr does not always know (Antigravity, or Codex without hook): ask the pane's machine.
 		local, m := split(wk.PaneID)
-		if ps := s.titlesFor(m, r.Context())[local]; ps.Session != "" {
+		sess := s.titlesFor(m, r.Context())[local].Session
+		if sess == "" && m == "" && kinds[wk.Kind] == "codex" {
+			if p, _ := s.findTranscript("codex", "", "", local, wk.Cwd); p != "" {
+				sess = codexSessionID(p)
+			}
+		}
+		if sess != "" {
 			sp.mu.Lock()
-			wk.Session = ps.Session
+			wk.Session = sess
 			sp.mu.Unlock()
 		}
 	}

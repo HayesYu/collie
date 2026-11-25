@@ -17,6 +17,7 @@
 # 环境变量：COLLIE_BIN_DIR（默认 ~/.local/bin）、COLLIE_BINARY（直接安装这个现成的文件）、
 # COLLIE_VERSION（下载时的版本，默认 latest）、COLLIE_NO_HERDR（设为 1 跳过自动装 herdr 和集成）、
 # COLLIE_NO_INTEGRATION（设为 1 跳过自动装 herdr 的 agent 集成）、
+# COLLIE_INSTALL_CODEX_HOOK（默认不装 Codex hook；设为 1 才装，注意会改 ~/.codex/hooks.json 并触发 Codex 信任确认弹窗）、
 # COLLIE_NO_OPEN（设为 1 不在 macOS 桌面自动打开浏览器）。
 set -eu
 
@@ -231,34 +232,53 @@ check_herdr() {
     fi
   fi
   st=$("$hb" integration status 2>/dev/null) || return 0
+  # Default auto-install targets: skip codex because `herdr integration install
+  # codex` writes global ~/.codex/hooks.json and triggers Codex's hook trust
+  # review dialog for every tool sharing ~/.codex; Collie discovers and controls
+  # Codex without any hook. Opt in explicitly with COLLIE_INSTALL_CODEX_HOOK=1.
+  pairs="claude:claude agy:antigravity-cli"
+  if [ "${COLLIE_INSTALL_CODEX_HOOK:-}" = "1" ]; then
+    pairs="${pairs} codex:codex"
+  fi
   missing=""
-  for pair in claude:claude codex:codex agy:antigravity-cli; do
+  outdated=""
+  for pair in $pairs; do
     command -v "${pair%%:*}" >/dev/null 2>&1 || continue # this agent isn't installed here
     target=${pair#*:}
-    line=$(printf '%s\n' "$st" | grep "^$target:" || true)
+    line=$(printf '%s\n' "$st" | grep "^${target}:" || true)
     case "$line" in
-      "" | *": current"*) ;; # unknown to this herdr version, or fine
-      *) missing="$missing $target" ;;
+      *": not installed"*) missing="${missing} ${target}" ;;
+      *": outdated"*) outdated="${outdated} ${target}" ;;
+      *) ;; # current, unknown to this herdr version, or already configured
     esac
   done
   if [ -n "$missing" ]; then
     if [ -z "${COLLIE_NO_HERDR:-}" ] && [ -z "${COLLIE_NO_INTEGRATION:-}" ]; then
       list=${missing# }
       step "安装 herdr 的 agent 集成：${list}（不想自动改 agent 配置可设 COLLIE_NO_INTEGRATION=1）"
+      case " ${missing} " in
+        *" codex "*)
+          warn "已按 COLLIE_INSTALL_CODEX_HOOK=1 安装 codex 集成：这会修改全局 ~/.codex/hooks.json 并触发 Codex 信任确认弹窗，若同机有其他共用 ~/.codex 的工具请慎用。"
+          ;;
+      esac
       failed=""
       for t in $missing; do
         if ! "$hb" integration install "$t" </dev/null; then
-          failed="$failed $t"
+          failed="${failed} ${t}"
         fi
       done
       if [ -n "$failed" ]; then
         warn "以下 agent 的 herdr 集成没装上，可以稍后手动运行："
-        for t in $failed; do say "      herdr integration install $t"; done
+        for t in $failed; do say "      herdr integration install ${t}"; done
       fi
     else
-      warn "这些 agent 还没装 herdr 集成：herdr 认不出它们在干什么，Collie 也就没法给它们发消息。运行："
-      for t in $missing; do say "      herdr integration install $t"; done
+      warn "以下 agent 还没装 herdr 集成（Claude / Antigravity 需要集成汇报状态；Codex 无需安装 hook 即可被 Collie 发现与控制）。如需手动安装，运行："
+      for t in $missing; do say "      herdr integration install ${t}"; done
     fi
+  fi
+  if [ -n "$outdated" ]; then
+    warn "以下 agent 的 herdr 集成已有新版（为避免静默覆写已有配置，不会自动更新）；如需手动升级，运行："
+    for t in $outdated; do say "      herdr integration install ${t}"; done
   fi
 }
 

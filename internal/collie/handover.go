@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -94,10 +95,19 @@ func (sp *Super) checkHandover(ctx context.Context, live map[string]liveAgent, q
 	if kind == "antigravity" {
 		kind = "agy"
 	}
+	sess := a.Session
 	var u ctxUsage
-	if a.Session != "" || kind == "agy" {
-		if path, format := sp.s.findTranscript(kind, "id", a.Session, a.Pane, sp.routerDir()); path != "" {
+	if sess != "" || kind == "agy" || kind == "codex" {
+		if path, format := sp.s.findTranscript(kind, "id", sess, a.Pane, sp.routerDir()); path != "" {
 			u = contextUsage(path, format, window)
+			if sess == "" {
+				switch kind {
+				case "codex":
+					sess = codexSessionID(path)
+				case "agy":
+					sess = filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path))))
+				}
+			}
 		}
 	}
 	sp.mu.Lock()
@@ -120,7 +130,7 @@ func (sp *Super) checkHandover(ctx context.Context, live map[string]liveAgent, q
 	}
 	// Only between conversations: nothing queued, the last batch answered, and
 	// not right after a (re)start.
-	if at <= 0 || paused || !idle || queued || !asked.IsZero() || u.Pct() < at || time.Since(launched) < 5*time.Minute || a.Session == "" {
+	if at <= 0 || paused || !idle || queued || !asked.IsZero() || u.Pct() < at || time.Since(launched) < 5*time.Minute || sess == "" {
 		return
 	}
 	prompt := fmt.Sprintf(`[collie] Handover. Your context window is %d%% full, so Collie will restart you in a fresh session as soon as you finish this. Nothing from this conversation carries over except memory/ (layout in ROUTER.md), so bring it up to date now:
@@ -142,7 +152,7 @@ This turn is for the files alone: edit them, then stop. Your next session handle
 		return
 	}
 	sp.mu.Lock()
-	sp.handover = &handover{at: time.Now(), kind: kind, session: a.Session, pct: u.Pct()}
+	sp.handover = &handover{at: time.Now(), kind: kind, session: sess, pct: u.Pct()}
 	sp.addEntryLocked("event", mainThread, fmt.Sprintf("Collie 的上下文用了 %d%%，正在把要记住的事写进记忆，马上换一个新会话", u.Pct()), "", "info")
 	sp.mu.Unlock()
 }

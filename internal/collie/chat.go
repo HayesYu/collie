@@ -680,12 +680,15 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 			return m[0], "claude"
 		}
 	case "codex":
-		if value == "" {
+		root := envOr("CODEX_HOME", filepath.Join(s.home, ".codex"))
+		if value != "" {
+			if m, _ := filepath.Glob(filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+value+".jsonl")); len(m) > 0 {
+				return m[len(m)-1], "codex"
+			}
 			return "", ""
 		}
-		root := envOr("CODEX_HOME", filepath.Join(s.home, ".codex"))
-		if m, _ := filepath.Glob(filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+value+".jsonl")); len(m) > 0 {
-			return m[len(m)-1], "codex"
+		if p := s.guessCodex(root, pane, cwd); p != "" {
+			return p, "codex"
 		}
 	case "agy":
 		brain := filepath.Join(s.agyCLIHome(), "brain")
@@ -714,20 +717,23 @@ type Choice struct {
 }
 
 type Approval struct {
-	Title    string   `json:"title"`
-	Question string   `json:"question"`
-	Choices  []Choice `json:"choices"`
-	Hint     string   `json:"hint,omitempty"`
-	Screen   string   `json:"screen"`
-	after    int      // lines of other text below the menu
+	Title     string   `json:"title"`
+	Question  string   `json:"question"`
+	Choices   []Choice `json:"choices"`
+	Hint      string   `json:"hint,omitempty"`
+	Screen    string   `json:"screen"`
+	after     int      // lines of other text below the menu
+	cursors   int      // choices marked with a selection cursor glyph
+	idleBelow bool     // an idle input prompt or shortcut footer appears below the menu
 }
 
 var (
-	numberedRe = regexp.MustCompile(`^\s*([❯›>▸●➜→]\s*)?(\d)[.)]\s+(.{1,90}?)\s*$`)
-	cursorRe   = regexp.MustCompile(`^\s*[❯›>▸●➜→]\s+(.{1,90}?)\s*$`)
-	hintRe     = regexp.MustCompile(`(?i)(enter|esc|↑|↓|tab)\b.*(confirm|cancel|select|navigate|continue|back|skip|close|review|amend)`)
-	frameRe    = regexp.MustCompile(`^[\s│┃|╭╮╰╯─━═┌┐└┘╌┄┈]*$`)
-	ruleRe     = regexp.MustCompile(`[─━═]{12,}`)
+	numberedRe  = regexp.MustCompile(`^\s*([❯›>▸●➜→]\s*)?(\d)[.)]\s+(.{1,90}?)\s*$`)
+	cursorRe    = regexp.MustCompile(`^\s*[❯›>▸●➜→]\s+(.{1,90}?)\s*$`)
+	hintRe      = regexp.MustCompile(`(?i)((enter|esc|tab)\b|↑|↓).*(confirm|cancel|select|navigate|continue|back|skip|close|review|amend|dismiss|submit)`)
+	idleBelowRe = regexp.MustCompile(`(?i)^\s*[❯›>]\s*$|\?\s*for shortcuts\b|\bshift\+tab to cycle\b|⏎\s*send\b`)
+	frameRe     = regexp.MustCompile(`^[\s│┃|╭╮╰╯─━═┌┐└┘╌┄┈]*$`)
+	ruleRe      = regexp.MustCompile(`[─━═]{12,}`)
 )
 
 // moveKeys builds the arrow+Enter keystrokes from cur to target idx.
@@ -798,10 +804,15 @@ func parseApproval(screen string) Approval {
 	first := digit(lines[end]) // the lowest option number found so far
 	for start > 0 {
 		prev := lines[start-1]
-		if numbered && (numberedRe.MatchString(prev) || wrapped(prev)) {
-			if d := digit(prev); d >= 0 {
+		if numbered && numberedRe.MatchString(prev) {
+			if d := digit(prev); d >= 0 && d == first-1 {
 				first = d
+				start--
+				continue
 			}
+			break
+		}
+		if numbered && first > 1 && wrapped(prev) {
 			start--
 			continue
 		}
@@ -831,10 +842,13 @@ func parseApproval(screen string) Approval {
 	}
 	// Cursor menus may continue below the ❯ line.
 	for !numbered && end+1 < len(lines) && strings.HasPrefix(lines[end+1], "  ") && strings.TrimSpace(lines[end+1]) != "" &&
-		!hintRe.MatchString(lines[end+1]) {
+		!hintRe.MatchString(lines[end+1]) && !idleBelowRe.MatchString(lines[end+1]) {
 		end++
 	}
 	for _, l := range lines[end+1:] {
+		if idleBelowRe.MatchString(l) {
+			a.idleBelow = true
+		}
 		if strings.TrimSpace(l) != "" && !hintRe.MatchString(l) {
 			a.after++
 		}
@@ -843,7 +857,7 @@ func parseApproval(screen string) Approval {
 	cur := -1
 	opts := lines[start : end+1]
 	for i, l := range opts {
-		if t := strings.TrimSpace(l); t != "" && (cursorRe.MatchString(l) || strings.ContainsAny(t[:1], "❯›>▸●➜→")) {
+		if cursorRe.MatchString(l) {
 			cur = i
 		}
 	}
@@ -867,8 +881,14 @@ func parseApproval(screen string) Approval {
 				}
 				continue
 			}
+			if m[1] != "" {
+				a.cursors++
+			}
 			a.Choices = append(a.Choices, Choice{Label: m[3], Text: m[2], Current: m[1] != ""})
 			continue
+		}
+		if cursorRe.MatchString(l) {
+			a.cursors++
 		}
 		label := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "❯›>▸●➜→"))
 		if label == "" {

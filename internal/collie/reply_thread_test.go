@@ -723,6 +723,8 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(appCss.includes(".td-head:has(+ .td-workers:not([hidden]))"), "CSS merges header border when .td-workers visible");
   assert.ok(appCss.includes("scrollbar-width: none;") && appCss.includes("@supports not (scrollbar-width: none)"), "CSS hides horizontal scrollbar with modern @supports fallback");
   assert.ok(!/\.td-worker\b[^}]*--mono/.test(appCss), ".td-worker pills strictly use --sans typography, never --mono");
+  assert.ok(appCss.includes(".viewer > .gone {"), "pane-closed .gone banner must be scoped to .viewer > .gone");
+  assert.ok(!/(?:^|\n)\s*\.gone\s*\{/.test(appCss), "unscoped .gone rule must not exist (would hijack .dot.gone to bottom-left of .threadpane)");
 
   console.log("OK: all reply-thread, settings, and notification JS tests passed");
 })().catch((err) => {

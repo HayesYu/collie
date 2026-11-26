@@ -405,7 +405,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   position: absolute; right: 16px; bottom: 16px; z-index: 10; width: 36px; height: 36px; display: grid; place-items: center;
   border-radius: 50%; border: 1px solid var(--line-2); background: var(--bg); box-shadow: var(--shadow);
 }
-.gone { position: absolute; inset: auto 0 0 0; padding: 10px; text-align: center; background: var(--attn-soft); color: var(--attn); font-size: 13px; }
+.viewer > .gone { position: absolute; inset: auto 0 0 0; padding: 10px; text-align: center; background: var(--attn-soft); color: var(--attn); font-size: 13px; }
 
 /* ─── conversation ─── */
 .chat { position: absolute; inset: 0; flex-direction: column; }
@@ -1449,7 +1449,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   :root[data-theme="dark"] .thread-scrim { background: rgba(0, 0, 0, .62); }
   .threadpane {
     position: fixed; top: auto; left: 0; right: 0; bottom: 0; z-index: 48;
-    width: 100vw; max-width: 100%;
+    width: 100%; max-width: 100%;
     height: min(calc(var(--vh) * 0.9), calc(var(--vh) - max(48px, env(safe-area-inset-top) + 14px)));
     border-left: 0; border-top: 1px solid var(--line-2); border-radius: 20px 20px 0 0;
     box-shadow: 0 -8px 32px rgba(0, 0, 0, .14), 0 -1px 4px rgba(0, 0, 0, .06);
@@ -1478,7 +1478,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   .td-node-acts { opacity: .75; }
   .td-act span { display: none; }
   .td-act { width: 28px; height: 28px; padding: 0; justify-content: center; }
-  .td-foot { padding: 8px 12px max(12px, env(safe-area-inset-bottom)); }
+  .td-foot { padding: 8px 12px max(12px, env(safe-area-inset-bottom, 0px)); }
   .td-ta { font-size: 16px; }
   .td-hint { display: none; }
 }

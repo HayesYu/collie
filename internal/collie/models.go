@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -78,6 +79,9 @@ func effectiveEffort(kind, model, effort string) string {
 	if effort == "" {
 		return ""
 	}
+	if kinds[kind] == "cursor" {
+		return ""
+	}
 	if kinds[kind] == "agy" && agyRejectsEffort(model) {
 		return ""
 	}
@@ -114,6 +118,10 @@ func modelArgs(kind, model, effort string) []string {
 		if effort != "" {
 			a = append(a, "--effort", effort)
 		}
+	case "cursor":
+		if model != "" {
+			a = append(a, "--model", model)
+		}
 	}
 	return a
 }
@@ -127,6 +135,8 @@ func bypassArgs(kind string) []string {
 		return []string{"--dangerously-bypass-approvals-and-sandbox"}
 	case "doubao":
 		return []string{"-y"}
+	case "cursor":
+		return []string{"--force"}
 	}
 	return nil
 }
@@ -191,6 +201,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			s.agyModels(ctx, info)
 		case "doubao":
 			s.doubaoModels(ctx, info)
+		case "cursor":
+			s.cursorModels(ctx, info)
 		}
 		if info.Models == nil {
 			info.Models = []ModelOpt{}
@@ -657,6 +669,151 @@ func (s *Server) doubaoModels(ctx context.Context, info *ModelInfo) {
 	}
 }
 
+var ansiEscapeRe = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))`)
+
+func stripANSI(s string) string {
+	return ansiEscapeRe.ReplaceAllString(s, "")
+}
+
+// stripCursorModelMarkers strips trailing "(default)", "(current)", or
+// "(current, default)" tags without disturbing display-name parentheticals
+// such as "(Max)" or "(High)".
+func stripCursorModelMarkers(s string) (clean string, isDefault, isCurrent bool) {
+	clean = strings.TrimSpace(s)
+	for strings.HasSuffix(clean, ")") {
+		open := strings.LastIndex(clean, "(")
+		if open < 0 {
+			break
+		}
+		inner := strings.TrimSpace(clean[open+1 : len(clean)-1])
+		if inner == "" {
+			break
+		}
+		parts := strings.Split(inner, ",")
+		allMarker := true
+		var foundDef, foundCur bool
+		for _, p := range parts {
+			switch strings.ToLower(strings.TrimSpace(p)) {
+			case "default":
+				foundDef = true
+			case "current":
+				foundCur = true
+			default:
+				allMarker = false
+			}
+		}
+		if !allMarker || (!foundDef && !foundCur) {
+			break
+		}
+		isDefault = isDefault || foundDef
+		isCurrent = isCurrent || foundCur
+		clean = strings.TrimSpace(clean[:open])
+	}
+	return clean, isDefault, isCurrent
+}
+
+func isValidCursorModelID(id string) bool {
+	if id == "" || strings.ContainsAny(id, " \t") || !modelNameRe.MatchString(id) {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			return true
+		}
+	}
+	return false
+}
+
+// parseCursorModels parses `cursor-agent --list-models` stdout after stripping
+// ANSI escape sequences. Supports the native "<id> - <displayName> (current, default)"
+// format as well as optional leading list bullets or bare model ID lines.
+func parseCursorModels(raw string) (models []ModelOpt, defID string) {
+	cleaned := strings.ReplaceAll(stripANSI(raw), "\r\n", "\n")
+	seen := map[string]bool{}
+	var defaultID, currentID string
+
+	for _, line := range strings.Split(cleaned, "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" {
+			continue
+		}
+		low := strings.ToLower(l)
+		if low == "available models" || low == "available models:" ||
+			strings.HasPrefix(low, "tip:") ||
+			strings.HasPrefix(low, "no models available") ||
+			strings.HasPrefix(low, "error:") ||
+			strings.HasPrefix(low, "warning:") ||
+			strings.HasPrefix(l, "⚠") ||
+			strings.HasPrefix(low, "loading") {
+			continue
+		}
+		for _, bullet := range []string{"- ", "* ", "• "} {
+			if strings.HasPrefix(l, bullet) {
+				l = strings.TrimSpace(strings.TrimPrefix(l, bullet))
+				break
+			}
+		}
+
+		var id, label string
+		var isDef, isCur bool
+		if left, right, hasSep := strings.Cut(l, " - "); hasSep {
+			id = strings.TrimSpace(left)
+			label, isDef, isCur = stripCursorModelMarkers(right)
+			if !isDef && !isCur {
+				var idDef, idCur bool
+				id, idDef, idCur = stripCursorModelMarkers(id)
+				isDef = isDef || idDef
+				isCur = isCur || idCur
+			}
+		} else {
+			id, isDef, isCur = stripCursorModelMarkers(l)
+		}
+		if !isValidCursorModelID(id) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		models = append(models, ModelOpt{
+			ID:      id,
+			Label:   label,
+			Efforts: []string{},
+		})
+		if isDef && defaultID == "" {
+			defaultID = id
+		}
+		if isCur && currentID == "" {
+			currentID = id
+		}
+	}
+	return models, orStr(defaultID, currentID)
+}
+
+func (s *Server) cursorModels(ctx context.Context, info *ModelInfo) {
+	// Cursor CLI embeds thinking variants in model IDs / bracket params and
+	// has no independent --effort flag.
+	info.Efforts = []string{}
+
+	bin := findBin("cursor-agent", s.home)
+	if bin == "" {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, bin, "--list-models")
+	cmd.Env = append(cursorEnv(os.Environ()), "NO_COLOR=1")
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	models, defID := parseCursorModels(string(out))
+	if len(models) == 0 {
+		return
+	}
+	info.Models = models
+	info.Default = defID
+}
+
 // detectInitialSettings probes local agents for a brand-new installation and,
 // when `agy models` succeeds, warms modelCache so the first settings/composer
 // load does not pay for a second CLI round-trip.
@@ -714,8 +871,25 @@ func findBin(name, home string) string {
 			}
 		}
 	}
+	if found == "" && name == "codex" {
+		found = desktopCodex(home)
+	}
 	if found != "" {
 		binCache.Store(name, found)
 	}
 	return found
+}
+
+// The ChatGPT desktop app bundles Codex without installing it on PATH.
+func desktopCodex(home string) string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	for _, dir := range []string{filepath.Join(home, "Applications"), "/Applications"} {
+		path := filepath.Join(dir, "ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+		if bin, err := exec.LookPath(path); err == nil && filepath.IsAbs(bin) {
+			return bin
+		}
+	}
+	return ""
 }

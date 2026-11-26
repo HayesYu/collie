@@ -9,7 +9,7 @@
     set(k, v) { try { localStorage.setItem("collie." + k, JSON.stringify(v)); } catch {} },
   };
   const narrow = () => matchMedia("(max-width: 760px)").matches;
-  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", doubao: "Doubao" };
+  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", doubao: "Doubao", cursor: "Cursor" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
   const FMT_HHMM = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }) : null;
@@ -103,11 +103,12 @@
     codex: '<svg viewBox="0 0 32 32"><path d="M16 4l10.4 6v12L16 28 5.6 22V10z"/><path d="M13 13l-3 3 3 3M19 13l3 3-3 3"/></svg>',
     agy: '<svg viewBox="0 0 32 32"><ellipse cx="16" cy="16" rx="11" ry="5" transform="rotate(-30 16 16)"/><path d="M16 21V9M12 13l4-4 4 4"/></svg>',
     doubao: '<svg viewBox="0 0 32 32"><path d="M16 5c5.8 0 10 4.2 10 10.2C26 21.8 21.8 27 16 27S6 21.8 6 15.2C6 9.2 10.2 5 16 5z"/><circle cx="12.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="19.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><path d="M12.5 19.5c1.1 1.1 2.2 1.6 3.5 1.6s2.4-.5 3.5-1.6"/></svg>',
+    cursor: '<svg viewBox="0 0 32 32"><path d="M8 5l16 9.5-7.2 2.1L14.5 24 8 5z"/><path d="M17.2 16.8L23 22.6"/></svg>',
     agent: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="10"/><path d="M12 15h.01M20 15h.01M12 20c2.4 1.8 5.6 1.8 8 0"/></svg>',
     shell: '<svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg>',
     collie: '<img src="/icon.svg" alt="" style="width:20px;height:20px">',
   };
-  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity", doubao: "doubao" };
+  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity", doubao: "doubao", cursor: "cursor" };
   const STATUS_LABEL = {
     idle: "空闲", working: "工作中", waiting: "在等后台任务", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
     asleep: "休眠中", starting: "启动中", gone: "已退出", failed: "启动失败",
@@ -399,7 +400,7 @@
     if (pickOpen && !pickPop.contains(e.target) && !pickOpen._pick.contains(e.target)) closePick();
   });
   addEventListener("resize", () => closePick());
-  document.addEventListener("scroll", (e) => { if (pickOpen && !pickPop.contains(e.target)) closePick(); }, true);
+  document.addEventListener("scroll", (e) => { if (pickOpen && !pickPop.contains(e.target)) closePick(); }, { capture: true, passive: true });
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") syncPick(e.target); });
   const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "screen", "log"]);
   let _screenSkipHost = null;
@@ -794,7 +795,7 @@
     if (!dirCtx || dirPop.hidden || dirPop.classList.contains("sheet")) return;
     if (dirPop.contains(e.target)) return;
     positionDirPop();
-  }, true);
+  }, { capture: true, passive: true });
 
   function enhanceDirInput(input, opts = {}) {
     if (!input || !input.parentNode) return null;
@@ -1117,12 +1118,46 @@
   let current = null;  // pane id when view === "pane"
 
   // Coalesce burst SSE "super"/"state" updates into one animation frame and defer
-  // DOM work while the user is mid-IME composition so typing never drops frames.
+  // DOM work while the user is mid-IME composition or actively scrolling upward
+  // through Collie chat history so typing and momentum scrolling never drop frames.
   let superComposing = false;
+  let collieScrolling = false;
+  let collieScrollEndTimer = 0;
+  let collieScrollCapTimer = 0;
+  let deferredScrollMask = 0;
   let liveUpdateMask = 0;
   let liveUpdateRAF = 0;
   let liveComposeTimer = 0;
   const LIVE_SIDE = 1, LIVE_PENDING_BARS = 2, LIVE_SUPER = 4, LIVE_UPDATE_ENTRY = 8, LIVE_HEAD = 16;
+  function endCollieUserScroll(dropDeferred = false) {
+    if (collieScrollEndTimer) { clearTimeout(collieScrollEndTimer); collieScrollEndTimer = 0; }
+    if (collieScrollCapTimer) { clearTimeout(collieScrollCapTimer); collieScrollCapTimer = 0; }
+    collieScrolling = false;
+    if (dropDeferred) {
+      deferredScrollMask = 0;
+      return;
+    }
+    if (deferredScrollMask) {
+      const pending = deferredScrollMask;
+      deferredScrollMask = 0;
+      scheduleLiveUpdates(pending);
+    }
+  }
+  function noteCollieUserScroll(sc) {
+    if (view !== "collie" || !sc || performance.now() < programmaticScrollUntil) return;
+    activeCollieRestore = null;
+    cancelInitialAnchor();
+    if (isCollieNearBottom(sc)) {
+      if (collieScrolling) endCollieUserScroll(false);
+      return;
+    }
+    collieScrolling = true;
+    if (collieScrollEndTimer) clearTimeout(collieScrollEndTimer);
+    collieScrollEndTimer = setTimeout(() => {
+      collieScrollEndTimer = 0;
+      endCollieUserScroll(false);
+    }, 150);
+  }
   function flushLiveUpdates() {
     liveUpdateRAF = 0;
     if (liveComposeTimer) { clearTimeout(liveComposeTimer); liveComposeTimer = 0; }
@@ -1136,6 +1171,28 @@
     if ((mask & LIVE_SUPER) && view === "collie") renderSuper();
   }
   function scheduleLiveUpdates(mask) {
+    if (collieScrolling && view === "collie" && !superComposing && !document.hidden && typeof requestAnimationFrame === "function") {
+      const deferBits = LIVE_SUPER | (narrow() ? LIVE_SIDE : 0);
+      const toDefer = mask & deferBits;
+      if (toDefer) {
+        deferredScrollMask |= toDefer;
+        mask &= ~deferBits;
+        if (!collieScrollCapTimer) {
+          collieScrollCapTimer = setTimeout(() => {
+            collieScrollCapTimer = 0;
+            if (deferredScrollMask && view === "collie") {
+              const pending = deferredScrollMask;
+              deferredScrollMask = 0;
+              const wasScrolling = collieScrolling;
+              collieScrolling = false;
+              scheduleLiveUpdates(pending);
+              collieScrolling = wasScrolling;
+            }
+          }, 600);
+        }
+      }
+      if (!mask) return;
+    }
     liveUpdateMask |= mask;
     if (superComposing) {
       if (!liveComposeTimer) {
@@ -1547,7 +1604,7 @@
   const find = (id) => state.agents.find((a) => a.pane_id === id) || state.shells.find((a) => a.pane_id === id);
   // What to call an agent: the session's own title; a handle like "agy-1" says
   // nothing, so until there's a title use the folder it works in.
-  const autoName = (n) => /^(claude|codex|agy|antigravity|doubao)-\d+$/.test(n || "");
+  const autoName = (n) => /^(claude|codex|agy|antigravity|doubao|cursor)-\d+$/.test(n || "");
   const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "~";
   function title(v) {
     if (!v) return "";
@@ -2086,7 +2143,7 @@
     document.addEventListener("scroll", (ev) => {
       if (!booted || !view || performance.now() < programmaticScrollUntil) return;
       const sc = viewScroller(view);
-      if (!sc || ev.target !== sc || sc.clientHeight <= 0) return;
+      if (!sc || ev.target !== sc) return;
       scheduleScrollSettleCapture(140);
     }, { capture: true, passive: true });
   }
@@ -2182,6 +2239,7 @@
       }
     }
     if (next !== "collie") {
+      endCollieUserScroll(true);
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       pendingOpen = false;
@@ -2358,7 +2416,7 @@
   const entryKey = (e) => (e && (e.id || e._localId)) || "";
   const threadWhoLabel = (e) => (e?.role === "user" ? "你" : "Collie");
   const isWorkerActiveStatus = (w) => !!w && !w.ended && ["working", "starting", "waiting", "blocked"].includes(w.status);
-  const META_PAREN_TOKEN_RE = /^(?:claude|codex|agy|antigravity|doubao|shell|hub|local|mac|macbook|devbox|linux|darwin|amd64|arm64|worker|agent|main|worktree|v?\d+(?:\.\d+)*|#t\d+|t\d+)$/i;
+  const META_PAREN_TOKEN_RE = /^(?:claude|codex|agy|antigravity|doubao|cursor|shell|hub|local|mac|macbook|devbox|linux|darwin|amd64|arm64|worker|agent|main|worktree|v?\d+(?:\.\d+)*|#t\d+|t\d+)$/i;
   function isMetaParen(inner) {
     const parts = String(inner || "").split(/[\s·•\/,|｜\-—–+]+/).filter(Boolean);
     return !parts.length || parts.every((p) => META_PAREN_TOKEN_RE.test(p));
@@ -3306,7 +3364,7 @@
 
   // Older chat, loaded a page at a time when you ask: the hub only sends the
   // latest 200 lines. olderMore: whether there is more before that.
-  let older = [], olderMore = null, olderBusy = false, superScrollRAF = 0;
+  let older = [], olderMore = null, olderBusy = false, olderShowRow = false, olderRowTimer = 0, superScrollRAF = 0;
   let _chatEntriesCache = null;
   function chatEntries() {
     const supArr = sup.entries || [];
@@ -3391,12 +3449,27 @@
     const first = chatEntries().find((e) => e.id);
     if (olderBusy || !first) return false;
     const scroller = $("#super-thread")?.parentElement || null;
-    const keepSnap = keepPos && scroller
-      ? (collieLayoutLock?.snap ? { ...collieLayoutLock.snap, useFromBottom: true } : { ...captureColliePos(scroller), useFromBottom: true })
-      : null;
     const bgFetch = !!(keepPos && untilId);
     olderBusy = true;
-    if (!bgFetch) renderSuper(keepSnap ? { restore: keepSnap } : undefined);
+    olderShowRow = false;
+    clearTimeout(olderRowTimer);
+    olderRowTimer = 0;
+    if (!bgFetch) {
+      // Only show the top "加载中…" row if a slow fetch is still pending when
+      // the user is actually at the top edge; silent prefetching above the
+      // viewport avoids an unnecessary mid-scroll DOM shift and scrollTop write.
+      const showEarlierRowNow = () => {
+        olderRowTimer = 0;
+        if (!olderBusy || olderShowRow || bgFetch) return;
+        if (scroller && scroller.scrollTop > 80) return;
+        olderShowRow = true;
+        const snap = keepPos && scroller
+          ? (collieLayoutLock?.snap || { ...captureColliePos(scroller), useFromBottom: true })
+          : null;
+        renderSuper(snap ? { restore: snap, once: true } : undefined);
+      };
+      olderRowTimer = setTimeout(showEarlierRowNow, !scroller || scroller.scrollTop <= 40 ? 120 : 180);
+    }
     let added = false;
     try {
       let url = `/api/super/earlier?before=${encodeURIComponent(first.id)}`;
@@ -3413,15 +3486,22 @@
       }
       olderMore = batch.length ? !!r.more : false;
     } catch (e) { olderMore = false; toast(e.message, "attn"); }
+    clearTimeout(olderRowTimer);
+    olderRowTimer = 0;
+    const hadRow = olderShowRow;
+    olderShowRow = false;
     olderBusy = false;
-    const finalSnap = keepPos ? (collieLayoutLock?.snap || keepSnap) : null;
-    if (!bgFetch || added) {
-      renderSuper(finalSnap ? { restore: finalSnap } : undefined);
+    if (!added && !hadRow) {
+      return false;
     }
-    if (finalSnap && scroller) {
-      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
-      applyColliePos(scroller, finalSnap);
-      updateSuperJump();
+    // Capture a FRESH scroll anchor right before prepending so any upward scroll
+    // that happened during the async fetch is preserved with 0px rebound, and
+    // apply it once synchronously without arming the 340ms activeCollieRestore lock.
+    const finalSnap = keepPos && scroller
+      ? (collieLayoutLock?.snap || { ...captureColliePos(scroller), useFromBottom: true })
+      : null;
+    if (!bgFetch || added) {
+      renderSuper(finalSnap ? { restore: finalSnap, once: true } : undefined);
     }
     return added;
   }
@@ -3857,7 +3937,7 @@
     collieInitialAnchor = { mode, until, timer, ro, lastH: sc.scrollHeight, lastCH: sc.clientHeight };
   }
 
-  let superBodyKey = "", superDomGen = 0, superAsksGen = 0, thumbRenderVer = 0;
+  let superBodyKey = "", superDomGen = 0, superAsksGen = 0;
   let _superPatchTpl = null;
   function canPatchSuperDom(box) {
     if (!box || typeof box.insertBefore !== "function" || typeof box.replaceChild !== "function"
@@ -4005,27 +4085,61 @@
     }
 
     let cursor = box.firstElementChild;
-    let pendingFrag = null;
+    let pendingNew = null;
     const flushFrag = () => {
-      if (!pendingFrag) return;
-      if (cursor) box.insertBefore(pendingFrag, cursor);
-      else box.appendChild(pendingFrag);
-      pendingFrag = null;
+      if (!pendingNew || !pendingNew.length) return;
+      const frag = document.createDocumentFragment();
+      if (pendingNew.length > 8) {
+        _superPatchTpl.innerHTML = pendingNew.map((it) => it.render()).join("");
+        const parsed = [..._superPatchTpl.content.children];
+        if (parsed.length === pendingNew.length) {
+          for (let j = 0; j < pendingNew.length; j++) {
+            const el = parsed[j], it = pendingNew[j];
+            el._collieKey = it.key;
+            el._collieSig = it.sig;
+            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            nodeMap.set(it.key, el);
+            frag.appendChild(el);
+            added++;
+          }
+        } else {
+          _superPatchTpl.innerHTML = "";
+          for (let j = 0; j < pendingNew.length; j++) {
+            const it = pendingNew[j], el = parseSuperNode(it.render());
+            if (!el) continue;
+            el._collieKey = it.key;
+            el._collieSig = it.sig;
+            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            nodeMap.set(it.key, el);
+            frag.appendChild(el);
+            added++;
+          }
+        }
+      } else {
+        for (let j = 0; j < pendingNew.length; j++) {
+          const it = pendingNew[j], el = parseSuperNode(it.render());
+          if (!el) continue;
+          el._collieKey = it.key;
+          el._collieSig = it.sig;
+          if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+          nodeMap.set(it.key, el);
+          frag.appendChild(el);
+          added++;
+        }
+      }
+      if (frag.firstChild) {
+        if (cursor) box.insertBefore(frag, cursor);
+        else box.appendChild(frag);
+      }
+      pendingNew = null;
     };
 
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       let el = nodeMap.get(it.key);
       if (!el) {
-        el = parseSuperNode(it.render());
-        if (!el) continue;
-        el._collieKey = it.key;
-        el._collieSig = it.sig;
-        if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
-        nodeMap.set(it.key, el);
-        if (!pendingFrag) pendingFrag = document.createDocumentFragment();
-        pendingFrag.appendChild(el);
-        added++;
+        if (!pendingNew) pendingNew = [];
+        pendingNew.push(it);
         continue;
       }
       flushFrag();
@@ -4165,7 +4279,15 @@
     const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || distBefore <= AT_BOTTOM_PX);
     const jumping = flashEntry.until > Date.now();
     const shouldApplyUnreadAnchor = (wantUnreadAnchor || !unreadAnchorApplied) && !forceBottom && !holdRestore && !activeThreadRoot && view === "collie";
-    const liveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread" ? captureCollieAnchor(scroller) : null;
+    const needLiveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread";
+    let liveAnchor = null;
+    let liveAnchorCaptured = false;
+    const ensureLiveAnchor = () => {
+      if (!needLiveAnchor || liveAnchorCaptured) return liveAnchor;
+      liveAnchorCaptured = true;
+      liveAnchor = captureCollieAnchor(scroller);
+      return liveAnchor;
+    };
     const prevScrollTop = scroller.scrollTop;
     const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew._html ?? crew.innerHTML;
     const r = sup.router || {};
@@ -4179,6 +4301,8 @@
     // where its next message will appear; quiet background inspections stay in header.
     const busyInfo = resolveSuperBusy(r, allEntries, opts || {});
     const busy = busyInfo?.text || null;
+    const busyChanged = (busy || "") !== prevBusy;
+    if (busyChanged) ensureLiveAnchor();
     st.hidden = !!busy;
     if (busy) {
       if (wk.className !== busyInfo.cls) wk.className = busyInfo.cls;
@@ -4202,8 +4326,10 @@
       const pane = paneOf(w.name);
       return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
     }).join("");
+    const crewWillChange = crewHTML !== prevCrew;
+    if (crewWillChange) ensureLiveAnchor();
     const prevCrewScroll = crew.scrollLeft || 0;
-    const crewChanged = setHTML(crew, crewHTML) || crewHTML !== prevCrew;
+    const crewChanged = setHTML(crew, crewHTML) || crewWillChange;
     if (crewChanged) {
       if (prevCrewScroll > 0) crew.scrollLeft = prevCrewScroll;
       crew._syncScrollFade?.();
@@ -4242,9 +4368,8 @@
       isEmptyChat ? "E" : "L",
       entriesFingerprint(allEntries),
       sessionUnreadMarkerId || "",
-      olderBusy ? 1 : 0,
+      olderShowRow ? 1 : 0,
       curDayStamp,
-      thumbRenderVer,
       sup.hasPending ? 1 : 0,
       pendList.map((p) => p.id).join(","),
       dismissedLocal.size ? [...dismissedLocal].join(",") : "",
@@ -4255,7 +4380,6 @@
     ].join("|");
 
     renderPendingBar();
-    const busyChanged = (busy || "") !== prevBusy;
 
     if (!force && nextBodyKey === superBodyKey && (!canPatchSuperDom(box) || box.firstElementChild)) {
       if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
@@ -4267,8 +4391,9 @@
       syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
       if (activeThreadRoot) syncThreadDrawer();
     } else {
+      ensureLiveAnchor();
       const items = [];
-      if (olderBusy) {
+      if (olderShowRow) {
         items.push({ key: "__earlier__", sig: "earlier", render: () => `<div class="earlier-row">加载中…</div>` });
       }
       if (isEmptyChat) {
@@ -4371,8 +4496,7 @@
           if (e.role === "user") {
             const qi = analyzeQuote(e, ei);
             const qSig = qi ? qi.sig : "";
-            const hasMedia = !!(e.text && (e.text.includes("附件：\n") || e.text.includes("[image:")));
-            const msgSig = `u:${qSig}|${hasMedia ? thumbRenderVer : 0}|${e.text || ""}`;
+            const msgSig = `u:${qSig}|${e.text || ""}`;
             const sig = `u|${e.id || ""}|${at}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${msgSig}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -4401,8 +4525,7 @@
             const qSig = qi ? qi.sig : "";
             const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
             const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
-            const hasMedia = !!(e.text && (e.text.includes("![") || e.text.includes("/") || e.text.includes("~")));
-            const sig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${hasMedia ? thumbRenderVer : 0}|${qSig}|${optsHtml}|${e.text || ""}`;
+            const sig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${qSig}|${optsHtml}|${e.text || ""}`;
             items.push({
               key: eKey,
               sig,
@@ -4570,11 +4693,17 @@
       return;
     }
     if (holdRestore && !holdRestore.atBottom) {
-      activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
       if (typeof cancelAnimationFrame === "function") {
         cancelAnimationFrame(superScrollRAF);
         cancelAnimationFrame(collieRestoreRAF);
       }
+      if (opts?.once) {
+        activeCollieRestore = null;
+        applyCollieAnchor(scroller, holdRestore);
+        updateSuperJump();
+        return;
+      }
+      activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
       if (holdRestore.unreadSep && collieInitialAnchor?.mode === "unread") {
         applyInitialAnchor();
         return;
@@ -4626,22 +4755,56 @@
       if (e.target?.tagName !== "IMG") return;
       const p = e.target.parentElement?.dataset?.img;
       if (p && e.target.naturalWidth > 0 && e.target.naturalHeight > 0 && !thumbDims.has(p)) {
-        thumbDims.set(p, { w: e.target.naturalWidth, h: e.target.naturalHeight });
+        const w = e.target.naturalWidth, h = e.target.naturalHeight;
+        thumbDims.set(p, { w, h });
         invalidateMdCacheForImage(p);
+        for (const el of document.querySelectorAll(".thumb[data-img] img")) {
+          if (el.parentElement?.dataset?.img === p && !el.getAttribute("width")) {
+            el.width = w;
+            el.height = h;
+          }
+        }
       }
       if (collieInitialAnchor) applyInitialAnchor();
     }, true);
     let superJumpScrollRAF = 0;
+    const maybePrefetchOlder = () => {
+      if (view !== "collie" || olderBusy || !canLoadOlder() || !sc) return;
+      if (performance.now() < programmaticScrollUntil) return;
+      const maxRange = sc.scrollHeight - sc.clientHeight;
+      if (maxRange <= 100) return;
+      const prefetchPx = Math.min(
+        Math.max(480, Math.round(sc.clientHeight * 1.1)),
+        Math.max(40, Math.floor(maxRange * 0.45)),
+      );
+      if (sc.scrollTop < prefetchPx) loadOlder();
+    };
     sc?.addEventListener("scroll", () => {
+      noteCollieUserScroll(sc);
       if (superJumpScrollRAF) return;
       const run = () => {
         superJumpScrollRAF = 0;
         updateSuperJump();
-        if (performance.now() >= programmaticScrollUntil) maybeScheduleReadAtBottom();
+        if (performance.now() >= programmaticScrollUntil) {
+          maybeScheduleReadAtBottom();
+          maybePrefetchOlder();
+        }
       };
       if (typeof requestAnimationFrame === "function") superJumpScrollRAF = requestAnimationFrame(run);
       else run();
     }, { passive: true });
+    if ("onscrollend" in window) {
+      sc?.addEventListener("scrollend", () => {
+        if (collieScrolling) {
+          if (collieScrollEndTimer) clearTimeout(collieScrollEndTimer);
+          collieScrollEndTimer = setTimeout(() => {
+            collieScrollEndTimer = 0;
+            endCollieUserScroll(false);
+          }, 80);
+        }
+        maybePrefetchOlder();
+      }, { passive: true });
+    }
     sc?.addEventListener("wheel", (e) => {
       cancelCollieLayoutLock();
       cancelInitialAnchor();
@@ -4824,6 +4987,7 @@
     return AGY_EFFORT_RE.test(m) || /orchestrator/i.test(m);
   }
   function effortsFor(info, kind, model) {
+    if (kind === "cursor") return [];
     if ((kind === "agy" || kind === "antigravity") && model && agyRejectsEffort(model)) return [];
     const m = (info?.models || []).find((x) => x.id === model);
     if (m && Array.isArray(m.efforts)) return m.efforts;
@@ -4843,7 +5007,7 @@
       if (machine) q.set("machine", machine);
       modelInfo[key] = api("/api/models?" + q).catch(() => ({
         models: [],
-        efforts: kind === "agy" || kind === "antigravity" ? [] : ["low", "medium", "high", "xhigh", "max"],
+        efforts: kind === "agy" || kind === "antigravity" || kind === "cursor" ? [] : ["low", "medium", "high", "xhigh", "max"],
       }));
     }
     return modelInfo[key];
@@ -4872,7 +5036,7 @@
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
       data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
     const have = ms.find((m) => m.id === t.machine)?.agents;
-    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["doubao", "Doubao"]].map(([k, l]) => {
+    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["doubao", "Doubao"], ["cursor", "Cursor"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
       const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
       return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${sub}"` : ""} ${missing && k !== t.kind ? "disabled" : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`;
@@ -7213,9 +7377,9 @@
     const s = r.settings;
     latestSettingsBase = s;
     const routerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
-    const workerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["doubao", "Doubao", "doubao"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
+    const workerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["doubao", "Doubao", "doubao"], ["cursor", "Cursor", "cursor"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
     const modelPick = (who, kind, model, effort) => {
-      const hideEff = (kind === "antigravity" || kind === "agy") && agyRejectsEffort(model);
+      const hideEff = kind === "cursor" || ((kind === "antigravity" || kind === "agy") && agyRejectsEffort(model));
       const eff = hideEff ? "" : (effort || "");
       return `
           <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
@@ -7833,7 +7997,7 @@
       if (view === "ext" && extCur === "h:" + hid) el.innerHTML = `<div class="thread-empty">${esc(err.message)}</div>`;
     }
   }
-  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s], doubao: (s) => ["--resume", s] };
+  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s], doubao: (s) => ["--resume", s], cursor: (s) => ["--resume", s] };
   async function continueHist(hid) {
     const h = hist.find((x) => x.id === hid);
     if (!h || !RESUME[h.kind]) return;
@@ -7954,9 +8118,11 @@
     // 最近: newest first; Collie's own sessions are reached from its conversation.
     const collieWorkerNames = getWorkerLookup().byName;
     const collieRan = (name) => name === ROUTER || collieWorkerNames.has(name);
+    const sessionKey = (s) => JSON.stringify([s.hub || "", s.machine || "", s.session]);
+    const agyHistory = new Set(ext.filter((e) => e.app === "Antigravity CLI").map(sessionKey));
     const recent = [
       ...ext.filter((e) => !going(e)).map((e) => ({ id: e.id, t: +new Date(e.updated || e.started) || 0, html: extRow(e) })),
-      ...hist.filter((h) => !collieRan(h.name)).map((h) => ({ id: "h:" + h.id, t: +new Date(h.ended) || 0, html: histRow(h) })),
+      ...hist.filter((h) => !collieRan(h.name) && !(h.kind === "agy" && agyHistory.has(sessionKey(h)))).map((h) => ({ id: "h:" + h.id, t: +new Date(h.ended) || 0, html: histRow(h) })),
     ].sort((x, y) => y.t - x.t);
     let shown = extAll ? recent : recent.slice(0, RECENT_N);
     const cur = view === "ext" && extCur && !shown.some((x) => x.id === extCur) && recent.find((x) => x.id === extCur);
@@ -8086,24 +8252,63 @@
     const mine = () => view === "ext" && extCur === id;
     // The stream drops when the hub restarts or the computer reconnects:
     // try again in a moment, keeping what is on screen.
-    let tries = 0;
+    let tries = 0, received = false;
     const connect = () => {
       const es = extStream = openES(`/api/external/${encodeURIComponent(id)}/chat`);
+      const here = () => mine() && extStream === es;
+      const show = (msgs) => {
+        keepThread("x:" + id, msgs);
+        drawThread(msgs, el, "这个会话还没有消息。");
+        extWorking();
+      };
+      // Some remote connections open the event stream but delay its first
+      // complete event. A finite read can populate the view in the meantime.
+      const fallback = setTimeout(async () => {
+        if (received || !here()) return;
+        if (el.querySelector(".thread-skel")) el.innerHTML = `<div class="thread-empty">正在读取远端会话记录…</div>`;
+        try {
+          const p = await api(`/api/external/${encodeURIComponent(id)}/snapshot`, { timeout: 12000 });
+          if (!received && here() && Array.isArray(p.msgs)) show(applyPatch(el, p));
+        } catch {
+          if (!received && here() && !el._msgs) el.innerHTML = `<div class="thread-empty">暂时读不到会话记录，正在等待实时连接…</div>`;
+        }
+      }, 4000);
       es.addEventListener("meta", (ev) => {
+        if (!here()) return;
         tries = 0; extSoonN = 0;
         if (!ext.some((e) => e.id === id)) loadExternal();
-        if (mine() && !JSON.parse(ev.data).structured) el.innerHTML = `<div class="thread-empty">还没有找到这个会话的记录。</div>`;
+        if (!JSON.parse(ev.data).structured) {
+          received = true;
+          clearTimeout(fallback);
+          el.innerHTML = `<div class="thread-empty">还没有找到这个会话的记录。</div>`;
+        }
       });
-      const show = (msgs) => { keepThread("x:" + id, msgs); if (mine()) { drawThread(msgs, el, "这个会话还没有消息。"); extWorking(); } };
-      el._redraw = () => show(threadMsgs(el));
-      es.addEventListener("patch", (ev) => mine() && show(applyPatch(el, JSON.parse(ev.data))));
-      es.addEventListener("messages", (ev) => { el._msgs = null; el._older = null; show(JSON.parse(ev.data)); }); // an older computer
-      es.addEventListener("gone", () => { closeExt(); if (mine()) renderExtHead(true); });
+      el._redraw = () => { if (here()) show(threadMsgs(el)); };
+      es.addEventListener("patch", (ev) => {
+        if (!here()) return;
+        received = true;
+        clearTimeout(fallback);
+        show(applyPatch(el, JSON.parse(ev.data)));
+      });
+      es.addEventListener("messages", (ev) => { // an older computer
+        if (!here()) return;
+        received = true;
+        clearTimeout(fallback);
+        el._msgs = null; el._older = null;
+        show(JSON.parse(ev.data));
+      });
+      es.addEventListener("gone", () => {
+        if (!here()) return;
+        clearTimeout(fallback);
+        if (el.querySelector(".thread-skel")) el.innerHTML = `<div class="thread-empty">这个会话已经结束了。</div>`;
+        closeExt();
+        renderExtHead(true);
+      });
       es.onerror = () => {
-        if (es.readyState !== EventSource.CLOSED || extStream !== es || !mine()) return;
+        if (!here() || es.readyState !== EventSource.CLOSED) return;
         if (++tries > 20) { renderExtHead(true); return; }
-        if (!el.querySelector(".msg")) el.innerHTML = `<div class="thread-empty">连不上那台电脑，正在重试…</div>`;
-        setTimeout(() => { if (extStream === es && mine()) connect(); }, Math.min(1000 * tries, 5000));
+        if (!el._msgs && !el.querySelector(".msg")) el.innerHTML = `<div class="thread-empty">连不上那台电脑，正在重试…</div>`;
+        setTimeout(() => { if (here()) connect(); }, Math.min(1000 * tries, 5000));
       };
     };
     connect();
@@ -8575,7 +8780,7 @@
   // Which agents a computer has: nothing when not known (an older node).
   const agentsTag = (list) => !Array.isArray(list) ? ""
     : list.length ? `<span title="这台电脑上装了的 agent">${list.map((k) => esc(AGENT_LABEL[k] || k)).join(" · ")}</span>`
-    : `<span class="tag attn" title="找不到 claude、codex、agy、doubao 命令：装一个，再重连这台电脑">没装 agent</span>`;
+    : `<span class="tag attn" title="找不到 claude、codex、agy、doubao、cursor-agent 命令：装一个，再重连这台电脑">没装 agent</span>`;
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
     ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
   const updateRow = (have, latest, cmd, note, id, name) => {
@@ -9377,10 +9582,14 @@
   }
   // Any conversation scrolled to its top brings in the page before: each
   // thread says how (_loadMore), this one listener notices.
+  // (#super-thread is prefetched earlier inside its own rAF-throttled handler.)
   document.addEventListener("scroll", (ev) => {
     if (performance.now() < programmaticScrollUntil) return;
     const s = ev.target;
-    if (!(s instanceof Element) || s.scrollTop >= 40 || s.scrollHeight <= s.clientHeight + 100) return;
+    if (!(s instanceof Element)) return;
+    const superBox = $("#super-thread");
+    if (superBox && superBox.parentElement === s) return;
+    if (s.scrollTop >= 40 || s.scrollHeight <= s.clientHeight + 100) return;
     const el = s._loadMore ? s : [...s.querySelectorAll(".thread")].find((t) => t._loadMore && (t.parentElement === s || scroller(t) === s));
     el?._loadMore();
   }, { capture: true, passive: true });
@@ -10303,7 +10512,7 @@
     const dim = thumbDims.get(p);
     return (src ? ` src="${src}"` : "") + (dim ? ` width="${dim.w}" height="${dim.h}"` : "");
   };
-  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="${esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt=""${thumbImgAttrs(p)}></button>`;
+  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="${esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt="" decoding="async"${thumbImgAttrs(p)}></button>`;
   const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
   async function loadThumb(img) {
     const p = img.parentElement.dataset.img;
@@ -12014,7 +12223,6 @@
     const sig = JSON.stringify([
       th.rootId,
       curDayStamp,
-      thumbRenderVer,
       th.missingRoot?.id || "",
       tdLoadingRoot ? 1 : 0,
       canLoadOlder() ? 1 : 0,
@@ -12074,10 +12282,9 @@
         const pickedSig = picked ? `${picked.sending ? 1 : 0}:${picked.text}` : "";
         const branchSig = isBranch && parent ? `${entryKey(parent)}|${parent.at || ""}|${threadWhoLabel(parent)}|${parent.text || ""}` : "";
         const rootQuoteSig = hasRootQuote ? `${m.re.who || ""}|${m.re.text}` : "";
-        const hasMedia = !!(m.text && (m.text.includes("[file:") || m.text.includes("/api/uploads/") || m.text.includes("![")));
         const msgSig = [
           m.role, who, m.text || "", isRoot ? 1 : 0, isBranch ? 1 : 0,
-          branchSig, rootQuoteSig, hasMedia ? thumbRenderVer : 0,
+          branchSig, rootQuoteSig,
         ].join("\x1f");
         const itemSig = [
           k, m.id || "", at ? sepTime(at) : "", msgSig,
@@ -12496,7 +12703,6 @@
   const mdCache = new Map();
   const mdCacheImgKeys = new Set();
   function invalidateMdCacheForImage(p) {
-    thumbRenderVer++;
     if (!p || !mdCacheImgKeys.size) return;
     const baseName = p.split("/").pop() || "";
     for (const k of [...mdCacheImgKeys]) {
@@ -13288,17 +13494,19 @@
     return typeof t.includes === "function" ? t.includes("Files") : Array.from(t).includes("Files");
   };
   function seedUploadedThumbs(files) {
-    let added = false;
     for (const f of files || []) {
       if (f?.path && f.isImage && f.blob && !f.thumbFailed && !isUnpreviewableImage(f.mime) && !thumbs.has(f.path)) {
         try {
-          thumbs.set(f.path, URL.createObjectURL(f.blob));
+          const u = URL.createObjectURL(f.blob);
+          thumbs.set(f.path, u);
           thumbMeta.set(f.path, { size: f.size || 0, machine: f.machine || "", path: f.path });
-          added = true;
+          invalidateMdCacheForImage(f.path);
+          for (const el of document.querySelectorAll(".thumb[data-img] img:not([src])")) {
+            if (el.parentElement?.dataset?.img === f.path) { el.src = u; el.parentElement.classList.remove("broken"); }
+          }
         } catch {}
       }
     }
-    if (added) thumbRenderVer++;
   }
 
   function bindFiles(form, machine, opts = {}) {
@@ -13870,19 +14078,38 @@
   // ───────────────────────────── viewport (mobile keyboard)
   // The app fills the visible area: its height shrinks above the keyboard, and
   // it follows the visible area when the browser scrolls the page for it.
+  let lastVH = "", lastVTop = "", setVHRAF = 0;
   function setVH() {
     const v = window.visualViewport;
+    const nextVH = (v ? Math.round(v.height) : innerHeight) + "px";
+    const nextVTop = (v ? Math.max(0, Math.round(v.offsetTop)) : 0) + "px";
+    if (nextVH === lastVH && nextVTop === lastVTop) return;
     const root = document.documentElement.style;
-    // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-    const screenPinned = curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
-    const pinned = [...document.querySelectorAll(".viewer, #log, #td-body")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
-    root.setProperty("--vh", (v ? v.height : innerHeight) + "px");
-    pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
-    if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
-    root.setProperty("--vtop", (v ? Math.max(0, v.offsetTop) : 0) + "px");
+    const vhChanged = nextVH !== lastVH;
+    if (vhChanged) {
+      // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
+      const screenPinned = curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
+      const pinned = [...document.querySelectorAll(".viewer, #log, #td-body")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
+      lastVH = nextVH;
+      root.setProperty("--vh", nextVH);
+      pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
+      if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
+    }
+    if (nextVTop !== lastVTop) {
+      lastVTop = nextVTop;
+      root.setProperty("--vtop", nextVTop);
+    }
+  }
+  function scheduleSetVH() {
+    if (setVHRAF) return;
+    if (typeof requestAnimationFrame === "function") {
+      setVHRAF = requestAnimationFrame(() => { setVHRAF = 0; setVH(); });
+    } else {
+      setVH();
+    }
   }
   window.visualViewport?.addEventListener("resize", setVH);
-  window.visualViewport?.addEventListener("scroll", setVH);
+  window.visualViewport?.addEventListener("scroll", scheduleSetVH);
   addEventListener("resize", setVH);
   setVH();
 

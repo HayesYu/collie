@@ -2441,6 +2441,210 @@ func TestFeishuQuotedLocalImageUsesNativeReplyWithoutDuplication(t *testing.T) {
 	}
 }
 
+func TestFeishuNeverFallbackToGroupChat(t *testing.T) {
+	ctx := context.Background()
+
+	// Case 1: Owner previously DM'd (oc_p2p_owner), then @Collie in a public group,
+	// then talks from the Web UI. Non-group replies must NEVER fall back to the group
+	// or trigger group-based instant sync; they fall back to lastP2P. Only an explicit
+	// reply quoting the owner's group message routes back into the group.
+	t.Run("falls back to lastP2P and disables group instant-sync fallback", func(t *testing.T) {
+		_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+		cfg := FeishuConfig{AllowOpenIDs: []string{"ou_allowed_owner"}, GroupMentionOnly: true, InstantChatSync: true}
+
+		p2pMsg := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_nofb_p2p"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_nofb_p2p_1"),
+					ChatId:      strPtr("oc_p2p_owner"),
+					ChatType:    strPtr("p2p"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"私聊打个招呼"}`),
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, p2pMsg, sink); err != nil {
+			t.Fatal(err)
+		}
+
+		pubGrpMsg := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_nofb_grp"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_owner_pub_1"),
+					ChatId:      strPtr("oc_public_group"),
+					ChatType:    strPtr("group"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"@_user_1 群里问个问题"}`),
+					Mentions: []*larkim.MentionEvent{{
+						Key:           strPtr("@_user_1"),
+						Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+						MentionedType: strPtr("bot"),
+						Name:          strPtr("Collie Test Bot"),
+					}},
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, pubGrpMsg, sink); err != nil {
+			t.Fatal(err)
+		}
+		sp.mu.Lock()
+		grpUserEntry := sp.st.Entries[len(sp.st.Entries)-1]
+		sp.mu.Unlock()
+
+		// Human now sends a message from the Web UI (not Feishu, Channel == "").
+		sp.mu.Lock()
+		webUserEntry := sp.addEntryLocked("user", mainThread, "网页端发的私密指令", "", "")
+		sp.mu.Unlock()
+		webReply, _ := sp.Reply(mainThread, "收到网页端私密指令，已开始处理", webUserEntry.ID, nil, false)
+		unquotedReply, _ := sp.Reply(mainThread, "这是一条无引用后台汇报", "", nil, false)
+
+		if fa.ShouldInstantSync(webReply, false) {
+			t.Fatal("ShouldInstantSync must be false for web reply when lastInbound is a group chat")
+		}
+		if fa.ShouldInstantSync(unquotedReply, false) {
+			t.Fatal("ShouldInstantSync must be false for unquoted reply when lastInbound is a group chat")
+		}
+
+		for label, entry := range map[string]*Entry{
+			"web reply":      webReply,
+			"unquoted reply": unquotedReply,
+			"async notice":   nil,
+		} {
+			rt, rid, rmsg := fa.targetForEntry(entry, cfg)
+			if rt != "chat_id" || rid != "oc_p2p_owner" || rmsg != "" {
+				t.Fatalf("targetForEntry(%s) = (%q,%q,%q), want (chat_id, oc_p2p_owner, \"\")", label, rt, rid, rmsg)
+			}
+		}
+
+		// Sending outbound card/notice for web reply must hit oc_p2p_owner, never oc_public_group.
+		receipt, err := fa.SendReply(ctx, webReply, "http://127.0.0.1:7788")
+		if err != nil {
+			t.Fatalf("SendReply(webReply): %v", err)
+		}
+		if receipt.ChatID != "oc_p2p_owner" {
+			t.Fatalf("webReply routed to %q, want oc_p2p_owner", receipt.ChatID)
+		}
+
+		time.Sleep(80 * time.Millisecond)
+		ff.mu.Lock()
+		for _, c := range ff.calls {
+			if strings.HasSuffix(c.Path, "/reply") || strings.Contains(c.Body, `"receive_id":"oc_public_group"`) {
+				ff.mu.Unlock()
+				t.Fatalf("web/unquoted reply leaked into public group: %+v", c)
+			}
+		}
+		ff.mu.Unlock()
+
+		// Explicit reply quoting the owner's group message MUST still instant-sync back to the group.
+		grpReply, _ := sp.Reply(mainThread, "群里这个问题已查清楚", grpUserEntry.ID, nil, false)
+		if !fa.ShouldInstantSync(grpReply, true) {
+			t.Fatal("ShouldInstantSync must stay true for explicit reply to group origin")
+		}
+		rt, rid, rmsg := fa.targetForEntry(grpReply, cfg)
+		if rt != "chat_id" || rid != "oc_public_group" || rmsg != "om_owner_pub_1" {
+			t.Fatalf("targetForEntry(grpReply) = (%q,%q,%q), want (chat_id, oc_public_group, om_owner_pub_1)", rt, rid, rmsg)
+		}
+		ff.waitForCall(t, func(c fakeFeishuCall) bool {
+			return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages/om_owner_pub_1/reply" &&
+				strings.Contains(extractCardContent(c.Body), "群里这个问题已查清楚")
+		})
+	})
+
+	// Case 2: No prior P2P DM (only AllowOpenIDs configured). Owner @Collie in a public group,
+	// then replies from Web UI (and even clicks a card in the group) -> fallback must go to
+	// AllowOpenIDs[0] (owner DM open_id), never to the group.
+	t.Run("falls back to AllowOpenIDs without prior P2P and resists group card click poisoning", func(t *testing.T) {
+		_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+		cfg := FeishuConfig{AllowOpenIDs: []string{"ou_allowed_owner"}, GroupMentionOnly: true, InstantChatSync: true}
+
+		pubGrpMsg := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_nofb2_grp"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_owner_pub_2"),
+					ChatId:      strPtr("oc_public_group_2"),
+					ChatType:    strPtr("group"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"@_user_1 帮我看下群消息"}`),
+					Mentions: []*larkim.MentionEvent{{
+						Key:           strPtr("@_user_1"),
+						Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+						MentionedType: strPtr("bot"),
+						Name:          strPtr("Collie Test Bot"),
+					}},
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, pubGrpMsg, sink); err != nil {
+			t.Fatal(err)
+		}
+		sp.mu.Lock()
+		grpUserEntry := sp.st.Entries[len(sp.st.Entries)-1]
+		sp.mu.Unlock()
+
+		// Collie sends an --opt card explicitly replying to the group message, then owner clicks it inside the group.
+		optCard, _ := sp.Reply(mainThread, "群里选一个方案", grpUserEntry.ID, []string{"方案A", "方案B"}, false)
+		ff.waitForCall(t, func(c fakeFeishuCall) bool {
+			return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages/om_owner_pub_2/reply"
+		})
+		if _, err := fa.handleCardAction(ctx, &larkcallback.CardActionTriggerEvent{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_nofb2_card"}},
+			Event: &larkcallback.CardActionTriggerRequest{
+				Operator: &larkcallback.Operator{OpenID: "ou_allowed_owner"},
+				Context:  &larkcallback.Context{OpenChatID: "oc_public_group_2", OpenMessageID: "om_card_in_grp"},
+				Action:   &larkcallback.CallBackAction{Value: map[string]any{"action": "pick_opt", "entry_id": optCard.ID, "opt_idx": "0"}},
+			},
+		}, sink); err != nil {
+			t.Fatalf("handleCardAction in group: %v", err)
+		}
+
+		// Now owner sends a Web UI message and Collie replies without Feishu origin.
+		sp.mu.Lock()
+		webUserEntry := sp.addEntryLocked("user", mainThread, "回到网页端继续私聊任务", "", "")
+		sp.mu.Unlock()
+		webReply, _ := sp.Reply(mainThread, "好的，网页端任务已安排", webUserEntry.ID, nil, false)
+		if fa.ShouldInstantSync(webReply, false) {
+			t.Fatal("ShouldInstantSync must stay false after group message + group card click")
+		}
+		rt, rid, rmsg := fa.targetForEntry(webReply, cfg)
+		if rt != "open_id" || rid != "ou_allowed_owner" || rmsg != "" {
+			t.Fatalf("targetForEntry(webReply) = (%q,%q,%q), want (open_id, ou_allowed_owner, \"\")", rt, rid, rmsg)
+		}
+		receipt, err := fa.SendReply(ctx, webReply, "http://127.0.0.1:7788")
+		if err != nil {
+			t.Fatalf("SendReply(webReply): %v", err)
+		}
+		if receipt.ChatID != "ou_allowed_owner" {
+			t.Fatalf("webReply routed to %q, want ou_allowed_owner", receipt.ChatID)
+		}
+
+		// Also verify CanSendFallback does not count a group-only lastInbound when AllowOpenIDs is empty.
+		fa.mgr.mu.Lock()
+		emptyAllowCfg, _ := json.Marshal(FeishuConfig{Region: "cn", AppID: "cli_test_app", InstantChatSync: true})
+		rec := fa.mgr.records[feishuKind]
+		rec.Config = emptyAllowCfg
+		fa.mgr.records[feishuKind] = rec
+		fa.mgr.mu.Unlock()
+		if fa.CanSendFallback() {
+			t.Fatal("CanSendFallback must be false when AllowOpenIDs is empty and only a group chat was seen")
+		}
+	})
+}
+
 func TestOpenSourceRepoZeroInternalTerms(t *testing.T) {
 	// Guard against accidentally introducing internal tool names or internal corporate domains
 	// into the public repository source files.

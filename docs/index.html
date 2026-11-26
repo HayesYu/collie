@@ -2,7 +2,7 @@
 <html lang="en" class="js">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <script>
 try {
@@ -11,39 +11,39 @@ try {
 } catch (e) {}
 window.onerror = function () { document.documentElement.classList.remove("js"); };
 </script>
-<title>Collie · Herd Your AI Coding Agents from Your Phone</title>
-<meta name="description" content="Pick up Claude Code, Codex, and Antigravity sessions running on your computers from your phone—or let Collie, a self-hosted super-agent, split tasks across machines and ping you only when a decision needs you.">
+<title>Collie · Stop Babysitting AI Terminals — Your Self-Hosted Super Agent</title>
+<meta name="description" content="An open-source, self-hosted super-agent for Claude Code, Codex, and Antigravity. Close the terminals and agent desktop apps—one pure Web UI across phone and desktop with 3-line briefs and one-tap decisions.">
 <link rel="canonical" href="https://lihuanyu0w0.github.io/collie/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Collie">
 <meta property="og:url" content="https://lihuanyu0w0.github.io/collie/">
-<meta property="og:title" content="Collie — Herd Your AI Coding Agents from Your Phone">
-<meta property="og:description" content="One hub across all your machines. Pick up Claude Code, Codex, and Antigravity from your phone, tap through approval cards, or hand work to Collie's super-agent.">
+<meta property="og:title" content="Collie — Stop Babysitting 8 AI Terminals">
+<meta property="og:description" content="Close the terminals and every agent desktop app. One pure Web UI across phone and desktop—Collie dispatches Claude Code, Codex, and Antigravity across your machines and delivers 3-line briefs with one-tap decisions.">
 <meta property="og:image" content="https://lihuanyu0w0.github.io/collie/img/hero-dark.png">
 <meta property="og:image:width" content="2880">
 <meta property="og:image:height" content="1800">
-<meta property="og:image:alt" content="Collie workspace dispatching Claude Code and Codex workers with a one-tap approval card">
+<meta property="og:image:alt" content="Collie workspace showing parallel Claude Code and Codex workers reporting back with a concise brief and one-tap decision buttons">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Collie — Herd Your AI Coding Agents from Your Phone">
-<meta name="twitter:description" content="One hub across all your machines. Pick up Claude Code, Codex, and Antigravity from your phone, tap through approval cards, or hand work to Collie's super-agent.">
+<meta name="twitter:title" content="Collie — Stop Babysitting 8 AI Terminals">
+<meta name="twitter:description" content="Close the terminals and agent desktop apps. One pure Web UI across phone and desktop—leave your laptop behind.">
 <meta name="twitter:image" content="https://lihuanyu0w0.github.io/collie/img/hero-dark.png">
-<meta name="twitter:image:alt" content="Collie workspace dispatching Claude Code and Codex workers with a one-tap approval card">
+<meta name="twitter:image:alt" content="Collie workspace showing parallel Claude Code and Codex workers reporting back with a concise brief and one-tap decision buttons">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <style>
 :root {
   --bg-light: #ffffff; --bg-2-light: #f7f7f6; --bg-3-light: #efefed;
-  --line-light: #e9e9e6; --line-2-light: #dcdcd8;
-  --fg-light: #111111; --fg-2-light: #55554f; --fg-3-light: #6e6e68;
+  --line-light: #e8e8e5; --line-2-light: #d8d8d3;
+  --fg-light: #111111; --fg-2-light: #52524c; --fg-3-light: #6e6e67;
   --accent-light: #111111; --on-accent-light: #ffffff;
   --ok-light: #15803d; --attn-light: #b45309; --attn-soft-light: #fbf3e8;
-  --shadow-light: 0 1px 2px rgba(0,0,0,.04), 0 12px 40px rgba(0,0,0,.08);
+  --shadow-light: 0 1px 2px rgba(0,0,0,.04), 0 16px 48px rgba(0,0,0,.08);
 
   --bg-dark: #0b0b0c; --bg-2-dark: #131315; --bg-3-dark: #1c1c1f;
-  --line-dark: #232326; --line-2-dark: #313135;
+  --line-dark: #232327; --line-2-dark: #323238;
   --fg-dark: #ededeb; --fg-2-dark: #a6a6a0; --fg-3-dark: #888882;
   --accent-dark: #f2f2f0; --on-accent-dark: #0b0b0c;
   --ok-dark: #4ade80; --attn-dark: #f0a35e; --attn-soft-dark: #2a1f12;
-  --shadow-dark: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.5);
+  --shadow-dark: 0 1px 2px rgba(0,0,0,.45), 0 20px 56px rgba(0,0,0,.55);
 
   --bg: var(--bg-light); --bg-2: var(--bg-2-light); --bg-3: var(--bg-3-light);
   --line: var(--line-light); --line-2: var(--line-2-light);
@@ -52,9 +52,13 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   --ok: var(--ok-light); --attn: var(--attn-light); --attn-soft: var(--attn-soft-light);
   --shadow: var(--shadow-light);
 
+  --target-size: 28px;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   color-scheme: light dark;
+}
+@media (pointer: coarse) {
+  :root { --target-size: 44px; }
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -108,7 +112,7 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   }
 }
 
-/* Light/dark non-color branching: screenshots & theme toggle icons */
+/* Light/dark & language non-color media branching */
 .only-dark, .ic-to-light { display: none; }
 .only-light, .ic-to-dark { display: block; }
 @media (prefers-color-scheme: dark) {
@@ -122,18 +126,44 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
 :root:has(> head > meta[name="color-scheme"][content="dark"]) .only-dark,
 :root:has(> head > meta[name="color-scheme"][content="dark"]) .ic-to-light { display: block; }
 
+/* Invert monochrome Collie brand SVG in dark mode */
+@media (prefers-color-scheme: dark) {
+  :root:has(> head > meta[name="color-scheme"][content="light dark"]) .brand img { filter: invert(1); }
+}
+:root:has(> head > meta[name="color-scheme"][content="dark"]) .brand img { filter: invert(1); }
+
+/* Language-specific architecture diagrams */
+html[lang^="zh"] .lang-only-en { display: none; }
+html:not([lang^="zh"]) .lang-only-zh { display: none; }
+
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 0.9375rem/1.7 var(--sans); overflow-x: hidden; }
-a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--line-2); }
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(72px + env(safe-area-inset-top, 0px));
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 0.9375rem/1.7 var(--sans);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
+}
+a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--line-2); overflow-wrap: anywhere; }
 a:hover { text-decoration-color: currentColor; }
 :where(a:any-link, button):focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-code, pre { font-family: var(--mono); font-size: 0.8125rem; }
-img, video { max-width: 100%; height: auto; display: block; }
+code, pre { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
+img, video { max-inline-size: 100%; block-size: auto; display: block; }
 h1, h2, h3 { text-wrap: balance; }
-p, .feature li { text-wrap: pretty; }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
-.narrow { max-width: 760px; }
+p, .feature li, .point span { text-wrap: pretty; }
+
+.wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-inline: max(24px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
+}
+.narrow { max-width: 780px; }
 
 .visually-hidden:where(:not(:focus-within, :active)) {
   position: absolute !important;
@@ -153,19 +183,39 @@ p, .feature li { text-wrap: pretty; }
   font-size: 0.875rem; font-weight: 600;
 }
 
-header.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); border-bottom: 1px solid transparent; }
+/* Header */
+header.top {
+  position: sticky; top: 0; z-index: 20;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-bottom: 1px solid transparent;
+  transition: border-color .15s ease;
+}
 header.top.scrolled { border-bottom-color: var(--line); }
-header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-block-size: 60px; padding-top: 8px; padding-bottom: 8px; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 650; text-decoration: none; flex: none; }
+header.top .wrap {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; min-block-size: 60px; padding-block: 8px;
+}
+.brand {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-weight: 650; font-size: 0.96875rem; letter-spacing: -.01em;
+  text-decoration: none; flex: none; min-block-size: var(--target-size);
+}
 .brand img { width: 26px; height: 26px; }
-nav { display: flex; align-items: center; gap: 20px; min-width: 0; }
-nav a { color: var(--fg-2); text-decoration: none; font-size: 0.875rem; padding: 4px 0; }
+nav { display: flex; align-items: center; gap: 20px; min-inline-size: 0; }
+nav a {
+  display: inline-flex; align-items: center;
+  min-block-size: var(--target-size);
+  color: var(--fg-2); text-decoration: none; font-size: 0.875rem;
+}
 nav a:hover { color: var(--fg); }
 .controls { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .ctrl {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  min-block-size: 30px; min-inline-size: 30px; padding: 4px 10px;
-  border-radius: 999px; border: 1px solid var(--line-2);
+  min-block-size: max(30px, var(--target-size)); min-inline-size: max(30px, var(--target-size));
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line-2);
   background: transparent; color: var(--fg-2);
   font: 0.78rem/1 var(--sans); font-weight: 500; cursor: pointer;
   transition: background .15s ease, color .15s ease, border-color .15s ease;
@@ -179,125 +229,271 @@ nav a:hover { color: var(--fg); }
 .theme-btn { padding: 4px; }
 .theme-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-.btn { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-size: 0.90625rem; font-weight: 550; padding: 10px 18px; min-block-size: 42px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--fg); background: var(--bg); transition: transform .15s ease, background .15s ease; }
-.btn:hover { background: var(--bg-3); transform: translateY(-1px); }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  text-decoration: none; font-size: 0.9375rem; font-weight: 560;
+  padding: 10px 20px; min-block-size: 44px; border-radius: 999px;
+  border: 1px solid var(--line-2); color: var(--fg); background: var(--bg);
+  transition: transform .15s ease, background .15s ease, border-color .15s ease;
+}
+.btn:hover { background: var(--bg-3); border-color: var(--fg-3); transform: translateY(-1px); }
 .btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .btn.primary:hover { background: var(--accent); opacity: .9; }
-.btn svg { width: 16px; height: 16px; flex: none; }
+.btn svg { width: 15px; height: 15px; flex: none; }
 
-/* hero */
-.hero { padding: 72px 0 32px; text-align: center; }
-h1 { font-size: clamp(2.15rem, 1.45rem + 2.6vw, 3.5rem); line-height: 1.12; letter-spacing: -.03em; margin: 20px auto 16px; font-weight: 700; max-width: 860px; }
+/* Hero */
+.hero { padding: 48px 0 24px; text-align: center; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 13px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg-2);
+  font-size: 0.8125rem; font-weight: 500; color: var(--fg-2);
+}
+.eyebrow i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--attn); flex: none;
+}
+h1 {
+  font-size: clamp(2rem, 1.35rem + 2.35vw, 3.35rem);
+  line-height: 1.13; letter-spacing: -.03em;
+  margin: 18px auto 16px; font-weight: 700; max-width: 960px;
+}
 h1:focus { outline: none; }
 h1 em { font-style: normal; color: var(--attn); }
-.lede { font-size: clamp(1rem, 0.94rem + 0.35vw, 1.125rem); color: var(--fg-2); margin: 0 auto; max-width: 680px; }
-@media (max-width: 700px) { .lede br.wide { display: none; } }
-.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
-.agents { display: flex; gap: 8px 18px; justify-content: center; flex-wrap: wrap; margin-top: 22px; font-size: 0.8125rem; color: var(--fg-3); }
-.agents span::before { content: "✓ "; color: var(--ok); }
+.lede {
+  font-size: clamp(0.98rem, 0.93rem + 0.25vw, 1.1rem);
+  line-height: 1.66; color: var(--fg-2);
+  margin: 0 auto; max-width: 700px;
+}
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 26px; }
+.proof {
+  display: flex; gap: 6px 16px; justify-content: center; flex-wrap: wrap;
+  margin-top: 20px; font-size: 0.8125rem; color: var(--fg-3);
+}
+.proof span::before { content: "✓ "; color: var(--ok); }
 
-.stage { position: relative; margin: 48px auto 0; max-width: 1080px; }
-.frame { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow); background: var(--bg-2); }
-.frame .bar { display: flex; align-items: center; gap: 7px; min-block-size: 34px; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
-.frame .bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-2); flex: none; }
-.frame .bar span { margin-left: 10px; font-size: 0.75rem; color: var(--fg-3); font-family: var(--mono); }
-.frame video, .frame img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; background: var(--bg); }
-.phone { position: absolute; right: -28px; bottom: -40px; width: 230px; border-radius: 34px; border: 7px solid #1b1b1d; box-shadow: var(--shadow); overflow: hidden; background: #fff; }
-.phone img { width: 100%; aspect-ratio: 390 / 844; object-fit: cover; }
+/* Hero media showcase — clean slot ready for future video cover/player swap */
+.stage { position: relative; margin: 40px auto 0; max-width: 1060px; padding-bottom: 24px; }
+.frame {
+  border-radius: 16px; overflow: hidden;
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+  background: var(--bg-2);
+}
+.frame .bar {
+  display: flex; align-items: center; gap: 7px;
+  min-block-size: 36px; padding: 6px 14px;
+  border-bottom: 1px solid var(--line); background: var(--bg-2);
+}
+.frame .bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); flex: none; }
+.frame .bar span { margin-left: 8px; font-size: 0.75rem; color: var(--fg-3); font-family: var(--mono); }
+.stage-media { position: relative; background: var(--bg); }
+.stage-media img,
+.stage-media video {
+  width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top;
+}
+.stage-phone {
+  position: absolute; right: 16px; bottom: 0; width: 224px;
+  border-radius: 32px; border: 6px solid #1b1b1d;
+  box-shadow: var(--shadow); overflow: hidden; background: var(--bg);
+}
+.stage-phone img { width: 100%; aspect-ratio: 390 / 844; object-fit: cover; object-position: top; }
 
-/* sections */
-section { padding: 96px 0 0; }
-.kicker { font-size: 0.8125rem; font-weight: 600; color: var(--attn); letter-spacing: .04em; text-transform: uppercase; margin: 0 0 10px; }
-html[lang^="zh"] .kicker { text-transform: none; }
-h2 { font-size: clamp(1.65rem, 1.35rem + 1.2vw, 2.25rem); line-height: 1.2; margin: 0 0 14px; font-weight: 680; letter-spacing: -.02em; }
-.sub { color: var(--fg-2); font-size: 1.03125rem; margin: 0; max-width: 660px; }
+/* Flow strip (3-step mental model right below hero) */
+.loop {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+  background: var(--line); border: 1px solid var(--line);
+  border-radius: 14px; overflow: hidden; margin-top: 44px; text-align: left;
+}
+.loop-step { background: var(--bg); padding: 20px 22px; }
+.loop-num {
+  display: inline-block; font-size: 0.75rem; font-weight: 600;
+  color: var(--attn); letter-spacing: .04em; margin-bottom: 6px;
+}
+.loop-step b { display: block; font-size: 0.96875rem; margin-bottom: 4px; }
+.loop-step span { color: var(--fg-2); font-size: 0.875rem; }
+
+/* Sections */
+section { padding: 100px 0 0; }
+.kicker {
+  font-size: 0.8125rem; font-weight: 600; color: var(--attn);
+  letter-spacing: .04em; text-transform: uppercase; margin: 0 0 10px;
+}
+html[lang^="zh"] .kicker { text-transform: none; letter-spacing: .02em; }
+h2 {
+  font-size: clamp(1.65rem, 1.32rem + 1.2vw, 2.3rem);
+  line-height: 1.2; margin: 0 0 14px; font-weight: 680; letter-spacing: -.022em;
+}
+.sub { color: var(--fg-2); font-size: 1.03125rem; margin: 0; max-width: 680px; }
 .center { text-align: center; }
 .center .sub { margin: 0 auto; }
 
 .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 40px; }
-.point { border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 20px; background: var(--bg); }
-.point .ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--bg-3); margin-bottom: 14px; }
-.point .ic svg { width: 18px; height: 18px; stroke: var(--fg); fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.point b { display: block; font-size: 1rem; margin-bottom: 6px; }
+.point {
+  border: 1px solid var(--line); border-radius: 14px;
+  padding: 22px 22px 20px; background: var(--bg);
+}
+.point .ic {
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center; background: var(--bg-3); margin-bottom: 14px;
+}
+.point .ic svg {
+  width: 18px; height: 18px; stroke: var(--fg); fill: none;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.point b { display: block; font-size: 0.98rem; margin-bottom: 6px; }
 .point span { color: var(--fg-2); font-size: 0.875rem; }
 
-.feature { display: grid; grid-template-columns: 1fr 1.45fr; gap: 56px; align-items: center; margin-top: 80px; }
-.feature.flip { grid-template-columns: 1.45fr 1fr; }
+/* Deep-dive feature rows */
+.feature {
+  display: grid; grid-template-columns: 1fr 1.48fr;
+  gap: 56px; align-items: center; margin-top: 88px;
+}
+.feature.flip { grid-template-columns: 1.48fr 1fr; }
 .feature.flip .text { order: 2; }
-.feature h3 { font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.625rem); line-height: 1.25; margin: 0 0 12px; letter-spacing: -.015em; }
-.feature p { color: var(--fg-2); margin: 0 0 14px; }
-.feature ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-.feature li { color: var(--fg-2); font-size: 0.90625rem; padding-left: 22px; position: relative; }
-.feature li::before { content: ""; position: absolute; left: 4px; top: .7em; width: 7px; height: 7px; border-radius: 50%; background: var(--attn); }
-.shot { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow); }
-.shot img { width: 100%; }
-.duo { display: flex; gap: 18px; justify-content: center; }
-.duo .phone { position: static; width: 46%; max-width: 250px; }
+.feature h3 {
+  font-size: clamp(1.375rem, 1.18rem + 0.65vw, 1.65rem);
+  line-height: 1.24; margin: 0 0 12px; letter-spacing: -.018em;
+}
+.feature p { color: var(--fg-2); margin: 0 0 16px; }
+.feature ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.feature li { color: var(--fg-2); font-size: 0.90625rem; padding-left: 20px; position: relative; }
+.feature li::before {
+  content: ""; position: absolute; left: 3px; top: .68em;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--attn);
+}
+.shot {
+  border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+  background: var(--bg-2);
+}
+.shot img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; }
+.duo { display: flex; gap: 18px; justify-content: center; align-items: flex-start; }
+.duo .phone-card {
+  width: 47%; max-width: 248px;
+  border-radius: 32px; border: 6px solid #1b1b1d;
+  box-shadow: var(--shadow); overflow: hidden; background: var(--bg);
+}
+.duo .phone-card img { width: 100%; aspect-ratio: 390 / 844; object-fit: cover; object-position: top; }
 
-.arch { margin-top: 36px; border: 1px solid var(--line); border-radius: 16px; padding: 18px; background: var(--bg); }
+/* Architecture */
+.arch {
+  margin-top: 36px; border: 1px solid var(--line);
+  border-radius: 16px; padding: 18px; background: var(--bg);
+}
 .arch img { width: 100%; border-radius: 8px; }
-.facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 20px; }
+.facts {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+  background: var(--line); border: 1px solid var(--line);
+  border-radius: 14px; overflow: hidden; margin-top: 20px;
+}
 .facts div { background: var(--bg); padding: 16px 18px; }
-.facts b { display: block; font-size: 0.9375rem; margin-bottom: 2px; }
+.facts b { display: block; font-size: 0.9375rem; margin-bottom: 3px; }
 .facts span { color: var(--fg-2); font-size: 0.84375rem; }
 
-/* install */
-.install { margin: 32px 0 8px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--bg-2); text-align: left; }
-.tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tabs button { appearance: none; border: 0; background: transparent; cursor: pointer; padding: 7px 14px; min-block-size: 32px; border-radius: 8px; font: 0.84375rem/1.2 var(--sans); color: var(--fg-2); white-space: nowrap; }
-.tabs button[aria-selected="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 0 0 1px var(--line); }
-.panel { padding: 16px 18px 18px; }
-.panel[hidden] { display: none; }
-.panel p { margin: 0 0 10px; font-size: 0.875rem; color: var(--fg-2); }
-.cmd { display: flex; align-items: flex-start; gap: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 11px 10px 11px 14px; }
-.cmd pre { margin: 0; flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; padding-top: 2px; }
+/* Install tabs (accessible, hidden="until-found" safe: no padding/border on panel element itself) */
+.install {
+  margin: 32px 0 8px; border: 1px solid var(--line);
+  border-radius: 14px; overflow: hidden; background: var(--bg-2); text-align: left;
+}
+.tabs {
+  display: flex; gap: 4px; padding: 6px 8px 0;
+  border-bottom: 1px solid var(--line); overflow-x: auto;
+  scroll-snap-type: inline proximity;
+}
+.tabs button {
+  position: relative; flex: none; scroll-snap-align: start;
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  padding: 9px 14px 11px; min-block-size: max(36px, var(--target-size));
+  font: 0.875rem/1.2 var(--sans); font-weight: 500; color: var(--fg-2); white-space: nowrap;
+}
+.tabs button:hover { color: var(--fg); }
+.tabs button[aria-selected="true"] { color: var(--fg); }
+.tabs button[aria-selected="true"]::after {
+  content: ""; position: absolute; inset: auto 8px 0;
+  border-block-end: 2px solid var(--fg);
+}
+.panel-body { padding: 18px 20px 20px; }
+.panel-body p { margin: 0 0 12px; font-size: 0.875rem; color: var(--fg-2); }
+.cmd {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 11px 10px 11px 14px;
+}
+.cmd pre { margin: 0; flex: 1; min-inline-size: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; padding-top: 2px; }
 .cmd pre::before { content: "$ "; color: var(--fg-3); }
 .cmd pre.multi::before { content: none; }
-.copy { appearance: none; background: transparent; cursor: pointer; flex: none; min-block-size: 28px; font: 0.75rem/1 var(--sans); color: var(--fg-2); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 10px; }
+.copy {
+  appearance: none; background: transparent; cursor: pointer; flex: none;
+  min-block-size: max(30px, var(--target-size));
+  font: 0.78rem/1 var(--sans); font-weight: 500; color: var(--fg-2);
+  border: 1px solid var(--line-2); border-radius: 7px; padding: 4px 11px;
+}
 .copy:hover { color: var(--fg); background: var(--bg-3); }
 .copy.done { color: var(--ok); border-color: currentColor; }
-.note { font-size: 0.8125rem; color: var(--fg-3); margin: 10px 2px 0; }
-.steps { list-style: none; padding: 0; margin: 28px 0 0; counter-reset: s; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; text-align: left; }
+.note { font-size: 0.8125rem; color: var(--fg-3); margin: 12px 2px 0; }
+.steps {
+  list-style: none; padding: 0; margin: 28px 0 0; counter-reset: s;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; text-align: left;
+}
 .steps li { counter-increment: s; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
-.steps li::before { content: counter(s); width: 26px; height: 26px; border-radius: 50%; background: var(--fg); color: var(--bg); display: grid; place-items: center; font-size: 0.8125rem; font-weight: 600; margin-bottom: 12px; }
+.steps li::before {
+  content: counter(s); width: 26px; height: 26px; border-radius: 50%;
+  background: var(--fg); color: var(--bg); display: grid; place-items: center;
+  font-size: 0.8125rem; font-weight: 600; margin-bottom: 12px;
+}
 .steps b { display: block; font-weight: 600; margin-bottom: 4px; }
 .steps span { color: var(--fg-2); font-size: 0.875rem; }
 .steps code { background: var(--bg-3); padding: 1px 5px; border-radius: 4px; font-size: 0.78125rem; }
 
-.final { margin: 110px 0 0; padding: 56px 24px; border-radius: 20px; background: var(--bg-2); border: 1px solid var(--line); text-align: center; }
+/* Final CTA & Footer */
+.final {
+  margin: 108px 0 0; padding: 56px 24px;
+  border-radius: 20px; background: var(--bg-2); border: 1px solid var(--line);
+  text-align: center;
+}
 .final h2 { margin-bottom: 10px; }
-.final .sub { margin: 0 auto 24px; }
+.final .sub { margin: 0 auto 26px; }
 .final .cta { margin-top: 0; }
 
-footer { border-top: 1px solid var(--line); margin-top: 80px; padding: 26px 0 52px; color: var(--fg-3); font-size: 0.8125rem; }
+footer {
+  border-top: 1px solid var(--line); margin-top: 84px;
+  padding: 26px 0 calc(52px + env(safe-area-inset-bottom, 0px));
+  color: var(--fg-3); font-size: 0.8125rem;
+}
 footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
 footer a { color: var(--fg-2); }
 
-/* Only hidden while the script runs: if it fails, everything still shows. */
-.js .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+/* Progressive scroll reveal */
+.js .reveal { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
 .reveal.in { opacity: 1; transform: none; }
-@media (prefers-reduced-motion: reduce) { .js .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) {
+  .js .reveal { opacity: 1; transform: none; transition: none; }
+  html { scroll-behavior: auto; }
+}
 
-@media (max-width: 900px) {
+@media (max-width: 960px) {
   .points { grid-template-columns: 1fr 1fr; }
-  .feature, .feature.flip { grid-template-columns: 1fr; gap: 24px; margin-top: 64px; }
+  .loop { grid-template-columns: 1fr; }
+  .feature, .feature.flip { grid-template-columns: 1fr; gap: 28px; margin-top: 68px; }
   .feature.flip .text { order: 0; }
   .facts { grid-template-columns: 1fr 1fr; }
   .steps { grid-template-columns: 1fr; }
-  .phone { width: 170px; right: -8px; bottom: -28px; border-width: 5px; border-radius: 26px; }
+  .stage-phone { width: 176px; right: 12px; border-width: 5px; border-radius: 26px; }
 }
-@media (max-width: 600px) {
-  .wrap { padding: 0 16px; }
+@media (max-width: 640px) {
+  .wrap { padding-inline: max(16px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)); }
   nav a.hide-s { display: none; }
-  nav { gap: 12px; }
+  nav { gap: 10px; }
   .ctrl { padding: 4px 8px; font-size: 0.75rem; }
-  .hero { padding: 40px 0 16px; }
+  .hero { padding: 36px 0 12px; }
+  .stage { margin-top: 32px; padding-bottom: 0; }
+  .stage-phone { display: none; }
   section { padding-top: 72px; }
   .points { grid-template-columns: 1fr; }
-  .phone { display: none; }
-  .duo .phone { display: block; }
+  .duo { gap: 12px; }
+  .duo .phone-card { width: 48%; border-width: 4px; border-radius: 22px; }
   .facts { grid-template-columns: 1fr; }
-  .final { padding: 40px 18px; }
+  .final { padding: 40px 18px; margin-top: 76px; }
 }
 </style>
 </head>
@@ -330,24 +526,54 @@ footer a { color: var(--fg-2); }
 
 <main>
   <div class="wrap hero">
-    <h1 id="content" tabindex="-1" data-i18n-html="hero_h1">Herd your AI coding agents<br><em>from your phone</em></h1>
-    <p class="lede" data-i18n-html="hero_lede">Pick up Claude Code, Codex, and Antigravity sessions from your phone.<br>When work piles up, hand it to Collie—a self-hosted super-agent that splits tasks across machines, watches for stalls, and turns approval prompts into one-tap cards.</p>
+    <div class="eyebrow"><i aria-hidden="true"></i><span data-i18n="hero_eyebrow">One border collie to herd your coding agents</span></div>
+    <h1 id="content" tabindex="-1" data-i18n-html="hero_h1">Stop babysitting 8 AI terminals.<br>Hand work to <em>Collie</em>.</h1>
+    <p class="lede" data-i18n="hero_lede">Open-source, self-hosted super-agent. Close your terminals and agent desktop apps—Collie dispatches Claude Code, Codex, and Antigravity across machines, retries stalls, and returns 3-line briefs with one-tap options. One pure Web UI on phone and desktop, so you can leave your laptop behind.</p>
     <div class="cta">
       <a class="btn primary" href="demo/">
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg><span data-i18n="cta_demo">Live Demo</span></a>
-      <a class="btn" href="#install" data-i18n="cta_install">Install in 2 minutes</a>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg><span data-i18n="cta_demo">Try Live Demo (10s)</span></a>
+      <a class="btn" href="#install" data-i18n="cta_install">Install in 30s</a>
     </div>
-    <div class="agents"><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>macOS · Linux · WSL2</span><span>IPv4 · IPv6</span><span data-i18n="agent_devices">Phone · Tablet · Desktop</span></div>
+    <div class="proof">
+      <span>Claude Code</span>
+      <span>Codex</span>
+      <span>Antigravity</span>
+      <span>macOS · Linux · WSL2</span>
+      <span data-i18n="proof_web">Pure Web UI · PWA</span>
+      <span data-i18n="proof_ports">Zero open ports</span>
+    </div>
 
-    <div class="stage reveal">
+    <!-- Primary media slot: swap .stage-media contents with video cover/player when published -->
+    <div class="stage reveal" data-media-slot="hero-showcase">
       <div class="frame">
         <div class="bar"><i></i><i></i><i></i><span data-i18n="stage_bar">collie · chat with Collie</span></div>
-        <video id="hero-video" autoplay muted loop playsinline preload="metadata" poster="img/hero-light.png" width="1440" height="900" aria-hidden="true">
-          <source src="img/demo.mp4" type="video/mp4">
-          <img src="img/hero-light.png" width="2880" height="1800" fetchpriority="high" alt="Collie conversation workspace" data-i18n-alt="stage_video_alt">
-        </video>
+        <div class="stage-media" id="hero-media">
+          <img class="only-light" src="img/hero-light.png" width="2880" height="1800" fetchpriority="high" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
+          <img class="only-dark" src="img/hero-dark.png" width="2880" height="1800" fetchpriority="high" alt="Collie workspace in dark mode: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
+        </div>
       </div>
-      <div class="phone"><img src="img/phone-ask.png" width="1170" height="2532" alt="One-tap approval decision card on mobile" data-i18n-alt="phone_ask_alt" loading="lazy"></div>
+      <div class="stage-phone">
+        <img class="only-light" src="img/phone-decision-light.png" width="780" height="1688" alt="Mobile Collie view showing a concise report and one-tap decision buttons" data-i18n-alt="phone_decision_alt" loading="lazy">
+        <img class="only-dark" src="img/phone-decision-dark.png" width="780" height="1688" alt="Mobile Collie view in dark mode showing a concise report and one-tap decision buttons" data-i18n-alt="phone_decision_alt" loading="lazy">
+      </div>
+    </div>
+
+    <div class="loop reveal">
+      <div class="loop-step">
+        <span class="loop-num">01</span>
+        <b data-i18n="loop1_t">Delegate once</b>
+        <span data-i18n="loop1_d">Describe the goal in chat—or let GitHub, Feishu / Lark, or a schedule trigger it automatically.</span>
+      </div>
+      <div class="loop-step">
+        <span class="loop-num">02</span>
+        <b data-i18n="loop2_t">Collie sees it through</b>
+        <span data-i18n="loop2_d">Picks the agent, model, and machine, runs workers in parallel, watches for stalls, and retries on errors.</span>
+      </div>
+      <div class="loop-step">
+        <span class="loop-num">03</span>
+        <b data-i18n="loop3_t">Tap once to decide</b>
+        <span data-i18n="loop3_d">Get a 3-line summary and 2–4 decision buttons. Tap to pass the baton, or reply in a sentence to adjust.</span>
+      </div>
     </div>
   </div>
 
@@ -355,81 +581,98 @@ footer a { color: var(--fg-2); }
     <div class="wrap">
       <div class="center reveal">
         <p class="kicker" data-i18n="why_kicker">Why Collie</p>
-        <h2 data-i18n="why_h2">Your agents keep shipping while you step away</h2>
-        <p class="sub" data-i18n="why_sub">Everything runs on your own computers. Collie keeps the whole fleet visible, steer-able, and quiet until it genuinely needs you.</p>
+        <h2 data-i18n="why_h2">Save your attention for decisions, not terminal logs</h2>
+        <p class="sub" data-i18n="why_sub">Every agent runs on your own hardware. Collie splits the work, tracks it to completion, and stays quiet until a real decision is ready.</p>
       </div>
       <div class="points">
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+          <b data-i18n="p1_title">Ditch terminals &amp; agent desktop apps</b><span data-i18n="p1_body">Stop bouncing between terminals and Claude, Codex, or Antigravity desktop apps. One workspace runs every agent across your machines, retries stalls, and returns 3-line briefs with one-tap options.</span></div>
         <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></div>
-          <b data-i18n="p1_title">One entry, a fleet of agents</b><span data-i18n="p1_body">Tell Collie what you need. It picks the right agent, model, and machine, dispatches workers in parallel, and rolls results back into one chat.</span></div>
-        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12l3 3 5-6"/></svg></div>
-          <b data-i18n="p2_title">Approval prompts become cards</b><span data-i18n="p2_body">When an agent pauses at “Allow this command?”, Collie turns the prompt and choices into a card—tap once on your phone without walking back to your desk.</span></div>
-        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="12" height="9" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="9" width="4" height="10" rx="1"/></svg></div>
-          <b data-i18n="p3_title">All your machines, zero open ports</b><span data-i18n="p3_body">Link Macs, Linux devboxes, and cloud VMs to one hub over outbound tunnels. Automatic IPv4 and pure-IPv6 dual-stack discovery—no SSH, works behind NAT.</span></div>
-        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
-          <b data-i18n="p4_title">Real chats, threads &amp; attachments</b><span data-i18n="p4_body">Reads native JSONL transcripts instead of scraping pixels. Quote replies form a dedicated thread drawer with image paste/uploads, while main chat stays unread-anchored.</span></div>
+          <b data-i18n="p2_title">One pure Web UI—leave your laptop behind</b><span data-i18n="p2_body">Phone (PWA) and desktop share the exact same full workspace: quote-replies, pins, thread drawers, screenshots, reports, and synced unread anchors—ship real work from your phone anywhere.</span></div>
         <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/></svg></div>
-          <b data-i18n="p5_title">Always-on triggers &amp; autonomy</b><span data-i18n="p5_body">Wire in GitHub PRs/CI, pluggable CLI providers, zero-public-IP Feishu/Lark WebSocket cards, webhooks, and timers. Retries stalls and escalates only real decisions.</span></div>
+          <b data-i18n="p3_title">Events come to you automatically</b><span data-i18n="p3_body">Wire in GitHub (PR reviews, @mentions, CI failures investigated read-only), zero-public-IP Feishu / Lark interactive cards, cron checks, and nightly memory consolidation.</span></div>
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="12" height="9" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="9" width="4" height="10" rx="1"/></svg></div>
+          <b data-i18n="p4_title">All your machines, zero open ports</b><span data-i18n="p4_body">Link Macs, Linux devboxes, WSL2, and cloud VMs over outbound tunnels with dual-stack IPv4 and pure-IPv6 discovery—no SSH, works behind NAT, multi-hub ready.</span></div>
+        <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
+          <b data-i18n="p5_title">Step into any agent—or take over existing ones</b><span data-i18n="p5_body">Read native transcripts or flip to the live xterm.js screen anytime. Auto-discovers sessions running in iTerm, VS Code, tmux, SSH, or desktop apps for one-click takeover.</span></div>
         <div class="point reveal"><div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7z"/></svg></div>
-          <b data-i18n="p6_title">Single binary, fleet updates, portable memory</b><span data-i18n="p6_body">One Go binary + SQLite + embedded UI. Revocable per-device tokens, one-click fleet-wide updates, and ZIP memory export/import—zero third-party cloud.</span></div>
+          <b data-i18n="p6_title">Single binary, 30-second setup, fully yours</b><span data-i18n="p6_body">One Go binary + SQLite + embedded UI (zero third-party cloud). Per-device revocable tokens, one-click rolling fleet updates, and ZIP memory export/import.</span></div>
       </div>
 
+      <!-- Spotlight 1: Chat-native collaboration -->
       <div class="feature reveal">
         <div class="text">
-          <p class="kicker" data-i18n="f1_kicker">Super-agent</p>
-          <h3 data-i18n="f1_h3">Say one sentence, Collie orchestrates</h3>
-          <p data-i18n="f1_p">Talk to a single persistent router on your hub. It splits tasks across isolated workers, tracks progress, and surfaces concise updates when they matter.</p>
+          <p class="kicker" data-i18n="f1_kicker">Chat-native workspace</p>
+          <h3 data-i18n="f1_h3">Collaborate like you would in a chat app—not a cold terminal</h3>
+          <p data-i18n="f1_p">Everything stays organized in one calm conversation, even when five workers are moving at once across different machines.</p>
           <ul>
-            <li data-i18n="f1_li1">Picks the agent, machine, and model automatically based on your context and notes</li>
-            <li data-i18n="f1_li2">Reply chains open in a resizable thread drawer with direct image paste, drag-and-drop uploads, and live worker status pills</li>
-            <li data-i18n="f1_li3">Unread-anchored main feed keeps your reading spot steady during bursts of worker reports</li>
+            <li data-i18n="f1_li1">Quote-reply any message into a resizable thread drawer with live status pills for linked workers—parallel tasks never tangle</li>
+            <li data-i18n="f1_li2">Pin key conclusions and todos right above the composer; paste screenshots or drop files straight into main chat or any thread</li>
+            <li data-i18n="f1_li3">Cross-device read/unread sync and unread boundary anchoring: switch between phone and laptop anytime and open straight to where you left off</li>
           </ul>
         </div>
         <div class="shot">
-          <img class="only-light" src="img/hero-light.png" width="2880" height="1800" alt="Chatting with Collie in light mode: two workers dispatched, one reported back, inline approval card" data-i18n-alt="f1_alt" loading="lazy">
-          <img class="only-dark" src="img/hero-dark.png" width="2880" height="1800" alt="Chatting with Collie in dark mode: two workers dispatched, one reported back, inline approval card" data-i18n-alt="f1_alt" loading="lazy">
+          <img class="only-light" src="img/thread-light.png" width="2880" height="1800" alt="Collie chat workspace with unread divider, one-tap decision options, pinned todo bar, and resizable reply-thread drawer" data-i18n-alt="f1_alt" loading="lazy">
+          <img class="only-dark" src="img/thread-dark.png" width="2880" height="1800" alt="Collie chat workspace in dark mode with unread divider, one-tap decision options, pinned todo bar, and resizable reply-thread drawer" data-i18n-alt="f1_alt" loading="lazy">
         </div>
       </div>
 
+      <!-- Spotlight 2: Events come to you -->
       <div class="feature flip reveal">
         <div class="text">
-          <p class="kicker" data-i18n="f2_kicker">Mobile-first</p>
-          <h3 data-i18n="f2_h3">Quiet until you are actually needed</h3>
-          <p data-i18n="f2_p">Blocked agents float to the top with tab-title badges and background notifications. Open straight into a decision card—numbered menus and cursor menus both work with a single tap.</p>
+          <p class="kicker" data-i18n="f2_kicker">Event-driven &amp; Memory</p>
+          <h3 data-i18n="f2_h3">Work finds Collie first—and context compounds overnight</h3>
+          <p data-i18n="f2_p">Connect the places where engineering work actually happens. Collie investigates in the background and brings you decisions instead of raw alerts.</p>
           <ul>
-            <li data-i18n="f2_li1">Scan a QR code to pair; Add to Home Screen for a full PWA with silent session recovery</li>
-            <li data-i18n="f2_li2">Thumb-friendly mobile drawers and bottom sheets tuned for one-handed replies</li>
+            <li data-i18n="f2_li1">GitHub integration tracks PR reviews, @mentions, and CI failures with read-only investigation and one-tap merge or fix choices (plus pluggable local CLI providers)</li>
+            <li data-i18n="f2_li2">Feishu / Lark bot connects over a zero-public-IP WebSocket with two-way interactive cards—delegate and decide right inside your chat app</li>
+            <li data-i18n="f2_li3">Scheduled cron checks plus structured long-term memory tidied nightly (“dream”) and portable via one-click ZIP export/import</li>
+          </ul>
+        </div>
+        <div class="shot">
+          <img class="only-light" src="img/integrations-light.png" width="2880" height="1800" alt="Collie integrations panel showing connected Feishu/Lark zero-public-IP bot, GitHub PR/CI watcher, and custom Git CLI provider" data-i18n-alt="f2_alt" loading="lazy">
+          <img class="only-dark" src="img/integrations-dark.png" width="2880" height="1800" alt="Collie integrations panel in dark mode showing connected Feishu/Lark zero-public-IP bot, GitHub PR/CI watcher, and custom Git CLI provider" data-i18n-alt="f2_alt" loading="lazy">
+        </div>
+      </div>
+
+      <!-- Spotlight 3: Phone & Desktop seamless decisions -->
+      <div class="feature reveal">
+        <div class="text">
+          <p class="kicker" data-i18n="f3_kicker">Pure Web UI · Leave Your Laptop</p>
+          <h3 data-i18n="f3_h3">Identical full experience on phone and desktop—leave your laptop behind</h3>
+          <p data-i18n="f3_p">Collie is one pure Web UI (Add to Home Screen as a PWA), not a stripped-down remote. Delegate tasks, read briefs, tap options, open thread drawers, and view images or reports—all from your phone on a commute or between meetings.</p>
+          <ul>
+            <li data-i18n="f3_li1">Full parity on mobile: send tasks, tap 2–4 decision buttons, browse bottom-sheet thread drawers, and inspect screenshots or full reports one-handed</li>
+            <li data-i18n="f3_li2">Scan a QR code once to pair, then Add to Home Screen for a full PWA with silent session recovery and synced unread markers</li>
           </ul>
         </div>
         <div class="duo">
-          <div class="phone"><img src="img/phone-list.png" width="1170" height="2532" alt="Mobile agent list with needs-attention pinned on top" data-i18n-alt="phone_list_alt" loading="lazy"></div>
-          <div class="phone"><img src="img/phone-ask.png" width="1170" height="2532" alt="One-tap approval decision card on mobile" data-i18n-alt="phone_ask_alt" loading="lazy"></div>
+          <div class="phone-card">
+            <img class="only-light" src="img/phone-decision-light.png" width="780" height="1688" alt="Mobile Collie conversation showing summary and one-tap decision buttons" data-i18n-alt="phone_decision_alt" loading="lazy">
+            <img class="only-dark" src="img/phone-decision-dark.png" width="780" height="1688" alt="Mobile Collie conversation in dark mode showing summary and one-tap decision buttons" data-i18n-alt="phone_decision_alt" loading="lazy">
+          </div>
+          <div class="phone-card">
+            <img class="only-light" src="img/phone-thread-light.png" width="780" height="1688" alt="Mobile Collie bottom-sheet reply-thread drawer with linked worker status pills" data-i18n-alt="phone_thread_alt" loading="lazy">
+            <img class="only-dark" src="img/phone-thread-dark.png" width="780" height="1688" alt="Mobile Collie bottom-sheet reply-thread drawer in dark mode with linked worker status pills" data-i18n-alt="phone_thread_alt" loading="lazy">
+          </div>
         </div>
       </div>
 
-      <div class="feature reveal">
-        <div class="text">
-          <p class="kicker" data-i18n="f3_kicker">Direct control</p>
-          <h3 data-i18n="f3_h3">Step into any agent on any machine</h3>
-          <p data-i18n="f3_p">Launch a fresh agent anywhere—pick its kind, working directory, and model, and give it an opening task. Inspect every plan and tool call in structured chat, with the active model in the header.</p>
-          <ul>
-            <li data-i18n="f3_li1">Discovers sessions running in iTerm, VS Code, tmux, SSH, and desktop apps—view live or take over in one click</li>
-            <li data-i18n="f3_li2">Flip to live xterm.js screen output or wrapped logs whenever you want raw terminal truth</li>
-          </ul>
-        </div>
-        <div class="shot"><img src="img/agent.png" width="2880" height="1800" alt="Structured agent chat showing file reads, plan, and edits" data-i18n-alt="f3_alt" loading="lazy"></div>
-      </div>
-
+      <!-- Spotlight 4: Direct control & takeover -->
       <div class="feature flip reveal">
         <div class="text">
-          <p class="kicker" data-i18n="f4_kicker">Always-on &amp; Memory</p>
-          <h3 data-i18n="f4_h3">Events flow in, knowledge compounds</h3>
-          <p data-i18n="f4_p">Chat messages, GitHub PR reviews and CI alerts, zero-public-IP Feishu/Lark WebSocket cards, webhooks, and cron timers all land in one inbox. Subscribed workers get thread updates directly; the rest go to Collie.</p>
+          <p class="kicker" data-i18n="f4_kicker">Unified Workspace &amp; Takeover</p>
+          <h3 data-i18n="f4_h3">One roof for every agent—and one-click takeover for existing sessions</h3>
+          <p data-i18n="f4_p">No need to open separate Claude, Codex, or Antigravity desktop apps alongside terminal tabs. Everything lives here—and sessions already running elsewhere can be taken over cleanly anytime.</p>
           <ul>
-            <li data-i18n="f4_li1">Built-in GitHub integration plus pluggable local CLI providers, backed by 0600-protected secret storage</li>
-            <li data-i18n="f4_li2">Structured memory (preferences, active tasks, project notes) tidied nightly—and portable via one-click ZIP export/import</li>
+            <li data-i18n="f4_li1">Parses native JSONL transcripts into clean plans, tool steps, and diffs—with live xterm.js terminal view one tap away (and terminal prompts turned into tap cards)</li>
+            <li data-i18n="f4_li2">Auto-discovers sessions started outside Collie in iTerm, VS Code, tmux, SSH, or desktop apps for live viewing and one-click takeover</li>
           </ul>
         </div>
-        <div class="shot"><img src="img/memory.png" width="2880" height="1800" alt="Automation inbox, integrations, and structured memory panel" data-i18n-alt="f4_alt" loading="lazy"></div>
+        <div class="shot">
+          <img class="only-light" src="img/agent-light.png" width="2880" height="1800" alt="Direct agent conversation view showing plan, file reads, and edits with active model in the header" data-i18n-alt="f4_alt" loading="lazy">
+          <img class="only-dark" src="img/agent-dark.png" width="2880" height="1800" alt="Direct agent conversation view in dark mode showing plan, file reads, and edits with active model in the header" data-i18n-alt="f4_alt" loading="lazy">
+        </div>
       </div>
     </div>
   </section>
@@ -438,66 +681,80 @@ footer a { color: var(--fg-2); }
     <div class="wrap">
       <div class="center reveal">
         <p class="kicker" data-i18n="arch_kicker">Architecture</p>
-        <h2 data-i18n="arch_h2">One always-on hub, every computer dials in</h2>
-        <p class="sub" data-i18n-html="arch_sub">Run one hub on an always-on devbox. Other machines run <code>collie node</code> to dial out to the hub; phones and browsers connect only to the hub. Agents live in <a href="https://herdr.dev">herdr</a>, so closing your tab never stops them.</p>
+        <h2 data-i18n="arch_h2">One always-on hub, every machine dials in</h2>
+        <p class="sub" data-i18n-html="arch_sub">Run one hub on an always-on machine. Other computers run <code>collie node</code> to dial out to the hub over multiplexed tunnels—no open ports, no SSH. Agents live in <a href="https://herdr.dev">herdr</a>, so closing your browser never stops them.</p>
       </div>
       <div class="arch reveal">
-        <img class="only-light" src="img/architecture-light.svg" width="1000" height="620" alt="Collie architecture: browsers and events connect to the hub running web UI, super-agent, and herdr, while other computers join over outbound yamux tunnels" data-i18n-alt="arch_alt" loading="lazy">
-        <img class="only-dark" src="img/architecture.svg" width="1000" height="620" alt="Collie architecture: browsers and events connect to the hub running web UI, super-agent, and herdr, while other computers join over outbound yamux tunnels" data-i18n-alt="arch_alt" loading="lazy">
+        <div class="lang-only-en">
+          <img class="only-light" src="img/architecture-en-light.svg" width="1000" height="620" alt="Collie architecture diagram: phones, browsers, GitHub, and Feishu/Lark connect to the hub running the workspace UI, super-agent, and herdr, while other computers join over outbound yamux tunnels" data-i18n-alt="arch_alt" loading="lazy">
+          <img class="only-dark" src="img/architecture-en-dark.svg" width="1000" height="620" alt="Collie architecture diagram in dark mode" data-i18n-alt="arch_alt" loading="lazy">
+        </div>
+        <div class="lang-only-zh">
+          <img class="only-light" src="img/architecture-light.svg" width="1000" height="620" alt="Collie 架构图：浏览器、GitHub 与飞书长连接进入 hub，hub 内置协作工作台、Super Agent 与 herdr，其他电脑通过出站隧道连入" data-i18n-alt="arch_alt" loading="lazy">
+          <img class="only-dark" src="img/architecture-dark.svg" width="1000" height="620" alt="Collie 深色架构图" data-i18n-alt="arch_alt" loading="lazy">
+        </div>
       </div>
       <div class="facts reveal">
-        <div><b data-i18n="fact1_t">Single binary</b><span data-i18n="fact1_d">Written in Go with SQLite, xterm.js, and UI embedded—zero CDN required</span></div>
-        <div><b data-i18n="fact2_t">Dual-stack outbound tunnel</b><span data-i18n="fact2_d">Multiplexed yamux over IPv4 &amp; pure IPv6 with automatic reconnect</span></div>
-        <div><b data-i18n="fact3_t">Multi-hub federation</b><span data-i18n="fact3_d">Run a hub per isolated network and view every fleet in one sidebar</span></div>
-        <div><b data-i18n="fact4_t">One-click fleet updates</b><span data-i18n="fact4_d">Upgrades remote nodes first, then the hub—running agents stay untouched</span></div>
+        <div><b data-i18n="fact1_t">Single Go binary</b><span data-i18n="fact1_d">SQLite, xterm.js, and embedded web UI included—zero external CDN</span></div>
+        <div><b data-i18n="fact2_t">Zero-port outbound tunnels</b><span data-i18n="fact2_d">Multiplexed yamux over IPv4 &amp; pure IPv6 with automatic reconnect</span></div>
+        <div><b data-i18n="fact3_t">Multi-hub federation</b><span data-i18n="fact3_d">Run one hub per isolated network and view every fleet in one sidebar</span></div>
+        <div><b data-i18n="fact4_t">Rolling fleet updates</b><span data-i18n="fact4_d">One click upgrades remote nodes first, then the hub—running agents stay untouched</span></div>
       </div>
     </div>
   </section>
 
   <section id="install">
     <div class="wrap narrow center">
-      <p class="kicker reveal" data-i18n="inst_kicker">Install</p>
-      <h2 class="reveal" data-i18n="inst_h2">Running in two minutes</h2>
-      <p class="sub reveal" data-i18n="inst_sub">macOS, Linux (amd64 / arm64), and Windows via WSL2 (Ubuntu/Debian—run the same command in WSL2; for viewing or control only, open the web UI in Chrome or Edge). Verifies SHA-256 checksums, registers a background service (launchd or systemd --user, falling back to nohup), detects IPv4/IPv6 addresses, and installs herdr if missing.</p>
+      <p class="kicker reveal" data-i18n="inst_kicker">Quick Start</p>
+      <h2 class="reveal" data-i18n="inst_h2">Up and running in 30 seconds</h2>
+      <p class="sub reveal" data-i18n="inst_sub">macOS, Linux (amd64 / arm64), and Windows via WSL2 (Ubuntu/Debian). Verifies SHA-256 checksums, installs herdr if missing, registers a background service (launchd or systemd --user), and prints a QR code ready to scan.</p>
       <div class="install reveal">
         <div class="tabs" role="tablist" aria-label="Installation modes" data-i18n-aria="tabs_label">
-          <button type="button" role="tab" id="tab-hub" aria-selected="true" aria-controls="panel-hub" data-tab="hub" data-i18n="tab_hub">Start hub</button>
-          <button type="button" role="tab" id="tab-node" aria-selected="false" aria-controls="panel-node" tabindex="-1" data-tab="node" data-i18n="tab_node">Join computer</button>
-          <button type="button" role="tab" id="tab-bin" aria-selected="false" aria-controls="panel-bin" tabindex="-1" data-tab="bin" data-i18n="tab_bin">Binary only</button>
-          <button type="button" role="tab" id="tab-src" aria-selected="false" aria-controls="panel-src" tabindex="-1" data-tab="src" data-i18n="tab_src">From source</button>
+          <button type="button" role="tab" id="tab-hub" aria-selected="true" data-tab="hub" data-i18n="tab_hub">Start hub</button>
+          <button type="button" role="tab" id="tab-node" aria-selected="false" tabindex="-1" data-tab="node" data-i18n="tab_node">Join computer</button>
+          <button type="button" role="tab" id="tab-bin" aria-selected="false" tabindex="-1" data-tab="bin" data-i18n="tab_bin">Binary only</button>
+          <button type="button" role="tab" id="tab-src" aria-selected="false" tabindex="-1" data-tab="src" data-i18n="tab_src">From source</button>
         </div>
         <div class="panel" role="tabpanel" id="panel-hub" aria-labelledby="tab-hub" data-panel="hub">
-          <p data-i18n="p_hub">Run on an always-on machine, then scan the terminal QR code from your phone to pair.</p>
-          <div class="cmd"><pre><code>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+          <div class="panel-body">
+            <p data-i18n="p_hub">Run on an always-on machine, then scan the terminal QR code from your phone to pair.</p>
+            <div class="cmd"><pre><code>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+          </div>
         </div>
-        <div class="panel" role="tabpanel" id="panel-node" aria-labelledby="tab-node" data-panel="node" hidden>
-          <p data-i18n="p_node">Run on any other computer. Copy the hub URL and pairing code from Devices → Connect a computer—dials outbound, no open ports.</p>
-          <div class="cmd"><pre><code>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://&lt;hub&gt;:7788 --code &lt;code&gt;</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+        <div class="panel" role="tabpanel" id="panel-node" aria-labelledby="tab-node" data-panel="node" hidden="until-found">
+          <div class="panel-body">
+            <p data-i18n="p_node">Run on any other computer. Copy the hub URL and pairing code from Devices → Connect a computer—dials outbound, no open ports.</p>
+            <div class="cmd"><pre><code>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://&lt;hub&gt;:7788 --code &lt;code&gt;</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+          </div>
         </div>
-        <div class="panel" role="tabpanel" id="panel-bin" aria-labelledby="tab-bin" data-panel="bin" hidden>
-          <p data-i18n-html="p_bin">Install only the <code>collie</code> binary to <code>~/.local/bin</code> without registering a service.</p>
-          <div class="cmd"><pre><code>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+        <div class="panel" role="tabpanel" id="panel-bin" aria-labelledby="tab-bin" data-panel="bin" hidden="until-found">
+          <div class="panel-body">
+            <p data-i18n-html="p_bin">Install only the <code>collie</code> binary to <code>~/.local/bin</code> without registering a service.</p>
+            <div class="cmd"><pre><code>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+          </div>
         </div>
-        <div class="panel" role="tabpanel" id="panel-src" aria-labelledby="tab-src" data-panel="src" hidden>
-          <p data-i18n-html="p_src">Requires Go 1.25+. Run the same script inside the repo to build locally; pass <code>hub</code> or <code>node --hub … --code …</code>.</p>
-          <div class="cmd"><pre class="multi"><code>git clone https://github.com/lihuanyu0w0/collie.git
+        <div class="panel" role="tabpanel" id="panel-src" aria-labelledby="tab-src" data-panel="src" hidden="until-found">
+          <div class="panel-body">
+            <p data-i18n-html="p_src">Requires Go 1.25+. Run the same script inside the repo to build locally; pass <code>hub</code> or <code>node --hub … --code …</code>.</p>
+            <div class="cmd"><pre class="multi"><code>git clone https://github.com/lihuanyu0w0/collie.git
 cd collie
 sh docs/install.sh hub</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+          </div>
         </div>
       </div>
       <p class="note reveal"><a href="install.sh" data-i18n="note_script">Inspect install.sh</a> · <a href="https://github.com/lihuanyu0w0/collie#readme" data-i18n="note_docs" data-readme-link>Full documentation</a></p>
       <ol class="steps">
         <li class="reveal"><b data-i18n="s1_t">Start a hub</b><span data-i18n-html="s1_d">Run <code>hub</code> above. Missing Claude Code &amp; Antigravity herdr integrations are set up automatically; Codex works natively with zero hook edits.</span></li>
-        <li class="reveal"><b data-i18n="s2_t">Scan from your phone</b><span data-i18n="s2_d">Scan the terminal QR code for a dedicated device token, then Add to Home Screen for a native-feeling PWA.</span></li>
-        <li class="reveal"><b data-i18n="s3_t">Join your other computers</b><span data-i18n="s3_d">Copy the one-liner from Devices → Connect a computer and run it—your whole fleet shows up immediately.</span></li>
+        <li class="reveal"><b data-i18n="s2_t">Scan from your phone</b><span data-i18n="s2_d">Scan the terminal QR code for a revocable per-device token, then Add to Home Screen for a native-feeling PWA.</span></li>
+        <li class="reveal"><b data-i18n="s3_t">Join your other computers</b><span data-i18n="s3_d">Copy the one-liner from Devices → Connect a computer and run it—your entire fleet merges into one sidebar.</span></li>
       </ol>
     </div>
   </section>
 
   <div class="wrap">
     <div class="final reveal">
-      <h2 data-i18n="final_h2">Try the interface right now</h2>
-      <p class="sub" data-i18n="final_sub">The interactive demo runs the real Collie frontend on sample data—send a message, open a thread drawer, tap a decision card, or launch an agent.</p>
+      <h2 data-i18n="final_h2">Try the real interface in 10 seconds</h2>
+      <p class="sub" data-i18n="final_sub">Zero install. The interactive demo runs the real Collie frontend on sample data—delegate a task, tap a decision button, open a thread drawer, or inspect an agent.</p>
       <div class="cta"><a class="btn primary" href="demo/"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg><span data-i18n="final_demo">Open Live Demo</span></a><a class="btn" href="https://github.com/lihuanyu0w0/collie" data-i18n="final_gh">View Source on GitHub</a></div>
     </div>
   </div>
@@ -505,7 +762,7 @@ sh docs/install.sh hub</code></pre><button type="button" class="copy" data-i18n=
 
 <footer>
   <div class="wrap">
-    <span data-i18n="footer_tag">Collie · A border collie for your AI agents: herdr manages the terminals, Collie herds the agents</span>
+    <span data-i18n="footer_tag">Collie · Self-hosted super-agent: herdr keeps the terminals alive, Collie herds the agents</span>
     <a href="https://github.com/lihuanyu0w0/collie" data-i18n="footer_src">Source</a>
     <a href="https://github.com/lihuanyu0w0/collie/releases" data-i18n="footer_rel">Releases</a>
     <a href="https://github.com/lihuanyu0w0/collie#readme" data-i18n="footer_docs" data-readme-link>Docs</a>
@@ -517,7 +774,7 @@ sh docs/install.sh hub</code></pre><button type="button" class="copy" data-i18n=
 const COPY = {
   en: {
     _lang: "en",
-    _title: "Collie · Herd Your AI Coding Agents from Your Phone",
+    _title: "Collie · Stop Babysitting AI Terminals — Your Self-Hosted Super Agent",
     _readme: "https://github.com/lihuanyu0w0/collie#readme",
     _langAria: "EN / 中文 — Switch to Chinese",
     skip_link: "Skip to main content",
@@ -527,69 +784,78 @@ const COPY = {
     nav_install: "Install",
     theme_to_dark: "Switch to dark theme",
     theme_to_light: "Switch to light theme",
-    hero_h1: "Herd your AI coding agents<br><em>from your phone</em>",
-    hero_lede: "Pick up Claude Code, Codex, and Antigravity sessions from your phone.<br>When work piles up, hand it to Collie—a self-hosted super-agent that splits tasks across machines, watches for stalls, and turns approval prompts into one-tap cards.",
-    cta_demo: "Live Demo",
-    cta_install: "Install in 2 minutes",
-    agent_devices: "Phone · Tablet · Desktop",
+    hero_eyebrow: "One border collie to herd your coding agents",
+    hero_h1: "Stop babysitting 8 AI terminals.<br>Hand work to <em>Collie</em>.",
+    hero_lede: "Open-source, self-hosted super-agent. Close your terminals and agent desktop apps—Collie dispatches Claude Code, Codex, and Antigravity across machines, retries stalls, and returns 3-line briefs with one-tap options. One pure Web UI on phone and desktop, so you can leave your laptop behind.",
+    cta_demo: "Try Live Demo (10s)",
+    cta_install: "Install in 30s",
+    proof_web: "Pure Web UI · PWA",
+    proof_ports: "Zero open ports",
     stage_bar: "collie · chat with Collie",
-    stage_video_alt: "Collie conversation workspace",
-    phone_ask_alt: "One-tap approval decision card on mobile",
-    phone_list_alt: "Mobile agent list with needs-attention pinned on top",
+    hero_img_alt: "Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons",
+    phone_decision_alt: "Mobile Collie view showing a concise report and one-tap decision buttons",
+    phone_thread_alt: "Mobile Collie bottom-sheet reply-thread drawer with linked worker status pills",
+    loop1_t: "Delegate once",
+    loop1_d: "Describe the goal in chat—or let GitHub, Feishu / Lark, or a schedule trigger it automatically.",
+    loop2_t: "Collie sees it through",
+    loop2_d: "Picks the agent, model, and machine, runs workers in parallel, watches for stalls, and retries on errors.",
+    loop3_t: "Tap once to decide",
+    loop3_d: "Get a 3-line summary and 2–4 decision buttons. Tap to pass the baton, or reply in a sentence to adjust.",
     why_kicker: "Why Collie",
-    why_h2: "Your agents keep shipping while you step away",
-    why_sub: "Everything runs on your own computers. Collie keeps the whole fleet visible, steer-able, and quiet until it genuinely needs you.",
-    p1_title: "One entry, a fleet of agents",
-    p1_body: "Tell Collie what you need. It picks the right agent, model, and machine, dispatches workers in parallel, and rolls results back into one chat.",
-    p2_title: "Approval prompts become cards",
-    p2_body: "When an agent pauses at “Allow this command?”, Collie turns the prompt and choices into a card—tap once on your phone without walking back to your desk.",
-    p3_title: "All your machines, zero open ports",
-    p3_body: "Link Macs, Linux devboxes, and cloud VMs to one hub over outbound tunnels. Automatic IPv4 and pure-IPv6 dual-stack discovery—no SSH, works behind NAT.",
-    p4_title: "Real chats, threads & attachments",
-    p4_body: "Reads native JSONL transcripts instead of scraping pixels. Quote replies form a dedicated thread drawer with image paste/uploads, while main chat stays unread-anchored.",
-    p5_title: "Always-on triggers & autonomy",
-    p5_body: "Wire in GitHub PRs/CI, pluggable CLI providers, zero-public-IP Feishu/Lark WebSocket cards, webhooks, and timers. Retries stalls and escalates only real decisions.",
-    p6_title: "Single binary, fleet updates, portable memory",
-    p6_body: "One Go binary + SQLite + embedded UI. Revocable per-device tokens, one-click fleet-wide updates, and ZIP memory export/import—zero third-party cloud.",
-    f1_kicker: "Super-agent",
-    f1_h3: "Say one sentence, Collie orchestrates",
-    f1_p: "Talk to a single persistent router on your hub. It splits tasks across isolated workers, tracks progress, and surfaces concise updates when they matter.",
-    f1_li1: "Picks the agent, machine, and model automatically based on your context and notes",
-    f1_li2: "Reply chains open in a resizable thread drawer with direct image paste, drag-and-drop uploads, and live worker status pills",
-    f1_li3: "Unread-anchored main feed keeps your reading spot steady during bursts of worker reports",
-    f1_alt: "Chatting with Collie: two workers dispatched, one reported back, inline approval card",
-    f2_kicker: "Mobile-first",
-    f2_h3: "Quiet until you are actually needed",
-    f2_p: "Blocked agents float to the top with tab-title badges and background notifications. Open straight into a decision card—numbered menus and cursor menus both work with a single tap.",
-    f2_li1: "Scan a QR code to pair; Add to Home Screen for a full PWA with silent session recovery",
-    f2_li2: "Thumb-friendly mobile drawers and bottom sheets tuned for one-handed replies",
-    f3_kicker: "Direct control",
-    f3_h3: "Step into any agent on any machine",
-    f3_p: "Launch a fresh agent anywhere—pick its kind, working directory, and model, and give it an opening task. Inspect every plan and tool call in structured chat, with the active model in the header.",
-    f3_li1: "Discovers sessions running in iTerm, VS Code, tmux, SSH, and desktop apps—view live or take over in one click",
-    f3_li2: "Flip to live xterm.js screen output or wrapped logs whenever you want raw terminal truth",
-    f3_alt: "Structured agent chat showing file reads, plan, and edits",
-    f4_kicker: "Always-on & Memory",
-    f4_h3: "Events flow in, knowledge compounds",
-    f4_p: "Chat messages, GitHub PR reviews and CI alerts, zero-public-IP Feishu/Lark WebSocket cards, webhooks, and cron timers all land in one inbox. Subscribed workers get thread updates directly; the rest go to Collie.",
-    f4_li1: "Built-in GitHub integration plus pluggable local CLI providers, backed by 0600-protected secret storage",
-    f4_li2: "Structured memory (preferences, active tasks, project notes) tidied nightly—and portable via one-click ZIP export/import",
-    f4_alt: "Automation inbox, integrations, and structured memory panel",
+    why_h2: "Save your attention for decisions, not terminal logs",
+    why_sub: "Every agent runs on your own hardware. Collie splits the work, tracks it to completion, and stays quiet until a real decision is ready.",
+    p1_title: "Ditch terminals & agent desktop apps",
+    p1_body: "Stop bouncing between terminals and Claude, Codex, or Antigravity desktop apps. One workspace runs every agent across your machines, retries stalls, and returns 3-line briefs with one-tap options.",
+    p2_title: "One pure Web UI—leave your laptop behind",
+    p2_body: "Phone (PWA) and desktop share the exact same full workspace: quote-replies, pins, thread drawers, screenshots, reports, and synced unread anchors—ship real work from your phone anywhere.",
+    p3_title: "Events come to you automatically",
+    p3_body: "Wire in GitHub (PR reviews, @mentions, CI failures investigated read-only), zero-public-IP Feishu / Lark interactive cards, cron checks, and nightly memory consolidation.",
+    p4_title: "All your machines, zero open ports",
+    p4_body: "Link Macs, Linux devboxes, WSL2, and cloud VMs over outbound tunnels with dual-stack IPv4 and pure-IPv6 discovery—no SSH, works behind NAT, multi-hub ready.",
+    p5_title: "Step into any agent—or take over existing ones",
+    p5_body: "Read native transcripts or flip to the live xterm.js screen anytime. Auto-discovers sessions running in iTerm, VS Code, tmux, SSH, or desktop apps for one-click takeover.",
+    p6_title: "Single binary, 30-second setup, fully yours",
+    p6_body: "One Go binary + SQLite + embedded UI (zero third-party cloud). Per-device revocable tokens, one-click rolling fleet updates, and ZIP memory export/import.",
+    f1_kicker: "Chat-native workspace",
+    f1_h3: "Collaborate like you would in a chat app—not a cold terminal",
+    f1_p: "Everything stays organized in one calm conversation, even when five workers are moving at once across different machines.",
+    f1_li1: "Quote-reply any message into a resizable thread drawer with live status pills for linked workers—parallel tasks never tangle",
+    f1_li2: "Pin key conclusions and todos right above the composer; paste screenshots or drop files straight into main chat or any thread",
+    f1_li3: "Cross-device read/unread sync and unread boundary anchoring: switch between phone and laptop anytime and open straight to where you left off",
+    f1_alt: "Collie chat workspace with unread divider, one-tap decision options, pinned todo bar, and resizable reply-thread drawer",
+    f2_kicker: "Event-driven & Memory",
+    f2_h3: "Work finds Collie first—and context compounds overnight",
+    f2_p: "Connect the places where engineering work actually happens. Collie investigates in the background and brings you decisions instead of raw alerts.",
+    f2_li1: "GitHub integration tracks PR reviews, @mentions, and CI failures with read-only investigation and one-tap merge or fix choices (plus pluggable local CLI providers)",
+    f2_li2: "Feishu / Lark bot connects over a zero-public-IP WebSocket with two-way interactive cards—delegate and decide right inside your chat app",
+    f2_li3: "Scheduled cron checks plus structured long-term memory tidied nightly (“dream”) and portable via one-click ZIP export/import",
+    f2_alt: "Collie integrations panel showing connected Feishu/Lark zero-public-IP bot, GitHub PR/CI watcher, and custom Git CLI provider",
+    f3_kicker: "Pure Web UI · Leave Your Laptop",
+    f3_h3: "Identical full experience on phone and desktop—leave your laptop behind",
+    f3_p: "Collie is one pure Web UI (Add to Home Screen as a PWA), not a stripped-down remote. Delegate tasks, read briefs, tap options, open thread drawers, and view images or reports—all from your phone on a commute or between meetings.",
+    f3_li1: "Full parity on mobile: send tasks, tap 2–4 decision buttons, browse bottom-sheet thread drawers, and inspect screenshots or full reports one-handed",
+    f3_li2: "Scan a QR code once to pair, then Add to Home Screen for a full PWA with silent session recovery and synced unread markers",
+    f4_kicker: "Unified Workspace & Takeover",
+    f4_h3: "One roof for every agent—and one-click takeover for existing sessions",
+    f4_p: "No need to open separate Claude, Codex, or Antigravity desktop apps alongside terminal tabs. Everything lives here—and sessions already running elsewhere can be taken over cleanly anytime.",
+    f4_li1: "Parses native JSONL transcripts into clean plans, tool steps, and diffs—with live xterm.js terminal view one tap away (and terminal prompts turned into tap cards)",
+    f4_li2: "Auto-discovers sessions started outside Collie in iTerm, VS Code, tmux, SSH, or desktop apps for live viewing and one-click takeover",
+    f4_alt: "Direct agent conversation view showing plan, file reads, and edits with active model in the header",
     arch_kicker: "Architecture",
-    arch_h2: "One always-on hub, every computer dials in",
-    arch_sub: "Run one hub on an always-on devbox. Other machines run <code>collie node</code> to dial out to the hub; phones and browsers connect only to the hub. Agents live in <a href=\"https://herdr.dev\">herdr</a>, so closing your tab never stops them.",
-    arch_alt: "Collie architecture: browsers and events connect to the hub running web UI, super-agent, and herdr, while other computers join over outbound yamux tunnels",
-    fact1_t: "Single binary",
-    fact1_d: "Written in Go with SQLite, xterm.js, and UI embedded—zero CDN required",
-    fact2_t: "Dual-stack outbound tunnel",
+    arch_h2: "One always-on hub, every machine dials in",
+    arch_sub: "Run one hub on an always-on machine. Other computers run <code>collie node</code> to dial out to the hub over multiplexed tunnels—no open ports, no SSH. Agents live in <a href=\"https://herdr.dev\">herdr</a>, so closing your browser never stops them.",
+    arch_alt: "Collie architecture diagram: phones, browsers, GitHub, and Feishu/Lark connect to the hub running the workspace UI, super-agent, and herdr, while other computers join over outbound yamux tunnels",
+    fact1_t: "Single Go binary",
+    fact1_d: "SQLite, xterm.js, and embedded web UI included—zero external CDN",
+    fact2_t: "Zero-port outbound tunnels",
     fact2_d: "Multiplexed yamux over IPv4 & pure IPv6 with automatic reconnect",
     fact3_t: "Multi-hub federation",
-    fact3_d: "Run a hub per isolated network and view every fleet in one sidebar",
-    fact4_t: "One-click fleet updates",
-    fact4_d: "Upgrades remote nodes first, then the hub—running agents stay untouched",
-    inst_kicker: "Install",
-    inst_h2: "Running in two minutes",
-    inst_sub: "macOS, Linux (amd64 / arm64), and Windows via WSL2 (Ubuntu/Debian—run the same command in WSL2; for viewing or control only, open the web UI in Chrome or Edge). Verifies SHA-256 checksums, registers a background service (launchd or systemd --user, falling back to nohup), detects IPv4/IPv6 addresses, and installs herdr if missing.",
+    fact3_d: "Run one hub per isolated network and view every fleet in one sidebar",
+    fact4_t: "Rolling fleet updates",
+    fact4_d: "One click upgrades remote nodes first, then the hub—running agents stay untouched",
+    inst_kicker: "Quick Start",
+    inst_h2: "Up and running in 30 seconds",
+    inst_sub: "macOS, Linux (amd64 / arm64), and Windows via WSL2 (Ubuntu/Debian). Verifies SHA-256 checksums, installs herdr if missing, registers a background service (launchd or systemd --user), and prints a QR code ready to scan.",
     tabs_label: "Installation modes",
     tab_hub: "Start hub",
     tab_node: "Join computer",
@@ -606,14 +872,14 @@ const COPY = {
     s1_t: "Start a hub",
     s1_d: "Run <code>hub</code> above. Missing Claude Code &amp; Antigravity herdr integrations are set up automatically; Codex works natively with zero hook edits.",
     s2_t: "Scan from your phone",
-    s2_d: "Scan the terminal QR code for a dedicated device token, then Add to Home Screen for a native-feeling PWA.",
+    s2_d: "Scan the terminal QR code for a revocable per-device token, then Add to Home Screen for a native-feeling PWA.",
     s3_t: "Join your other computers",
-    s3_d: "Copy the one-liner from Devices → Connect a computer and run it—your whole fleet shows up immediately.",
-    final_h2: "Try the interface right now",
-    final_sub: "The interactive demo runs the real Collie frontend on sample data—send a message, open a thread drawer, tap a decision card, or launch an agent.",
+    s3_d: "Copy the one-liner from Devices → Connect a computer and run it—your entire fleet merges into one sidebar.",
+    final_h2: "Try the real interface in 10 seconds",
+    final_sub: "Zero install. The interactive demo runs the real Collie frontend on sample data—delegate a task, tap a decision button, open a thread drawer, or inspect an agent.",
     final_demo: "Open Live Demo",
     final_gh: "View Source on GitHub",
-    footer_tag: "Collie · A border collie for your AI agents: herdr manages the terminals, Collie herds the agents",
+    footer_tag: "Collie · Self-hosted super-agent: herdr keeps the terminals alive, Collie herds the agents",
     footer_src: "Source",
     footer_rel: "Releases",
     footer_docs: "Docs",
@@ -621,103 +887,112 @@ const COPY = {
   },
   zh: {
     _lang: "zh-CN",
-    _title: "Collie · 在手机上养边牧，放牧一群 Agent",
+    _title: "Collie · 别再守着 8 个 AI 终端，把活交给你的开源 Super Agent",
     _readme: "https://github.com/lihuanyu0w0/collie/blob/main/README.zh-CN.md",
     _langAria: "EN / 中文 — 切换到英文",
     skip_link: "跳至正文",
     nav_label: "主导航",
-    nav_features: "功能",
+    nav_features: "特性",
     nav_arch: "架构",
     nav_install: "安装",
     theme_to_dark: "切换到深色主题",
     theme_to_light: "切换到浅色主题",
-    hero_h1: "在手机上养边牧，<br>放牧<em>一群 Agent</em>",
-    hero_lede: "电脑上开着的 Claude Code、Codex、Antigravity 会话，手机上直接接着聊。<br>活多了就交给 Collie 这个 super-agent：<br class=\"wide\">它派给各台电脑并行去做，盯进度、处理卡点，需要你拍板时点一下就回。",
-    cta_demo: "在线体验",
-    cta_install: "两分钟装好",
-    agent_devices: "手机 · 平板 · 桌面",
+    hero_eyebrow: "养一只边牧，放牧一群 Agent",
+    hero_h1: "别再守着 8 个 AI 终端，<br>把活交给 <em>Collie</em> 盯到底",
+    hero_lede: "开源自托管 Super Agent。不用再在终端和各种 Agent 桌面端 App 间来回切——把活交给 Collie，它并行调动各台电脑上的 Claude Code、Codex 与 Antigravity，自己盯进度、遇错自愈；做完只端上 3 行结论和一键选项，纯 Web UI 手机电脑一致，出门都不用背电脑。",
+    cta_demo: "10 秒在线体验",
+    cta_install: "30 秒一行装好",
+    proof_web: "纯 Web UI · PWA",
+    proof_ports: "免开端口",
     stage_bar: "collie · 和 Collie 对话",
-    stage_video_alt: "Collie 的对话界面",
-    phone_ask_alt: "手机上的决策卡片",
-    phone_list_alt: "手机上的 agent 列表",
+    hero_img_alt: "Collie 工作台：并行派出的 Claude Code 与 Codex 回报进展，Collie 给出精炼结论与一键决策选项",
+    phone_decision_alt: "手机端 Collie 界面：精炼结论配一键决策按钮与待处理钉住条",
+    phone_thread_alt: "手机端 Collie 底部话题抽屉：多条分支讨论与关联 Agent 实时状态",
+    loop1_t: "说清目标，放心交出去",
+    loop1_d: "在对话里派活，或让 GitHub、飞书机器人与定时巡检自动把事送进来。",
+    loop2_t: "Collie 并行盯到底",
+    loop2_d: "自动挑模型和电脑派给多个 Agent 并行干活，盯卡点、遇错先自愈，不拿中间日志打扰你。",
+    loop3_t: "点一下拍板下一棒",
+    loop3_d: "做完只端上 3 行结论和 2–4 个一键选项——点一下就推进，不满意回一句话微调。",
     why_kicker: "为什么用 Collie",
-    why_h2: "agent 在干活，你不用守着屏幕",
-    why_sub: "它们跑在你自己的电脑上，Collie 只负责让你随时看得到、管得到，真正需要你时才出声。",
-    p1_title: "一个入口，派一群 agent",
-    p1_body: "把事情告诉 Collie。它理解上下文，把活拆给 Claude、Codex 或 Antigravity 并行去做，结果回到同一个对话里。",
-    p2_title: "确认框变成卡片",
-    p2_body: "agent 停在「允许运行吗？」时，问题和选项变成一张卡片，在手机上点一下就回，不用跑回电脑前。",
-    p3_title: "所有电脑合在一处",
-    p3_body: "Mac、开发机、云电脑通过出站隧道连到一个 hub，原生支持 IPv4 与纯 IPv6 双栈自动发现；不开端口、不配 SSH，在 NAT 后面也能用。",
-    p4_title: "读真正的对话，带话题抽屉",
-    p4_body: "直接读 agent 自己的 JSONL 会话记录。引用回复自然收拢成话题抽屉，支持抽屉内直接贴图上传，主会话未读锚定不乱跳。",
-    p5_title: "外部事件接入，自己往前推",
-    p5_body: "内置 GitHub PR/CI、可插拔 CLI 源、零公网飞书/Lark 长连接双向卡片、Webhook 与定时器；卡住自动重试换路，重要决定才问你。",
-    p6_title: "单二进制、一键更新、可迁移记忆",
-    p6_body: "单个 Go 程序 + SQLite + 内嵌前端。每台设备独立令牌随时撤销，一键全端滚动升级，记忆支持 ZIP 导出导入，不经任何第三方云。",
-    f1_kicker: "Super-agent",
-    f1_h3: "说一句话，Collie 去组织",
-    f1_p: "你只和 Collie 对话。它常驻在 hub 上，把事情拆成任务交给 worker，worker 做完、卡住都会回报，Collie 再决定下一步。",
-    f1_li1: "选哪个 agent、哪台电脑、哪个模型，它根据上下文和记忆自己定",
-    f1_li2: "连续引用自然收拢为可调宽话题抽屉，支持抽屉内粘贴/拖放图片与关联 Agent 实时状态胶囊",
-    f1_li3: "主会话自动维持未读锚点，多条回报涌入时阅读位置不漂移",
-    f1_alt: "和 Collie 对话：派出两个 worker，一个已经回报，卡住的 agent 在对话里直接处理",
-    f2_kicker: "手机上处理",
-    f2_h3: "需要你的时候，叫你一声",
-    f2_p: "卡住的 agent 置顶，标签页标题带计数，后台时弹通知。打开就是一张决策卡片：编号菜单发数字，光标菜单发方向键，都替你处理好了。",
-    f2_li1: "扫码配对，添加到主屏幕就是一个完整 PWA，断线自动静默恢复会话",
-    f2_li2: "窄屏专属底部抽屉与单手布局，随时随地一点就回",
-    f3_kicker: "直接管 agent",
-    f3_h3: "每个 agent 都能随时接手",
-    f3_p: "在任意一台电脑上新建 agent：选类型、目录、模型，顺手给它第一个任务。对话视图里看它的思路和每一步工具调用，标题栏写着它用的模型。",
-    f3_li1: "iTerm、VS Code、tmux、SSH 与桌面端直接跑的会话也能实时查看，一键在 herdr 里接管",
-    f3_li2: "屏幕视图用 xterm.js 原样呈现，日志视图在窄屏上自动换行",
-    f3_alt: "Claude 的对话视图：读文件、计划、编辑",
-    f4_kicker: "Always-on · 记忆",
-    f4_h3: "事件进来，经验越攒越厚",
-    f4_p: "你的消息、GitHub PR 评审与 CI 告警、零公网飞书/Lark 长连接卡片、通用 Webhook 与定时任务统统进入同一个收件箱；订阅了线程的 worker 直接收到，其余交给 Collie 判断。",
-    f4_li1: "内置 GitHub 与可插拔本地 CLI 代码托管源，凭据以 0600 权限本地隔离保存",
-    f4_li2: "记忆按偏好、任务、项目笔记分层，每晚「做梦」整理，并支持一键 ZIP 导出与导入迁移",
-    f4_alt: "自动化收件箱、外部接入与结构化记忆面板",
+    why_h2: "把注意力留给拍板，别耗在盯终端上",
+    why_sub: "所有 Agent 都跑在你自己的电脑上。Collie 帮你拆活、跟进和兜底，只在真正值得你做决定时端到你面前。",
+    p1_title: "不止终端，连 Agent 桌面端都不用开了",
+    p1_body: "不用再在终端、Claude / Codex / Antigravity 桌面端间来回切窗口。一个工作台收编全部 Agent 并行干活，遇错自愈，做完只端 3 行结论和一键选项。",
+    p2_title: "纯 Web UI 全端一致，出门不用背电脑",
+    p2_body: "只有一套纯 Web UI（手机加主屏即 PWA），和电脑完全一致：引用、Pin、话题抽屉、看图看报告、跨端未读同步——通勤开会一部手机就能把活干完。",
+    p3_title: "事件自动找上门，经验越攒越厚",
+    p3_body: "接入 GitHub（PR / @提及 / CI 失败自动只读调研并给一键修复选项）、零公网飞书/Lark 双向卡片、定时巡检，外加每晚自动整理长期记忆（dream）。",
+    p4_title: "跨电脑零端口互联，不配 SSH",
+    p4_body: "Mac、Linux、WSL2 与云主机通过出站隧道连进同一个 hub，支持 IPv4 与纯 IPv6 双栈自动发现；藏在 NAT 后也能用，多网络可聚合多个 hub。",
+    p5_title: "想看细节随时钻进去，旧会话一键接管",
+    p5_body: "直读原生对话记录，随时切回实时 xterm.js 终端（顺手把终端确认框变成点选卡片）；自动发现 iTerm、VS Code、tmux 与桌面端已开会话并一键接管。",
+    p6_title: "单二进制 30 秒跑起，数据全在你手里",
+    p6_body: "单个 Go 程序 + SQLite + 全内嵌前端，不经任何第三方云。每台设备独立令牌随时撤销，一键全端滚动升级不打断在跑任务，记忆支持 ZIP 导出迁移。",
+    f1_kicker: "聊天式协作",
+    f1_h3: "像在聊天软件里和靠谱同事共事，告别冷冰冰的命令行",
+    f1_p: "哪怕 5 条任务跨电脑同时在跑，主会话依然干净有序——该收拢的收进话题线，该置顶的钉在眼前。",
+    f1_li1: "引用任意消息自然展开可调宽话题抽屉，附带关联 Agent 实时状态胶囊，多条并行任务绝不串台",
+    f1_li2: "Pin 置顶关键结论与待办清单；主会话和话题抽屉都支持直接粘贴截图、拖放文件",
+    f1_li3: "跨端已读/未读同步与未读边界锚定：手机和电脑随时切，打开就停在上次未读处，既不错过汇报也不用重新翻找",
+    f1_alt: "Collie 聊天工作台：展示以下为未读消息分界线、一键决策按钮、待处理钉住条与右侧话题抽屉",
+    f2_kicker: "事件主动上门 · 长期记忆",
+    f2_h3: "不用天天盯仓巡检，事件到了 Collie 先替你查好",
+    f2_p: "把代码托管和日常聊天软件接进来。有新动态时 Collie 先做一轮只读调研，把结论和可执行选项直接推给你。",
+    f2_li1: "接入 GitHub：PR 评审、@提及 与 CI 失败自动只读排查，把原因和一键合并/修复选项推到你面前（也支持本地可插拔 CLI 代码托管源）",
+    f2_li2: "接入飞书 / Lark 机器人：零公网 WebSocket 长连接双向卡片，在熟悉的聊天软件里就能派活、收汇报和点按钮拍板",
+    f2_li3: "定时巡检叠加长期记忆：偏好、进行中的任务和项目笔记每晚自动做梦整理（dream），支持一键 ZIP 导出迁移",
+    f2_alt: "Collie 自动化接入页：展示已连通的飞书零公网长连接机器人、GitHub PR/CI 追踪与可插拔 CLI 适配器",
+    f3_kicker: "纯 Web UI · 全端一致",
+    f3_h3: "手机和电脑完全一致，出门根本不用背电脑",
+    f3_p: "Collie 只有一套纯 Web UI（添加到主屏幕即 PWA），手机端不是阉割版遥控器，而是和电脑一模一样的完整工作台——通勤、外出、开会间隙，一部手机就能把活干完。",
+    f3_li1: "发需求、看 3 行结论、点一键拍板、翻底部话题抽屉、看截图和长报告全在手机上原生搞定，告别随身背笔记本",
+    f3_li2: "扫码配对一次即可，添加到主屏幕即完整 PWA，断线静默续登，已读/未读进度与电脑实时同步",
+    f4_kicker: "统一工作台 · 旧会话接管",
+    f4_h3: "一个工作台收编全部 Agent，本机旧会话也能随时接管",
+    f4_p: "平时不用再单独打开 Claude、Codex、Antigravity 桌面端或一堆终端；就算之前在别处先开了会话，Collie 也能自动发现并一键收编。",
+    f4_li1: "直接解析原生 JSONL 对话记录，看清每步计划、读文件和改动；随时切回实时 xterm.js 终端画面，遇到确认框也能顺手点过",
+    f4_li2: "自动发现 iTerm、VS Code、tmux、SSH 与桌面端里原本就在跑的会话，支持实时查看和一键接管",
+    f4_alt: "直接管 Agent 视图：清晰呈现计划、文件读取与代码修改，顶栏标注当前模型与所在电脑",
     arch_kicker: "架构",
-    arch_h2: "hub 常开，电脑主动连上来",
-    arch_sub: "一个 hub 放在常开的开发机上；其他电脑运行 <code>collie node</code> 主动连上 hub；手机、平板、浏览器只连 hub。agent 本身跑在 <a href=\"https://herdr.dev\">herdr</a> 里，关掉网页也不停。",
-    arch_alt: "Collie 架构：浏览器和事件进 hub，hub 里有 Web 控制台、super-agent 和 herdr，其他电脑通过出站隧道连上来",
-    fact1_t: "单个二进制",
-    fact1_d: "Go 编写，SQLite、xterm.js 与前端全部内嵌，内网无需 CDN",
-    fact2_t: "双栈出站隧道",
-    fact2_d: "yamux 长连接原生支持 IPv4 与纯 IPv6，断线自动重连",
-    fact3_t: "多个 hub 聚合",
+    arch_h2: "一台 hub 常开，所有电脑主动连上来",
+    arch_sub: "在常开的电脑上跑一个 hub，其他电脑运行 <code>collie node</code> 主动出站连入——不开端口、不配 SSH。Agent 运行在 <a href=\"https://herdr.dev\">herdr</a> 里，关掉网页照样稳跑。",
+    arch_alt: "Collie 架构图：浏览器、GitHub 与飞书长连接进入 hub，hub 内置协作工作台、Super Agent 与 herdr，其他电脑通过出站隧道连入",
+    fact1_t: "单个 Go 二进制",
+    fact1_d: "内置 SQLite、xterm.js 与完整前端，零外部 CDN 依赖",
+    fact2_t: "零端口出站隧道",
+    fact2_d: "yamux 多路复用支持 IPv4 与纯 IPv6 双栈，断线自动重连",
+    fact3_t: "多 hub 聚合",
     fact3_d: "互不相通的网络各跑一个，侧栏合在一处统一管理",
-    fact4_t: "一键全端更新",
-    fact4_d: "先远端 node 后 hub 自动校验原地重启，不影响正在跑的 agent",
-    inst_kicker: "安装",
-    inst_h2: "两分钟装好",
-    inst_sub: "支持 macOS、Linux（amd64 / arm64）与 Windows（在 WSL2 Ubuntu/Debian 终端内运行同一条一键安装命令即可开箱复用 Linux 二进制；纯控制/查看直接用 Chrome / Edge 打开网页即可）。下载自动校验 SHA-256，注册后台服务（launchd 或 systemd --user，无则回退 nohup），自动探测 IPv4 / 纯 IPv6 地址，没有 herdr 时一并装好。",
+    fact4_t: "一键全端升级",
+    fact4_d: "先远端 node 后 hub 自动校验重启，不打断正在跑的 Agent",
+    inst_kicker: "快速开始",
+    inst_h2: "一行命令，30 秒跑起",
+    inst_sub: "支持 macOS、Linux（amd64 / arm64）与 Windows（WSL2 Ubuntu / Debian 终端内跑同一条命令）。自动校验 SHA-256、补装 herdr、注册后台服务（launchd / systemd --user），启动即打印配对二维码。",
     tabs_label: "安装方式",
     tab_hub: "做 hub",
     tab_node: "加入电脑",
     tab_bin: "只装命令",
     tab_src: "从源码",
-    p_hub: "在一台常开的开发机上运行。之后用手机扫终端里的二维码就能登录。",
-    p_node: "在其他电脑上运行。hub 地址和配对码在 hub 的「设备 → 连接一台电脑」里拿；电脑主动连 hub，不用开端口。",
-    p_bin: "只把 <code>collie</code> 装到 <code>~/.local/bin</code>，不装后台服务。",
-    p_src: "需要 Go 1.25+。在仓库里运行同一个脚本，会用本地源码编译；后面可以接 <code>hub</code> 或 <code>node --hub … --code …</code>。",
+    p_hub: "在一台常开的电脑上运行，随后用手机扫终端里的二维码就能配对。",
+    p_node: "在其他电脑上运行。在 hub 的「设备 → 连接一台电脑」复制地址和配对码；主动出站连接，不用开端口。",
+    p_bin: "只把 <code>collie</code> 装到 <code>~/.local/bin</code>，不注册后台服务。",
+    p_src: "需要 Go 1.25+。在仓库内跑同一个脚本即可本地编译；后面可接 <code>hub</code> 或 <code>node --hub … --code …</code>。",
     copy: "复制",
     copied: "已复制",
     note_script: "查看安装脚本",
     note_docs: "完整文档",
-    s1_t: "开发机上起 hub",
+    s1_t: "30 秒起一个 hub",
     s1_d: "跑上面的 <code>hub</code> 命令。自动补装缺失的 Claude Code 与 Antigravity 集成；Codex 无需改写全局 hook 即可原生使用。",
-    s2_t: "手机扫码",
-    s2_d: "扫终端里的二维码获取独立设备令牌，添加到主屏幕后就像一个原生 app。",
-    s3_t: "其他电脑加入",
-    s3_d: "在「设备 → 连接一台电脑」里复制命令，在那台电脑上跑一下就并入舰队。",
-    final_h2: "先看看它长什么样",
-    final_sub: "在线体验运行的是真实 Collie 前端与示例数据：可以给 Collie 发消息、打开话题抽屉、点决策卡片或新建 agent。",
+    s2_t: "手机扫码配对",
+    s2_d: "扫终端二维码拿到独立可撤销令牌，添加到主屏幕即可像原生 app 一样使用。",
+    s3_t: "把其他电脑接进来",
+    s3_d: "从「设备 → 连接一台电脑」复制一行命令跑一下，所有电脑上的 Agent 立刻合进同一个侧栏。",
+    final_h2: "10 秒免安装在线体验",
+    final_sub: "直接跑真实 Collie 前端与模拟数据：派个任务、点一下一键决策按钮、拉出话题抽屉，感受一下不再盯终端的节奏。",
     final_demo: "打开在线体验",
-    final_gh: "GitHub 上看源码",
-    footer_tag: "Collie · 一只边牧：herdr 管终端，Collie 把 agent 赶到一处干活",
+    final_gh: "GitHub 查看源码",
+    footer_tag: "Collie · 像养一只边牧，帮你放牧一群 AI Agent（herdr 管终端，Collie 管协作）",
     footer_src: "源码",
     footer_rel: "下载",
     footer_docs: "文档",
@@ -807,19 +1082,27 @@ window.addEventListener("storage", (e) => {
   if (e.key === "collie-lang") applyLang(detectInitialLang());
 });
 
-/* Accessible install tabs with keyboard navigation */
+/* Accessible install tabs with keyboard navigation and find-in-page (beforematch) sync */
 const tabButtons = Array.from(document.querySelectorAll('.tabs [role="tab"]'));
+const tabPanels = Array.from(document.querySelectorAll('.panel[role="tabpanel"]'));
+
 function activateTab(btn, moveFocus) {
   tabButtons.forEach((x) => {
     const active = x === btn;
     x.setAttribute("aria-selected", String(active));
     x.tabIndex = active ? 0 : -1;
   });
-  document.querySelectorAll('.panel[role="tabpanel"]').forEach((p) => {
-    p.hidden = p.dataset.panel !== btn.dataset.tab;
+  tabPanels.forEach((p) => {
+    if (p.dataset.panel === btn.dataset.tab) {
+      p.removeAttribute("hidden");
+    } else {
+      p.setAttribute("hidden", "until-found");
+    }
   });
+  btn.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (moveFocus) btn.focus();
 }
+
 tabButtons.forEach((b, idx) => {
   b.addEventListener("click", () => activateTab(b, false));
   b.addEventListener("keydown", (e) => {
@@ -832,6 +1115,13 @@ tabButtons.forEach((b, idx) => {
       e.preventDefault();
       activateTab(tabButtons[next], true);
     }
+  });
+});
+
+tabPanels.forEach((p) => {
+  p.addEventListener("beforematch", () => {
+    const btn = tabButtons.find((b) => b.dataset.tab === p.dataset.panel);
+    if (btn) activateTab(btn, false);
   });
 });
 

@@ -118,6 +118,36 @@ func TestDoubaoApprovalMenuParsed(t *testing.T) {
 	}
 }
 
+func TestCursorTranscriptAndApprovalMenu(t *testing.T) {
+	msgs := parse(t, "cursor", `{"type":"user","text":"inspect build"}
+{"type":"tool","id":"tc1","title":"Run shell command","kind":"execute","status":"in_progress"}
+{"type":"tool","id":"tc1","title":"Run shell command","kind":"execute","status":"completed","locations":["/tmp/repo"],"output":"PASS\n"}
+{"type":"assistant_chunk","id":"m1","text":"All "}
+{"type":"assistant_chunk","id":"m1","text":"green."}
+`)
+	if len(msgs) != 3 {
+		t.Fatalf("got %d msgs: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Kind != "user" || msgs[0].Text != "inspect build" {
+		t.Errorf("msg[0] = %+v", msgs[0])
+	}
+	if msgs[1].Kind != "tool" || msgs[1].Name != "Run shell command" || msgs[1].Input != "/tmp/repo" || msgs[1].Output != "PASS" {
+		t.Errorf("msg[1] = %+v", msgs[1])
+	}
+	if msgs[2].Kind != "assistant" || msgs[2].Text != "All green." {
+		t.Errorf("msg[2] = %+v", msgs[2])
+	}
+
+	screen := "────────────────────────────────────────\nCursor 提问：Choose target\n  Which environment?\n\n1. Staging\n2. Production\n3. Skip\nEnter number (1-3) to confirm · Esc to cancel\n"
+	if !screenAsks(screen) {
+		t.Fatal("screenAsks should detect cursor ask_question menu")
+	}
+	a := parseApproval(screen)
+	if len(a.Choices) != 3 || a.Choices[1].Text != "2" || a.Choices[1].Label != "Production" {
+		t.Fatalf("choices = %+v", a.Choices)
+	}
+}
+
 func TestApprovalNumbered(t *testing.T) {
 	a := parseApproval("╭────╮\n│ Bash command\n│   git push origin main\n│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. Yes, and don't ask again\n│   3. No, and tell Claude what to do differently (esc)\n╰────╯")
 	if len(a.Choices) != 3 || a.Choices[0].Text != "1" || !a.Choices[0].Current || a.Choices[1].Label != "Yes, and don't ask again" {

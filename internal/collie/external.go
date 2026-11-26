@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -178,18 +179,28 @@ func cwdOf(pids []int) map[int]string {
 }
 
 // externalCache keeps discovery cheap when several viewers poll.
-var externalCache struct {
-	sync.Mutex
+type externalSnapshot struct {
 	at   time.Time
 	list []*External
+}
+
+var externalCache struct {
+	sync.Mutex // serializes discovery; readers can use the previous snapshot
+	snapshot   atomic.Pointer[externalSnapshot]
+}
+
+func forgetExternalSessions() {
+	externalCache.Lock()
+	externalCache.snapshot.Store(nil)
+	externalCache.Unlock()
 }
 
 // externalSessions finds interactive agents on this machine outside herdr.
 func (s *Server) externalSessions() []*External {
 	externalCache.Lock()
 	defer externalCache.Unlock()
-	if time.Since(externalCache.at) < 4*time.Second && externalCache.list != nil {
-		return externalCache.list
+	if cached := externalCache.snapshot.Load(); cached != nil && time.Since(cached.at) < 4*time.Second {
+		return cached.list
 	}
 	ps, err := listProcs()
 	if err != nil {
@@ -224,20 +235,41 @@ func (s *Server) externalSessions() []*External {
 			}
 		}
 	}
+	codexDirs := make(map[string]int)
+	for _, p := range cands {
+		if externalKinds[p.name] == "codex" {
+			codexDirs[cwds[p.pid]]++
+		}
+	}
+	tmuxTitles := sync.OnceValue(tmuxPaneTitles)
+	threadNames := sync.OnceValue(s.uniqueCodexThreadNames)
 	used := map[int]bool{}
 	var codex []*External
+	listed := map[string]bool{}
 	for _, p := range cands {
 		app, inHerdr := terminalApp(ps, p)
 		if r := regOf[p.pid]; r != nil {
 			used[r.PID] = true
 		}
 		if inHerdr {
+			if externalKinds[p.name] == "agy" {
+				if id := agyConversationArg(p.args); id != "" {
+					listed[id] = true
+				}
+			}
 			continue
 		}
 		kind := externalKinds[p.name]
 		e := &External{ID: fmt.Sprintf("%s-%d", kind, p.pid), Kind: kind, PID: p.pid, Cwd: cwds[p.pid], App: app, Started: now.Add(-p.age), Live: true}
 		if kind == "codex" {
-			codex = append(codex, e)
+			handled := false
+			if app == "tmux" {
+				title := tmuxProcessTitle(ps, p, tmuxTitles())
+				handled = s.locateTmuxCodex(e, p, title, threadNames(), codexDirs[e.Cwd] > 1)
+			}
+			if !handled {
+				codex = append(codex, e)
+			}
 		} else {
 			s.locateExternal(e, p)
 		}
@@ -245,14 +277,15 @@ func (s *Server) externalSessions() []*External {
 		list = append(list, e)
 	}
 	s.locateExternalCodex(codex)
-	listed := map[string]bool{}
 	for _, e := range list {
 		s.reachable(e)
 		if e.path != "" {
 			if fi, err := os.Stat(e.path); err == nil {
 				e.Updated = fi.ModTime()
 			}
-			e.Title = firstUserLine(e.path, e.format)
+			if e.Title == "" {
+				e.Title = firstUserLine(e.path, e.format)
+			}
 		}
 		e.CanTakeOver = e.Session != ""
 		if e.Session != "" {
@@ -271,7 +304,7 @@ func (s *Server) externalSessions() []*External {
 	}
 	list = kept
 	sortSessions(list)
-	externalCache.at, externalCache.list = time.Now(), list
+	externalCache.snapshot.Store(&externalSnapshot{at: time.Now(), list: list})
 	return list
 }
 
@@ -290,7 +323,9 @@ func (s *Server) reachable(e *External) {
 		e.CanSend, e.ReadOnly = e.reg.canSend()
 	case "codex":
 		if e.Session == "" {
-			e.ReadOnly = "这个 Codex 还没开始对话：先在那边说第一句，之后就能从这里发消息"
+			if e.ReadOnly == "" {
+				e.ReadOnly = "这个 Codex 还没开始对话：先在那边说第一句，之后就能从这里发消息"
+			}
 			return
 		}
 		ids, err := s.codexLoaded()
@@ -452,11 +487,8 @@ func (s *Server) externalByID(id string) *External {
 // viewableByID is for reading only: the list the page just showed is almost
 // always still there, so use it rather than look at every process again.
 func (s *Server) viewableByID(id string) *External {
-	externalCache.Lock()
-	cached, at := externalCache.list, externalCache.at
-	externalCache.Unlock()
-	if time.Since(at) < time.Minute {
-		for _, e := range cached {
+	if cached := externalCache.snapshot.Load(); cached != nil && time.Since(cached.at) < time.Minute {
+		for _, e := range cached.list {
 			if e.ID == id {
 				return e
 			}
@@ -595,6 +627,20 @@ func (s *Server) fetchRemoteExternal(m Machine) []*External {
 	return body.Sessions
 }
 
+// externalSnapshot returns the same initial view as the live stream in a
+// finite response, for viewers still waiting for the first complete SSE event.
+func (s *Server) externalSnapshot(w http.ResponseWriter, r *http.Request) {
+	e := s.viewableByID(r.PathValue("id"))
+	if e == nil || e.path == "" {
+		writeJSON(w, 404, map[string]any{"error": "没有找到这个会话的记录"})
+		return
+	}
+	tr := newTranscript(e.path, e.format)
+	tr.openTail()
+	var ms msgSync
+	writeJSON(w, 200, ms.patch(tr))
+}
+
 // streamExternal follows an external agent's conversation, read-only.
 func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 	e := s.viewableByID(r.PathValue("id"))
@@ -650,7 +696,18 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 // takeOverExternal stops an external agent and resumes its conversation in a
 // new herdr pane on the same machine, in the same directory.
 func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
-	e := s.externalByID(r.PathValue("id"))
+	id := r.PathValue("id")
+	if strings.HasPrefix(id, "ag-cli-") {
+		if _, busy := s.agyResuming.LoadOrStore(id, true); busy {
+			writeJSON(w, 409, map[string]any{"error": "正在恢复这个会话"})
+			return
+		}
+		defer s.agyResuming.Delete(id)
+		// A second viewer or a terminal may already have resumed it.
+		forgetExternalSessions()
+		defer forgetExternalSessions()
+	}
+	e := s.externalByID(id)
 	if e == nil {
 		writeJSON(w, 404, map[string]any{"error": "这个会话已经结束了"})
 		return
@@ -679,9 +736,7 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	externalCache.Lock()
-	externalCache.at = time.Time{}
-	externalCache.Unlock()
+	forgetExternalSessions()
 	name := e.Kind + "-" + strconv.Itoa(e.PID)
 	if e.PID == 0 {
 		name = e.Kind + "-" + strings.SplitN(e.Session, "-", 2)[0]

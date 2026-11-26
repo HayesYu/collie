@@ -266,11 +266,12 @@ for raw in sys.stdin:
 	// Part 1: Fresh session with interactive permission approval
 	pr, pw := io.Pipe()
 	var outBuf bytes.Buffer
-	b := &doubaoBridge{
-		cfg: doubaoBridgeConfig{
+	b := &acpBridge{
+		provider: doubaoProvider{},
+		cfg: acpBridgeConfig{
 			Cwd:        tmp,
 			CollieHome: collieHome,
-			DoubaoBin:  fakeDoubao,
+			Bin:        fakeDoubao,
 			Bypass:     false,
 		},
 		herdrSock:     fakeSock,
@@ -385,11 +386,12 @@ for raw in sys.stdin:
 	// Part 2A: Resume WITH existing JSONL must NOT duplicate replayed history
 	pr2, pw2 := io.Pipe()
 	var out2 bytes.Buffer
-	b2 := &doubaoBridge{
-		cfg: doubaoBridgeConfig{
+	b2 := &acpBridge{
+		provider: doubaoProvider{},
+		cfg: acpBridgeConfig{
 			Cwd:        tmp,
 			CollieHome: collieHome,
-			DoubaoBin:  fakeDoubao,
+			Bin:        fakeDoubao,
 			Bypass:     true,
 			Resume:     "11111111-2222-3333-4444-555555555555",
 		},
@@ -415,11 +417,12 @@ for raw in sys.stdin:
 	_ = os.Remove(logPath)
 	pr3, pw3 := io.Pipe()
 	var out3 bytes.Buffer
-	b3 := &doubaoBridge{
-		cfg: doubaoBridgeConfig{
+	b3 := &acpBridge{
+		provider: doubaoProvider{},
+		cfg: acpBridgeConfig{
 			Cwd:        tmp,
 			CollieHome: collieHome,
-			DoubaoBin:  fakeDoubao,
+			Bin:        fakeDoubao,
 			Bypass:     true,
 			Resume:     "11111111-2222-3333-4444-555555555555",
 		},

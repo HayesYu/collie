@@ -11,14 +11,14 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.53", agents: ["claude", "codex", "agy", "doubao"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.53", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
     { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.53", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
     agent({ pane_id: "w1:p1", workspace_id: "w1", name: "collie", kind: "claude", status: "idle", cwd: "/home/alex/.collie/router" }),
     agent({ pane_id: "w2:p1@macbook", workspace_id: "w2@macbook", name: "claude-1", kind: "claude", status: "working", cwd: "/Users/alex/code/shop-web", topic: "首页加暗色模式", run: ["opus", "high"] }),
-    agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "blocked", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", run: ["gpt-6.1-sol", "high"] }),
+    agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "idle", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", run: ["gpt-6.1-sol", "high"] }),
     agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", run: ["", ""] }),
     agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
     agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
@@ -237,7 +237,8 @@
       { kind: "assistant", text: "找到了：`offset` 用的是 `page * size`，但 `page` 从 1 开始，最后一页会和前一页重叠一条。改成 `(page-1) * size`，再加一个跨页不重复的测试。" },
       tool("Edit", "internal/orders/list.go", "+3 −1"),
       tool("Edit", "internal/orders/list_test.go", "+24"),
-      { kind: "assistant", text: "改好了，跑一下测试确认。" },
+      tool("Bash", "go test ./internal/orders/...", "ok  shop-api/internal/orders  0.41s"),
+      { kind: "assistant", text: "改好了，跨页去重测试全部通过。" },
     ],
     "w4:p1": [
       { kind: "user", text: "migrations/ 里有不少重复和废弃的脚本，整理一下，保证从空库能一路升到最新。" },
@@ -271,15 +272,7 @@
     "w2:p1@macbook": { status: "working", tail: "Editing src/components/Header.tsx…", meta: "42s · ↓ 1.8k tokens" },
     "w5:p1": { status: "working", tail: "Running go test -run TestOrdersPagination -count=200 ./internal/orders", meta: "18s" },
   };
-  const approvals = {
-    "w3:p1": {
-      title: "codex 想运行一条命令",
-      question: "Codex 想在 shop-api 里跑一遍测试。\n\n    go test ./internal/orders/...\n\n允许运行这条命令吗？",
-      choices: [{ label: "允许", keys: ["1"] }, { label: "允许，这个会话里不再问", keys: ["2"] }, { label: "不允许，告诉它怎么做", keys: ["3"] }],
-      hint: "",
-      screen: "  Would you like to run the following command?\n\n  $ go test ./internal/orders/...\n\n› 1. Yes, proceed\n  2. Yes, and don't ask again for this command\n  3. No, and tell Codex what to do differently",
-    },
-  };
+  const approvals = {};
   const demoLogLines = Array.from({ length: 58 }, (_, i) => {
     const mm = String(Math.floor(i / 4)).padStart(2, "0"), ss = String((i * 13) % 60).padStart(2, "0");
     if (i % 9 === 0) return `12:${mm}:${ss} \x1b[33mWARN\x1b[0m  slow query orders_by_created_at (${110 + i}ms)`;
@@ -376,6 +369,16 @@
       default: "9",
       default_effort: "high",
       efforts: ["low", "medium", "high"],
+    },
+    cursor: {
+      models: [
+        { id: "auto", label: "Auto", efforts: [] },
+        { id: "composer-2.5", label: "Composer 2.5", efforts: [] },
+        { id: "claude-4.6-opus-max", label: "Claude 4.6 Opus (Max)", efforts: [] },
+        { id: "gpt-5.4-high", label: "GPT 5.4 High", efforts: [] },
+      ],
+      default: "auto",
+      efforts: [],
     },
   };
 

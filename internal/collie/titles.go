@@ -21,7 +21,7 @@ import (
 // The files live on the agent's machine, so every machine reads its own and
 // the hub collects them from the nodes.
 
-var genericTitles = map[string]bool{"": true, "claude": true, "claude code": true, "codex": true, "agy": true, "antigravity": true, "doubao": true, "bash": true, "zsh": true}
+var genericTitles = map[string]bool{"": true, "claude": true, "claude code": true, "codex": true, "agy": true, "antigravity": true, "doubao": true, "cursor": true, "cursor-agent": true, "bash": true, "zsh": true}
 
 // cleanTitle drops the spinner/status glyphs claude puts in front of the topic.
 func cleanTitle(t string) string {
@@ -187,8 +187,8 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 				}
 			}
 			t = s.agyTitle(sess)
-		case "doubao":
-			if meta, ok := readDoubaoPaneMeta(s.doubaoTranscriptDir(), local); ok {
+		case "doubao", "cursor":
+			if meta, ok := readACPPaneMeta(s.bridgeTranscriptDir(kind), local); ok {
 				if sess == "" {
 					sess = meta.SessionID
 				}
@@ -291,6 +291,8 @@ func (s *Server) freeName(ctx context.Context, kind string) string {
 	base := kind
 	if base == "antigravity" {
 		base = "agy"
+	} else if base == "cursor-agent" {
+		base = "cursor"
 	}
 	taken := map[string]bool{}
 	if agents, err := s.herdr.Agents(ctx); err == nil {

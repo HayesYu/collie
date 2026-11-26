@@ -20,8 +20,9 @@ const memoryLayout = `memory/
                     and what finished work taught: where data lives, the command or query
                     that worked, pitfalls, where results are. One file per project or
                     data set (book-df.md, shop-api.md) by default; machines.md for
-                    computers; agents.md for which agent and model works where, what
-                    each is good at, how they fail; a how-to that spans projects gets
+                    computers; agents.md for agent/model availability, failures/workarounds
+                    per machine, and explicit human preferences (never subjective quality
+                    overrides of the default model); a how-to that spans projects gets
                     its own. Facts that change (quotas, outages, how far a job has got)
                     carry a date: "（截至 11-19）". Read when relevant; add a line to
                     index.md for each new file.

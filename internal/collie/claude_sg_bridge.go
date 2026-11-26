@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 
 const (
 	claudeSGBinEnv       = "COLLIE_CLAUDE_LAUNCHER"
+	claudeSGProjectEnv   = "COLLIE_CLAUDE_PROJECT"
 	claudeSGDirEnv       = "COLLIE_CLAUDE_SG_DIR"
 	claudeSGBridgeSource = "collie:claude-sg"
 	claudeSGContainerDir = "/mac-home/.local/state/claude-sg/collie"
@@ -29,6 +31,10 @@ const (
 
 func claudeSGLauncher() string {
 	return strings.TrimSpace(os.Getenv(claudeSGBinEnv))
+}
+
+func claudeSGProject() string {
+	return strings.TrimSpace(os.Getenv(claudeSGProjectEnv))
 }
 
 func isExecutable(p string) bool {
@@ -106,6 +112,7 @@ func readClaudeSGEvent(path string) (claudeSGEvent, bool) {
 type claudeSGBridgeConfig struct {
 	Name       string
 	Project    string
+	Workdir    string
 	Launcher   string
 	ClaudeArgs []string
 }
@@ -142,6 +149,14 @@ func parseClaudeSGBridgeArgs(args []string) (claudeSGBridgeConfig, error) {
 			cfg.Project = v
 		case strings.HasPrefix(a, "--project="):
 			cfg.Project = strings.TrimPrefix(a, "--project=")
+		case a == "--workdir":
+			v, err := next("--workdir")
+			if err != nil {
+				return cfg, err
+			}
+			cfg.Workdir = v
+		case strings.HasPrefix(a, "--workdir="):
+			cfg.Workdir = strings.TrimPrefix(a, "--workdir=")
 		case a == "--launcher":
 			v, err := next("--launcher")
 			if err != nil {
@@ -227,7 +242,11 @@ func runClaudeSGBridge(args []string) {
 		collieBin = "collie"
 	}
 
-	cmdArgs := []string{"run", "--project", cfg.Project, "--"}
+	cmdArgs := []string{"run", "--project", cfg.Project}
+	if cfg.Workdir != "" {
+		cmdArgs = append(cmdArgs, "--workdir", cfg.Workdir)
+	}
+	cmdArgs = append(cmdArgs, "--")
 	cmdArgs = append(cmdArgs, cfg.ClaudeArgs...)
 	cmd := exec.Command(cfg.Launcher, cmdArgs...)
 	cmd.Stdin = os.Stdin
@@ -340,6 +359,9 @@ func claudeSGResumeArgv(collieBin string, cfg claudeSGBridgeConfig, sessionID st
 	if cfg.Project != "" {
 		argv = append(argv, "--project", cfg.Project)
 	}
+	if cfg.Workdir != "" {
+		argv = append(argv, "--workdir", cfg.Workdir)
+	}
 	if cfg.Launcher != "" {
 		argv = append(argv, "--launcher", cfg.Launcher)
 	}
@@ -409,6 +431,82 @@ func (s *Server) startClaudeSGAgent(ctx context.Context, name, cwd, label string
 	return paneID, wsID, nil
 }
 
+func splitAbsParts(p string) ([]string, bool) {
+	c := filepath.Clean(p)
+	if !strings.HasPrefix(c, "/") {
+		return nil, false
+	}
+	trimmed := strings.TrimPrefix(c, "/")
+	if trimmed == "" {
+		return nil, true
+	}
+	return strings.Split(trimmed, "/"), true
+}
+
+func relUnderBaseOnce(base, target string, caseInsensitive bool) (string, bool) {
+	bParts, bOK := splitAbsParts(base)
+	tParts, tOK := splitAbsParts(target)
+	if !bOK || !tOK || len(tParts) < len(bParts) {
+		return "", false
+	}
+	for i := range bParts {
+		if caseInsensitive {
+			if !strings.EqualFold(bParts[i], tParts[i]) {
+				return "", false
+			}
+		} else if bParts[i] != tParts[i] {
+			return "", false
+		}
+	}
+	if len(tParts) == len(bParts) {
+		return "", true
+	}
+	return strings.Join(tParts[len(bParts):], "/"), true
+}
+
+func relUnderBase(base, target string, caseInsensitive bool) (string, bool) {
+	if rel, ok := relUnderBaseOnce(base, target, caseInsensitive); ok {
+		return rel, true
+	}
+	rb, errB := filepath.EvalSymlinks(base)
+	rt, errT := filepath.EvalSymlinks(target)
+	if errB == nil && errT == nil {
+		return relUnderBaseOnce(rb, rt, caseInsensitive)
+	}
+	return "", false
+}
+
+func resolveClaudeSGTargetCase(pinnedProject, requestedCwd, home string, caseInsensitive bool) (containerProject, containerWorkdir string) {
+	pinned := strings.TrimSpace(pinnedProject)
+	if pinned == "" {
+		return requestedCwd, ""
+	}
+	containerProject = filepath.Clean(pinned)
+	req := strings.TrimSpace(requestedCwd)
+	if req == "" {
+		return containerProject, "/workspace"
+	}
+	if rel, ok := relUnderBase(containerProject, req, caseInsensitive); ok {
+		if rel == "" {
+			return containerProject, "/workspace"
+		}
+		return containerProject, "/workspace/" + rel
+	}
+	if h := strings.TrimSpace(home); h != "" {
+		if rel, ok := relUnderBase(filepath.Clean(h), req, caseInsensitive); ok {
+			if rel == "" {
+				return containerProject, "/mac-home"
+			}
+			return containerProject, "/mac-home/" + rel
+		}
+	}
+	return containerProject, "/workspace"
+}
+
+func resolveClaudeSGTarget(pinnedProject, requestedCwd, home string) (containerProject, containerWorkdir string) {
+	return resolveClaudeSGTargetCase(pinnedProject, requestedCwd, home, runtime.GOOS == "darwin")
+}
+
 func (s *Server) launchClaudeSGInPane(ctx context.Context, paneID, name, cwd string, args []string) error {
 	launcher := claudeSGLauncher()
 	if !isExecutable(launcher) {
@@ -417,7 +515,15 @@ func (s *Server) launchClaudeSGInPane(ctx context.Context, paneID, name, cwd str
 	if cwd == "" {
 		cwd = s.home
 	}
-	cmdArgs := []string{s.collieBinFor(""), "_bridge", "claude-sg", "--name", name, "--project", cwd, "--launcher", launcher}
+	projectDir, workdir := resolveClaudeSGTarget(claudeSGProject(), cwd, s.home)
+	if projectDir == "" {
+		projectDir = cwd
+	}
+	cmdArgs := []string{s.collieBinFor(""), "_bridge", "claude-sg", "--name", name, "--project", projectDir}
+	if workdir != "" {
+		cmdArgs = append(cmdArgs, "--workdir", workdir)
+	}
+	cmdArgs = append(cmdArgs, "--launcher", launcher)
 	if len(args) > 0 {
 		cmdArgs = append(cmdArgs, "--")
 		cmdArgs = append(cmdArgs, args...)

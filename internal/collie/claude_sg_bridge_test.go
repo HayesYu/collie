@@ -25,6 +25,7 @@ func TestParseClaudeSGBridgeArgs(t *testing.T) {
 	cfg, err := parseClaudeSGBridgeArgs([]string{
 		"--name", "worker-1",
 		"--project=/tmp/proj",
+		"--workdir", "/workspace/agent/collie",
 		"--launcher", "/usr/local/bin/claude-sg",
 		"--",
 		"--model", "opus",
@@ -33,16 +34,56 @@ func TestParseClaudeSGBridgeArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Name != "worker-1" || cfg.Project != "/tmp/proj" || cfg.Launcher != "/usr/local/bin/claude-sg" {
+	if cfg.Name != "worker-1" || cfg.Project != "/tmp/proj" || cfg.Workdir != "/workspace/agent/collie" || cfg.Launcher != "/usr/local/bin/claude-sg" {
 		t.Fatalf("unexpected cfg: %+v", cfg)
 	}
 	want := []string{"--model", "opus", "--allowedTools", "Bash(collie report:*)"}
 	if !slices.Equal(cfg.ClaudeArgs, want) {
 		t.Fatalf("ClaudeArgs = %v, want %v", cfg.ClaudeArgs, want)
 	}
+	resumed := claudeSGResumeArgv("/usr/local/bin/collie", cfg, "sid-123")
+	wantResume := []string{"/usr/local/bin/collie", "_bridge", "claude-sg", "--name", "worker-1", "--project", "/tmp/proj", "--workdir", "/workspace/agent/collie", "--launcher", "/usr/local/bin/claude-sg", "--", "--resume", "sid-123"}
+	if !slices.Equal(resumed, wantResume) {
+		t.Fatalf("claudeSGResumeArgv = %v, want %v", resumed, wantResume)
+	}
 
 	if _, err := parseClaudeSGBridgeArgs([]string{"--name"}); err == nil {
 		t.Fatal("expected error for missing --name value")
+	}
+}
+
+func TestResolveClaudeSGTarget(t *testing.T) {
+	pinned := "/Users/bytedance/Code"
+	home := "/Users/bytedance"
+
+	// Unpinned keeps requested cwd with no extra workdir override.
+	p, w := resolveClaudeSGTargetCase("", "/Users/bytedance/code/foo", home, true)
+	if p != "/Users/bytedance/code/foo" || w != "" {
+		t.Fatalf("unpinned = (%q, %q)", p, w)
+	}
+
+	cases := []struct {
+		cwd      string
+		ci       bool
+		wantProj string
+		wantWork string
+	}{
+		{"", true, pinned, "/workspace"},
+		{"/Users/bytedance/Code", true, pinned, "/workspace"},
+		{"/Users/bytedance/code", true, pinned, "/workspace"},
+		{"/Users/bytedance/code/agent/collie", true, pinned, "/workspace/agent/collie"},
+		{"/Users/bytedance/Code/agent/collie", false, pinned, "/workspace/agent/collie"},
+		{"/Users/bytedance/personal/foo", true, pinned, "/mac-home/personal/foo"},
+		{"/Users/bytedance", true, pinned, "/mac-home"},
+		{"/Users/bytedance/Code2", true, pinned, "/mac-home/Code2"},
+		{"/tmp/other", true, pinned, "/workspace"},
+	}
+	for _, tc := range cases {
+		gotProj, gotWork := resolveClaudeSGTargetCase(pinned, tc.cwd, home, tc.ci)
+		if gotProj != tc.wantProj || gotWork != tc.wantWork {
+			t.Fatalf("resolveClaudeSGTargetCase(%q, %q, ci=%v) = (%q, %q), want (%q, %q)",
+				pinned, tc.cwd, tc.ci, gotProj, gotWork, tc.wantProj, tc.wantWork)
+		}
 	}
 }
 

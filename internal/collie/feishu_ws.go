@@ -1098,6 +1098,9 @@ func (f *FeishuAdapter) handleCardAction(ctx context.Context, event *larkcallbac
 				MessageID: openMsgID,
 			})
 		}
+		if entryCopy.Thread == "" || entryCopy.Thread == mainThread {
+			_, _, _ = f.sp.MarkChatRead(entryID)
+		}
 		summary := "已选择：" + choice
 		card := buildFeishuEntryCard(&entryCopy, f.jumpLink(), summary)
 		return &larkcallback.CardActionTriggerResponse{
@@ -1107,9 +1110,12 @@ func (f *FeishuAdapter) handleCardAction(ctx context.Context, event *larkcallbac
 
 	case "ack":
 		f.sp.dismissWithoutSync(entryID)
-		card := buildFeishuEntryCard(&entryCopy, f.jumpLink(), "已标记已看")
+		if entryCopy.Thread == "" || entryCopy.Thread == mainThread {
+			_, _, _ = f.sp.MarkChatRead(entryID)
+		}
+		card := buildFeishuEntryCard(&entryCopy, f.jumpLink(), "已标记处理")
 		return &larkcallback.CardActionTriggerResponse{
-			Toast: &larkcallback.Toast{Type: "success", Content: "已标记已看"},
+			Toast: &larkcallback.Toast{Type: "success", Content: "已标记处理"},
 			Card:  &larkcallback.Card{Type: "raw", Data: card},
 		}, nil
 
@@ -1676,7 +1682,7 @@ func buildFeishuEntryCard(e *Entry, link string, resolvedSummary string) map[str
 			"tag":   "button",
 			"type":  "primary",
 			"width": "default",
-			"text":  map[string]string{"tag": "plain_text", "content": "已看"},
+			"text":  map[string]string{"tag": "plain_text", "content": "已处理"},
 			"behaviors": []any{
 				map[string]any{
 					"type": "callback",

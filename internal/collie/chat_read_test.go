@@ -210,6 +210,7 @@ const vm = require("vm");
 const assert = require("assert/strict");
 
 const appSrc = fs.readFileSync(path.join(process.argv[1], "web", "app.js"), "utf8");
+const cssSrc = fs.readFileSync(path.join(process.argv[1], "web", "app.css"), "utf8");
 
 function makeClassList() {
   const set = new Set();
@@ -504,7 +505,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot marker in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSuper, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { older = []; readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSide, renderSuper, renderPendingBar, activePending, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { older = []; sup = { router: { status: 'idle' }, entries: [], workers: [], pending: [], pinned: [] }; pendingSays.length = 0; dismissedLocal.clear(); readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
 );
 vm.runInContext(instrumented, ctx);
 
@@ -666,6 +667,108 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(getEl("#super-jump-badge").textContent, "99+", "badge caps at 99+");
   assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部，105 条未读", "aria-label preserves exact 105 unread count");
   assert.equal(getEl("#super-jump").title, "回到底部，105 条未读", "title preserves exact 105 unread count");
+
+  // 11) P1 Sidebar subtle unread pill on non-main views (mutually exclusive with amber pending).
+  assert.ok(cssSrc.includes(".count-pill.unread"), "CSS must define subtle .count-pill.unread style");
+  const np = getEl("#nav-pending");
+  // On main chat view with 0 pending & 6 unread: sidebar pill stays hidden (jump button handles it).
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setView("collie");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e4" });
+  T.renderSide();
+  assert.equal(np.hidden, true, "sidebar unread pill stays hidden on #/collie");
+
+  // On non-main view (auto / pane / prefs / null mobile list) with 0 pending & 6 unread: neutral subtle unread pill.
+  for (const otherView of ["auto", "pane", "prefs", null]) {
+    T.setView(otherView);
+    T.renderSide();
+    assert.equal(np.hidden, false, "sidebar unread pill must show on view=" + String(otherView));
+    assert.equal(np.classList.contains("unread"), true, "sidebar unread pill carries .unread class");
+    assert.equal(np.classList.contains("attn"), false, "sidebar unread pill must not carry .attn class");
+    assert.equal(np.textContent, "6", "sidebar unread pill shows exact unread count");
+    assert.equal(np.title, "6 条未读", "sidebar unread pill title describes unread count");
+    assert.equal(np.getAttribute("aria-label"), "6 条未读", "sidebar unread pill aria-label describes unread count");
+  }
+
+  // Unread > 99 on non-main view caps at 99+ while preserving exact count in title/aria-label.
+  T.setView("auto");
+  serverLastRead = "e1";
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: hugeEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e1" });
+  T.renderSide();
+  assert.equal(np.hidden, false, "sidebar unread pill shown for 105 unread");
+  assert.equal(np.classList.contains("unread"), true, "sidebar unread pill uses .unread");
+  assert.equal(np.textContent, "99+", "sidebar unread pill caps at 99+");
+  assert.equal(np.title, "105 条未读", "sidebar unread title preserves exact 105 count");
+
+  // Pending > 0 on non-main view takes precedence: amber .attn pill with「待处理」copy, no dual badges.
+  T.setView("auto");
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  const checkEntries = [
+    mkEntry(1, "user", "hi"),
+    mkEntry(2, "collie", "请去控制台手动续签证书", { check: true }),
+    mkEntry(3, "collie", "另一条普通汇报"),
+  ];
+  T.setSup({
+    router: { status: "idle" },
+    entries: checkEntries,
+    workers: [],
+    pending: [{ id: "e2", at: checkEntries[1].at, summary: "请去控制台手动续签证书", check: true }],
+    pinned: [],
+    last_read_entry_id: "e1",
+  });
+  T.renderSide();
+  assert.equal(np.hidden, false, "sidebar pending pill shown");
+  assert.equal(np.classList.contains("attn"), true, "pending pill uses amber .attn");
+  assert.equal(np.classList.contains("unread"), false, "pending pill removes .unread");
+  assert.equal(np.textContent, "1", "pending pill shows pending count");
+  assert.equal(np.title, "1 条待处理", "pending pill uses unified 待处理 wording");
+
+  // Cross-device read cursor update from server (e.g. Feishu reply) clears non-main sidebar unread pill.
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e12" });
+  T.renderSide();
+  assert.equal(np.hidden, true, "advancing server last_read_entry_id clears sidebar unread pill");
+
+  // 12) P0 Web copy unification (已处理 / 待处理 / 标为已处理) + pure --check survives unquoted user send.
+  T.setView("collie");
+  serverLastRead = "e1";
+  T.resetReadState("", "");
+  const p0Entries = [
+    mkEntry(1, "user", "巡检一下"),
+    mkEntry(2, "collie", "测试环境证书将于明天到期，请在控制台续签", { check: true }),
+  ];
+  T.setSup({
+    router: { status: "idle" },
+    entries: p0Entries,
+    workers: [],
+    pending: [{ id: "e2", at: p0Entries[1].at, summary: "测试环境证书将于明天到期，请在控制台续签", check: true }],
+    pinned: [],
+    last_read_entry_id: "e1",
+  });
+  T.renderSuper({ force: true });
+  assert.ok(threadBox.innerHTML.includes("已处理</button>"), "check button must read 已处理");
+  assert.ok(!threadBox.innerHTML.includes("已看</button>"), "check button must not read 已看");
+  const pendingBarHtml = getEl("#pending-bar").innerHTML;
+  assert.ok(pendingBarHtml.includes(">待处理<"), "pending bar must read 待处理");
+  assert.ok(!pendingBarHtml.includes("待你确认"), "pending bar must not read 待你确认");
+  assert.ok(pendingBarHtml.includes('title="标为已处理"') && pendingBarHtml.includes('aria-label="标为已处理"'), "pending dismiss X must use 标为已处理");
+
+  // Unquoted user send must NOT optimistically clear pure --check item.
+  await T.sendSuper("顺便问下构建状态", null, false);
+  assert.equal(T.activePending().length, 1, "pure --check must stay active after unquoted sendSuper");
+  assert.equal(T.activePending()[0].id, "e2", "e2 remains pending after unquoted sendSuper");
+
+  // Legacy hub fallback (without sup.pending array) also keeps pure --check across unquoted user message.
+  const legacyEntries = [
+    mkEntry(1, "collie", "请去审批后台点一下通过", { check: true }),
+    mkEntry(2, "user", "顺便跑下测试"),
+  ];
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: legacyEntries, workers: [], pinned: [] });
+  T.renderSuper({ force: true });
+  assert.ok(threadBox.innerHTML.includes('data-ack="e1"') && threadBox.innerHTML.includes("已处理</button>"), "legacy fallback keeps pure --check across unquoted user msg");
 
   console.log("OK: all unread anchor & chat read JS regression checks passed");
 })().catch((err) => {

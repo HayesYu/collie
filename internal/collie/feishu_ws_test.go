@@ -432,10 +432,14 @@ func TestFeishuFullBidirectionalLoopAndReverseSync(t *testing.T) {
 	}
 
 	// Stage D1: Reverse sync on Web Dismiss -> PATCH old Feishu card to resolved gray.
-	checkEntry, _ := sp.Reply(mainThread, "文档已更新，请过目", "", nil, true)
-	ff.waitForCall(t, func(c fakeFeishuCall) bool {
+	checkEntry, _ := sp.Reply(mainThread, "测试环境证书明天到期，请手动续签", "", nil, true)
+	checkSendCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
 		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), `"action":"ack"`)
 	})
+	checkCardRaw := extractCardContent(checkSendCall.Body)
+	if !strings.Contains(checkCardRaw, `"content":"已处理"`) || strings.Contains(checkCardRaw, `"content":"已看"`) {
+		t.Fatalf("outbound --check card must label button 已处理 (not 已看): %s", checkCardRaw)
+	}
 	deadline = time.Now().Add(time.Second)
 	var checkMsgID string
 	for time.Now().Before(deadline) {
@@ -453,7 +457,7 @@ func TestFeishuFullBidirectionalLoopAndReverseSync(t *testing.T) {
 		return c.Method == http.MethodPatch && c.Path == "/open-apis/im/v1/messages/"+checkMsgID
 	})
 	patchRaw := extractCardContent(patchCall.Body)
-	if !strings.Contains(patchRaw, "已在网页端标记已看") || !strings.Contains(patchRaw, `"template":"grey"`) {
+	if !strings.Contains(patchRaw, "已在网页端标记已处理") || !strings.Contains(patchRaw, `"template":"grey"`) {
 		t.Fatalf("unexpected reverse-sync PATCH payload on dismiss: %s", patchRaw)
 	}
 
@@ -894,6 +898,159 @@ func TestFeishuGroupFeedbackSecurityRouting(t *testing.T) {
 		if strings.HasSuffix(c.Path, "/reply") || strings.Contains(c.Body, `"receive_id":"oc_feedback_group"`) {
 			ff.mu.Unlock()
 			t.Fatalf("outbound message leaked into feedback group: %+v", c)
+		}
+	}
+	ff.mu.Unlock()
+}
+
+func TestFeishuReadCursorAckAndUnquotedReplySync(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	ctx := context.Background()
+
+	waitMapping := func(entryID string) string {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			if rec, _ := getIntegrationMessage(sp.db, entryID, feishuKind); rec != nil && rec.ExternalID != "" {
+				return rec.ExternalID
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("integration_messages mapping missing for %s", entryID)
+		return ""
+	}
+	sendP2P := func(eventID, msgID, text string) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"text": text})
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: eventID}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr(msgID),
+					ChatId:      strPtr("oc_p2p_owner"),
+					ChatType:    strPtr("p2p"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(string(body)),
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive(%s): %v", eventID, err)
+		}
+	}
+
+	// 1) Feishu p2p message advances chat:main read cursor monotonically and persists to SQLite.
+	sendP2P("evt_rc_1", "om_rc_1", "帮我看下发布状态")
+	sp.mu.Lock()
+	u1 := sp.st.Entries[len(sp.st.Entries)-1]
+	sp.mu.Unlock()
+	if got := sp.LastReadEntryID(); got != u1.ID {
+		t.Fatalf("LastReadEntryID after Feishu p2p = %q, want %q", got, u1.ID)
+	}
+	reloaded, err := loadState(sp.db, sp.dir)
+	if err != nil || reloaded.LastReadEntryID != u1.ID {
+		t.Fatalf("persisted LastReadEntryID = %q (err=%v), want %q", reloaded.LastReadEntryID, err, u1.ID)
+	}
+
+	// 2) Feishu card ack click: unified「已标记处理」copy, clears pending, advances read cursor monotonically.
+	chkOld, _ := sp.Reply(mainThread, "请手动审批旧工单 #1", "", nil, true)
+	chkNew, _ := sp.Reply(mainThread, "请手动审批新工单 #2", "", nil, true)
+	waitMapping(chkOld.ID)
+	waitMapping(chkNew.ID)
+
+	ackRespNew, err := fa.handleCardAction(ctx, &larkcallback.CardActionTriggerEvent{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_ack_new"}},
+		Event: &larkcallback.CardActionTriggerRequest{
+			Operator: &larkcallback.Operator{OpenID: "ou_allowed_owner"},
+			Context:  &larkcallback.Context{OpenChatID: "oc_p2p_owner", OpenMessageID: "om_chk_new"},
+			Action:   &larkcallback.CallBackAction{Value: map[string]any{"action": "ack", "entry_id": chkNew.ID}},
+		},
+	}, sink)
+	if err != nil {
+		t.Fatalf("ack chkNew: %v", err)
+	}
+	if ackRespNew.Toast == nil || ackRespNew.Toast.Content != "已标记处理" {
+		t.Fatalf("ack toast = %+v, want 已标记处理", ackRespNew.Toast)
+	}
+	ackCardRaw, _ := json.Marshal(ackRespNew.Card.Data)
+	if !strings.Contains(string(ackCardRaw), "已标记处理") || strings.Contains(string(ackCardRaw), "已看") {
+		t.Fatalf("ack updated card unexpected: %s", string(ackCardRaw))
+	}
+	if got := sp.LastReadEntryID(); got != chkNew.ID {
+		t.Fatalf("LastReadEntryID after ack chkNew = %q, want %q", got, chkNew.ID)
+	}
+
+	// Clicking an older ack card must NOT regress LastReadEntryID backward.
+	if _, err := fa.handleCardAction(ctx, &larkcallback.CardActionTriggerEvent{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_ack_old"}},
+		Event: &larkcallback.CardActionTriggerRequest{
+			Operator: &larkcallback.Operator{OpenID: "ou_allowed_owner"},
+			Context:  &larkcallback.Context{OpenChatID: "oc_p2p_owner", OpenMessageID: "om_chk_old"},
+			Action:   &larkcallback.CallBackAction{Value: map[string]any{"action": "ack", "entry_id": chkOld.ID}},
+		},
+	}, sink); err != nil {
+		t.Fatalf("ack chkOld: %v", err)
+	}
+	if got := sp.LastReadEntryID(); got != chkNew.ID {
+		t.Fatalf("LastReadEntryID regressed on older ack: got %q, want %q", got, chkNew.ID)
+	}
+
+	// 3) Feishu pick_opt callback advances read cursor to the new user choice entry.
+	optCard, _ := sp.Reply(mainThread, "要现在切流量吗？", "", []string{"切 10%", "先观望"}, false)
+	waitMapping(optCard.ID)
+	if _, err := fa.handleCardAction(ctx, &larkcallback.CardActionTriggerEvent{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_opt_1"}},
+		Event: &larkcallback.CardActionTriggerRequest{
+			Operator: &larkcallback.Operator{OpenID: "ou_allowed_owner"},
+			Context:  &larkcallback.Context{OpenChatID: "oc_p2p_owner", OpenMessageID: "om_opt_1"},
+			Action:   &larkcallback.CallBackAction{Value: map[string]any{"action": "pick_opt", "entry_id": optCard.ID, "opt_idx": "0"}},
+		},
+	}, sink); err != nil {
+		t.Fatalf("pick_opt: %v", err)
+	}
+	sp.mu.Lock()
+	optUserEntry := sp.st.Entries[len(sp.st.Entries)-1]
+	sp.mu.Unlock()
+	if got := sp.LastReadEntryID(); got != optUserEntry.ID || idNum(got) <= idNum(optCard.ID) {
+		t.Fatalf("LastReadEntryID after pick_opt = %q, want %q (> %q)", got, optUserEntry.ID, optCard.ID)
+	}
+
+	// 4) Unquoted Feishu text reply right after an --opt card resolves it AND gray-patches the card.
+	optDirect, _ := sp.Reply(mainThread, "日志级别要调回 info 吗？", "", []string{"调回 info", "保持 debug"}, false)
+	optDirectMsgID := waitMapping(optDirect.ID)
+	sendP2P("evt_rc_direct_opt", "om_rc_direct_opt", "调回 info 就行")
+	patchOpt := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPatch && c.Path == "/open-apis/im/v1/messages/"+optDirectMsgID
+	})
+	if raw := extractCardContent(patchOpt.Body); !strings.Contains(raw, "已回复：调回 info 就行") || !strings.Contains(raw, `"template":"grey"`) {
+		t.Fatalf("expected unquoted Feishu reply to gray-patch --opt card, got: %s", raw)
+	}
+
+	// 5) Unquoted Feishu text reply right after a pure --check card must NOT clear pending
+	// or gray-patch the card, while still advancing LastReadEntryID.
+	chkGuard, _ := sp.Reply(mainThread, "请手动给测试集群续签证书（办完点已处理）", "", nil, true)
+	chkGuardMsgID := waitMapping(chkGuard.ID)
+	sendP2P("evt_rc_unrelated", "om_rc_unrelated", "顺便帮我查一下今天构建数")
+	sp.mu.Lock()
+	uUnrelated := sp.st.Entries[len(sp.st.Entries)-1]
+	pendNow := sp.pendingLocked(time.Now())
+	sp.mu.Unlock()
+	if got := sp.LastReadEntryID(); got != uUnrelated.ID {
+		t.Fatalf("LastReadEntryID after unrelated Feishu msg = %q, want %q", got, uUnrelated.ID)
+	}
+	if len(pendNow) != 1 || pendNow[0].ID != chkGuard.ID {
+		t.Fatalf("unrelated Feishu text must keep pure --check pending, got %+v", pendNow)
+	}
+	time.Sleep(80 * time.Millisecond)
+	ff.mu.Lock()
+	for _, c := range ff.calls {
+		if c.Method == http.MethodPatch && c.Path == "/open-apis/im/v1/messages/"+chkGuardMsgID {
+			ff.mu.Unlock()
+			t.Fatalf("unrelated Feishu text must NOT gray-patch pure --check card: %s", extractCardContent(c.Body))
 		}
 	}
 	ff.mu.Unlock()

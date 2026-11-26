@@ -173,7 +173,7 @@ func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	re := fs.String("re", "", "the event (#t123) this answers, shown to the human as a quote")
 	var opts flagList
 	fs.Var(&opts, "opt", "quick-reply choice button for the human (repeatable)")
-	check := fs.Bool("check", false, "mark as needing the human's review or action (without --opt)")
+	check := fs.Bool("check", false, "mark as an external human todo (no --opt; silently checkable)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -477,13 +477,17 @@ sessions and tidies memory/. Its journal is in dreams/.
 
 ## Tools (run in your shell)
 - ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... [--check] \"text\"`" + ` — message the human (add --thread X for another thread).
-  When asking the human to confirm or choose between options — or whenever you proactively
-  propose an actionable suggestion or next step (distilling a skill, creating/adjusting a
-  timer, fixing a nearby issue, follow-up improvements) — attach 2–4 short ` + "`--opt`" + ` buttons
-  (recommended choice first) so they can reply in one tap.
-  When a reply has no ` + "`--opt`" + ` buttons yet still needs the human to handle, review or answer
-  (a todo for them, an open question, a report or issue awaiting sign-off), add ` + "`--check`" + `
-  so it stays in their pending reminder; leave ` + "`--check`" + ` off for plain updates or closed items.
+  - Plain updates, finished deliverables, reports, or FYIs: pass neither ` + "`--opt`" + ` nor ` + "`--check`" + `
+    (the chat's cross-device unread marker already keeps them from being missed).
+  - Need a decision, reply, or follow-up action from the human — including whenever you
+    proactively propose an actionable suggestion or next step (distilling a skill,
+    creating/adjusting a timer, fixing a nearby issue) or need them to tell you once an
+    external step is done: attach 2–4 short ` + "`--opt`" + ` buttons (recommended choice first) so they
+    can reply in one tap.
+  - Only add ` + "`--check`" + ` (never with ` + "`--opt`" + `) for an offline/external human todo that needs no
+    reply back to you (e.g. approving a ticket, running a manual login/key setup, replying
+    to someone else, confirming a calendar invite) so it stays in their pending list until
+    they silently mark it done.
 - ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--thread T] [--name N] \"task brief\"`" + `
   starts a worker in the background and returns at once. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
   ` + "`{{BIN}} list`" + ` shows the connected computers. Use --machine when the human names a

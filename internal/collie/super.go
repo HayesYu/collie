@@ -2122,16 +2122,18 @@ func (sp *Super) dismiss(id string, syncExternal bool) {
 		sp.flush()
 	}
 	if changed && syncExternal && mgr != nil {
-		go mgr.SyncResolved(context.Background(), id, "已在网页端标记已看", "")
+		go mgr.SyncResolved(context.Background(), id, "已在网页端标记已处理", "")
 	}
 }
 
 // pendingLocked computes unanswered --opt and --check Collie messages in chat:main.
 // An item resolves when:
-//  1. the human tapped「已看」or × (/api/super/dismiss),
+//  1. the human tapped「已处理」or × (/api/super/dismiss),
 //  2. the human tapped one of its options or quoted it (re.entry == e.id),
-//  3. the human sent a plain unquoted message right after it with no other
-//     role=="collie" reply in between (system/worker events do not interrupt).
+//  3. for --opt messages only: the human sent a plain unquoted message right after
+//     it with no other role=="collie" reply in between (system/worker events do not
+//     interrupt). Pure --check external todos stay pending across unrelated unquoted
+//     messages so follow-up chatter never silently clears them.
 func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 	es := sp.st.Entries
 	var out []PendingItem
@@ -2149,6 +2151,7 @@ func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 		if len(opts) == 0 && !e.Check {
 			continue
 		}
+		hasOpts := len(opts) > 0
 		resolved, otherCollie := false, false
 		for j := i + 1; j < len(es); j++ {
 			next := es[j]
@@ -2161,7 +2164,7 @@ func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 				if next.Re != nil {
 					reID = next.Re.Entry
 				}
-				if reID == e.ID || (reID == "" && !otherCollie) {
+				if reID == e.ID || (hasOpts && reID == "" && !otherCollie) {
 					resolved = true
 				}
 			case "collie":

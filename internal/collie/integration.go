@@ -1200,6 +1200,10 @@ func (s *managerSink) EmitHuman(ctx context.Context, ev HumanEvent) error {
 		return nil
 	}
 	sp.mu.Lock()
+	var beforePending []PendingItem
+	if thread == mainThread {
+		beforePending = sp.pendingLocked(now)
+	}
 	re := sp.sayQuoteLocked(ev.ReEntryID)
 	e := sp.addEntryReLocked("user", thread, text, "", "", re)
 	e.Channel = src
@@ -1216,10 +1220,42 @@ func (s *managerSink) EmitHuman(ctx context.Context, ev HumanEvent) error {
 	}
 	// Source "chat" guarantees human-interrupt priority in Super.tick() (fromHuman).
 	sp.ingestLocked("chat", thread, from, promptText, "", "", e.ID)
+	var afterPending []PendingItem
+	if thread == mainThread {
+		afterPending = sp.pendingLocked(now)
+	}
 	sp.mu.Unlock()
 
+	if thread == mainThread && e != nil && e.ID != "" {
+		_, _, _ = sp.MarkChatRead(e.ID)
+	}
 	s.mgr.recordActivity(s.kind)
-	if ev.ReEntryID != "" {
+	if thread == mainThread {
+		stillPending := make(map[string]bool, len(afterPending))
+		for _, p := range afterPending {
+			stillPending[p.ID] = true
+		}
+		resolvedIDs := map[string]bool{}
+		for _, p := range beforePending {
+			if !stillPending[p.ID] {
+				resolvedIDs[p.ID] = true
+			}
+		}
+		if ev.ReEntryID != "" {
+			resolvedIDs[ev.ReEntryID] = true
+		}
+		if len(resolvedIDs) > 0 {
+			directSummary := "已回复：" + clip(oneLine(text), 40)
+			for rid := range resolvedIDs {
+				id := rid
+				if id == ev.ReEntryID {
+					go s.mgr.SyncResolved(context.Background(), id, "已回复处理", src)
+				} else {
+					go s.mgr.SyncResolved(context.Background(), id, directSummary, "")
+				}
+			}
+		}
+	} else if ev.ReEntryID != "" {
 		go s.mgr.SyncResolved(context.Background(), ev.ReEntryID, "已回复处理", src)
 	}
 	return nil

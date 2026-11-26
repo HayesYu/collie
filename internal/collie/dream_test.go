@@ -143,7 +143,7 @@ func TestMemoryUpFrontSplitAnd10KBBudget(t *testing.T) {
 	if !strings.Contains(routerStr, "~10 KB") || strings.Contains(routerStr, "6 KB") {
 		t.Fatalf("ROUTER.md budget text unexpected:\n%s", routerStr)
 	}
-	if !strings.Contains(routerStr, "create a timer + a notes/ workflow directly,") || !strings.Contains(routerStr, "proactively\n  propose an actionable suggestion") {
+	if !strings.Contains(routerStr, "create a timer + a notes/ workflow directly,") || !strings.Contains(routerStr, "propose an actionable suggestion") {
 		t.Fatalf("ROUTER.md missing timer-in-notes or proactive --opt guidance:\n%s", routerStr)
 	}
 	renderedDream := strings.ReplaceAll(dreamPrompt, "{{BUDGET}}", "10")

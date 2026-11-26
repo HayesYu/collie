@@ -263,9 +263,9 @@ func TestReplyCheckPersistencePendingAndFourResolutions(t *testing.T) {
 		t.Fatalf("non-main --check pending = %v, want empty", got)
 	}
 
-	// Rule ①: --check without options enters pending; clicking「已看」calls /api/super/dismiss.
+	// Rule ①: --check without options enters pending; clicking「已处理」calls /api/super/dismiss.
 	rec1 := call("POST", "/api/super/reply", map[string]any{
-		"text":  "飞书扫出 2 条需要你本人回复的单聊待办，详见清单。",
+		"text":  "有 2 条需要你本人线下处理的审批待办，详见清单。",
 		"check": true,
 	})
 	if rec1.Code != 200 {
@@ -285,29 +285,42 @@ func TestReplyCheckPersistencePendingAndFourResolutions(t *testing.T) {
 		t.Fatalf("pending after dismiss = %v, want empty", got)
 	}
 
-	// Rule ② & ③b: intervening Collie reply preserves --check until quoted (re == e.ID).
-	cQuote, _ := sp.Reply(mainThread, "日报里发现昨天延迟抖动了两次，你空了看一眼原因是什么？", "", nil, true)
+	// Rule ②: explicit quote reply (re == e.ID) resolves --check, even across intervening Collie replies.
+	cQuote, _ := sp.Reply(mainThread, "测试环境证书明天到期，请手动在控制台续签。", "", nil, true)
 	sp.Reply(mainThread, "顺便说下：定时巡检照常跑完了。", "", nil)
 	call("POST", "/api/super/say", map[string]any{"text": "巡检收到"})
 	if got := pendingIDs(t, call); !slices.Equal(got, []string{cQuote.ID}) {
 		t.Fatalf("cQuote should stay pending across intervening Collie reply, got %v", got)
 	}
-	call("POST", "/api/super/say", map[string]any{"text": "那是昨天机房切流，不用管", "re": cQuote.ID})
+	call("POST", "/api/super/say", map[string]any{"text": "刚在控制台续好了", "re": cQuote.ID})
 	if got := pendingIDs(t, call); len(got) != 0 {
 		t.Fatalf("quoting cQuote should resolve it, got %v", got)
 	}
 
-	// Rule ③a: direct unquoted user reply (even with worker event in between) resolves --check.
-	cDirect, _ := sp.Reply(mainThread, "这个开放式问题想听你的想法：下周重点先排哪块？", "", nil, true)
+	// Guard against false dismiss: a direct unquoted user message right after a pure --check
+	// external todo (with or without worker events in between) must NOT silently clear it.
+	cDirect, _ := sp.Reply(mainThread, "请手动批一下权限续期工单，批完点已处理即可。", "", nil, true)
 	sp.mu.Lock()
 	sp.addEntryLocked("event", mainThread, "worker-a 完成了一轮", "worker-a", "done")
 	sp.mu.Unlock()
 	if got := pendingIDs(t, call); !slices.Equal(got, []string{cDirect.ID}) {
 		t.Fatalf("cDirect pending = %v, want [%s]", got, cDirect.ID)
 	}
-	call("POST", "/api/super/say", map[string]any{"text": "先做稳定性专项"})
+	call("POST", "/api/super/say", map[string]any{"text": "顺手帮我查下昨晚回归测试"})
+	if got := pendingIDs(t, call); !slices.Equal(got, []string{cDirect.ID}) {
+		t.Fatalf("unquoted follow-up must NOT clear pure --check todo, got %v", got)
+	}
+	// Explicit quote or dismiss resolves it cleanly.
+	call("POST", "/api/super/say", map[string]any{"text": "工单批好了", "re": cDirect.ID})
 	if got := pendingIDs(t, call); len(got) != 0 {
-		t.Fatalf("direct reply should resolve cDirect, got %v", got)
+		t.Fatalf("explicit quote should resolve cDirect, got %v", got)
+	}
+
+	// Verify routerDoc explicitly steers plain updates/reports away from --check and
+	// narrows --check strictly to offline/external human todos.
+	if !strings.Contains(routerDoc, "Plain updates, finished deliverables, reports, or FYIs: pass neither `--opt` nor `--check`") ||
+		!strings.Contains(routerDoc, "Only add `--check` (never with `--opt`) for an offline/external human todo") {
+		t.Fatalf("routerDoc missing narrowed --check guidance")
 	}
 
 	// Persistence across SQLite saveState/loadState and /api/super/earlier, plus 7-day cutoff.
@@ -319,8 +332,8 @@ func TestReplyCheckPersistencePendingAndFourResolutions(t *testing.T) {
 	sp.changed()
 	sp.mu.Unlock()
 
-	cKeep, _ := sp.Reply(mainThread, "验收报告放好了，请过目。", "", nil, true)
-	cIgnore, _ := sp.Reply(mainThread, "这条点 × 忽略。", "", nil, true)
+	cKeep, _ := sp.Reply(mainThread, "测试环境密钥需要手动轮换。", "", nil, true)
+	cIgnore, _ := sp.Reply(mainThread, "这条点 × 标为已处理。", "", nil, true)
 	// Rule ④: × in pending bar calls Dismiss.
 	sp.Dismiss(cIgnore.ID)
 	sp.flush()

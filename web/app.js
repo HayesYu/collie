@@ -1433,11 +1433,31 @@
     $("#nav-auto-sub").classList.toggle("follow", !!f?.next);
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
     const pend = activePending();
+    const unreadCount = pend.length === 0 && view !== "collie" ? computeUnreadInfo().count : 0;
     const np = $("#nav-pending");
     if (np) {
-      np.hidden = pend.length === 0;
-      np.textContent = pend.length || "";
-      np.title = pend.length ? `${pend.length} 条待你确认` : "";
+      if (pend.length > 0) {
+        np.hidden = false;
+        np.classList.add("attn");
+        np.classList.remove("unread");
+        np.textContent = pend.length > 99 ? "99+" : String(pend.length);
+        np.title = `${pend.length} 条待处理`;
+        np.setAttribute("aria-label", `${pend.length} 条待处理`);
+      } else if (unreadCount > 0) {
+        np.hidden = false;
+        np.classList.remove("attn");
+        np.classList.add("unread");
+        np.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+        np.title = `${unreadCount} 条未读`;
+        np.setAttribute("aria-label", `${unreadCount} 条未读`);
+      } else {
+        np.hidden = true;
+        np.classList.add("attn");
+        np.classList.remove("unread");
+        np.textContent = "";
+        np.title = "";
+        np.removeAttribute("aria-label");
+      }
     }
     const intErr = sup.integrations_summary?.error || 0;
     const nie = $("#nav-int-err");
@@ -2079,7 +2099,7 @@
     if (e.picked || e.resolved || e.dismissed) return false;
     const id = e.id || "";
     if (id && dismissedLocal.has(id)) return false;
-    if (id && optimisticallyResolved(id, allEntries)) return false;
+    if (id && optimisticallyResolved(e, allEntries)) return false;
     const pset = pendIds || new Set(activePending().map((p) => p.id));
     if (sup.hasPending) {
       if (id && pset.has(id)) return true;
@@ -2094,12 +2114,13 @@
     }
     const idx = allEntries.indexOf(e);
     if (idx < 0) return entryHasConfirmMarker(e);
+    const hasOpts = entryConfirmOptions(e).length > 0;
     let otherCollie = false;
     for (let j = idx + 1; j < allEntries.length; j++) {
       const next = allEntries[j];
       if (next.role === "user") {
         const reId = next.re?.entry || "";
-        if ((id && reId === id) || (!reId && !otherCollie)) return false;
+        if ((id && reId === id) || (hasOpts && !reId && !otherCollie)) return false;
       } else if (next.role === "collie") {
         otherCollie = true;
       }
@@ -2271,10 +2292,17 @@
     updateSuperJump();
   }
 
-  function optimisticallyResolved(id, list = chatEntries()) {
+  function optimisticallyResolved(p, list = chatEntries()) {
+    const id = typeof p === "string" ? p : p?.id;
+    if (!id) return false;
     if (dismissedLocal.has(id)) return true;
     if (!pendingSays.length) return false;
     if (pendingSays.some((m) => m.re?.entry === id)) return true;
+    // Pure --check external todos do not auto-resolve on an unquoted message.
+    const hasOpts = typeof p === "object"
+      ? entryConfirmOptions(p).length > 0
+      : true;
+    if (!hasOpts) return false;
     if (!pendingSays.some((m) => !m.re?.entry)) return false;
     const idx = list.findIndex((e) => e.id === id);
     if (idx < 0) return false;
@@ -2287,7 +2315,7 @@
     const list = sup.pending || [];
     if (!list.length) return [];
     const entries = pendingSays.length ? chatEntries() : sup.entries;
-    return list.filter((p) => p?.id && !optimisticallyResolved(p.id, entries));
+    return list.filter((p) => p?.id && !optimisticallyResolved(p, entries));
   }
   function clientPinSummary(e) {
     if (!e) return "";
@@ -2352,8 +2380,8 @@
     const P = pend.length, M = pinsAll.length;
     const lastPend = P ? pend[P - 1] : null, lastPin = M ? pinsAll[M - 1] : null;
     const sum = lastPend ? lastPend.summary : pinDisplaySummary(lastPin);
-    const label = P && M ? (total === 1 ? "待你确认 · 已钉住" : `待你确认 (${P}) · 已钉住 (${M})`)
-      : P ? (total === 1 ? "待你确认" : `待你确认 (${P})`)
+    const label = P && M ? (total === 1 ? "待处理 · 钉住" : `待处理 (${P}) · 钉住 (${M})`)
+      : P ? (total === 1 ? "待处理" : `待处理 (${P})`)
       : (total === 1 ? "已钉住" : `已钉住 (${M})`);
     const barSig = `${total}:${P}:${M}:${lastPend?.id || ""}:${lastPin?.id || ""}:${sum}`;
     if (barSig !== pendingBarSig) {
@@ -2362,7 +2390,7 @@
       if (total === 1) {
         const onlyId = lastPend ? lastPend.id : lastPin.id;
         const xBtn = lastPend
-          ? `<button type="button" class="pending-x" data-dismiss="${esc(onlyId)}" title="忽略" aria-label="忽略">${ICON_X}</button>`
+          ? `<button type="button" class="pending-x" data-dismiss="${esc(onlyId)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>`
           : `<button type="button" class="pending-x" data-unpin="${esc(onlyId)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>`;
         bar.innerHTML = `<button type="button" class="pending-main" data-goto-pending="${esc(onlyId)}" title="${esc(sum)}">
             ${lead}<span class="pending-label">${esc(label)}</span><span class="pending-sep">·</span><span class="pending-sum">${esc(sum)}</span>
@@ -2386,7 +2414,7 @@
         const pendRows = [...pend].reverse().map((p) => `<div class="pending-item">
           <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(p.summary)}">
             <span class="pending-dot"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="已钉住">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
-          </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="忽略" aria-label="忽略">${ICON_X}</button>
+          </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>
         </div>`);
         const pinRows = [...pinsOnly].reverse().map((p) => {
           const ps = pinDisplaySummary(p);
@@ -2888,7 +2916,7 @@
       }
       const pendIds = new Set(activePending().map((p) => p.id));
       const pinIds = new Set(activePinned().map((p) => p.id));
-      const entryPending = (idx, id) => {
+      const entryPending = (idx, id, hasOpts = true) => {
         if (!id) return false;
         if (sup.hasPending) return pendIds.has(id);
         if (dismissedLocal.has(id)) return false;
@@ -2897,7 +2925,7 @@
           const next = allEntries[j];
           if (next.role === "user") {
             const reId = next.re?.entry || "";
-            if (reId === id || (!reId && !otherCollie)) return false;
+            if (reId === id || (hasOpts && !reId && !otherCollie)) return false;
           } else if (next.role === "collie") {
             otherCollie = true;
           }
@@ -2907,12 +2935,12 @@
       const replyOpts = (e, idx) => {
         const opts = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
         if (opts.length) {
-          if (!entryPending(idx, e.id)) return "";
+          if (!entryPending(idx, e.id, true)) return "";
           return `<div class="reply-opts" data-entry="${esc(e.id)}">${opts.map((o) =>
             `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
         }
-        if (e.check && entryPending(idx, e.id)) {
-          return `<div class="reply-opts reply-check" data-entry="${esc(e.id)}"><button type="button" class="reply-ack" data-ack="${esc(e.id)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已看</button></div>`;
+        if (e.check && entryPending(idx, e.id, false)) {
+          return `<div class="reply-opts reply-check" data-entry="${esc(e.id)}"><button type="button" class="reply-ack" data-ack="${esc(e.id)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已处理</button></div>`;
         }
         return "";
       };
@@ -8816,7 +8844,7 @@
       const metaParts = [`${th.replyCount} 条回复`];
       if (th.branchCount > 0) metaParts.push("含分支");
       const dotHtml = pending
-        ? `<span class="th-pop-dot" aria-hidden="true"></span><span class="visually-hidden">待确认，</span>`
+        ? `<span class="th-pop-dot" aria-hidden="true"></span><span class="visually-hidden">待处理，</span>`
         : "";
       const previewHtml = th.preview
         ? `<div class="th-pop-preview" title="${esc(th.preview)}">${esc(th.preview)}</div>`

@@ -2119,10 +2119,13 @@
     const unreadCount = view === "collie" ? computeUnreadInfo().count : 0;
     const threshold = unreadCount > 0 ? AT_BOTTOM_PX : SUPER_JUMP_DIST;
     const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > threshold;
-    const labelText = unreadCount > 0 ? `${unreadCount} 条未读` : "回到底部";
+    const badgeText = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
     const ariaText = unreadCount > 0 ? `回到底部，${unreadCount} 条未读` : "回到底部";
-    const labelEl = $("#super-jump-label", btn);
-    if (labelEl && labelEl.textContent !== labelText) labelEl.textContent = labelText;
+    const badgeEl = $("#super-jump-badge", btn);
+    if (badgeEl) {
+      if (badgeEl.textContent !== badgeText) badgeEl.textContent = badgeText;
+      badgeEl.hidden = !badgeText;
+    }
     btn.classList.toggle("has-unread", unreadCount > 0);
     if (btn.title !== ariaText) {
       btn.title = ariaText;

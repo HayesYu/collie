@@ -333,7 +333,8 @@ for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#compo
 }
 getEl("#re-draft")._qs[".re-t"] = makeEl("#re-draft .re-t");
 getEl("#re-draft")._qs["button"] = makeEl("#re-draft button");
-getEl("#super-jump")._qs["#super-jump-label"] = getEl("#super-jump-label");
+getEl("#super-jump")._qs["#super-jump-badge"] = getEl("#super-jump-badge");
+getEl("#super-jump-badge").hidden = true;
 getEl("#super-jump").hidden = true;
 getEl("#thread-drawer").hidden = true;
 getEl("#thread-scrim").hidden = true;
@@ -503,7 +504,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot marker in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSuper, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSuper, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { older = []; readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
 );
 vm.runInContext(instrumented, ctx);
 
@@ -565,9 +566,12 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.ok(sepNode, "layout must include unread-sep");
   const sepVisualTop = sepNode.y - scroller.scrollTop;
   assert.ok(sepVisualTop >= 12 && sepVisualTop <= 16, "divider top breathing room must be 12-16px, got " + sepVisualTop);
-  assert.equal(getEl("#super-jump").hidden, false, "jump pill must appear when anchored above bottom");
-  assert.equal(getEl("#super-jump-label").textContent, "6 条未读", "jump pill must show unread count");
-  assert.equal(getEl("#super-jump").classList.contains("has-unread"), true, "jump pill must carry has-unread class");
+  assert.equal(getEl("#super-jump").hidden, false, "jump button must appear when anchored above bottom");
+  assert.equal(getEl("#super-jump-badge").hidden, false, "jump badge must appear when unread > 0");
+  assert.equal(getEl("#super-jump-badge").textContent, "6", "jump badge must show compact unread count");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部，6 条未读", "jump aria-label must describe unread count");
+  assert.equal(getEl("#super-jump").title, "回到底部，6 条未读", "jump title must describe unread count");
+  assert.equal(getEl("#super-jump").classList.contains("has-unread"), true, "jump button must carry has-unread class");
   await wait(520);
   assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "must not advance cursor while stopped above bottom");
 
@@ -579,21 +583,36 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(scroller.scrollTop, scrollBeforeDrawer, "closing thread drawer must keep 0px scroll drift");
   assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "drawer toggle must not prematurely advance read cursor");
 
-  // 4) Clicking jump pill scrolls to bottom and immediately advances server + local cursor.
+  // 4) Clicking jump button scrolls to bottom and immediately advances server + local cursor.
   getEl("#super-jump").dispatch("click");
   await wait(30);
-  assert.equal(serverLastRead, "e12", "clicking jump pill must immediately POST /api/chat/read to e12");
+  assert.equal(serverLastRead, "e12", "clicking jump button must immediately POST /api/chat/read to e12");
   assert.equal(JSON.parse(storage.get("collie.chatReadEntryId")), "e12", "localStorage cursor updated to e12");
-  assert.equal(scroller.scrollTop, scroller.scrollHeight, "clicking jump pill must land at bottom");
-  assert.equal(getEl("#super-jump").hidden, true, "jump pill must hide at bottom");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "clicking jump button must land at bottom");
+  assert.equal(getEl("#super-jump").hidden, true, "jump button must hide at bottom");
+  assert.equal(getEl("#super-jump-badge").hidden, true, "jump badge must hide after read");
+  assert.equal(getEl("#super-jump-badge").textContent, "", "jump badge must clear after read");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部", "jump aria-label resets after read");
 
-  // 5) Simulated reload after reading: lands at bottom, NO unread divider, NO jump pill.
+  // 4b) Scrolled up with 0 unread: pure circular icon button without badge text.
+  scroller.scrollTop = 0;
+  T.updateSuperJump();
+  assert.equal(getEl("#super-jump").hidden, false, "jump button appears when scrolled up with 0 unread");
+  assert.equal(getEl("#super-jump-badge").hidden, true, "badge stays hidden when 0 unread");
+  assert.equal(getEl("#super-jump-badge").textContent, "", "no text rendered when 0 unread");
+  assert.equal(getEl("#super-jump").classList.contains("has-unread"), false, "has-unread cleared when 0 unread");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部", "aria-label is 回到底部 when 0 unread");
+  scroller.scrollTop = scroller.scrollHeight;
+  T.updateSuperJump();
+
+  // 5) Simulated reload after reading: lands at bottom, NO unread divider, NO jump button.
+  serverLastRead = "e12";
   T.resetReadState("", "");
   T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e12" });
   T.renderSuper({ force: true, unreadAnchor: true });
   assert.ok(!threadBox.innerHTML.includes('id="unread-sep"'), "reloading after read must not show unread divider");
   assert.equal(scroller.scrollTop, scroller.scrollHeight, "reloading after read must stick to bottom");
-  assert.equal(getEl("#super-jump").hidden, true, "reloading after read keeps jump pill hidden");
+  assert.equal(getEl("#super-jump").hidden, true, "reloading after read keeps jump button hidden");
 
   // 6) Few unread (fits at bottom): anti-annoyance boundary keeps bottom + subtle divider + debounced read.
   fetchCalls.length = 0;
@@ -634,6 +653,19 @@ const mkEntry = (n, role, text, extra = {}) => ({
   T.renderSuper({ force: true, unreadAnchor: true });
   assert.ok(!threadBox.innerHTML.includes('id="unread-sep"'), "stale localStorage cursor must be discarded");
   assert.equal(scroller.scrollTop, scroller.scrollHeight, "stale cursor reset sticks to bottom");
+
+  // 10) Unread > 99 caps badge display at 99+ while preserving exact count in aria-label/title.
+  const hugeEntries = [mkEntry(1, "collie", "read baseline")];
+  for (let i = 2; i <= 106; i++) hugeEntries.push(mkEntry(i, "collie", "unread " + i));
+  serverLastRead = "e1";
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: hugeEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e1" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.equal(getEl("#super-jump").hidden, false, "jump button shown for 105 unread");
+  assert.equal(getEl("#super-jump-badge").hidden, false, "badge shown for 105 unread");
+  assert.equal(getEl("#super-jump-badge").textContent, "99+", "badge caps at 99+");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部，105 条未读", "aria-label preserves exact 105 unread count");
+  assert.equal(getEl("#super-jump").title, "回到底部，105 条未读", "title preserves exact 105 unread count");
 
   console.log("OK: all unread anchor & chat read JS regression checks passed");
 })().catch((err) => {

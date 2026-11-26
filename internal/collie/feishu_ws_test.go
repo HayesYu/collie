@@ -26,18 +26,43 @@ type fakeFeishuCall struct {
 	Body   string
 }
 
+type fakeFeishuMessage struct {
+	MessageID string
+	MsgType   string
+	Content   string
+	Deleted   bool
+	Mentions  []map[string]any
+	Status    int
+	Code      int
+	Msg       string
+	Delay     time.Duration
+}
+
+type fakeFeishuResource struct {
+	Data     []byte
+	FileName string
+	Status   int
+	Code     int
+	Msg      string
+	Delay    time.Duration
+}
+
 type fakeFeishuServer struct {
-	srv     *httptest.Server
-	mu      sync.Mutex
-	calls   []fakeFeishuCall
-	msgSeq  int
-	imgData []byte
+	srv       *httptest.Server
+	mu        sync.Mutex
+	calls     []fakeFeishuCall
+	msgSeq    int
+	imgData   []byte
+	messages  map[string]fakeFeishuMessage
+	resources map[string]fakeFeishuResource
 }
 
 func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 	t.Helper()
 	ff := &fakeFeishuServer{
-		imgData: []byte("\x89PNG\r\n\x1a\nfake-png-bytes"),
+		imgData:   []byte("\x89PNG\r\n\x1a\nfake-png-bytes"),
+		messages:  map[string]fakeFeishuMessage{},
+		resources: map[string]fakeFeishuResource{},
 	}
 	ff.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -89,9 +114,92 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 			_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{"reaction_id":"r_1"}}`))
 
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/resources/"):
+			idx := strings.LastIndex(r.URL.Path, "/resources/")
+			fileKey := r.URL.Path[idx+len("/resources/"):]
+			ff.mu.Lock()
+			res, hasCustom := ff.resources[fileKey]
+			defaultData := ff.imgData
+			ff.mu.Unlock()
+			if hasCustom {
+				if res.Delay > 0 {
+					select {
+					case <-time.After(res.Delay):
+					case <-r.Context().Done():
+						return
+					}
+				}
+				if res.Code != 0 {
+					if res.Status > 0 {
+						w.WriteHeader(res.Status)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": res.Code, "msg": res.Msg})
+					return
+				}
+				if res.Status >= 400 {
+					w.WriteHeader(res.Status)
+					_, _ = w.Write([]byte(`{"code":500,"msg":"resource error"}`))
+					return
+				}
+				fname := res.FileName
+				if fname == "" {
+					fname = fileKey + ".png"
+				}
+				w.Header().Set("Content-Type", "image/png")
+				w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
+				_, _ = w.Write(res.Data)
+				return
+			}
 			w.Header().Set("Content-Type", "image/png")
 			w.Header().Set("Content-Disposition", `attachment; filename="shot.png"`)
-			_, _ = w.Write(ff.imgData)
+			_, _ = w.Write(defaultData)
+
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/open-apis/im/v1/messages/"):
+			msgID := strings.TrimPrefix(r.URL.Path, "/open-apis/im/v1/messages/")
+			ff.mu.Lock()
+			msg, ok := ff.messages[msgID]
+			ff.mu.Unlock()
+			if !ok {
+				w.WriteHeader(404)
+				_, _ = w.Write([]byte(`{"code":230011,"msg":"message not found"}`))
+				return
+			}
+			if msg.Delay > 0 {
+				select {
+				case <-time.After(msg.Delay):
+				case <-r.Context().Done():
+					return
+				}
+			}
+			if msg.Code != 0 {
+				if msg.Status > 0 {
+					w.WriteHeader(msg.Status)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": msg.Code, "msg": msg.Msg})
+				return
+			}
+			if msg.Status >= 400 {
+				w.WriteHeader(msg.Status)
+				_, _ = w.Write([]byte(`{"code":500,"msg":"internal error"}`))
+				return
+			}
+			id := msg.MessageID
+			if id == "" {
+				id = msgID
+			}
+			item := map[string]any{
+				"message_id": id,
+				"msg_type":   msg.MsgType,
+				"deleted":    msg.Deleted,
+				"body":       map[string]any{"content": msg.Content},
+			}
+			if len(msg.Mentions) > 0 {
+				item["mentions"] = msg.Mentions
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]any{"items": []any{item}},
+			})
 
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/open-apis/contact/v3/users/"):
 			if r.URL.Query().Get("user_id_type") != "open_id" {
@@ -1054,6 +1162,494 @@ func TestFeishuReadCursorAckAndUnquotedReplySync(t *testing.T) {
 		}
 	}
 	ff.mu.Unlock()
+}
+
+func TestFeishuQuotedMessageTextImagePostAndFeedback(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	sp.integrations.humanBurst = 20
+	ctx := context.Background()
+
+	// Configure a feedback group too so we verify all three inbound paths:
+	// p2p, owner group @Collie, and monitored feedback group @Collie.
+	cfgJSON, _ := json.Marshal(FeishuConfig{
+		Region:           "cn",
+		AppID:            "cli_test_app",
+		AllowOpenIDs:     []string{"ou_allowed_owner"},
+		FeedbackChatIDs:  []string{"oc_feedback_group"},
+		GroupMentionOnly: true,
+		InstantChatSync:  true,
+	})
+	fa.mu.Lock()
+	fa.activeCfg = parseFeishuConfig(cfgJSON)
+	fa.mu.Unlock()
+
+	png1 := []byte("\x89PNG\r\n\x1a\nquoted-image-one")
+	png2 := []byte("\x89PNG\r\n\x1a\nquoted-image-two")
+	png3 := []byte("\x89PNG\r\n\x1a\nquoted-image-three")
+	png4 := []byte("\x89PNG\r\n\x1a\nquoted-image-four")
+	png5 := []byte("\x89PNG\r\n\x1a\nquoted-image-five")
+	pngMain := []byte("\x89PNG\r\n\x1a\nmain-image-bytes")
+
+	ff.mu.Lock()
+	ff.messages["om_parent_text"] = fakeFeishuMessage{
+		MessageID: "om_parent_text",
+		MsgType:   "text",
+		Content:   `{"text":"@_user_1 昨晚发布后 QPS 掉了一半，日志见集群 A"}`,
+		Mentions: []map[string]any{
+			{"key": "@_user_1", "name": "林同学"},
+		},
+	}
+	ff.messages["om_parent_img"] = fakeFeishuMessage{
+		MessageID: "om_parent_img",
+		MsgType:   "image",
+		Content:   `{"image_key":"img_parent_1"}`,
+	}
+	ff.messages["om_parent_post"] = fakeFeishuMessage{
+		MessageID: "om_parent_post",
+		MsgType:   "post",
+		Content:   `{"zh_cn":{"title":"巡检汇总","content":[[{"tag":"text","text":"发现两处异常"},{"tag":"img","image_key":"img_post_1"}],[{"tag":"a","text":"监控链接","href":"https://example.com/dash"},{"tag":"img","image_key":"img_post_2"}]]}}`,
+	}
+	ff.messages["om_parent_many_imgs"] = fakeFeishuMessage{
+		MessageID: "om_parent_many_imgs",
+		MsgType:   "post",
+		Content:   `{"title":"多图报告","content":[[{"tag":"img","image_key":"img_cap_1"},{"tag":"img","image_key":"img_cap_2"},{"tag":"img","image_key":"img_cap_3"},{"tag":"img","image_key":"img_cap_4"},{"tag":"img","image_key":"img_cap_5"},{"tag":"img","image_key":"img_cap_1"}]]}`,
+	}
+	ff.messages["om_parent_deleted"] = fakeFeishuMessage{
+		MessageID: "om_parent_deleted",
+		MsgType:   "text",
+		Deleted:   true,
+		Content:   `{"text":"should not leak"}`,
+	}
+	ff.resources["img_parent_1"] = fakeFeishuResource{Data: png1, FileName: "err-shot.png"}
+	ff.resources["img_post_1"] = fakeFeishuResource{Data: png1, FileName: "p1.png"}
+	ff.resources["img_post_2"] = fakeFeishuResource{Data: png2, FileName: "p2.png"}
+	ff.resources["img_cap_1"] = fakeFeishuResource{Data: png1, FileName: "c1.png"}
+	ff.resources["img_cap_2"] = fakeFeishuResource{Data: png2, FileName: "c2.png"}
+	ff.resources["img_cap_3"] = fakeFeishuResource{Data: png3, FileName: "c3.png"}
+	ff.resources["img_cap_4"] = fakeFeishuResource{Data: png4, FileName: "c4.png"}
+	ff.resources["img_cap_5"] = fakeFeishuResource{Data: png5, FileName: "c5.png"}
+	ff.resources["img_main_1"] = fakeFeishuResource{Data: pngMain, FileName: "main.png"}
+	ff.mu.Unlock()
+
+	// 1) Quoted plain text in p2p: mention placeholder resolved + quoted block prepended.
+	evText := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_q_text"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_child_1"),
+				ParentId:    strPtr("om_parent_text"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"帮我先查下是不是配置变更导致的"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evText, sink); err != nil {
+		t.Fatalf("quoted text: %v", err)
+	}
+	got1 := sp.st.Entries[len(sp.st.Entries)-1].Text
+	for _, want := range []string{"[引用消息]", "> @林同学 昨晚发布后 QPS 掉了一半，日志见集群 A", "帮我先查下是不是配置变更导致的"} {
+		if !strings.Contains(got1, want) {
+			t.Fatalf("quoted text entry missing %q:\n%s", want, got1)
+		}
+	}
+	if strings.Contains(got1, "@_user_1") {
+		t.Fatalf("raw mention key leaked in quoted text:\n%s", got1)
+	}
+
+	// 2) Quoted image in owner group @Collie: fetches resource using parent_id and attaches path.
+	evImg := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_q_img"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_child_2"),
+				ParentId:    strPtr("om_parent_img"),
+				ChatId:      strPtr("oc_owner_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 看下这张报错截图"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evImg, sink); err != nil {
+		t.Fatalf("quoted image: %v", err)
+	}
+	got2 := sp.st.Entries[len(sp.st.Entries)-1].Text
+	if !strings.Contains(got2, "[引用图片]") || !strings.Contains(got2, "看下这张报错截图") {
+		t.Fatalf("quoted image missing context:\n%s", got2)
+	}
+	attIdx := strings.LastIndex(got2, "附件：\n")
+	if attIdx < 0 {
+		t.Fatalf("quoted image missing 附件： block:\n%s", got2)
+	}
+	savedPath := strings.TrimSpace(got2[attIdx+len("附件：\n"):])
+	if !strings.Contains(savedPath, filepath.Join("uploads", time.Now().Format("20060102"))) {
+		t.Fatalf("quoted image saved in unexpected dir: %q", savedPath)
+	}
+	rawImg, err := os.ReadFile(savedPath)
+	if err != nil || !bytes.Equal(rawImg, png1) {
+		t.Fatalf("quoted image bytes mismatch: err=%v got=%q", err, string(rawImg))
+	}
+	// Verify MessageResource.Get targeted parent_id (om_parent_img), NOT child message_id.
+	ff.mu.Lock()
+	foundParentResCall := false
+	for _, c := range ff.calls {
+		if c.Method == http.MethodGet && c.Path == "/open-apis/im/v1/messages/om_parent_img/resources/img_parent_1" {
+			foundParentResCall = true
+		}
+	}
+	ff.mu.Unlock()
+	if !foundParentResCall {
+		t.Fatal("expected MessageResource.Get to use parent_id om_parent_img")
+	}
+
+	// 3) Quoted rich-text post with locale wrapper (zh_cn) + 2 images, while current message ALSO has an image:
+	//    all image paths must merge into ONE trailing 附件：\n block.
+	evPost := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_q_post"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_child_3"),
+				ParentId:    strPtr("om_parent_post"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("image"),
+				Content:     strPtr(`{"image_key":"img_main_1"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evPost, sink); err != nil {
+		t.Fatalf("quoted post: %v", err)
+	}
+	got3 := sp.st.Entries[len(sp.st.Entries)-1].Text
+	for _, want := range []string{"[引用消息（含 2 张图片）]", "> 巡检汇总", "> 发现两处异常", "[监控链接](https://example.com/dash)"} {
+		if !strings.Contains(got3, want) {
+			t.Fatalf("quoted post missing %q:\n%s", want, got3)
+		}
+	}
+	if strings.Count(got3, "附件：\n") != 1 {
+		t.Fatalf("expected single trailing 附件： block, got:\n%s", got3)
+	}
+	paths3 := strings.Split(strings.TrimSpace(got3[strings.LastIndex(got3, "附件：\n")+len("附件：\n"):]), "\n")
+	if len(paths3) != 3 {
+		t.Fatalf("expected 3 merged attachment paths (2 quoted + 1 main), got %d: %v", len(paths3), paths3)
+	}
+	for i, wantBytes := range [][]byte{png1, png2, pngMain} {
+		b, rerr := os.ReadFile(paths3[i])
+		if rerr != nil || !bytes.Equal(b, wantBytes) {
+			t.Fatalf("attachment[%d] (%s) mismatch: err=%v", i, paths3[i], rerr)
+		}
+	}
+
+	// 4) Max 4 images cap: post with 5 unique (+1 dup) images downloads only first 4 and notes 1 omitted.
+	evCap := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_q_cap"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_child_4"),
+				ParentId:    strPtr("om_parent_many_imgs"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"全看一遍"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evCap, sink); err != nil {
+		t.Fatalf("quoted max images: %v", err)
+	}
+	got4 := sp.st.Entries[len(sp.st.Entries)-1].Text
+	if !strings.Contains(got4, "含 4 张图片") || !strings.Contains(got4, "另略去 1 张") {
+		t.Fatalf("expected max-4 image cap notice, got:\n%s", got4)
+	}
+	paths4 := strings.Split(strings.TrimSpace(got4[strings.LastIndex(got4, "附件：\n")+len("附件：\n"):]), "\n")
+	if len(paths4) != 4 {
+		t.Fatalf("expected exactly 4 saved images, got %d: %v", len(paths4), paths4)
+	}
+	ff.mu.Lock()
+	for _, c := range ff.calls {
+		if strings.HasSuffix(c.Path, "/resources/img_cap_5") {
+			ff.mu.Unlock()
+			t.Fatal("5th unique quoted image should not have been downloaded")
+		}
+	}
+	ff.mu.Unlock()
+
+	// 5) Monitored feedback group: colleague @Collie quoting a screenshot passes quoted context + image path
+	//    into read-only feedback trigger without creating fake owner entry or replying to group.
+	entriesBeforeFB := len(sp.st.Entries)
+	evFB := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_q_fb"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_named")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_fb_quote"),
+				ParentId:    strPtr("om_parent_img"),
+				ChatId:      strPtr("oc_feedback_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 暗色模式下这里文字重叠了"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evFB, sink); err != nil {
+		t.Fatalf("feedback quoted image: %v", err)
+	}
+	if len(sp.st.Entries) != entriesBeforeFB {
+		t.Fatal("feedback group quoted message must not create owner user entry")
+	}
+	fbTrig := sp.st.Triggers[len(sp.st.Triggers)-1]
+	for _, want := range []string{feishuGroupFeedbackTag, "[引用图片]", "暗色模式下这里文字重叠了", "附件：\n"} {
+		if !strings.Contains(fbTrig.Text, want) {
+			t.Fatalf("feedback quoted trigger missing %q:\n%s", want, fbTrig.Text)
+		}
+	}
+
+	// 6) Recalled/deleted parent message shows clean placeholder without leaking content.
+	evDel := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_q_del"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_child_del"),
+				ParentId:    strPtr("om_parent_deleted"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"忽略刚才那条"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evDel, sink); err != nil {
+		t.Fatalf("quoted deleted: %v", err)
+	}
+	gotDel := sp.st.Entries[len(sp.st.Entries)-1].Text
+	if !strings.Contains(gotDel, "[原消息已撤回]") || strings.Contains(gotDel, "should not leak") {
+		t.Fatalf("unexpected deleted parent formatting:\n%s", gotDel)
+	}
+}
+
+func TestFeishuQuotedMessageFailureDegradationAndLimits(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	sp.integrations.humanBurst = 20
+	ctx := context.Background()
+
+	origFetchTimeout := feishuQuoteFetchTimeout
+	origImgTimeout := feishuQuoteImageTimeout
+	origTotalTimeout := feishuQuoteTotalTimeout
+	origMaxBytes := feishuQuoteMaxImageBytes
+	t.Cleanup(func() {
+		feishuQuoteFetchTimeout = origFetchTimeout
+		feishuQuoteImageTimeout = origImgTimeout
+		feishuQuoteTotalTimeout = origTotalTimeout
+		feishuQuoteMaxImageBytes = origMaxBytes
+	})
+
+	ff.mu.Lock()
+	ff.messages["om_parent_err"] = fakeFeishuMessage{
+		MessageID: "om_parent_err",
+		Code:      99991672,
+		Msg:       "no permission to read message",
+	}
+	ff.messages["om_parent_slow"] = fakeFeishuMessage{
+		MessageID: "om_parent_slow",
+		MsgType:   "text",
+		Content:   `{"text":"too slow"}`,
+		Delay:     400 * time.Millisecond,
+	}
+	ff.messages["om_parent_img_fail"] = fakeFeishuMessage{
+		MessageID: "om_parent_img_fail",
+		MsgType:   "image",
+		Content:   `{"image_key":"img_broken"}`,
+	}
+	ff.messages["om_parent_img_big"] = fakeFeishuMessage{
+		MessageID: "om_parent_img_big",
+		MsgType:   "post",
+		Content:   `{"title":"含超大图","content":[[{"tag":"img","image_key":"img_oversized"},{"tag":"img","image_key":"img_small_ok"}]]}`,
+	}
+	ff.resources["img_broken"] = fakeFeishuResource{Code: 234001, Msg: "resource expired"}
+	ff.resources["img_oversized"] = fakeFeishuResource{Data: bytes.Repeat([]byte("X"), 128), FileName: "huge.png"}
+	ff.resources["img_small_ok"] = fakeFeishuResource{Data: []byte("tiny-png"), FileName: "ok.png"}
+	ff.mu.Unlock()
+
+	// 1) im.v1.message.get permission error degrades cleanly without blocking main message.
+	evErr := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_deg_err"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_deg_1"),
+				ParentId:    strPtr("om_parent_err"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"拉取父消息失败也要收到我"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evErr, sink); err != nil {
+		t.Fatalf("degraded parent error failed: %v", err)
+	}
+	if got := sp.st.Entries[len(sp.st.Entries)-1].Text; got != "拉取父消息失败也要收到我" {
+		t.Fatalf("expected clean main text on parent API error, got %q", got)
+	}
+
+	// 2) im.v1.message.get timeout degrades quickly without blocking main message.
+	feishuQuoteFetchTimeout = 60 * time.Millisecond
+	start := time.Now()
+	evSlow := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_deg_slow"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_deg_2"),
+				ParentId:    strPtr("om_parent_slow"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"超时也不能卡死主消息"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evSlow, sink); err != nil {
+		t.Fatalf("degraded timeout failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Fatalf("quote fetch timeout took too long: %v", elapsed)
+	}
+	if got := sp.st.Entries[len(sp.st.Entries)-1].Text; got != "超时也不能卡死主消息" {
+		t.Fatalf("expected clean main text on timeout, got %q", got)
+	}
+	feishuQuoteFetchTimeout = origFetchTimeout
+
+	// 3) Parent image download fails: degrades gracefully with fallback label and delivers main message.
+	evImgFail := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_deg_img"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_deg_3"),
+				ParentId:    strPtr("om_parent_img_fail"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"这张图过期了但文字得送到"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evImgFail, sink); err != nil {
+		t.Fatalf("degraded image download failed: %v", err)
+	}
+	gotImgFail := sp.st.Entries[len(sp.st.Entries)-1].Text
+	if !strings.Contains(gotImgFail, "[引用图片（下载失败）]") || !strings.Contains(gotImgFail, "这张图过期了但文字得送到") {
+		t.Fatalf("unexpected degraded image message:\n%s", gotImgFail)
+	}
+
+	// 4) Single-image size limit enforcement: oversized image rejected & deleted, sibling image & main text delivered.
+	feishuQuoteMaxImageBytes = 64
+	evBig := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_deg_big"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_deg_4"),
+				ParentId:    strPtr("om_parent_img_big"),
+				ChatId:      strPtr("oc_p2p_owner"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"看下正常那张图"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evBig, sink); err != nil {
+		t.Fatalf("size-limited quoted image failed: %v", err)
+	}
+	gotBig := sp.st.Entries[len(sp.st.Entries)-1].Text
+	if !strings.Contains(gotBig, "含 1 张图片") || !strings.Contains(gotBig, "1 张图片下载失败") || !strings.Contains(gotBig, "看下正常那张图") {
+		t.Fatalf("unexpected size-limited message:\n%s", gotBig)
+	}
+	savedOK := strings.TrimSpace(gotBig[strings.LastIndex(gotBig, "附件：\n")+len("附件：\n"):])
+	if b, err := os.ReadFile(savedOK); err != nil || string(b) != "tiny-png" {
+		t.Fatalf("expected only tiny-png saved, got %q err=%v", string(b), err)
+	}
+
+	// 5) Unauthorized sender quoting a parent message must never trigger im.v1.message.get.
+	ff.mu.Lock()
+	callsBeforeUnauth := len(ff.calls)
+	ff.mu.Unlock()
+	evUnauth := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_deg_unauth"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_stranger")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_deg_5"),
+				ParentId:    strPtr("om_parent_err"),
+				ChatId:      strPtr("oc_p2p_stranger"),
+				ChatType:    strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"probe"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, evUnauth, sink); err != nil {
+		t.Fatalf("unauthorized quote failed: %v", err)
+	}
+	ff.mu.Lock()
+	callsAfterUnauth := len(ff.calls)
+	ff.mu.Unlock()
+	if callsAfterUnauth != callsBeforeUnauth {
+		t.Fatalf("unauthorized sender triggered %d Feishu API calls", callsAfterUnauth-callsBeforeUnauth)
+	}
 }
 
 func TestOpenSourceRepoZeroInternalTerms(t *testing.T) {

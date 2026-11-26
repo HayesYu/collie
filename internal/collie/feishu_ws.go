@@ -35,6 +35,15 @@ const (
 	feishuGroupFeedbackTag  = "[群只读反馈 · 仅调研出建议，严禁未经确认直接执行或向群内回复]"
 	feishuSenderCacheTTL    = time.Hour
 	feishuMaxSenderCache    = 256
+	feishuQuoteMaxRunes     = 1000
+)
+
+var (
+	feishuQuoteFetchTimeout  = 8 * time.Second
+	feishuQuoteImageTimeout  = 15 * time.Second
+	feishuQuoteTotalTimeout  = 25 * time.Second
+	feishuQuoteMaxImageBytes = int64(20 << 20)
+	feishuQuoteMaxImages     = 4
 )
 
 // FeishuConfig holds the non-sensitive settings for Feishu/Lark WebSocket mode.
@@ -668,6 +677,7 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 	chatID := strings.TrimSpace(deref(msg.ChatId))
 	chatType := strings.ToLower(strings.TrimSpace(deref(msg.ChatType)))
 	messageID := strings.TrimSpace(deref(msg.MessageId))
+	parentID := strings.TrimSpace(deref(msg.ParentId))
 	msgType := strings.ToLower(strings.TrimSpace(deref(msg.MessageType)))
 	eventID := ""
 	if event.EventV2Base != nil && event.EventV2Base.Header != nil {
@@ -704,7 +714,7 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 		if !f.isBotMentioned(msg.Mentions, botOpenID, botName) {
 			return nil
 		}
-		text, err := f.extractMessageContent(ctx, client, messageID, msgType, deref(msg.Content), msg.Mentions)
+		text, err := f.extractInboundText(ctx, client, messageID, parentID, msgType, deref(msg.Content), msg.Mentions)
 		if err != nil {
 			log.Printf("feishu-ws: extract feedback content (%s): %v", msgType, err)
 		}
@@ -739,8 +749,8 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 		}
 	}
 
-	// 4. Extract message text and/or image attachments.
-	text, err := f.extractMessageContent(ctx, client, messageID, msgType, deref(msg.Content), msg.Mentions)
+	// 4. Extract message text, attachments, and optional quoted parent message.
+	text, err := f.extractInboundText(ctx, client, messageID, parentID, msgType, deref(msg.Content), msg.Mentions)
 	if err != nil {
 		log.Printf("feishu-ws: extract content (%s): %v", msgType, err)
 	}
@@ -817,28 +827,49 @@ func (f *FeishuAdapter) completePairing(ctx context.Context, client *larksdk.Cli
 	}
 }
 
+type feishuQuotedParent struct {
+	text          string
+	attachments   []string
+	failedImages  int
+	omittedImages int
+}
+
+func (f *FeishuAdapter) extractInboundText(ctx context.Context, client *larksdk.Client, messageID, parentID, msgType, rawContent string, mentions []*larkim.MentionEvent) (string, error) {
+	mainText, mainPaths, err := f.extractMessageContentParts(ctx, client, messageID, msgType, rawContent, mentions)
+	var quote *feishuQuotedParent
+	if parentID != "" && parentID != messageID && client != nil {
+		quote = f.fetchQuotedParent(ctx, client, parentID)
+	}
+	return composeFeishuInboundText(mainText, mainPaths, quote), err
+}
+
 func (f *FeishuAdapter) extractMessageContent(ctx context.Context, client *larksdk.Client, messageID, msgType, rawContent string, mentions []*larkim.MentionEvent) (string, error) {
+	mainText, mainPaths, err := f.extractMessageContentParts(ctx, client, messageID, msgType, rawContent, mentions)
+	return composeFeishuInboundText(mainText, mainPaths, nil), err
+}
+
+func (f *FeishuAdapter) extractMessageContentParts(ctx context.Context, client *larksdk.Client, messageID, msgType, rawContent string, mentions []*larkim.MentionEvent) (string, []string, error) {
 	switch msgType {
 	case "text":
 		var body struct {
 			Text string `json:"text"`
 		}
 		if err := json.Unmarshal([]byte(rawContent), &body); err != nil {
-			return "", err
+			return "", nil, err
 		}
-		return stripFeishuMentions(body.Text, mentions), nil
+		return stripFeishuMentions(body.Text, mentions), nil, nil
 	case "image":
 		var body struct {
 			ImageKey string `json:"image_key"`
 		}
 		if err := json.Unmarshal([]byte(rawContent), &body); err != nil || body.ImageKey == "" {
-			return "[飞书图片]", err
+			return "[飞书图片]", nil, err
 		}
 		saved, err := f.downloadImage(ctx, client, messageID, body.ImageKey)
 		if err != nil {
-			return "[飞书图片（下载失败）]", err
+			return "[飞书图片（下载失败）]", nil, err
 		}
-		return "附件：\n" + saved, nil
+		return "", []string{saved}, nil
 	case "post":
 		text, imgKeys := parseFeishuPostContent(rawContent)
 		text = stripFeishuMentions(text, mentions)
@@ -848,34 +879,309 @@ func (f *FeishuAdapter) extractMessageContent(ctx context.Context, client *larks
 				paths = append(paths, p)
 			}
 		}
-		if len(paths) > 0 {
-			if text != "" {
-				text += "\n\n"
-			}
-			text += "附件：\n" + strings.Join(paths, "\n")
-		}
-		return text, nil
+		return text, paths, nil
 	default:
 		if msgType == "" {
-			return "", nil
+			return "", nil, nil
 		}
-		return fmt.Sprintf("[飞书 %s 消息]", msgType), nil
+		return fmt.Sprintf("[飞书 %s 消息]", msgType), nil, nil
 	}
 }
 
-func parseFeishuPostContent(raw string) (string, []string) {
-	var body struct {
-		Title   string `json:"title"`
-		Content [][]struct {
-			Tag      string `json:"tag"`
-			Text     string `json:"text"`
-			Href     string `json:"href"`
-			ImageKey string `json:"image_key"`
-		} `json:"content"`
+func replaceFeishuMessageMentions(text string, mentions []*larkim.Mention) string {
+	out := text
+	for _, m := range mentions {
+		if m == nil || m.Key == nil || *m.Key == "" {
+			continue
+		}
+		repl := " "
+		if name := strings.TrimSpace(deref(m.Name)); name != "" {
+			repl = "@" + name
+		}
+		out = strings.ReplaceAll(out, *m.Key, repl)
 	}
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSpace(l)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func dedupNonEmpty(items []string) []string {
+	var out []string
+	for _, it := range items {
+		it = strings.TrimSpace(it)
+		if it != "" && !slices.Contains(out, it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.Client, parentID string) *feishuQuotedParent {
+	if client == nil || parentID == "" {
+		return nil
+	}
+	totalTimeout := feishuQuoteTotalTimeout
+	if totalTimeout <= 0 {
+		totalTimeout = 25 * time.Second
+	}
+	totalCtx, totalCancel := context.WithTimeout(ctx, totalTimeout)
+	defer totalCancel()
+
+	fetchTimeout := feishuQuoteFetchTimeout
+	if fetchTimeout <= 0 {
+		fetchTimeout = 8 * time.Second
+	}
+	getCtx, getCancel := context.WithTimeout(totalCtx, fetchTimeout)
+	req := larkim.NewGetMessageReqBuilder().MessageId(parentID).Build()
+	resp, err := client.Im.V1.Message.Get(getCtx, req)
+	getCancel()
+	if err != nil {
+		log.Printf("feishu-ws: fetch quoted parent %s failed: %v", parentID, err)
+		return nil
+	}
+	if resp == nil || !resp.Success() {
+		if resp != nil {
+			log.Printf("feishu-ws: fetch quoted parent %s api error: code=%d msg=%s", parentID, resp.Code, resp.Msg)
+		}
+		return nil
+	}
+	if resp.Data == nil || len(resp.Data.Items) == 0 {
+		return nil
+	}
+
+	var item *larkim.Message
+	for _, cand := range resp.Data.Items {
+		if cand == nil {
+			continue
+		}
+		if strings.TrimSpace(deref(cand.MessageId)) == parentID {
+			item = cand
+			break
+		}
+		if item == nil {
+			item = cand
+		}
+	}
+	if item == nil {
+		return nil
+	}
+	if item.Deleted != nil && *item.Deleted {
+		return &feishuQuotedParent{text: "[原消息已撤回]"}
+	}
+
+	parentType := strings.ToLower(strings.TrimSpace(deref(item.MsgType)))
+	rawContent := ""
+	if item.Body != nil {
+		rawContent = deref(item.Body.Content)
+	}
+
+	q := &feishuQuotedParent{}
+	var imgKeys []string
+	switch parentType {
+	case "text":
+		var body struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(rawContent), &body); err != nil {
+			log.Printf("feishu-ws: decode quoted text %s: %v", parentID, err)
+			return nil
+		}
+		q.text = replaceFeishuMessageMentions(body.Text, item.Mentions)
+	case "image":
+		var body struct {
+			ImageKey string `json:"image_key"`
+		}
+		if err := json.Unmarshal([]byte(rawContent), &body); err != nil || strings.TrimSpace(body.ImageKey) == "" {
+			q.text = "[飞书图片]"
+		} else {
+			imgKeys = append(imgKeys, strings.TrimSpace(body.ImageKey))
+		}
+	case "post":
+		text, keys := parseFeishuPostContent(rawContent)
+		q.text = replaceFeishuMessageMentions(text, item.Mentions)
+		imgKeys = append(imgKeys, keys...)
+	case "interactive":
+		text, keys := parseFeishuInteractiveContent(rawContent)
+		q.text = replaceFeishuMessageMentions(text, item.Mentions)
+		imgKeys = append(imgKeys, keys...)
+		if q.text == "" && len(imgKeys) == 0 {
+			q.text = "[飞书卡片消息]"
+		}
+	case "file":
+		var body struct {
+			FileName string `json:"file_name"`
+		}
+		if json.Unmarshal([]byte(rawContent), &body) == nil && strings.TrimSpace(body.FileName) != "" {
+			q.text = fmt.Sprintf("[飞书文件：%s]", strings.TrimSpace(body.FileName))
+		} else {
+			q.text = "[飞书 file 消息]"
+		}
+	default:
+		if parentType != "" {
+			q.text = fmt.Sprintf("[飞书 %s 消息]", parentType)
+		}
+	}
+
+	imgKeys = dedupNonEmpty(imgKeys)
+	maxImgs := feishuQuoteMaxImages
+	if maxImgs <= 0 {
+		maxImgs = 4
+	}
+	if len(imgKeys) > maxImgs {
+		q.omittedImages = len(imgKeys) - maxImgs
+		imgKeys = imgKeys[:maxImgs]
+	}
+
+	maxBytes := feishuQuoteMaxImageBytes
+	if maxBytes <= 0 {
+		maxBytes = 20 << 20
+	}
+	imgTimeout := feishuQuoteImageTimeout
+	if imgTimeout <= 0 {
+		imgTimeout = 15 * time.Second
+	}
+	for _, key := range imgKeys {
+		if totalCtx.Err() != nil {
+			q.failedImages++
+			log.Printf("feishu-ws: quoted image download budget exceeded for parent %s", parentID)
+			continue
+		}
+		saved, derr := f.downloadImageWithLimit(totalCtx, client, parentID, key, maxBytes, imgTimeout)
+		if derr != nil || saved == "" {
+			q.failedImages++
+			log.Printf("feishu-ws: download quoted image %s/%s failed: %v", parentID, key, derr)
+			continue
+		}
+		q.attachments = append(q.attachments, saved)
+	}
+
+	if strings.TrimSpace(q.text) == "" && len(q.attachments) == 0 && q.failedImages == 0 {
+		return nil
+	}
+	return q
+}
+
+func formatQuotedParentBlock(q *feishuQuotedParent) string {
+	if q == nil {
+		return ""
+	}
+	text := strings.TrimSpace(q.text)
+	if text != "" {
+		text = clip(text, feishuQuoteMaxRunes)
+	}
+	imgCount := len(q.attachments)
+	if text == "" {
+		switch {
+		case imgCount > 0 && q.omittedImages > 0 && q.failedImages > 0:
+			return fmt.Sprintf("[引用图片（已保存 %d 张，%d 张下载失败，另略去 %d 张）]", imgCount, q.failedImages, q.omittedImages)
+		case imgCount > 0 && q.omittedImages > 0:
+			return fmt.Sprintf("[引用图片（已保存前 %d 张，另略去 %d 张）]", imgCount, q.omittedImages)
+		case imgCount > 0 && q.failedImages > 0:
+			return fmt.Sprintf("[引用图片（已保存 %d 张，%d 张下载失败）]", imgCount, q.failedImages)
+		case imgCount > 1:
+			return fmt.Sprintf("[引用图片（%d 张）]", imgCount)
+		case imgCount == 1:
+			return "[引用图片]"
+		case q.failedImages > 0:
+			return "[引用图片（下载失败）]"
+		default:
+			return ""
+		}
+	}
+
+	var notes []string
+	if imgCount > 0 {
+		notes = append(notes, fmt.Sprintf("含 %d 张图片", imgCount))
+	}
+	if q.failedImages > 0 {
+		notes = append(notes, fmt.Sprintf("%d 张图片下载失败", q.failedImages))
+	}
+	if q.omittedImages > 0 {
+		notes = append(notes, fmt.Sprintf("另略去 %d 张", q.omittedImages))
+	}
+	header := "[引用消息]"
+	if len(notes) > 0 {
+		header = "[引用消息（" + strings.Join(notes, "，") + "）]"
+	}
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		lines = append(lines, "> "+line)
+	}
+	return header + "\n" + strings.Join(lines, "\n")
+}
+
+func composeFeishuInboundText(mainText string, mainPaths []string, quote *feishuQuotedParent) string {
+	mainText = strings.TrimSpace(mainText)
+	quoteBlock := formatQuotedParentBlock(quote)
+
+	var body string
+	switch {
+	case quoteBlock != "" && mainText != "":
+		body = quoteBlock + "\n\n" + mainText
+	case quoteBlock != "":
+		body = quoteBlock
+	default:
+		body = mainText
+	}
+
+	var paths []string
+	if quote != nil {
+		paths = append(paths, quote.attachments...)
+	}
+	paths = append(paths, mainPaths...)
+	paths = dedupNonEmpty(paths)
+
+	if len(paths) > 0 {
+		if body != "" {
+			return body + "\n\n附件：\n" + strings.Join(paths, "\n")
+		}
+		return "附件：\n" + strings.Join(paths, "\n")
+	}
+	return body
+}
+
+type feishuPostBody struct {
+	Title   string `json:"title"`
+	Content [][]struct {
+		Tag      string `json:"tag"`
+		Text     string `json:"text"`
+		Href     string `json:"href"`
+		ImageKey string `json:"image_key"`
+		UserName string `json:"user_name"`
+	} `json:"content"`
+}
+
+func parseFeishuPostContent(raw string) (string, []string) {
+	var body feishuPostBody
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		return "", nil
 	}
+	// Feishu im.v1.message.get may wrap post payloads under a locale key (e.g. "zh_cn").
+	if strings.TrimSpace(body.Title) == "" && len(body.Content) == 0 {
+		var localized map[string]json.RawMessage
+		if json.Unmarshal([]byte(raw), &localized) == nil {
+			tryKeys := []string{"zh_cn", "en_us", "ja_jp"}
+			for k := range localized {
+				if !slices.Contains(tryKeys, k) {
+					tryKeys = append(tryKeys, k)
+				}
+			}
+			for _, k := range tryKeys {
+				sub, ok := localized[k]
+				if !ok || len(bytes.TrimSpace(sub)) == 0 {
+					continue
+				}
+				var candidate feishuPostBody
+				if json.Unmarshal(sub, &candidate) == nil && (strings.TrimSpace(candidate.Title) != "" || len(candidate.Content) > 0) {
+					body = candidate
+					break
+				}
+			}
+		}
+	}
+
 	var lines []string
 	var imgs []string
 	if t := strings.TrimSpace(body.Title); t != "" {
@@ -885,8 +1191,14 @@ func parseFeishuPostContent(raw string) (string, []string) {
 		var parts []string
 		for _, cell := range row {
 			switch cell.Tag {
-			case "text":
+			case "text", "md", "code_block":
 				parts = append(parts, cell.Text)
+			case "at":
+				if name := strings.TrimSpace(cell.UserName); name != "" {
+					parts = append(parts, "@"+name)
+				} else if cell.Text != "" {
+					parts = append(parts, cell.Text)
+				}
 			case "a":
 				if cell.Text != "" && cell.Href != "" {
 					parts = append(parts, fmt.Sprintf("[%s](%s)", cell.Text, cell.Href))
@@ -908,11 +1220,127 @@ func parseFeishuPostContent(raw string) (string, []string) {
 	return strings.Join(lines, "\n"), imgs
 }
 
+// parseFeishuInteractiveContent extracts readable text and image keys from
+// Feishu interactive card JSON (both im.v1.message.get downgraded format and
+// Card JSON 2.0 payloads).
+func parseFeishuInteractiveContent(raw string) (string, []string) {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil || doc == nil {
+		return "", nil
+	}
+	var lines []string
+	var imgs []string
+	if title, _ := doc["title"].(string); strings.TrimSpace(title) != "" {
+		lines = append(lines, strings.TrimSpace(title))
+	}
+	if header, ok := doc["header"].(map[string]any); ok {
+		if titleObj, ok := header["title"].(map[string]any); ok {
+			if content, _ := titleObj["content"].(string); strings.TrimSpace(content) != "" {
+				lines = append(lines, strings.TrimSpace(content))
+			}
+		}
+	}
+	var walk func(any)
+	walk = func(node any) {
+		switch v := node.(type) {
+		case []any:
+			var rowParts []string
+			hasInline := false
+			for _, it := range v {
+				if m, ok := it.(map[string]any); ok {
+					tag, _ := m["tag"].(string)
+					switch tag {
+					case "text":
+						if s, _ := m["text"].(string); s != "" {
+							rowParts = append(rowParts, s)
+							hasInline = true
+						}
+						continue
+					case "a":
+						txt, _ := m["text"].(string)
+						href, _ := m["href"].(string)
+						if txt != "" && href != "" {
+							rowParts = append(rowParts, fmt.Sprintf("[%s](%s)", txt, href))
+							hasInline = true
+						} else if txt != "" {
+							rowParts = append(rowParts, txt)
+							hasInline = true
+						} else if href != "" {
+							rowParts = append(rowParts, href)
+							hasInline = true
+						}
+						continue
+					case "img":
+						if k, _ := m["image_key"].(string); strings.TrimSpace(k) != "" {
+							imgs = append(imgs, strings.TrimSpace(k))
+						} else if k, _ := m["img_key"].(string); strings.TrimSpace(k) != "" {
+							imgs = append(imgs, strings.TrimSpace(k))
+						}
+						continue
+					}
+				}
+				walk(it)
+			}
+			if hasInline {
+				if line := strings.TrimSpace(strings.Join(rowParts, "")); line != "" {
+					lines = append(lines, line)
+				}
+			}
+		case map[string]any:
+			tag, _ := v["tag"].(string)
+			switch tag {
+			case "markdown", "lark_md":
+				if content, _ := v["content"].(string); strings.TrimSpace(content) != "" {
+					lines = append(lines, strings.TrimSpace(content))
+				}
+			case "plain_text":
+				if content, _ := v["content"].(string); strings.TrimSpace(content) != "" {
+					lines = append(lines, strings.TrimSpace(content))
+				}
+			case "img":
+				if k, _ := v["image_key"].(string); strings.TrimSpace(k) != "" {
+					imgs = append(imgs, strings.TrimSpace(k))
+				} else if k, _ := v["img_key"].(string); strings.TrimSpace(k) != "" {
+					imgs = append(imgs, strings.TrimSpace(k))
+				}
+			case "button":
+				return
+			default:
+				if els, ok := v["elements"]; ok {
+					walk(els)
+				}
+				if txt, ok := v["text"]; ok {
+					walk(txt)
+				}
+			}
+		}
+	}
+	if els, ok := doc["elements"]; ok {
+		walk(els)
+	}
+	if body, ok := doc["body"].(map[string]any); ok {
+		if els, ok := body["elements"]; ok {
+			walk(els)
+		}
+	}
+	return strings.Join(lines, "\n"), imgs
+}
+
 func (f *FeishuAdapter) downloadImage(ctx context.Context, client *larksdk.Client, messageID, imageKey string) (string, error) {
+	return f.downloadImageWithLimit(ctx, client, messageID, imageKey, maxUpload, 20*time.Second)
+}
+
+func (f *FeishuAdapter) downloadImageWithLimit(ctx context.Context, client *larksdk.Client, messageID, imageKey string, maxBytes int64, timeout time.Duration) (string, error) {
 	if client == nil || messageID == "" || imageKey == "" {
 		return "", errors.New("missing client or image key")
 	}
-	dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	if maxBytes <= 0 {
+		maxBytes = maxUpload
+	}
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	dctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req := larkim.NewGetMessageResourceReqBuilder().
 		MessageId(messageID).
@@ -926,8 +1354,20 @@ func (f *FeishuAdapter) downloadImage(ctx context.Context, client *larksdk.Clien
 	if !resp.Success() {
 		return "", fmt.Errorf("feishu resource get failed: code=%d msg=%s", resp.Code, resp.Msg)
 	}
+	if resp.ApiResp != nil && strings.Contains(strings.ToLower(resp.ApiResp.Header.Get("Content-Type")), "application/json") {
+		var apiErr struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if json.Unmarshal(resp.ApiResp.RawBody, &apiErr) == nil && apiErr.Code != 0 {
+			return "", fmt.Errorf("feishu resource get failed: code=%d msg=%s", apiErr.Code, apiErr.Msg)
+		}
+	}
 	if resp.File == nil {
 		return "", errors.New("empty image body")
+	}
+	if closer, ok := resp.File.(io.Closer); ok {
+		defer closer.Close()
 	}
 	baseDir := collieDir()
 	if f.sp != nil && f.sp.dir != "" {
@@ -950,13 +1390,16 @@ func (f *FeishuAdapter) downloadImage(ctx context.Context, client *larksdk.Clien
 	if err != nil {
 		return "", err
 	}
-	limited := io.LimitReader(resp.File, maxUpload+1)
+	limited := io.LimitReader(resp.File, maxBytes+1)
 	n, err := io.Copy(file, limited)
 	file.Close()
-	if err != nil || n > maxUpload {
+	if err != nil || n > maxBytes {
 		_ = os.Remove(dst)
-		if n > maxUpload {
-			return "", errors.New("image exceeds 25MB limit")
+		if n > maxBytes {
+			if maxBytes >= 1<<20 {
+				return "", fmt.Errorf("image exceeds %dMB limit", maxBytes>>20)
+			}
+			return "", fmt.Errorf("image exceeds %d byte limit", maxBytes)
 		}
 		return "", err
 	}

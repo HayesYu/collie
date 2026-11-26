@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,13 +31,21 @@ import (
 // say which computers run an older Collie. The release page's redirect
 // (…/releases/latest → …/tag/vX.Y.Z) needs no API token or rate limit.
 
-const repo = "lihuanyu0w0/collie"
+const (
+	repo                 = "lihuanyu0w0/collie"
+	relayUpdateTagHeader = "X-Collie-Update-Tag"
+	relayUpdateSHAHeader = "X-Collie-Update-SHA256"
+)
 
 var (
 	selfUpdateMu             sync.Mutex
 	releaseRepoURL           = "https://github.com/" + repo
 	selfUpdateTimeout        = 2*time.Minute + 30*time.Second
 	selfUpdateForwardTimeout = 2*time.Minute + 50*time.Second
+	selfUpdateRelayTimeout   = 2*time.Minute + 30*time.Second
+	maxRelayBinarySize       = int64(128 << 20)
+	relayCacheTTL            = 15 * time.Minute
+	relayCacheMaxEntries     = 8
 	updateMaxAttempts        = 3
 	updateRetryBaseDelay     = 600 * time.Millisecond
 	updateDialTimeout        = 12 * time.Second
@@ -67,10 +76,12 @@ var (
 )
 
 var (
-	errBadChecksum     = errors.New("checksum mismatch")
-	errIdleReadTimeout = errors.New("download stalled (read timeout)")
-	errTruncatedBody   = errors.New("incomplete response body")
-	credURLRe          = regexp.MustCompile(`(https?|socks5h?)://[^/@\s]+@`)
+	errBadChecksum      = errors.New("checksum mismatch")
+	errIdleReadTimeout  = errors.New("download stalled (read timeout)")
+	errTruncatedBody    = errors.New("incomplete response body")
+	errExecVerifyFailed = errors.New("updated binary verification failed")
+	credURLRe           = regexp.MustCompile(`(https?|socks5h?)://[^/@\s]+@`)
+	platformPartRe      = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
 )
 
 type httpStatusError struct {
@@ -631,7 +642,7 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 			msg = "连不上 github.com，请检查网络或代理设置后重试"
 		}
 		log.Printf("self-update failed (stage=check-latest current=%s dur=%s): %s", version, time.Since(start).Round(time.Millisecond), sanitizeUpdateErr(fmt.Sprint(err)))
-		writeJSON(w, 502, map[string]any{"error": "查不到最新版本：" + msg})
+		writeJSON(w, 502, map[string]any{"error": "查不到最新版本：" + msg, "relayable": true})
 		return
 	}
 	if !outdated(version, latest) {
@@ -647,8 +658,10 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := downloadReleaseWithHint(ctx, latest, exe, usedIPv4); err != nil {
 		msg := formatUpdateError(err)
+		var fe *updateFileError
+		relayable := !errors.As(err, &fe) && !errors.Is(err, errExecVerifyFailed)
 		log.Printf("self-update failed (stage=download current=%s target=%s dur=%s): %s", version, latest, time.Since(start).Round(time.Millisecond), sanitizeUpdateErr(err.Error()))
-		writeJSON(w, 502, map[string]any{"error": "更新失败：" + msg})
+		writeJSON(w, 502, map[string]any{"error": "更新失败：" + msg, "relayable": relayable})
 		return
 	}
 	log.Printf("updated %s → %s (dur=%s); restarting", version, latest, time.Since(start).Round(time.Millisecond))
@@ -658,6 +671,629 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	restarting = true
 	go execUpdated(exe)
+}
+
+func isValidSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseMachineOSArch(raw string) (goos, goarch string, ok bool) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	parts := strings.Split(raw, "/")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	if !platformPartRe.MatchString(parts[0]) || !platformPartRe.MatchString(parts[1]) {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+type updateExecVerifyError struct {
+	msg string
+}
+
+func (e *updateExecVerifyError) Error() string { return e.msg }
+func (e *updateExecVerifyError) Unwrap() error { return errExecVerifyFailed }
+
+func verifyBinaryVersion(ctx context.Context, binPath, tag string) error {
+	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	out, rerr := exec.CommandContext(verifyCtx, binPath, "version").Output()
+	cancel()
+	if rerr != nil || !strings.Contains(string(out), tag) {
+		return &updateExecVerifyError{
+			msg: fmt.Sprintf("新版本在这台电脑上跑不起来：%v %s", rerr, strings.TrimSpace(string(out))),
+		}
+	}
+	return nil
+}
+
+// relayUpdate runs on a remote node inside the authenticated Hub↔Node tunnel.
+// It receives a Hub-fetched binary, verifies its SHA-256 and version output,
+// atomically replaces the current executable (0755), and restarts in place.
+func (s *Server) relayUpdate(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	if !s.node {
+		writeJSON(w, 403, map[string]any{"error": "仅允许节点通过控制通道接收 Hub 中转升级"})
+		return
+	}
+	if !selfUpdateMu.TryLock() {
+		log.Printf("relay-update rejected (current=%s): already in progress", version)
+		writeJSON(w, 409, map[string]any{"error": "升级已在进行中，请稍候"})
+		return
+	}
+	restarting := false
+	defer func() {
+		if !restarting {
+			selfUpdateMu.Unlock()
+		}
+	}()
+	if parseVersion(version) == nil {
+		log.Printf("relay-update rejected (current=%s): source build", version)
+		writeJSON(w, 400, map[string]any{"error": "这台的 collie 是从源码编译的（" + version + "），在源码里 git pull 后重新编译来更新"})
+		return
+	}
+	tag := strings.TrimSpace(r.Header.Get(relayUpdateTagHeader))
+	wantSHA := strings.ToLower(strings.TrimSpace(r.Header.Get(relayUpdateSHAHeader)))
+	if parseVersion(tag) == nil {
+		writeJSON(w, 400, map[string]any{"error": "中转升级目标版本号无效"})
+		return
+	}
+	if !isValidSHA256Hex(wantSHA) {
+		writeJSON(w, 400, map[string]any{"error": "中转升级缺少有效的 SHA-256 校验值"})
+		return
+	}
+	if !outdated(version, tag) {
+		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 1<<20))
+		log.Printf("relay-update noop (current=%s target=%s dur=%s): already up to date", version, tag, time.Since(start).Round(time.Millisecond))
+		writeJSON(w, 200, map[string]any{"ok": true, "version": version, "latest": true, "relayed": true})
+		return
+	}
+	exe, err := executablePath()
+	if err != nil {
+		log.Printf("relay-update failed (stage=exe current=%s target=%s dur=%s): %v", version, tag, time.Since(start).Round(time.Millisecond), err)
+		writeJSON(w, 500, map[string]any{"error": "找不到自己的程序文件：" + err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), selfUpdateTimeout)
+	defer cancel()
+	if err := installRelayedBinary(ctx, r.Body, r.ContentLength, tag, wantSHA, exe); err != nil {
+		status := 502
+		if errors.Is(err, errBadChecksum) {
+			status = 422
+		}
+		msg := formatUpdateError(err)
+		if errors.Is(err, errBadChecksum) {
+			msg = "中转升级文件校验失败（SHA-256 不匹配），已拒绝安装"
+		}
+		log.Printf("relay-update failed (stage=install current=%s target=%s dur=%s): %s", version, tag, time.Since(start).Round(time.Millisecond), sanitizeUpdateErr(err.Error()))
+		writeJSON(w, status, map[string]any{"error": "中转升级失败：" + msg})
+		return
+	}
+	log.Printf("relay-updated %s → %s (dur=%s); restarting", version, tag, time.Since(start).Round(time.Millisecond))
+	writeJSON(w, 200, map[string]any{"ok": true, "from": version, "version": tag, "relayed": true})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	restarting = true
+	go execUpdated(exe)
+}
+
+func installRelayedBinary(ctx context.Context, body io.Reader, expectedLen int64, tag, wantSHA, exe string) error {
+	dir := filepath.Dir(exe)
+	f, err := os.CreateTemp(dir, ".collie.new.*")
+	if err != nil {
+		return &updateFileError{dir: dir, err: err}
+	}
+	tmp := f.Name()
+	defer func() {
+		if tmp != "" {
+			os.Remove(tmp)
+		}
+	}()
+
+	limit := maxRelayBinarySize
+	if limit <= 0 {
+		limit = 128 << 20
+	}
+	h := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, limit+1))
+	chmodErr := f.Chmod(0o755)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: received empty binary", errTruncatedBody)
+	}
+	if n > limit {
+		return fmt.Errorf("升级包体积超出上限（%d MB）", limit>>20)
+	}
+	if expectedLen > 0 && n != expectedLen {
+		return fmt.Errorf("%w: got %d of %d bytes", errTruncatedBody, n, expectedLen)
+	}
+	if chmodErr != nil {
+		return &updateFileError{dir: dir, err: chmodErr}
+	}
+	if closeErr != nil {
+		return &updateFileError{dir: dir, err: closeErr}
+	}
+	if hex.EncodeToString(h.Sum(nil)) != wantSHA {
+		return errBadChecksum
+	}
+	if err := verifyBinaryVersion(ctx, tmp, tag); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, exe); err != nil {
+		return &updateFileError{dir: dir, err: err}
+	}
+	tmp = ""
+	return nil
+}
+
+// ---------------------------------------------------------------- Hub-side remote update & relay fallback
+
+type relayCacheKey struct {
+	repo   string
+	tag    string
+	goos   string
+	goarch string
+}
+
+type relayCacheEntry struct {
+	asset     string
+	sha256    string
+	size      int64
+	path      string
+	expiresAt time.Time
+}
+
+type relayInflight struct {
+	done chan struct{}
+	ent  relayCacheEntry
+	err  error
+}
+
+var relayCache = struct {
+	mu       sync.Mutex
+	dir      string
+	entries  map[relayCacheKey]relayCacheEntry
+	inflight map[relayCacheKey]*relayInflight
+}{
+	entries:  map[relayCacheKey]relayCacheEntry{},
+	inflight: map[relayCacheKey]*relayInflight{},
+}
+
+func resetRelayCache() {
+	relayCache.mu.Lock()
+	defer relayCache.mu.Unlock()
+	for k, ent := range relayCache.entries {
+		_ = os.Remove(ent.path)
+		delete(relayCache.entries, k)
+	}
+	if relayCache.dir != "" {
+		_ = os.RemoveAll(relayCache.dir)
+		relayCache.dir = ""
+	}
+}
+
+func pruneRelayCacheLocked(now time.Time) {
+	for k, ent := range relayCache.entries {
+		if now.After(ent.expiresAt) {
+			_ = os.Remove(ent.path)
+			delete(relayCache.entries, k)
+		}
+	}
+}
+
+func evictOldestRelayCacheLocked(maxEntries int) {
+	if maxEntries <= 0 {
+		maxEntries = 1
+	}
+	for len(relayCache.entries) >= maxEntries {
+		var oldestKey relayCacheKey
+		var oldestExp time.Time
+		first := true
+		for k, ent := range relayCache.entries {
+			if first || ent.expiresAt.Before(oldestExp) {
+				oldestKey = k
+				oldestExp = ent.expiresAt
+				first = false
+			}
+		}
+		if first {
+			break
+		}
+		_ = os.Remove(relayCache.entries[oldestKey].path)
+		delete(relayCache.entries, oldestKey)
+	}
+}
+
+// getOrFetchRelayAsset returns a SHA-256-verified release binary for goos/goarch
+// from the Hub's short-term temp cache, downloading from GitHub on cache miss.
+func getOrFetchRelayAsset(ctx context.Context, tag, goos, goarch string, preferIPv4 bool) (relayCacheEntry, *os.File, bool, error) {
+	key := relayCacheKey{repo: releaseRepoURL, tag: tag, goos: goos, goarch: goarch}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		relayCache.mu.Lock()
+		now := time.Now()
+		pruneRelayCacheLocked(now)
+
+		if ent, ok := relayCache.entries[key]; ok {
+			f, err := os.Open(ent.path)
+			if err == nil {
+				if fi, serr := f.Stat(); serr == nil && fi.Size() == ent.size {
+					relayCache.mu.Unlock()
+					return ent, f, true, nil
+				}
+				f.Close()
+			}
+			_ = os.Remove(ent.path)
+			delete(relayCache.entries, key)
+		}
+
+		if wait, ok := relayCache.inflight[key]; ok {
+			relayCache.mu.Unlock()
+			select {
+			case <-wait.done:
+			case <-ctx.Done():
+				return relayCacheEntry{}, nil, false, ctx.Err()
+			}
+			if wait.err != nil {
+				return relayCacheEntry{}, nil, false, wait.err
+			}
+			continue
+		}
+
+		if relayCache.dir == "" {
+			dir, err := os.MkdirTemp("", "collie-relay-*")
+			if err != nil {
+				relayCache.mu.Unlock()
+				return relayCacheEntry{}, nil, false, err
+			}
+			relayCache.dir = dir
+		}
+		dir := relayCache.dir
+		inf := &relayInflight{done: make(chan struct{})}
+		relayCache.inflight[key] = inf
+		relayCache.mu.Unlock()
+
+		ent, f, err := fetchRelayAssetFresh(ctx, dir, tag, goos, goarch, preferIPv4)
+
+		relayCache.mu.Lock()
+		delete(relayCache.inflight, key)
+		if err != nil {
+			inf.err = err
+			close(inf.done)
+			relayCache.mu.Unlock()
+			return relayCacheEntry{}, nil, false, err
+		}
+		ttl := relayCacheTTL
+		if ttl > 0 {
+			evictOldestRelayCacheLocked(relayCacheMaxEntries)
+			ent.expiresAt = time.Now().Add(ttl)
+			if prev, exists := relayCache.entries[key]; exists && prev.path != ent.path {
+				_ = os.Remove(prev.path)
+			}
+			relayCache.entries[key] = ent
+		} else {
+			// Caching disabled: remove path immediately while caller keeps open fd.
+			_ = os.Remove(ent.path)
+		}
+		inf.ent = ent
+		close(inf.done)
+		relayCache.mu.Unlock()
+		return ent, f, false, nil
+	}
+	return relayCacheEntry{}, nil, false, errors.New("relay cache unavailable")
+}
+
+func fetchRelayAssetFresh(ctx context.Context, cacheDir, tag, goos, goarch string, preferIPv4 bool) (relayCacheEntry, *os.File, error) {
+	asset := "collie-" + goos + "-" + goarch
+	base := releaseRepoURL + "/releases/download/" + tag + "/"
+	wantSHA, usedIPv4, err := downloadChecksums(ctx, base, tag, asset, preferIPv4)
+	if err != nil {
+		return relayCacheEntry{}, nil, err
+	}
+	tmpPath, err := downloadAssetToDir(ctx, base, asset, cacheDir, wantSHA, usedIPv4, 0o600)
+	if err != nil {
+		return relayCacheEntry{}, nil, err
+	}
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return relayCacheEntry{}, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		_ = os.Remove(tmpPath)
+		return relayCacheEntry{}, nil, err
+	}
+	return relayCacheEntry{
+		asset:  asset,
+		sha256: wantSHA,
+		size:   fi.Size(),
+		path:   tmpPath,
+	}, f, nil
+}
+
+func (s *Server) machineOS(m Machine) string {
+	if strings.TrimSpace(m.OS) != "" {
+		return m.OS
+	}
+	if s.auths != nil {
+		for _, d := range s.auths.list() {
+			if d.ID == m.ID && d.Kind == "machine" && strings.TrimSpace(d.OS) != "" {
+				return d.OS
+			}
+		}
+	}
+	return ""
+}
+
+func isLocalNodeUpdateError(msg string) bool {
+	for _, needle := range []string{
+		"无写权限",
+		"磁盘空间不足",
+		"写入新版本文件失败",
+		"跑不起来",
+		"源码编译",
+		"升级已在进行中",
+		"找不到自己的程序文件",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldTriggerHubRelay(statusCode int, errMsg string, relayable *bool) bool {
+	if statusCode != http.StatusBadGateway {
+		return false
+	}
+	if relayable != nil {
+		return *relayable
+	}
+	return !isLocalNodeUpdateError(errMsg)
+}
+
+func (s *Server) updateRemote(w http.ResponseWriter, r *http.Request, machine string) {
+	start := time.Now()
+	log.Printf("remote-update start (machine=%s)", machine)
+	if s.herdr == nil {
+		log.Printf("remote-update failed (machine=%s dur=%s): node offline", machine, time.Since(start).Round(time.Millisecond))
+		writeJSON(w, 503, map[string]any{"error": "这台电脑现在不在线（" + machine + "）"})
+		return
+	}
+	m, client, err := s.herdr.MachineInfo(machine)
+	if err != nil {
+		log.Printf("remote-update failed (machine=%s dur=%s): node offline", machine, time.Since(start).Round(time.Millisecond))
+		writeJSON(w, 503, map[string]any{"error": "这台电脑现在不在线（" + machine + "）"})
+		return
+	}
+
+	reqCtx := r.Context()
+	if selfUpdateForwardTimeout > 0 {
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(reqCtx, selfUpdateForwardTimeout)
+		defer cancel()
+	}
+
+	q := r.URL.Query()
+	q.Del("machine")
+	nodeURL := "http://node/api/update"
+	if enc := q.Encode(); enc != "" {
+		nodeURL += "?" + enc
+	}
+	outReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, nodeURL, nil)
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"error": "转发到 " + machine + " 失败：" + sanitizeUpdateErr(err.Error())})
+		return
+	}
+
+	resp, err := client.Do(outReq)
+	if err != nil {
+		dur := time.Since(start).Round(time.Millisecond)
+		log.Printf("remote-update failed (machine=%s dur=%s): %s", machine, dur, sanitizeUpdateErr(err.Error()))
+		msg := "转发到 " + machine + " 失败：" + sanitizeUpdateErr(err.Error())
+		switch {
+		case isTimeoutErr(err):
+			msg = "转发到 " + machine + " 更新超时：节点未在规定时间内返回，可能下载较慢或网络卡顿，请稍后刷新查看版本"
+		case isConnResetOrEOF(err):
+			msg = "转发到 " + machine + " 时连接中断：节点可能正在重启或暂时掉线，请稍候刷新查看版本；若未升级可重试"
+		}
+		writeJSON(w, 502, map[string]any{"error": msg})
+		return
+	}
+	rawBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	if readErr != nil {
+		dur := time.Since(start).Round(time.Millisecond)
+		log.Printf("remote-update failed (machine=%s dur=%s): %s", machine, dur, sanitizeUpdateErr(readErr.Error()))
+		writeJSON(w, 502, map[string]any{"error": "转发到 " + machine + " 时连接中断：节点可能正在重启或暂时掉线，请稍候刷新查看版本；若未升级可重试"})
+		return
+	}
+
+	dur := time.Since(start).Round(time.Millisecond)
+	isJSON := strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json")
+	if resp.StatusCode == http.StatusOK {
+		if isJSON {
+			var res struct {
+				OK      bool   `json:"ok"`
+				From    string `json:"from"`
+				Version string `json:"version"`
+				Latest  bool   `json:"latest"`
+			}
+			_ = json.Unmarshal(rawBody, &res)
+			log.Printf("remote-update ok (machine=%s from=%s version=%s latest=%v dur=%s)", machine, res.From, res.Version, res.Latest, dur)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(rawBody)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+
+	var res struct {
+		Error     string `json:"error"`
+		Relayable *bool  `json:"relayable"`
+	}
+	errMsg := ""
+	if isJSON && json.Unmarshal(rawBody, &res) == nil && strings.TrimSpace(res.Error) != "" {
+		errMsg = sanitizeUpdateErr(strings.TrimSpace(res.Error))
+	} else {
+		msg := strings.TrimSpace(string(rawBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		errMsg = "节点 " + machine + " 返回异常：" + sanitizeUpdateErr(msg)
+	}
+	log.Printf("remote-update failed (machine=%s status=%d dur=%s): %s", machine, resp.StatusCode, dur, errMsg)
+
+	goos, goarch, hasOS := parseMachineOSArch(s.machineOS(m))
+	if hasOS && shouldTriggerHubRelay(resp.StatusCode, errMsg, res.Relayable) {
+		s.relayRemoteUpdate(w, r, m, client, goos, goarch, errMsg, start)
+		return
+	}
+
+	writeJSON(w, resp.StatusCode, map[string]any{"error": errMsg})
+}
+
+func (s *Server) relayRemoteUpdate(w http.ResponseWriter, r *http.Request, m Machine, client *http.Client, goos, goarch, directErr string, start time.Time) {
+	log.Printf("remote-update relay start (machine=%s os=%s/%s): %s", m.ID, goos, goarch, directErr)
+	timeout := selfUpdateRelayTimeout
+	if timeout <= 0 {
+		timeout = selfUpdateTimeout
+	}
+	relayCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
+	defer cancel()
+
+	tag, usedIPv4, err := fetchLatestTagErr(relayCtx)
+	if err != nil || tag == "" {
+		msg := formatUpdateError(err)
+		if msg == "" {
+			msg = "连不上 github.com"
+		}
+		log.Printf("remote-update relay failed (machine=%s stage=check-latest dur=%s): %s", m.ID, time.Since(start).Round(time.Millisecond), sanitizeUpdateErr(fmt.Sprint(err)))
+		writeJSON(w, 502, map[string]any{"error": fmt.Sprintf("%s；Hub 中转查不到最新版本：%s", directErr, msg)})
+		return
+	}
+
+	latestRel.Lock()
+	latestRel.tag = tag
+	latestRel.checked = time.Now()
+	latestRel.Unlock()
+
+	if parseVersion(m.Version) != nil && !outdated(m.Version, tag) {
+		log.Printf("remote-update relay noop (machine=%s version=%s latest=%s dur=%s): already up to date", m.ID, m.Version, tag, time.Since(start).Round(time.Millisecond))
+		writeJSON(w, 200, map[string]any{"ok": true, "version": m.Version, "latest": true, "relayed": true})
+		return
+	}
+
+	ent, file, cached, err := getOrFetchRelayAsset(relayCtx, tag, goos, goarch, usedIPv4)
+	if err != nil {
+		msg := formatUpdateError(err)
+		log.Printf("remote-update relay failed (machine=%s stage=hub-download target=%s os=%s/%s dur=%s): %s", m.ID, tag, goos, goarch, time.Since(start).Round(time.Millisecond), sanitizeUpdateErr(err.Error()))
+		writeJSON(w, 502, map[string]any{"error": fmt.Sprintf("%s；Hub 中转下载 %s (%s/%s) 失败：%s", directErr, tag, goos, goarch, msg)})
+		return
+	}
+	defer file.Close()
+
+	pushReq, err := http.NewRequestWithContext(relayCtx, http.MethodPost, "http://node/api/update/relay", file)
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"error": "构造中转升级请求失败：" + sanitizeUpdateErr(err.Error())})
+		return
+	}
+	pushReq.ContentLength = ent.size
+	pushReq.Header.Set("Content-Type", "application/octet-stream")
+	pushReq.Header.Set(relayUpdateTagHeader, tag)
+	pushReq.Header.Set(relayUpdateSHAHeader, ent.sha256)
+	pushReq.Header.Set("Expect", "100-continue")
+
+	resp, err := client.Do(pushReq)
+	if err != nil {
+		dur := time.Since(start).Round(time.Millisecond)
+		log.Printf("remote-update relay failed (machine=%s stage=push target=%s dur=%s): %s", m.ID, tag, dur, sanitizeUpdateErr(err.Error()))
+		msg := fmt.Sprintf("Hub 中转推送 %s 到 %s 失败：%s", tag, m.ID, sanitizeUpdateErr(err.Error()))
+		switch {
+		case isTimeoutErr(err):
+			msg = fmt.Sprintf("Hub 中转推送 %s 到 %s 超时：请稍后刷新查看版本", tag, m.ID)
+		case isConnResetOrEOF(err):
+			msg = fmt.Sprintf("Hub 中转推送 %s 到 %s 时连接中断：节点可能正在重启或暂时掉线，请稍候刷新查看版本", tag, m.ID)
+		}
+		writeJSON(w, 502, map[string]any{"error": msg})
+		return
+	}
+	rawBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	dur := time.Since(start).Round(time.Millisecond)
+	if readErr != nil {
+		log.Printf("remote-update relay failed (machine=%s stage=push-read target=%s dur=%s): %s", m.ID, tag, dur, sanitizeUpdateErr(readErr.Error()))
+		writeJSON(w, 502, map[string]any{"error": fmt.Sprintf("Hub 中转推送 %s 到 %s 时连接中断，请稍候刷新查看版本", tag, m.ID)})
+		return
+	}
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		log.Printf("remote-update relay unsupported (machine=%s version=%s status=%d dur=%s)", m.ID, m.Version, resp.StatusCode, dur)
+		verHint := "版本较旧"
+		if strings.TrimSpace(m.Version) != "" {
+			verHint = fmt.Sprintf("当前版本（%s）较旧", strings.TrimSpace(m.Version))
+		}
+		writeJSON(w, 502, map[string]any{
+			"error": fmt.Sprintf("%s；已尝试由 Hub 中转分发 %s，但该节点%s，暂不支持接收 Hub 中转升级，请先在该节点手动升级一次后再使用一键更新", directErr, tag, verHint),
+		})
+		return
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		var out map[string]any
+		if json.Unmarshal(rawBody, &out) != nil || out == nil {
+			out = map[string]any{"ok": true, "version": tag}
+		}
+		out["relayed"] = true
+		from, _ := out["from"].(string)
+		ver, _ := out["version"].(string)
+		latestFlag, _ := out["latest"].(bool)
+		log.Printf("remote-update relay ok (machine=%s from=%s version=%s latest=%v cached=%v dur=%s)", m.ID, from, ver, latestFlag, cached, dur)
+		writeJSON(w, 200, out)
+		return
+	}
+
+	var nodeRes struct {
+		Error string `json:"error"`
+	}
+	nodeErr := ""
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") && json.Unmarshal(rawBody, &nodeRes) == nil && strings.TrimSpace(nodeRes.Error) != "" {
+		nodeErr = sanitizeUpdateErr(strings.TrimSpace(nodeRes.Error))
+	} else {
+		msg := strings.TrimSpace(string(rawBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		nodeErr = sanitizeUpdateErr(msg)
+	}
+	log.Printf("remote-update relay failed (machine=%s target=%s status=%d dur=%s): %s", m.ID, tag, resp.StatusCode, dur, nodeErr)
+
+	outStatus := http.StatusBadGateway
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusConflict {
+		outStatus = resp.StatusCode
+	}
+	if !strings.HasPrefix(nodeErr, "中转升级失败：") && !strings.HasPrefix(nodeErr, "Hub 中转") {
+		nodeErr = "Hub 中转分发失败：" + nodeErr
+	}
+	writeJSON(w, outStatus, map[string]any{"error": nodeErr})
 }
 
 // downloadRelease puts release tag's binary for this platform at exe,
@@ -693,11 +1329,8 @@ func downloadReleaseWithHint(ctx context.Context, tag, exe string, preferIPv4 bo
 		}
 	}()
 
-	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	out, rerr := exec.CommandContext(verifyCtx, tmp, "version").Output()
-	cancel()
-	if rerr != nil || !strings.Contains(string(out), tag) {
-		return fmt.Errorf("新版本在这台电脑上跑不起来：%v %s", rerr, strings.TrimSpace(string(out)))
+	if err := verifyBinaryVersion(ctx, tmp, tag); err != nil {
+		return err
 	}
 	if err := os.Rename(tmp, exe); err != nil {
 		return &updateFileError{dir: dir, err: err}
@@ -724,11 +1357,14 @@ func downloadChecksums(ctx context.Context, base, tag, asset string, preferIPv4 
 			sc := bufio.NewScanner(bytes.NewReader(data))
 			for sc.Scan() {
 				if f := strings.Fields(sc.Text()); len(f) == 2 && f[1] == asset {
-					want = f[0]
+					want = strings.ToLower(strings.TrimSpace(f[0]))
 				}
 			}
 			if want == "" {
 				return "", forceIPv4, fmt.Errorf("%s 没有 %s 的版本", tag, asset)
+			}
+			if !isValidSHA256Hex(want) {
+				return "", forceIPv4, fmt.Errorf("%s 的 checksums.txt 中 %s 校验值格式无效", tag, asset)
 			}
 			return want, forceIPv4, nil
 		}
@@ -794,6 +1430,10 @@ func fetchSmallFileOnce(parentCtx context.Context, targetURL, name string, force
 }
 
 func downloadAsset(ctx context.Context, base, asset, exe, wantSHA string, preferIPv4 bool) (string, error) {
+	return downloadAssetToDir(ctx, base, asset, filepath.Dir(exe), wantSHA, preferIPv4, 0o755)
+}
+
+func downloadAssetToDir(ctx context.Context, base, asset, dir, wantSHA string, preferIPv4 bool, mode os.FileMode) (string, error) {
 	maxAttempts := max(1, updateMaxAttempts)
 	forceIPv4 := preferIPv4
 	triedIPv4 := preferIPv4
@@ -804,7 +1444,7 @@ func downloadAsset(ctx context.Context, base, asset, exe, wantSHA string, prefer
 		if forceIPv4 {
 			triedIPv4 = true
 		}
-		tmp, usedProxy, err := downloadAssetOnce(ctx, base+asset, asset, exe, wantSHA, forceIPv4)
+		tmp, usedProxy, err := downloadAssetOnce(ctx, base+asset, asset, dir, wantSHA, forceIPv4, mode)
 		lastUsesProxy = usedProxy
 		if err == nil {
 			return tmp, nil
@@ -833,7 +1473,7 @@ func downloadAsset(ctx context.Context, base, asset, exe, wantSHA string, prefer
 	return "", &updateOpError{err: lastErr, usedProxy: lastUsesProxy, triedIPv4: triedIPv4}
 }
 
-func downloadAssetOnce(parentCtx context.Context, targetURL, asset, exe, wantSHA string, forceIPv4 bool) (string, bool, error) {
+func downloadAssetOnce(parentCtx context.Context, targetURL, asset, dir, wantSHA string, forceIPv4 bool, mode os.FileMode) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, updateBinAttemptTimeout)
 	defer cancel()
 
@@ -864,7 +1504,6 @@ func downloadAssetOnce(parentCtx context.Context, targetURL, asset, exe, wantSHA
 		return "", usedProxy, &httpStatusError{file: asset, statusCode: resp.StatusCode, status: resp.Status}
 	}
 
-	dir := filepath.Dir(exe)
 	f, err := os.CreateTemp(dir, ".collie.new.*")
 	if err != nil {
 		return "", usedProxy, &updateFileError{dir: dir, err: err}
@@ -878,7 +1517,7 @@ func downloadAssetOnce(parentCtx context.Context, targetURL, asset, exe, wantSHA
 
 	h := sha256.New()
 	n, copyErr := io.Copy(io.MultiWriter(f, h), body)
-	chmodErr := f.Chmod(0o755)
+	chmodErr := f.Chmod(mode)
 	closeErr := f.Close()
 	if copyErr != nil {
 		return "", usedProxy, copyErr

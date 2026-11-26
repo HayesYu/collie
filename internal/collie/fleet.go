@@ -29,11 +29,12 @@ type Machine struct {
 	Online bool      `json:"online"`
 	Since  time.Time `json:"since,omitempty"`
 
-	conn   *herdrConn
-	client *http.Client // remote only: the node's own API, through the tunnel
-	ip     string       // remote only: where it connects from
-	ui     string       // remote only: its local web UI (http://127.0.0.1:port), if any
-	close  func()
+	conn        *herdrConn
+	client      *http.Client // remote only: the node's own API, through the tunnel
+	ip          string       // remote only: where it connects from
+	ui          string       // remote only: its local web UI (http://127.0.0.1:port), if any
+	relayUpdate bool         // remote only: node advertised /api/update/relay support
+	close       func()
 }
 
 // Herdr is the herdr API across every connected machine. It speaks herdr's
@@ -282,14 +283,26 @@ func (h *Herdr) detach(id string, m *Machine) {
 
 // Client returns the HTTP client for a remote machine's node API.
 func (h *Herdr) Client(machine string) (*http.Client, error) {
-	m, err := h.machine(machine)
-	if err != nil {
-		return nil, err
+	_, client, err := h.MachineInfo(machine)
+	return client, err
+}
+
+// MachineInfo returns a snapshot of a connected remote machine along with its
+// tunnel HTTP client.
+func (h *Herdr) MachineInfo(machine string) (Machine, *http.Client, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if machine == "" {
+		return *h.local, nil, fmt.Errorf("machine %q has no node API", machine)
+	}
+	m := h.remote[machine]
+	if m == nil || !m.Online {
+		return Machine{}, nil, &HerdrError{Code: "machine_offline", Message: fmt.Sprintf("machine %q is not connected", machine)}
 	}
 	if m.client == nil {
-		return nil, fmt.Errorf("machine %q has no node API", machine)
+		return *m, nil, fmt.Errorf("machine %q has no node API", machine)
 	}
-	return m.client, nil
+	return *m, m.client, nil
 }
 
 var routeKeys = []string{"pane_id", "workspace_id", "tab_id", "target"}

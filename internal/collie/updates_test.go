@@ -33,6 +33,10 @@ func saveUpdateHooks(t *testing.T) {
 	origExec := execUpdated
 	origTimeout := selfUpdateTimeout
 	origFwdTimeout := selfUpdateForwardTimeout
+	origRelayTimeout := selfUpdateRelayTimeout
+	origMaxRelaySize := maxRelayBinarySize
+	origRelayTTL := relayCacheTTL
+	origRelayMax := relayCacheMaxEntries
 	origMaxAttempts := updateMaxAttempts
 	origRetryDelay := updateRetryBaseDelay
 	origDialTimeout := updateDialTimeout
@@ -45,6 +49,11 @@ func saveUpdateHooks(t *testing.T) {
 	origProxy := updateProxyFunc
 	origDial := updateDialContext
 
+	latestRel.Lock()
+	origLatestTag, origLatestChecked := latestRel.tag, latestRel.checked
+	latestRel.Unlock()
+	resetRelayCache()
+
 	// Tests should run fast and deterministically without inheriting host proxies.
 	updateRetryBaseDelay = 5 * time.Millisecond
 	updateProxyFunc = func(*http.Request) (*url.URL, error) { return nil, nil }
@@ -56,6 +65,10 @@ func saveUpdateHooks(t *testing.T) {
 		execUpdated = origExec
 		selfUpdateTimeout = origTimeout
 		selfUpdateForwardTimeout = origFwdTimeout
+		selfUpdateRelayTimeout = origRelayTimeout
+		maxRelayBinarySize = origMaxRelaySize
+		relayCacheTTL = origRelayTTL
+		relayCacheMaxEntries = origRelayMax
 		updateMaxAttempts = origMaxAttempts
 		updateRetryBaseDelay = origRetryDelay
 		updateDialTimeout = origDialTimeout
@@ -67,6 +80,10 @@ func saveUpdateHooks(t *testing.T) {
 		updateBinAttemptTimeout = origBinTimeout
 		updateProxyFunc = origProxy
 		updateDialContext = origDial
+		latestRel.Lock()
+		latestRel.tag, latestRel.checked = origLatestTag, origLatestChecked
+		latestRel.Unlock()
+		resetRelayCache()
 		if !selfUpdateMu.TryLock() {
 			selfUpdateMu.Unlock()
 		} else {
@@ -842,5 +859,340 @@ func TestGetVersionAndStateMachinesVersion(t *testing.T) {
 	srv.getVersion(rec3, httptest.NewRequest("GET", "/api/version", nil))
 	if !strings.Contains(rec3.Body.String(), `"outdated":null`) {
 		t.Fatalf("expected outdated:null when up to date, got %s", rec3.Body.String())
+	}
+}
+
+func TestHubRelayRemoteUpdateFallbackAndCache(t *testing.T) {
+	saveUpdateHooks(t)
+
+	newTag := "v0.2.76"
+	newScript := "#!/bin/sh\necho collie " + newTag + "\n"
+	sum := sha256.Sum256([]byte(newScript))
+	goodSum := hex.EncodeToString(sum[:])
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	asset := "collie-" + goos + "-" + goarch
+
+	var latestHits, csHits, binHits atomic.Int32
+	var gh *httptest.Server
+	gh = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			latestHits.Add(1)
+			w.Header().Set("Location", gh.URL+"/releases/tag/"+newTag)
+			w.WriteHeader(http.StatusFound)
+		case "/releases/download/" + newTag + "/checksums.txt":
+			csHits.Add(1)
+			fmt.Fprintf(w, "%s  %s\n", goodSum, asset)
+		case "/releases/download/" + newTag + "/" + asset:
+			binHits.Add(1)
+			w.Write([]byte(newScript))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gh.Close()
+	releaseRepoURL = gh.URL
+
+	// Prepare two isolated fake node binaries on disk.
+	dirA := t.TempDir()
+	exeA := filepath.Join(dirA, "collie")
+	oldScript := "#!/bin/sh\necho collie v0.2.72\n"
+	if err := os.WriteFile(exeA, []byte(oldScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dirB := t.TempDir()
+	exeB := filepath.Join(dirB, "collie")
+	if err := os.WriteFile(exeB, []byte(oldScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var curExe atomic.Value
+	curExe.Store(exeA)
+	executablePath = func() (string, error) { return curExe.Load().(string), nil }
+
+	restarted := make(chan string, 4)
+	execUpdated = func(p string) { restarted <- p }
+	version = "v0.2.72"
+
+	// Build a real NodeRoutes handler; direct /api/update simulates a node without
+	// internet access (returns 502 timeout), while /api/update/relay executes the
+	// real node relay handler.
+	nodeSrv := &Server{node: true}
+	nodeRoutes := nodeSrv.NodeRoutes()
+	makeNoInternetNodeClient := func() *http.Client {
+		return &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/api/update" {
+				body := `{"error":"查不到最新版本：连接 GitHub 超时（已自动重试并尝试 IPv4）","relayable":true}`
+				return &http.Response{
+					StatusCode: 502,
+					Status:     "502 Bad Gateway",
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(body)),
+				}, nil
+			}
+			rec := httptest.NewRecorder()
+			nodeRoutes.ServeHTTP(rec, r)
+			return rec.Result(), nil
+		})}
+	}
+
+	h := newHerdr("/nonexistent.sock", "hubbox", t.TempDir())
+	h.attach(&Machine{
+		ID: "devbox-a", Name: "devbox-a", OS: goos + "/" + goarch, Version: "v0.2.72", Online: true,
+		client: makeNoInternetNodeClient(),
+	})
+	h.attach(&Machine{
+		ID: "devbox-b", Name: "devbox-b", OS: goos + "/" + goarch, Version: "v0.2.72", Online: true,
+		client: makeNoInternetNodeClient(),
+	})
+	var pushToLatest atomic.Int32
+	h.attach(&Machine{
+		ID: "devbox-up2date", Name: "devbox-up2date", OS: goos + "/" + goarch, Version: newTag, Online: true,
+		client: &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/api/update/relay" {
+				pushToLatest.Add(1)
+			}
+			body := `{"error":"查不到最新版本：连接 GitHub 超时","relayable":true}`
+			return &http.Response{
+				StatusCode: 502,
+				Status:     "502 Bad Gateway",
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		})},
+	})
+
+	hubSrv := &Server{herdr: h}
+	handler := hubSrv.routed(hubSrv.selfUpdate)
+
+	// 1) Upgrade devbox-a: direct fails -> Hub downloads, verifies SHA-256, pushes to node,
+	//    node verifies SHA-256, runs `version`, atomically replaces exe (0755), and restarts.
+	recA := httptest.NewRecorder()
+	handler.ServeHTTP(recA, httptest.NewRequest("POST", "/api/update?machine=devbox-a", nil))
+	if recA.Code != 200 {
+		t.Fatalf("devbox-a relay status=%d body=%s", recA.Code, recA.Body.String())
+	}
+	var resA map[string]any
+	if err := json.Unmarshal(recA.Body.Bytes(), &resA); err != nil {
+		t.Fatal(err)
+	}
+	if resA["ok"] != true || resA["from"] != "v0.2.72" || resA["version"] != newTag || resA["relayed"] != true {
+		t.Fatalf("unexpected devbox-a relay response: %+v", resA)
+	}
+	if got := <-restarted; got != exeA {
+		t.Fatalf("restarted = %q, want %q", got, exeA)
+	}
+	selfUpdateMu.Unlock()
+
+	gotBinA, err := os.ReadFile(exeA)
+	if err != nil || string(gotBinA) != newScript {
+		t.Fatalf("exeA content = %q err=%v", string(gotBinA), err)
+	}
+	fiA, err := os.Stat(exeA)
+	if err != nil || fiA.Mode().Perm() != 0o755 {
+		t.Fatalf("exeA mode = %o, want 0755", fiA.Mode().Perm())
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dirA, ".collie.new.*")); len(leftovers) != 0 {
+		t.Fatalf("leftover temp files in dirA: %v", leftovers)
+	}
+	if csHits.Load() != 1 || binHits.Load() != 1 {
+		t.Fatalf("after first relay: csHits=%d binHits=%d, want 1 and 1", csHits.Load(), binHits.Load())
+	}
+
+	// 2) Upgrade devbox-b (same os/arch): must reuse Hub short-term cache without re-downloading.
+	curExe.Store(exeB)
+	recB := httptest.NewRecorder()
+	handler.ServeHTTP(recB, httptest.NewRequest("POST", "/api/update?machine=devbox-b", nil))
+	if recB.Code != 200 {
+		t.Fatalf("devbox-b relay status=%d body=%s", recB.Code, recB.Body.String())
+	}
+	if got := <-restarted; got != exeB {
+		t.Fatalf("restarted = %q, want %q", got, exeB)
+	}
+	selfUpdateMu.Unlock()
+
+	gotBinB, err := os.ReadFile(exeB)
+	if err != nil || string(gotBinB) != newScript {
+		t.Fatalf("exeB content = %q err=%v", string(gotBinB), err)
+	}
+	if csHits.Load() != 1 || binHits.Load() != 1 {
+		t.Fatalf("expected Hub cache hit on second node: csHits=%d binHits=%d, want 1 and 1", csHits.Load(), binHits.Load())
+	}
+
+	// 3) Upgrade devbox-up2date (already at latest, just couldn't reach GitHub): returns noop 200 without pushing.
+	recC := httptest.NewRecorder()
+	handler.ServeHTTP(recC, httptest.NewRequest("POST", "/api/update?machine=devbox-up2date", nil))
+	if recC.Code != 200 {
+		t.Fatalf("devbox-up2date status=%d body=%s", recC.Code, recC.Body.String())
+	}
+	var resC map[string]any
+	_ = json.Unmarshal(recC.Body.Bytes(), &resC)
+	if resC["ok"] != true || resC["latest"] != true || resC["relayed"] != true || pushToLatest.Load() != 0 {
+		t.Fatalf("unexpected noop relay result: %+v pushCount=%d", resC, pushToLatest.Load())
+	}
+}
+
+func TestHubRelayChecksumRejectionAndOldNodeDegradation(t *testing.T) {
+	saveUpdateHooks(t)
+
+	newTag := "v0.2.76"
+	newScript := "#!/bin/sh\necho collie " + newTag + "\n"
+	sum := sha256.Sum256([]byte(newScript))
+	goodSum := hex.EncodeToString(sum[:])
+	badSum := strings.Repeat("a", 64)
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	asset := "collie-" + goos + "-" + goarch
+
+	var serveBadChecksum atomic.Bool
+	var ghHits atomic.Int32
+	var gh *httptest.Server
+	gh = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ghHits.Add(1)
+		switch r.URL.Path {
+		case "/releases/latest":
+			w.Header().Set("Location", gh.URL+"/releases/tag/"+newTag)
+			w.WriteHeader(http.StatusFound)
+		case "/releases/download/" + newTag + "/checksums.txt":
+			cs := goodSum
+			if serveBadChecksum.Load() {
+				cs = badSum
+			}
+			fmt.Fprintf(w, "%s  %s\n", cs, asset)
+		case "/releases/download/" + newTag + "/" + asset:
+			w.Write([]byte(newScript))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gh.Close()
+	releaseRepoURL = gh.URL
+
+	// 1) Hub-side SHA-256 mismatch rejects before ever pushing to the remote node.
+	serveBadChecksum.Store(true)
+	var relayPushCount atomic.Int32
+	h := newHerdr("/nonexistent.sock", "hubbox", t.TempDir())
+	h.attach(&Machine{
+		ID: "devbox", Name: "devbox", OS: goos + "/" + goarch, Version: "v0.2.72", Online: true,
+		client: &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/api/update/relay" {
+				relayPushCount.Add(1)
+			}
+			body := `{"error":"查不到最新版本：连接 GitHub 超时","relayable":true}`
+			return &http.Response{
+				StatusCode: 502,
+				Status:     "502 Bad Gateway",
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		})},
+	})
+	hubSrv := &Server{herdr: h}
+	handler := hubSrv.routed(hubSrv.selfUpdate)
+
+	recBadHub := httptest.NewRecorder()
+	handler.ServeHTTP(recBadHub, httptest.NewRequest("POST", "/api/update?machine=devbox", nil))
+	if recBadHub.Code != 502 || !strings.Contains(recBadHub.Body.String(), "校验失败") {
+		t.Fatalf("hub bad checksum: status=%d body=%s", recBadHub.Code, recBadHub.Body.String())
+	}
+	if relayPushCount.Load() != 0 {
+		t.Fatalf("hub pushed binary despite checksum mismatch (count=%d)", relayPushCount.Load())
+	}
+
+	// 2) Node-side SHA-256 mismatch: tampered body rejected with 422, binary intact, 0 temp files, no restart.
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "collie")
+	origScript := "#!/bin/sh\necho collie v0.2.72\n"
+	if err := os.WriteFile(exe, []byte(origScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	version = "v0.2.72"
+	executablePath = func() (string, error) { return exe, nil }
+	var restarted atomic.Bool
+	execUpdated = func(string) { restarted.Store(true) }
+
+	nodeSrv := &Server{node: true}
+	nodeRoutes := nodeSrv.NodeRoutes()
+	tamperedReq := httptest.NewRequest(http.MethodPost, "http://node/api/update/relay", strings.NewReader("#!/bin/sh\necho tampered\n"))
+	tamperedReq.Header.Set(relayUpdateTagHeader, newTag)
+	tamperedReq.Header.Set(relayUpdateSHAHeader, goodSum)
+	recTampered := httptest.NewRecorder()
+	nodeRoutes.ServeHTTP(recTampered, tamperedReq)
+	if recTampered.Code != 422 || !strings.Contains(recTampered.Body.String(), "SHA-256 不匹配") {
+		t.Fatalf("tampered relay status=%d body=%s, want 422 with SHA-256 mismatch", recTampered.Code, recTampered.Body.String())
+	}
+	if restarted.Load() {
+		t.Fatal("node must not restart on checksum mismatch")
+	}
+	if got, _ := os.ReadFile(exe); string(got) != origScript {
+		t.Fatalf("exe was modified on checksum mismatch: %q", string(got))
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, ".collie.new.*")); len(leftovers) != 0 {
+		t.Fatalf("leftover temp files after rejected relay: %v", leftovers)
+	}
+
+	// 3) Non-node server refuses relayUpdate with 403.
+	hubDirectRec := httptest.NewRecorder()
+	(&Server{node: false}).relayUpdate(hubDirectRec, tamperedReq)
+	if hubDirectRec.Code != 403 {
+		t.Fatalf("non-node relayUpdate status=%d, want 403", hubDirectRec.Code)
+	}
+
+	// 4) Old node degradation: direct /api/update returns 502, /api/update/relay returns 404.
+	serveBadChecksum.Store(false)
+	h.attach(&Machine{
+		ID: "legacy-node", Name: "legacy-node", OS: goos + "/" + goarch, Version: "v0.2.68", Online: true,
+		client: &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/api/update" {
+				body := `{"error":"查不到最新版本：连接 GitHub 超时"}`
+				return &http.Response{
+					StatusCode: 502,
+					Status:     "502 Bad Gateway",
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(body)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 404,
+				Status:     "404 Not Found",
+				Header:     http.Header{"Content-Type": {"text/plain; charset=utf-8"}},
+				Body:       io.NopCloser(strings.NewReader("404 page not found\n")),
+			}, nil
+		})},
+	})
+	recOld := httptest.NewRecorder()
+	handler.ServeHTTP(recOld, httptest.NewRequest("POST", "/api/update?machine=legacy-node", nil))
+	if recOld.Code != 502 {
+		t.Fatalf("old node relay status=%d body=%s", recOld.Code, recOld.Body.String())
+	}
+	for _, want := range []string{"v0.2.68", "暂不支持接收 Hub 中转升级", "手动升级"} {
+		if !strings.Contains(recOld.Body.String(), want) {
+			t.Fatalf("old node message missing %q: %s", want, recOld.Body.String())
+		}
+	}
+
+	// 5) Non-relayable local node error (e.g., unwritable directory): Hub does NOT invoke GitHub or relay.
+	ghHitsBefore := ghHits.Load()
+	h.attach(&Machine{
+		ID: "ro-node", Name: "ro-node", OS: goos + "/" + goarch, Version: "v0.2.72", Online: true,
+		client: &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/api/update/relay" {
+				t.Errorf("unexpected relay push on local permission error")
+			}
+			body := `{"error":"更新失败：程序所在目录无写权限（/usr/local/bin）","relayable":false}`
+			return &http.Response{
+				StatusCode: 502,
+				Status:     "502 Bad Gateway",
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		})},
+	})
+	recRO := httptest.NewRecorder()
+	handler.ServeHTTP(recRO, httptest.NewRequest("POST", "/api/update?machine=ro-node", nil))
+	if recRO.Code != 502 || !strings.Contains(recRO.Body.String(), "无写权限") {
+		t.Fatalf("local permission error status=%d body=%s", recRO.Code, recRO.Body.String())
+	}
+	if ghHits.Load() != ghHitsBefore {
+		t.Fatalf("non-relayable error should not hit GitHub (before=%d after=%d)", ghHitsBefore, ghHits.Load())
 	}
 }

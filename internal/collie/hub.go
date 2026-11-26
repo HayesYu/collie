@@ -62,6 +62,10 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 			h(w, r)
 			return
 		}
+		if r.URL.Path == "/api/update" && r.Method == http.MethodPost {
+			s.updateRemote(w, r, machine)
+			return
+		}
 		s.forward(w, r, machine, path, body)
 	}
 }
@@ -824,10 +828,14 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 	m := &Machine{
 		ID: d.ID, Name: d.Name, OS: r.Header.Get("X-Collie-OS"), Home: r.Header.Get("X-Collie-Home"),
 		Bin: r.Header.Get("X-Collie-Bin"), Version: r.Header.Get("X-Collie-Version"), Agents: parseAgentsHeader(r.Header.Get("X-Collie-Agents")), Online: true, Since: time.Now(),
-		conn: &herdrConn{dial: streamDialer(open, "herdr")},
+		relayUpdate: r.Header.Get("X-Collie-Relay-Update") == "1",
+		conn:        &herdrConn{dial: streamDialer(open, "herdr")},
 		client: &http.Client{Transport: &http.Transport{
-			DialContext:         func(ctx context.Context, _, _ string) (net.Conn, error) { return httpDial(ctx) },
-			MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second, ResponseHeaderTimeout: 0,
+			DialContext:           func(ctx context.Context, _, _ string) (net.Conn, error) { return httpDial(ctx) },
+			MaxIdleConnsPerHost:   8,
+			IdleConnTimeout:       60 * time.Second,
+			ResponseHeaderTimeout: 0,
+			ExpectContinueTimeout: 1 * time.Second,
 		}},
 		close: func() { sess.Close() },
 	}

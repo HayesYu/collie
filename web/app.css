@@ -278,7 +278,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 }
 .nav-item:hover .count-pill.unread { background: var(--bg); }
 
-.side-scroll { flex: 1; overflow: auto; padding: 0 8px 16px; border-top: 1px solid var(--line); margin-top: 4px; }
+.side-scroll { flex: 1; overflow: auto; padding: 0 8px 16px; border-top: 1px solid var(--line); margin-top: 4px; contain: layout style; }
 .group { margin-top: 14px; }
 .group h2, .group summary {
   font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
@@ -395,7 +395,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 
 /* ─── viewer ─── */
 .viewer { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
-.viewer.chatbg { background: var(--bg); overflow: auto; outline: none; }
+.viewer.chatbg { background: var(--bg); overflow: auto; outline: none; contain: layout style; }
 .viewer > .screen, .viewer > .log, .viewer > .chat { display: none; }
 .viewer[data-mode="screen"] > .screen, .viewer[data-mode="log"] > .log { display: block; }
 .viewer[data-mode="chat"] > .chat { display: flex; }
@@ -1420,6 +1420,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   overscroll-behavior-y: contain; outline: none;
   padding: 16px 18px 24px; scrollbar-gutter: stable;
+  contain: layout style;
 }
 .td-list { display: flex; flex-direction: column; }
 .td-older {

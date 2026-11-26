@@ -12,19 +12,89 @@
   const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", doubao: "Doubao" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
-  const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+  const FMT_HHMM = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }) : null;
+  const FMT_MD = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" }) : null;
+  const FMT_FULL = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
+  const _hhmmCache = new Map();
+  const _fullTimeCache = new Map();
+  const _mdCache = new Map();
+  let _dayBoundsAt = 0, _todayStart = 0, _yestStart = 0, _tomorrowStart = 0, _dayStamp = "";
+  function dayBounds() {
+    const now = Date.now();
+    if (now >= _tomorrowStart || now - _dayBoundsAt > 30000 || !_todayStart) {
+      const d = new Date(now);
+      d.setHours(0, 0, 0, 0);
+      _todayStart = d.getTime();
+      _yestStart = _todayStart - 86400e3;
+      _tomorrowStart = _todayStart + 86400e3;
+      _dayBoundsAt = now;
+      _dayStamp = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    }
+    return _dayStamp;
+  }
+  const hhmm = (t) => {
+    const ms = typeof t === "number" ? t : +new Date(t);
+    if (!Number.isFinite(ms)) return "";
+    const min = Math.floor(ms / 60000);
+    let out = _hhmmCache.get(min);
+    if (out === undefined) {
+      const d = new Date(ms);
+      out = FMT_HHMM ? FMT_HHMM.format(d) : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      if (_hhmmCache.size > 4000) _hhmmCache.clear();
+      _hhmmCache.set(min, out);
+    }
+    return out;
+  };
   // 21:52 today, 昨天 18:30, 11月18日 18:30 before that.
   const sepTime = (t) => {
-    const d = new Date(t), now = new Date(), y = new Date(now - 86400e3);
-    if (d.toDateString() === now.toDateString()) return hhmm(t);
-    if (d.toDateString() === y.toDateString()) return "昨天 " + hhmm(t);
-    return `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm(t)}`;
+    const ms = typeof t === "number" ? t : +new Date(t);
+    if (!Number.isFinite(ms)) return "";
+    dayBounds();
+    const hm = hhmm(ms);
+    if (ms >= _todayStart && ms < _tomorrowStart) return hm;
+    if (ms >= _yestStart && ms < _todayStart) return "昨天 " + hm;
+    const d = new Date(ms);
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   };
-  const fullTime = (t) => new Date(t).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const fullTime = (t) => {
+    const ms = typeof t === "number" ? t : +new Date(t);
+    if (!Number.isFinite(ms)) return "";
+    const min = Math.floor(ms / 60000);
+    let out = _fullTimeCache.get(min);
+    if (out === undefined) {
+      const d = new Date(ms);
+      out = FMT_FULL ? FMT_FULL.format(d) : d.toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      if (_fullTimeCache.size > 4000) _fullTimeCache.clear();
+      _fullTimeCache.set(min, out);
+    }
+    return out;
+  };
   const when = (t) => {
-    const d = new Date(t); if (isNaN(d)) return "";
-    const today = new Date().toDateString() === d.toDateString();
-    return today ? hhmm(t) : d.toLocaleDateString([], { month: "numeric", day: "numeric" }) + " " + hhmm(t);
+    const ms = typeof t === "number" ? t : +new Date(t);
+    if (!Number.isFinite(ms)) return "";
+    dayBounds();
+    if (ms >= _todayStart && ms < _tomorrowStart) return hhmm(ms);
+    const day = Math.floor(ms / 86400000);
+    let mdStr = _mdCache.get(day);
+    if (mdStr === undefined) {
+      const d = new Date(ms);
+      mdStr = FMT_MD ? FMT_MD.format(d) : d.toLocaleDateString([], { month: "numeric", day: "numeric" });
+      if (_mdCache.size > 500) _mdCache.clear();
+      _mdCache.set(day, mdStr);
+    }
+    return mdStr + " " + hhmm(ms);
+  };
+  const setHTML = (el, html) => {
+    if (!el) return false;
+    if (el._html === html) return false;
+    el._html = html;
+    el.innerHTML = html;
+    return true;
+  };
+  const setText = (el, txt) => {
+    if (!el) return;
+    const s = String(txt ?? "");
+    if (el.textContent !== s) el.textContent = s;
   };
 
   // ───────────────────────────── icons & labels
@@ -331,13 +401,16 @@
   addEventListener("resize", () => closePick());
   document.addEventListener("scroll", (e) => { if (pickOpen && !pickPop.contains(e.target)) closePick(); }, true);
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") syncPick(e.target); });
+  const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list"]);
   new MutationObserver((ms) => {
     for (const m of ms) {
+      if (NO_SELECT_IDS.has(m.target?.id)) continue;
       for (const n of m.addedNodes) {
         if (n.nodeType !== 1) continue;
-        if (n.tagName === "SELECT") enhance(n); else n.querySelectorAll?.("select").forEach(enhance);
+        if (n.tagName === "SELECT") enhance(n);
+        else if (n.childElementCount > 0) n.querySelectorAll?.("select").forEach(enhance);
       }
-      const s = m.target.closest?.("select");
+      const s = m.target.tagName === "SELECT" ? m.target : m.target.closest?.("select");
       if (s) syncPick(s);
     }
   }).observe(document.body, { childList: true, subtree: true });
@@ -1037,7 +1110,10 @@
 
   function connect() {
     const ev = new EventSource("/api/events");
+    let lastSuperRaw = "", lastStateRaw = "";
     ev.addEventListener("super", (e) => {
+      if (e.data === lastSuperRaw) return;
+      lastSuperRaw = e.data;
       const prevSum = JSON.stringify(sup.integrations_summary || null);
       const prevInboxKey = `${sup.queued}:${(sup.entries || []).length}:${sup.entries?.[sup.entries.length - 1]?.id || ""}`;
       sup = normSup(JSON.parse(e.data));
@@ -1058,6 +1134,8 @@
       }
     });
     ev.addEventListener("state", (e) => {
+      if (e.data === lastStateRaw) return;
+      lastStateRaw = e.data;
       localState = JSON.parse(e.data);
       syncReadCursorFromServer(localState?.last_read_entry_id, sup.entries);
       const next = mergedState();
@@ -1094,7 +1172,15 @@
   document.addEventListener("visibilitychange", () => { if (view === "pane" && find(current)) markSeen(find(current)); });
 
   // ───────────────────────────── browser notifications (Collie replies + agents)
-  const entryIdNum = (id) => parseInt(String(id || "").replace(/^[a-z]+/i, ""), 10) || 0;
+  const entryIdNum = (id) => {
+    if (!id) return 0;
+    const s = String(id);
+    if (s.charCodeAt(0) === 101 && s.length > 1) { // fast path for "e1234"
+      const n = Number(s.slice(1));
+      if (Number.isInteger(n) && n > 0) return n;
+    }
+    return parseInt(s.replace(/^[a-z]+/i, ""), 10) || 0;
+  };
   function notifyEnvState() {
     if (window.isSecureContext === false) {
       return {
@@ -1365,11 +1451,26 @@
     }
     return s;
   }
-  const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
-  const paneOf = (name) => state.agents.find((a) => a.name === name)?.pane_id;
+  let _agentByNameCache = { ref: null, len: -1, map: new Map() };
+  function getAgentByName() {
+    const arr = state.agents || [];
+    if (_agentByNameCache.ref === arr && _agentByNameCache.len === arr.length) return _agentByNameCache.map;
+    const map = new Map();
+    for (let i = 0; i < arr.length; i++) {
+      const a = arr[i];
+      if (a?.name && !map.has(a.name)) map.set(a.name, a);
+    }
+    _agentByNameCache = { ref: arr, len: arr.length, map };
+    return map;
+  }
+  const isWorker = (name) => {
+    const w = name ? getWorkerLookup().byName.get(name) : null;
+    return !!(w && !w.ended);
+  };
+  const paneOf = (name) => (name ? getAgentByName().get(name)?.pane_id : undefined);
   // A worker's status as the sidebar shows it (which knows when it waits on
   // background work), else as Collie last saw it.
-  const workerStatus = (w) => (!w.ended && state.agents.find((a) => a.name === w.name)?.status) || w.status;
+  const workerStatus = (w) => (!w.ended && w.name && getAgentByName().get(w.name)?.status) || w.status;
   const workerBusy = (w) => !w.ended && ["working", "starting", "waiting"].includes(workerStatus(w));
   const find = (id) => state.agents.find((a) => a.pane_id === id) || state.shells.find((a) => a.pane_id === id);
   // What to call an agent: the session's own title; a handle like "agy-1" says
@@ -1384,15 +1485,16 @@
   }
 
   // ───────────────────────────── sidebar
-  function itemHTML(v, workerThreadMap = null) {
+  function itemHTML(v, workerThreadMap = null, allEntries = null) {
     const where = (state.machines || []).length > 1 ? machineName(v.machine) + " · " : "";
     const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
     const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
     const label = v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
     const isRealAgent = v.is_agent && v.name !== ROUTER;
-    const linked = isRealAgent ? ((workerThreadMap || computeWorkerThreadMap()).get(v.name) || null) : null;
-    const sum = isRealAgent ? agentTaskSummary(v, findWorkerForAgent(v), linked) : null;
+    const entries = isRealAgent ? (allEntries || chatEntries()) : null;
+    const linked = isRealAgent ? ((workerThreadMap || computeWorkerThreadMap(null, entries)).get(v.name) || null) : null;
+    const sum = isRealAgent ? agentTaskSummary(v, findWorkerForAgent(v), linked, entries) : null;
     const sumText = sum && sum.short && sum.short !== label ? sum.short : "";
     const sumFull = sumText ? (sum.full || sumText) : "";
     const cardTitle = sumFull ? `${label} — ${sumFull}` : label;
@@ -1419,72 +1521,77 @@
     return days === 0 ? hm : days === 1 ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   }
   function renderSide() {
-    const wtMap = computeWorkerThreadMap();
+    const allEntries = chatEntries();
+    const wtMap = computeWorkerThreadMap(null, allEntries);
     const blocked = state.agents.filter((a) => a.status === "blocked");
     $("#attention-group").hidden = blocked.length === 0;
-    $("#attention").innerHTML = blocked.map((a) => itemHTML(a, wtMap)).join("");
+    setHTML($("#attention"), blocked.map((a) => itemHTML(a, wtMap, allEntries)).join(""));
 
     const machines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
     const multi = machines.length > 1;
 
-    renderSessions(wtMap);
-    $("#shells").innerHTML = state.shells.map((s) => itemHTML(s, wtMap)).join("");
-    $("#shell-count").textContent = state.shells.length || "";
+    renderSessions(wtMap, allEntries);
+    setHTML($("#shells"), state.shells.map((s) => itemHTML(s, wtMap, allEntries)).join(""));
+    setText($("#shell-count"), state.shells.length || "");
     $("#shell-group").hidden = state.shells.length === 0;
 
     const online = machines.filter((m) => m.local ? state.ok : m.online).length;
-    $("#conn").className = "conn " + (online ? "on" : "off");
-    $("#herdr-status").textContent = !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
+    const connCls = "conn " + (online ? "on" : "off");
+    if ($("#conn").className !== connCls) $("#conn").className = connCls;
+    setText($("#herdr-status"), !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`);
     if (!state.ok && state.error) $("#herdr-status").title = state.error;
-    if (view !== "file") document.title = blocked.length ? `(${blocked.length}) Collie` : "Collie";
+    const wantDocTitle = blocked.length ? `(${blocked.length}) Collie` : "Collie";
+    if (view !== "file" && document.title !== wantDocTitle) document.title = wantDocTitle;
 
     const r = sup.router || {};
     const active = sup.workers.filter((w) => !w.ended);
     const running = active.filter(workerBusy).length;
-    $("#nav-collie-sub").textContent = collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : "");
+    setText($("#nav-collie-sub"), collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : ""));
     // The next time Collie set itself to look again, under 自动化 where its
     // timers are: "明天 09:00 再看：复查 paper_df…".
     const f = sup.follow;
-    $("#nav-auto-sub").textContent = f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "记忆 · 定时 · 接入";
-    $("#nav-auto-sub").title = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}（点开看进行中的任务）` : "";
+    setText($("#nav-auto-sub"), f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "记忆 · 定时 · 接入");
+    const wantFollowTitle = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}（点开看进行中的任务）` : "";
+    if ($("#nav-auto-sub").title !== wantFollowTitle) $("#nav-auto-sub").title = wantFollowTitle;
     $("#nav-auto-sub").classList.toggle("follow", !!f?.next);
-    $("#nav-collie-dot").className = "dot " + collieDot(r.status);
+    const dotCls = "dot " + collieDot(r.status);
+    if ($("#nav-collie-dot").className !== dotCls) $("#nav-collie-dot").className = dotCls;
     const pend = activePending();
-    const unreadCount = pend.length === 0 && view !== "collie" ? computeUnreadInfo().count : 0;
+    const unreadCount = pend.length === 0 && view !== "collie" ? computeUnreadInfo(allEntries).count : 0;
     const np = $("#nav-pending");
     if (np) {
       if (pend.length > 0) {
         np.hidden = false;
         np.classList.add("attn");
         np.classList.remove("unread");
-        np.textContent = pend.length > 99 ? "99+" : String(pend.length);
-        np.title = `${pend.length} 条待处理`;
-        np.setAttribute("aria-label", `${pend.length} 条待处理`);
+        setText(np, pend.length > 99 ? "99+" : String(pend.length));
+        const lbl = `${pend.length} 条待处理`;
+        if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
       } else if (unreadCount > 0) {
         np.hidden = false;
         np.classList.remove("attn");
         np.classList.add("unread");
-        np.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
-        np.title = `${unreadCount} 条未读`;
-        np.setAttribute("aria-label", `${unreadCount} 条未读`);
+        setText(np, unreadCount > 99 ? "99+" : String(unreadCount));
+        const lbl = `${unreadCount} 条未读`;
+        if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
       } else {
         np.hidden = true;
         np.classList.add("attn");
         np.classList.remove("unread");
-        np.textContent = "";
-        np.title = "";
-        np.removeAttribute("aria-label");
+        setText(np, "");
+        if (np.title !== "") { np.title = ""; np.removeAttribute("aria-label"); }
       }
     }
     const intErr = sup.integrations_summary?.error || 0;
     const nie = $("#nav-int-err");
     if (nie) {
       nie.hidden = intErr === 0;
-      nie.textContent = intErr || "";
-      nie.title = intErr ? `${intErr} 个外部接入异常` : "";
+      setText(nie, intErr || "");
+      const errTitle = intErr ? `${intErr} 个外部接入异常` : "";
+      if (nie.title !== errTitle) nie.title = errTitle;
     }
     $("#nav-queue").hidden = !sup.queued;
-    $("#nav-queue").textContent = sup.queued;
+    setText($("#nav-queue"), sup.queued);
     $("#nav-collie").classList.toggle("active", view === "collie");
     $("#nav-auto").classList.toggle("active", view === "auto");
     $("#nav-devices").classList.toggle("active", view === "devices");
@@ -1755,17 +1862,31 @@
     apply();
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
   }
-  document.addEventListener("scroll", (ev) => {
+  // Defer scroll-anchor capture until scrolling settles (`scrollend` with debounced fallback)
+  // so continuous scrolling never triggers per-frame querySelectorAll + getBoundingClientRect.
+  // route() still captures synchronously before departing a view.
+  let scrollEndTimer = 0;
+  function captureOnScrollSettle(ev) {
     if (!booted || !view || performance.now() < programmaticScrollUntil) return;
     const sc = viewScroller(view);
     if (!sc || ev.target !== sc || sc.clientHeight <= 0) return;
-    if (scrollTrackRAF) return;
-    scrollTrackRAF = requestAnimationFrame(() => {
-      scrollTrackRAF = 0;
-      if (!view || performance.now() < programmaticScrollUntil) return;
-      captureViewScroll(view, view === "ext" ? extCur : current, navCur);
-    });
-  }, { capture: true, passive: true });
+    captureViewScroll(view, view === "ext" ? extCur : current, navCur);
+  }
+  if ("onscrollend" in window) {
+    document.addEventListener("scrollend", captureOnScrollSettle, { capture: true, passive: true });
+  } else {
+    document.addEventListener("scroll", (ev) => {
+      if (!booted || !view || performance.now() < programmaticScrollUntil) return;
+      const sc = viewScroller(view);
+      if (!sc || ev.target !== sc || sc.clientHeight <= 0) return;
+      clearTimeout(scrollEndTimer);
+      scrollEndTimer = setTimeout(() => {
+        scrollEndTimer = 0;
+        if (!view || performance.now() < programmaticScrollUntil) return;
+        captureViewScroll(view, view === "ext" ? extCur : current, navCur);
+      }, 140);
+    }, { capture: true, passive: true });
+  }
 
   function syncHistoryIndex() {
     if (typeof history.state?.collieIdx === "number") {
@@ -1972,18 +2093,24 @@
     if (e.role === "event" && (e.tone === "error" || e.tone === "blocked")) return true;
     return false;
   };
+  let _unreadInfoCache = { key: "", val: { firstUnreadId: "", count: 0 } };
   function computeUnreadInfo(allEntries = chatEntries(), cursorId = readCursorId) {
     const curN = entryIdNum(cursorId);
     if (curN <= 0) return { firstUnreadId: "", count: 0 };
+    const entries = allEntries || [];
+    const key = `${curN}|${entriesFingerprint(entries)}`;
+    if (key === _unreadInfoCache.key) return _unreadInfoCache.val;
     let firstUnreadId = "", count = 0;
-    for (const e of allEntries || []) {
+    for (const e of entries) {
       if (!isSubstantiveUnread(e)) continue;
       if (entryIdNum(e.id) > curN) {
         if (!firstUnreadId) firstUnreadId = e.id;
         count++;
       }
     }
-    return { firstUnreadId, count };
+    const val = { firstUnreadId, count };
+    _unreadInfoCache = { key, val };
+    return val;
   }
   function findUnreadRowEl(box, id) {
     if (!box || !id) return null;
@@ -2020,77 +2147,125 @@
     const parts = String(inner || "").split(/[\s·•\/,|｜\-—–+]+/).filter(Boolean);
     return !parts.length || parts.every((p) => META_PAREN_TOKEN_RE.test(p));
   }
-  function findWorkerForAgent(v) {
-    if (!v || !v.is_agent || v.name === ROUTER) return null;
+  let _workerLookupCache = { ref: null, len: -1, byPane: new Map(), byName: new Map() };
+  function getWorkerLookup() {
     const workers = sup.workers || [];
-    let best = null;
+    if (_workerLookupCache.ref === workers && _workerLookupCache.len === workers.length) {
+      return _workerLookupCache;
+    }
+    const byPane = new Map();
+    const byName = new Map();
     for (const w of workers) {
       if (!w) continue;
-      if (v.pane_id && w.pane_id === v.pane_id) {
-        if (!w.ended) return w;
-        if (!best) best = w;
+      if (w.pane_id) {
+        const prevP = byPane.get(w.pane_id);
+        if (!prevP || (prevP.ended && !w.ended)) byPane.set(w.pane_id, w);
+      }
+      if (w.name) {
+        const prevN = byName.get(w.name);
+        if (!prevN || (prevN.ended && !w.ended) || (!!prevN.ended === !!w.ended && (+new Date(w.created_at) || 0) >= (+new Date(prevN.created_at) || 0))) {
+          byName.set(w.name, w);
+        }
       }
     }
-    if (best && !best.ended) return best;
-    for (const w of workers) {
-      if (!w || w.name !== v.name) continue;
-      if (!best || (best.ended && !w.ended) || (!!best.ended === !!w.ended && (+new Date(w.created_at) || 0) >= (+new Date(best.created_at) || 0))) {
-        best = w;
-      }
-    }
-    return best;
+    _workerLookupCache = { ref: workers, len: workers.length, byPane, byName };
+    return _workerLookupCache;
   }
+  function findWorkerForAgent(v) {
+    if (!v || !v.is_agent || v.name === ROUTER) return null;
+    const { byPane, byName } = getWorkerLookup();
+    const byP = v.pane_id ? byPane.get(v.pane_id) : null;
+    if (byP && !byP.ended) return byP;
+    const byN = v.name ? byName.get(v.name) : null;
+    if (!byP) return byN || null;
+    if (!byN) return byP;
+    if (!byN.ended) return byN;
+    return (+new Date(byN.created_at) || 0) >= (+new Date(byP.created_at) || 0) ? byN : byP;
+  }
+  const _goalTaskCache = new Map();
+  const GOAL_LABEL_RE = /^(?:任务目标|核心目标|目标|任务说明|任务|需求|目的|主题|工作目标|Task|Goal|Objective)\s*(?:[（(][^）)\n]{1,36}[）)])?\s*[:：]\s*(.+)$/i;
+  const TASK_PREAMBLE_RE = /^(?:You are worker\b|请先阅读|先阅读|先读|先看下?规范|并发隔离|隔离要求|安全红线|工作目录|路径|仓库|分支|注意|提醒|约束|背景|上下文|环境|Before you start|Note:|Context:)/i;
+  const TASK_PATH_ONLY_RE = /^(?:~\/|\/[A-Za-z0-9_.\-/]+)\s*$/;
+  const TASK_LEAD_BRACKET_RE = /^(?:【([^】\n]{2,36})】|（([^）\n]{2,36})）)\s*(.*)$/;
   function extractGoalFromTask(rawTask) {
     const raw = String(rawTask || "").trim();
     if (!raw) return { goal: "", full: "" };
+    const hit = _goalTaskCache.get(raw);
+    if (hit !== undefined) return hit;
     const cleaned = raw
       .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
-    const lines = cleaned.split("\n").map(stripThreadMarkdownLine).filter(Boolean);
-    if (!lines.length) return { goal: "", full: "" };
-
-    const isPreamble = (l) =>
-      /^(?:You are worker\b|请先阅读|先阅读|先读|先看下?规范|并发隔离|隔离要求|安全红线|工作目录|路径|仓库|分支|注意|提醒|约束|背景|上下文|环境|Before you start|Note:|Context:)/i.test(l) ||
-      /^(?:~\/|\/[A-Za-z0-9_.\-/]+)\s*$/.test(l);
-    const GOAL_LABEL_RE = /^(?:任务目标|核心目标|目标|任务说明|任务|需求|目的|主题|工作目标|Task|Goal|Objective)\s*(?:[（(][^）)\n]{1,36}[）)])?\s*[:：]\s*(.+)$/i;
-
-    const first = lines[0];
-    const workerBracket = first.match(WORKER_TOPIC_PREFIX_RE);
-    if (workerBracket) {
-      const t = (workerBracket[2] || workerBracket[3] || "").trim();
-      if (t && !isMetaParen(t)) {
-        const rest = (workerBracket[4] || "").replace(/^[\s:：\-—–·•,，、]+/, "").trim();
-        const full = rest ? `${t}：${rest}` : t;
-        return { goal: rest ? `${t} · ${rest}` : t, full };
+    const rawLines = cleaned.split("\n");
+    const lines = [];
+    for (let i = 0; i < rawLines.length && lines.length < 14; i++) {
+      const s = stripThreadMarkdownLine(rawLines[i]);
+      if (s) lines.push(s);
+    }
+    let res;
+    if (!lines.length) {
+      res = { goal: "", full: "" };
+    } else {
+      const isPreamble = (l) => TASK_PREAMBLE_RE.test(l) || TASK_PATH_ONLY_RE.test(l);
+      const first = lines[0];
+      const workerBracket = first.match(WORKER_TOPIC_PREFIX_RE);
+      if (workerBracket) {
+        const t = (workerBracket[2] || workerBracket[3] || "").trim();
+        if (t && !isMetaParen(t)) {
+          const rest = (workerBracket[4] || "").replace(/^[\s:：\-—–·•,，、]+/, "").trim();
+          const full = rest ? `${t}：${rest}` : t;
+          res = { goal: rest ? `${t} · ${rest}` : t, full };
+        }
+      }
+      if (!res) {
+        const leadBracket = first.match(TASK_LEAD_BRACKET_RE);
+        if (leadBracket) {
+          const t = (leadBracket[1] || leadBracket[2] || "").trim();
+          if (t && !isMetaParen(t)) {
+            const rest = (leadBracket[3] || "").replace(/^[\s:：\-—–·•,，、]+/, "").trim();
+            const full = rest ? `${t}：${rest}` : t;
+            res = { goal: rest ? `${t} · ${rest}` : t, full };
+          }
+        }
+      }
+      if (!res) {
+        for (let i = 0; i < Math.min(lines.length, 10); i++) {
+          const gm = lines[i].match(GOAL_LABEL_RE);
+          if (gm && gm[1].trim()) {
+            const g = gm[1].trim();
+            res = { goal: g, full: g };
+            break;
+          }
+        }
+      }
+      if (!res) {
+        const natural = lines.find((l) => !isPreamble(l)) || first;
+        const full = lines.slice(0, 3).join(" ").trim();
+        res = { goal: natural, full: full.length > 260 ? full.slice(0, 260) + "…" : full };
       }
     }
-    const leadBracket = first.match(/^(?:【([^】\n]{2,36})】|（([^）\n]{2,36})）)\s*(.*)$/);
-    if (leadBracket) {
-      const t = (leadBracket[1] || leadBracket[2] || "").trim();
-      if (t && !isMetaParen(t)) {
-        const rest = (leadBracket[3] || "").replace(/^[\s:：\-—–·•,，、]+/, "").trim();
-        const full = rest ? `${t}：${rest}` : t;
-        return { goal: rest ? `${t} · ${rest}` : t, full };
-      }
-    }
-    for (let i = 0; i < Math.min(lines.length, 10); i++) {
-      const gm = lines[i].match(GOAL_LABEL_RE);
-      if (gm && gm[1].trim()) {
-        const g = gm[1].trim();
-        return { goal: g, full: g };
-      }
-    }
-    const natural = lines.find((l) => !isPreamble(l)) || first;
-    const full = lines.slice(0, 3).join(" ").trim();
-    return { goal: natural, full: full.length > 260 ? full.slice(0, 260) + "…" : full };
+    if (_goalTaskCache.size > 500) _goalTaskCache.clear();
+    _goalTaskCache.set(raw, res);
+    return res;
   }
+  const _bracketTopicReCache = new Map();
+  const _bracketTopicCache = new Map();
   function findWorkerBracketTopic(workerName, entries, minAtMs = 0) {
     if (!workerName || !entries?.length) return "";
-    const re = new RegExp(`(?:^|[^A-Za-z0-9_\\-/.\\\\])${escRegex(workerName)}[\`*\\s]*(?:（([^）\\n]{2,40})）|\\(([^)\\n]{2,40})\\))`);
+    const cacheKey = `${workerName}|${minAtMs}|${entriesFingerprint(entries)}`;
+    const hit = _bracketTopicCache.get(cacheKey);
+    if (hit !== undefined) return hit;
+    let re = _bracketTopicReCache.get(workerName);
+    if (!re) {
+      re = new RegExp(`(?:^|[^A-Za-z0-9_\\-/.\\\\])${escRegex(workerName)}[\`*\\s]*(?:（([^）\\n]{2,40})）|\\(([^)\\n]{2,40})\\))`);
+      if (_bracketTopicReCache.size > 500) _bracketTopicReCache.clear();
+      _bracketTopicReCache.set(workerName, re);
+    }
+    let out = "";
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i];
       if (!e || (e.role !== "collie" && e.role !== "user") || !e.text) continue;
+      if (!e.text.includes(workerName)) continue;
       if (minAtMs > 0) {
         const at = +new Date(e.at) || 0;
         if (at && at < minAtMs) continue;
@@ -2098,9 +2273,11 @@
       const m = cleanTextForWorkerMatch(e.text, e.role).match(re);
       if (!m) continue;
       const t = stripThreadMarkdownLine(m[1] || m[2] || "");
-      if (t && !isMetaParen(t)) return t;
+      if (t && !isMetaParen(t)) { out = t; break; }
     }
-    return "";
+    if (_bracketTopicCache.size > 500) _bracketTopicCache.clear();
+    _bracketTopicCache.set(cacheKey, out);
+    return out;
   }
   function agentTaskSummary(v, w = null, linkedThread = null, allEntries = null) {
     if (!v || !v.is_agent || v.name === ROUTER) return { short: "", full: "" };
@@ -2266,7 +2443,7 @@
     if (e.picked || e.resolved || e.dismissed) return false;
     return entryConfirmOptions(e).length > 0 || !!e.check || !!e.pending;
   }
-  function isThreadPending(th, allEntries = chatEntries(), pendIds = null) {
+  function isThreadPending(th, allEntries = chatEntries(), pendIds = null, idxByEntry = null) {
     const e = th?.latest;
     if (!e || e.role !== "collie") return false;
     if (e.picked || e.resolved || e.dismissed) return false;
@@ -2285,7 +2462,7 @@
     } else if (!entryHasConfirmMarker(e)) {
       return false;
     }
-    const idx = allEntries.indexOf(e);
+    const idx = idxByEntry ? (idxByEntry.get(e) ?? -1) : allEntries.indexOf(e);
     if (idx < 0) return entryHasConfirmMarker(e);
     const hasOpts = entryConfirmOptions(e).length > 0;
     let otherCollie = false;
@@ -2304,10 +2481,160 @@
     const clean = String(text || "").replace(/\s+/g, " ").trim();
     return clean.length > max ? clean.slice(0, max) + "…" : clean;
   }
+  // Lightweight content fingerprints & compiled regex / text-match caches for thread/worker analysis.
+  const _entriesFpWeak = new WeakMap();
+  const _workerReCache = new Map();
+  let _textWorkersCacheKey = "";
+  const _textWorkersCache = new Map();
+  let _replyThreadsCache = { key: "", val: null };
+  function fnvHashStr(h, s) {
+    if (!s) return h;
+    for (let i = 0, n = s.length; i < n; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return h;
+  }
+  function entriesFingerprint(entries) {
+    const arr = entries || [];
+    const n = arr.length;
+    if (!n) return "0";
+    const first = arr[0], last = arr[n - 1];
+    const fk = entryKey(first), lk = entryKey(last);
+    const lt = last?.text || "", lre = last?.re?.entry || "";
+    const cached = _entriesFpWeak.get(arr);
+    if (cached && cached.n === n && cached.fk === fk && cached.lk === lk && cached.lt === lt && cached.lre === lre) {
+      return cached.fp;
+    }
+    let h = 2166136261;
+    for (let i = 0; i < n; i++) {
+      const e = arr[i];
+      if (!e) { h = Math.imul(h ^ 1, 16777619); continue; }
+      h = fnvHashStr(h, e.id || e._localId || "");
+      h = fnvHashStr(h, e.role || "");
+      h = fnvHashStr(h, e.at || "");
+      h = fnvHashStr(h, e.ref || "");
+      h = fnvHashStr(h, e.tone || "");
+      if (e.re) {
+        h = fnvHashStr(h, e.re.entry || "");
+        h = fnvHashStr(h, e.re.worker || "");
+        h = fnvHashStr(h, e.re.from || "");
+        h = fnvHashStr(h, e.re.kind || "");
+        h = fnvHashStr(h, e.re.who || "");
+      }
+      if (e.worker) h = fnvHashStr(h, e.worker);
+      if (e.from) h = fnvHashStr(h, e.from);
+      if (e.action && typeof e.action === "object") {
+        h = fnvHashStr(h, e.action.worker || e.action.ref || e.action.target || e.action.name || "");
+      }
+      if (e.check) h = Math.imul(h ^ 37, 16777619);
+      if (e.pending) h = Math.imul(h ^ 41, 16777619);
+      if (e.picked || e.resolved || e.dismissed) h = Math.imul(h ^ 43, 16777619);
+      if (Array.isArray(e.options)) h = Math.imul(h ^ (e.options.length + 53), 16777619);
+      if (e.text) {
+        const s = e.text, len = s.length;
+        h = Math.imul(h ^ len, 16777619);
+        if (len <= 256) {
+          h = fnvHashStr(h, s);
+        } else {
+          for (let j = 0; j < 64; j++) h = Math.imul(h ^ s.charCodeAt(j), 16777619);
+          for (let j = len - 64; j < len; j++) h = Math.imul(h ^ s.charCodeAt(j), 16777619);
+          const step = Math.max(1, (len - 128) >> 5);
+          for (let j = 64; j < len - 64; j += step) h = Math.imul(h ^ s.charCodeAt(j), 16777619);
+        }
+      }
+    }
+    const fp = `${n}:${fk}:${lk}:${h >>> 0}`;
+    _entriesFpWeak.set(arr, { n, fk, lk, lt, lre, fp });
+    return fp;
+  }
+  function workerNameRe(name) {
+    let re = _workerReCache.get(name);
+    if (!re) {
+      re = new RegExp(`(?:^|[^A-Za-z0-9_\\-/.\\\\])${escRegex(name)}(?![A-Za-z0-9_\\-/\\\\]|\\.[A-Za-z0-9_])`);
+      if (_workerReCache.size > 1000) _workerReCache.clear();
+      _workerReCache.set(name, re);
+    }
+    return re;
+  }
+  function matchWorkerNamesInText(cleaned, workerNames, namesKey) {
+    if (!cleaned || !workerNames.length) return [];
+    if (_textWorkersCacheKey !== namesKey) {
+      _textWorkersCacheKey = namesKey;
+      _textWorkersCache.clear();
+    }
+    let hits = _textWorkersCache.get(cleaned);
+    if (hits !== undefined) return hits;
+    hits = [];
+    for (let i = 0; i < workerNames.length; i++) {
+      const name = workerNames[i];
+      if (cleaned.includes(name) && workerNameRe(name).test(cleaned)) hits.push(name);
+    }
+    if (_textWorkersCache.size > 4000) _textWorkersCache.clear();
+    _textWorkersCache.set(cleaned, hits);
+    return hits;
+  }
+  let _kwFpCache = { wRef: null, wLen: -1, aRef: null, aLen: -1, hRef: null, hLen: -1, fp: "" };
+  function knownWorkersFingerprint() {
+    const workers = sup.workers || [], agents = state.agents || [], hs = hist || [];
+    if (_kwFpCache.wRef === workers && _kwFpCache.wLen === workers.length &&
+      _kwFpCache.aRef === agents && _kwFpCache.aLen === agents.length &&
+      _kwFpCache.hRef === hs && _kwFpCache.hLen === hs.length) {
+      return _kwFpCache.fp;
+    }
+    let h = 2166136261, n = 0;
+    for (let i = 0; i < workers.length; i++) { const nm = workers[i]?.name; if (nm) { h = fnvHashStr(h, nm); n++; } }
+    for (let i = 0; i < agents.length; i++) { const nm = agents[i]?.name; if (nm) { h = fnvHashStr(h, nm); n++; } }
+    for (let i = 0; i < hs.length; i++) { const nm = hs[i]?.name; if (nm) { h = fnvHashStr(h, nm); n++; } }
+    const fp = `${n}:${h >>> 0}`;
+    _kwFpCache = { wRef: workers, wLen: workers.length, aRef: agents, aLen: agents.length, hRef: hs, hLen: hs.length, fp };
+    return fp;
+  }
+  let _wsFpCache = { wRef: null, wLen: -1, aRef: null, aLen: -1, hRef: null, hLen: -1, fp: "" };
+  function workerStateFingerprint() {
+    const workers = sup.workers || [], agents = state.agents || [], hs = hist || [];
+    if (_wsFpCache.wRef === workers && _wsFpCache.wLen === workers.length &&
+      _wsFpCache.aRef === agents && _wsFpCache.aLen === agents.length &&
+      _wsFpCache.hRef === hs && _wsFpCache.hLen === hs.length) {
+      return _wsFpCache.fp;
+    }
+    let h = 2166136261;
+    for (let i = 0; i < workers.length; i++) {
+      const w = workers[i];
+      if (!w) continue;
+      h = fnvHashStr(h, w.name || "");
+      h = fnvHashStr(h, w.status || "");
+      h = fnvHashStr(h, w.pane_id || "");
+      h = fnvHashStr(h, w.thread || "");
+      h = fnvHashStr(h, w.created_at || "");
+      h = fnvHashStr(h, w.report_at || "");
+      h = Math.imul(h ^ (w.ended ? 1 : 2), 16777619);
+    }
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      if (!a) continue;
+      h = fnvHashStr(h, a.name || "");
+      h = fnvHashStr(h, a.status || "");
+      h = fnvHashStr(h, a.pane_id || "");
+      h = fnvHashStr(h, a.kind || "");
+      h = fnvHashStr(h, a.topic || "");
+    }
+    for (let i = 0; i < hs.length; i++) {
+      const x = hs[i];
+      if (!x) continue;
+      h = fnvHashStr(h, x.id || "");
+      h = fnvHashStr(h, x.name || "");
+      h = fnvHashStr(h, x.ended || "");
+    }
+    const fp = `${workers.length}:${agents.length}:${hs.length}:${h >>> 0}`;
+    _wsFpCache = { wRef: workers, wLen: workers.length, aRef: agents, aLen: agents.length, hRef: hs, hLen: hs.length, fp };
+    return fp;
+  }
   // Group user/collie messages connected by `re.entry` into natural reply threads,
   // and fold background worker report replies back into their worker's origin topic thread.
   function computeReplyThreads(allEntries) {
     const entries = allEntries || [];
+    const cacheKey = `${entriesFingerprint(entries)}|${knownWorkersFingerprint()}`;
+    if (_replyThreadsCache.val && _replyThreadsCache.key === cacheKey) {
+      return _replyThreadsCache.val;
+    }
     const byId = new Map();
     const knownWorkers = new Set();
     const addKnownWorker = (raw) => {
@@ -2370,10 +2697,8 @@
       if (m.re.who && knownWorkers.has(String(m.re.who).trim())) return "";
       return pid;
     };
-    const workerRegexes = [];
-    for (const name of knownWorkers) {
-      workerRegexes.push([name, new RegExp(`(?:^|[^A-Za-z0-9_\\-/.\\\\])${escRegex(name)}(?![A-Za-z0-9_\\-/\\\\]|\\.[A-Za-z0-9_])`)]);
-    }
+    const knownWorkerNames = [...knownWorkers];
+    const knownNamesKey = knownWorkerNames.join("\0");
     const missingRoots = new Map();
     const mergedRoot = new Map(); // entryKey -> origin thread rootId (for worker-report replies)
     const workerReportOf = new Map(); // entryKey -> worker name (for Collie replies quoting a worker report)
@@ -2450,13 +2775,13 @@
       recordOrigin(m.re?.worker, r);
       recordActionOrigin(m.action, r);
       recordActionOrigin(m.actions, r);
-      if (workerRegexes.length && m.text) {
+      if (knownWorkerNames.length && originRootByWorker.size < knownWorkerNames.length && m.text) {
         const cleaned = cleanTextForWorkerMatch(m.text, m.role);
         if (cleaned) {
-          for (const [wName, re] of workerRegexes) {
-            if (!originRootByWorker.has(wName) && re.test(cleaned)) {
-              originRootByWorker.set(wName, r);
-            }
+          const hits = matchWorkerNamesInText(cleaned, knownWorkerNames, knownNamesKey);
+          for (let hi = 0; hi < hits.length; hi++) {
+            const wName = hits[hi];
+            if (!originRootByWorker.has(wName)) originRootByWorker.set(wName, r);
           }
         }
       }
@@ -2514,7 +2839,9 @@
       const nextR = i + 1 < visibleTalk.length ? msgToRoot.get(entryKey(visibleTalk[i + 1])) : null;
       if (nextR !== r) showEntryOn.add(k);
     }
-    return { byId, threads, allThreads, msgToRoot, allMsgToRoot, showEntryOn, parentOf, workerReportOf, originRootByWorker };
+    const out = { byId, threads, allThreads, msgToRoot, allMsgToRoot, showEntryOn, parentOf, workerReportOf, originRootByWorker };
+    _replyThreadsCache = { key: cacheKey, val: out };
+    return out;
   }
   // Items dismissed locally via × before the hub's next stream frame lands.
   const dismissedLocal = new Set();
@@ -2541,6 +2868,7 @@
       tid = setTimeout(done, 120);
     });
   }
+  let _lastJumpUiKey = "";
   function updateSuperJump() {
     const btn = $("#super-jump"), sc = $("#super-thread")?.parentElement;
     if (!btn || !sc) return;
@@ -2549,6 +2877,9 @@
     const unreadCount = view === "collie" ? computeUnreadInfo().count : 0;
     const threshold = unreadCount > 0 ? AT_BOTTOM_PX : SUPER_JUMP_DIST;
     const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > threshold;
+    const uiKey = `${show ? 1 : 0}|${unreadCount}`;
+    if (uiKey === _lastJumpUiKey && btn.hidden === !show) return;
+    _lastJumpUiKey = uiKey;
     const badgeText = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
     const ariaText = unreadCount > 0 ? `回到底部，${unreadCount} 条未读` : "回到底部";
     const badgeEl = $("#super-jump-badge", btn);
@@ -2716,8 +3047,10 @@
       listEl.hidden = false;
     } else {
       listEl.hidden = true;
-      listEl.innerHTML = "";
-      pendingListSig = "";
+      if (pendingListSig !== "") {
+        listEl.innerHTML = "";
+        pendingListSig = "";
+      }
     }
     updateSuperJump();
   }
@@ -2740,11 +3073,31 @@
   // Older chat, loaded a page at a time when you ask: the hub only sends the
   // latest 200 lines. olderMore: whether there is more before that.
   let older = [], olderMore = null, olderBusy = false, superScrollRAF = 0;
+  let _chatEntriesCache = null;
   function chatEntries() {
-    const have = new Set(sup.entries.map((e) => e.id));
-    for (let i = pendingSays.length - 1; i >= 0; i--) if (pendingSays[i].id && have.has(pendingSays[i].id)) pendingSays.splice(i, 1);
-    const old = older.length ? older.filter((e) => !have.has(e.id)) : [];
-    return old.length || pendingSays.length ? [...old, ...sup.entries, ...pendingSays] : sup.entries;
+    const supArr = sup.entries || [];
+    if (!older.length && !pendingSays.length) return supArr;
+    if (pendingSays.length) {
+      const have = new Set(supArr.map((e) => e.id));
+      for (let i = pendingSays.length - 1; i >= 0; i--) {
+        if (pendingSays[i].id && have.has(pendingSays[i].id)) pendingSays.splice(i, 1);
+      }
+      if (!older.length && !pendingSays.length) return supArr;
+    }
+    const oldArr = older;
+    const pLen = pendingSays.length;
+    const pKey = pLen ? pendingSays.map((m) => `${m._localId || ""}:${m.id || ""}:${m.text?.length || 0}`).join("|") : "";
+    if (_chatEntriesCache &&
+      _chatEntriesCache.supArr === supArr && _chatEntriesCache.supLen === supArr.length &&
+      _chatEntriesCache.oldArr === oldArr && _chatEntriesCache.oldLen === oldArr.length &&
+      _chatEntriesCache.pKey === pKey) {
+      return _chatEntriesCache.out;
+    }
+    const have = new Set(supArr.map((e) => e.id));
+    const old = oldArr.length ? oldArr.filter((e) => !have.has(e.id)) : [];
+    const out = old.length || pLen ? [...old, ...supArr, ...pendingSays] : supArr;
+    _chatEntriesCache = { supArr, supLen: supArr.length, oldArr, oldLen: oldArr.length, pKey, out };
+    return out;
   }
   // More before what is shown? Until asked, guess from a full page.
   const canLoadOlder = () => olderMore ?? !!sup.earlier;
@@ -3157,17 +3510,25 @@
     scroller.scrollTop = wantTop;
     return { fitsAtBottom: false, wantTop };
   }
-  function applyInitialAnchor() {
+  function applyInitialAnchor(fromResize = false) {
     if (!collieInitialAnchor) return;
     if (view !== "collie") { cancelInitialAnchor(); return; }
     if (performance.now() > collieInitialAnchor.until) { cancelInitialAnchor(); return; }
     if (activeThreadRoot || collieLayoutLock || olderBusy) return;
     const box = $("#super-thread"), sc = box?.parentElement;
     if (!sc || sc.clientHeight <= 0) return;
+    const sh = sc.scrollHeight, ch = sc.clientHeight;
+    if (fromResize && sh === collieInitialAnchor.lastH && ch === collieInitialAnchor.lastCH) {
+      if (collieInitialAnchor.mode === "bottom" && sh - sc.scrollTop - ch <= 1) return;
+    }
+    collieInitialAnchor.lastH = sh;
+    collieInitialAnchor.lastCH = ch;
     if (collieInitialAnchor.mode === "bottom") {
       markProgrammaticScroll(120);
-      sc.scrollTop = sc.scrollHeight;
-      captureViewScroll("collie", null, navCur);
+      sc.scrollTop = sh;
+      const snap = { routeKey: "collie", atBottom: true, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0 };
+      if (typeof navCur === "number") scrollByIdx.set(navCur, snap);
+      scrollByRoute.set("collie", snap);
       updateSuperJump();
       maybeScheduleReadAtBottom();
       return;
@@ -3191,14 +3552,15 @@
     const until = performance.now() + INITIAL_ANCHOR_MS;
     let ro = null;
     if (typeof ResizeObserver === "function") {
-      ro = new ResizeObserver(() => { applyInitialAnchor(); });
+      ro = new ResizeObserver(() => { applyInitialAnchor(true); });
       try { ro.observe(box); } catch {}
       try { ro.observe(sc); } catch {}
     }
     const timer = setTimeout(cancelInitialAnchor, INITIAL_ANCHOR_MS);
-    collieInitialAnchor = { mode, until, timer, ro };
+    collieInitialAnchor = { mode, until, timer, ro, lastH: sc.scrollHeight, lastCH: sc.clientHeight };
   }
 
+  let superBodyKey = "", superDomGen = 0, superAsksGen = 0;
   function renderSuper(opts) {
     const force = opts === true || !!opts?.force;
     const forceBottom = !!opts?.scrollBottom;
@@ -3214,30 +3576,34 @@
     const shouldApplyUnreadAnchor = (wantUnreadAnchor || !unreadAnchorApplied) && !forceBottom && !holdRestore && !activeThreadRoot && view === "collie";
     const liveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread" ? captureCollieAnchor(scroller) : null;
     const prevScrollTop = scroller.scrollTop;
-    const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew.innerHTML;
+    const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew._html ?? crew.innerHTML;
     const r = sup.router || {};
-    $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "";
+    setText($("#router-kind"), KIND_LABEL[r.kind] || r.kind || "");
     const st = $("#router-status");
-    st.className = "status " + collieDot(r.status);
-    st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`;
+    const stCls = "status " + collieDot(r.status);
+    if (st.className !== stCls) st.className = stCls;
+    setHTML(st, `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`);
     // While Collie is busy, say so where the answer will appear, as the
     // other agents' sessions do; the header keeps the resting states.
     const busy = r.replied ? null : { working: "Collie 在想…", starting: "Collie 正在醒来…", blocked: "Collie 在等你在电脑上确认", dreaming: "Collie 在做梦，整理完记忆会自己醒来" }[r.status];
     st.hidden = !!busy;
     if (busy) {
       // In Collie's own column, where its next message will appear.
-      wk.className = "working-row say " + (r.status === "working" ? "working" : collieDot(r.status));
+      const wkCls = "working-row say " + (r.status === "working" ? "working" : collieDot(r.status));
+      if (wk.className !== wkCls) wk.className = wkCls;
       if (busy !== prevBusy) wk.innerHTML = `<span class="avatar"><img src="/icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
     }
     wk.hidden = !busy;
-    $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";
+    setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "");
     const cx = $("#router-ctx");
-    cx.textContent = r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "";
+    setText(cx, r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "");
     cx.classList.toggle("warn", !!r.handover || (r.rotate_at > 0 && r.context >= r.rotate_at - 10));
-    cx.title = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
+    const cxTitle = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
+    if (cx.title !== cxTitle) cx.title = cxTitle;
     renderRouterModel(r);
     renderRouterPendingBars();
-    $$('[data-act="pause"]').forEach((b) => b.textContent = sup.paused ? "恢复投递" : "暂停投递");
+    const pauseLabel = sup.paused ? "恢复投递" : "暂停投递";
+    $$('[data-act="pause"]').forEach((b) => setText(b, pauseLabel));
 
     const active = sup.workers.filter((w) => !w.ended);
     if (view === "collie") renderTarget();
@@ -3245,11 +3611,67 @@
       const pane = paneOf(w.name);
       return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
     }).join("");
-    if (crewHTML !== prevCrew) crew.innerHTML = crewHTML;
-    let html = "", prevRole = "", curThreadInfo = { threads: new Map(), msgToRoot: new Map() };
-    if (!sup.entries.length && !pendingSays.length) {
-      renderCollieThreadsMenu(curThreadInfo);
-      html = `<div class="hello"><img src="/icon.svg" alt="">
+    const crewChanged = setHTML(crew, crewHTML) || crewHTML !== prevCrew;
+
+    const allEntries = chatEntries();
+    const isEmptyChat = !sup.entries.length && !pendingSays.length;
+    let curThreadInfo = { threads: new Map(), allThreads: new Map(), msgToRoot: new Map(), allMsgToRoot: new Map() };
+    const pendList = activePending();
+    const pinList = activePinned();
+    const needs = state.agents.filter((a) => a.status === "blocked");
+    for (const a of needs) {
+      const got = superAsks.get(a.pane_id);
+      if (!got || Date.now() - got.at > 4000) loadSuperAsk(a.pane_id);
+    }
+
+    if (!isEmptyChat) {
+      const unreadNow = computeUnreadInfo(allEntries, readCursorId);
+      if (shouldApplyUnreadAnchor) {
+        sessionUnreadMarkerId = unreadNow.firstUnreadId;
+      } else if (!sessionUnreadMarkerId && (!atBottom || document.hidden) && unreadNow.firstUnreadId) {
+        sessionUnreadMarkerId = unreadNow.firstUnreadId;
+      }
+      curThreadInfo = computeReplyThreads(allEntries);
+      if (activeThreadRoot && !curThreadInfo.allThreads.has(activeThreadRoot) && activeThreadAnchor) {
+        const migrated = curThreadInfo.allMsgToRoot.get(activeThreadAnchor);
+        if (migrated && curThreadInfo.allThreads.has(migrated)) activeThreadRoot = migrated;
+      }
+      renderCollieThreadsMenu(curThreadInfo, allEntries);
+    } else {
+      renderCollieThreadsMenu(curThreadInfo, allEntries);
+    }
+
+    // Fast structural key for #super-thread body: skip building 200-800+ entry HTML string when unchanged.
+    const nextBodyKey = [
+      isEmptyChat ? "E" : "L",
+      entriesFingerprint(allEntries),
+      sessionUnreadMarkerId || "",
+      olderBusy ? 1 : 0,
+      dayBounds(),
+      sup.hasPending ? 1 : 0,
+      pendList.map((p) => p.id).join(","),
+      dismissedLocal.size ? [...dismissedLocal].join(",") : "",
+      pinList.map((p) => p.id).join(","),
+      workerStateFingerprint(),
+      superAsksGen,
+    ].join("|");
+
+    renderPendingBar();
+    const busyChanged = (busy || "") !== prevBusy;
+
+    if (!force && nextBodyKey === superBodyKey) {
+      if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor) {
+        syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
+        if (activeThreadRoot) syncThreadDrawer();
+        updateSuperJump();
+        return;
+      }
+      syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
+      if (activeThreadRoot) syncThreadDrawer();
+    } else {
+      let html = "", prevRole = "";
+      if (isEmptyChat) {
+        html = `<div class="hello"><img src="/icon.svg" alt="">
         <h3>一个入口，管一群 agent</h3>
         <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
         <div class="ideas">
@@ -3257,171 +3679,143 @@
           <button data-idea="每天早上 9 点帮我看一下各个任务的进展，有卡住的就告诉我。">每天 9 点汇报进展</button>
           <button data-idea="以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。">把 GitHub 评论变成任务</button>
         </div></div>`;
-    } else {
-      let prev = "", lastAt = 0;
-      // What a reply is about shows as a quoted line, unless it is plain
-      // from what is right above: the first answer to your last message, or
-      // a word on the worker whose line it follows.
-      let lastUser = "", sinceUser = 0, lastEvent = "", lastEventId = "", lastCollie = "", sinceCollie = 0;
-      const allEntries = chatEntries();
-      const unreadNow = computeUnreadInfo(allEntries, readCursorId);
-      if (shouldApplyUnreadAnchor) {
-        sessionUnreadMarkerId = unreadNow.firstUnreadId;
-      } else if (!sessionUnreadMarkerId && (!atBottom || document.hidden) && unreadNow.firstUnreadId) {
-        sessionUnreadMarkerId = unreadNow.firstUnreadId;
-      }
-      const threadInfo = computeReplyThreads(allEntries);
-      curThreadInfo = threadInfo;
-      if (activeThreadRoot && !threadInfo.allThreads.has(activeThreadRoot) && activeThreadAnchor) {
-        const migrated = threadInfo.allMsgToRoot.get(activeThreadAnchor);
-        if (migrated && threadInfo.allThreads.has(migrated)) activeThreadRoot = migrated;
-      }
-      const pendIds = new Set(activePending().map((p) => p.id));
-      const pinIds = new Set(activePinned().map((p) => p.id));
-      const replyOpts = (e, idx) => replyOptsMarkup(e, idx, allEntries, pendIds);
-      const findWorkerEventBefore = (worker, idx) => {
-        if (!worker) return "";
-        for (let j = idx - 1; j >= 0; j--) {
-          const prev = allEntries[j];
-          if (prev.role !== "event" || prev.ref !== worker || !prev.id) continue;
-          if (prev.ref === ROUTER && prev.tone === "info") continue;
-          if (workerChatter(prev)) continue;
-          return prev.id;
-        }
-        return "";
-      };
-      const quote = (e, idx) => {
-        const q = e.re;
-        if (!q) return "";
-        if (q.entry && q.entry === lastUser && !sinceUser) return "";
-        if (q.entry && q.entry === lastCollie && !sinceCollie) return "";
-        if (q.entry && q.entry === lastEventId) return "";
-        if (!q.entry && q.worker && q.worker === lastEvent) return "";
-        const targetId = q.entry || (q.worker ? findWorkerEventBefore(q.worker, idx) : "");
-        const body = `<span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}`;
-        const k = entryKey(e);
-        const tr = threadInfo.allMsgToRoot.get(k) || "";
-        const trTh = tr ? threadInfo.allThreads.get(tr) : null;
-        const isWorkerQuote = !!(q.worker || threadInfo.workerReportOf?.has(k) || (targetId && threadInfo.byId.get(targetId)?.role === "event"));
-        const openRoot = !isWorkerQuote && trTh && trTh.totalCount >= 2 ? tr : "";
-        if (targetId) {
-          return `<a class="re" href="#" data-goto="${esc(targetId)}"${openRoot ? ` data-thread-root="${esc(openRoot)}"` : ""} title="${esc(q.text)}">${body}</a>`;
-        }
-        if (q.worker) {
-          return `<a class="re" href="#" data-goto-worker="${esc(q.worker)}" data-before="${esc(e.id || "")}" title="${esc(q.text)}">${body}</a>`;
-        }
-        return `<div class="re" title="${esc(q.text)}">${body}</div>`;
-      };
-      const threadEntryFor = (e) => {
-        const k = entryKey(e);
-        const r = k ? threadInfo.msgToRoot.get(k) : "";
-        if (!r || !threadInfo.showEntryOn.has(k)) return "";
-        const th = threadInfo.threads.get(r);
-        if (!th) return "";
-        return `<button type="button" class="thread-entry" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="false">` +
-          `${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
-      };
-      renderCollieThreadsMenu(threadInfo, allEntries);
-      for (let ei = 0; ei < allEntries.length; ei++) {
-        const e = allEntries[ei];
-        if (isHiddenSuperEntry(e)) continue;
-        if (sessionUnreadMarkerId && e.id === sessionUnreadMarkerId) {
-          html += `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(e.id)}" role="separator" aria-label="以下为未读消息"><span>以下为未读消息</span></div>`;
-          prev = "";
-        }
-        // A quiet line with the time when the talk picks up again after a
-        // while (or on a new day); hovering a message shows its exact time.
-        const at = +new Date(e.at) || 0;
-        // A new day always gets its line, even before an event (whose own
-        // time has no date); talk after a pause gets one too.
-        const talk = e.role === "user" || e.role === "collie";
-        const newDay = at && lastAt && new Date(at).toDateString() !== new Date(lastAt).toDateString();
-        if (at && (newDay || (talk && (!lastAt || at - lastAt > 10 * 60e3)))) {
-          html += `<div class="time-sep">${esc(sepTime(at))}</div>`;
-          prev = "";
-        }
-        if (at) lastAt = at;
-        const cont = e.role === "collie" && prev === "collie";
-        prev = prevRole = e.role;
-        const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
-        const pinned = !!(e.id && pinIds.has(e.id));
-        const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
-        const eKey = entryKey(e);
-        const eRoot = eKey ? (threadInfo.allMsgToRoot.get(eKey) || "") : "";
-        const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-        if (e.role === "user") {
-          const entryBtn = threadEntryFor(e);
-          const acts = mineActs(e, at, pinned, entryBtn ? "" : eRoot);
-          const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-          html += `<div class="mine${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${foot}</div>`;
-          lastUser = e.id; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
-        } else if (e.role === "collie") {
-          const entryBtn = threadEntryFor(e);
-          const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot);
-          const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-          html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${foot}</div></div>`;
-          sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = e.id; sinceCollie = 0;
-        } else {
-          lastEvent = e.ref || "";
-          lastEventId = e.id || "";
-          // A handover/dream line opens the session Collie rotated out of
-          // (explicit h:<id>, or matched by time for older rows); a worker's
-          // line opens its ended record once gone, else its live pane.
-          const hid = e.ref?.startsWith("h:") ? e.ref.slice(2)
-            : (!e.ref && (e.text?.includes("换了一个新会话") || (e.text?.includes("睡一会儿") && e.text?.includes("做梦"))) ? routerHist(e.at)?.id : "");
-          const past = !hid && e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
-          const pane = !hid && !past && e.ref ? paneOf(e.ref) : null;
-          const hTitle = e.text?.includes("做梦") ? "翻看做梦前的对话" : "翻看交接前的对话";
-          const tag = hid ? `a href="#/h/${encodeURIComponent(hid)}" title="${hTitle}"`
-            : past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"`
-            : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
-          // A spawn line stays still even while its worker runs: the sidebar
-          // (or mobile crew strip) carries the spinner and the row already says "还在跑".
-          const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
-          const busy = w && workerBusy(w);
-          const stuck = w && !w.ended && w.status === "blocked";
-          const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "running" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
-          // A spawn line carries its worker's state, in place of a line per change.
-          const state = w ? (w.ended ? "已结束" : busy ? "还在跑" : stuck ? "等你确认" : "") : "";
-          const idAttr = e.id ? ` data-id="${esc(e.id)}"` : "";
-          const refAttr = e.ref ? ` data-ref="${esc(e.ref)}"` : "";
-          html += `<${tag} class="event${e.tone === "error" ? " error" : ""}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span>${state ? `<span class="wstate">${state}</span>` : ""}</${tag.split(" ")[0]}>`;
+      } else {
+        let prev = "", lastAt = 0;
+        let lastUser = "", sinceUser = 0, lastEvent = "", lastEventId = "", lastCollie = "", sinceCollie = 0;
+        const threadInfo = curThreadInfo;
+        const pendIds = new Set(pendList.map((p) => p.id));
+        const pinIds = new Set(pinList.map((p) => p.id));
+        const workerByNameMap = getWorkerLookup().byName;
+        const replyOpts = (e, idx) => replyOptsMarkup(e, idx, allEntries, pendIds);
+        const findWorkerEventBefore = (worker, idx) => {
+          if (!worker) return "";
+          for (let j = idx - 1; j >= 0; j--) {
+            const prev = allEntries[j];
+            if (prev.role !== "event" || prev.ref !== worker || !prev.id) continue;
+            if (prev.ref === ROUTER && prev.tone === "info") continue;
+            if (workerChatter(prev)) continue;
+            return prev.id;
+          }
+          return "";
+        };
+        const quote = (e, idx) => {
+          const q = e.re;
+          if (!q) return "";
+          if (q.entry && q.entry === lastUser && !sinceUser) return "";
+          if (q.entry && q.entry === lastCollie && !sinceCollie) return "";
+          if (q.entry && q.entry === lastEventId) return "";
+          if (!q.entry && q.worker && q.worker === lastEvent) return "";
+          const targetId = q.entry || (q.worker ? findWorkerEventBefore(q.worker, idx) : "");
+          const body = `<span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}`;
+          const k = entryKey(e);
+          const tr = threadInfo.allMsgToRoot.get(k) || "";
+          const trTh = tr ? threadInfo.allThreads.get(tr) : null;
+          const isWorkerQuote = !!(q.worker || threadInfo.workerReportOf?.has(k) || (targetId && threadInfo.byId.get(targetId)?.role === "event"));
+          const openRoot = !isWorkerQuote && trTh && trTh.totalCount >= 2 ? tr : "";
+          if (targetId) {
+            return `<a class="re" href="#" data-goto="${esc(targetId)}"${openRoot ? ` data-thread-root="${esc(openRoot)}"` : ""} title="${esc(q.text)}">${body}</a>`;
+          }
+          if (q.worker) {
+            return `<a class="re" href="#" data-goto-worker="${esc(q.worker)}" data-before="${esc(e.id || "")}" title="${esc(q.text)}">${body}</a>`;
+          }
+          return `<div class="re" title="${esc(q.text)}">${body}</div>`;
+        };
+        const threadEntryFor = (e) => {
+          const k = entryKey(e);
+          const r = k ? threadInfo.msgToRoot.get(k) : "";
+          if (!r || !threadInfo.showEntryOn.has(k)) return "";
+          const th = threadInfo.threads.get(r);
+          if (!th) return "";
+          return `<button type="button" class="thread-entry" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="false">` +
+            `${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
+        };
+        for (let ei = 0; ei < allEntries.length; ei++) {
+          const e = allEntries[ei];
+          if (isHiddenSuperEntry(e)) continue;
+          if (sessionUnreadMarkerId && e.id === sessionUnreadMarkerId) {
+            html += `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(e.id)}" role="separator" aria-label="以下为未读消息"><span>以下为未读消息</span></div>`;
+            prev = "";
+          }
+          const at = +new Date(e.at) || 0;
+          const talk = e.role === "user" || e.role === "collie";
+          const newDay = at && lastAt && Math.floor((at - new Date(at).getTimezoneOffset() * 60000) / 86400000) !== Math.floor((lastAt - new Date(lastAt).getTimezoneOffset() * 60000) / 86400000);
+          if (at && (newDay || (talk && (!lastAt || at - lastAt > 10 * 60e3)))) {
+            html += `<div class="time-sep">${esc(sepTime(at))}</div>`;
+            prev = "";
+          }
+          if (at) lastAt = at;
+          const cont = e.role === "collie" && prev === "collie";
+          prev = prevRole = e.role;
+          const pinned = !!(e.id && pinIds.has(e.id));
+          const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
+          const eKey = entryKey(e);
+          const eRoot = eKey ? (threadInfo.allMsgToRoot.get(eKey) || "") : "";
+          const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
+          if (e.role === "user") {
+            const entryBtn = threadEntryFor(e);
+            const acts = mineActs(e, at, pinned, entryBtn ? "" : eRoot);
+            const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
+            html += `<div class="mine${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${foot}</div>`;
+            lastUser = e.id; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
+          } else if (e.role === "collie") {
+            const entryBtn = threadEntryFor(e);
+            const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot);
+            const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
+            html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${foot}</div></div>`;
+            sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = e.id; sinceCollie = 0;
+          } else {
+            lastEvent = e.ref || "";
+            lastEventId = e.id || "";
+            const hid = e.ref?.startsWith("h:") ? e.ref.slice(2)
+              : (!e.ref && (e.text?.includes("换了一个新会话") || (e.text?.includes("睡一会儿") && e.text?.includes("做梦"))) ? routerHist(e.at)?.id : "");
+            const past = !hid && e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
+            const pane = !hid && !past && e.ref ? paneOf(e.ref) : null;
+            const hTitle = e.text?.includes("做梦") ? "翻看做梦前的对话" : "翻看交接前的对话";
+            const tag = hid ? `a href="#/h/${encodeURIComponent(hid)}" title="${hTitle}"`
+              : past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"`
+              : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
+            const w = e.tone === "spawn" ? (workerByNameMap.get(e.ref) || null) : null;
+            const busyW = w && workerBusy(w);
+            const stuck = w && !w.ended && w.status === "blocked";
+            const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busyW ? "running" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
+            const wstate = w ? (w.ended ? "已结束" : busyW ? "还在跑" : stuck ? "等你确认" : "") : "";
+            const idAttr = e.id ? ` data-id="${esc(e.id)}"` : "";
+            const refAttr = e.ref ? ` data-ref="${esc(e.ref)}"` : "";
+            html += `<${tag} class="event${e.tone === "error" ? " error" : ""}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${hhmm(at || e.at)}</span><span>${esc(e.text)}</span>${wstate ? `<span class="wstate">${wstate}</span>` : ""}</${tag.split(" ")[0]}>`;
+          }
         }
       }
-    }
-    // Everything waiting on the human, in one place, answerable right here.
-    const needs = state.agents.filter((a) => a.status === "blocked");
-    if (needs.length) {
-      html += `<div class="needs">` + needs.map((a) => {
-        const got = superAsks.get(a.pane_id);
-        if (!got || Date.now() - got.at > 4000) loadSuperAsk(a.pane_id);
-        if (got?.a) return superAskHTML(got.a, a);
-        return `<a class="need" href="#/p/${encodeURIComponent(a.pane_id)}">
+      if (needs.length) {
+        html += `<div class="needs">` + needs.map((a) => {
+          const got = superAsks.get(a.pane_id);
+          if (got?.a) return superAskHTML(got.a, a);
+          return `<a class="need" href="#/p/${encodeURIComponent(a.pane_id)}">
         <span class="dot blocked"></span>
         <span class="body"><div class="name">${esc(title(a))} 等你确认</div><div class="sub">${esc(a.name === ROUTER ? "它停在一个对话框上，处理后才能继续" : (KIND_LABEL[a.kind] || a.kind) + " · " + tilde(a.cwd))}</div></span>
         <span class="go">处理 →</span></a>`;
-      }).join("") + `</div>`;
-    }
-    renderPendingBar();
-    if (olderBusy) html = `<div class="earlier-row">加载中…</div>` + html;
-    const busyChanged = (busy || "") !== prevBusy, crewChanged = crewHTML !== prevCrew;
-    if (html !== superSig || force) {
-      superSig = html;
-      box.innerHTML = html;
-      syncActiveThreadMarks(curThreadInfo);
-      if (flashEntry.until > Date.now() && flashEntry.id) {
-        const fid = CSS.escape(flashEntry.id);
-        box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`)?.classList.add("flash");
+        }).join("") + `</div>`;
       }
-      if (activeThreadRoot) syncThreadDrawer();
-    } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor) {
-      syncActiveThreadMarks(curThreadInfo);
-      if (activeThreadRoot) syncThreadDrawer();
-      updateSuperJump();
-      return;
-    } else {
-      syncActiveThreadMarks(curThreadInfo);
-      if (activeThreadRoot) syncThreadDrawer();
+      if (olderBusy) html = `<div class="earlier-row">加载中…</div>` + html;
+      superBodyKey = nextBodyKey;
+      if (html !== superSig || force) {
+        superSig = html;
+        superDomGen++;
+        box.innerHTML = html;
+        syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
+        if (flashEntry.until > Date.now() && flashEntry.id) {
+          const fid = CSS.escape(flashEntry.id);
+          box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`)?.classList.add("flash");
+        }
+        if (activeThreadRoot) syncThreadDrawer();
+      } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor) {
+        syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
+        if (activeThreadRoot) syncThreadDrawer();
+        updateSuperJump();
+        return;
+      } else {
+        syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
+        if (activeThreadRoot) syncThreadDrawer();
+      }
     }
     if (shouldApplyUnreadAnchor && scroller.clientHeight > 0) {
       const hasEntries = chatEntries().length > 0;
@@ -3560,13 +3954,20 @@
       const p = e.target.parentElement?.dataset?.img;
       if (p && e.target.naturalWidth > 0 && e.target.naturalHeight > 0 && !thumbDims.has(p)) {
         thumbDims.set(p, { w: e.target.naturalWidth, h: e.target.naturalHeight });
-        mdCache.clear();
+        invalidateMdCacheForImage(p);
       }
       if (collieInitialAnchor) applyInitialAnchor();
     }, true);
+    let superJumpScrollRAF = 0;
     sc?.addEventListener("scroll", () => {
-      updateSuperJump();
-      if (performance.now() >= programmaticScrollUntil) maybeScheduleReadAtBottom();
+      if (superJumpScrollRAF) return;
+      const run = () => {
+        superJumpScrollRAF = 0;
+        updateSuperJump();
+        if (performance.now() >= programmaticScrollUntil) maybeScheduleReadAtBottom();
+      };
+      if (typeof requestAnimationFrame === "function") superJumpScrollRAF = requestAnimationFrame(run);
+      else run();
     }, { passive: true });
     sc?.addEventListener("wheel", (e) => {
       cancelCollieLayoutLock();
@@ -3643,8 +4044,10 @@
     let a = null;
     try { const r = await api(paneURL(pane, "ask")); a = r.asking ? r.approval : null; } catch { a = prev?.a || null; }
     if (superAsks.get(pane)?.sending && !force) return;
+    const changedAsk = JSON.stringify(a) !== JSON.stringify(prev?.a ?? null);
     superAsks.set(pane, { at: Date.now(), a });
-    if ((force || JSON.stringify(a) !== JSON.stringify(prev?.a ?? null)) && view === "collie") renderSuper(force ? { force: true } : undefined);
+    if (changedAsk) superAsksGen++;
+    if ((force || changedAsk) && view === "collie") renderSuper(force ? { force: true } : undefined);
   }
   setInterval(() => { if (view === "collie" && state.agents.some((x) => x.status === "blocked")) renderSuper(); }, 4000);
   function superAskHTML(a, agent) {
@@ -3731,9 +4134,10 @@
   // "派到": where this message's work runs. Shows the defaults from
   // 自动化 → 设置 (read again whenever this view opens); target holds only
   // what was picked here, so a message never carries a stale default.
-  let target = null, targetDefault = null;
+  let target = null, targetDefault = null, _renderTargetSig = "";
   async function renderTarget(fresh) {
     if (!targetDefault || fresh) {
+      _renderTargetSig = "";
       try {
         const s = (await api("/api/super/settings")).settings;
         targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
@@ -3743,6 +4147,9 @@
     // computer at its default, not unset.
     const t = targetNow();
     const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
+    const sig = `${t.machine}|${t.kind}|${t.model ?? ""}|${t.effort ?? ""}|${targetDefault.machine}|${targetDefault.kind}|${targetDefault.model}|${targetDefault.effort}|${state.ok}|${ms.map((m) => `${m.id}:${m.name}:${m.online}:${(m.agents || []).join(",")}`).join(";")}`;
+    if (!fresh && sig === _renderTargetSig) return;
+    _renderTargetSig = sig;
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
@@ -6490,12 +6897,30 @@
   }
 
   // ───────────────────────────── agents in other terminals (outside herdr)
-  let ext = [], extTimer, extStream = null, extCur = null;
+  let ext = [], extTimer, extStream = null, extCur = null, _lastExtSig = "", _lastExtRenderAt = 0;
+  function sessionListSig(list) {
+    if (!list || !list.length) return "0";
+    let out = String(list.length);
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (!e) continue;
+      out += `|${e.id || ""}:${e.live ? 1 : 0}:${e.status || ""}:${e.title || ""}:${e.updated || e.ended || e.started || ""}`;
+    }
+    return out;
+  }
   async function loadExternal() {
     if (document.hidden && ext.length) return;
-    try { ext = (await api("/api/external")).sessions || []; } catch { return; }
-    ext = ext.concat(...await fromHubs("/api/external", "ext"));
-    renderExt();
+    let nextExt;
+    try { nextExt = (await api("/api/external")).sessions || []; } catch { return; }
+    nextExt = nextExt.concat(...await fromHubs("/api/external", "ext"));
+    const sig = sessionListSig(nextExt);
+    const now = Date.now();
+    ext = nextExt;
+    if (sig !== _lastExtSig || now - _lastExtRenderAt >= 30000) {
+      _lastExtSig = sig;
+      _lastExtRenderAt = now;
+      renderExt();
+    }
     if (view === "ext") renderExtHead();
   }
 
@@ -6515,13 +6940,40 @@
   }
 
   // ───────────────────────────── ended sessions: read them, continue them
-  let hist = [];
+  let hist = [], _lastHistSig = "", _lastHistRenderAt = 0;
+  let _histIndexCache = { ref: null, len: -1, byName: new Map(), routers: [] };
+  function getHistIndex() {
+    const arr = hist || [];
+    if (_histIndexCache.ref === arr && _histIndexCache.len === arr.length) return _histIndexCache;
+    const byName = new Map();
+    const routers = [];
+    for (let i = 0; i < arr.length; i++) {
+      const h = arr[i];
+      if (!h) continue;
+      const endedMs = +new Date(h.ended) || 0;
+      const item = { h, endedMs };
+      if (h.name === ROUTER) routers.push(item);
+      if (h.name) {
+        let list = byName.get(h.name);
+        if (!list) { list = []; byName.set(h.name, list); }
+        list.push(item);
+      }
+    }
+    _histIndexCache = { ref: arr, len: arr.length, byName, routers };
+    return _histIndexCache;
+  }
   // workerHist: the ended session named name that a line at time at was
   // about: the first of that name to end after it.
   const workerHist = (name, at) => {
-    const t = new Date(at);
-    let best = null;
-    for (const h of hist) if (h.name === name && new Date(h.ended) >= t && (!best || new Date(h.ended) < new Date(best.ended))) best = h;
+    if (!name) return null;
+    const list = getHistIndex().byName.get(name);
+    if (!list || !list.length) return null;
+    const t = +new Date(at) || 0;
+    let best = null, bestMs = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      if (item.endedMs >= t && item.endedMs < bestMs) { best = item.h; bestMs = item.endedMs; }
+    }
     return best;
   };
   // routerHist: the ended Collie session closest in time to an older
@@ -6529,19 +6981,28 @@
   const routerHist = (at) => {
     const t = +new Date(at);
     if (!t) return null;
+    const routers = getHistIndex().routers;
     let best = null, bestDiff = 10 * 60e3;
-    for (const h of hist) {
-      if (h.name !== ROUTER) continue;
-      const d = Math.abs(+new Date(h.ended) - t);
-      if (d < bestDiff) { best = h; bestDiff = d; }
+    for (let i = 0; i < routers.length; i++) {
+      const d = Math.abs(routers[i].endedMs - t);
+      if (d < bestDiff) { best = routers[i].h; bestDiff = d; }
     }
     return best;
   };
   async function loadHistory() {
-    try { hist = (await api("/api/history")).sessions || []; } catch { return; }
-    hist = hist.concat(...await fromHubs("/api/history", "hist"));
-    renderHist();
-    if (view === "collie") renderSuper();
+    let nextHist;
+    try { nextHist = (await api("/api/history")).sessions || []; } catch { return; }
+    nextHist = nextHist.concat(...await fromHubs("/api/history", "hist"));
+    const sig = sessionListSig(nextHist);
+    const now = Date.now();
+    const changed = sig !== _lastHistSig;
+    hist = nextHist;
+    if (changed || now - _lastHistRenderAt >= 30000) {
+      _lastHistSig = sig;
+      _lastHistRenderAt = now;
+      renderHist();
+    }
+    if (changed && view === "collie") renderSuper();
     if (view === "ext" && extCur?.startsWith("h:")) renderHistHead(extCur.slice(2));
   }
   const ago = (t) => {
@@ -6634,8 +7095,9 @@
   const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
   const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
   function renderExt() { renderSessions(); }
-  function renderSessions(workerThreadMap = null) {
-    const wtMap = workerThreadMap || computeWorkerThreadMap();
+  function renderSessions(workerThreadMap = null, allEntries = null) {
+    const entries = allEntries || chatEntries();
+    const wtMap = workerThreadMap || computeWorkerThreadMap(null, entries);
     const many = (state.machines || []).length > 1;
     const extRow = (e) => {
       const open = e.live && e.status === "idle";
@@ -6660,26 +7122,27 @@
     // saying it is still open.
     const going = (e) => e.live && e.status !== "idle" && e.status !== "unknown";
     const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked")
-      .map((a) => ({ rank: RANK[a.status] ?? 3, done: a.status === "done", html: itemHTML(a, wtMap), on: view === "pane" && a.pane_id === current }));
+      .map((a) => ({ rank: RANK[a.status] ?? 3, done: a.status === "done", html: itemHTML(a, wtMap, entries), on: view === "pane" && a.pane_id === current }));
     const liveExt = ext.filter(going).map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
     const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
     const busy = live.filter((x) => x.rank <= 1).length;
-    $("#live-count").textContent = busy ? `${busy} 个在跑` : live.length || "";
-    $("#live-list").innerHTML = live.map((x) => x.html).join("")
-      || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`;
+    setText($("#live-count"), busy ? `${busy} 个在跑` : live.length || "");
+    setHTML($("#live-list"), live.map((x) => x.html).join("")
+      || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`);
 
     // 最近: newest first; Collie's own sessions are reached from its conversation.
-    const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
+    const collieWorkerNames = getWorkerLookup().byName;
+    const collieRan = (name) => name === ROUTER || collieWorkerNames.has(name);
     const recent = [
-      ...ext.filter((e) => !going(e)).map((e) => ({ id: e.id, t: new Date(e.updated || e.started), html: extRow(e) })),
-      ...hist.filter((h) => !collieRan(h.name)).map((h) => ({ id: "h:" + h.id, t: new Date(h.ended), html: histRow(h) })),
+      ...ext.filter((e) => !going(e)).map((e) => ({ id: e.id, t: +new Date(e.updated || e.started) || 0, html: extRow(e) })),
+      ...hist.filter((h) => !collieRan(h.name)).map((h) => ({ id: "h:" + h.id, t: +new Date(h.ended) || 0, html: histRow(h) })),
     ].sort((x, y) => y.t - x.t);
     let shown = extAll ? recent : recent.slice(0, RECENT_N);
     const cur = view === "ext" && extCur && !shown.some((x) => x.id === extCur) && recent.find((x) => x.id === extCur);
     if (cur) shown = [...shown, cur];
     $("#recent-group").hidden = !recent.length;
-    $("#recent-list").innerHTML = shown.map((x) => x.html).join("")
-      + (recent.length > RECENT_N ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `还有 ${recent.length - RECENT_N} 个`}</button></li>` : "");
+    setHTML($("#recent-list"), shown.map((x) => x.html).join("")
+      + (recent.length > RECENT_N ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `还有 ${recent.length - RECENT_N} 个`}</button></li>` : ""));
   }
   // Look up the open session again in a moment (a few times at most).
   let extSoonT = null, extSoonN = 0;
@@ -8809,7 +9272,7 @@
       const u = URL.createObjectURL(new Blob([f.blob], { type: imgMime(p) }));
       thumbs.set(p, u);
       thumbMeta.set(p, { size: f.size, machine: f.machine, path: f.path });
-      mdCache.clear();
+      invalidateMdCacheForImage(p);
       for (const el of document.querySelectorAll(".thumb[data-img] img")) {
         if (el.parentElement.dataset.img === p) { el.src = u; el.parentElement.classList.remove("broken"); }
       }
@@ -8953,8 +9416,26 @@
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
-  new MutationObserver(() => {
-    for (const img of document.querySelectorAll(".thumb img:not([src])")) if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
+  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "router-status"]);
+  function triggerThumbLoads(root) {
+    if (!root || root.nodeType !== 1) return;
+    if (root.tagName === "IMG") {
+      if (!root.getAttribute("src") && !root.dataset.asked && root.parentElement?.classList?.contains("thumb")) {
+        root.dataset.asked = 1;
+        loadThumb(root);
+      }
+      return;
+    }
+    if (root.childElementCount === 0) return;
+    for (const img of root.querySelectorAll(".thumb img:not([src])")) {
+      if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
+    }
+  }
+  new MutationObserver((ms) => {
+    for (const m of ms) {
+      if (NO_THUMB_IDS.has(m.target?.id)) continue;
+      for (const n of m.addedNodes) triggerThumbLoads(n);
+    }
   }).observe(document.body, { childList: true, subtree: true });
 
   // ───────────────────────────── fullscreen image lightbox
@@ -9554,24 +10035,51 @@
     else location.hash = "#/collie";
   }
 
-  function syncActiveThreadMarks(threadInfo) {
+  let _lastMarkedGen = -1, _lastMarkedRoot = null, _lastSideMarkedKey = "";
+  function syncActiveThreadMarks(threadInfo, opts = {}) {
+    const curRoot = activeThreadRoot || "";
     const box = $("#super-thread");
-    if (box) {
-      for (const el of box.querySelectorAll(".say[data-thread-root], .mine[data-thread-root], .in-active-thread")) {
-        el.classList.toggle("in-active-thread", !!activeThreadRoot && el.dataset.threadRoot === activeThreadRoot);
+    if (box && (_lastMarkedGen !== superDomGen || _lastMarkedRoot !== curRoot)) {
+      _lastMarkedGen = superDomGen;
+      _lastMarkedRoot = curRoot;
+      for (const el of box.querySelectorAll(".in-active-thread")) {
+        if (!curRoot || el.dataset.threadRoot !== curRoot) el.classList.remove("in-active-thread");
       }
-      for (const btn of box.querySelectorAll(".thread-entry[data-open-thread], .focus-btn[data-open-thread]")) {
-        const isOpen = !!activeThreadRoot && btn.dataset.openThread === activeThreadRoot;
-        btn.classList.toggle("active", isOpen);
-        btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      for (const btn of box.querySelectorAll(".thread-entry.active, .focus-btn.active")) {
+        if (!curRoot || btn.dataset.openThread !== curRoot) {
+          btn.classList.remove("active");
+          btn.setAttribute("aria-expanded", "false");
+        }
+      }
+      if (curRoot) {
+        const escRoot = CSS.escape(curRoot);
+        for (const el of box.querySelectorAll(`.say[data-thread-root="${escRoot}"], .mine[data-thread-root="${escRoot}"]`)) {
+          el.classList.add("in-active-thread");
+        }
+        for (const btn of box.querySelectorAll(`.thread-entry[data-open-thread="${escRoot}"], .focus-btn[data-open-thread="${escRoot}"]`)) {
+          btn.classList.add("active");
+          btn.setAttribute("aria-expanded", "true");
+        }
       }
     }
-    for (const btn of document.querySelectorAll(".item-th-btn[data-agent-thread]")) {
-      const isOpen = view === "collie" && !!activeThreadRoot && btn.dataset.agentThread === activeThreadRoot;
-      btn.classList.toggle("active", isOpen);
-      btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    const sideKey = view === "collie" ? curRoot : "";
+    if (_lastSideMarkedKey !== sideKey) {
+      _lastSideMarkedKey = sideKey;
+      for (const btn of document.querySelectorAll(".item-th-btn.active")) {
+        if (!sideKey || btn.dataset.agentThread !== sideKey) {
+          btn.classList.remove("active");
+          btn.setAttribute("aria-expanded", "false");
+        }
+      }
+      if (sideKey) {
+        const escSide = CSS.escape(sideKey);
+        for (const btn of document.querySelectorAll(`.item-th-btn[data-agent-thread="${escSide}"]`)) {
+          btn.classList.add("active");
+          btn.setAttribute("aria-expanded", "true");
+        }
+      }
     }
-    if (thPopWrap) {
+    if (thPopWrap && !opts.skipMenu) {
       const entries = chatEntries();
       renderCollieThreadsMenu(threadInfo || computeReplyThreads(entries), entries);
     }
@@ -9589,34 +10097,53 @@
     const entries = chatEntries();
     renderCollieThreadsMenu(computeReplyThreads(entries), entries);
   }
+  let _thMenuRowsCache = { key: "", allRows: [], activeRows: [] };
+  let _thPopInputSig = "";
   function renderCollieThreadsMenu(threadInfo, allEntries) {
     if (!thPopWrap || !thHeadBtn || !thHeadCnt || !thPop || !thPopList) return;
     const entries = allEntries || chatEntries();
     const info = threadInfo || computeReplyThreads(entries);
-    const pendIds = new Set(activePending().map((p) => p.id));
-    const wCtx = makeWorkerExtractCtx(entries);
-    const allRows = [];
-    for (const th of (info?.allThreads || info?.threads)?.values() || []) {
-      const workers = extractThreadWorkers(th, info, entries, wCtx);
-      const activeWorkers = workers.filter(isWorkerActiveStatus);
-      const pending = isThreadPending(th, entries, pendIds);
-      const inProgress = activeWorkers.length > 0 || pending;
-      if (th.totalCount < 3 && !inProgress) continue;
-      allRows.push({
-        th,
-        pending,
-        activeWorkers,
-        hasActiveWorker: activeWorkers.length > 0,
-        hasBlockedWorker: activeWorkers.some((w) => w.status === "blocked"),
-        inProgress,
+    const pendList = activePending();
+    const pendKey = `${sup.hasPending ? 1 : 0}:${pendList.map((p) => p.id).join(",")}:${dismissedLocal.size ? [...dismissedLocal].join(",") : ""}`;
+    const rowsKey = `${entriesFingerprint(entries)}|${workerStateFingerprint()}|${pendKey}`;
+    const fullInputSig = `${rowsKey}|${thPopFilter}|${activeThreadRoot || ""}|${dayBounds()}`;
+    if (fullInputSig === _thPopInputSig) return;
+    _thPopInputSig = fullInputSig;
+
+    let allRows, activeRows;
+    if (_thMenuRowsCache.key === rowsKey) {
+      allRows = _thMenuRowsCache.allRows;
+      activeRows = _thMenuRowsCache.activeRows;
+    } else {
+      const pendIds = new Set(pendList.map((p) => p.id));
+      const idxByEntry = new Map();
+      for (let i = 0; i < entries.length; i++) idxByEntry.set(entries[i], i);
+      const wCtx = makeWorkerExtractCtx(entries);
+      allRows = [];
+      for (const th of (info?.allThreads || info?.threads)?.values() || []) {
+        const workers = extractThreadWorkers(th, info, entries, wCtx);
+        const activeWorkers = workers.filter(isWorkerActiveStatus);
+        const pending = isThreadPending(th, entries, pendIds, idxByEntry);
+        const inProgress = activeWorkers.length > 0 || pending;
+        if (th.totalCount < 3 && !inProgress) continue;
+        allRows.push({
+          th,
+          pending,
+          activeWorkers,
+          hasActiveWorker: activeWorkers.length > 0,
+          hasBlockedWorker: activeWorkers.some((w) => w.status === "blocked"),
+          inProgress,
+        });
+      }
+      allRows.sort((a, b) => {
+        const ta = +new Date(a.th.latest?.at || 0) || 0;
+        const tb = +new Date(b.th.latest?.at || 0) || 0;
+        if (tb !== ta) return tb - ta;
+        return String(b.th.latest?.id || "").localeCompare(String(a.th.latest?.id || ""));
       });
+      activeRows = allRows.filter((r) => r.inProgress);
+      _thMenuRowsCache = { key: rowsKey, allRows, activeRows };
     }
-    allRows.sort((a, b) => {
-      const ta = +new Date(a.th.latest?.at || 0) || 0;
-      const tb = +new Date(b.th.latest?.at || 0) || 0;
-      if (tb !== ta) return tb - ta;
-      return String(b.th.latest?.id || "").localeCompare(String(a.th.latest?.id || ""));
-    });
     if (!allRows.length) {
       thPopWrap.hidden = true;
       closeCollieThreadsPop();
@@ -9624,11 +10151,10 @@
       return;
     }
     thPopWrap.hidden = false;
-    thHeadCnt.textContent = String(allRows.length);
+    setText(thHeadCnt, String(allRows.length));
     thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
-    const activeRows = allRows.filter((r) => r.inProgress);
-    if (thPopCntAll) thPopCntAll.textContent = String(allRows.length);
-    if (thPopCntActive) thPopCntActive.textContent = String(activeRows.length);
+    if (thPopCntAll) setText(thPopCntAll, String(allRows.length));
+    if (thPopCntActive) setText(thPopCntActive, String(activeRows.length));
     if (thPopTabs) {
       for (const tab of thPopTabs.querySelectorAll("[data-th-filter]")) {
         const on = tab.dataset.thFilter === thPopFilter;
@@ -9639,9 +10165,9 @@
     const filtered = thPopFilter === "active" ? activeRows : allRows;
     const shown = filtered.slice(0, 30);
     if (thPopSub) {
-      thPopSub.textContent = filtered.length > shown.length
+      setText(thPopSub, filtered.length > shown.length
         ? `前 ${shown.length} / ${filtered.length} 条`
-        : filtered.length > 0 ? "按最近活跃" : "";
+        : filtered.length > 0 ? "按最近活跃" : "");
     }
     const sig = JSON.stringify([
       thPopFilter,
@@ -9765,24 +10291,38 @@
     if (status === "waiting") return 2;
     return 3;
   }
+  const _cleanTextCache = new Map();
   function cleanTextForWorkerMatch(raw, role) {
     let t = String(raw || "");
     if (!t) return "";
+    const ck = `${role || ""}\0${t}`;
+    const hit = _cleanTextCache.get(ck);
+    if (hit !== undefined) return hit;
     if (role === "user") {
       const cut = t.indexOf("\n\n[The human picked");
       if (cut >= 0) t = t.slice(0, cut);
       const att = t.lastIndexOf("附件：\n");
       if (att >= 0) t = t.slice(0, att);
     }
-    return t
+    const out = t
       .replace(/```[\s\S]*?```/g, " ")
       .replace(/\]\([^)\n]+\)/g, "]")
       .replace(/https?:\/\/\S+/gi, " ");
+    if (_cleanTextCache.size > 4000) _cleanTextCache.clear();
+    _cleanTextCache.set(ck, out);
+    return out;
   }
+  let _workerExtractCtxCache = { key: "", ctx: null };
+  let _workerThreadMapCache = { key: "", val: null };
   function makeWorkerExtractCtx(allEntries) {
     const entries = allEntries || chatEntries();
+    const key = `${entriesFingerprint(entries)}|${workerStateFingerprint()}`;
+    if (_workerExtractCtxCache.ctx && _workerExtractCtxCache.key === key) {
+      return _workerExtractCtxCache.ctx;
+    }
     // Deduplicate sup.workers by name: prefer active (!ended), then newest created_at.
     const workerByName = new Map();
+    const workersByThread = new Map();
     for (const w of sup.workers || []) {
       const name = typeof w?.name === "string" ? w.name.trim() : "";
       if (!name || name === ROUTER) continue;
@@ -9796,31 +10336,58 @@
         }
       }
     }
+    for (const [name, w] of workerByName.entries()) {
+      if (w.thread) {
+        let list = workersByThread.get(w.thread);
+        if (!list) { list = []; workersByThread.set(w.thread, list); }
+        list.push([name, w]);
+      }
+    }
     const liveAgentByName = new Map();
     for (const a of state.agents || []) {
       if (a?.name && a.name !== ROUTER && !liveAgentByName.has(a.name)) liveAgentByName.set(a.name, a);
     }
-    const histNames = new Set((hist || []).map((h) => h?.name).filter(Boolean));
+    const histIdx = getHistIndex();
+    const histNames = new Set(histIdx.byName.keys());
     const latestEventAtByName = new Map();
-    const linkedEvents = [];
+    const eventsByReEntry = new Map();
+    const eventsByThread = new Map();
     for (const ev of entries) {
       if (!ev || ev.role !== "event") continue;
       if (ev.ref && ev.ref !== ROUTER && !ev.ref.startsWith("h:")) {
         const t = +new Date(ev.at) || 0;
         if (t > (latestEventAtByName.get(ev.ref) || 0)) latestEventAtByName.set(ev.ref, t);
       }
-      if (ev.re?.entry || ev.thread) linkedEvents.push(ev);
+      if (ev.re?.entry) {
+        let list = eventsByReEntry.get(ev.re.entry);
+        if (!list) { list = []; eventsByReEntry.set(ev.re.entry, list); }
+        list.push(ev);
+      }
+      if (ev.thread) {
+        let list = eventsByThread.get(ev.thread);
+        if (!list) { list = []; eventsByThread.set(ev.thread, list); }
+        list.push(ev);
+      }
     }
-    const workerRegexes = [];
-    for (const name of workerByName.keys()) {
-      workerRegexes.push([name, new RegExp(`(?:^|[^A-Za-z0-9_\\-/.\\\\])${escRegex(name)}(?![A-Za-z0-9_\\-/\\\\]|\\.[A-Za-z0-9_])`)]);
-    }
-    return { entries, workerByName, liveAgentByName, histNames, latestEventAtByName, linkedEvents, workerRegexes };
+    const workerNames = [...workerByName.keys()];
+    const workerNamesKey = workerNames.join("\0");
+    const ctx = {
+      entries, workerByName, workersByThread, liveAgentByName, histNames, histByName: histIdx.byName,
+      latestEventAtByName, eventsByReEntry, eventsByThread, workerNames, workerNamesKey,
+      threadWorkersWeak: new WeakMap(),
+    };
+    _workerExtractCtxCache = { key, ctx };
+    return ctx;
   }
   function extractThreadWorkers(th, info, allEntries, ctx = null) {
     if (!th) return [];
     const c = ctx || makeWorkerExtractCtx(allEntries);
-    const { entries, workerByName, liveAgentByName, histNames, latestEventAtByName, linkedEvents, workerRegexes } = c;
+    const cachedList = c.threadWorkersWeak.get(th);
+    if (cachedList) return cachedList;
+    const {
+      entries, workerByName, workersByThread, liveAgentByName, histNames, histByName,
+      latestEventAtByName, eventsByReEntry, eventsByThread, workerNames, workerNamesKey,
+    } = c;
     const byId = info?.byId || new Map(entries.map((e) => [entryKey(e), e]).filter(([k]) => !!k));
 
     const found = new Map(); // name -> { lastMentionAt, structured }
@@ -9885,24 +10452,32 @@
       const mq = cleanTextForWorkerMatch(th.missingRoot.text, "");
       if (mq) textParts.push({ text: mq, at: 0 });
     }
-    for (const ev of linkedEvents) {
-      const linked = (ev.re?.entry && nodeIds.has(ev.re.entry)) || (ev.thread && th.rootId && ev.thread === th.rootId);
-      if (!linked) continue;
+    const recordEv = (ev) => {
       const at = +new Date(ev.at) || 0;
       record(ev.ref, at, true);
       record(ev.worker, at, true);
       record(ev.from, at, true);
+    };
+    for (const nid of nodeIds) {
+      const evs = eventsByReEntry.get(nid);
+      if (evs) for (let i = 0; i < evs.length; i++) recordEv(evs[i]);
     }
-    for (const [name, w] of workerByName.entries()) {
-      if (w.thread && th.rootId && w.thread === th.rootId) {
-        record(name, +new Date(w.report_at || w.created_at) || 0, true);
+    if (th.rootId) {
+      const tevs = eventsByThread.get(th.rootId);
+      if (tevs) for (let i = 0; i < tevs.length; i++) recordEv(tevs[i]);
+      const tws = workersByThread.get(th.rootId);
+      if (tws) {
+        for (let i = 0; i < tws.length; i++) {
+          const [name, w] = tws[i];
+          record(name, +new Date(w.report_at || w.created_at) || 0, true);
+        }
       }
     }
-    if (textParts.length && workerRegexes.length) {
-      for (const [name, re] of workerRegexes) {
-        for (const part of textParts) {
-          if (re.test(part.text)) record(name, part.at, false);
-        }
+    if (textParts.length && workerNames.length) {
+      for (let pi = 0; pi < textParts.length; pi++) {
+        const part = textParts[pi];
+        const hits = matchWorkerNamesInText(part.text, workerNames, workerNamesKey);
+        for (let hi = 0; hi < hits.length; hi++) record(hits[hi], part.at, false);
       }
     }
 
@@ -9915,7 +10490,7 @@
         ? (w?.status === "failed" ? "failed" : "gone")
         : (live?.status || w?.status || "unknown");
       const pane = !ended ? (live?.pane_id || w?.pane_id || "") : "";
-      const past = !pane ? (workerHist(name, w?.created_at || 0) || hist.find((h) => h.name === name) || null) : null;
+      const past = !pane ? (workerHist(name, w?.created_at || 0) || histByName.get(name)?.[0]?.h || null) : null;
       const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
       const kind = live?.kind || w?.kind || past?.kind || "";
       const lastActive = Math.max(
@@ -9944,15 +10519,23 @@
       if (b.lastActive !== a.lastActive) return b.lastActive - a.lastActive;
       return a.name.localeCompare(b.name);
     });
+    c.threadWorkersWeak.set(th, out);
     return out;
   }
   function computeWorkerThreadMap(threadInfo = null, allEntries = null) {
     const entries = allEntries || chatEntries();
+    if (!entries.length) return new Map();
+    const cacheKey = `${entriesFingerprint(entries)}|${workerStateFingerprint()}`;
+    if (!threadInfo && _workerThreadMapCache.val && _workerThreadMapCache.key === cacheKey) {
+      return _workerThreadMapCache.val;
+    }
     const out = new Map();
-    if (!entries.length) return out;
     const info = threadInfo || computeReplyThreads(entries);
     const wCtx = makeWorkerExtractCtx(entries);
-    if (!wCtx.workerByName.size && !wCtx.liveAgentByName.size) return out;
+    if (!wCtx.workerByName.size && !wCtx.liveAgentByName.size) {
+      if (!threadInfo) _workerThreadMapCache = { key: cacheKey, val: out };
+      return out;
+    }
     for (const th of (info.allThreads || info.threads).values()) {
       const workers = extractThreadWorkers(th, info, entries, wCtx);
       if (!workers.length) continue;
@@ -9982,6 +10565,7 @@
         if (better) out.set(w.name, cand);
       }
     }
+    if (!threadInfo) _workerThreadMapCache = { key: cacheKey, val: out };
     return out;
   }
   function renderThreadWorkers(th, info, allEntries, force = false) {
@@ -10529,13 +11113,31 @@
 
   // Minimal, safe Markdown: escape first, then add a little structure.
   const mdCache = new Map();
+  const mdCacheImgKeys = new Set();
+  function invalidateMdCacheForImage(p) {
+    if (!p || !mdCacheImgKeys.size) return;
+    const baseName = p.split("/").pop() || "";
+    for (const k of [...mdCacheImgKeys]) {
+      const rendered = mdCache.get(k);
+      if (rendered === undefined) { mdCacheImgKeys.delete(k); continue; }
+      if (k.includes(p) || (baseName && k.includes(baseName)) || rendered.includes(p)) {
+        mdCache.delete(k);
+        mdCacheImgKeys.delete(k);
+      }
+    }
+  }
   function md(src) {
     const key = String(src || "");
     let out = mdCache.get(key);
     if (out === undefined) {
       out = mdRender(key);
-      if (mdCache.size > 8000) mdCache.delete(mdCache.keys().next().value);
+      if (mdCache.size > 8000) {
+        const oldest = mdCache.keys().next().value;
+        mdCache.delete(oldest);
+        mdCacheImgKeys.delete(oldest);
+      }
       mdCache.set(key, out);
+      if (out.includes('class="thumb md-thumb"')) mdCacheImgKeys.add(key);
     }
     return out;
   }

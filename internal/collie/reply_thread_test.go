@@ -1350,7 +1350,55 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(mergeDrawerHtml.includes('data-opt="立刻切换"'), "drawer exposes latest pending decision options");
   T.closeThreadDrawer({ immediate: true });
 
-  console.log("OK: all reply-thread, focus-drawer, filter, agent-card, worker-fold, settings, and notification JS tests passed");
+  // ─── 13. Memoization, cache invalidation & zero spurious DOM writes on unchanged refreshes ───
+  const infoMemo1 = T.computeReplyThreads(mergeEntries);
+  const infoMemo2 = T.computeReplyThreads(mergeEntries);
+  assert.equal(infoMemo1, infoMemo2, "computeReplyThreads returns memoized result for identical entries & workers");
+  const wtMemo1 = T.computeWorkerThreadMap(null, mergeEntries);
+  const wtMemo2 = T.computeWorkerThreadMap(null, mergeEntries);
+  assert.equal(wtMemo1, wtMemo2, "computeWorkerThreadMap returns memoized map when state is unchanged");
+
+  // Mutating worker status invalidates computeWorkerThreadMap cleanly (never serves stale state)
+  const flippedWorkers = mergeWorkers.map((w) => w.name === "ingest-batch-50m" ? { ...w, status: "done", ended: true } : w);
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: mergeEntries,
+    workers: flippedWorkers,
+    pending: [{ id: "m5", at: mTs(14), summary: "全部跑完且校验全绿，要现在切流量吗？", options: ["立刻切换", "稍后再切"] }],
+  });
+  const wtAfterFlip = T.computeWorkerThreadMap(null, mergeEntries);
+  assert.notEqual(wtAfterFlip, wtMemo1, "worker status change invalidates computeWorkerThreadMap cache");
+
+  // Idle renderSide() + renderSuper() after priming must produce ZERO innerHTML writes on sidebar & main containers
+  T.renderSide();
+  T.renderSuper();
+  const trackWrites = (sel) => {
+    const el = getEl(sel);
+    let count = 0;
+    let val = el.innerHTML;
+    Object.defineProperty(el, "innerHTML", {
+      get() { return val; },
+      set(v) { count++; val = v; },
+      configurable: true,
+    });
+    return () => count;
+  };
+  const liveWrites = trackWrites("#live-list");
+  const recentWrites = trackWrites("#recent-list");
+  const attnWrites = trackWrites("#attention");
+  const pendListWrites = trackWrites("#pending-list");
+  const mainWritesBefore = innerWrites;
+  for (let i = 0; i < 5; i++) {
+    T.renderSide();
+    T.renderSuper();
+  }
+  assert.equal(liveWrites(), 0, "idle renderSide() must not rewrite #live-list.innerHTML");
+  assert.equal(recentWrites(), 0, "idle renderSide() must not rewrite #recent-list.innerHTML");
+  assert.equal(attnWrites(), 0, "idle renderSide() must not rewrite #attention.innerHTML");
+  assert.equal(pendListWrites(), 0, "idle renderSuper() must not rewrite collapsed #pending-list.innerHTML");
+  assert.equal(innerWrites, mainWritesBefore, "idle renderSuper() must not rewrite #super-thread.innerHTML");
+
+  console.log("OK: all reply-thread, focus-drawer, filter, agent-card, worker-fold, memoization, settings, and notification JS tests passed");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

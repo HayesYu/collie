@@ -1970,7 +1970,7 @@
   const ICON_TD_USER = `<svg viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.2 24.4c.4-6.8 5.2-11.2 14.4-11.4 7.2-.2 12.2 2.5 13.8 8.3"/><path d="M18.2 24.4c9.2-3.2 22.2-4.2 35-2.4"/><path d="M43.2 21.5c.2 2.4.8 4.2 3.6 7.4.6.7.1 1.7-.9 2l-2 .5c.2 2.8-.8 5.2-3.6 6.4-2.8 1.2-6.4 1-9.2-.3"/><path d="M20.2 24c-1.6 3.8-1.2 7.8 1.8 10.4"/><path d="M24.2 35.2c.2 2.4-.2 4.6-.8 6.4-5.4 2-9.2 5.8-10.9 11.9"/><path d="M23.4 41.6c4.2 3.6 10.2 3.8 15.2.6 4.6 2.1 8.5 5.6 10.9 11.3"/></g><circle cx="39.4" cy="27.2" r="1.45" fill="currentColor" stroke="none"/></svg>`;
   const entryKey = (e) => (e && (e.id || e._localId)) || "";
   const threadWhoLabel = (e) => (e?.role === "user" ? "你" : "Collie");
-  function threadCleanText(e) {
+  function threadEntryPlainText(e) {
     let t = String(e?.text || "");
     if (e?.role === "user") {
       const cut = t.indexOf("\n\n[The human picked");
@@ -1978,13 +1978,133 @@
       const att = t.lastIndexOf("附件：\n");
       if (att >= 0) t = t.slice(0, att).trim() || "附件消息";
     }
+    return t;
+  }
+  function stripThreadMarkdownLine(raw) {
+    return String(raw || "")
+      .replace(/^\s*(?:[#>*•\-]+|\d+[.)])\s+/, "")
+      .replace(/\\([!"#$%&'()*+,\-.\/:;<=>?@\[\\\]^_`{|}~])/g, "$1")
+      .replace(/(\*\*|__|~~)/g, "")
+      .replace(/`+/g, "")
+      .replace(/(^|[\s（(【\[「『])\*([^\s*][^*]*?[^\s*]|[^\s*])\*(?=$|[\s，。！？、：；.,!?)）】\]」』])/g, "$1$2")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  function firstCleanThreadLine(text) {
+    const rawText = String(text || "");
+    const cleaned = rawText
+      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+      .replace(/\[image:[^\]]+\]/g, " ")
+      .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
+    for (const raw of cleaned.split("\n")) {
+      const line = stripThreadMarkdownLine(raw);
+      if (line) return line;
+    }
+    if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
+    if (/```/.test(rawText)) return "代码片段";
+    return stripThreadMarkdownLine(plainLine(rawText));
+  }
+  function collapseThreadMarkdown(text) {
+    const rawText = String(text || "");
+    const cleaned = rawText
+      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+      .replace(/\[image:[^\]]+\]/g, " ")
+      .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
+    const lines = cleaned.split("\n").map(stripThreadMarkdownLine).filter(Boolean);
+    if (lines.length) return lines.join(" ").replace(/\s+/g, " ").trim();
+    if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
+    if (/```/.test(rawText)) return "代码片段";
+    return stripThreadMarkdownLine(plainLine(rawText));
+  }
+  function threadCleanText(e) {
+    const t = threadEntryPlainText(e);
+    const line = firstCleanThreadLine(t);
+    if (line) return line.length > 120 ? line.slice(0, 120) + "…" : line;
     return collieNotifySummary(t);
   }
+  // Strip leading `ascii-worker-name（中文主题）...` or `` `ascii-worker-name`（中文主题）... ``
+  // so thread titles foreground the human topic instead of raw worker IDs.
+  const WORKER_TOPIC_PREFIX_RE = /^([a-z][a-z0-9]*(?:[-_][a-z0-9]+)+|[a-z]+\d+[a-z0-9]*)\s*(?:（([^）\n]+)）|\(([^)\n]+)\))(.*)$/;
   function threadTitleFromText(text, fallback = "话题线") {
-    const clean = String(text || "").replace(/\s+/g, " ").trim();
+    const clean = firstCleanThreadLine(text);
     if (!clean) return fallback;
+    const m = clean.match(WORKER_TOPIC_PREFIX_RE);
+    if (m) {
+      const workerName = m[1];
+      const fullTopic = (m[2] || "").trim();
+      const halfTopic = (m[3] || "").trim();
+      const topic = fullTopic || halfTopic;
+      const isAsciiOnlyHalfTag = !!halfTopic && !/[\u4e00-\u9fff]/.test(halfTopic) &&
+        (((workerName.match(/[-_]/g) || []).length < 2 && !/\d/.test(workerName)) || halfTopic.length < 4);
+      if (topic && !isAsciiOnlyHalfTag) {
+        const rawRest = (m[4] || "").trim();
+        const leadingEnd = /^[？?。！!]/.test(rawRest);
+        const restTrim = leadingEnd ? "" : rawRest.replace(/^[\s:：\-—–·•,，、]+/, "");
+        const restFirst = restTrim ? (restTrim.split(/[？?。！!\n]/)[0] || "").trim() : "";
+        const combined = restFirst ? `${topic} · ${restFirst}` : topic;
+        return combined.length > 48 ? combined.slice(0, 48) + "…" : combined;
+      }
+    }
     const first = clean.split(/[？?。！!\n]/)[0].trim() || clean;
     return first.length > 48 ? first.slice(0, 48) + "…" : first;
+  }
+  function threadPreviewFromEntry(e) {
+    if (!e) return "";
+    const who = threadWhoLabel(e);
+    const body = collapseThreadMarkdown(threadEntryPlainText(e));
+    const text = body || (e.role === "user" ? "附件消息" : "新回复");
+    const clipped = text.length > 90 ? text.slice(0, 90) + "…" : text;
+    return `${who}：${clipped}`;
+  }
+  function entryConfirmOptions(e) {
+    const raw = Array.isArray(e?.options) ? e.options
+      : Array.isArray(e?.opts) ? e.opts
+      : Array.isArray(e?.buttons) ? e.buttons
+      : null;
+    if (!raw) return [];
+    return raw.filter((o) => {
+      if (typeof o === "string") return !!o.trim();
+      if (o && typeof o === "object") return !!(String(o.label || o.text || o.value || "").trim());
+      return false;
+    });
+  }
+  function entryHasConfirmMarker(e) {
+    if (!e || e.role !== "collie") return false;
+    if (e.picked || e.resolved || e.dismissed) return false;
+    return entryConfirmOptions(e).length > 0 || !!e.check || !!e.pending;
+  }
+  function isThreadPending(th, allEntries = chatEntries(), pendIds = null) {
+    const e = th?.latest;
+    if (!e || e.role !== "collie") return false;
+    if (e.picked || e.resolved || e.dismissed) return false;
+    const id = e.id || "";
+    if (id && dismissedLocal.has(id)) return false;
+    if (id && optimisticallyResolved(id, allEntries)) return false;
+    const pset = pendIds || new Set(activePending().map((p) => p.id));
+    if (sup.hasPending) {
+      if (id && pset.has(id)) return true;
+      const hasAlias = !e.options?.length && !e.check && (
+        (Array.isArray(e.opts) && entryConfirmOptions(e).length > 0) ||
+        (Array.isArray(e.buttons) && entryConfirmOptions(e).length > 0) ||
+        !!e.pending
+      );
+      if (!hasAlias) return false;
+    } else if (!entryHasConfirmMarker(e)) {
+      return false;
+    }
+    const idx = allEntries.indexOf(e);
+    if (idx < 0) return entryHasConfirmMarker(e);
+    let otherCollie = false;
+    for (let j = idx + 1; j < allEntries.length; j++) {
+      const next = allEntries[j];
+      if (next.role === "user") {
+        const reId = next.re?.entry || "";
+        if ((id && reId === id) || (!reId && !otherCollie)) return false;
+      } else if (next.role === "collie") {
+        otherCollie = true;
+      }
+    }
+    return true;
   }
   function threadSnippet(text, max = 24) {
     const clean = String(text || "").replace(/\s+/g, " ").trim();
@@ -2054,8 +2174,9 @@
         if (pid && pid !== prevK) branchCount++;
       }
       const latest = list[list.length - 1];
+      const latestReply = latest && latest !== root ? latest : null;
       const replyCount = totalCount - 1;
-      const rootSummary = root ? threadCleanText(root) : (missingRoot?.text ? collieNotifySummary(missingRoot.text) : threadCleanText(list[0]));
+      const rootSummary = root ? threadCleanText(root) : (missingRoot?.text ? firstCleanThreadLine(missingRoot.text) || collieNotifySummary(missingRoot.text) : threadCleanText(list[0]));
       threads.set(rootId, {
         rootId,
         root,
@@ -2067,6 +2188,7 @@
         branchCount,
         title: threadTitleFromText(rootSummary),
         fullTitle: rootSummary,
+        preview: latestReply ? threadPreviewFromEntry(latestReply) : "",
       });
       for (const x of list) msgToRoot.set(entryKey(x), rootId);
     }
@@ -2832,7 +2954,7 @@
         return `<button type="button" class="thread-entry" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="false">` +
           `${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
       };
-      renderCollieThreadsMenu(threadInfo);
+      renderCollieThreadsMenu(threadInfo, allEntries);
       for (let ei = 0; ei < allEntries.length; ei++) {
         const e = allEntries[ei];
         if (isHiddenSuperEntry(e)) continue;
@@ -8626,7 +8748,10 @@
         btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
       }
     }
-    if (thPopWrap) renderCollieThreadsMenu(threadInfo || computeReplyThreads(chatEntries()));
+    if (thPopWrap) {
+      const entries = chatEntries();
+      renderCollieThreadsMenu(threadInfo || computeReplyThreads(entries), entries);
+    }
   }
   function closeCollieThreadsPop() {
     if (!thPop || thPop.hidden) return;
@@ -8634,8 +8759,10 @@
     thPop.style.top = "";
     thHeadBtn?.setAttribute("aria-expanded", "false");
   }
-  function renderCollieThreadsMenu(threadInfo) {
+  function renderCollieThreadsMenu(threadInfo, allEntries) {
     if (!thPopWrap || !thHeadBtn || !thHeadCnt || !thPop || !thPopList) return;
+    const entries = allEntries || chatEntries();
+    const pendIds = new Set(activePending().map((p) => p.id));
     const all = [...(threadInfo?.threads?.values() || [])].sort((a, b) => {
       const ta = +new Date(a.latest?.at || 0) || 0;
       const tb = +new Date(b.latest?.at || 0) || 0;
@@ -8655,16 +8782,40 @@
     if (thPopSub) {
       thPopSub.textContent = all.length > shown.length ? `最近活跃前 ${shown.length} / ${all.length} 条` : `共 ${all.length} 条 · 按最近活跃`;
     }
-    const sig = JSON.stringify([activeThreadRoot || "", shown.map((th) => [th.rootId, th.replyCount, th.latest?.id || "", th.latest?.at || "", th.title])]);
+    const items = shown.map((th) => ({
+      th,
+      pending: isThreadPending(th, entries, pendIds),
+    }));
+    const sig = JSON.stringify([
+      activeThreadRoot || "",
+      items.map(({ th, pending }) => [
+        th.rootId,
+        th.replyCount,
+        th.branchCount,
+        th.latest?.id || "",
+        th.latest?.at || "",
+        th.title,
+        th.preview || "",
+        pending ? 1 : 0,
+      ]),
+    ]);
     if (sig === thPopSig) return;
     thPopSig = sig;
-    thPopList.innerHTML = shown.map((th) => {
+    thPopList.innerHTML = items.map(({ th, pending }) => {
       const isAct = activeThreadRoot === th.rootId;
       const lastAt = th.latest?.at ? sepTime(+new Date(th.latest.at)) : "";
       const metaParts = [`${th.replyCount} 条回复`];
       if (th.branchCount > 0) metaParts.push("含分支");
-      return `<button type="button" class="th-pop-item${isAct ? " active" : ""}" role="listitem" data-th-pick="${esc(th.rootId)}" data-th-latest="${esc(entryKey(th.latest))}">
+      const dotHtml = pending
+        ? `<span class="th-pop-dot" aria-hidden="true"></span><span class="visually-hidden">待确认，</span>`
+        : "";
+      const previewHtml = th.preview
+        ? `<div class="th-pop-preview" title="${esc(th.preview)}">${esc(th.preview)}</div>`
+        : "";
+      return `<button type="button" class="th-pop-item${isAct ? " active" : ""}${pending ? " is-pending" : ""}" role="listitem" data-th-pick="${esc(th.rootId)}" data-th-latest="${esc(entryKey(th.latest))}"${pending ? ' data-th-pending="1"' : ""}>
+        ${dotHtml}
         <div class="th-pop-title" title="${esc(th.fullTitle || th.title)}">${esc(th.title)}</div>
+        ${previewHtml}
         <div class="th-pop-meta"><span>${esc(metaParts.join(" · "))}</span><span>${esc(lastAt)}</span></div>
       </button>`;
     }).join("");
@@ -8675,7 +8826,8 @@
     const willOpen = thPop.hidden;
     $$(".menu").forEach((m) => { m.hidden = true; });
     if (willOpen) {
-      renderCollieThreadsMenu(computeReplyThreads(chatEntries()));
+      const entries = chatEntries();
+      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
       if (narrow()) {
         const hr = $("#v-collie .d-head")?.getBoundingClientRect?.();
         thPop.style.top = hr && hr.bottom > 0 ? Math.round(hr.bottom + 6) + "px" : "";

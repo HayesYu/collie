@@ -387,7 +387,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setState: (st) => { localState = st; state = mergedState(); }, setHist: (h) => { hist = h || []; }, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, connect, renderSuper, computeReplyThreads, extractThreadWorkers, openThreadDrawer, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, resetChat: () => { older = []; pendingSays.length = 0; dismissedLocal.clear(); }, setState: (st) => { localState = st; state = mergedState(); }, setHist: (h) => { hist = h || []; }, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, connect, renderSuper, computeReplyThreads, threadTitleFromText, threadPreviewFromEntry, isThreadPending, renderCollieThreadsMenu, dismissPending, extractThreadWorkers, openThreadDrawer, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 
@@ -819,6 +819,163 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(indexHtml.includes('class="icon-btn attach td-attach"') && indexHtml.includes('aria-label="添加图片或文件"'), "index.html adds accessible + attach button to #td-composer");
   assert.ok(appCss.includes(".td-foot.drop .td-cbox"), "CSS styles dragover drop highlight on .td-cbox");
   assert.ok(appCss.includes(".td-files") && appCss.includes(".td-text .thumbs") && appCss.includes(".td-text .att"), "CSS styles drawer preview strip and rendered thumbs/attachments");
+
+  // ─── 8. Thread list popover readability: smart worker-prefix strip, latest-reply preview & pending light dot ───
+  // 8a) Smart worker-prefix stripping & Markdown cleanup boundaries
+  assert.equal(
+    T.threadTitleFromText("feat-collie-unread-anchor（未读自动定位与分割线）已发版，已升完三端。"),
+    "未读自动定位与分割线 · 已发版，已升完三端",
+  );
+  assert.equal(
+    T.threadTitleFromText("\x60feat-collie-unread-anchor\x60（未读自动定位与分割线）已发版"),
+    "未读自动定位与分割线 · 已发版",
+  );
+  assert.equal(
+    T.threadTitleFromText("**\x60polish-thread-list\x60**（话题线列表可读性优化）：已完成四象限验收。细节如下"),
+    "话题线列表可读性优化 · 已完成四象限验收",
+  );
+  assert.equal(
+    T.threadTitleFromText("fix-login（登录回调修复）"),
+    "登录回调修复",
+  );
+  assert.equal(
+    T.threadTitleFromText("fix-login（登录回调修复）。后续再补回归测试"),
+    "登录回调修复",
+  );
+  assert.equal(
+    T.threadTitleFromText("fix-login (登录回调修复) 已合入"),
+    "登录回调修复 · 已合入",
+  );
+  assert.equal(
+    T.threadTitleFromText("feat-thread-list-ui (Thread list readability) shipped to main"),
+    "Thread list readability · shipped to main",
+  );
+  assert.equal(
+    T.threadTitleFromText("feat-nested（阶段二 (v2) 优化）已完成"),
+    "阶段二 (v2) 优化 · 已完成",
+  );
+  assert.equal(
+    T.threadTitleFromText("fix-flaky-test 跑完了，结果全绿"),
+    "fix-flaky-test 跑完了，结果全绿",
+    "worker name without parenthetical topic must be preserved",
+  );
+  assert.equal(
+    T.threadTitleFromText("已开好并回查生效（权限直授）：确认无误"),
+    "已开好并回查生效（权限直授）：确认无误",
+    "Chinese prefix with parentheses must not be stripped",
+  );
+  assert.equal(
+    T.threadTitleFromText("Collie（或者其他工具）支持多端"),
+    "Collie（或者其他工具）支持多端",
+    "normal capitalized English noun with parentheses must not be stripped",
+  );
+  assert.equal(
+    T.threadTitleFromText("real-time (beta) mode is slow"),
+    "real-time (beta) mode is slow",
+    "ordinary hyphenated English word + short tag must not be stripped",
+  );
+  assert.equal(
+    T.threadTitleFromText("**普通中文标题** 带 \x60code\x60、~~旧文案~~ 与 [发布说明](https://example.com/rel)"),
+    "普通中文标题 带 code、旧文案 与 发布说明",
+    "non-worker title strips redundant Markdown symbols cleanly",
+  );
+  assert.equal(T.threadTitleFromText("   "), "话题线");
+
+  // 8b) Latest-reply preview & pending light dot in #collie-threads-list
+  const pTs = (m) => new Date(now - m * 60000).toISOString();
+  const popEntries = [
+    // Thread 1: worker-prefixed root, ends with Collie options (pending -> light dot)
+    { id: "p1", role: "collie", text: "\x60feat-unread-anchor\x60（未读自动定位与分割线）已准备就绪，等待确认发版。", at: pTs(30) },
+    { id: "p2", role: "user", text: "手机端和桌面端都验过了吗？", at: pTs(28), re: { entry: "p1", who: "Collie", text: "未读自动定位与分割线" } },
+    { id: "p3", role: "collie", text: "都验完了：**四象限全绿**，要现在切 \x60v0.2.71\x60 发版吗？", at: pTs(2), options: ["直接发版", "再看看"], re: { entry: "p2", who: "你", text: "手机端和桌面端都验过了吗？" } },
+
+    // Thread 2: ordinary Chinese root, ends with Collie check=true (pending -> light dot)
+    { id: "p10", role: "user", text: "帮我检查一下夜间定时任务日志。", at: pTs(25) },
+    { id: "p11", role: "collie", text: "已查完，全部正常。", at: pTs(24), re: { entry: "p10", who: "你", text: "帮我检查一下夜间定时任务日志。" } },
+    { id: "p12", role: "collie", text: "顺带发现一处重试阈值偏高，你空了确认一眼。", at: pTs(5), check: true, re: { entry: "p11", who: "Collie", text: "已查完" } },
+
+    // Thread 3: worker-prefixed root, ends with user reply (settled -> NO dot, preview starts with 你：)
+    { id: "p20", role: "collie", text: "eval-bench-suite（夜间基准评测）跑出结果了，P99 下降 22%。", at: pTs(20) },
+    { id: "p21", role: "user", text: "太棒了，贴一下对比图表。", at: pTs(18), re: { entry: "p20", who: "Collie", text: "夜间基准评测" } },
+    { id: "p22", role: "collie", text: "图表已附上，还要继续跑吗？", at: pTs(15), options: ["继续", "先停"], re: { entry: "p21", who: "你", text: "贴一下对比图表" } },
+    { id: "p23", role: "user", text: "先停吧，**结论够清楚了**\n\n附件：\n/tmp/uploads/001-summary.png", at: pTs(10), re: { entry: "p22", who: "Collie", text: "图表已附上" } },
+
+    // Thread 4: ends with Collie options that were ALREADY resolved/dismissed (not in sup.pending -> NO dot)
+    { id: "p30", role: "user", text: "清理一下旧缓存脚本。", at: pTs(19) },
+    { id: "p31", role: "collie", text: "找到 3 个废弃脚本。", at: pTs(17), re: { entry: "p30", who: "你", text: "清理一下旧缓存脚本。" } },
+    { id: "p32", role: "collie", text: "要直接删除吗？", at: pTs(14), options: ["删除", "归档"], re: { entry: "p31", who: "Collie", text: "找到 3 个废弃脚本。" } },
+  ];
+
+  T.resetChat();
+  T.setView("collie");
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: popEntries,
+    workers: [],
+    pending: [
+      { id: "p3", at: pTs(2), summary: "都验完了，要现在切 v0.2.71 发版吗？", options: ["直接发版", "再看看"] },
+      { id: "p12", at: pTs(5), summary: "顺带发现一处重试阈值偏高", check: true },
+    ],
+  });
+  T.renderSuper({ force: true });
+
+  const popListHtml = getEl("#collie-threads-list").innerHTML;
+  const popItems = popListHtml.match(/<button[\s\S]*?<\/button>/g) || [];
+  assert.equal(popItems.length, 4, "all 4 threads rendered in #collie-threads-list");
+
+  const findPopItem = (rootId) => popItems.find((h) => h.includes('data-th-pick="' + rootId + '"')) || "";
+  const item1 = findPopItem("p1");
+  const item2 = findPopItem("p10");
+  const item3 = findPopItem("p20");
+  const item4 = findPopItem("p30");
+
+  // Thread 1: stripped worker prefix + Collie preview + pending dot
+  assert.ok(item1.includes('<div class="th-pop-title"'), "item1 has title");
+  assert.ok(item1.includes(">未读自动定位与分割线 · 已准备就绪，等待确认发版</div>"), "item1 stripped worker prefix cleanly: " + item1);
+  assert.ok(item1.includes('<div class="th-pop-preview" title="Collie：都验完了：四象限全绿，要现在切 v0.2.71 发版吗？">Collie：都验完了：四象限全绿，要现在切 v0.2.71 发版吗？</div>'), "item1 renders cleaned Collie latest-reply preview: " + item1);
+  assert.ok(item1.includes("is-pending") && item1.includes('data-th-pending="1"') && item1.includes('class="th-pop-dot"'), "item1 shows pending dot for unresolved options");
+
+  // Thread 2: check=true pending dot
+  assert.ok(item2.includes("is-pending") && item2.includes('class="th-pop-dot"'), "item2 shows pending dot for unresolved check");
+  assert.ok(item2.includes("Collie：顺带发现一处重试阈值偏高，你空了确认一眼。"), "item2 renders Collie check preview");
+
+  // Thread 3: stripped worker prefix + user preview (strips attachment trailer & bold) + NO dot
+  assert.ok(item3.includes(">夜间基准评测 · 跑出结果了，P99 下降 22%</div>"), "item3 stripped worker prefix cleanly: " + item3);
+  assert.ok(item3.includes("你：先停吧，结论够清楚了"), "item3 renders cleaned user latest-reply preview");
+  assert.ok(!item3.includes("is-pending") && !item3.includes("th-pop-dot"), "settled user-ended thread has NO pending dot");
+
+  // Thread 4: dismissed/resolved options (absent from sup.pending) -> NO dot
+  assert.ok(!item4.includes("is-pending") && !item4.includes("th-pop-dot"), "resolved options thread absent from sup.pending has NO pending dot");
+
+  // 8c) Dismissing p12 immediately clears its pending dot in #collie-threads-list
+  await T.dismissPending("p12");
+  const afterDismissItems = (getEl("#collie-threads-list").innerHTML.match(/<button[\s\S]*?<\/button>/g) || []);
+  const item2After = afterDismissItems.find((h) => h.includes('data-th-pick="p10"')) || "";
+  assert.ok(!item2After.includes("is-pending") && !item2After.includes("th-pop-dot"), "dismissing p12 immediately removes pending dot");
+
+  // 8d) Alias markers (opts / buttons / pending) work cleanly when sup.pending is absent
+  const aliasEntries = [
+    { id: "a1", role: "user", text: "对比一下两个方案。", at: pTs(11) },
+    { id: "a2", role: "collie", text: "方案 A 更轻，方案 B 更稳。", at: pTs(10), re: { entry: "a1", who: "你", text: "对比一下两个方案。" } },
+    { id: "b1", role: "user", text: "看下另一个分支。", at: pTs(9) },
+    { id: "b2", role: "collie", text: "已经整理好了。", at: pTs(8), re: { entry: "b1", who: "你", text: "看下另一个分支。" } },
+    { id: "c1", role: "user", text: "第三条线也确认一下。", at: pTs(7) },
+    { id: "c2", role: "collie", text: "已就绪。", at: pTs(6), re: { entry: "c1", who: "你", text: "第三条线也确认一下。" } },
+    { id: "c3", role: "collie", text: "等你点头就开始。", at: pTs(5), pending: true, re: { entry: "c2", who: "Collie", text: "已就绪。" } },
+    { id: "b3", role: "collie", text: "等你确认后合并。", at: pTs(3), opts: ["确认合并"], re: { entry: "b2", who: "Collie", text: "已经整理好了。" } },
+    { id: "a3", role: "collie", text: "请拍板用哪个？", at: pTs(1), buttons: [{ label: "用方案 A" }, { label: "用方案 B" }], re: { entry: "a2", who: "Collie", text: "方案 A 更轻" } },
+  ];
+  T.setSup({ router: { status: "idle", alive: true }, entries: aliasEntries, workers: [] });
+  const aliasInfo = T.computeReplyThreads(aliasEntries);
+  assert.equal(T.isThreadPending(aliasInfo.threads.get("a1"), aliasEntries), true, "buttons alias marks thread pending");
+  assert.equal(T.isThreadPending(aliasInfo.threads.get("b1"), aliasEntries), true, "opts alias marks thread pending");
+  assert.equal(T.isThreadPending(aliasInfo.threads.get("c1"), aliasEntries), true, "pending flag alias marks thread pending");
+
+  // 8e) CSS contracts for popover preview & pending dot alignment
+  assert.ok(appCss.includes(".th-pop-preview"), "CSS defines .th-pop-preview");
+  assert.ok(appCss.includes(".th-pop-dot"), "CSS defines .th-pop-dot");
+  assert.ok(appCss.includes(".th-pop-list:has(.th-pop-item.is-pending)"), "CSS aligns gutter via :has() when pending items exist");
+  assert.ok(appCss.includes("@media (forced-colors: active)"), "CSS supports Forced Colors Mode for pending dot");
 
   console.log("OK: all reply-thread, settings, and notification JS tests passed");
 })().catch((err) => {

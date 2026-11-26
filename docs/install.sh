@@ -109,6 +109,48 @@ install_binary() {
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 systemd_env_val() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g'; }
 
+has_systemd_user() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 3 systemctl --user show-environment >/dev/null 2>&1
+  else
+    systemctl --user show-environment >/dev/null 2>&1
+  fi
+}
+
+stop_pidfile() {
+  pf=${1:-}
+  [ -f "${pf}" ] || return 0
+  old_pid=$(tr -d '\r\n\t ' < "${pf}" 2>/dev/null || true)
+  case "${old_pid}" in
+    "" | 0* | *[!0-9]*) return 0 ;;
+  esac
+  kill "${old_pid}" 2>/dev/null || return 0
+  w=0
+  while [ "${w}" -lt 10 ]; do
+    kill -0 "${old_pid}" 2>/dev/null || return 0
+    if sleep 0.2 2>/dev/null; then
+      w=$((w + 1))
+    else
+      sleep 1
+      w=$((w + 5))
+    fi
+  done
+  if kill -0 "${old_pid}" 2>/dev/null; then
+    kill -9 "${old_pid}" 2>/dev/null || true
+    w=0
+    while [ "${w}" -lt 10 ]; do
+      kill -0 "${old_pid}" 2>/dev/null || return 0
+      if sleep 0.2 2>/dev/null; then
+        w=$((w + 1))
+      else
+        sleep 1
+        w=$((w + 5))
+      fi
+    done
+  fi
+}
+
 # service <name> <args…>: run `collie <args…>` in the background, now and
 # after every login (macOS) or boot (Linux, with linger).
 service() {
@@ -183,18 +225,25 @@ RestartSec=5
 WantedBy=default.target"
     if [ -n "${COLLIE_DRY_SERVICE:-}" ]; then say "$unit"; return; fi
     # Containers (cloud dev machines, sandboxes) often have systemctl but no
-    # user bus; fall back to a plain background process there.
-    if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
-      log=$HOME/.collie/$name.log
-      pidf=$HOME/.collie/$name.pid
-      mkdir -p "$HOME/.collie"
-      if [ -f "$pidf" ] && kill "$(cat "$pidf")" 2>/dev/null; then sleep 1; fi
-      PATH=$path nohup "$BIN" "$@" >>"$log" 2>&1 </dev/null &
-      echo $! > "$pidf"
+    # user bus (or a hanging D-Bus socket); fall back to a plain background
+    # process there.
+    if ! has_systemd_user; then
+      log=${HOME}/.collie/${name}.log
+      pidf=${HOME}/.collie/${name}.pid
+      mkdir -p "${HOME}/.collie"
+      stop_pidfile "${pidf}"
+      setsid_bin=$(command -v setsid 2>/dev/null || true)
+      if [ -n "${setsid_bin}" ]; then
+        PATH="${path}" "${setsid_bin}" nohup "${BIN}" "$@" </dev/null >>"${log}" 2>&1 &
+      else
+        PATH="${path}" nohup "${BIN}" "$@" </dev/null >>"${log}" 2>&1 &
+      fi
+      new_pid=$!
+      printf '%s\n' "${new_pid}" > "${pidf}"
       sleep 2
-      kill -0 "$(cat "$pidf")" 2>/dev/null || die "没能启动，看日志：tail -n 30 $log"
-      step "已在后台运行（这台机器没有 systemd 用户服务，用的 nohup；pid $(cat "$pidf")）"
-      say "    日志：tail -f $log"
+      kill -0 "${new_pid}" 2>/dev/null || die "没能启动，看日志：tail -n 30 ${log}"
+      step "已在后台运行（这台机器没有 systemd 用户服务，用的 nohup；pid ${new_pid}）"
+      say "    日志：tail -f ${log}"
       say "    机器重启后不会自动起来，重跑这条安装命令即可"
       return
     fi

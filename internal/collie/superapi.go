@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -58,6 +59,9 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("GET /api/super/integrations/{kind}/probe", s.superProbeIntegration)
 	api("POST /api/super/integrations/{kind}/probe", s.superProbeIntegration)
 	api("POST /api/super/integrations/feishu/pair", s.superFeishuPair)
+	api("POST /api/super/integrations/feishu/onboard", s.superFeishuOnboardStart)
+	api("GET /api/super/integrations/feishu/onboard", s.superFeishuOnboardStatus)
+	api("DELETE /api/super/integrations/feishu/onboard", s.superFeishuOnboardCancel)
 	api("POST /api/super/notify/test", s.superTestNotify)
 	mux.HandleFunc("POST /hooks/{source}", s.webhook)
 }
@@ -1139,6 +1143,49 @@ func (s *Server) superFeishuPair(w http.ResponseWriter, r *http.Request) {
 		"expires_at": exp,
 		"message":    "请在 2 分钟内用飞书给机器人发任意一条私信，系统将自动锁定你的 OpenID。",
 	})
+}
+
+func (s *Server) superFeishuOnboardStart(w http.ResponseWriter, r *http.Request) {
+	if s.sup == nil || s.sup.feishuOnboard == nil {
+		writeJSON(w, 503, map[string]any{"error": "feishu onboard not available"})
+		return
+	}
+	var req FeishuOnboardStartRequest
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeJSON(w, 400, map[string]any{"error": "invalid JSON body"})
+			return
+		}
+	}
+	view, err := s.sup.feishuOnboard.Start(r.Context(), req)
+	if err != nil {
+		var bad *feishuOnboardBadRequestError
+		if errors.As(err, &bad) {
+			writeJSON(w, 400, map[string]any{"error": bad.Error()})
+			return
+		}
+		writeJSON(w, 502, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, view)
+}
+
+func (s *Server) superFeishuOnboardStatus(w http.ResponseWriter, r *http.Request) {
+	if s.sup == nil || s.sup.feishuOnboard == nil {
+		writeJSON(w, 503, map[string]any{"error": "feishu onboard not available"})
+		return
+	}
+	writeJSON(w, 200, s.sup.feishuOnboard.Status())
+}
+
+func (s *Server) superFeishuOnboardCancel(w http.ResponseWriter, r *http.Request) {
+	if s.sup == nil || s.sup.feishuOnboard == nil {
+		writeJSON(w, 503, map[string]any{"error": "feishu onboard not available"})
+		return
+	}
+	s.sup.feishuOnboard.Cancel()
+	writeJSON(w, 200, map[string]any{"ok": true, "state": feishuOnboardStateIdle})
 }
 
 func (s *Server) superTestNotify(w http.ResponseWriter, r *http.Request) {

@@ -3559,6 +3559,144 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
 .int-set-note { margin: 0; font-size: 12.5px; color: var(--fg-3); line-height: 1.55; }
 .int-set-note button { border: 0; background: none; padding: 0; color: var(--fg); font-weight: 500; text-decoration: underline; text-underline-offset: 2px; }
 
+/* Feishu one-click onboarding card, QR light surface & collapsible manual fallback */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.tnum { font-variant-numeric: tabular-nums; }
+.int-onboard-card {
+  border: 1px solid var(--line-2); border-radius: 13px; background: var(--bg-2);
+  padding: 14px 15px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0;
+}
+.int-onboard-head { display: grid; gap: 4px; min-width: 0; }
+.int-onboard-title-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.int-onboard-title { font-size: 14px; font-weight: 600; color: var(--fg); letter-spacing: -.01em; }
+.int-onboard-badge {
+  font-size: 11px; font-weight: 500; color: var(--fg-2);
+  padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--bg);
+}
+.int-onboard-desc { margin: 0; font-size: 12.5px; color: var(--fg-2); line-height: 1.55; }
+.int-onboard-opts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+.int-onboard-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; }
+.int-onboard-cta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 2px; }
+.int-onboard-hint { font-size: 12px; color: var(--fg-3); line-height: 1.45; }
+.int-onboard-inline {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2);
+  padding: 12px 13px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0;
+}
+.int-onboard-wait { display: grid; grid-template-columns: minmax(0, 1fr); gap: 11px; min-width: 0; }
+.int-onboard-qr-row { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.int-qr-frame {
+  /* Force light surface so mobile Feishu scanners reliably read the QR in dark mode. */
+  color-scheme: only light;
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid rgba(15, 23, 42, .12);
+  border-radius: 12px;
+  padding: 8px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+}
+.int-qr-frame img { display: block; width: 144px; height: 144px; border-radius: 6px; }
+.int-onboard-actions { flex: 1; min-width: 0; display: grid; gap: 9px; align-content: start; }
+.int-onboard-guide { margin: 0; font-size: 12.5px; color: var(--fg-2); line-height: 1.55; overflow-wrap: anywhere; }
+.int-onboard-guide code, .int-onboard-code code {
+  font: 11.5px var(--mono); background: var(--bg); border: 1px solid var(--line);
+  padding: 1px 5px; border-radius: 5px; color: var(--fg);
+}
+.int-onboard-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.int-ob-open { text-decoration: none; }
+.int-copy-wrap { position: relative; display: inline-flex; align-items: center; }
+.int-copy-btn { min-inline-size: 24px; min-block-size: 24px; }
+.int-copy-tip {
+  position: absolute; top: calc(100% + 5px); left: 50%; transform: translateX(-50%); z-index: 6;
+  padding: 3px 8px; border-radius: 6px; background: var(--fg); color: var(--bg);
+  font: 500 11px/1.3 var(--sans); white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity .14s;
+}
+.int-copy-btn[data-copied] + .int-copy-tip,
+.int-copy-btn[data-failed] + .int-copy-tip { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .int-copy-tip { transition: none; }
+}
+.int-onboard-code { margin: 0; font-size: 11.5px; color: var(--fg-3); }
+.int-onboard-status {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border-radius: 9px; border: 1px solid var(--line); background: var(--bg);
+  font-size: 12px; color: var(--fg-2); min-width: 0;
+}
+.int-onboard-status.is-switched {
+  border-color: color-mix(in srgb, var(--ok) 36%, var(--line));
+}
+.int-onboard-status-txt { flex: 1; min-width: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.int-onboard-err {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border-radius: 9px; border: 1px solid color-mix(in srgb, var(--attn) 35%, var(--line));
+  background: var(--attn-soft); font-size: 12px; color: var(--fg); min-width: 0;
+}
+.int-onboard-err-txt { flex: 1; min-width: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.int-onboard-done {
+  display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, var(--line));
+  background: color-mix(in srgb, var(--ok) 8%, var(--bg)); color: var(--fg); font-size: 12.5px;
+}
+.int-onboard-done svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--ok); }
+.int-onboard-done strong { display: block; font-size: 13px; font-weight: 600; color: var(--fg); line-height: 1.4; }
+.int-onboard-done p { margin: 2px 0 0; font-size: 12px; color: var(--fg-2); line-height: 1.5; }
+
+/* Manual fallback <details> (accordion guide) */
+.int-manual-fold {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg); overflow: hidden;
+}
+.int-manual-fold > summary {
+  list-style: none; display: flex; align-items: center; gap: 8px;
+  padding: 11px 13px; cursor: pointer; user-select: none; transition: background .14s;
+}
+.int-manual-fold > summary::-webkit-details-marker { display: none; }
+.int-manual-fold > summary:hover { background: var(--bg-2); }
+.int-manual-fold > summary:focus-visible { outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--fg) 18%, transparent); }
+.int-manual-fold > summary::before {
+  content: ""; width: 13px; height: 13px; flex: none;
+  background-color: var(--fg-3);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  rotate: -90deg;
+}
+.int-manual-fold[open] > summary::before { rotate: 0deg; }
+@media (prefers-reduced-motion: no-preference) {
+  .int-manual-fold > summary::before { transition: rotate .2s ease; }
+}
+.int-manual-title { font-size: 13px; font-weight: 500; color: var(--fg); }
+.int-manual-hint { margin-left: auto; font-size: 11.5px; color: var(--fg-3); white-space: nowrap; }
+.int-manual-fold::details-content { interpolate-size: allow-keywords; overflow: clip; contain: layout; }
+.int-manual-fold:not([open])::details-content { block-size: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .int-manual-fold::details-content {
+    transition-property: block-size, content-visibility;
+    transition-duration: .24s;
+    transition-timing-function: ease;
+    transition-behavior: allow-discrete;
+  }
+}
+.int-manual-body {
+  border-top: 1px solid var(--line); padding: 12px 13px 14px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0;
+}
+
+@media (max-width: 560px) {
+  .int-onboard-row { grid-template-columns: minmax(0, 1fr); }
+  .int-onboard-qr-row { flex-direction: column; align-items: stretch; }
+  .int-qr-frame { align-self: center; }
+  .int-qr-frame img { width: 156px; height: 156px; }
+  .int-onboard-btns .btn { flex: 1 1 auto; justify-content: center; }
+  .int-copy-wrap { flex: 1 1 auto; }
+  .int-copy-wrap .btn { width: 100%; justify-content: center; }
+  .int-manual-hint { display: none; }
+}
+
 @media (pointer: coarse) {
   dialog.int-sheet input:where(:not([type=checkbox], [type=radio])) {
     font-size: 16px; height: 36px; font-family: var(--sans);

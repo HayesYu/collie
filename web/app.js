@@ -1047,7 +1047,10 @@
       if (view === "collie") renderSuper();
       if (view === "auto" && autoTab === "integrations") {
         const nextSum = JSON.stringify(sup.integrations_summary || null);
-        if (nextSum !== prevSum && !$("#int-modal")?.open) loadAuto();
+        if (nextSum !== prevSum) {
+          if (!$("#int-modal")?.open) loadAuto();
+          else if (intModalKind === "feishu" && intModalDraft) refreshFeishuModalHealth();
+        }
       }
       if (view === "auto" && autoTab === "inbox") {
         const nextInboxKey = `${sup.queued}:${(sup.entries || []).length}:${sup.entries?.[sup.entries.length - 1]?.id || ""}`;
@@ -3580,6 +3583,8 @@
   let intModalKind = null;
   let intModalDraft = null;
   let intPairTimer = null;
+  let intOnboardPollTimer = null;
+  let intOnboardTickTimer = null;
   const INT_STATUS_TEXT = {
     connected: "已连通",
     connecting: "连接中",
@@ -3983,11 +3988,50 @@
       </details>`;
   }
 
+  function stopOnboardTimers() {
+    clearInterval(intOnboardPollTimer);
+    intOnboardPollTimer = null;
+    clearInterval(intOnboardTickTimer);
+    intOnboardTickTimer = null;
+  }
+
+  function formatOnboardRemaining(sec) {
+    const s = Math.max(0, Math.floor(Number(sec) || 0));
+    const m = Math.floor(s / 60), r = s % 60;
+    return m > 0 ? `${m} 分 ${String(r).padStart(2, "0")} 秒` : `${r} 秒`;
+  }
+
+  function onboardRemainingSec(d) {
+    if (!d) return 0;
+    if (d.onboardDeadlineMs > 0) return Math.max(0, Math.ceil((d.onboardDeadlineMs - Date.now()) / 1000));
+    return Math.max(0, Number(d.onboard?.remaining_sec) || 0);
+  }
+
+  async function refreshFeishuModalHealth() {
+    if (!intModal?.open || intModalKind !== "feishu" || !intModalDraft) return;
+    try {
+      const r = await api("/api/super/integrations");
+      if (!intModal?.open || intModalKind !== "feishu" || !intModalDraft) return;
+      intPayload = r;
+      const item = (r.integrations || []).find((x) => x.kind === "feishu");
+      if (!item) return;
+      intModalDraft.health = item.health || intModalDraft.health;
+      const st = intEffectiveState({
+        configured: !!intModalDraft.app_id && (intModalDraft.secret_set || !!intModalDraft.app_secret),
+        enabled: intModalDraft.enabled,
+        health: intModalDraft.health,
+      });
+      const stEl = $("#int-modal-state");
+      if (stEl) stEl.innerHTML = `<span class="sdot ${esc(st)}" aria-hidden="true"></span><span>${esc(INT_STATUS_TEXT[st] || st)}</span>`;
+    } catch {}
+  }
+
   const intModal = $("#int-modal");
   async function closeIntModal(reason = "cancel") {
     if (!intModal?.open || intModal.hasAttribute("data-closing")) return;
     clearInterval(intPairTimer);
     intPairTimer = null;
+    stopOnboardTimers();
     if (!supportsTopLayerExit()) {
       intModal.setAttribute("data-closing", "");
       const anims = intModal.getAnimations({ subtree: true });
@@ -4022,6 +4066,7 @@
     intModal.addEventListener("close", () => {
       clearInterval(intPairTimer);
       intPairTimer = null;
+      stopOnboardTimers();
       intModal.returnValue = "";
       intModal.removeAttribute("data-closing");
       intModalKind = null;
@@ -4049,6 +4094,14 @@
         enabled: !!item.enabled,
         health: item.health || { state: "unconfigured" },
         pairing: item.extra?.pairing || { active: false },
+        onboardMode: "create",
+        onboardClientId: "",
+        onboardStarting: false,
+        onboard: null,
+        onboardDeadlineMs: 0,
+        onboardDoneTitle: "",
+        onboardDoneMsg: "",
+        manualOpen: false,
         testState: null,
         testMsg: "",
         saving: false,
@@ -4057,6 +4110,7 @@
       if (!intModal.open) intModal.showModal();
       $("#int-modal-body").scrollTop = 0;
       if (intModalDraft.pairing?.active) startPairPoll();
+      syncFeishuOnboardOnOpen(item);
       return;
     }
 
@@ -4171,10 +4225,108 @@
     }
   }
 
+  async function syncFeishuOnboardOnOpen(item) {
+    try {
+      const res = await api("/api/super/integrations/feishu/onboard");
+      if (!intModal?.open || intModalKind !== "feishu" || !intModalDraft) return;
+      if (res && (res.state === "waiting" || res.state === "domain_switched")) {
+        intModalDraft.onboard = res;
+        intModalDraft.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec) || 0) * 1000;
+        if (res.region) intModalDraft.region = res.region;
+        if (res.mode === "existing" || res.mode === "create") intModalDraft.onboardMode = res.mode;
+        renderIntModal(item);
+        startOnboardPoll(item);
+      }
+    } catch {}
+  }
+
+  function startOnboardPoll(item) {
+    stopOnboardTimers();
+    intOnboardTickTimer = setInterval(() => {
+      if (!intModal?.open || intModalKind !== "feishu" || !intModalDraft) {
+        stopOnboardTimers();
+        return;
+      }
+      const cd = $("#fs-ob-countdown");
+      if (cd) cd.textContent = formatOnboardRemaining(onboardRemainingSec(intModalDraft));
+    }, 1000);
+    intOnboardPollTimer = setInterval(async () => {
+      if (!intModal?.open || intModalKind !== "feishu" || !intModalDraft) {
+        stopOnboardTimers();
+        return;
+      }
+      const d = intModalDraft;
+      try {
+        const res = await api("/api/super/integrations/feishu/onboard");
+        if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+        const st = res?.state || "idle";
+        if (st === "waiting" || st === "domain_switched") {
+          const prevSt = d.onboard?.state;
+          const prevRegion = d.onboard?.region;
+          d.onboard = res;
+          d.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec) || 0) * 1000;
+          if (res.region) d.region = res.region;
+          if (st !== prevSt || res.region !== prevRegion) {
+            renderIntModal(item);
+          } else {
+            const cd = $("#fs-ob-countdown");
+            if (cd) cd.textContent = formatOnboardRemaining(onboardRemainingSec(d));
+          }
+          return;
+        }
+        stopOnboardTimers();
+        if (st === "completed") {
+          const wasExisting = res.mode === "existing" || d.configured;
+          d.onboard = null;
+          d.onboardDeadlineMs = 0;
+          try {
+            const r = await api("/api/super/integrations");
+            intPayload = r;
+            const fresh = (r.integrations || []).find((x) => x.kind === "feishu") || item;
+            const fc = fresh.config || {};
+            d.configured = !!fresh.configured;
+            d.secret_set = !!fresh.secret_set;
+            d.enabled = !!fresh.enabled;
+            d.region = fc.region || res.region || d.region;
+            d.app_id = fc.app_id || res.app_id || d.app_id;
+            d.app_secret = "";
+            d.allow_open_id = fc.allow_open_id || (Array.isArray(fc.allow_open_ids) ? fc.allow_open_ids.join(", ") : (res.open_id || d.allow_open_id));
+            d.feedback_chat_ids = fc.feedback_chat_id || (Array.isArray(fc.feedback_chat_ids) ? fc.feedback_chat_ids.join(", ") : d.feedback_chat_ids);
+            d.health = fresh.health || d.health;
+            d.onboardDoneTitle = wasExisting ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入";
+            d.onboardDoneMsg = "凭据已按 0600 权限安全保存并自动拉起长连接，可点下方「测试连通 · 发验证卡片」校验；若企业开启应用发布审批，待管理员通过后即可收发消息。";
+            renderIntModal(fresh);
+            $("#int-modal-body").scrollTop = 0;
+            toast(wasExisting ? "已补齐飞书应用权限并重载长连接" : "飞书机器人已自动配置并启动长连接");
+            if (view === "auto" && autoTab === "integrations") loadAuto();
+          } catch {
+            d.configured = true;
+            d.secret_set = true;
+            d.enabled = true;
+            if (res.app_id) d.app_id = res.app_id;
+            if (res.region) d.region = res.region;
+            if (res.open_id && !d.allow_open_id) d.allow_open_id = res.open_id;
+            d.onboardDoneTitle = wasExisting ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入";
+            d.onboardDoneMsg = "凭据已安全保存并自动拉起长连接，可点击下方「测试连通 · 发验证卡片」校验。";
+            renderIntModal(item);
+          }
+          return;
+        }
+        d.onboard = st === "idle" ? null : res;
+        d.onboardDeadlineMs = 0;
+        renderIntModal(item);
+      } catch {}
+    }, 2000);
+  }
+
   function renderFeishuIntModal(item) {
     const d = intModalDraft;
     const isConfigured = !!(d.configured || d.secret_set || item?.configured || item?.secret_set);
     const st = intEffectiveState({ configured: !!d.app_id && (d.secret_set || !!d.app_secret), enabled: d.enabled, health: d.health });
+    const ob = d.onboard;
+    const isObWaiting = !!(ob && (ob.state === "waiting" || ob.state === "domain_switched"));
+    const isObTerminalErr = !!(ob && (ob.state === "denied" || ob.state === "expired" || ob.state === "error"));
+
     $("#int-modal-icon").innerHTML = INT_ICONS[d.kind] || INT_ICONS.gitforge;
     $("#int-modal-title").textContent = item?.name || "飞书机器人";
     $("#int-modal-sub").textContent = item?.subtitle || "长连接双向对话 · 零公网门槛";
@@ -4199,84 +4351,241 @@
         <button type="button" class="btn ghost small" id="fs-pair-cancel">取消</button>
       </div>` : "";
 
-    $("#int-modal-body").innerHTML = `
-      ${st === "error" && d.health?.last_error ? `
-        <div class="int-modal-alert" role="alert">
-          <span class="sdot error" aria-hidden="true"></span>
-          <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
-        </div>` : ""}
+    const renderOnboardWaiting = () => {
+      if (!isObWaiting) return "";
+      const safeHref = /^https:\/\//i.test(ob.url || "") ? ob.url : "";
+      const safeQR = /^(data:image\/(?:png|svg\+xml);base64,|demo-qr\.png)/i.test(ob.qr_data_url || "") ? ob.qr_data_url : "";
+      const isExisting = ob.mode === "existing";
+      const targetHint = isExisting
+        ? (ob.client_id ? `确认页已自动定位应用 <code>${esc(ob.client_id)}</code>，点确认即可一键补齐最小 IM 权限与事件/卡片双长连接。` : "在确认页选择你的已有飞书应用并确认，将自动补齐最小 IM 权限与事件/卡片双长连接。")
+        : "用飞书 App 扫码或在浏览器打开确认页，点「创建」即可自动配好机器人、双长连接与白名单。";
+      const statusText = ob.state === "domain_switched"
+        ? (ob.region === "intl"
+          ? "检测到海外 Lark 账号，已自动切至 Lark 域等待确认（剩余 "
+          : "检测到国内飞书账号，已自动切至飞书域等待确认（剩余 ")
+        : (isExisting ? "等待你在飞书中确认补齐（剩余 " : "等待你在飞书中确认创建（剩余 ");
+      return `
+        <div class="int-onboard-wait">
+          <div class="int-onboard-qr-row">
+            ${safeQR ? `<div class="int-qr-frame"><img src="${esc(safeQR)}" alt="飞书一键确认二维码" width="144" height="144"></div>` : ""}
+            <div class="int-onboard-actions">
+              <p class="int-onboard-guide">${targetHint}</p>
+              <div class="int-onboard-btns">
+                ${safeHref ? `<a class="btn primary int-ob-open" href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">在浏览器打开确认页 ↗</a>` : ""}
+                ${safeHref ? `
+                  <span class="int-copy-wrap">
+                    <button type="button" class="btn int-copy-btn" command="--copy" commandfor="fs-ob-url-src">复制确认链接</button>
+                    <span class="int-copy-tip" role="status"></span>
+                  </span>
+                  <span id="fs-ob-url-src" class="sr-only">${esc(safeHref)}</span>` : ""}
+              </div>
+              ${ob.user_code ? `<p class="int-onboard-code">确认码：<code>${esc(ob.user_code)}</code></p>` : ""}
+            </div>
+          </div>
+          <div class="int-onboard-status${ob.state === "domain_switched" ? " is-switched" : ""}" role="status">
+            <span class="int-spinner" aria-hidden="true"></span>
+            <span class="int-onboard-status-txt">${statusText}<span id="fs-ob-countdown" class="tnum">${esc(formatOnboardRemaining(onboardRemainingSec(d)))}</span>）…</span>
+            <button type="button" class="btn ghost small" id="fs-ob-cancel-btn">取消</button>
+          </div>
+        </div>`;
+    };
 
-      <section class="int-sec">
-        <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+    const renderOnboardTerminal = () => {
+      if (!isObTerminalErr) return "";
+      const fallbackMsg = ob.state === "denied"
+        ? "你已取消本次飞书授权确认，可随时重新发起。"
+        : ob.state === "expired"
+          ? "确认二维码已过期，请重新生成。"
+          : "一键开通未完成，请重试或改用手动填写。";
+      return `
+        <div class="int-onboard-err" role="status">
+          <span class="sdot error" aria-hidden="true"></span>
+          <span class="int-onboard-err-txt">${esc(ob.error || fallbackMsg)}</span>
+          <button type="button" class="btn ghost small" id="fs-ob-retry-btn">重新生成</button>
+        </div>`;
+    };
+
+    const credentialsFieldsHTML = (includeRegion = true) => `
+      ${includeRegion ? `
         <div class="int-field">
           <span class="int-field-label">平台区域</span>
           <div class="seg" role="group" aria-label="平台区域">
             <button type="button" class="${d.region === "cn" ? "on" : ""}" data-fs-region="cn">国内飞书</button>
             <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">海外 Lark</button>
           </div>
-        </div>
-        <div class="int-field">
-          <label class="int-field-label" for="fs-app-id">App ID</label>
-          <input id="fs-app-id" value="${esc(d.app_id)}" placeholder="cli_xxxxxxxxxxxx" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
-        </div>
-        <div class="int-field">
-          <label class="int-field-label" for="fs-app-secret">App Secret <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></label>
-          <input id="fs-app-secret" type="password" value="${esc(d.app_secret)}" placeholder="${d.secret_set ? "已保存在本机 secrets.json（留空则保持不变）" : "粘贴应用的 App Secret"}" autocomplete="new-password">
-          <p class="int-field-help">凭据以 <code>0600</code> 权限单独落盘，界面、接口与日志永不回显明文。</p>
-        </div>
-      </section>
-
-      <section class="int-sec">
-        <h3 class="int-sec-title">安全白名单与对话方式</h3>
-        <div class="int-field">
-          <label class="int-field-label" for="fs-openid">允许对话的本人 OpenID <span class="opt">强烈建议</span></label>
-          <div class="int-input-row has-multi">
-            <input id="fs-openid" value="${esc(d.allow_open_id)}" placeholder="ou_xxxxxxxxxxxx，多个逗号隔开" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
-            <button type="button" class="btn small" id="fs-detect-id" title="从本机 lark-cli 读取当前登录账号">自动填入</button>
-            <button type="button" class="btn small" id="fs-pair-btn" ${d.pairing?.active ? "disabled" : ""} title="给机器人发一条私信自动抓拍锁定">私信配对</button>
-          </div>
-          ${pairBanner}
-          <p class="int-field-help">仅白名单账号可唤醒 Collie 与点击卡片拍板按钮，防止他人借机器人操作你的电脑。</p>
-        </div>
-        <div class="int-field">
-          <label class="int-field-label" for="fs-feedback-chats">只读反馈监听群 Chat ID <span class="opt">可选</span></label>
-          <textarea id="fs-feedback-chats" name="feedback_chat_ids" rows="2" placeholder="oc_xxxxxxxxxxxx，多个逗号或换行隔开" aria-describedby="fs-feedback-help" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">${esc(d.feedback_chat_ids)}</textarea>
-          <p class="int-field-help" id="fs-feedback-help">仅在群内 @Collie 时以只读建议送入主会话，不响应普通闲聊、不授予执行权限。</p>
-        </div>
-        <div class="int-toggle-row">
-          <div class="tl">
-            <b>群聊中仅响应 @Collie</b>
-            <small>私信默认直接回复；拉进群后只有 @机器人 才会触发，不打扰群聊。</small>
-          </div>
-          <button type="button" class="switch" id="fs-mention-sw" role="switch" aria-checked="${d.group_mention_only ? "true" : "false"}" aria-label="群聊中仅响应 @Collie"></button>
-        </div>
-        <div class="int-toggle-row">
-          <div class="tl">
-            <b>飞书对话立即同步卡片</b>
-            <small>从飞书发出的消息会立刻回传交互卡片，不受「网页在线静默」限制。</small>
-          </div>
-          <button type="button" class="switch" id="fs-sync-sw" role="switch" aria-checked="${d.instant_chat_sync ? "true" : "false"}" aria-label="飞书对话立即同步卡片"></button>
-        </div>
-      </section>
-
-      <section class="int-sec">
-        <h3 class="int-sec-title">连通自检</h3>
-        <div class="int-test-box">
-          <div class="int-test-head">
-            <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
-            ${testRow()}
-          </div>
-        </div>
-      </section>
-    `;
-
-    $("#int-modal-foot").innerHTML = `
-      ${isConfigured ? `<button type="button" class="btn ghost small" id="fs-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>` : ""}
-      <div class="int-sheet-foot-right">
-        <button type="button" class="btn" id="fs-cancel-btn">取消</button>
-        <button type="button" class="btn primary" id="fs-save-btn" ${d.saving ? "disabled" : ""}>${d.saving ? "保存中…" : "保存并应用"}</button>
+        </div>` : ""}
+      <div class="int-field">
+        <label class="int-field-label" for="fs-app-id">App ID</label>
+        <input id="fs-app-id" value="${esc(d.app_id)}" placeholder="cli_xxxxxxxxxxxx" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
       </div>
-    `;
+      <div class="int-field">
+        <label class="int-field-label" for="fs-app-secret">App Secret <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></label>
+        <input id="fs-app-secret" type="password" value="${esc(d.app_secret)}" placeholder="${d.secret_set ? "已保存在本机 secrets.json（留空则保持不变）" : "粘贴应用的 App Secret"}" autocomplete="new-password">
+        <p class="int-field-help">凭据以 <code>0600</code> 权限单独落盘，界面、接口与日志永不回显明文。</p>
+      </div>`;
+
+    const allowlistFieldsHTML = `
+      <div class="int-field">
+        <label class="int-field-label" for="fs-openid">允许对话的本人 OpenID <span class="opt">强烈建议</span></label>
+        <div class="int-input-row has-multi">
+          <input id="fs-openid" value="${esc(d.allow_open_id)}" placeholder="ou_xxxxxxxxxxxx，多个逗号隔开" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+          <button type="button" class="btn small" id="fs-detect-id" title="从本机 lark-cli 读取当前登录账号">自动填入</button>
+          <button type="button" class="btn small" id="fs-pair-btn" ${d.pairing?.active ? "disabled" : ""} title="给机器人发一条私信自动抓拍锁定">私信配对</button>
+        </div>
+        ${pairBanner}
+        <p class="int-field-help">仅白名单账号可唤醒 Collie 与点击卡片拍板按钮，防止他人借机器人操作你的电脑。</p>
+      </div>
+      <div class="int-field">
+        <label class="int-field-label" for="fs-feedback-chats">只读反馈监听群 Chat ID <span class="opt">可选</span></label>
+        <textarea id="fs-feedback-chats" name="feedback_chat_ids" rows="2" placeholder="oc_xxxxxxxxxxxx，多个逗号或换行隔开" aria-describedby="fs-feedback-help" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">${esc(d.feedback_chat_ids)}</textarea>
+        <p class="int-field-help" id="fs-feedback-help">仅在群内 @Collie 时以只读建议送入主会话，不响应普通闲聊、不授予执行权限。</p>
+      </div>
+      <div class="int-toggle-row">
+        <div class="tl">
+          <b>群聊中仅响应 @Collie</b>
+          <small>私信默认直接回复；拉进群后只有 @机器人 才会触发，不打扰群聊。</small>
+        </div>
+        <button type="button" class="switch" id="fs-mention-sw" role="switch" aria-checked="${d.group_mention_only ? "true" : "false"}" aria-label="群聊中仅响应 @Collie"></button>
+      </div>
+      <div class="int-toggle-row">
+        <div class="tl">
+          <b>飞书对话立即同步卡片</b>
+          <small>从飞书发出的消息会立刻回传交互卡片，不受「网页在线静默」限制。</small>
+        </div>
+        <button type="button" class="switch" id="fs-sync-sw" role="switch" aria-checked="${d.instant_chat_sync ? "true" : "false"}" aria-label="飞书对话立即同步卡片"></button>
+      </div>`;
+
+    if (!isConfigured) {
+      $("#int-modal-body").innerHTML = `
+        ${st === "error" && d.health?.last_error ? `
+          <div class="int-modal-alert" role="alert">
+            <span class="sdot error" aria-hidden="true"></span>
+            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+          </div>` : ""}
+
+        <section class="int-onboard-card" aria-label="飞书一键开通向导">
+          <div class="int-onboard-head">
+            <div class="int-onboard-title-row">
+              <span class="int-onboard-title">一键接入飞书机器人</span>
+              <span class="int-onboard-badge">推荐</span>
+            </div>
+            <p class="int-onboard-desc">扫码或在浏览器确认，自动完成创建或绑定应用、开启机器人、配置最小消息权限、启用事件与卡片双长连接，并自动锁定你的安全白名单。</p>
+          </div>
+
+          ${isObWaiting ? renderOnboardWaiting() : `
+            <div class="int-onboard-opts">
+              <div class="int-onboard-row">
+                <div class="int-field">
+                  <span class="int-field-label">平台区域</span>
+                  <div class="seg" role="group" aria-label="平台区域">
+                    <button type="button" class="${d.region === "cn" ? "on" : ""}" data-fs-region="cn">国内飞书</button>
+                    <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">海外 Lark</button>
+                  </div>
+                </div>
+                <div class="int-field">
+                  <span class="int-field-label">开通方式</span>
+                  <div class="seg" role="group" aria-label="飞书开通方式">
+                    <button type="button" class="${d.onboardMode === "create" ? "on" : ""}" data-fs-ob-mode="create">新建应用</button>
+                    <button type="button" class="${d.onboardMode === "existing" ? "on" : ""}" data-fs-ob-mode="existing">绑定已有应用</button>
+                  </div>
+                </div>
+              </div>
+              ${d.onboardMode === "existing" ? `
+                <div class="int-field">
+                  <label class="int-field-label" for="fs-ob-client-id">已有应用 App ID <span class="opt">可选</span></label>
+                  <input id="fs-ob-client-id" value="${esc(d.onboardClientId)}" placeholder="留空可在飞书确认页直接选择已有应用，或填入 cli_…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+                </div>` : ""}
+              <div class="int-onboard-cta">
+                <button type="button" class="btn primary" id="fs-ob-start-btn" ${d.onboardStarting ? "disabled" : ""}>
+                  ${d.onboardStarting ? "正在生成确认码…" : (d.onboardMode === "existing" ? "一键绑定并补齐权限" : "一键开通飞书")}
+                </button>
+                <span class="int-onboard-hint">零公网地址 · 自动配好双长连接与白名单</span>
+              </div>
+              ${renderOnboardTerminal()}
+            </div>`}
+        </section>
+
+        <details class="int-manual-fold" id="fs-manual-fold" ${d.manualOpen ? "open" : ""}>
+          <summary>
+            <span class="int-manual-title">手动填写 App ID / App Secret</span>
+            <span class="int-manual-hint">已有凭据或受限租户兜底</span>
+          </summary>
+          <div class="int-manual-body">
+            <div class="int-sec">
+              ${credentialsFieldsHTML(false)}
+            </div>
+            <div class="int-sec">
+              <div class="int-sec-title">安全白名单与对话方式</div>
+              ${allowlistFieldsHTML}
+            </div>
+            <div class="int-sec">
+              <div class="int-sec-title">连通自检</div>
+              <div class="int-test-box">
+                <div class="int-test-head">
+                  <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
+                  ${testRow()}
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
+      `;
+    } else {
+      $("#int-modal-body").innerHTML = `
+        ${st === "error" && d.health?.last_error ? `
+          <div class="int-modal-alert" role="alert">
+            <span class="sdot error" aria-hidden="true"></span>
+            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+          </div>` : ""}
+
+        ${d.onboardDoneMsg ? `
+          <div class="int-onboard-done" role="status">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+            <div>
+              <strong>${esc(d.onboardDoneTitle || "已完成飞书接入")}</strong>
+              <p>${esc(d.onboardDoneMsg)}</p>
+            </div>
+          </div>` : ""}
+
+        <section class="int-sec">
+          <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+          ${credentialsFieldsHTML(true)}
+        </section>
+
+        <section class="int-sec">
+          <h3 class="int-sec-title">安全白名单与对话方式</h3>
+          ${allowlistFieldsHTML}
+        </section>
+
+        <section class="int-sec">
+          <h3 class="int-sec-title">连通自检与一键补齐</h3>
+          <div class="int-test-box">
+            <div class="int-test-head">
+              <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
+              <button type="button" class="btn" id="fs-ob-repair-btn" ${d.onboardStarting || isObWaiting ? "disabled" : ""} title="带当前 App ID 唤起飞书确认页，一键补齐最小 IM 权限与事件/卡片双长连接">
+                ${d.onboardStarting ? "生成确认码…" : "一键补齐权限/回调"}
+              </button>
+            </div>
+            ${testRow()}
+            ${isObWaiting || isObTerminalErr ? `<div class="int-onboard-inline" id="fs-ob-inline">${isObWaiting ? renderOnboardWaiting() : renderOnboardTerminal()}</div>` : ""}
+          </div>
+        </section>
+      `;
+    }
+
+    const renderFeishuFoot = () => {
+      const showSave = isConfigured || d.manualOpen || !!d.app_id.trim() || !!d.app_secret.trim();
+      $("#int-modal-foot").innerHTML = `
+        ${isConfigured ? `<button type="button" class="btn ghost small" id="fs-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>` : ""}
+        <div class="int-sheet-foot-right">
+          <button type="button" class="btn" id="fs-cancel-btn">${showSave ? "取消" : "关闭"}</button>
+          ${showSave ? `<button type="button" class="btn primary" id="fs-save-btn" ${d.saving ? "disabled" : ""}>${d.saving ? "保存中…" : "保存并应用"}</button>` : ""}
+        </div>
+      `;
+      $("#fs-reset-btn")?.addEventListener("click", handleReset);
+      $("#fs-cancel-btn")?.addEventListener("click", () => closeIntModal("cancel"));
+      $("#fs-save-btn")?.addEventListener("click", handleSave);
+    };
 
     const splitIDList = (raw) => String(raw || "").split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean);
     const draftConfigPayload = () => ({
@@ -4294,9 +4603,77 @@
       return s;
     };
 
+    const startOnboardFlow = async (mode, clientID) => {
+      d.onboardStarting = true;
+      d.onboardDoneMsg = "";
+      d.onboardDoneTitle = "";
+      d.manualOpen = false;
+      renderIntModal(item);
+      try {
+        const res = await api("/api/super/integrations/feishu/onboard", {
+          body: { region: d.region, mode, client_id: clientID || "" },
+        });
+        if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+        d.onboardStarting = false;
+        d.onboard = res;
+        d.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec ?? res.expire_in) || 600) * 1000;
+        renderIntModal(item);
+        startOnboardPoll(item);
+        if (isConfigured) {
+          $("#fs-ob-inline")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      } catch (err) {
+        if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+        d.onboardStarting = false;
+        d.onboard = { state: "error", mode, client_id: clientID || "", error: err.message || "发起飞书一键开通失败" };
+        d.onboardDeadlineMs = 0;
+        renderIntModal(item);
+      }
+    };
+
     intModal.querySelectorAll("[data-fs-region]").forEach((b) => {
-      b.addEventListener("click", () => { d.region = b.dataset.fsRegion; renderIntModal(item); });
+      b.addEventListener("click", () => {
+        if ($("#fs-manual-fold")) d.manualOpen = !!$("#fs-manual-fold").open;
+        d.region = b.dataset.fsRegion;
+        renderIntModal(item);
+      });
     });
+    intModal.querySelectorAll("[data-fs-ob-mode]").forEach((b) => {
+      b.addEventListener("click", () => {
+        if ($("#fs-manual-fold")) d.manualOpen = !!$("#fs-manual-fold").open;
+        d.onboardMode = b.dataset.fsObMode;
+        if (isObTerminalErr) d.onboard = null;
+        renderIntModal(item);
+      });
+    });
+    $("#fs-ob-client-id")?.addEventListener("input", (ev) => { d.onboardClientId = ev.target.value; });
+    $("#fs-ob-start-btn")?.addEventListener("click", () => {
+      const cid = d.onboardMode === "existing" ? d.onboardClientId.trim() : "";
+      startOnboardFlow(d.onboardMode, cid);
+    });
+    $("#fs-ob-repair-btn")?.addEventListener("click", () => {
+      startOnboardFlow("existing", d.app_id.trim());
+    });
+    $("#fs-ob-retry-btn")?.addEventListener("click", () => {
+      const mode = isConfigured ? "existing" : (d.onboard?.mode || d.onboardMode || "create");
+      const cid = isConfigured ? d.app_id.trim() : (mode === "existing" ? (d.onboard?.client_id || d.onboardClientId.trim()) : "");
+      startOnboardFlow(mode, cid);
+    });
+    $("#fs-ob-cancel-btn")?.addEventListener("click", async () => {
+      stopOnboardTimers();
+      try {
+        await api("/api/super/integrations/feishu/onboard", { method: "DELETE" });
+      } catch {}
+      if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+      d.onboard = null;
+      d.onboardDeadlineMs = 0;
+      renderIntModal(item);
+    });
+    $("#fs-manual-fold")?.addEventListener("toggle", (ev) => {
+      d.manualOpen = !!ev.target.open;
+      if (!isConfigured) renderFeishuFoot();
+    });
+
     $("#fs-app-id")?.addEventListener("input", (ev) => { d.app_id = ev.target.value; });
     $("#fs-app-secret")?.addEventListener("input", (ev) => { d.app_secret = ev.target.value; });
     $("#fs-openid")?.addEventListener("input", (ev) => { d.allow_open_id = ev.target.value; });
@@ -4363,10 +4740,12 @@
       }
     });
 
-    $("#fs-reset-btn")?.addEventListener("click", async () => {
+    const handleReset = async () => {
       d.saving = true;
       renderIntModal(item);
       try {
+        stopOnboardTimers();
+        await api("/api/super/integrations/feishu/onboard", { method: "DELETE" }).catch(() => {});
         await api("/api/super/integrations/feishu", {
           body: {
             enabled: false,
@@ -4382,11 +4761,9 @@
         renderIntModal(item);
         toast(err.message, "attn");
       }
-    });
+    };
 
-    $("#fs-cancel-btn")?.addEventListener("click", () => closeIntModal("cancel"));
-
-    $("#fs-save-btn")?.addEventListener("click", async () => {
+    const handleSave = async () => {
       const hasCreds = !!d.app_id.trim() && (d.secret_set || !!d.app_secret.trim());
       d.saving = true;
       renderIntModal(item);
@@ -4406,7 +4783,9 @@
         renderIntModal(item);
         toast(err.message, "attn");
       }
-    });
+    };
+
+    renderFeishuFoot();
   }
 
   function renderGitForgeIntModal(item) {
@@ -8078,10 +8457,12 @@
       try { await navigator.clipboard.writeText(t); return true; } catch {}
     }
     // Plain-HTTP LAN addresses have no Async Clipboard API: synchronous textarea fallback.
+    // Mount inside any open top-layer <dialog> because document.body is inert while showModal() is active.
     const ta = Object.assign(document.createElement("textarea"), { value: t });
     ta.setAttribute("readonly", "");
     ta.style.cssText = "position:fixed;inset-block-start:0;opacity:0";
-    document.body.append(ta);
+    const host = document.querySelector("dialog[open]") || document.body;
+    host.append(ta);
     ta.select();
     try { return document.execCommand("copy"); } catch { return false; } finally { ta.remove(); }
   }

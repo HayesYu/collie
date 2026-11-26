@@ -67,9 +67,10 @@ type Super struct {
 	seenAt       time.Time // when a page of Collie was last open in front of you
 	seenURL      string    // where that page was, for the link in a notification
 
-	secrets      *SecretStore
-	integrations *IntegrationManager
-	feishu       *FeishuAdapter
+	secrets       *SecretStore
+	integrations  *IntegrationManager
+	feishu        *FeishuAdapter
+	feishuOnboard *feishuOnboarder
 }
 
 type sayReceipt struct {
@@ -119,6 +120,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 	sp.secrets = sec
 	sp.integrations = newIntegrationManager(sp, db, sec)
 	sp.feishu = newFeishuAdapter(sp, sp.integrations)
+	sp.feishuOnboard = newFeishuOnboarder(sp, sp.integrations)
 	sp.integrations.Register(sp.feishu)
 	sp.integrations.Register(newGitForgeAdapter(sp, sp.integrations, newGitHubProvider()))
 	for _, cliProv := range DiscoverCLIProviders(dir) {
@@ -434,6 +436,9 @@ func (sp *Super) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			if sp.feishuOnboard != nil {
+				sp.feishuOnboard.Close()
+			}
 			if sp.integrations != nil {
 				sp.integrations.Stop(3 * time.Second)
 			}

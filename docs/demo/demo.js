@@ -160,6 +160,7 @@
     },
     extra: { pairing: { active: false }, bot_name: "Collie" },
   };
+  let demoFeishuOnboard = null;
   const demoGitHub = {
     kind: "github",
     name: "GitHub",
@@ -705,6 +706,37 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/super/integrations/feishu/pair" && method === "POST") {
       demoFeishu.extra.pairing = { active: !body.cancel, remaining_sec: 120 };
       return json({ ok: true, active: !body.cancel, message: "请在 2 分钟内用飞书给机器人发任意一条私信（演示模式）" });
+    }
+    if (p === "/api/super/integrations/feishu/onboard") {
+      if (method === "DELETE") {
+        demoFeishuOnboard = null;
+        return json({ ok: true, state: "idle" });
+      }
+      if (method === "POST") {
+        const region = body.region === "intl" ? "intl" : "cn";
+        const mode = body.mode === "existing" ? "existing" : "create";
+        const clientId = mode === "existing" ? String(body.client_id || "").trim() : "";
+        const host = region === "intl" ? "open.larksuite.com" : "open.feishu.cn";
+        const qp = new URLSearchParams({ user_code: "DEMO-2026", from: "sdk", tp: "sdk", source: "go-sdk/collie" });
+        if (mode === "create") qp.set("createOnly", "true");
+        else if (clientId) qp.set("clientID", clientId);
+        demoFeishuOnboard = {
+          session_id: "demo-ob-" + (++seq),
+          state: "waiting",
+          mode,
+          region,
+          client_id: clientId,
+          url: `https://${host}/page/launcher?${qp.toString()}`,
+          user_code: "DEMO-2026",
+          qr_data_url: "demo-qr.png",
+          expire_in: 600,
+          expiresAtMs: Date.now() + 600000,
+        };
+        return json({ ...demoFeishuOnboard, remaining_sec: 600 });
+      }
+      if (!demoFeishuOnboard) return json({ state: "idle" });
+      const rem = Math.max(0, Math.ceil((demoFeishuOnboard.expiresAtMs - Date.now()) / 1000));
+      return json({ ...demoFeishuOnboard, remaining_sec: rem });
     }
     const demoForgeMap = { github: demoGitHub, "git-cli": demoGitCLI };
     const forgeMatch = p.match(/^\/api\/super\/integrations\/(github|git-cli)(?:\/(test|probe|sample))?$/);

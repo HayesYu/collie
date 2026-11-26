@@ -1108,6 +1108,75 @@
   let view = null;     // "collie" | "auto" | "pane" | null
   let current = null;  // pane id when view === "pane"
 
+  // Coalesce burst SSE "super"/"state" updates into one animation frame and defer
+  // DOM work while the user is mid-IME composition so typing never drops frames.
+  let superComposing = false;
+  let liveUpdateMask = 0;
+  let liveUpdateRAF = 0;
+  let liveComposeTimer = 0;
+  const LIVE_SIDE = 1, LIVE_PENDING_BARS = 2, LIVE_SUPER = 4, LIVE_UPDATE_ENTRY = 8, LIVE_HEAD = 16;
+  function flushLiveUpdates() {
+    liveUpdateRAF = 0;
+    if (liveComposeTimer) { clearTimeout(liveComposeTimer); liveComposeTimer = 0; }
+    const mask = liveUpdateMask;
+    liveUpdateMask = 0;
+    if (!mask) return;
+    if (mask & LIVE_SIDE) renderSide();
+    if (mask & LIVE_PENDING_BARS) renderRouterPendingBars();
+    if (mask & LIVE_UPDATE_ENTRY) renderUpdateEntry();
+    if ((mask & LIVE_HEAD) && view === "pane") renderHead();
+    if ((mask & LIVE_SUPER) && view === "collie") renderSuper();
+  }
+  function scheduleLiveUpdates(mask) {
+    liveUpdateMask |= mask;
+    if (superComposing) {
+      if (!liveComposeTimer) {
+        liveComposeTimer = setTimeout(() => {
+          liveComposeTimer = 0;
+          if (liveUpdateMask) flushLiveUpdates();
+        }, 450);
+      }
+      return;
+    }
+    if (document.hidden || typeof requestAnimationFrame !== "function") {
+      flushLiveUpdates();
+      return;
+    }
+    if (!liveUpdateRAF) {
+      let ranSync = false;
+      const id = requestAnimationFrame(() => {
+        ranSync = true;
+        flushLiveUpdates();
+      });
+      if (!ranSync) liveUpdateRAF = id;
+    }
+  }
+  function bindCompositionGuard(el) {
+    if (!el || el._compGuardBound) return;
+    el._compGuardBound = true;
+    const onStart = () => { superComposing = true; };
+    const onUpdate = () => {
+      if (!superComposing || !liveComposeTimer) return;
+      clearTimeout(liveComposeTimer);
+      liveComposeTimer = setTimeout(() => {
+        liveComposeTimer = 0;
+        if (liveUpdateMask) flushLiveUpdates();
+      }, 450);
+    };
+    const onEnd = () => {
+      if (!superComposing) return;
+      superComposing = false;
+      if (liveComposeTimer) { clearTimeout(liveComposeTimer); liveComposeTimer = 0; }
+      if (liveUpdateMask) flushLiveUpdates();
+    };
+    el.addEventListener("compositionstart", onStart);
+    el.addEventListener("compositionupdate", onUpdate);
+    el.addEventListener("compositionend", onEnd);
+    el.addEventListener("blur", onEnd);
+  }
+  bindCompositionGuard($("#super-input"));
+  bindCompositionGuard($("#td-input"));
+
   function connect() {
     const ev = new EventSource("/api/events");
     let lastSuperRaw = "", lastStateRaw = "";
@@ -1118,9 +1187,7 @@
       const prevInboxKey = `${sup.queued}:${(sup.entries || []).length}:${sup.entries?.[sup.entries.length - 1]?.id || ""}`;
       sup = normSup(JSON.parse(e.data));
       syncCollieNotifyWatermark(sup.entries, true);
-      renderSide();
-      renderRouterPendingBars();
-      if (view === "collie") renderSuper();
+      scheduleLiveUpdates(LIVE_SIDE | LIVE_PENDING_BARS | (view === "collie" ? LIVE_SUPER : 0));
       if (view === "auto" && autoTab === "integrations") {
         const nextSum = JSON.stringify(sup.integrations_summary || null);
         if (nextSum !== prevSum) {
@@ -1141,10 +1208,7 @@
       const next = mergedState();
       notifyTransitions(next);
       state = next;
-      renderSide();
-      renderUpdateEntry();
-      if (view === "pane") renderHead();
-      if (view === "collie") renderSuper();
+      scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
     });
     ev.onopen = () => $("#conn").className = "conn on";
     ev.onerror = async () => {
@@ -2145,6 +2209,16 @@
   // Messages you sent that the hub's stream hasn't shown yet.
   const pendingSays = [];
   let pendingSaySeq = 0;
+  // Maps persisted server entry id -> prior optimistic _localId so incremental DOM
+  // patching promotes the existing bubble in-place without flashing or re-creating it.
+  const promotedPendingKeys = new Map();
+  function rememberPromotedPending(realId, localId) {
+    if (!realId || !localId) return;
+    if (promotedPendingKeys.size >= 64) {
+      promotedPendingKeys.delete(promotedPendingKeys.keys().next().value);
+    }
+    promotedPendingKeys.set(realId, localId);
+  }
   // Natural reply-chain thread drawer state.
   let activeThreadRoot = null;
   let activeThreadAnchor = "";
@@ -3117,15 +3191,67 @@
     const supArr = sup.entries || [];
     if (!older.length && !pendingSays.length) return supArr;
     if (pendingSays.length) {
-      const have = new Set(supArr.map((e) => e.id));
+      const have = new Set();
+      const byClientId = new Map();
+      for (let i = 0; i < supArr.length; i++) {
+        const e = supArr[i];
+        if (!e?.id) continue;
+        have.add(e.id);
+        if (e.client_msg_id) byClientId.set(e.client_msg_id, e.id);
+      }
+      const claimed = new Set();
       for (let i = pendingSays.length - 1; i >= 0; i--) {
-        if (pendingSays[i].id && have.has(pendingSays[i].id)) pendingSays.splice(i, 1);
+        const m = pendingSays[i];
+        if (m.id && have.has(m.id)) {
+          claimed.add(m.id);
+          rememberPromotedPending(m.id, m._localId);
+          pendingSays.splice(i, 1);
+          continue;
+        }
+        if (m.client_msg_id && byClientId.has(m.client_msg_id)) {
+          const realId = byClientId.get(m.client_msg_id);
+          m.id = realId;
+          claimed.add(realId);
+          rememberPromotedPending(realId, m._localId);
+          pendingSays.splice(i, 1);
+          continue;
+        }
+      }
+      // Fallback for older hubs or mocks that do not echo client_msg_id on Entry:
+      // reconcile strictly newer server user entries with matching text and re.entry
+      // so SSE arriving ahead of the POST /api/super/say response never renders a
+      // duplicate optimistic bubble (which would momentarily flash a redundant quote bar).
+      if (pendingSays.length) {
+        for (let i = 0; i < pendingSays.length; i++) {
+          const m = pendingSays[i];
+          if (m.id) continue;
+          const afterNum = m._afterNum || 0;
+          const mRe = m.re?.entry || "";
+          let hitId = "";
+          for (let j = supArr.length - 1; j >= 0; j--) {
+            const e = supArr[j];
+            if (!e?.id) continue;
+            if (afterNum > 0 && entryIdNum(e.id) <= afterNum) break;
+            if (e.role !== "user" || e.client_msg_id || claimed.has(e.id)) continue;
+            if (e.text === m.text && (e.re?.entry || "") === mRe) {
+              hitId = e.id;
+              break;
+            }
+          }
+          if (hitId) {
+            m.id = hitId;
+            claimed.add(hitId);
+            rememberPromotedPending(hitId, m._localId);
+            pendingSays.splice(i, 1);
+            i--;
+          }
+        }
       }
       if (!older.length && !pendingSays.length) return supArr;
     }
     const oldArr = older;
     const pLen = pendingSays.length;
-    const pKey = pLen ? pendingSays.map((m) => `${m._localId || ""}:${m.id || ""}:${m.text?.length || 0}`).join("|") : "";
+    const pKey = pLen ? pendingSays.map((m) => `${m._localId || ""}:${m.id || ""}:${m.client_msg_id || ""}:${m.text?.length || 0}`).join("|") : "";
     if (_chatEntriesCache &&
       _chatEntriesCache.supArr === supArr && _chatEntriesCache.supLen === supArr.length &&
       _chatEntriesCache.oldArr === oldArr && _chatEntriesCache.oldLen === oldArr.length &&
@@ -3215,6 +3341,17 @@
     }
     flashEntry = { id, until: Date.now() + 2200 };
     await scrollToAsync(sc, want, smooth ? "smooth" : "auto");
+    if (seq !== jumpSeq) return;
+    // Settle once if off-screen content-visibility sizing shifted the target after scrolling into view.
+    const settledHit = document.querySelector(sel);
+    if (settledHit) {
+      const sr2 = sc.getBoundingClientRect(), mr2 = settledHit.getBoundingClientRect();
+      const want2 = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + (mr2.top - sr2.top) - Math.max(24, (sc.clientHeight - mr2.height) / 2)));
+      if (Math.abs(want2 - sc.scrollTop) > 48) {
+        markProgrammaticScroll();
+        sc.scrollTop = want2;
+      }
+    }
     captureViewScroll("collie", null, navCur);
     updateSuperJump();
     if (seq !== jumpSeq) return;
@@ -3599,7 +3736,302 @@
     collieInitialAnchor = { mode, until, timer, ro, lastH: sc.scrollHeight, lastCH: sc.clientHeight };
   }
 
-  let superBodyKey = "", superDomGen = 0, superAsksGen = 0;
+  let superBodyKey = "", superDomGen = 0, superAsksGen = 0, thumbRenderVer = 0;
+  let _superPatchTpl = null;
+  function canPatchSuperDom(box) {
+    if (!box || typeof box.insertBefore !== "function" || typeof box.replaceChild !== "function"
+      || typeof box.removeChild !== "function" || typeof box.appendChild !== "function") {
+      return false;
+    }
+    if (typeof document?.createElement !== "function") return false;
+    if (!_superPatchTpl) {
+      const tpl = document.createElement("template");
+      if (!tpl || !tpl.content) return false;
+      _superPatchTpl = tpl;
+    }
+    return true;
+  }
+  function parseSuperNode(html) {
+    _superPatchTpl.innerHTML = html;
+    return _superPatchTpl.content.firstElementChild;
+  }
+  function promoteUserNodeInPlace(el, item) {
+    const msgEl = el.querySelector?.(".msg.user");
+    if (!msgEl) return false;
+    const nextCls = `mine${item.pinned ? " is-pinned" : ""}`;
+    if (el.className !== nextCls) el.className = nextCls;
+    if (item.rootId) el.dataset.threadRoot = item.rootId;
+    else delete el.dataset.threadRoot;
+    if (msgEl.dataset.id !== (item.entryId || "")) msgEl.dataset.id = item.entryId || "";
+    const nextTitle = item.at ? fullTime(item.at) : "";
+    if (nextTitle) msgEl.setAttribute("title", nextTitle);
+    else msgEl.removeAttribute("title");
+    const curPin = el.querySelector?.(".pin-ind");
+    if (item.pinned && !curPin) {
+      const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
+      if (pinEl) el.insertBefore(pinEl, msgEl);
+    } else if (!item.pinned && curPin && curPin.parentNode === el) {
+      el.removeChild(curPin);
+    }
+    const oldFoot = el.querySelector?.(":scope > .msg-foot, :scope > .msg-acts")
+      || (msgEl.nextElementSibling && (msgEl.nextElementSibling.classList?.contains("msg-foot") || msgEl.nextElementSibling.classList?.contains("msg-acts")) ? msgEl.nextElementSibling : null);
+    const footHtml = item.renderFoot ? item.renderFoot() : "";
+    if (footHtml) {
+      const newFoot = parseSuperNode(footHtml);
+      if (newFoot) {
+        if (oldFoot && oldFoot.parentNode === el) el.replaceChild(newFoot, oldFoot);
+        else el.appendChild(newFoot);
+      }
+    } else if (oldFoot && oldFoot.parentNode === el) {
+      el.removeChild(oldFoot);
+    }
+    el._collieSig = item.sig;
+    el._collieKey = item.key;
+    return true;
+  }
+  function patchSuperThread(box, items) {
+    const t0 = performance.now();
+    const stats = box._colliePatchStats || (box._colliePatchStats = {
+      renders: 0, fullRebuilds: 0, lastAdded: 0, lastUpdated: 0, lastRemoved: 0, lastReused: 0, lastMs: 0,
+    });
+    stats.renders++;
+    let nodeMap = box._collieNodes;
+    const isInitial = !nodeMap || !nodeMap.size || !box.firstElementChild || items.length === 0;
+    if (isInitial) {
+      nodeMap = new Map();
+      box._collieNodes = nodeMap;
+      if (!items.length) {
+        while (box.firstChild) box.removeChild(box.firstChild);
+        stats.fullRebuilds++;
+        stats.lastAdded = stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+        stats.lastMs = performance.now() - t0;
+        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, fullRebuild: true };
+      }
+      const frag = document.createDocumentFragment();
+      if (items.length > 16) {
+        _superPatchTpl.innerHTML = items.map((it) => it.render()).join("");
+        const parsed = [..._superPatchTpl.content.children];
+        if (parsed.length === items.length) {
+          for (let i = 0; i < items.length; i++) {
+            const el = parsed[i], it = items[i];
+            el._collieKey = it.key;
+            el._collieSig = it.sig;
+            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            nodeMap.set(it.key, el);
+            frag.appendChild(el);
+          }
+        } else {
+          _superPatchTpl.innerHTML = "";
+          for (let i = 0; i < items.length; i++) {
+            const it = items[i], el = parseSuperNode(it.render());
+            if (!el) continue;
+            el._collieKey = it.key;
+            el._collieSig = it.sig;
+            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            nodeMap.set(it.key, el);
+            frag.appendChild(el);
+          }
+        }
+      } else {
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i], el = parseSuperNode(it.render());
+          if (!el) continue;
+          el._collieKey = it.key;
+          el._collieSig = it.sig;
+          if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+          nodeMap.set(it.key, el);
+          frag.appendChild(el);
+        }
+      }
+      while (box.firstChild) box.removeChild(box.firstChild);
+      box.appendChild(frag);
+      stats.fullRebuilds++;
+      stats.lastAdded = items.length;
+      stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+      stats.lastMs = performance.now() - t0;
+      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, fullRebuild: true };
+    }
+
+    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0;
+    const nextKeys = new Set();
+    for (let i = 0; i < items.length; i++) {
+      const k = items[i].key;
+      nextKeys.add(k);
+      if (!nodeMap.has(k)) {
+        let alias = "";
+        if (promotedPendingKeys.has(k)) {
+          alias = promotedPendingKeys.get(k);
+          promotedPendingKeys.delete(k);
+        } else if (k.startsWith("__tsep:")) {
+          const idPart = k.slice(7);
+          const localPart = promotedPendingKeys.get(idPart);
+          if (localPart && nodeMap.has("__tsep:" + localPart)) alias = "__tsep:" + localPart;
+        }
+        if (alias && nodeMap.has(alias)) {
+          const existing = nodeMap.get(alias);
+          nodeMap.delete(alias);
+          existing._collieKey = k;
+          nodeMap.set(k, existing);
+        }
+      }
+    }
+
+    for (const [k, el] of nodeMap) {
+      if (!nextKeys.has(k)) {
+        if (el.parentNode === box) box.removeChild(el);
+        nodeMap.delete(k);
+        removed++;
+      }
+    }
+
+    let cursor = box.firstElementChild;
+    let pendingFrag = null;
+    const flushFrag = () => {
+      if (!pendingFrag) return;
+      if (cursor) box.insertBefore(pendingFrag, cursor);
+      else box.appendChild(pendingFrag);
+      pendingFrag = null;
+    };
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      let el = nodeMap.get(it.key);
+      if (!el) {
+        el = parseSuperNode(it.render());
+        if (!el) continue;
+        el._collieKey = it.key;
+        el._collieSig = it.sig;
+        if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+        nodeMap.set(it.key, el);
+        if (!pendingFrag) pendingFrag = document.createDocumentFragment();
+        pendingFrag.appendChild(el);
+        added++;
+        continue;
+      }
+      flushFrag();
+      if (el._collieSig !== it.sig) {
+        if (it.canPromoteInPlace && el._collieMsgSig && el._collieMsgSig === it.msgSig && promoteUserNodeInPlace(el, it)) {
+          updated++;
+          reused++;
+        } else {
+          const fresh = parseSuperNode(it.render());
+          if (fresh) {
+            fresh._collieKey = it.key;
+            fresh._collieSig = it.sig;
+            if (it.msgSig !== undefined) fresh._collieMsgSig = it.msgSig;
+            const wasCursor = el === cursor;
+            if (el.parentNode === box) box.replaceChild(fresh, el);
+            el = fresh;
+            nodeMap.set(it.key, el);
+            if (wasCursor) cursor = el;
+            updated++;
+          }
+        }
+      } else {
+        reused++;
+      }
+      if (el === cursor) {
+        cursor = el.nextElementSibling;
+      } else {
+        if (cursor) box.insertBefore(el, cursor);
+        else box.appendChild(el);
+        moved++;
+      }
+    }
+    flushFrag();
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      box.removeChild(cursor);
+      cursor = next;
+      removed++;
+    }
+    stats.lastAdded = added;
+    stats.lastUpdated = updated;
+    stats.lastRemoved = removed;
+    stats.lastReused = reused;
+    stats.lastMs = performance.now() - t0;
+    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, fullRebuild: false };
+  }
+
+  // Anti-flicker state for the in-stream "Collie 在想…" row (#super-working):
+  // - Background silent turns (worker reports / timers / system checks when the
+  //   human isn't waiting on a reply) stay quietly in the header #router-status
+  //   instead of popping an avatar bubble in and out of the chat stream.
+  // - Human-initiated turns debounce brief (<180ms) mount blips and short (<350ms)
+  //   status dips, while hiding immediately (0ms) the instant Collie replies.
+  const SUPER_BUSY_SHOW_MS = 180;
+  const SUPER_BUSY_HIDE_MS = 350;
+  let superBusyShown = null;
+  let superBusyShowTimer = 0;
+  let superBusyHideTimer = 0;
+  let superLastCollieId = "";
+  function isWaitingCollieReply(r, allEntries) {
+    if (r?.replied) return false;
+    if (pendingSays.length > 0) return true;
+    if (r?.turn_kind === "chat") return true;
+    if (r?.turn_kind === "background") return false;
+    for (let i = (allEntries?.length || 0) - 1; i >= 0; i--) {
+      const e = allEntries[i];
+      if (!e) continue;
+      if (e.role === "user") return true;
+      if (e.role === "collie") return false;
+    }
+    return false;
+  }
+  function latestCollieEntryId(allEntries) {
+    for (let i = (allEntries?.length || 0) - 1; i >= 0; i--) {
+      const e = allEntries[i];
+      if (e?.role === "collie" && e.id) return e.id;
+    }
+    return "";
+  }
+  function resolveSuperBusy(r, allEntries, opts = {}) {
+    const rawBusy = r.replied ? null : {
+      working: "Collie 在想…",
+      starting: "Collie 正在醒来…",
+      blocked: "Collie 在等你在电脑上确认",
+      dreaming: "Collie 在做梦，整理完记忆会自己醒来",
+    }[r.status] || null;
+    const collieId = latestCollieEntryId(allEntries);
+    const gotNewCollieReply = !!(collieId && superLastCollieId && collieId !== superLastCollieId);
+    if (collieId) superLastCollieId = collieId;
+    const persistentState = r.status === "blocked" || r.status === "dreaming";
+    const waiting = isWaitingCollieReply(r, allEntries);
+    const wantBusy = rawBusy && (persistentState || waiting)
+      ? { text: rawBusy, cls: "working-row say " + (r.status === "working" ? "working" : collieDot(r.status)) }
+      : null;
+
+    if (wantBusy) {
+      if (superBusyHideTimer) { clearTimeout(superBusyHideTimer); superBusyHideTimer = 0; }
+      if (persistentState || opts.immediate || opts.busyTimer || superBusyShown) {
+        if (superBusyShowTimer) { clearTimeout(superBusyShowTimer); superBusyShowTimer = 0; }
+        superBusyShown = wantBusy;
+      } else if (!superBusyShowTimer) {
+        superBusyShowTimer = setTimeout(() => {
+          superBusyShowTimer = 0;
+          if (view === "collie") renderSuper({ busyTimer: true });
+        }, SUPER_BUSY_SHOW_MS);
+      }
+      return superBusyShown;
+    }
+
+    if (superBusyShowTimer) { clearTimeout(superBusyShowTimer); superBusyShowTimer = 0; }
+    if (!superBusyShown) return null;
+    const hideNow = !!r.replied || gotNewCollieReply || r.turn_kind === "background" || !waiting || opts.immediate || opts.busyTimer;
+    if (hideNow) {
+      if (superBusyHideTimer) { clearTimeout(superBusyHideTimer); superBusyHideTimer = 0; }
+      superBusyShown = null;
+      return null;
+    }
+    if (!superBusyHideTimer) {
+      superBusyHideTimer = setTimeout(() => {
+        superBusyHideTimer = 0;
+        if (view === "collie") renderSuper({ busyTimer: true });
+      }, SUPER_BUSY_HIDE_MS);
+    }
+    return superBusyShown;
+  }
+
   function renderSuper(opts) {
     const force = opts === true || !!opts?.force;
     const forceBottom = !!opts?.scrollBottom;
@@ -3617,19 +4049,19 @@
     const prevScrollTop = scroller.scrollTop;
     const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew._html ?? crew.innerHTML;
     const r = sup.router || {};
+    const allEntries = chatEntries();
     setText($("#router-kind"), KIND_LABEL[r.kind] || r.kind || "");
     const st = $("#router-status");
     const stCls = "status " + collieDot(r.status);
     if (st.className !== stCls) st.className = stCls;
     setHTML(st, `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`);
-    // While Collie is busy, say so where the answer will appear, as the
-    // other agents' sessions do; the header keeps the resting states.
-    const busy = r.replied ? null : { working: "Collie 在想…", starting: "Collie 正在醒来…", blocked: "Collie 在等你在电脑上确认", dreaming: "Collie 在做梦，整理完记忆会自己醒来" }[r.status];
+    // While Collie is busy on a human turn (or blocked/dreaming), show the indicator
+    // where its next message will appear; quiet background inspections stay in header.
+    const busyInfo = resolveSuperBusy(r, allEntries, opts || {});
+    const busy = busyInfo?.text || null;
     st.hidden = !!busy;
     if (busy) {
-      // In Collie's own column, where its next message will appear.
-      const wkCls = "working-row say " + (r.status === "working" ? "working" : collieDot(r.status));
-      if (wk.className !== wkCls) wk.className = wkCls;
+      if (wk.className !== busyInfo.cls) wk.className = busyInfo.cls;
       if (busy !== prevBusy) wk.innerHTML = `<span class="avatar"><img src="/icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
     }
     wk.hidden = !busy;
@@ -3650,10 +4082,13 @@
       const pane = paneOf(w.name);
       return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
     }).join("");
+    const prevCrewScroll = crew.scrollLeft || 0;
     const crewChanged = setHTML(crew, crewHTML) || crewHTML !== prevCrew;
-    if (crewChanged) crew._syncScrollFade?.();
+    if (crewChanged) {
+      if (prevCrewScroll > 0) crew.scrollLeft = prevCrewScroll;
+      crew._syncScrollFade?.();
+    }
 
-    const allEntries = chatEntries();
     const isEmptyChat = !sup.entries.length && !pendingSays.length;
     let curThreadInfo = { threads: new Map(), allThreads: new Map(), msgToRoot: new Map(), allMsgToRoot: new Map() };
     const pendList = activePending();
@@ -3681,13 +4116,15 @@
       renderCollieThreadsMenu(curThreadInfo, allEntries);
     }
 
-    // Fast structural key for #super-thread body: skip building 200-800+ entry HTML string when unchanged.
+    const curDayStamp = dayBounds();
+    // Fast structural key for #super-thread body: skip item diffing when completely unchanged.
     const nextBodyKey = [
       isEmptyChat ? "E" : "L",
       entriesFingerprint(allEntries),
       sessionUnreadMarkerId || "",
       olderBusy ? 1 : 0,
-      dayBounds(),
+      curDayStamp,
+      thumbRenderVer,
       sup.hasPending ? 1 : 0,
       pendList.map((p) => p.id).join(","),
       dismissedLocal.size ? [...dismissedLocal].join(",") : "",
@@ -3710,16 +4147,23 @@
       syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
       if (activeThreadRoot) syncThreadDrawer();
     } else {
-      let html = "", prevRole = "";
+      const items = [];
+      if (olderBusy) {
+        items.push({ key: "__earlier__", sig: "earlier", render: () => `<div class="earlier-row">加载中…</div>` });
+      }
       if (isEmptyChat) {
-        html = `<div class="hello"><img src="/icon.svg" alt="">
+        items.push({
+          key: "__hello__",
+          sig: "hello",
+          render: () => `<div class="hello"><img src="/icon.svg" alt="">
         <h3>一个入口，管一群 agent</h3>
         <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
         <div class="ideas">
           <button data-idea="看一下 ~/agent-workspace 里最近改动最多的三个项目，各派一个 agent 检查有没有失败的测试，最后给我一句话总结。">并行检查三个项目的测试</button>
           <button data-idea="每天早上 9 点帮我看一下各个任务的进展，有卡住的就告诉我。">每天 9 点汇报进展</button>
           <button data-idea="以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。">把 GitHub 评论变成任务</button>
-        </div></div>`;
+        </div></div>`,
+        });
       } else {
         let prev = "", lastAt = 0;
         let lastUser = "", sinceUser = 0, lastEvent = "", lastEventId = "", lastCollie = "", sinceCollie = 0;
@@ -3727,32 +4171,36 @@
         const pendIds = new Set(pendList.map((p) => p.id));
         const pinIds = new Set(pinList.map((p) => p.id));
         const workerByNameMap = getWorkerLookup().byName;
-        const replyOpts = (e, idx) => replyOptsMarkup(e, idx, allEntries, pendIds);
         const findWorkerEventBefore = (worker, idx) => {
           if (!worker) return "";
           for (let j = idx - 1; j >= 0; j--) {
-            const prev = allEntries[j];
-            if (prev.role !== "event" || prev.ref !== worker || !prev.id) continue;
-            if (prev.ref === ROUTER && prev.tone === "info") continue;
-            if (workerChatter(prev)) continue;
-            return prev.id;
+            const p = allEntries[j];
+            if (p.role !== "event" || p.ref !== worker || !p.id) continue;
+            if (p.ref === ROUTER && p.tone === "info") continue;
+            if (workerChatter(p)) continue;
+            return p.id;
           }
           return "";
         };
-        const quote = (e, idx) => {
+        const analyzeQuote = (e, idx) => {
           const q = e.re;
-          if (!q) return "";
-          if (q.entry && q.entry === lastUser && !sinceUser) return "";
-          if (q.entry && q.entry === lastCollie && !sinceCollie) return "";
-          if (q.entry && q.entry === lastEventId) return "";
-          if (!q.entry && q.worker && q.worker === lastEvent) return "";
+          if (!q) return null;
+          if (q.entry && q.entry === lastUser && !sinceUser) return null;
+          if (q.entry && q.entry === lastCollie && !sinceCollie) return null;
+          if (q.entry && q.entry === lastEventId) return null;
+          if (!q.entry && q.worker && q.worker === lastEvent) return null;
           const targetId = q.entry || (q.worker ? findWorkerEventBefore(q.worker, idx) : "");
-          const body = `<span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}`;
           const k = entryKey(e);
           const tr = threadInfo.allMsgToRoot.get(k) || "";
           const trTh = tr ? threadInfo.allThreads.get(tr) : null;
           const isWorkerQuote = !!(q.worker || threadInfo.workerReportOf?.has(k) || (targetId && threadInfo.byId.get(targetId)?.role === "event"));
           const openRoot = !isWorkerQuote && trTh && trTh.totalCount >= 2 ? tr : "";
+          return { q, targetId, openRoot, sig: `${targetId}|${openRoot}|${q.who || ""}|${q.worker || ""}|${q.text || ""}` };
+        };
+        const renderQuoteHtml = (qi, e) => {
+          if (!qi) return "";
+          const { q, targetId, openRoot } = qi;
+          const body = `<span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}`;
           if (targetId) {
             return `<a class="re" href="#" data-goto="${esc(targetId)}"${openRoot ? ` data-thread-root="${esc(openRoot)}"` : ""} title="${esc(q.text)}">${body}</a>`;
           }
@@ -3761,49 +4209,93 @@
           }
           return `<div class="re" title="${esc(q.text)}">${body}</div>`;
         };
-        const threadEntryFor = (e) => {
-          const k = entryKey(e);
-          const r = k ? threadInfo.msgToRoot.get(k) : "";
-          if (!r || !threadInfo.showEntryOn.has(k)) return "";
-          const th = threadInfo.threads.get(r);
-          if (!th) return "";
-          return `<button type="button" class="thread-entry" data-open-thread="${esc(r)}" data-focus-msg="${esc(k)}" aria-expanded="false">` +
-            `${ICON_THREAD_BRANCH}<span class="te-count">${th.replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
+        const renderThreadEntryBtn = (eKey, rootId, replyCount) => {
+          if (!rootId || !replyCount) return "";
+          return `<button type="button" class="thread-entry" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(eKey)}" aria-expanded="false">` +
+            `${ICON_THREAD_BRANCH}<span class="te-count">${replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
         };
         for (let ei = 0; ei < allEntries.length; ei++) {
           const e = allEntries[ei];
           if (isHiddenSuperEntry(e)) continue;
+          const eKey = entryKey(e) || ("__idx:" + ei);
           if (sessionUnreadMarkerId && e.id === sessionUnreadMarkerId) {
-            html += `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(e.id)}" role="separator" aria-label="以下为未读消息"><span>以下为未读消息</span></div>`;
+            const uId = e.id;
+            items.push({
+              key: "__unread__",
+              sig: `unread:${uId}`,
+              render: () => `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(uId)}" role="separator" aria-label="以下为未读消息"><span>以下为未读消息</span></div>`,
+            });
             prev = "";
           }
           const at = +new Date(e.at) || 0;
           const talk = e.role === "user" || e.role === "collie";
           const newDay = at && lastAt && Math.floor((at - new Date(at).getTimezoneOffset() * 60000) / 86400000) !== Math.floor((lastAt - new Date(lastAt).getTimezoneOffset() * 60000) / 86400000);
           if (at && (newDay || (talk && (!lastAt || at - lastAt > 10 * 60e3)))) {
-            html += `<div class="time-sep">${esc(sepTime(at))}</div>`;
+            const tLabel = sepTime(at);
+            items.push({
+              key: "__tsep:" + eKey,
+              sig: `tsep:${tLabel}`,
+              render: () => `<div class="time-sep">${esc(tLabel)}</div>`,
+            });
             prev = "";
           }
           if (at) lastAt = at;
           const cont = e.role === "collie" && prev === "collie";
-          prev = prevRole = e.role;
+          prev = e.role;
           const pinned = !!(e.id && pinIds.has(e.id));
-          const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
-          const eKey = entryKey(e);
           const eRoot = eKey ? (threadInfo.allMsgToRoot.get(eKey) || "") : "";
-          const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
+          const showEntry = !!(eKey && threadInfo.showEntryOn.has(eKey));
+          const teRoot = showEntry ? (threadInfo.msgToRoot.get(eKey) || "") : "";
+          const teCount = teRoot ? (threadInfo.threads.get(teRoot)?.replyCount || 0) : 0;
+
           if (e.role === "user") {
-            const entryBtn = threadEntryFor(e);
-            const acts = mineActs(e, at, pinned, entryBtn ? "" : eRoot);
-            const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-            html += `<div class="mine${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e, ei)}${userText(e.text)}</div>${foot}</div>`;
-            lastUser = e.id; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
+            const qi = analyzeQuote(e, ei);
+            const qSig = qi ? qi.sig : "";
+            const hasMedia = !!(e.text && (e.text.includes("附件：\n") || e.text.includes("[image:")));
+            const msgSig = `u:${qSig}|${hasMedia ? thumbRenderVer : 0}|${e.text || ""}`;
+            const sig = `u|${e.id || ""}|${at}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${msgSig}`;
+            const renderFoot = () => {
+              const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
+              const acts = mineActs(e, at, pinned, entryBtn ? "" : eRoot);
+              return entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
+            };
+            items.push({
+              key: eKey,
+              sig,
+              msgSig,
+              canPromoteInPlace: true,
+              entryId: e.id || "",
+              pinned,
+              rootId: eRoot,
+              at,
+              renderFoot,
+              render: () => {
+                const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
+                const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
+                return `<div class="mine${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${renderQuoteHtml(qi, e)}${userText(e.text)}</div>${renderFoot()}</div>`;
+              },
+            });
+            lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
           } else if (e.role === "collie") {
-            const entryBtn = threadEntryFor(e);
-            const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot);
-            const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-            html += `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${quote(e, ei)}${md(e.text)}${imagesIn(e.text)}${replyOpts(e, ei)}${foot}</div></div>`;
-            sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = e.id; sinceCollie = 0;
+            const qi = analyzeQuote(e, ei);
+            const qSig = qi ? qi.sig : "";
+            const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
+            const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
+            const hasMedia = !!(e.text && (e.text.includes("![") || e.text.includes("/") || e.text.includes("~")));
+            const sig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${hasMedia ? thumbRenderVer : 0}|${qSig}|${optsHtml}|${e.text || ""}`;
+            items.push({
+              key: eKey,
+              sig,
+              render: () => {
+                const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
+                const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
+                const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
+                const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot);
+                const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${optsHtml}${foot}</div></div>`;
+              },
+            });
+            sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
           } else {
             lastEvent = e.ref || "";
             lastEventId = e.id || "";
@@ -3820,14 +4312,22 @@
             const stuck = w && !w.ended && w.status === "blocked";
             const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busyW ? "running" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
             const wstate = w ? (w.ended ? "已结束" : busyW ? "还在跑" : stuck ? "等你确认" : "") : "";
-            const idAttr = e.id ? ` data-id="${esc(e.id)}"` : "";
-            const refAttr = e.ref ? ` data-ref="${esc(e.ref)}"` : "";
-            html += `<${tag} class="event${e.tone === "error" ? " error" : ""}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${hhmm(at || e.at)}</span><span>${esc(e.text)}</span>${wstate ? `<span class="wstate">${wstate}</span>` : ""}</${tag.split(" ")[0]}>`;
+            const whenStr = hhmm(at || e.at);
+            const sig = `ev|${e.id || ""}|${e.ref || ""}|${e.tone || ""}|${tag}|${tone}|${wstate}|${whenStr}|${e.text || ""}`;
+            items.push({
+              key: eKey,
+              sig,
+              render: () => {
+                const idAttr = e.id ? ` data-id="${esc(e.id)}"` : "";
+                const refAttr = e.ref ? ` data-ref="${esc(e.ref)}"` : "";
+                return `<${tag} class="event${e.tone === "error" ? " error" : ""}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${whenStr}</span><span>${esc(e.text)}</span>${wstate ? `<span class="wstate">${wstate}</span>` : ""}</${tag.split(" ")[0]}>`;
+              },
+            });
           }
         }
       }
       if (needs.length) {
-        html += `<div class="needs">` + needs.map((a) => {
+        const needsHtml = `<div class="needs">` + needs.map((a) => {
           const got = superAsks.get(a.pane_id);
           if (got?.a) return superAskHTML(got.a, a);
           return `<a class="need" href="#/p/${encodeURIComponent(a.pane_id)}">
@@ -3835,17 +4335,29 @@
         <span class="body"><div class="name">${esc(title(a))} 等你确认</div><div class="sub">${esc(a.name === ROUTER ? "它停在一个对话框上，处理后才能继续" : (KIND_LABEL[a.kind] || a.kind) + " · " + tilde(a.cwd))}</div></span>
         <span class="go">处理 →</span></a>`;
         }).join("") + `</div>`;
+        items.push({ key: "__needs__", sig: "needs:" + needsHtml, render: () => needsHtml });
       }
-      if (olderBusy) html = `<div class="earlier-row">加载中…</div>` + html;
       superBodyKey = nextBodyKey;
-      if (html !== superSig || force) {
-        superSig = html;
-        superDomGen++;
-        box.innerHTML = html;
+      let domMutated = false;
+      if (canPatchSuperDom(box)) {
+        const res = patchSuperThread(box, items);
+        domMutated = res.mutated;
+        if (domMutated) superDomGen++;
+      } else {
+        const html = items.map((it) => it.render()).join("");
+        if (html !== superSig || force) {
+          superSig = html;
+          superDomGen++;
+          box.innerHTML = html;
+          domMutated = true;
+        }
+      }
+      if (domMutated) {
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (flashEntry.until > Date.now() && flashEntry.id) {
           const fid = CSS.escape(flashEntry.id);
-          box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`)?.classList.add("flash");
+          const fEl = box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`);
+          if (fEl && !fEl.classList.contains("flash")) fEl.classList.add("flash");
         }
         if (activeThreadRoot) syncThreadDrawer();
       } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor) {
@@ -4303,10 +4815,15 @@
   // Quoting one of Collie's messages: it rides along with what you send next.
   let replyTo = null;
   const setReply = (e) => {
-    replyTo = e ? { entry: e.id, who: "Collie", text: e.text } : null;
+    replyTo = e ? { entry: e.id, who: e.role === "user" ? "你" : "Collie", text: e.text } : null;
     const box = $("#re-draft");
     box.hidden = !e;
-    if (e) { $(".re-t", box).textContent = reLine(e.text); $("#super-input").focus({ preventScroll: true }); }
+    if (e) {
+      const whoEl = $(".re-who", box);
+      if (whoEl) whoEl.textContent = replyTo.who;
+      $(".re-t", box).textContent = reLine(e.text);
+      $("#super-input").focus({ preventScroll: true });
+    }
   };
   const reLine = (t) => plainLine(t);
   $("#re-draft button").addEventListener("click", () => setReply(null));
@@ -4324,11 +4841,22 @@
   async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID(), opts = {}) {
     const scrollBottom = opts.scrollBottom !== false;
     const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
+    const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
     // Only what was picked here goes along; the hub fills in its current defaults.
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
-    // Your message shows at once; the hub's copy takes its place when it arrives.
-    const mine = { id: "", _localId: "_p" + (++pendingSaySeq), role: "user", text, at: new Date().toISOString(), pending: true, re };
+    // Your message shows at once; the hub's copy takes its place seamlessly when it arrives.
+    const mine = {
+      id: "",
+      _localId: "_p" + (++pendingSaySeq),
+      client_msg_id: clientMsgID,
+      _afterNum: entryIdNum(latestPersistedEntryId()),
+      role: "user",
+      text,
+      at: new Date().toISOString(),
+      pending: true,
+      re: normRe,
+    };
     pendingSays.push(mine);
     if (scrollBottom) {
       cancelInitialAnchor();
@@ -4339,12 +4867,12 @@
       if (latestBeforeSend) commitChatRead(latestBeforeSend, { immediate: false });
     }
     renderSide();
-    renderSuper({ force: true, scrollBottom, ...(keepRestore ? { restore: keepRestore } : {}) });
+    renderSuper({ scrollBottom, ...(keepRestore ? { restore: keepRestore } : {}) });
     let r;
     try {
       const info = await modelsFor(t.kind, t.machine);
       const sendEffort = effortsFor(info, t.kind, model).includes(effort) ? effort : "";
-      r = await api("/api/super/say", { body: { text, re: re?.entry || "", client_msg_id: clientMsgID,
+      r = await api("/api/super/say", { body: { text, re: normRe?.entry || "", client_msg_id: clientMsgID,
       machine: "machine" in p ? (t.machine || "local") : "",
       kind: "kind" in p ? t.kind : "",
       model: "model" in p || "kind" in p ? model : "",
@@ -4352,25 +4880,26 @@
     } catch (err) {
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0) pendingSays.splice(idx, 1);
-      if (restoreRe && re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry));
+      if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry));
       opts.onRollback?.();
       const errSc = !scrollBottom && view === "collie" ? viewScroller("collie") : null;
       const errRestore = errSc && !isCollieNearBottom(errSc)
-        ? (captureEntryAnchor(errSc, re?.entry || "") || captureColliePos(errSc))
+        ? (captureEntryAnchor(errSc, normRe?.entry || "") || captureColliePos(errSc))
         : null;
       if (errRestore) errRestore.atBottom = false;
       renderSide();
-      renderSuper({ force: true, ...(errRestore ? { restore: errRestore } : {}) });
+      renderSuper(errRestore ? { restore: errRestore } : undefined);
       throw err;
     }
-    // The hub's copy may already be here (its push beat the reply): swap now.
-    mine.id = r?.entry || "";
+    // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
+    mine.id = r?.entry || mine.id || "";
     if (mine.id && scrollBottom) commitChatRead(mine.id, { immediate: true });
-    if (!mine.id || sup.entries.some((e) => e.id === mine.id)) {
-      const idx = pendingSays.indexOf(mine);
-      if (idx >= 0) pendingSays.splice(idx, 1);
+    const idx = pendingSays.indexOf(mine);
+    if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
+      if (mine.id) rememberPromotedPending(mine.id, mine._localId);
+      pendingSays.splice(idx, 1);
       renderSide();
-      renderSuper({ force: true });
+      renderSuper();
     }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }
@@ -10162,15 +10691,18 @@
     const curRoot = activeThreadRoot || "";
     const box = $("#super-thread");
     if (box && (_lastMarkedGen !== superDomGen || _lastMarkedRoot !== curRoot)) {
+      const hadPrevRoot = !!_lastMarkedRoot;
       _lastMarkedGen = superDomGen;
       _lastMarkedRoot = curRoot;
-      for (const el of box.querySelectorAll(".in-active-thread")) {
-        if (!curRoot || el.dataset.threadRoot !== curRoot) el.classList.remove("in-active-thread");
-      }
-      for (const btn of box.querySelectorAll(".thread-entry.active, .focus-btn.active")) {
-        if (!curRoot || btn.dataset.openThread !== curRoot) {
-          btn.classList.remove("active");
-          btn.setAttribute("aria-expanded", "false");
+      if (hadPrevRoot) {
+        for (const el of box.querySelectorAll(".in-active-thread")) {
+          if (!curRoot || el.dataset.threadRoot !== curRoot) el.classList.remove("in-active-thread");
+        }
+        for (const btn of box.querySelectorAll(".thread-entry.active, .focus-btn.active")) {
+          if (!curRoot || btn.dataset.openThread !== curRoot) {
+            btn.classList.remove("active");
+            btn.setAttribute("aria-expanded", "false");
+          }
         }
       }
       if (curRoot) {
@@ -10396,11 +10928,55 @@
   const tdTargetReset = $("#td-target-reset");
   const tdHintEl = $("#td-hint");
   const tdLocateRootBtn = $("#td-locate-root");
+  const tdWidenBtn = $("#td-widen");
   const tdCloseBtn = $("#td-close");
   const tdBackBtn = $("#td-back");
   const tdGripEl = $("#td-grip");
   const setThreadW = (w) => document.documentElement.style.setProperty("--thread-w", Math.round(w) + "px");
   const threadMax = () => Math.max(360, Math.min(560, innerWidth - ($(".side")?.offsetWidth || 0) - 420));
+  const threadWideW = () => {
+    const sideW = $(".side")?.offsetWidth || 260;
+    const avail = Math.max(480, innerWidth - sideW);
+    return Math.max(480, Math.min(920, Math.round(avail * 0.78), avail - 200));
+  };
+  let threadWide = !!store.get("threadWide", false);
+  function syncThreadWideUI() {
+    const activeWide = !!(activeThreadRoot && threadWide && innerWidth > 1000);
+    $("#app")?.classList.toggle("thread-wide", activeWide);
+    if (tdWidenBtn) {
+      tdWidenBtn.setAttribute("aria-pressed", activeWide ? "true" : "false");
+      const lbl = activeWide ? "还原宽度" : "拓宽抽屉";
+      tdWidenBtn.title = lbl;
+      tdWidenBtn.setAttribute("aria-label", lbl);
+    }
+  }
+  function applyThreadWidth() {
+    if (innerWidth <= 1000) {
+      syncThreadWideUI();
+      return;
+    }
+    const defW = innerWidth <= 1120 ? 420 : 432;
+    const w = threadWide
+      ? threadWideW()
+      : Math.max(360, Math.min(store.get("threadW", 0) || defW, threadMax()));
+    setThreadW(w);
+    syncThreadWideUI();
+  }
+  function setThreadWide(next, opts = {}) {
+    const wide = !!next;
+    if (threadWide === wide && !opts.force) {
+      syncThreadWideUI();
+      return;
+    }
+    const sc = activeThreadRoot && view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    threadWide = wide;
+    store.set("threadWide", wide);
+    applyThreadWidth();
+    if (lockSnap && innerWidth > 1000 && opts.animate !== false) {
+      beginCollieLayoutLock(lockSnap, { trackTransition: true });
+    }
+  }
   let tdHideTimer = 0, tdFocusTimer = 0, tdLoadingRoot = false, tdWorkersSig = "";
   let tdComposerCtrl = null, tdAutoStickUntil = 0, tdDraftRoot = null;
 
@@ -10964,8 +11540,7 @@
       tdWorkersSig = "";
       tdLastCount = 0;
     }
-    const defW = innerWidth <= 1120 ? 420 : 432;
-    setThreadW(Math.max(360, Math.min(store.get("threadW", 0) || defW, threadMax())));
+    applyThreadWidth();
     if (tdDrawer.hidden) { tdDrawer.hidden = false; tdDrawer.offsetWidth; }
     tdDrawer.classList.remove("is-dragging");
     tdDrawer.style.transform = "";
@@ -11005,6 +11580,8 @@
     tdDrawer.style.transform = "";
     if (tdScrim) tdScrim.style.opacity = "";
     appEl.classList.remove("has-thread");
+    appEl.classList.remove("thread-wide");
+    syncThreadWideUI();
     tdDrawer.setAttribute("aria-hidden", "true");
     clearTimeout(tdHideTimer);
     const hideNow = () => {
@@ -11030,6 +11607,20 @@
     const tdHandleBtn = $("#td-handle");
     const tdHeadEl = tdDrawer.querySelector(".td-head");
     let tdSkipHandleClickUntil = 0;
+    tdWidenBtn?.addEventListener("click", () => {
+      if (innerWidth <= 1000 || !activeThreadRoot) return;
+      setThreadWide(!threadWide);
+    });
+    $("#v-collie")?.addEventListener("click", (e) => {
+      if (!activeThreadRoot || !threadWide || innerWidth <= 1000) return;
+      if (window.getSelection?.()?.toString()) return;
+      if (e.target.closest?.("a, button, input, textarea, select, label, .composer, .d-head, .crew, .super-search, .pending-wrap, .msg, .event, .ask, .thumb")) return;
+      setThreadWide(false);
+    });
+    addEventListener("resize", () => {
+      if (activeThreadRoot) applyThreadWidth();
+      else syncThreadWideUI();
+    });
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
     tdBackBtn?.addEventListener("click", () => closeThreadDrawer());
     tdScrim?.addEventListener("click", () => closeThreadDrawer());
@@ -11199,7 +11790,7 @@
       const grip = e.currentTarget;
       grip.setPointerCapture(e.pointerId);
       document.body.classList.add("dragging");
-      const max = threadMax();
+      const max = Math.max(threadMax(), threadWideW());
       const move = (ev) => {
         setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)));
         if (gripSnap && sc) {
@@ -11212,7 +11803,16 @@
         grip.removeEventListener("pointerup", up);
         grip.removeEventListener("pointercancel", up);
         document.body.classList.remove("dragging");
-        store.set("threadW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--thread-w")) || 432);
+        const finalW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--thread-w")) || 432;
+        if (finalW > threadMax() + 40) {
+          threadWide = true;
+          store.set("threadWide", true);
+        } else {
+          threadWide = false;
+          store.set("threadWide", false);
+          store.set("threadW", finalW);
+        }
+        syncThreadWideUI();
         if (gripSnap && sc) {
           applyColliePos(sc, gripSnap);
           captureViewScroll("collie", null, navCur);
@@ -11238,6 +11838,7 @@
   const mdCache = new Map();
   const mdCacheImgKeys = new Set();
   function invalidateMdCacheForImage(p) {
+    thumbRenderVer++;
     if (!p || !mdCacheImgKeys.size) return;
     const baseName = p.split("/").pop() || "";
     for (const k of [...mdCacheImgKeys]) {
@@ -11720,7 +12321,15 @@
   });
   $("#keys").addEventListener("mousedown", (e) => e.preventDefault());
 
-  function grow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, innerHeight * 0.4) + "px"; }
+  function grow(el) {
+    if (!el) return;
+    if (el.closest?.(".cbox") && typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content")) {
+      if (el.style.height) el.style.height = "";
+      return;
+    }
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, innerHeight * 0.4) + "px";
+  }
   // Files go to the machine where the agent runs, then their paths ride
   // along in the message (agents read images and files by path).
   const fmtSize = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
@@ -12021,14 +12630,17 @@
     return typeof t.includes === "function" ? t.includes("Files") : Array.from(t).includes("Files");
   };
   function seedUploadedThumbs(files) {
+    let added = false;
     for (const f of files || []) {
       if (f?.path && f.isImage && f.blob && !f.thumbFailed && !isUnpreviewableImage(f.mime) && !thumbs.has(f.path)) {
         try {
           thumbs.set(f.path, URL.createObjectURL(f.blob));
           thumbMeta.set(f.path, { size: f.size || 0, machine: f.machine || "", path: f.path });
+          added = true;
         } catch {}
       }
     }
+    if (added) thumbRenderVer++;
   }
 
   function bindFiles(form, machine, opts = {}) {

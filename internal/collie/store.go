@@ -80,6 +80,9 @@ type Entry struct {
 	Check bool `json:"check,omitempty"`
 	// External chat channel that originated this entry (e.g. "feishu"), empty for Web UI.
 	Channel string `json:"channel,omitempty"`
+	// ClientMsgID echoes the sender's idempotency token so optimistic UI entries
+	// reconcile 1:1 with SSE snapshots even when SSE arrives before the HTTP reply.
+	ClientMsgID string `json:"client_msg_id,omitempty"`
 }
 
 // SearchHit is one matched user/collie message in a conversation search.

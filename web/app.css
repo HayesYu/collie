@@ -436,6 +436,14 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .thread > .tools + .tools, .thread > .event + .event, .thread > .event + .needs { margin-top: 8px; }
 .thread > .tools, .thread > * + .tools { margin-top: 14px; }
 .thread > .tools + .msg, .thread > .tools + .say { margin-top: 22px; }
+#super-thread > .say, #super-thread > .mine, #super-thread > .event { contain: layout style; }
+@supports (content-visibility: auto) {
+  #super-thread > .say:nth-last-child(n+31),
+  #super-thread > .mine:nth-last-child(n+31) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto none auto 7rem;
+  }
+}
 .chatbg .thread { overflow: visible; min-height: 100%; }
 /* "还在跑" follows the last message instead of sitting at the bottom. */
 .chatbg .thread:has(+ .working-row:not([hidden])) { min-height: 0; }
@@ -1209,6 +1217,7 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   resize: none; max-height: calc(var(--vh) * .4); min-height: 44px; font-size: 14px; line-height: 1.5; padding: 12px 16px 4px;
   border: 0; border-radius: 18px; background: transparent; box-shadow: none; outline: none;
 }
+.cbox textarea { field-sizing: content; width: 100%; height: auto; }
 .composer textarea:hover, .composer textarea:focus { border-color: transparent; box-shadow: none; }
 .cbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px 8px; }
 .cbar .spacer { flex: 1; }
@@ -1336,7 +1345,7 @@ dialog.sheet > form { flex: 1 1 auto; min-height: 0; max-height: none; }
   .app.has-thread { grid-template-columns: var(--side-w) minmax(0, 1fr) var(--thread-w, 432px); }
   .filepane, .threadpane { grid-column: 3; grid-row: 1; }
 }
-body.dragging .app { transition: none; }
+body.dragging .app, body.dragging .td-inner { transition: none; }
 .filepane { position: relative; display: flex; justify-content: flex-end; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--line); background: var(--bg); }
 .filepane[hidden] { display: none; }
 .fv-inner { display: flex; flex-direction: column; flex: none; width: var(--file-w, 600px); height: 100%; }
@@ -1410,7 +1419,7 @@ body.dragging { cursor: col-resize; user-select: none; }
   .fv-act-btn, .fv-copy-btn { min-inline-size: 32px; min-block-size: 32px; width: 32px; height: 32px; }
 }
 @media (max-width: 760px) { .app.has-file, .app.has-thread { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { .app, .filepane, .threadpane, .thread-scrim, .thread-entry, .thread-entry .te-chev, .td-worker, .td-cbox, .td-text .att a { transition: none !important; } a.td-worker:active { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .app, .filepane, .threadpane, .td-inner, .thread-scrim, .thread-entry, .thread-entry .te-chev, .td-worker, .td-cbox, .td-text .att a { transition: none !important; } a.td-worker:active { transform: none; } }
 
 /* ─── right-side reply-thread drawer ─── */
 .thread-scrim {
@@ -1431,6 +1440,7 @@ body.dragging { cursor: col-resize; user-select: none; }
 .td-inner {
   display: flex; flex-direction: column; flex: none; min-width: 0;
   width: var(--thread-w, 432px); height: 100%; min-height: 0; background: var(--bg);
+  transition: width .36s cubic-bezier(.32, .72, 0, 1);
 }
 .td-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 4; }
 .td-grip:hover, body.dragging .td-grip { background: linear-gradient(90deg, transparent 3px, var(--line-2) 3px, var(--line-2) 5px, transparent 5px); }
@@ -1459,6 +1469,20 @@ body.dragging { cursor: col-resize; user-select: none; }
 }
 .td-head-acts { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .td-head-acts .icon-btn svg { width: 16px; height: 16px; stroke-width: 1.7; }
+.td-widen .ic-restore { display: none; }
+.td-widen[aria-pressed="true"] .ic-expand { display: none; }
+.td-widen[aria-pressed="true"] .ic-restore { display: block; }
+.td-widen[aria-pressed="true"] { color: var(--fg); }
+@media (min-width: 1001px) {
+  .app.has-thread.thread-wide .th-head-btn { padding: 0 7px; gap: 4px; }
+  .app.has-thread.thread-wide .th-head-lbl { display: none; }
+  .app.has-thread.thread-wide .td-body { padding: 18px 26px 28px; }
+  .app.has-thread.thread-wide .td-head { padding-left: 24px; padding-right: 16px; }
+  .app.has-thread.thread-wide .td-workers { padding-left: 24px; padding-right: 18px; }
+  .app.has-thread.thread-wide .td-foot { padding: 10px 22px 14px; }
+  .app.has-thread.thread-wide .td-text .thumb img { max-width: min(320px, 100%); max-height: 220px; }
+  .app.has-thread.thread-wide .td-text.td-user-text .thumbs > .thumb:only-child img { max-width: min(460px, 100%); max-height: 300px; }
+}
 .td-head:has(+ .td-workers:not([hidden])) {
   border-bottom: 0;
   padding-bottom: 4px;
@@ -1662,8 +1686,9 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
     transform: translateX(100%); transition: transform .32s cubic-bezier(.32, .72, 0, 1);
   }
   .app.has-thread .threadpane { transform: none; }
-  .td-inner { width: 100%; }
+  .td-inner { width: 100%; transition: none; }
   .td-grip { display: none; }
+  .td-widen { display: none; }
 }
 @media (max-width: 760px) {
   .app.has-thread { grid-template-columns: 1fr; }

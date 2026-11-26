@@ -80,6 +80,8 @@ type routerView struct {
 	Dreaming bool `json:"dreaming,omitempty"`
 	// It has already replied this turn, and is only wrapping up (memory…).
 	Replied bool `json:"replied,omitempty"`
+	// TurnKind distinguishes human-chat turns ("chat") from background worker/timer/system turns ("background").
+	TurnKind string `json:"turn_kind,omitempty"`
 	// The model and effort it runs with ("" = the agent's own default), and
 	// whether the settings have changed since it started.
 	Model   string `json:"model,omitempty"`
@@ -176,12 +178,23 @@ func (s *Server) superState(ctx context.Context) superView {
 		sum := sp.integrations.Summary()
 		v.IntegrationsSummary = &sum
 	}
+	hasQueuedChat := false
 	for _, t := range sp.st.Triggers {
 		if t.Status == "queued" {
 			v.Queued++
 			if len(t.Targets) == 0 || slices.Contains(t.Targets, routerName) {
 				v.QueuedRouter++
+				if t.Source == "chat" {
+					hasQueuedChat = true
+				}
 			}
+		}
+	}
+	if v.Router.Status == "working" || v.Router.Status == "starting" {
+		if !v.Router.Replied && (sp.routerAskedChat || hasQueuedChat) {
+			v.Router.TurnKind = "chat"
+		} else if !v.Router.Replied && (!sp.routerAskedAt.IsZero() || v.Router.Status == "starting") {
+			v.Router.TurnKind = "background"
 		}
 	}
 	return v
@@ -256,6 +269,9 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	beforePending := sp.pendingLocked(now)
 	re := sp.sayQuoteLocked(body.Re)
 	e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
+	if cid != "" {
+		e.ClientMsgID = cid
+	}
 	// The composer's "派到" chip: a one-off choice the router should honour.
 	text := body.Text
 	if re != nil { // which message they mean: Collie need not guess

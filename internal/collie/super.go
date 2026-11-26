@@ -47,6 +47,7 @@ type Super struct {
 	routerLaunchAt  time.Time
 	routerFresh     bool
 	routerAskedAt   time.Time // last delivery to the router not yet followed by a reply or check
+	routerAskedChat bool      // whether the active router turn includes a human chat trigger
 	routerRetries   int       // turns in a row that ended on an API error, each retried
 	routerNudged    bool      // the watchdog interrupted this turn once already
 	routerUsage     ctxUsage
@@ -794,8 +795,20 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 	if fresh {
 		sp.routerFresh = false
 	}
-	if target == routerName && sp.routerAskedAt.IsZero() {
-		sp.routerAskedAt = time.Now() // a message mid-turn keeps the turn's start
+	if target == routerName {
+		hasChat := false
+		for _, t := range list {
+			if t.Source == "chat" {
+				hasChat = true
+				break
+			}
+		}
+		if sp.routerAskedAt.IsZero() {
+			sp.routerAskedAt = time.Now() // a message mid-turn keeps the turn's start
+			sp.routerAskedChat = hasChat
+		} else if hasChat {
+			sp.routerAskedChat = true
+		}
 	}
 	for _, t := range list {
 		t.Targets = remove(t.Targets, target)
@@ -2926,6 +2939,7 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 		return
 	}
 	sp.routerAskedAt = time.Time{}
+	sp.routerAskedChat = false
 	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
 		e := sp.st.Entries[i]
 		if e.At.Before(asked) {

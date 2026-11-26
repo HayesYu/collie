@@ -440,12 +440,18 @@ const okJSON = (data) => ({
   text: async () => JSON.stringify(data),
 });
 
+const resizeObservers = [];
 const ctx = vm.createContext({
   console, setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {}, URL, URLSearchParams,
   Blob, Uint8Array, TextEncoder, atob, AbortController, Event,
   Map, Set, Date, Math, JSON, RegExp, Array, Object, Promise, Error, Number, String, Boolean,
   MutationObserver: class { observe() {} disconnect() {} },
-  ResizeObserver: class { observe() {} disconnect() {} },
+  ResizeObserver: class {
+    constructor(cb) { this.cb = cb; this.active = true; resizeObservers.push(this); }
+    observe() {}
+    disconnect() { this.active = false; }
+    fire() { if (this.active) this.cb([]); }
+  },
   HTMLDialogElement: { prototype: {} },
   getComputedStyle: () => ({ getPropertyValue: () => "" }),
   crypto: { randomUUID: () => "cr-uuid-" + (++uuidSeq) },
@@ -769,6 +775,63 @@ const mkEntry = (n, role, text, extra = {}) => ({
   T.setSup({ router: { status: "idle" }, entries: legacyEntries, workers: [], pinned: [] });
   T.renderSuper({ force: true });
   assert.ok(threadBox.innerHTML.includes('data-ack="e1"') && threadBox.innerHTML.includes("已处理</button>"), "legacy fallback keeps pure --check across unquoted user msg");
+
+  // 13) #t8536 Reload scroll-anchor stability against async image expansion & short-unread fitsAtBottom rule.
+  // 13a) Reload with NO unread: async image loads expand scrollHeight by +1800px -> stays glued to bottom!
+  curRowHeight = 140;
+  serverLastRead = "e12";
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e12" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "initial reload with no unread lands at bottom");
+  const initialBottomH = scroller.scrollHeight;
+  scroller.scrollHeight = initialBottomH + 900;
+  threadBox.dispatch("load", { target: { tagName: "IMG" } });
+  assert.equal(scroller.scrollTop, initialBottomH + 900, "img load keeps viewport glued to bottom during initial settle");
+  scroller.scrollHeight = initialBottomH + 1800;
+  for (const ro of resizeObservers) ro.fire();
+  assert.equal(scroller.scrollTop, initialBottomH + 1800, "ResizeObserver keeps viewport glued to bottom during initial settle");
+
+  // 13b) Reload WITH off-screen unread: images ABOVE #unread-sep expand by +1200px -> #unread-sep stays locked at UNREAD_TOP_PAD (14px)!
+  curRowHeight = 140;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e4" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const sepBeforeGrow = layoutNodes.find((x) => x.isSep);
+  assert.ok(sepBeforeGrow);
+  assert.equal(sepBeforeGrow.y - scroller.scrollTop, 14, "initial unread divider locked at 14px");
+  for (const n of layoutNodes) {
+    if (n.y >= sepBeforeGrow.y) n.y += 1200;
+  }
+  scroller.scrollHeight += 1200;
+  threadBox.dispatch("load", { target: { tagName: "IMG" } });
+  assert.equal(sepBeforeGrow.y - scroller.scrollTop, 14, "after images above expand +1200px, #unread-sep stays locked at 14px");
+
+  // 13c) User manual scroll (wheel / touchstart / pointerdown / ArrowUp) IMMEDIATELY releases lock (never fights user).
+  const userScrolledTo = 180;
+  scroller.dispatch("wheel", { deltaY: -80 });
+  scroller.scrollTop = userScrolledTo;
+  for (const n of layoutNodes) {
+    if (n.y >= sepBeforeGrow.y) n.y += 400;
+  }
+  scroller.scrollHeight += 400;
+  threadBox.dispatch("load", { target: { tagName: "IMG" } });
+  for (const ro of resizeObservers) ro.fire();
+  assert.equal(scroller.scrollTop, userScrolledTo, "manual wheel immediately releases initial anchor lock so later img loads never hijack scroll");
+
+  // 13d) Short-unread boundary (sepTop - UNREAD_TOP_PAD >= maxTop): 3 short unread messages totaling ~380px (< 600px viewport)
+  // MUST evaluate fitsAtBottom = true and stick cleanly to bottom instead of stopping mid-air!
+  curRowHeight = 90;
+  serverLastRead = "e9";
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e9" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const shortSep = layoutNodes.find((x) => x.isSep);
+  assert.ok(shortSep, "3-msg short unread still renders divider");
+  const shortMaxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  assert.ok(shortSep.y - 14 >= shortMaxTop, "precondition: #unread-sep sits inside bottom-scrolled viewport");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "short unread fitting in viewport sticks cleanly to bottom");
 
   console.log("OK: all unread anchor & chat read JS regression checks passed");
 })().catch((err) => {

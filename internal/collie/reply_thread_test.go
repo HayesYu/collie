@@ -111,6 +111,75 @@ func TestSuperSayQuoteUserAndCollieEntries(t *testing.T) {
 	if qOld == nil || qOld.Entry != eRoot || qOld.Who != "你" || !strings.Contains(qOld.Text, "分页测试失败原因") {
 		t.Fatalf("SQLite fallback sayQuoteLocked(%s) = %+v", eRoot, qOld)
 	}
+
+	// 6) Focus-drawer reply on a standalone Collie message with options:
+	//    POST /api/super/say quotes the Collie entry, clears pending, and Collie's next reply chains onto it.
+	eProactive, _ := sp.Reply(mainThread, "夜间基线已跑完，要直接合并吗？", "", []string{"直接合并", "再看看"})
+	sp.mu.Lock()
+	if pendBefore := sp.pendingLocked(eProactive.At); len(pendBefore) == 0 || pendBefore[len(pendBefore)-1].ID != eProactive.ID {
+		sp.mu.Unlock()
+		t.Fatalf("expected proactive Collie entry %s to be pending, got %+v", eProactive.ID, pendBefore)
+	}
+	sp.mu.Unlock()
+
+	code, rFocus := postSay(map[string]any{"text": "先看下差异再合并", "re": eProactive.ID, "client_msg_id": "m-focus-1"})
+	if code != 200 {
+		t.Fatalf("focus say status=%d body=%+v", code, rFocus)
+	}
+	eFocusUser := rFocus["entry"].(string)
+	tFocus := rFocus["trigger"].(string)
+	eFocusCollie, _ := sp.Reply(mainThread, "好的，已列出改动摘要。", tFocus, nil)
+
+	sp.mu.Lock()
+	entFocusUser := sp.findEntryLocked(eFocusUser)
+	entFocusCollie := sp.findEntryLocked(eFocusCollie.ID)
+	pendAfter := sp.pendingLocked(eFocusCollie.At)
+	sp.mu.Unlock()
+	if entFocusUser == nil || entFocusUser.Re == nil || entFocusUser.Re.Entry != eProactive.ID || entFocusUser.Re.Who != "Collie" {
+		t.Fatalf("entFocusUser.Re = %+v, want quote of %s", entFocusUser, eProactive.ID)
+	}
+	if entFocusCollie == nil || entFocusCollie.Re == nil || entFocusCollie.Re.Entry != eFocusUser {
+		t.Fatalf("entFocusCollie.Re = %+v, want chained reply to %s", entFocusCollie, eFocusUser)
+	}
+	for _, p := range pendAfter {
+		if p.ID == eProactive.ID {
+			t.Fatalf("proactive entry %s should no longer be pending after focus-drawer reply", eProactive.ID)
+		}
+	}
+
+	// 7) /api/super exposes Worker.Task for sidebar human-readable task summaries.
+	sp.mu.Lock()
+	sp.st.Workers["wk-summary"] = &Worker{
+		Name:   "wk-summary",
+		Kind:   "codex",
+		Cwd:    dir,
+		Task:   "任务目标：修复分页同秒排序抖动并补单测",
+		Thread: mainThread,
+		Status: "working",
+	}
+	sp.mu.Unlock()
+	reqSup := httptest.NewRequest("GET", "/api/super", nil)
+	reqSup.Header.Set("Authorization", "Bearer test-tok")
+	recSup := httptest.NewRecorder()
+	mux.ServeHTTP(recSup, reqSup)
+	if recSup.Code != 200 {
+		t.Fatalf("GET /api/super status=%d", recSup.Code)
+	}
+	var supResp struct {
+		Workers []Worker `json:"workers"`
+	}
+	if err := json.Unmarshal(recSup.Body.Bytes(), &supResp); err != nil {
+		t.Fatalf("decode /api/super: %v", err)
+	}
+	foundWorkerTask := false
+	for _, w := range supResp.Workers {
+		if w.Name == "wk-summary" && strings.Contains(w.Task, "修复分页同秒排序抖动") {
+			foundWorkerTask = true
+		}
+	}
+	if !foundWorkerTask {
+		t.Fatalf("/api/super workers missing task field: %+v", supResp.Workers)
+	}
 }
 
 func TestReplyThreadSettingsAndNotificationsJS(t *testing.T) {
@@ -232,6 +301,11 @@ for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#compo
 }
 getEl("#re-draft")._qs[".re-t"] = makeEl("#re-draft .re-t");
 getEl("#re-draft")._qs["button"] = makeEl("#re-draft button");
+const tabAllEl = makeEl("tab-all");
+tabAllEl.dataset.thFilter = "all";
+const tabActiveEl = makeEl("tab-active");
+tabActiveEl.dataset.thFilter = "active";
+getEl("#collie-threads-tabs")._qsa["[data-th-filter]"] = [tabAllEl, tabActiveEl];
 getEl("#thread-drawer").hidden = true;
 getEl("#thread-scrim").hidden = true;
 getEl("#file-view").hidden = true;
@@ -387,7 +461,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, resetChat: () => { older = []; pendingSays.length = 0; dismissedLocal.clear(); }, setState: (st) => { localState = st; state = mergedState(); }, setHist: (h) => { hist = h || []; }, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, connect, renderSuper, computeReplyThreads, threadTitleFromText, threadPreviewFromEntry, isThreadPending, renderCollieThreadsMenu, dismissPending, extractThreadWorkers, openThreadDrawer, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, resetChat: () => { older = []; pendingSays.length = 0; dismissedLocal.clear(); }, setState: (st) => { localState = st; state = mergedState(); }, setHist: (h) => { hist = h || []; }, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, connect, renderSuper, renderSide, itemHTML, computeReplyThreads, computeWorkerThreadMap, extractGoalFromTask, agentTaskSummary, threadTitleFromText, threadPreviewFromEntry, isThreadPending, renderCollieThreadsMenu, setCollieThreadsFilter, getCollieThreadsFilter: () => thPopFilter, dismissPending, extractThreadWorkers, openThreadDrawer, openThreadFromAnywhere, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 
@@ -419,10 +493,16 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   ];
 
   const info = T.computeReplyThreads(baseEntries);
-  assert.equal(info.threads.size, 1, "only the >=3-message chain forms a thread");
-  assert.ok(!info.msgToRoot.has("e1"), "standalone message not in thread");
-  assert.ok(!info.msgToRoot.has("e2") && !info.msgToRoot.has("e3"), "2-message Q&A must not form a thread");
-  assert.ok(!info.msgToRoot.has("e5"), "single reply to worker event must not form a thread");
+  assert.equal(info.threads.size, 1, "only the >=3-message chain shows inline reply capsule");
+  assert.ok(!info.msgToRoot.has("e1"), "standalone message has no inline reply capsule");
+  assert.ok(!info.msgToRoot.has("e2") && !info.msgToRoot.has("e3"), "2-message Q&A has no inline reply capsule");
+  assert.ok(!info.msgToRoot.has("e5"), "single reply to worker event has no inline reply capsule");
+  // Universal allThreads includes every user/collie message for 1-click focus drawer
+  assert.equal(info.allThreads.size, 4, "allThreads includes 1-msg, 2-msg, worker-event reply, and >=3-msg chains");
+  assert.equal(info.allMsgToRoot.get("e1"), "e1");
+  assert.equal(info.allMsgToRoot.get("e2"), "e2");
+  assert.equal(info.allMsgToRoot.get("e3"), "e2");
+  assert.equal(info.allMsgToRoot.get("e5"), "e5");
   const th = info.threads.get("e10");
   assert.ok(th, "e10 is the thread root");
   assert.equal(th.totalCount, 5);
@@ -436,19 +516,20 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.setSup({ router: { status: "idle", alive: true }, entries: baseEntries, workers: [] });
   T.renderSuper({ force: true });
   const mainHtml = getEl("#super-thread").innerHTML;
-  // Exact minimal button copy: 4 条回复, no extra timestamp, no "这条线", no duplicate thread icon button in .msg-acts
+  // Exact minimal button copy: 4 条回复, no extra timestamp, no "这条线"
   assert.ok(mainHtml.includes('data-open-thread="e10"'), "thread entry rendered for e10");
   assert.ok(mainHtml.includes('<span class="te-count">4 条回复</span>'), "minimal reply count label");
   assert.ok(!mainHtml.includes("这条线"), "must not contain redundant 这条线 prefix");
   assert.ok(!mainHtml.includes("te-time"), "must not contain duplicate timestamp in thread entry");
-  // Ensure .msg-acts has zero data-open-thread button (no redundant ↳ icon in hover toolbar)
-  const actsMatches = mainHtml.match(/<div class="msg-acts">[\s\S]*?<\/div>/g) || [];
-  assert.ok(actsMatches.length >= 5, "msg-acts rendered");
-  for (const a of actsMatches) {
-    assert.ok(!a.includes("data-open-thread"), "hover toolbar must NOT add redundant thread icon button: " + a);
-  }
-  // 2-message Q&A quote bar has NO data-thread-root (keeps standard jump)
-  assert.ok(!mainHtml.includes('data-goto="e2" data-thread-root='), "2-msg Q&A quote stays jump-only");
+  // Standalone 1-msg and 2-msg entries get restrained .focus-btn in .msg-acts,
+  // while e14 (which already renders .thread-entry capsule) MUST NOT duplicate .focus-btn in its .msg-acts.
+  assert.ok(mainHtml.includes('class="focus-btn" data-open-thread="e1" data-focus-msg="e1"'), "1-msg user entry gets restrained focus-btn");
+  assert.ok(mainHtml.includes('class="focus-btn" data-open-thread="e2" data-focus-msg="e2"'), "2-msg root gets restrained focus-btn");
+  assert.ok(mainHtml.includes('class="focus-btn" data-open-thread="e2" data-focus-msg="e3"'), "2-msg reply gets restrained focus-btn pointing to root e2");
+  assert.ok(mainHtml.includes('class="focus-btn" data-open-thread="e5" data-focus-msg="e5"'), "1-msg Collie entry gets restrained focus-btn");
+  const footE14 = mainHtml.match(/<div class="msg-foot">[\s\S]*?data-focus-msg="e14"[\s\S]*?<\/div><\/div>/);
+  assert.ok(footE14, "e14 renders msg-foot with thread-entry capsule");
+  assert.ok(!footE14[0].includes('class="focus-btn"'), "message with inline thread-entry capsule must NOT duplicate focus-btn in .msg-acts");
   // Branched >=3-message quote bar carries data-thread-root="e10"
   assert.ok(mainHtml.includes('data-goto="e11" data-thread-root="e10"'), "thread quote opens drawer");
 
@@ -977,7 +1058,299 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(appCss.includes(".th-pop-list:has(.th-pop-item.is-pending)"), "CSS aligns gutter via :has() when pending items exist");
   assert.ok(appCss.includes("@media (forced-colors: active)"), "CSS supports Forced Colors Mode for pending dot");
 
-  console.log("OK: all reply-thread, settings, and notification JS tests passed");
+  // ─── 9. Universal focus drawer (1-msg & 2-msg), 0px scroll preservation, auto-quote & in-drawer quick options ───
+  const fTs = (m) => new Date(now - m * 60000).toISOString();
+  const focusEntries = [
+    { id: "f1", role: "user", text: "单条消息：帮我看看缓存命中率为什么下降", at: fTs(20) },
+    { id: "f2", role: "user", text: "两轮问答：接口超时阈值改成多少合适？", at: fTs(15) },
+    { id: "f3", role: "collie", text: "建议改成 8 秒，配合指数退避。", at: fTs(14), re: { entry: "f2", who: "你", text: "两轮问答：接口超时阈值改成多少合适？" } },
+    { id: "f4", role: "collie", text: "压测报告跑完了，要直接发版吗？", at: fTs(3), options: ["直接发版", "先留着"] },
+  ];
+  T.resetChat();
+  T.setView("collie");
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: focusEntries,
+    workers: [],
+    pending: [{ id: "f4", at: fTs(3), summary: "压测报告跑完了，要直接发版吗？", options: ["直接发版", "先留着"] }],
+  });
+  T.renderSuper({ force: true });
+
+  // 9a) Open focus drawer on 1-msg standalone user entry f1 -> zero main-DOM rebuild & auto-quotes f1
+  const mainEl9 = getEl("#super-thread");
+  const sc9 = mainEl9.parentElement;
+  sc9.scrollHeight = 1400;
+  sc9.clientHeight = 500;
+  sc9.scrollTop = 320; // mid-stream reading position (not at bottom)
+  const writesBeforeF1 = innerWrites;
+  T.openThreadDrawer("f1", "f1", "f1");
+  assert.equal(innerWrites, writesBeforeF1, "opening 1-msg focus drawer must NOT rebuild #super-thread.innerHTML");
+  assert.equal(T.getActiveThreadRoot(), "f1");
+  assert.equal(getEl("#td-meta").textContent, "共 1 条消息");
+  assert.ok(getEl("#td-target-text").innerHTML.includes("自动引用此消息"), "1-msg drawer target banner says 自动引用此消息");
+  assert.ok(getEl("#td-list").innerHTML.includes("帮我看看缓存命中率为什么下降"), "1-msg content rendered inside drawer");
+
+  // Send follow-up inside 1-msg focus drawer -> quotes f1, updates drawer to 2 msgs, does NOT yank main scrollTop to bottom!
+  fetchCalls.length = 0;
+  tdInput.value = "重点看热点 key 分布";
+  tdInput.dispatch("input");
+  tdComposer.requestSubmit();
+  await settle();
+  const focusSay1 = fetchCalls.find((c) => c.url === "/api/super/say");
+  assert.ok(focusSay1, "1-msg focus drawer submitted /api/super/say");
+  assert.equal(JSON.parse(focusSay1.body).re, "f1", "1-msg focus drawer reply automatically quotes root f1");
+  assert.ok(sc9.scrollTop < 900, "sending inside focus drawer must not yank mid-scrolled main stream to bottom: scrollTop=" + sc9.scrollTop);
+  assert.ok(getEl("#td-meta").textContent.includes("共 2 条消息"), "drawer seamlessly upgrades from 1 to 2 messages");
+
+  // 9b) Open focus drawer on 2-msg Q&A via reply f3 -> resolves to root f2 and auto-chains onto latest f3
+  T.openThreadDrawer("f2", "f3", "f3");
+  assert.equal(T.getActiveThreadRoot(), "f2");
+  assert.equal(getEl("#td-meta").textContent, "共 2 条消息");
+  assert.ok(getEl("#td-target-text").innerHTML.includes("自动接续最新"), "2-msg drawer target banner says 自动接续最新");
+  fetchCalls.length = 0;
+  tdInput.value = "好的，就按 8 秒改";
+  tdInput.dispatch("input");
+  tdComposer.requestSubmit();
+  await settle();
+  const focusSay2 = fetchCalls.find((c) => c.url === "/api/super/say");
+  assert.ok(focusSay2);
+  assert.equal(JSON.parse(focusSay2.body).re, "f3", "2-msg focus drawer reply chains onto latest message f3");
+
+  // 9c) Open focus drawer on standalone Collie pending-options entry f4 -> renders .reply-opts inside drawer
+  T.openThreadDrawer("f4", "f4", "f4");
+  assert.ok(getEl("#td-list").innerHTML.includes('class="reply-opts"') && getEl("#td-list").innerHTML.includes('data-opt="直接发版"'), "drawer renders quick-reply options for pending Collie message");
+  T.closeThreadDrawer({ immediate: true });
+
+  // ─── 10. Thread list popover 2-way filter (全部 / 进行中) with active agents + pending options ───
+  const qTs = (m) => new Date(now - m * 60000).toISOString();
+  const filterWorkers = [
+    { name: "wk-run", kind: "codex", status: "working", pane_id: "w31:p1", task: "重构查询索引并补齐基准测试", created_at: qTs(20) },
+    { name: "wk-blk", kind: "claude", status: "blocked", pane_id: "w32:p1", task: "任务目标（#t900）：修复登录态刷新回调", created_at: qTs(18) },
+    { name: "wk-fin", kind: "claude", status: "done", pane_id: "w33:p1", task: "清理历史废弃脚本", created_at: qTs(40), report_at: qTs(12) },
+  ];
+  const filterAgents = [
+    { pane_id: "w31:p1", name: "wk-run", kind: "codex", status: "working", is_agent: true, cwd: "/tmp/app" },
+    { pane_id: "w32:p1", name: "wk-blk", kind: "claude", status: "blocked", is_agent: true, cwd: "/tmp/app" },
+    { pane_id: "w33:p1", name: "wk-fin", kind: "claude", status: "done", is_agent: true, cwd: "/tmp/app" },
+    { pane_id: "w34:p1", name: "claude-1", kind: "claude", status: "working", is_agent: true, cwd: "/tmp/web", topic: "首页暗色模式" },
+  ];
+  const filterEntries = [
+    // T1: >=3 msgs + active working agent wk-run (NO pending buttons) -> in 全部 & 进行中
+    { id: "q1", role: "user", text: "帮我优化查询索引", at: qTs(22) },
+    { id: "q2", role: "collie", text: "已派 wk-run（查询索引优化）去处理。", at: qTs(21), re: { entry: "q1", who: "你", text: "帮我优化查询索引" } },
+    { id: "q3", role: "user", text: "注意兼容旧分页参数。", at: qTs(19), re: { entry: "q2", who: "Collie", text: "已派 wk-run" } },
+    // T2: 2-msg Q&A + active blocked agent wk-blk (<3 msgs, active agent!) -> in 全部 & 进行中
+    { id: "q10", role: "user", text: "修一下登录态刷新问题", at: qTs(18) },
+    { id: "q11", role: "collie", text: "交给 wk-blk 去排查了。", at: qTs(17), re: { entry: "q10", who: "你", text: "修一下登录态刷新问题" } },
+    // T3: 1-msg standalone Collie with pending options -> in 全部 & 进行中
+    { id: "q20", role: "collie", text: "wk-fin 整理完旧脚本了，要直接删掉吗？", at: qTs(10), options: ["直接删", "先留档"] },
+    // T4: >=3 msgs settled (no active worker, no pending) -> in 全部 ONLY
+    { id: "q30", role: "user", text: "明早提醒我看周报", at: qTs(30) },
+    { id: "q31", role: "collie", text: "好的，设好了 09:00。", at: qTs(29), re: { entry: "q30", who: "你", text: "明早提醒我看周报" } },
+    { id: "q32", role: "user", text: "谢谢。", at: qTs(28), re: { entry: "q31", who: "Collie", text: "好的，设好了 09:00。" } },
+    // Casual 1-msg standalone (no worker, no pending) -> NOT in popover list
+    { id: "q40", role: "user", text: "顺便记一句随手备忘", at: qTs(5) },
+  ];
+  T.resetChat();
+  T.setState({ ok: true, agents: filterAgents, shells: [], machines: [{ id: "", name: "local", local: true, online: true }] });
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: filterEntries,
+    workers: filterWorkers,
+    pending: [{ id: "q20", at: qTs(10), summary: "wk-fin 整理完旧脚本了，要直接删掉吗？", options: ["直接删", "先留档"] }],
+  });
+  T.setView("collie");
+  T.setCollieThreadsFilter("all");
+  T.renderSuper({ force: true });
+
+  assert.equal(getEl("#collie-threads-cnt").textContent, "4", "popover includes >=3 threads + active-agent + pending threads, excluding casual 1-liner q40");
+  assert.equal(getEl("#collie-threads-cnt-all").textContent, "4");
+  assert.equal(getEl("#collie-threads-cnt-active").textContent, "3");
+  const allListHtml = getEl("#collie-threads-list").innerHTML;
+  assert.ok(allListHtml.includes('data-th-pick="q1"') && allListHtml.includes("1 个在跑"), "T1 shows running agent count in meta");
+  assert.ok(allListHtml.includes('data-th-pick="q10"') && allListHtml.includes("Agent 等确认"), "T2 (2-msg blocked agent) included with Agent 等确认 meta");
+  assert.ok(allListHtml.includes('data-th-pick="q20"') && allListHtml.includes("1 条消息"), "T3 (1-msg pending) included with 1 条消息 meta");
+  assert.ok(allListHtml.includes('data-th-pick="q30"'), "T4 settled thread included in 全部");
+  assert.ok(!allListHtml.includes('data-th-pick="q40"'), "casual 1-liner q40 stays out of popover list");
+
+  // Switch filter to 进行中
+  T.setCollieThreadsFilter("active");
+  assert.equal(T.getCollieThreadsFilter(), "active");
+  assert.equal(tabActiveEl.getAttribute("aria-pressed"), "true");
+  assert.equal(tabAllEl.getAttribute("aria-pressed"), "false");
+  const activeListHtml = getEl("#collie-threads-list").innerHTML;
+  assert.ok(activeListHtml.includes('data-th-pick="q1"'), "T1 shown in 进行中");
+  assert.ok(activeListHtml.includes('data-th-pick="q10"'), "T2 shown in 进行中");
+  assert.ok(activeListHtml.includes('data-th-pick="q20"'), "T3 shown in 进行中");
+  assert.ok(!activeListHtml.includes('data-th-pick="q30"'), "settled T4 hidden in 进行中");
+
+  // When all workers finish and pending clears -> 进行中 count is 0 with calm empty state
+  const settledWorkers = filterWorkers.map((w) => ({ ...w, status: "done" }));
+  const settledAgents = filterAgents.map((a) => ({ ...a, status: "done" }));
+  T.setState({ ok: true, agents: settledAgents, shells: [], machines: [{ id: "", name: "local", local: true, online: true }] });
+  T.setSup({ router: { status: "idle", alive: true }, entries: filterEntries, workers: settledWorkers, pending: [] });
+  T.renderSuper({ force: true });
+  assert.equal(getEl("#collie-threads-cnt-active").textContent, "0");
+  assert.ok(getEl("#collie-threads-list").innerHTML.includes("当前没有进行中的话题"), "empty state rendered when 0 active threads");
+  T.setCollieThreadsFilter("all");
+
+  // ─── 11. Left sidebar Agent card: 1-line human summary + direct topic drawer button ───
+  // 11a) extractGoalFromTask handles preamble skipping, explicit goal labels, and bracket topics
+  assert.equal(
+    T.extractGoalFromTask("找出 TestOrdersPagination 偶发失败的原因并修好").goal,
+    "找出 TestOrdersPagination 偶发失败的原因并修好",
+  );
+  assert.equal(
+    T.extractGoalFromTask("请先阅读 ~/.agents/skills/guide/SKILL.md\n\n**并发隔离要求**：新建独立 worktree\n\n任务目标（#t8427 / #t8439）：把话题抽屉升级为极简专注视图").goal,
+    "把话题抽屉升级为极简专注视图",
+    "preamble skipped in favor of explicit 任务目标 line",
+  );
+  assert.equal(
+    T.extractGoalFromTask("【登录态续签】修复移动端刷新掉登问题").goal,
+    "登录态续签 · 修复移动端刷新掉登问题",
+  );
+
+  // 11b) Sidebar renders 1-line summary + sibling .item-th-btn (never nested inside <a>)
+  T.setState({ ok: true, agents: filterAgents, shells: [], machines: [{ id: "", name: "local", local: true, online: true }] });
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: filterEntries,
+    workers: filterWorkers,
+    pending: [{ id: "q20", at: qTs(10), summary: "wk-fin 整理完旧脚本了，要直接删掉吗？", options: ["直接删", "先留档"] }],
+  });
+  T.renderSide();
+
+  const liveListHtml = getEl("#live-list").innerHTML;
+  const attnListHtml = getEl("#attention").innerHTML;
+
+  // wk-run: Chinese bracket topic "查询索引优化" from chat + hover full description includes task goal + linked topic q1
+  assert.ok(liveListHtml.includes('class="item-sum"') && liveListHtml.includes(">查询索引优化</div>"), "wk-run displays Chinese bracket topic summary: " + liveListHtml);
+  assert.ok(liveListHtml.includes("查询索引优化 — 重构查询索引并补齐基准测试"), "wk-run hover tooltip combines topic and full task description");
+  assert.ok(liveListHtml.includes('data-agent-thread="q1"'), "wk-run gets direct topic drawer button for q1");
+  assert.ok(liveListHtml.includes('</a><button type="button" class="item-th-btn"'), "topic button rendered immediately after </a>");
+  assert.ok(!/<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<button\b/.test(liveListHtml), "topic button must be a sibling of <a>, never nested inside <a>");
+
+  // wk-blk (blocked -> #attention): extracts 任务目标 summary + direct topic button to 2-msg thread q10
+  assert.ok(attnListHtml.includes("修复登录态刷新回调"), "blocked wk-blk extracts explicit 任务目标 summary");
+  assert.ok(attnListHtml.includes('data-agent-thread="q10"'), "blocked wk-blk gets direct topic button to 2-msg thread q10");
+
+  // wk-fin: task summary + linked to 1-msg pending thread q20
+  assert.ok(liveListHtml.includes("清理历史废弃脚本") && liveListHtml.includes('data-agent-thread="q20"'), "wk-fin gets summary and topic link to q20");
+
+  // claude-1 (non-worker whose label already IS its topic "首页暗色模式"): NO duplicate .item-sum and NO .item-th-btn
+  const claude1Item = liveListHtml.match(/<li[^>]*>(?:(?!<\/li>)[\s\S])*w34%3Ap1(?:(?!<\/li>)[\s\S])*<\/li>/)?.[0] || "";
+  assert.ok(claude1Item, "claude-1 card rendered");
+  assert.ok(!claude1Item.includes('class="item-sum"'), "non-worker agent whose title already equals topic must not duplicate .item-sum");
+  assert.ok(!claude1Item.includes("data-agent-thread"), "unlinked agent must not render topic icon button");
+
+  // 11c) openThreadFromAnywhere navigates from terminal view #/p/... to #/collie and opens target drawer
+  T.setBooted(true);
+  ctx.location.hash = "#/p/w31%3Ap1";
+  T.route();
+  assert.equal(T.getActiveThreadRoot(), null);
+  T.openThreadFromAnywhere("q1", "q3");
+  assert.equal(ctx.location.hash, "#/collie", "clicking agent topic button from terminal navigates to #/collie");
+  T.route();
+  assert.equal(T.getActiveThreadRoot(), "q1", "target topic drawer opens automatically after routing to #/collie");
+  T.closeThreadDrawer({ immediate: true });
+
+  // 11d) HTML & CSS contracts for new focus drawer, filter tabs & sidebar agent summary/topic button
+  assert.ok(indexHtml.includes('id="collie-threads-tabs"') && indexHtml.includes('data-th-filter="active"'), "index.html adds 2-way 全部/进行中 filter tabs");
+  assert.ok(appCss.includes(".th-pop-tabs") && appCss.includes(".th-pop-tab.on::after") && appCss.includes(".th-pop-empty"), "CSS defines minimalist borderless filter tabs and empty state");
+  assert.ok(appCss.includes(".item-wrap") && appCss.includes(".item-sum") && appCss.includes(".item-th-btn"), "CSS defines sidebar agent summary and corner topic icon button");
+  assert.ok(appCss.includes("#v-collie .say .msg-acts:focus-within") && appCss.includes(".msg-acts button.focus-btn.active"), "CSS exposes hover actions on keyboard focus and highlights active focus-btn");
+
+  // ─── 12. Same-Agent background reports auto-fold into origin dispatch topic thread (#t8526) ───
+  const mTs = (m) => new Date(now - m * 60000).toISOString();
+  const mergeWorkers = [
+    { name: "ingest-batch-50m", kind: "codex", status: "working", pane_id: "w51:p1", task: "增量导入并校验 50m 数据批次", created_at: mTs(40) },
+    { name: "nightly-audit", kind: "claude", status: "done", pane_id: "w52:p1", task: "定时巡检夜间任务并汇报异常", created_at: mTs(30) },
+  ];
+  const mergeAgents = [
+    { pane_id: "w51:p1", name: "ingest-batch-50m", kind: "codex", status: "working", is_agent: true, cwd: "/tmp/data" },
+    { pane_id: "w52:p1", name: "nightly-audit", kind: "claude", status: "done", is_agent: true, cwd: "/tmp/data" },
+  ];
+  const mergeEntries = [
+    // Scenario A: Human-Collie dispatch -> multiple separate worker trigger/event reports + follow-up
+    { id: "m1", role: "user", text: "帮我跑一下 50m 增量导入并盯完校验。", at: mTs(42) },
+    { id: "m2", role: "collie", text: "收到，已派 \x60ingest-batch-50m\x60（50m 增量导入）去执行。", at: mTs(41), re: { entry: "m1", who: "你", text: "帮我跑一下 50m 增量导入并盯完校验。" } },
+    { id: "m_ev0", role: "event", ref: "ingest-batch-50m", tone: "spawn", text: "派出 ingest-batch-50m（codex）", at: mTs(40) },
+    // Unrelated interleaved task
+    { id: "m_other", role: "user", text: "顺手帮我查下明早日程。", at: mTs(36) },
+    // Report #1 (via event entry + worker field; interleaved by another user message before Collie replies)
+    { id: "m_ev1", role: "event", ref: "ingest-batch-50m", tone: "done", text: "ingest-batch-50m 回报：阶段一完成 35%，无报错。", at: mTs(32) },
+    { id: "m_inter1", role: "user", text: "另问一句：测试机磁盘够吗？", at: mTs(31.5) },
+    { id: "m3", role: "collie", text: "进度更新：阶段一已完成 35%，目前吞吐正常。", at: mTs(31), re: { entry: "m_ev1", worker: "ingest-batch-50m", who: "ingest-batch-50m", text: "阶段一完成 35%，无报错。" } },
+    // Human replies to report #1
+    { id: "m4", role: "user", text: "好，继续盯到阶段二校验完。", at: mTs(29), re: { entry: "m3", who: "Collie", text: "进度更新：阶段一已完成 35%" } },
+    // Report #2 (via trigger-style re with kind="trigger" & from="ingest-batch-50m", different event/trigger ID)
+    { id: "m_ev2", role: "event", ref: "ingest-batch-50m", tone: "done", text: "ingest-batch-50m 回报：阶段二校验全绿，等待切换。", at: mTs(15) },
+    { id: "m_inter2", role: "collie", text: "磁盘还有 420G 富余。", at: mTs(14.5), re: { entry: "m_inter1", who: "你", text: "另问一句：测试机磁盘够吗？" } },
+    { id: "m5", role: "collie", text: "全部跑完且校验全绿，要现在切流量吗？", at: mTs(14), options: ["立刻切换", "稍后再切"], re: { kind: "trigger", from: "ingest-batch-50m", entry: "m_ev2", who: "ingest-batch-50m", text: "阶段二校验全绿，等待切换。" } },
+
+    // Scenario B: Timer/system-spawned worker (NO prior human-Collie dispatch) -> first report becomes root, second report folds in!
+    { id: "n_ev1", role: "event", ref: "nightly-audit", tone: "done", text: "nightly-audit 回报：第一波巡检发现 1 条慢查询。", at: mTs(25) },
+    { id: "n1", role: "collie", text: "夜间巡检初报：发现 1 条慢查询，已继续复核。", at: mTs(24), re: { entry: "n_ev1", worker: "nightly-audit", who: "nightly-audit", text: "第一波巡检发现 1 条慢查询。" } },
+    { id: "n_ev2", role: "event", ref: "nightly-audit", tone: "done", text: "nightly-audit 回报：复核完毕，已确认是缓存冷启动。", at: mTs(10) },
+    { id: "n2", role: "collie", text: "夜间巡检结项：确认是缓存冷启动，当前已恢复正常。", at: mTs(9), check: true, re: { entry: "n_ev2", worker: "nightly-audit", who: "nightly-audit", text: "复核完毕，已确认是缓存冷启动。" } },
+    { id: "n3", role: "user", text: "收到，记进周报。", at: mTs(8), re: { entry: "n2", who: "Collie", text: "夜间巡检结项" } },
+  ];
+
+  T.resetChat();
+  T.setState({ ok: true, agents: mergeAgents, shells: [], machines: [{ id: "", name: "local", local: true, online: true }] });
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: mergeEntries,
+    workers: mergeWorkers,
+    pending: [{ id: "m5", at: mTs(14), summary: "全部跑完且校验全绿，要现在切流量吗？", options: ["立刻切换", "稍后再切"] }],
+  });
+  T.setView("collie");
+  T.renderSuper({ force: true });
+  T.renderSide();
+
+  const mergeInfo = T.computeReplyThreads(mergeEntries);
+  // Scenario A: m1, m2, m3 (report #1), m4 (user reply), m5 (report #2) ALL fold into origin root m1!
+  const thBatch = mergeInfo.threads.get("m1");
+  assert.ok(thBatch, "dispatched worker lifecycle folds into origin root m1");
+  assert.deepEqual(
+    Array.from(thBatch.list, (x) => x.id),
+    ["m1", "m2", "m3", "m4", "m5"],
+    "m1..m5 share one chronological thread across multiple different worker report trigger IDs",
+  );
+  assert.equal(mergeInfo.allMsgToRoot.get("m3"), "m1");
+  assert.equal(mergeInfo.allMsgToRoot.get("m4"), "m1");
+  assert.equal(mergeInfo.allMsgToRoot.get("m5"), "m1");
+  assert.equal(mergeInfo.allMsgToRoot.get("m_other"), "m_other", "unrelated message stays separate");
+
+  // Scenario B: timer/system worker with no dispatch message -> first report n1 becomes root, n2 & n3 fold into n1!
+  const thNightly = mergeInfo.threads.get("n1");
+  assert.ok(thNightly, "timer-spawned worker reports fold into first report root n1");
+  assert.deepEqual(
+    Array.from(thNightly.list, (x) => x.id),
+    ["n1", "n2", "n3"],
+    "n1, n2 (second trigger report), and n3 (user follow-up) form one unified thread",
+  );
+
+  // Main stream retains original worker-report quote bars (pointing to m_ev1 / m_ev2, NOT overwritten)
+  const mergeMainHtml = getEl("#super-thread").innerHTML;
+  assert.ok(mergeMainHtml.includes('data-goto="m_ev1"') && mergeMainHtml.includes("阶段一完成 35%，无报错。"), "main stream preserves report #1 quote bar");
+  assert.ok(mergeMainHtml.includes('data-goto="m_ev2"') && mergeMainHtml.includes("阶段二校验全绿，等待切换。"), "main stream preserves report #2 quote bar");
+
+  // Sidebar Agent card links directly to full lifecycle origin root (m1 for ingest-batch-50m, n1 for nightly-audit)
+  const mergeWtMap = T.computeWorkerThreadMap(mergeInfo, mergeEntries);
+  assert.equal(mergeWtMap.get("ingest-batch-50m")?.rootId, "m1", "sidebar links ingest-batch-50m to full lifecycle root m1");
+  assert.equal(mergeWtMap.get("nightly-audit")?.rootId, "n1", "sidebar links nightly-audit to first report root n1");
+
+  // Opening drawer for m1 displays full chronology WITH preserved worker-report quote bars inside drawer!
+  T.openThreadDrawer("m1", "m5", "m5");
+  const mergeDrawerHtml = getEl("#td-list").innerHTML;
+  assert.ok(mergeDrawerHtml.includes("帮我跑一下 50m 增量导入"), "drawer starts with original human dispatch");
+  assert.ok(mergeDrawerHtml.includes("阶段一完成 35%，无报错。") && mergeDrawerHtml.includes("进度更新：阶段一已完成 35%"), "drawer preserves report #1 quote bar and body");
+  assert.ok(mergeDrawerHtml.includes("阶段二校验全绿，等待切换。") && mergeDrawerHtml.includes("全部跑完且校验全绿"), "drawer preserves report #2 quote bar and body");
+  assert.ok(mergeDrawerHtml.includes('data-opt="立刻切换"'), "drawer exposes latest pending decision options");
+  T.closeThreadDrawer({ immediate: true });
+
+  console.log("OK: all reply-thread, focus-drawer, filter, agent-card, worker-fold, settings, and notification JS tests passed");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

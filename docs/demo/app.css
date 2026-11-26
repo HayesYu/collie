@@ -507,19 +507,24 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
    (and keeps its room only when a close follow-up message leaves no gap). */
 .msg-acts { display: flex; align-items: center; gap: 2px; height: 24px; margin: 0 0 -24px -6px; color: var(--fg-3); position: relative; z-index: 1;
   opacity: 0; pointer-events: none; transition: opacity .12s; }
-#v-collie .say:hover .msg-acts, #v-collie .msg.show-time .msg-acts { opacity: 1; pointer-events: auto; }
+#v-collie .say:hover .msg-acts, #v-collie .msg.show-time .msg-acts, #v-collie .say .msg-acts:focus-within { opacity: 1; pointer-events: auto; }
 /* your own message: the row sits under the bubble's right edge */
 #v-collie .mine { display: flex; flex-direction: column; align-items: flex-end; align-self: stretch; }
 #v-collie .mine .msg-acts { justify-content: flex-end; margin: 2px -6px -26px 0; }
 #v-collie .say:has(+ .say.cont) .msg-acts { margin-bottom: 0; }
 #v-collie .mine .msg-acts .t { margin: 0 6px 0 0; }
-#v-collie .mine:hover .msg-acts, #v-collie .mine .msg.show-time + .msg-acts { opacity: 1; pointer-events: auto; }
+#v-collie .mine:hover .msg-acts, #v-collie .mine .msg.show-time + .msg-acts, #v-collie .mine .msg-acts:focus-within { opacity: 1; pointer-events: auto; }
 .msg-acts button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
 .msg-acts button:hover { background: var(--bg-2, rgba(127,127,127,.12)); color: var(--fg); }
+.msg-acts button:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 35%, transparent); outline-offset: 1px; }
 .msg-acts button.pin-btn.on { color: var(--pin); }
 .msg-acts button.pin-btn.on .pin-body { fill: color-mix(in srgb, currentColor 22%, transparent); }
+.msg-acts button.focus-btn.active { color: var(--attn); background: color-mix(in srgb, var(--attn) 10%, transparent); }
 .msg-acts svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .msg-acts .t { margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+@media (pointer: coarse) {
+  .msg-acts button { width: 32px; height: 32px; }
+}
 .pin-ind {
   display: inline-flex; align-items: center; gap: 4px; margin: 0 0 4px;
   font-size: 11.5px; line-height: 16px; color: var(--pin); user-select: none;
@@ -1496,6 +1501,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .td-text .thumbs { margin: 5px 0 2px; }
+.td-text .reply-opts { margin: 8px 0 2px; }
 .td-text .thumb { max-width: 100%; border: 1px solid var(--line); }
 .td-text .thumb img { max-width: min(176px, 100%); max-height: 148px; }
 .td-text.td-user-text .thumbs:has(> .thumb:only-child) { display: flex; max-width: 100%; }
@@ -2978,6 +2984,53 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
 
 /* sidebar: Collie's agents among yours */
 /* A long name gives way, not the badge after it. */
+.item-wrap { position: relative; }
+.item.has-sum { align-items: start; }
+.item.has-sum .glyph { margin-top: 1px; }
+.item.has-sum .dot { margin-top: 6px; }
+.item-sum {
+  margin-top: 1px;
+  font-size: 12px; line-height: 1.38; font-weight: 400;
+  color: color-mix(in oklab, var(--fg-2) 72%, var(--fg-3));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.item.has-sum .sub { margin-top: 1px; font-size: 11.5px; }
+.item.has-th .sub { padding-right: 26px; }
+.item.has-th:not(.has-sum) .dot { margin-left: 26px; }
+.item-th-btn {
+  position: absolute; right: 6px; bottom: 5px; z-index: 2;
+  display: grid; place-items: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-3);
+  opacity: .72; cursor: pointer;
+  transition: background .12s, color .12s, opacity .12s, transform .1s;
+}
+.item-wrap:has(> .item.has-th:not(.has-sum)) .item-th-btn {
+  right: 24px; bottom: auto; top: 50%; transform: translateY(-50%);
+}
+.item-wrap:hover .item-th-btn,
+.item-wrap:focus-within .item-th-btn,
+.item-th-btn.active { opacity: 1; }
+.item-th-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+.item-th-btn:active { transform: scale(.94); }
+.item-wrap:has(> .item.has-th:not(.has-sum)) .item-th-btn:active { transform: translateY(-50%) scale(.94); }
+.item-th-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 35%, transparent); outline-offset: 1px; }
+.item-th-btn.active {
+  color: var(--attn);
+  background: color-mix(in srgb, var(--attn) 12%, transparent);
+}
+.item-th-btn svg {
+  width: 14px; height: 14px; stroke-width: 1.75;
+  fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round;
+}
+@media (pointer: coarse) {
+  .item-th-btn { width: 28px; height: 28px; right: 6px; bottom: 7px; opacity: .82; }
+  .item-th-btn::after { content: ""; position: absolute; inset: -6px; }
+  .item.has-th .sub { padding-right: 32px; }
+  .item-wrap:has(> .item.has-th:not(.has-sum)) .item-th-btn { right: 26px; bottom: auto; top: 50%; }
+  .item.has-th:not(.has-sum) .dot { margin-left: 32px; }
+}
 .item .name:has(.by-collie) { display: flex; align-items: center; }
 .item .name .nm { min-width: 0; margin-right: 6px; overflow: hidden; text-overflow: ellipsis; }
 .item .name .by-collie { flex: none; margin-left: auto; /* all badges line up at the right */ padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; font: 500 10.5px/16px var(--sans, inherit); color: var(--fg-3); vertical-align: 1px; white-space: nowrap; }
@@ -3146,10 +3199,38 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
 .th-pop[hidden] { display: none; }
 .th-pop-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 9px 13px; border-bottom: 1px solid var(--line); background: var(--bg-2);
+  padding: 0 13px 0 8px; min-height: 36px; border-bottom: 1px solid var(--line); background: var(--bg-2);
   font-size: 12px; font-weight: 600; color: var(--fg-2);
 }
-.th-pop-sub { font-weight: 400; font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.th-pop-tabs { display: inline-flex; align-items: stretch; gap: 2px; min-width: 0; }
+.th-pop-tab {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 3px;
+  min-block-size: 36px; padding: 0 8px;
+  border: 0; border-radius: 0; background: transparent;
+  color: var(--fg-3); font: 500 12px/1 var(--sans); white-space: nowrap;
+  cursor: pointer; transition: color .14s;
+}
+.th-pop-tab:hover { color: var(--fg-2); }
+.th-pop-tab.on { color: var(--fg); font-weight: 600; }
+.th-pop-tab.on::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: 0;
+  height: 1.5px; border-radius: 2px; background: var(--fg);
+}
+.th-pop-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--fg) 35%, transparent);
+  outline-offset: -3px; border-radius: 6px;
+}
+.th-tab-cnt {
+  font-size: 11px; font-weight: 450; color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+.th-pop-tab.on .th-tab-cnt { color: var(--fg-2); }
+.th-pop-sub { font-weight: 400; font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.th-pop-empty {
+  padding: 22px 14px; text-align: center;
+  font-size: 12.5px; color: var(--fg-3);
+}
 .th-pop-list {
   max-height: min(420px, 60vh); overflow-y: auto; overscroll-behavior: contain;
   padding: 5px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
@@ -3215,6 +3296,8 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
     position: fixed; left: 12px; right: 12px; top: calc(64px + env(safe-area-inset-top));
     width: auto; max-width: none;
   }
+  .th-pop-head { padding: 0 11px 0 6px; min-height: 40px; }
+  .th-pop-tab { min-block-size: 40px; padding: 0 9px; font-size: 12.5px; }
   .th-pop-list { max-height: min(390px, 58dvh); }
   .th-pop-item { padding: 9px 11px; }
   .th-pop-list:has(.th-pop-item.is-pending) .th-pop-item,
@@ -3223,11 +3306,12 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
 }
 @media (forced-colors: active) {
   .th-pop-dot { background: Highlight; opacity: 1; box-shadow: none; forced-color-adjust: none; }
+  .th-pop-tab.on::after { background: Highlight; forced-color-adjust: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .th-pop { animation: none; }
-  .th-head-btn { transition: none; }
-  .th-head-btn:active { transform: none; }
+  .th-head-btn, .th-pop-tab, .item-th-btn { transition: none; }
+  .th-head-btn:active, .item-th-btn:active { transform: none; }
 }
 
 /* ─── integrations store & centered modal (<dialog class="sheet int-sheet">) ─── */

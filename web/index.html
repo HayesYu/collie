@@ -123,7 +123,10 @@
             </button>
             <div class="th-pop" id="collie-threads-pop" role="region" aria-label="话题线列表" hidden>
               <div class="th-pop-head">
-                <span>话题线</span>
+                <div class="th-pop-tabs" id="collie-threads-tabs" role="group" aria-label="筛选话题线">
+                  <button type="button" class="th-pop-tab on" data-th-filter="all" aria-pressed="true">全部<span class="th-tab-cnt" id="collie-threads-cnt-all"></span></button>
+                  <button type="button" class="th-pop-tab" data-th-filter="active" aria-pressed="false">进行中<span class="th-tab-cnt" id="collie-threads-cnt-active"></span></button>
+                </div>
                 <span class="th-pop-sub" id="collie-threads-sub"></span>
               </div>
               <div class="th-pop-list" id="collie-threads-list" role="list"></div>

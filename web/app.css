@@ -669,6 +669,33 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   .reply-ack svg { width: 14px; height: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { .reply-ack { transition: none; } }
+/* Quiet settled confirmation pill replacing .reply-opts after picking an option while reading above bottom. */
+.reply-opts.reply-picked { margin: -2px 0 6px; }
+.reply-picked-tag {
+  display: inline-flex; align-items: flex-start; gap: 5px;
+  max-inline-size: 100%; padding: 4px 11px 4px 9px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg-2); color: var(--fg-2);
+  font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere;
+  transition: opacity .16s ease;
+  animation: reply-picked-in .18s ease-out;
+}
+.reply-picked.is-sending .reply-picked-tag { opacity: .68; }
+.reply-picked-tag svg {
+  width: 13px; height: 13px; flex: none; margin-top: 2.5px;
+  stroke: var(--ok); stroke-width: 2.1; fill: none;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.reply-picked-text { min-width: 0; }
+.reply-picked-lbl { color: var(--fg-3); }
+.reply-picked-val { color: var(--fg-2); font-weight: 500; }
+@keyframes reply-picked-in {
+  from { opacity: 0; transform: translateY(-2px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reply-picked-tag { animation: none; transition: none; }
+}
 .time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .unread-sep {
   display: flex; align-items: center; gap: 10px;

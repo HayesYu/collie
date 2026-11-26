@@ -1713,6 +1713,27 @@
     }
     return false;
   }
+  function isCollieNearBottom(sc = viewScroller("collie")) {
+    if (!sc || sc.clientHeight <= 0) return true;
+    return (sc.scrollHeight - sc.scrollTop - sc.clientHeight) <= AT_BOTTOM_PX;
+  }
+  function captureEntryAnchor(sc, entryId) {
+    if (!sc || !entryId || sc.clientHeight <= 0) return null;
+    const box = $("#super-thread");
+    if (!box) return null;
+    const eid = CSS.escape(entryId);
+    const el = box.querySelector(`.msg[data-id="${eid}"], .event[data-id="${eid}"]`);
+    if (!el) return null;
+    const sr = sc.getBoundingClientRect();
+    const mr = el.getBoundingClientRect();
+    if (mr.bottom <= sr.top || mr.top >= sr.bottom) return null;
+    return {
+      atBottom: false,
+      scrollTop: sc.scrollTop,
+      anchorId: entryId,
+      anchorOffset: mr.top - sr.top,
+    };
+  }
   function captureColliePos(sc = viewScroller("collie")) {
     if (!sc || sc.clientHeight <= 0) return null;
     const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
@@ -2327,13 +2348,19 @@
     }
     return true;
   }
-  function replyOptsMarkup(e, idx, allEntries, pendIds = null) {
+  function replyOptsMarkup(e, idx, allEntries, pendIds = null, opts = null) {
     if (!e || e.role !== "collie" || !e.id) return "";
-    const opts = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
-    if (opts.length) {
-      if (!entryPendingNow(allEntries, idx, e.id, pendIds, true)) return "";
-      return `<div class="reply-opts" data-entry="${esc(e.id)}">${opts.map((o) =>
-        `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
+    const optList = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
+    if (optList.length) {
+      if (entryPendingNow(allEntries, idx, e.id, pendIds, true)) {
+        return `<div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
+      }
+      const picked = !opts?.inDrawer ? pickedReplyOpts.get(e.id) : null;
+      if (picked) {
+        return `<div class="reply-opts reply-picked${picked.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}" role="status" aria-live="polite"><span class="reply-picked-tag"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span class="reply-picked-text"><span class="reply-picked-lbl">已选择：</span><span class="reply-picked-val">${esc(picked.text)}</span></span></span></div>`;
+      }
+      return "";
     }
     if (e.check && entryPendingNow(allEntries, idx, e.id, pendIds, false)) {
       return `<div class="reply-opts reply-check" data-entry="${esc(e.id)}"><button type="button" class="reply-ack" data-ack="${esc(e.id)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已处理</button></div>`;
@@ -2845,6 +2872,8 @@
   }
   // Items dismissed locally via × before the hub's next stream frame lands.
   const dismissedLocal = new Set();
+  // Quick-reply options picked while scrolled above the bottom: entryId -> { text, sending }.
+  const pickedReplyOpts = new Map();
   const ICON_X = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
   const ICON_PIN = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-body" d="M9.5 3.5h5v5l3 3v2h-11v-2l3-3z"/><path d="M8.5 3.5h7M12 13.5v7"/></svg>`;
   let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
@@ -3056,10 +3085,20 @@
   }
   async function dismissPending(id) {
     if (!id || dismissedLocal.has(id)) return;
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    let keepSnap = null;
+    if (sc && !activeThreadRoot && !isCollieNearBottom(sc)) {
+      cancelCollieLayoutLock();
+      cancelInitialAnchor();
+      activeCollieRestore = null;
+      unreadAnchorApplied = true;
+      keepSnap = captureEntryAnchor(sc, id) || captureColliePos(sc);
+      if (keepSnap) keepSnap.atBottom = false;
+    }
     dismissedLocal.add(id);
     if (replyTo?.entry === id) setReply(null);
     renderSide();
-    if (view === "collie") renderSuper();
+    if (view === "collie") renderSuper(keepSnap ? { restore: keepSnap } : undefined);
     try {
       await api("/api/super/dismiss", { body: { id } });
     } catch (err) {
@@ -3651,6 +3690,7 @@
       sup.hasPending ? 1 : 0,
       pendList.map((p) => p.id).join(","),
       dismissedLocal.size ? [...dismissedLocal].join(",") : "",
+      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.text}`).join(",") : "",
       pinList.map((p) => p.id).join(","),
       workerStateFingerprint(),
       superAsksGen,
@@ -4221,7 +4261,7 @@
     replyTo = e ? { entry: e.id, who: "Collie", text: e.text } : null;
     const box = $("#re-draft");
     box.hidden = !e;
-    if (e) { $(".re-t", box).textContent = reLine(e.text); $("#super-input").focus(); }
+    if (e) { $(".re-t", box).textContent = reLine(e.text); $("#super-input").focus({ preventScroll: true }); }
   };
   const reLine = (t) => plainLine(t);
   $("#re-draft button").addEventListener("click", () => setReply(null));
@@ -4238,6 +4278,7 @@
 
   async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID(), opts = {}) {
     const scrollBottom = opts.scrollBottom !== false;
+    const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
     // Only what was picked here goes along; the hub fills in its current defaults.
     const t = targetNow(), p = target || {};
     const { model, effort } = modelNow(t);
@@ -4253,7 +4294,7 @@
       if (latestBeforeSend) commitChatRead(latestBeforeSend, { immediate: false });
     }
     renderSide();
-    renderSuper({ force: true, scrollBottom });
+    renderSuper({ force: true, scrollBottom, ...(keepRestore ? { restore: keepRestore } : {}) });
     let r;
     try {
       const info = await modelsFor(t.kind, t.machine);
@@ -4267,8 +4308,14 @@
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0) pendingSays.splice(idx, 1);
       if (restoreRe && re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry));
+      opts.onRollback?.();
+      const errSc = !scrollBottom && view === "collie" ? viewScroller("collie") : null;
+      const errRestore = errSc && !isCollieNearBottom(errSc)
+        ? (captureEntryAnchor(errSc, re?.entry || "") || captureColliePos(errSc))
+        : null;
+      if (errRestore) errRestore.atBottom = false;
       renderSide();
-      renderSuper({ force: true });
+      renderSuper({ force: true, ...(errRestore ? { restore: errRestore } : {}) });
       throw err;
     }
     // The hub's copy may already be here (its push beat the reply): swap now.
@@ -4298,13 +4345,43 @@
     const text = b.dataset.opt;
     if (replyTo?.entry === id) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
+    const sc = viewScroller("collie");
+    const shouldScrollBottom = typeof opts.scrollBottom === "boolean"
+      ? opts.scrollBottom
+      : (!opts.inDrawer && isCollieNearBottom(sc));
+    let keepSnap = null;
     if (opts.inDrawer) {
       tdForceScroll = true;
       tdAutoStickUntil = performance.now() + 1200;
+    } else if (!shouldScrollBottom) {
+      cancelCollieLayoutLock();
+      cancelInitialAnchor();
+      activeCollieRestore = null;
+      unreadAnchorApplied = true;
+      keepSnap = captureEntryAnchor(sc, id) || captureColliePos(sc);
+      if (keepSnap) keepSnap.atBottom = false;
+      pickedReplyOpts.set(id, { text, sending: true });
     }
     try {
-      await sendSuper(text, e ? { entry: e.id, who: "Collie", text: e.text } : { entry: id, who: "Collie", text: "" }, false, undefined, { scrollBottom: opts.scrollBottom !== false });
+      await sendSuper(
+        text,
+        e ? { entry: e.id, who: "Collie", text: e.text } : { entry: id, who: "Collie", text: "" },
+        false,
+        undefined,
+        {
+          scrollBottom: shouldScrollBottom,
+          restore: keepSnap,
+          onRollback: () => { pickedReplyOpts.delete(id); },
+        },
+      );
+      const picked = pickedReplyOpts.get(id);
+      if (picked) {
+        picked.sending = false;
+        const box = $("#super-thread");
+        box?.querySelector(`.reply-picked[data-entry="${CSS.escape(id)}"]`)?.classList.remove("is-sending");
+      }
     } catch (err) {
+      pickedReplyOpts.delete(id);
       delete grp.dataset.busy;
       grp.querySelectorAll("button").forEach((x) => { x.disabled = false; });
       toast(err.message, "attn");
@@ -10773,7 +10850,7 @@
           ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
           : "";
         const entryIdx = idxByKey.get(k) ?? -1;
-        const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds) : "";
+        const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
         const bodyHtml = m.role === "user"
           ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
           : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}${optsHtml}</div>`;

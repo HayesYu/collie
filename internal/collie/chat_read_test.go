@@ -350,18 +350,31 @@ scroller.scrollTop = 0;
 scroller._getRect = () => ({ top: 0, bottom: scroller.clientHeight, left: 0, right: 800, width: 800, height: scroller.clientHeight });
 
 let layoutNodes = []; // [{ id, isSep, y, h }]
+let simOptHeights = false;
 function rebuildLayout(rowHeight = 140) {
   const html = threadBox.innerHTML || "";
   layoutNodes = [];
   const tokenRe = /(<div class="unread-sep" id="unread-sep"[^>]*>)|data-id="(e\d+)"/g;
   let m, y = 32;
+  const matches = [];
   while ((m = tokenRe.exec(html)) !== null) {
-    if (m[1]) {
+    matches.push({ idx: m.index, isSep: !!m[1], id: m[2] || "__sep__" });
+  }
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    if (cur.isSep) {
       layoutNodes.push({ id: "__sep__", isSep: true, y, h: 24 });
       y += 40;
-    } else if (m[2]) {
-      layoutNodes.push({ id: m[2], isSep: false, y, h: rowHeight });
-      y += rowHeight + 28;
+    } else {
+      let h = rowHeight;
+      if (simOptHeights) {
+        const end = i + 1 < matches.length ? matches[i + 1].idx : html.length;
+        const slice = html.slice(cur.idx, end);
+        if (slice.includes('class="reply-opt"')) h += 48;
+        else if (slice.includes("reply-picked")) h += 28;
+      }
+      layoutNodes.push({ id: cur.id, isSep: false, y, h });
+      y += h + 28;
     }
   }
   scroller.scrollHeight = Math.max(scroller.clientHeight, y + 24);
@@ -406,6 +419,7 @@ const fetchCalls = [];
 let docHidden = false;
 let serverLastRead = "";
 let saySeq = 500;
+let sayFail = false;
 let uuidSeq = 0;
 
 class FakeES {
@@ -493,6 +507,14 @@ const ctx = vm.createContext({
       return okJSON({ ok: true, last_read_entry_id: serverLastRead, changed: n > curN });
     }
     if (u === "/api/super/say") {
+      if (sayFail) {
+        return {
+          ok: false, status: 500, statusText: "Server Error",
+          headers: { get: () => null },
+          json: async () => ({ error: "发送失败" }),
+          text: async () => JSON.stringify({ error: "发送失败" }),
+        };
+      }
       const id = "e" + (++saySeq);
       return okJSON({ entry: id, trigger: "t" + saySeq });
     }
@@ -511,7 +533,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot marker in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSide, renderSuper, renderPendingBar, activePending, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { older = []; sup = { router: { status: 'idle' }, entries: [], workers: [], pending: [], pinned: [] }; pendingSays.length = 0; dismissedLocal.clear(); readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSide, renderSuper, renderPendingBar, activePending, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { older = []; sup = { router: { status: 'idle' }, entries: [], workers: [], pending: [], pinned: [] }; pendingSays.length = 0; dismissedLocal.clear(); pickedReplyOpts.clear(); readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
 );
 vm.runInContext(instrumented, ctx);
 
@@ -832,6 +854,235 @@ const mkEntry = (n, role, text, extra = {}) => ({
   const shortMaxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
   assert.ok(shortSep.y - 14 >= shortMaxTop, "precondition: #unread-sep sits inside bottom-scrolled viewport");
   assert.equal(scroller.scrollTop, scroller.scrollHeight, "short unread fitting in viewport sticks cleanly to bottom");
+
+  // 14) #t8739 Clicking --opt option while unread / scrolled above bottom MUST NOT jump to bottom or mark lower unreads as read.
+  // Drain any pending async /api/chat/read microtasks from earlier synchronous subtests before resetting state.
+  await wait(20);
+  assert.ok(cssSrc.includes(".reply-opts.reply-picked") && cssSrc.includes(".reply-picked-tag"), "CSS must style inline settled .reply-picked feedback");
+  const makeOptClickTarget = (entryId, optText) => {
+    const grp = makeEl("opt-grp-" + entryId);
+    grp.dataset.entry = entryId;
+    const btn = makeEl("opt-btn-" + entryId);
+    btn.dataset.opt = optText;
+    grp._qsa = { button: [btn] };
+    btn.closest = (sel) => (sel.includes(".reply-opt[data-opt]") ? btn : sel === ".reply-opts[data-entry]" ? grp : null);
+    return { btn, grp };
+  };
+
+  // 14a) Unread below viewport: clicking --opt on e7 keeps 0px scroll drift, keeps unread cursor/divider/jump badge, shows inline 已选择 feedback,
+  // and subsequent SSE delivery + new Collie reply ticks badge 6 -> 7 with 0px drift.
+  simOptHeights = true;
+  curRowHeight = 140;
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  const optUnreadEntries = manyEntries.map((x) => (
+    x.id === "e7" ? { ...x, options: ["按方案 A 推进", "先观望"] } : x
+  ));
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: optUnreadEntries,
+    workers: [],
+    pending: [{ id: "e7", at: optUnreadEntries[6].at, summary: "first unread collie reply", options: ["按方案 A 推进", "先观望"] }],
+    pinned: [],
+    last_read_entry_id: "e4",
+  });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const scrollBeforeOpt = scroller.scrollTop;
+  const distBeforeOpt = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+  assert.ok(distBeforeOpt > 200, "precondition: substantial unread stream sits below viewport, dist=" + distBeforeOpt);
+  assert.ok(threadBox.innerHTML.includes('data-opt="按方案 A 推进"'), "e7 renders clickable option buttons");
+
+  const click14a = makeOptClickTarget("e7", "按方案 A 推进");
+  threadBox.dispatch("click", { target: click14a.btn });
+  await wait(40);
+
+  const sayCalls14a = fetchCalls.filter((c) => c.url === "/api/super/say");
+  assert.equal(sayCalls14a.length, 1, "option click posts /api/super/say once");
+  assert.equal(JSON.parse(sayCalls14a[0].body).text, "按方案 A 推进");
+  assert.equal(JSON.parse(sayCalls14a[0].body).re, "e7");
+  assert.equal(scroller.scrollTop, scrollBeforeOpt, "clicking --opt with unreads below must keep 0px scroll drift");
+  assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "clicking --opt above bottom must NOT POST /api/chat/read");
+  assert.equal(serverLastRead, "e4", "server read cursor stays at e4");
+  assert.equal(T.getReadState().readCursorId, "e4", "client read cursor stays at e4");
+  assert.ok(threadBox.innerHTML.includes('id="unread-sep" data-first-unread="e7"'), "unread divider stays intact above e7");
+  assert.equal(getEl("#super-jump").hidden, false, "jump pill stays visible after off-bottom opt click");
+  assert.equal(getEl("#super-jump-badge").textContent, "6", "unread count remains 6 until user reads lower messages");
+  assert.ok(threadBox.innerHTML.includes('class="reply-opts reply-picked') && threadBox.innerHTML.includes("已选择：") && threadBox.innerHTML.includes("按方案 A 推进"), "e7 shows settled inline 已选择 feedback");
+  assert.ok(!threadBox.innerHTML.includes('data-opt="按方案 A 推进"'), "e7 option buttons collapse after selection");
+
+  // SSE delivers persisted user message + new Collie reply below viewport: still 0px scroll drift and badge ticks 6 -> 7.
+  const sentId14a = "e" + saySeq;
+  const collieFollowId = "e" + (saySeq + 1);
+  saySeq += 1;
+  const afterSseEntries = [
+    ...optUnreadEntries,
+    mkEntry(parseInt(sentId14a.slice(1), 10), "user", "按方案 A 推进", { re: { entry: "e7", who: "Collie", text: "first unread collie reply" } }),
+    mkEntry(parseInt(collieFollowId.slice(1), 10), "collie", "收到，已按方案 A 启动处理。"),
+  ];
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: afterSseEntries,
+    workers: [],
+    pending: [],
+    pinned: [],
+    last_read_entry_id: "e4",
+  });
+  T.renderSuper();
+  await wait(30);
+  assert.equal(scroller.scrollTop, scrollBeforeOpt, "SSE echo + Collie follow-up keep 0px scroll drift");
+  assert.equal(serverLastRead, "e4", "SSE echo does not advance read cursor");
+  assert.equal(getEl("#super-jump-badge").textContent, "7", "new Collie reply increments unread badge 6 -> 7");
+  assert.ok(threadBox.innerHTML.includes("reply-picked") && threadBox.innerHTML.includes("按方案 A 推进"), "inline 已选择 feedback persists cleanly after SSE");
+
+  // Clicking jump button afterwards scrolls to bottom and advances read cursor to the latest reply.
+  getEl("#super-jump").dispatch("click");
+  await wait(30);
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "jump pill still takes user to bottom on demand");
+  assert.equal(serverLastRead, collieFollowId, "jump pill advances read cursor to latest message");
+
+  // 14b) Scrolled up in history with 0 unread (long stream below viewport): clicking --opt keeps 0px drift and does not jump to bottom.
+  fetchCalls.length = 0;
+  serverLastRead = "e12";
+  T.resetReadState("", "");
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: optUnreadEntries,
+    workers: [],
+    pending: [{ id: "e7", at: optUnreadEntries[6].at, summary: "first unread collie reply", options: ["按方案 A 推进", "先观望"] }],
+    pinned: [],
+    last_read_entry_id: "e12",
+  });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const e7Node14b = layoutNodes.find((x) => x.id === "e7");
+  assert.ok(e7Node14b);
+  scroller.scrollTop = Math.max(0, e7Node14b.y - 80);
+  const scroll14b = scroller.scrollTop;
+  assert.ok(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 200, "precondition: scrolled up far above bottom");
+  const click14b = makeOptClickTarget("e7", "先观望");
+  threadBox.dispatch("click", { target: click14b.btn });
+  await wait(40);
+  assert.equal(scroller.scrollTop, scroll14b, "0-unread scrolled-up history opt click keeps 0px drift");
+  assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "0-unread scrolled-up opt click does not advance read cursor");
+  assert.ok(threadBox.innerHTML.includes("先观望") && threadBox.innerHTML.includes("reply-picked"), "0-unread scrolled-up opt click shows inline 已选择 feedback");
+
+  // 14c) Partially above-top clicked message (e7.top < -4) anchors to e7 itself (0px drift even as e7 height shrinks by 20px!).
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: optUnreadEntries,
+    workers: [],
+    pending: [{ id: "e7", at: optUnreadEntries[6].at, summary: "first unread collie reply", options: ["按方案 A 推进", "先观望"] }],
+    pinned: [],
+    last_read_entry_id: "e4",
+  });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const e7Node14c = layoutNodes.find((x) => x.id === "e7");
+  assert.ok(e7Node14c);
+  // Scroll so e7's top is 40px ABOVE viewport top while its bottom/options are visible inside viewport.
+  scroller.scrollTop = e7Node14c.y + 40;
+  const scroll14c = scroller.scrollTop;
+  const click14c = makeOptClickTarget("e7", "按方案 A 推进");
+  threadBox.dispatch("click", { target: click14c.btn });
+  await wait(40);
+  assert.equal(scroller.scrollTop, scroll14c, "partially above-top clicked option message keeps exact 0px scrollTop drift despite height collapse");
+
+  // 14d) /api/super/say failure rolls back .reply-picked, restores clickable buttons, and keeps 0px scroll drift.
+  fetchCalls.length = 0;
+  sayFail = true;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: optUnreadEntries,
+    workers: [],
+    pending: [{ id: "e7", at: optUnreadEntries[6].at, summary: "first unread collie reply", options: ["按方案 A 推进", "先观望"] }],
+    pinned: [],
+    last_read_entry_id: "e4",
+  });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const scroll14d = scroller.scrollTop;
+  const click14d = makeOptClickTarget("e7", "按方案 A 推进");
+  threadBox.dispatch("click", { target: click14d.btn });
+  await wait(40);
+  sayFail = false;
+  assert.equal(scroller.scrollTop, scroll14d, "failed off-bottom opt click keeps 0px scroll drift");
+  assert.ok(threadBox.innerHTML.includes('data-opt="按方案 A 推进"'), "failed opt click restores clickable buttons");
+  assert.ok(!threadBox.innerHTML.includes("reply-picked"), "failed opt click clears inline 已选择 feedback");
+
+  // 14e) Already at bottom (atBottom): clicking --opt sticks naturally to bottom, advances read cursor, and omits redundant .reply-picked badge.
+  fetchCalls.length = 0;
+  serverLastRead = "e11";
+  T.resetReadState("", "");
+  const botOptEntries = manyEntries.map((x) => (
+    x.id === "e12" ? mkEntry(12, "collie", "要立刻发布吗？", { options: ["立刻发布", "稍后再发"] }) : x
+  ));
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: botOptEntries,
+    workers: [],
+    pending: [{ id: "e12", at: botOptEntries[11].at, summary: "要立刻发布吗？", options: ["立刻发布", "稍后再发"] }],
+    pinned: [],
+    last_read_entry_id: "e11",
+  });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+  const click14e = makeOptClickTarget("e12", "立刻发布");
+  threadBox.dispatch("click", { target: click14e.btn });
+  await wait(40);
+  const expectedBotRead = "e" + saySeq;
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "at-bottom opt click sticks smoothly to bottom");
+  assert.equal(serverLastRead, expectedBotRead, "at-bottom opt click advances read cursor to sent message");
+  assert.ok(!threadBox.innerHTML.includes("reply-picked"), "at-bottom opt click omits duplicate inline 已选择 tag");
+
+  // 14f) Inside 1v1 topic focus drawer (#td-list) while main chat has unreads below: drawer sticks to bottom,
+  // main chat stays anchored at 0px drift and unread cursor stays untouched.
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: optUnreadEntries,
+    workers: [],
+    pending: [{ id: "e7", at: optUnreadEntries[6].at, summary: "first unread collie reply", options: ["按方案 A 推进", "先观望"] }],
+    pinned: [],
+    last_read_entry_id: "e4",
+  });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const mainScrollBeforeDrawerOpt = scroller.scrollTop;
+  T.openThreadDrawer("e7", "e7", "e7");
+  const tdBody = getEl("#td-body");
+  tdBody.clientHeight = 400;
+  tdBody.scrollHeight = 900;
+  tdBody.scrollTop = 100;
+  const click14f = makeOptClickTarget("e7", "按方案 A 推进");
+  getEl("#td-list").dispatch("click", { target: click14f.btn });
+  await wait(40);
+  assert.equal(tdBody.scrollTop, tdBody.scrollHeight, "clicking --opt inside focus drawer sticks drawer to bottom");
+  assert.equal(scroller.scrollTop, mainScrollBeforeDrawerOpt, "clicking --opt inside focus drawer keeps main stream anchored at 0px drift");
+  assert.equal(serverLastRead, "e4", "clicking --opt inside focus drawer does not advance main unread cursor");
+  assert.ok(!getEl("#td-list").innerHTML.includes("reply-picked"), "focus drawer omits duplicate reply-picked pill above live reply");
+  T.closeThreadDrawer({ immediate: true });
+
+  // 14g) Quoting an older message via bottom composer still scrolls to bottom as expected when user types & sends.
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setSup({
+    router: { status: "idle", alive: true },
+    entries: optUnreadEntries,
+    workers: [],
+    pending: [],
+    pinned: [],
+    last_read_entry_id: "e4",
+  });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  await T.sendSuper("我补充一句自定义意见", { entry: "e7", who: "Collie", text: "first unread collie reply" }, true);
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "composer send with quote still scrolls to bottom");
+  assert.equal(serverLastRead, "e" + saySeq, "composer send advances read cursor");
+  simOptHeights = false;
 
   console.log("OK: all unread anchor & chat read JS regression checks passed");
 })().catch((err) => {

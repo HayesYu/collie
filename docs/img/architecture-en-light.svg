@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif">
+  <style>
+    .bg { fill: #ffffff; }
+    .box { fill: #f7f7f6; stroke: #dcdcd8; stroke-width: 1.2; }
+    .inner { fill: #ffffff; stroke: #dcdcd8; stroke-width: 1; }
+    .hub { fill: none; stroke: #111111; stroke-width: 1.4; }
+    .collie { fill: #fbf3e8; stroke: #e7c9a3; stroke-width: 1.2; }
+    .t { fill: #111111; font-size: 14.5px; font-weight: 600; }
+    .t2 { fill: #111111; font-size: 13px; font-weight: 600; }
+    .s { fill: #55554f; font-size: 11.5px; }
+    .m { fill: #8e8e88; font-size: 11px; }
+    .k { fill: #111111; font-size: 12px; font-family: 'SF Mono', ui-monospace, Menlo, monospace; }
+    .a { stroke: #8e8e88; stroke-width: 1.3; fill: none; marker-end: url(#arr); }
+    .ad { stroke: #8e8e88; stroke-width: 1.3; fill: none; stroke-dasharray: 4 4; marker-end: url(#arr); }
+    .ac { stroke: #b45309; stroke-width: 1.4; fill: none; marker-end: url(#arrc); }
+    .head { fill: #8e8e88; } .headc { fill: #b45309; }
+    .ct { fill: #b45309; font-size: 14.5px; font-weight: 600; }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="arrc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="headc" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <rect class="bg" width="1000" height="620" rx="14"/>
+
+  <path class="ad" d="M200,46 V24 H860 V44"/>
+  <text class="m" x="530" y="18" text-anchor="middle">Browsers can connect to hubs in separate networks — every fleet merges into one sidebar</text>
+
+  <rect class="box" x="40" y="48" width="320" height="64" rx="10"/>
+  <text class="t" x="60" y="74">Phone · Tablet · Desktop</text>
+  <text class="s" x="60" y="96">QR pairing, synced read cursor, Add to Home Screen</text>
+  <rect class="box" x="400" y="48" width="300" height="64" rx="10"/>
+  <text class="t" x="420" y="74">GitHub · Feishu / Lark · Timers</text>
+  <text class="s" x="420" y="96">PRs / CI, zero-public-IP chat cards &amp; scheduled checks</text>
+  <rect class="box" x="740" y="48" width="220" height="64" rx="10" stroke-dasharray="5 4"/>
+  <text class="t" x="760" y="74">Another hub</text>
+  <text class="s" x="760" y="96">Cloud VM or home Mac mini</text>
+
+  <path class="a" d="M200,112 V160"/>
+  <text class="m" x="210" y="142">HTTP + SSE</text>
+  <path class="a" d="M550,112 V160"/>
+
+  <rect class="hub" x="20" y="164" width="960" height="268" rx="16"/>
+  <text class="t" x="42" y="192">hub</text>
+  <text class="s" x="80" y="192">One always-on machine · Single Go binary, embedded web UI</text>
+
+  <rect class="inner" x="42" y="208" width="262" height="202" rx="10"/>
+  <text class="t2" x="60" y="236">Collaboration Workspace</text>
+  <text class="s" x="60" y="262">Chat-native: quotes, pins &amp; thread drawers</text>
+  <text class="s" x="60" y="286">Cross-device read sync &amp; unread anchor</text>
+  <text class="s" x="60" y="310">One-tap decisions: brief + 2–4 options</text>
+  <text class="s" x="60" y="334">Real transcripts + live terminal view</text>
+  <text class="s" x="60" y="358">Take over iTerm, VS Code &amp; desktop sessions</text>
+  <text class="m" x="60" y="390">Per-device revocable tokens · Self-hosted</text>
+
+  <rect class="collie" x="322" y="208" width="400" height="202" rx="10"/>
+  <text class="ct" x="340" y="236">Collie · Self-hosted Super Agent</text>
+  <rect class="inner" x="340" y="252" width="112" height="54" rx="8"/>
+  <text class="t2" x="354" y="275">Inbox</text>
+  <text class="m" x="354" y="294">Events · Policy</text>
+  <rect class="inner" x="466" y="252" width="112" height="54" rx="8"/>
+  <text class="t2" x="480" y="275">Router</text>
+  <text class="m" x="480" y="294">Split · Brief</text>
+  <rect class="inner" x="592" y="252" width="112" height="54" rx="8"/>
+  <text class="t2" x="606" y="275">Worker × N</text>
+  <text class="m" x="606" y="294">Run in parallel</text>
+  <path class="ac" d="M452,279 H464"/>
+  <path class="ac" d="M578,279 H590"/>
+  <path class="ac" d="M648,306 V326 H396 V308"/>
+  <text class="m" x="394" y="344">collie report: results &amp; stalls return; retries before pinging you</text>
+  <text class="s" x="340" y="372">All state lives in SQLite — restart Router cleanly anytime</text>
+  <text class="s" x="340" y="394">Long-term memory · Nightly dream cleanup · Cron checks</text>
+
+  <rect class="inner" x="740" y="208" width="218" height="202" rx="10"/>
+  <text class="t2" x="758" y="236">herdr</text>
+  <text class="s" x="758" y="260">Persistent sessions survive closing tabs</text>
+  <rect class="inner" x="758" y="276" width="182" height="30" rx="7"/>
+  <text class="k" x="772" y="296">claude code</text>
+  <rect class="inner" x="758" y="314" width="182" height="30" rx="7"/>
+  <text class="k" x="772" y="334">codex</text>
+  <rect class="inner" x="758" y="352" width="182" height="30" rx="7"/>
+  <text class="k" x="772" y="372">antigravity</text>
+
+  <path class="a" d="M200,488 V436"/>
+  <path class="a" d="M500,488 V436"/>
+  <path class="a" d="M800,488 V436"/>
+  <text class="m" x="210" y="466">Outbound yamux tunnels: zero open ports, no SSH, dual-stack IPv4 &amp; pure IPv6</text>
+
+  <rect class="box" x="40" y="492" width="320" height="96" rx="10"/>
+  <text class="t" x="60" y="520">Your Mac</text>
+  <text class="k" x="60" y="544">collie node + herdr</text>
+  <text class="s" x="60" y="568">Works behind NAT, reconnects automatically</text>
+  <rect class="box" x="380" y="492" width="260" height="96" rx="10"/>
+  <text class="t" x="400" y="520">Linux / WSL2 box</text>
+  <text class="k" x="400" y="544">collie node + herdr</text>
+  <text class="s" x="400" y="568">Every machine's agents in one place</text>
+  <rect class="box" x="660" y="492" width="300" height="96" rx="10"/>
+  <text class="t" x="680" y="520">Cloud VM / Server</text>
+  <text class="k" x="680" y="544">collie node + herdr</text>
+  <text class="s" x="680" y="568">One-click fleet upgrades without stopping agents</text>
+</svg>

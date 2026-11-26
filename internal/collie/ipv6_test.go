@@ -585,3 +585,120 @@ exit 0`, `echo "fe80::1"`)
 		})
 	}
 }
+
+func TestInstallScriptHubAutoLoginBrowser(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell test")
+	}
+	scriptPath, err := filepath.Abs(filepath.Join("..", "..", "docs", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("sh", "-n", scriptPath).CombinedOutput(); err != nil {
+		t.Fatalf("sh -n docs/install.sh failed: %v\n%s", err, string(out))
+	}
+
+	runDarwinHub := func(t *testing.T, launchctlBody string, preToken string, mockFastSleep bool, args ...string) (string, string) {
+		t.Helper()
+		tmp := t.TempDir()
+		homeDir := filepath.Join(tmp, "home")
+		binDir := filepath.Join(tmp, "bin")
+		mockDir := filepath.Join(tmp, "mock")
+		stubBin := filepath.Join(tmp, "collie-stub")
+		openLog := filepath.Join(tmp, "open.log")
+		for _, d := range []string{homeDir, mockDir} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if preToken != "" {
+			if err := os.MkdirAll(filepath.Join(homeDir, ".collie"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(homeDir, ".collie", "token"), []byte(preToken+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(stubBin, []byte("#!/bin/sh\necho 'collie v0.2.82-test'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeMock := func(name, body string) {
+			if err := os.WriteFile(filepath.Join(mockDir, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		writeMock("uname", `if [ "${1:-}" = "-s" ]; then echo Darwin; elif [ "${1:-}" = "-m" ]; then echo arm64; else echo Darwin; fi`)
+		writeMock("launchctl", launchctlBody)
+		writeMock("curl", `exit 0`)
+		writeMock("open", `printf '%s\n' "$*" >> "`+openLog+`"`)
+		writeMock("ifconfig", `echo "lo0: flags=8049"; echo "	inet 127.0.0.1 netmask 0xff000000"`)
+		writeMock("route", `echo "interface: en0"`)
+		writeMock("ipconfig", `echo "192.168.1.23"`)
+		if mockFastSleep {
+			writeMock("sleep", `exit 0`)
+		}
+
+		cmd := exec.Command("sh", append([]string{scriptPath, "hub"}, args...)...)
+		cmd.Env = []string{
+			"PATH=" + mockDir + ":" + os.Getenv("PATH"),
+			"HOME=" + homeDir,
+			"COLLIE_BIN_DIR=" + binDir,
+			"COLLIE_BINARY=" + stubBin,
+			"COLLIE_NO_HERDR=1",
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("install.sh hub %v failed: %v\n%s", args, err, string(out))
+		}
+		opened, _ := os.ReadFile(openLog)
+		return string(out), strings.TrimSpace(string(opened))
+	}
+
+	t.Run("opens_with_token_and_never_prints_token", func(t *testing.T) {
+		tok := "secret9f8e7d6c5b4a3210fedcba"
+		out, opened := runDarwinHub(t, `exit 0`, tok, false)
+		wantOpen := "http://127.0.0.1:7788/?t=" + tok
+		if opened != wantOpen {
+			t.Fatalf("open received %q, want %q", opened, wantOpen)
+		}
+		if !strings.Contains(out, "已在浏览器打开 http://127.0.0.1:7788（已自动登录）") {
+			t.Fatalf("missing auto-login message:\n%s", out)
+		}
+		if strings.Contains(out, tok) || strings.Contains(out, "?t=") {
+			t.Fatalf("token leaked to terminal output:\n%s", out)
+		}
+	})
+
+	t.Run("waits_for_async_token_file_and_supports_custom_port", func(t *testing.T) {
+		tok := "delayed1234567890abcdef"
+		launchctlBody := `
+if [ "${1:-}" = "bootstrap" ]; then
+  (sleep 0.3; mkdir -p "${HOME}/.collie"; printf '%s\n' "` + tok + `" > "${HOME}/.collie/token") >/dev/null 2>&1 &
+fi
+exit 0`
+		out, opened := runDarwinHub(t, launchctlBody, "", false, "--addr", "127.0.0.1:8899")
+		wantOpen := "http://127.0.0.1:8899/?t=" + tok
+		if opened != wantOpen {
+			t.Fatalf("open received %q, want %q", opened, wantOpen)
+		}
+		if !strings.Contains(out, "已在浏览器打开 http://127.0.0.1:8899（已自动登录）") {
+			t.Fatalf("missing custom port auto-login message:\n%s", out)
+		}
+		if strings.Contains(out, tok) || strings.Contains(out, "?t=") {
+			t.Fatalf("token leaked to terminal output:\n%s", out)
+		}
+	})
+
+	t.Run("falls_back_cleanly_when_token_missing", func(t *testing.T) {
+		out, opened := runDarwinHub(t, `exit 0`, "", true)
+		if opened != "http://127.0.0.1:7788" {
+			t.Fatalf("fallback open received %q, want %q", opened, "http://127.0.0.1:7788")
+		}
+		if !strings.Contains(out, "已在浏览器打开 http://127.0.0.1:7788（不想自动打开可设 COLLIE_NO_OPEN=1）") {
+			t.Fatalf("missing fallback browser message:\n%s", out)
+		}
+		if strings.Contains(out, "已自动登录") {
+			t.Fatalf("should not claim auto-login when token missing:\n%s", out)
+		}
+	})
+}

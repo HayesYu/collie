@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,23 +29,28 @@ import (
 )
 
 const (
-	feishuKind              = "feishu"
-	feishuInstantSyncWindow = 15 * time.Minute
-	feishuDefaultPairWindow = 2 * time.Minute
-	feishuMaxTrackedOrigins = 200
-	feishuReactionEmoji     = "OK"
-	feishuGroupFeedbackTag  = "[群只读反馈 · 仅调研出建议，严禁未经确认直接执行或向群内回复]"
-	feishuSenderCacheTTL    = time.Hour
-	feishuMaxSenderCache    = 256
-	feishuQuoteMaxRunes     = 1000
+	feishuKind                     = "feishu"
+	feishuInstantSyncWindow        = 15 * time.Minute
+	feishuDefaultPairWindow        = 2 * time.Minute
+	feishuMaxTrackedOrigins        = 200
+	feishuReactionEmoji            = "OK"
+	feishuGroupFeedbackTag         = "[群只读反馈 · 仅调研出建议，严禁未经确认直接执行或向群内回复]"
+	feishuSenderCacheTTL           = time.Hour
+	feishuMaxSenderCache           = 256
+	feishuQuoteMaxRunes            = 1000
+	feishuMergeForwardQuoteMaxRune = 2000
+	feishuMergeForwardMaxRunes     = 4000
+	feishuMergeForwardMaxDepth     = 3
+	feishuMergeForwardMaxMessages  = 50
 )
 
 var (
-	feishuQuoteFetchTimeout  = 8 * time.Second
-	feishuQuoteImageTimeout  = 15 * time.Second
-	feishuQuoteTotalTimeout  = 25 * time.Second
-	feishuQuoteMaxImageBytes = int64(20 << 20)
-	feishuQuoteMaxImages     = 4
+	feishuQuoteFetchTimeout     = 8 * time.Second
+	feishuQuoteImageTimeout     = 15 * time.Second
+	feishuQuoteTotalTimeout     = 25 * time.Second
+	feishuQuoteMaxImageBytes    = int64(20 << 20)
+	feishuQuoteMaxImages        = 4
+	feishuMergeForwardMaxImages = 8
 )
 
 // FeishuConfig holds the non-sensitive settings for Feishu/Lark WebSocket mode.
@@ -186,6 +193,8 @@ type FeishuAdapter struct {
 	lastFeedbackAt time.Time
 	origins        map[string]feishuRoute // entry_id -> originating Feishu chat/message
 	originOrder    []string
+	msgEntries     map[string]string // inbound Feishu message_id -> Collie entry_id
+	msgEntryOrder  []string
 	sentCards      map[string]string // outbound Feishu message_id -> clean text (fallback for quoted Card 2.0)
 	sentCardOrder  []string
 	senderNames    map[string]feishuSenderCache
@@ -199,6 +208,7 @@ func newFeishuAdapter(sp *Super, mgr *IntegrationManager) *FeishuAdapter {
 		sp:          sp,
 		mgr:         mgr,
 		origins:     map[string]feishuRoute{},
+		msgEntries:  map[string]string{},
 		sentCards:   map[string]string{},
 		senderNames: map[string]feishuSenderCache{},
 	}
@@ -753,9 +763,28 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 	}
 
 	// 4. Extract message text, attachments, and optional quoted parent message.
-	text, err := f.extractInboundText(ctx, client, messageID, parentID, msgType, deref(msg.Content), msg.Mentions)
-	if err != nil {
-		log.Printf("feishu-ws: extract content (%s): %v", msgType, err)
+	var text, promptText, reEntryID string
+	if parentID != "" && parentID != messageID {
+		if localEntryID, parentPaths, ok := f.lookupLocalUserAttachmentParent(parentID); ok {
+			mainText, mainPaths, err := f.extractMessageContentParts(ctx, client, messageID, msgType, deref(msg.Content), msg.Mentions)
+			if err != nil {
+				log.Printf("feishu-ws: extract content (%s): %v", msgType, err)
+			}
+			display := composeFeishuInboundText(mainText, mainPaths, nil)
+			if display != "" {
+				reEntryID = localEntryID
+				text = display
+				allPaths := append(append([]string{}, parentPaths...), mainPaths...)
+				promptText = composeFeishuInboundText(mainText, allPaths, nil)
+			}
+		}
+	}
+	if text == "" {
+		var err error
+		text, err = f.extractInboundText(ctx, client, messageID, parentID, msgType, deref(msg.Content), msg.Mentions)
+		if err != nil {
+			log.Printf("feishu-ws: extract content (%s): %v", msgType, err)
+		}
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -778,6 +807,8 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 			Thread:    mainThread,
 			From:      "feishu",
 			Text:      text,
+			Prompt:    promptText,
+			ReEntryID: reEntryID,
 			ChatID:    chatID,
 			MessageID: messageID,
 			ChatType:  chatType,
@@ -786,6 +817,7 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 		}
 		if eid := f.latestFeishuUserEntryID(); eid != "" {
 			f.bindEntryOrigin(eid, route)
+			f.recordInboundEntry(messageID, chatID, eid)
 		}
 	}
 
@@ -838,6 +870,66 @@ type feishuQuotedParent struct {
 	attachments   []string
 	failedImages  int
 	omittedImages int
+	maxRunes      int
+}
+
+var (
+	reFeishuPOpen      = regexp.MustCompile(`(?is)^<p(?:\s+(?:dir|style|align)\s*=\s*(?:"[^"]*"|'[^']*'))*\s*>`)
+	reFeishuPClose     = regexp.MustCompile(`(?is)</p\s*>`)
+	reFeishuBRTag      = regexp.MustCompile(`(?is)<br\s*/?>`)
+	reFeishuRawHTMLTag = regexp.MustCompile(`(?i)</?(?:p|div|span|a|img|table|thead|tbody|tr|td|th|ul|ol|li|script|style|html|head|body|form|input|button|select|textarea|section|article|header|footer|nav|main|aside|pre|code|h[1-6]|strong|em|b|i|svg|iframe|link|meta)(?:\s[^>]*)?/?>`)
+)
+
+// cleanFeishuInboundHTML strips Feishu rich-text paragraph wrappers (<p>...</p>,
+// <br>, and HTML entities such as &nbsp;/&lt;) while leaving normal messages and
+// pasted HTML/code snippets untouched.
+func cleanFeishuInboundHTML(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" || !strings.Contains(trimmed, "<") {
+		return s
+	}
+	rest := trimmed
+	var paragraphs []string
+	for rest != "" {
+		openLoc := reFeishuPOpen.FindStringIndex(rest)
+		if openLoc == nil {
+			return s
+		}
+		rest = rest[openLoc[1]:]
+		closeLoc := reFeishuPClose.FindStringIndex(rest)
+		if closeLoc == nil {
+			return s
+		}
+		inner := rest[:closeLoc[0]]
+		if reFeishuRawHTMLTag.MatchString(inner) {
+			return s
+		}
+		hadTrailingBR := false
+		if locs := reFeishuBRTag.FindAllStringIndex(inner, -1); len(locs) > 0 {
+			last := locs[len(locs)-1]
+			if strings.TrimSpace(inner[last[1]:]) == "" {
+				hadTrailingBR = true
+				inner = inner[:last[0]]
+			}
+		}
+		inner = reFeishuBRTag.ReplaceAllString(inner, "\n")
+		inner = strings.ReplaceAll(inner, "\r\n", "\n")
+		inner = strings.ReplaceAll(inner, "\r", "\n")
+		inner = html.UnescapeString(inner)
+		inner = strings.ReplaceAll(inner, "\u00a0", " ")
+		if strings.TrimSpace(inner) == "" {
+			if hadTrailingBR || len(paragraphs) > 0 {
+				paragraphs = append(paragraphs, "")
+			}
+		} else {
+			paragraphs = append(paragraphs, inner)
+		}
+		rest = strings.TrimSpace(rest[closeLoc[1]:])
+	}
+	if len(paragraphs) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(paragraphs, "\n"))
 }
 
 func (f *FeishuAdapter) extractInboundText(ctx context.Context, client *larksdk.Client, messageID, parentID, msgType, rawContent string, mentions []*larkim.MentionEvent) (string, error) {
@@ -863,7 +955,7 @@ func (f *FeishuAdapter) extractMessageContentParts(ctx context.Context, client *
 		if err := json.Unmarshal([]byte(rawContent), &body); err != nil {
 			return "", nil, err
 		}
-		return stripFeishuMentions(body.Text, mentions), nil, nil
+		return cleanFeishuInboundHTML(stripFeishuMentions(body.Text, mentions)), nil, nil
 	case "image":
 		var body struct {
 			ImageKey string `json:"image_key"`
@@ -878,12 +970,21 @@ func (f *FeishuAdapter) extractMessageContentParts(ctx context.Context, client *
 		return "", []string{saved}, nil
 	case "post":
 		text, imgKeys := parseFeishuPostContent(rawContent)
-		text = stripFeishuMentions(text, mentions)
+		text = cleanFeishuInboundHTML(stripFeishuMentions(text, mentions))
 		var paths []string
 		for _, k := range imgKeys {
 			if p, err := f.downloadImage(ctx, client, messageID, k); err == nil && p != "" {
 				paths = append(paths, p)
 			}
+		}
+		return text, paths, nil
+	case "merge_forward":
+		text, paths, err := f.fetchMergeForward(ctx, client, messageID)
+		if err != nil {
+			log.Printf("feishu-ws: expand merge_forward %s failed: %v", messageID, err)
+		}
+		if strings.TrimSpace(text) == "" && len(paths) == 0 {
+			return "[飞书 merge_forward 消息]", nil, err
 		}
 		return text, paths, nil
 	default:
@@ -924,6 +1025,85 @@ func dedupNonEmpty(items []string) []string {
 	return out
 }
 
+func extractAttachmentPaths(text string) []string {
+	idx := strings.LastIndex(text, "附件：\n")
+	if idx < 0 {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(text[idx+len("附件：\n"):], "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return dedupNonEmpty(paths)
+}
+
+func (f *FeishuAdapter) recordInboundEntry(messageID, chatID, entryID string) {
+	messageID = strings.TrimSpace(messageID)
+	entryID = strings.TrimSpace(entryID)
+	if messageID == "" || entryID == "" {
+		return
+	}
+	f.mu.Lock()
+	if f.msgEntries == nil {
+		f.msgEntries = map[string]string{}
+	}
+	if _, exists := f.msgEntries[messageID]; !exists {
+		f.msgEntryOrder = append(f.msgEntryOrder, messageID)
+		if len(f.msgEntryOrder) > feishuMaxTrackedOrigins {
+			drop := f.msgEntryOrder[0]
+			f.msgEntryOrder = f.msgEntryOrder[1:]
+			delete(f.msgEntries, drop)
+		}
+	}
+	f.msgEntries[messageID] = entryID
+	f.mu.Unlock()
+	if f.mgr != nil && f.mgr.db != nil {
+		_ = saveIntegrationMessage(f.mgr.db, IntegrationMessage{
+			EntryID:    entryID,
+			Kind:       feishuKind,
+			ChatID:     chatID,
+			ExternalID: messageID,
+			Resolved:   true, // inbound user message: never patched as an outbound card
+			CreatedAt:  time.Now().Unix(),
+		})
+	}
+}
+
+func (f *FeishuAdapter) lookupLocalUserAttachmentParent(parentID string) (string, []string, bool) {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" || f.sp == nil {
+		return "", nil, false
+	}
+	f.mu.RLock()
+	entryID := strings.TrimSpace(f.msgEntries[parentID])
+	f.mu.RUnlock()
+	if entryID == "" && f.mgr != nil && f.mgr.db != nil {
+		if rec, err := getIntegrationMessageByExternal(f.mgr.db, feishuKind, parentID); err == nil && rec != nil {
+			entryID = strings.TrimSpace(rec.EntryID)
+		}
+	}
+	if entryID == "" {
+		return "", nil, false
+	}
+	f.sp.mu.Lock()
+	var role, text string
+	if e := f.sp.findEntryLocked(entryID); e != nil {
+		role = e.Role
+		text = e.Text
+	}
+	f.sp.mu.Unlock()
+	if role != "user" {
+		return "", nil, false
+	}
+	paths := extractAttachmentPaths(text)
+	if len(paths) == 0 {
+		return "", nil, false
+	}
+	return entryID, paths, true
+}
+
 func (f *FeishuAdapter) lookupOwnQuotedCard(parentID string) (string, bool) {
 	parentID = strings.TrimSpace(parentID)
 	if parentID == "" {
@@ -951,6 +1131,477 @@ func (f *FeishuAdapter) lookupOwnQuotedCard(parentID string) (string, bool) {
 	return "", false
 }
 
+func (f *FeishuAdapter) fetchMessageItems(ctx context.Context, client *larksdk.Client, messageID string) ([]*larkim.Message, error) {
+	if client == nil || strings.TrimSpace(messageID) == "" {
+		return nil, errors.New("missing client or message id")
+	}
+	fetchTimeout := feishuQuoteFetchTimeout
+	if fetchTimeout <= 0 {
+		fetchTimeout = 8 * time.Second
+	}
+	getCtx, getCancel := context.WithTimeout(ctx, fetchTimeout)
+	defer getCancel()
+	req := larkim.NewGetMessageReqBuilder().MessageId(messageID).Build()
+	resp, err := client.Im.V1.Message.Get(getCtx, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || !resp.Success() {
+		if resp != nil {
+			return nil, fmt.Errorf("feishu message get api error: code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		return nil, errors.New("empty response from feishu message get")
+	}
+	if resp.Data == nil {
+		return nil, nil
+	}
+	return resp.Data.Items, nil
+}
+
+type feishuSubImageStatus int
+
+const (
+	feishuSubImgSaved feishuSubImageStatus = iota
+	feishuSubImgFailed
+	feishuSubImgOmitted
+	feishuSubImgDuplicate
+)
+
+type feishuMergeForwardState struct {
+	totalCtx      context.Context
+	client        *larksdk.Client
+	visited       map[string]bool
+	seenImages    map[string]bool
+	msgCount      int
+	truncatedMsgs int
+	maxMessages   int
+	maxImages     int
+	imgAttempted  int
+	maxBytes      int64
+	imgTimeout    time.Duration
+	attachments   []string
+	failedImages  int
+	omittedImages int
+}
+
+func (st *feishuMergeForwardState) downloadSubImage(f *FeishuAdapter, subMsgID, imageKey string, optional bool) feishuSubImageStatus {
+	subMsgID = strings.TrimSpace(subMsgID)
+	imageKey = strings.TrimSpace(imageKey)
+	if imageKey == "" {
+		return feishuSubImgFailed
+	}
+	dedupKey := subMsgID + "\x00" + imageKey
+	if st.seenImages[dedupKey] {
+		return feishuSubImgDuplicate
+	}
+	st.seenImages[dedupKey] = true
+
+	if st.imgAttempted >= st.maxImages {
+		if !optional {
+			st.omittedImages++
+		}
+		return feishuSubImgOmitted
+	}
+	st.imgAttempted++
+	if st.totalCtx.Err() != nil {
+		if !optional {
+			st.failedImages++
+		}
+		return feishuSubImgFailed
+	}
+	saved, err := f.downloadImageWithLimit(st.totalCtx, st.client, subMsgID, imageKey, st.maxBytes, st.imgTimeout)
+	if err != nil || saved == "" {
+		if !optional {
+			st.failedImages++
+			log.Printf("feishu-ws: download merge_forward image %s/%s failed: %v", subMsgID, imageKey, err)
+		}
+		return feishuSubImgFailed
+	}
+	st.attachments = append(st.attachments, saved)
+	return feishuSubImgSaved
+}
+
+func parseFeishuCreateTime(raw *string) int64 {
+	if raw == nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(*raw), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func buildMergeForwardChildren(rootID string, items []*larkim.Message) map[string][]*larkim.Message {
+	byID := make(map[string]*larkim.Message, len(items))
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		if id := strings.TrimSpace(deref(it.MessageId)); id != "" {
+			byID[id] = it
+		}
+	}
+	children := make(map[string][]*larkim.Message)
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		id := strings.TrimSpace(deref(it.MessageId))
+		if id == rootID {
+			continue
+		}
+		upper := strings.TrimSpace(deref(it.UpperMessageId))
+		if upper == "" || (upper != rootID && byID[upper] == nil) {
+			upper = rootID
+		}
+		children[upper] = append(children[upper], it)
+	}
+	for k := range children {
+		slices.SortStableFunc(children[k], func(a, b *larkim.Message) int {
+			ta, tb := parseFeishuCreateTime(a.CreateTime), parseFeishuCreateTime(b.CreateTime)
+			switch {
+			case ta < tb:
+				return -1
+			case ta > tb:
+				return 1
+			default:
+				return 0
+			}
+		})
+	}
+	return children
+}
+
+func (f *FeishuAdapter) resolveMergeForwardSender(ctx context.Context, client *larksdk.Client, sender *larkim.Sender) string {
+	if sender == nil {
+		return "未知用户"
+	}
+	if name := strings.TrimSpace(deref(sender.SenderName)); name != "" {
+		return name
+	}
+	if sender.SenderI18nNames != nil {
+		for _, cand := range []*string{sender.SenderI18nNames.ZhCn, sender.SenderI18nNames.EnUs, sender.SenderI18nNames.JaJp} {
+			if name := strings.TrimSpace(deref(cand)); name != "" {
+				return name
+			}
+		}
+	}
+	id := strings.TrimSpace(deref(sender.Id))
+	senderType := strings.ToLower(strings.TrimSpace(deref(sender.SenderType)))
+	idType := strings.ToLower(strings.TrimSpace(deref(sender.IdType)))
+	if senderType == "app" || senderType == "bot" {
+		f.mu.RLock()
+		botID := f.botOpenID
+		botName := f.botName
+		f.mu.RUnlock()
+		openBotID := strings.TrimSpace(deref(sender.OpenBotId))
+		if botName != "" && ((openBotID != "" && openBotID == botID) || (id != "" && id == botID)) {
+			return botName
+		}
+		if id != "" {
+			return "机器人(" + maskIdentifier(id) + ")"
+		}
+		return "机器人"
+	}
+	if id == "" {
+		if senderType == "anonymous" {
+			return "匿名用户"
+		}
+		return "未知用户"
+	}
+	if idType == "" || idType == "open_id" || strings.HasPrefix(id, "ou_") {
+		if ctx != nil && ctx.Err() != nil {
+			f.mu.RLock()
+			cached, ok := f.senderNames[id]
+			f.mu.RUnlock()
+			if ok && cached.name != "" && time.Since(cached.at) < feishuSenderCacheTTL {
+				return cached.name
+			}
+			return maskIdentifier(id)
+		}
+		_, from := f.resolveSenderLabel(ctx, client, id)
+		if from != "" {
+			return from
+		}
+	}
+	return maskIdentifier(id)
+}
+
+func formatSubPostImageNote(saved, failed, omitted int) string {
+	var notes []string
+	if saved > 0 {
+		notes = append(notes, fmt.Sprintf("含 %d 张图片", saved))
+	}
+	if failed > 0 {
+		notes = append(notes, fmt.Sprintf("%d 张图片下载失败", failed))
+	}
+	if omitted > 0 {
+		notes = append(notes, fmt.Sprintf("另略去 %d 张图片", omitted))
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return "（" + strings.Join(notes, "，") + "）"
+}
+
+func formatImageOnlyPlaceholder(saved, failed, omitted int) string {
+	switch {
+	case saved > 0 && failed > 0 && omitted > 0:
+		return fmt.Sprintf("[图片（已保存 %d 张，%d 张下载失败，另略去 %d 张）]", saved, failed, omitted)
+	case saved > 0 && failed > 0:
+		return fmt.Sprintf("[图片（已保存 %d 张，%d 张下载失败）]", saved, failed)
+	case saved > 0 && omitted > 0:
+		return fmt.Sprintf("[图片（已保存前 %d 张，另略去 %d 张）]", saved, omitted)
+	case saved > 1:
+		return fmt.Sprintf("[图片（%d 张）]", saved)
+	case saved == 1:
+		return "[图片]"
+	case failed > 1:
+		return fmt.Sprintf("[图片（%d 张下载失败）]", failed)
+	case failed == 1:
+		return "[图片（下载失败）]"
+	case omitted > 0:
+		return "[图片（超出上限已略去）]"
+	default:
+		return "[图片]"
+	}
+}
+
+func appendFormattedSenderLines(lines []string, indent, sender, body string) []string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return lines
+	}
+	parts := strings.Split(body, "\n")
+	lines = append(lines, fmt.Sprintf("%s%s：%s", indent, sender, parts[0]))
+	for _, p := range parts[1:] {
+		lines = append(lines, fmt.Sprintf("%s  %s", indent, p))
+	}
+	return lines
+}
+
+func (f *FeishuAdapter) renderMergeForwardChildren(st *feishuMergeForwardState, parentID string, children map[string][]*larkim.Message, depth int) []string {
+	if parentID != "" {
+		st.visited[parentID] = true
+	}
+	kids := children[parentID]
+	if len(kids) == 0 {
+		return nil
+	}
+	indent := strings.Repeat("  ", depth)
+	var lines []string
+	for _, child := range kids {
+		if child == nil {
+			continue
+		}
+		if st.msgCount >= st.maxMessages {
+			st.truncatedMsgs++
+			continue
+		}
+		st.msgCount++
+
+		sender := f.resolveMergeForwardSender(st.totalCtx, st.client, child.Sender)
+		childID := strings.TrimSpace(deref(child.MessageId))
+		childType := strings.ToLower(strings.TrimSpace(deref(child.MsgType)))
+		rawContent := ""
+		if child.Body != nil {
+			rawContent = deref(child.Body.Content)
+		}
+
+		if child.Deleted != nil && *child.Deleted {
+			lines = appendFormattedSenderLines(lines, indent, sender, "[原消息已撤回]")
+			continue
+		}
+
+		switch childType {
+		case "text":
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(rawContent), &body); err != nil {
+				lines = appendFormattedSenderLines(lines, indent, sender, "[飞书 text 消息]")
+				continue
+			}
+			txt := cleanFeishuInboundHTML(replaceFeishuMessageMentions(body.Text, child.Mentions))
+			if txt == "" {
+				continue
+			}
+			lines = appendFormattedSenderLines(lines, indent, sender, txt)
+
+		case "image":
+			var body struct {
+				ImageKey string `json:"image_key"`
+			}
+			if err := json.Unmarshal([]byte(rawContent), &body); err != nil || strings.TrimSpace(body.ImageKey) == "" {
+				lines = appendFormattedSenderLines(lines, indent, sender, "[图片]")
+				continue
+			}
+			switch st.downloadSubImage(f, childID, body.ImageKey, false) {
+			case feishuSubImgSaved, feishuSubImgDuplicate:
+				lines = appendFormattedSenderLines(lines, indent, sender, "[图片]")
+			case feishuSubImgOmitted:
+				lines = appendFormattedSenderLines(lines, indent, sender, "[图片（超出上限已略去）]")
+			default:
+				lines = appendFormattedSenderLines(lines, indent, sender, "[图片（下载失败）]")
+			}
+
+		case "post":
+			txt, keys := parseFeishuPostContent(rawContent)
+			txt = cleanFeishuInboundHTML(replaceFeishuMessageMentions(txt, child.Mentions))
+			var saved, failed, omitted int
+			for _, k := range dedupNonEmpty(keys) {
+				switch st.downloadSubImage(f, childID, k, false) {
+				case feishuSubImgSaved:
+					saved++
+				case feishuSubImgFailed:
+					failed++
+				case feishuSubImgOmitted:
+					omitted++
+				}
+			}
+			if txt == "" {
+				if saved+failed+omitted > 0 {
+					lines = appendFormattedSenderLines(lines, indent, sender, formatImageOnlyPlaceholder(saved, failed, omitted))
+				}
+				continue
+			}
+			if note := formatSubPostImageNote(saved, failed, omitted); note != "" {
+				txt += note
+			}
+			lines = appendFormattedSenderLines(lines, indent, sender, txt)
+
+		case "interactive":
+			if ownText, ok := f.lookupOwnQuotedCard(childID); ok {
+				lines = appendFormattedSenderLines(lines, indent, sender, ownText)
+				continue
+			}
+			txt, keys := parseFeishuInteractiveContent(rawContent)
+			txt = cleanFeishuInboundHTML(replaceFeishuMessageMentions(txt, child.Mentions))
+			saved := 0
+			for _, k := range dedupNonEmpty(keys) {
+				if st.downloadSubImage(f, childID, k, true) == feishuSubImgSaved {
+					saved++
+				}
+			}
+			if txt == "" {
+				if saved > 0 {
+					lines = appendFormattedSenderLines(lines, indent, sender, formatImageOnlyPlaceholder(saved, 0, 0))
+				} else {
+					lines = appendFormattedSenderLines(lines, indent, sender, "[飞书卡片消息]")
+				}
+				continue
+			}
+			if saved > 0 {
+				txt += fmt.Sprintf("（含 %d 张图片）", saved)
+			}
+			lines = appendFormattedSenderLines(lines, indent, sender, txt)
+
+		case "file":
+			var body struct {
+				FileName string `json:"file_name"`
+			}
+			if json.Unmarshal([]byte(rawContent), &body) == nil && strings.TrimSpace(body.FileName) != "" {
+				lines = appendFormattedSenderLines(lines, indent, sender, fmt.Sprintf("[飞书文件：%s]", strings.TrimSpace(body.FileName)))
+			} else {
+				lines = appendFormattedSenderLines(lines, indent, sender, "[飞书 file 消息]")
+			}
+
+		case "merge_forward":
+			if childID != "" && st.visited[childID] {
+				lines = appendFormattedSenderLines(lines, indent, sender, "[循环引用合并转发已跳过]")
+				continue
+			}
+			if depth+1 >= feishuMergeForwardMaxDepth {
+				lines = appendFormattedSenderLines(lines, indent, sender, "[嵌套合并转发已达展开深度上限]")
+				continue
+			}
+			var subLines []string
+			if childID != "" && len(children[childID]) > 0 {
+				subLines = f.renderMergeForwardChildren(st, childID, children, depth+1)
+			} else if childID != "" && st.client != nil && st.totalCtx.Err() == nil {
+				if subItems, err := f.fetchMessageItems(st.totalCtx, st.client, childID); err == nil && len(subItems) > 0 {
+					subChildren := buildMergeForwardChildren(childID, subItems)
+					subLines = f.renderMergeForwardChildren(st, childID, subChildren, depth+1)
+				}
+			}
+			if len(subLines) > 0 {
+				lines = append(lines, fmt.Sprintf("%s%s：[合并转发]", indent, sender))
+				lines = append(lines, subLines...)
+			} else {
+				lines = appendFormattedSenderLines(lines, indent, sender, "[合并转发消息]")
+			}
+
+		default:
+			if childType != "" {
+				lines = appendFormattedSenderLines(lines, indent, sender, fmt.Sprintf("[飞书 %s 消息]", childType))
+			}
+		}
+	}
+	return lines
+}
+
+func (f *FeishuAdapter) expandMergeForward(totalCtx context.Context, client *larksdk.Client, rootID string, items []*larkim.Message, maxImages int) (text string, paths []string, failedImages, omittedImages int) {
+	if len(items) == 0 {
+		return "", nil, 0, 0
+	}
+	if maxImages <= 0 {
+		maxImages = feishuMergeForwardMaxImages
+		if maxImages <= 0 {
+			maxImages = 8
+		}
+	}
+	maxBytes := feishuQuoteMaxImageBytes
+	if maxBytes <= 0 {
+		maxBytes = 20 << 20
+	}
+	imgTimeout := feishuQuoteImageTimeout
+	if imgTimeout <= 0 {
+		imgTimeout = 15 * time.Second
+	}
+	st := &feishuMergeForwardState{
+		totalCtx:    totalCtx,
+		client:      client,
+		visited:     map[string]bool{},
+		seenImages:  map[string]bool{},
+		maxMessages: feishuMergeForwardMaxMessages,
+		maxImages:   maxImages,
+		maxBytes:    maxBytes,
+		imgTimeout:  imgTimeout,
+	}
+	children := buildMergeForwardChildren(rootID, items)
+	lines := f.renderMergeForwardChildren(st, rootID, children, 0)
+	if len(lines) == 0 {
+		return "", dedupNonEmpty(st.attachments), st.failedImages, st.omittedImages
+	}
+	if st.truncatedMsgs > 0 {
+		lines = append(lines, fmt.Sprintf("…（已省略后续 %d 条子消息）", st.truncatedMsgs))
+	}
+	return "[合并转发]\n" + strings.Join(lines, "\n"), dedupNonEmpty(st.attachments), st.failedImages, st.omittedImages
+}
+
+func (f *FeishuAdapter) fetchMergeForward(ctx context.Context, client *larksdk.Client, messageID string) (string, []string, error) {
+	if client == nil || strings.TrimSpace(messageID) == "" {
+		return "", nil, nil
+	}
+	totalTimeout := feishuQuoteTotalTimeout
+	if totalTimeout <= 0 {
+		totalTimeout = 25 * time.Second
+	}
+	totalCtx, totalCancel := context.WithTimeout(ctx, totalTimeout)
+	defer totalCancel()
+
+	items, err := f.fetchMessageItems(totalCtx, client, messageID)
+	if err != nil {
+		return "", nil, err
+	}
+	text, paths, _, _ := f.expandMergeForward(totalCtx, client, messageID, items, feishuMergeForwardMaxImages)
+	if text != "" {
+		text = clip(text, feishuMergeForwardMaxRunes)
+	}
+	return text, paths, nil
+}
+
 func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.Client, parentID string) *feishuQuotedParent {
 	if parentID == "" {
 		return nil
@@ -972,30 +1623,17 @@ func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.C
 	totalCtx, totalCancel := context.WithTimeout(ctx, totalTimeout)
 	defer totalCancel()
 
-	fetchTimeout := feishuQuoteFetchTimeout
-	if fetchTimeout <= 0 {
-		fetchTimeout = 8 * time.Second
-	}
-	getCtx, getCancel := context.WithTimeout(totalCtx, fetchTimeout)
-	req := larkim.NewGetMessageReqBuilder().MessageId(parentID).Build()
-	resp, err := client.Im.V1.Message.Get(getCtx, req)
-	getCancel()
+	items, err := f.fetchMessageItems(totalCtx, client, parentID)
 	if err != nil {
 		log.Printf("feishu-ws: fetch quoted parent %s failed: %v", parentID, err)
 		return nil
 	}
-	if resp == nil || !resp.Success() {
-		if resp != nil {
-			log.Printf("feishu-ws: fetch quoted parent %s api error: code=%d msg=%s", parentID, resp.Code, resp.Msg)
-		}
-		return nil
-	}
-	if resp.Data == nil || len(resp.Data.Items) == 0 {
+	if len(items) == 0 {
 		return nil
 	}
 
 	var item *larkim.Message
-	for _, cand := range resp.Data.Items {
+	for _, cand := range items {
 		if cand == nil {
 			continue
 		}
@@ -1021,6 +1659,28 @@ func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.C
 		rawContent = deref(item.Body.Content)
 	}
 
+	maxImgs := feishuQuoteMaxImages
+	if maxImgs <= 0 {
+		maxImgs = 4
+	}
+	if parentType == "merge_forward" {
+		mfMaxImgs := feishuMergeForwardMaxImages
+		if mfMaxImgs <= 0 {
+			mfMaxImgs = maxImgs
+		}
+		text, paths, failed, omitted := f.expandMergeForward(totalCtx, client, parentID, items, mfMaxImgs)
+		if strings.TrimSpace(text) == "" && len(paths) == 0 {
+			text = "[飞书 merge_forward 消息]"
+		}
+		return &feishuQuotedParent{
+			text:          text,
+			attachments:   paths,
+			failedImages:  failed,
+			omittedImages: omitted,
+			maxRunes:      feishuMergeForwardQuoteMaxRune,
+		}
+	}
+
 	q := &feishuQuotedParent{}
 	var imgKeys []string
 	switch parentType {
@@ -1032,7 +1692,7 @@ func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.C
 			log.Printf("feishu-ws: decode quoted text %s: %v", parentID, err)
 			return nil
 		}
-		q.text = replaceFeishuMessageMentions(body.Text, item.Mentions)
+		q.text = cleanFeishuInboundHTML(replaceFeishuMessageMentions(body.Text, item.Mentions))
 	case "image":
 		var body struct {
 			ImageKey string `json:"image_key"`
@@ -1044,11 +1704,11 @@ func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.C
 		}
 	case "post":
 		text, keys := parseFeishuPostContent(rawContent)
-		q.text = replaceFeishuMessageMentions(text, item.Mentions)
+		q.text = cleanFeishuInboundHTML(replaceFeishuMessageMentions(text, item.Mentions))
 		imgKeys = append(imgKeys, keys...)
 	case "interactive":
 		text, keys := parseFeishuInteractiveContent(rawContent)
-		q.text = replaceFeishuMessageMentions(text, item.Mentions)
+		q.text = cleanFeishuInboundHTML(replaceFeishuMessageMentions(text, item.Mentions))
 		imgKeys = append(imgKeys, keys...)
 		if q.text == "" && len(imgKeys) == 0 {
 			q.text = "[飞书卡片消息]"
@@ -1069,10 +1729,6 @@ func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.C
 	}
 
 	imgKeys = dedupNonEmpty(imgKeys)
-	maxImgs := feishuQuoteMaxImages
-	if maxImgs <= 0 {
-		maxImgs = 4
-	}
 	if len(imgKeys) > maxImgs {
 		q.omittedImages = len(imgKeys) - maxImgs
 		imgKeys = imgKeys[:maxImgs]
@@ -1122,8 +1778,12 @@ func formatQuotedParentBlock(q *feishuQuotedParent) string {
 		return ""
 	}
 	text := strings.TrimSpace(q.text)
+	maxRunes := q.maxRunes
+	if maxRunes <= 0 {
+		maxRunes = feishuQuoteMaxRunes
+	}
 	if text != "" {
-		text = clip(text, feishuQuoteMaxRunes)
+		text = clip(text, maxRunes)
 	}
 	imgCount := len(q.attachments)
 	if text == "" {
@@ -1134,10 +1794,10 @@ func formatQuotedParentBlock(q *feishuQuotedParent) string {
 			return fmt.Sprintf("[引用图片（已保存前 %d 张，另略去 %d 张）]", imgCount, q.omittedImages)
 		case imgCount > 0 && q.failedImages > 0:
 			return fmt.Sprintf("[引用图片（已保存 %d 张，%d 张下载失败）]", imgCount, q.failedImages)
-		case imgCount > 1:
-			return fmt.Sprintf("[引用图片（%d 张）]", imgCount)
-		case imgCount == 1:
-			return "[引用图片]"
+		case imgCount > 0:
+			// Clean image attachments speak for themselves under "附件：";
+			// avoid prepending a redundant "[引用图片]" banner line.
+			return ""
 		case q.failedImages > 0:
 			return "[引用图片（下载失败）]"
 		default:

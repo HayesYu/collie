@@ -549,14 +549,50 @@ is_loopback_url() {
   esac
 }
 
-open_browser() { # open_browser <url> [probe_url]
-  [ "${os}" = darwin ] || return 0
-  [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] || return 0
-  [ -z "${COLLIE_NO_OPEN:-}" ] || return 0
-  [ -z "${COLLIE_DRY_SERVICE:-}" ] || return 0
-  command -v open >/dev/null 2>&1 || return 0
+can_open_browser() {
+  [ "${os}" = darwin ] || return 1
+  [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] || return 1
+  [ -z "${COLLIE_NO_OPEN:-}" ] || return 1
+  [ -z "${COLLIE_DRY_SERVICE:-}" ] || return 1
+  command -v open >/dev/null 2>&1 || return 1
+  return 0
+}
+
+wait_hub_token() {
+  token_file="${HOME}/.collie/token"
+  w=0
+  while [ "${w}" -lt 7 ]; do
+    if [ -r "${token_file}" ]; then
+      tok=$(tr -d '\r\n\t ' < "${token_file}" 2>/dev/null || true)
+      if [ -n "${tok}" ]; then
+        printf '%s\n' "${tok}"
+        return 0
+      fi
+    fi
+    if [ "${w}" -lt 6 ]; then
+      sleep 0.5 2>/dev/null || sleep 1
+    fi
+    w=$((w + 1))
+  done
+  return 1
+}
+
+append_token_query() { # append_token_query <url> <token>
+  base_url=${1:-}
+  tok=${2:-}
+  case "${base_url}" in
+    *\?*) printf '%s&t=%s\n' "${base_url}" "${tok}" ;;
+    */)   printf '%s?t=%s\n' "${base_url}" "${tok}" ;;
+    *)    printf '%s/?t=%s\n' "${base_url}" "${tok}" ;;
+  esac
+}
+
+open_browser() { # open_browser <url> [probe_url] [display_url] [note]
+  can_open_browser || return 0
   open_target=$1
   probe_url=${2:-$1}
+  display_url=${3:-$1}
+  open_note=${4:-}
   if command -v curl >/dev/null 2>&1; then
     w=0
     while [ "${w}" -lt 6 ]; do
@@ -566,7 +602,11 @@ open_browser() { # open_browser <url> [probe_url]
     done
   fi
   if open "${open_target}" >/dev/null 2>&1; then
-    say "    已在浏览器打开 ${open_target}（不想自动打开可设 COLLIE_NO_OPEN=1）"
+    if [ -n "${open_note}" ]; then
+      say "    已在浏览器打开 ${display_url}${open_note}"
+    else
+      say "    已在浏览器打开 ${display_url}（不想自动打开可设 COLLIE_NO_OPEN=1）"
+    fi
   fi
 }
 
@@ -773,7 +813,15 @@ case "${mode}" in
     say "    手机配对：collie pair（或在「设备」页扫码）。"
     say "    首次登录的令牌在 ~/.collie/token。"
     check_herdr "hub 本身照常能用"
-    open_browser "${open_url}" "${local_url}"
+    if can_open_browser; then
+      hub_tok=$(wait_hub_token || true)
+      if [ -n "${hub_tok}" ]; then
+        open_target=$(append_token_query "${open_url}" "${hub_tok}")
+        open_browser "${open_target}" "${local_url}" "${open_url}" "（已自动登录）"
+      else
+        open_browser "${open_url}" "${local_url}"
+      fi
+    fi
     ;;
   *)
     die "不认识的参数：${mode}（可以是 node、hub，或者不带参数）"

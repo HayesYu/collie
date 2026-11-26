@@ -923,17 +923,50 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(tdWiden.title, "拓宽抽屉");
   assert.equal(appEl.classList.contains("thread-wide"), false);
 
-  // Click widen -> expands smoothly to roomy width leaving >= 200px main strip, persists to localStorage.
+  // Click widen -> splits remaining width 50/50 between main chat and thread drawer, persists to localStorage.
   tdWiden.dispatch("click");
   const wideW = parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10);
-  assert.ok(wideW >= 720 && wideW <= 920, "widened drawer width in roomy range (got " + wideW + ")");
-  assert.ok(1440 - 260 - wideW >= 200, "leaves visible main-stream strip >= 200px");
+  assert.equal(wideW, 590, "widened drawer splits remaining width 50/50 (1180 * 0.5 = 590, got " + wideW + ")");
+  assert.equal(1440 - 260 - wideW, 590, "main chat gets symmetric 50% width");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "true");
   assert.equal(tdWiden.title, "还原宽度");
   assert.equal(appEl.classList.contains("thread-wide"), true);
   assert.equal(storage.get("collie.threadWide"), "true", "wide preference persisted in localStorage");
 
-  // Close & reopen remembers widened preference.
+  // Narrow desktop (>1000px) keeps comfortable 480px lower bound while leaving >= 200px main strip.
+  ctx.innerWidth = 1024;
+  getEl(".side").offsetWidth = 268;
+  for (const fn of (winListeners.get("resize") || [])) fn();
+  const narrowWideW = parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10);
+  assert.equal(narrowWideW, 480, "narrow desktop keeps 480px lower bound (got " + narrowWideW + ")");
+  assert.ok(1024 - 268 - narrowWideW >= 200, "narrow desktop leaves >= 200px main strip");
+  ctx.innerWidth = 1440;
+  getEl(".side").offsetWidth = 260;
+  for (const fn of (winListeners.get("resize") || [])) fn();
+  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), 590, "resizing back restores 50/50 width");
+
+  // Dragging .td-grip in wide mode stays wide smoothly without jumping, and dragging narrower cleanly restores normal mode.
+  const tdGrip = getEl("#td-grip");
+  tdGrip.setPointerCapture = () => {};
+  tdGrip.dispatch("pointerdown", { pointerId: 1, clientX: 1440 - 590 });
+  tdGrip.dispatch("pointermove", { pointerId: 1, clientX: 1440 - 640 });
+  tdGrip.dispatch("pointerup", { pointerId: 1 });
+  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), 640, "dragging wider keeps exact width without jumping");
+  assert.equal(appEl.classList.contains("thread-wide"), true, "dragging wider keeps wide state active");
+  assert.equal(storage.get("collie.threadWide"), "true");
+
+  tdGrip.dispatch("pointerdown", { pointerId: 2, clientX: 1440 - 640 });
+  tdGrip.dispatch("pointermove", { pointerId: 2, clientX: 1440 - 440 });
+  tdGrip.dispatch("pointerup", { pointerId: 2 });
+  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), 440, "dragging narrower keeps exact width without jumping");
+  assert.equal(appEl.classList.contains("thread-wide"), false, "dragging below wide threshold exits wide mode");
+  assert.equal(storage.get("collie.threadWide"), "false");
+  assert.equal(storage.get("collie.threadW"), "440");
+
+  // Re-enter wide mode via button; close & reopen remembers widened preference.
+  storage.delete("collie.threadW");
+  tdWiden.dispatch("click");
+  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), wideW);
   T.closeThreadDrawer({ immediate: true });
   assert.equal(appEl.classList.contains("thread-wide"), false, "closing drawer clears active wide class");
   T.openThreadDrawer("e290", "e290", "e290");

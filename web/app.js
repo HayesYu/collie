@@ -2190,7 +2190,7 @@
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
     }
     view = next; current = next === "ext" ? null : id;
-    livePageTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
+    liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
     const nextKey = routeKeyFor(next, id);
     const byIdx = wasExistingIdx ? scrollByIdx.get(navCur) : null;
     const saved = (byIdx && byIdx.routeKey === nextKey ? byIdx : null)
@@ -7869,19 +7869,11 @@
   // (other apps' resting conversations and ended herdr sessions, merged).
   // Which computer something is on is a detail on its row.
   const RECENT_N = 8;
-  const LIVE_PAGE_SIZE = 8;
-  let livePage = 1, livePageTarget = null;
+  const LIVE_N = 8;
+  let liveAll = store.get("liveAll", false), liveRevealTarget = null;
   const liveGroup = $("#live-group");
   liveGroup.open = store.get("liveGroupOpen", true);
   liveGroup.addEventListener("toggle", () => store.set("liveGroupOpen", liveGroup.open));
-  function showLivePage(page) {
-    livePageTarget = null;
-    livePage = page;
-    renderSessions();
-  }
-  $("#live-prev").addEventListener("click", () => showLivePage(livePage - 1));
-  $("#live-next").addEventListener("click", () => showLivePage(livePage + 1));
-  $("#live-page").addEventListener("change", (ev) => showLivePage(Number(ev.target.value)));
   let extAll = store.get("extAll", false);
   const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
   const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
@@ -7918,32 +7910,36 @@
     const busy = live.filter((s) => rank(s) <= 1).length;
     setText($("#live-count"), live.length ? `共 ${live.length} 个${busy ? ` · ${busy} 个在跑` : ""}` : "");
 
-    const pages = Math.max(1, Math.ceil(live.length / LIVE_PAGE_SIZE));
-    // A deep link may resolve after the first poll. Reveal it once, then let
-    // the viewer browse other pages while the selected conversation stays open.
-    if (livePageTarget) {
-      const index = live.findIndex((s) => (view === "pane" ? s.pane_id : s.id) === livePageTarget);
-      if (index >= 0) {
-        livePage = Math.floor(index / LIVE_PAGE_SIZE) + 1;
-        livePageTarget = null;
+    // A deep link may resolve after the first poll: if the target session sits
+    // past the initial 8 items (or the section was collapsed), expand once so
+    // the active item is immediately visible, then let the viewer toggle freely.
+    const liveId = (s) => (s.pane_id ? s.pane_id : s.id);
+    if (liveRevealTarget) {
+      const idx = live.findIndex((s) => liveId(s) === liveRevealTarget);
+      if (idx >= 0) {
+        if (!liveGroup.open) {
+          liveGroup.open = true;
+          store.set("liveGroupOpen", true);
+        }
+        if (idx >= LIVE_N && !liveAll) {
+          liveAll = true;
+          store.set("liveAll", true);
+        }
+        liveRevealTarget = null;
       }
     }
-    livePage = Math.max(1, Math.min(livePage, pages));
-    $("#live-pages").hidden = pages === 1;
-    $("#live-prev").disabled = livePage === 1;
-    $("#live-next").disabled = livePage === pages;
-    const picker = $("#live-page");
-    if (picker.length !== pages) {
-      if (pickOpen === picker) closePick();
-      setHTML(picker, Array.from({ length: pages }, (_, i) => `<option value="${i + 1}">${i + 1} / ${pages}</option>`).join(""));
+    let liveShown = liveAll ? live : live.slice(0, LIVE_N);
+    const activeLiveID = view === "pane" ? current : (view === "ext" && extCur && !extCur.startsWith("h:") ? extCur : "");
+    if (activeLiveID && !liveShown.some((s) => liveId(s) === activeLiveID)) {
+      const activeItem = live.find((s) => liveId(s) === activeLiveID);
+      if (activeItem) liveShown = [...liveShown, activeItem];
     }
-    if (picker.value !== String(livePage)) {
-      picker.value = String(livePage);
-      syncPick(picker);
-    }
-    const offset = (livePage - 1) * LIVE_PAGE_SIZE;
-    setHTML($("#live-list"), live.slice(offset, offset + LIVE_PAGE_SIZE)
-      .map((s) => s.pane_id ? itemHTML(s, wtMap, entries) : extRow(s)).join("")
+    const liveRest = Math.max(0, live.length - liveShown.length);
+    const liveMoreBtn = live.length > LIVE_N
+      ? `<li><button type="button" class="more-row" data-act="live-more" aria-expanded="${liveAll}">${liveAll ? "收起" : `展开其余 ${liveRest} 个`}</button></li>`
+      : "";
+    setHTML($("#live-list"), liveShown
+      .map((s) => s.pane_id ? itemHTML(s, wtMap, entries) : extRow(s)).join("") + liveMoreBtn
       || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`);
 
     // 最近: newest first; Collie's own sessions are reached from its conversation.
@@ -8052,6 +8048,14 @@
     return e?.hub ? tagged(e.machine || "", e.hub) : e?.machine || "";
   });
   function closeExt() { extStream?.close(); extStream = null; }
+  $("#live-list").addEventListener("click", (ev) => {
+    if (!ev.target.closest("[data-act=live-more]")) return;
+    ev.preventDefault();
+    liveRevealTarget = null;
+    liveAll = !liveAll;
+    store.set("liveAll", liveAll);
+    renderSessions();
+  });
   $("#recent-list").addEventListener("click", (ev) => {
     if (!ev.target.closest("[data-act=ext-more]")) return;
     ev.preventDefault();

@@ -301,9 +301,8 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 #live-group > summary:hover { background: var(--bg-3); }
 #live-group > summary::after { content: ""; width: 6px; height: 6px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
 #live-group[open] > summary::after { transform: rotate(45deg); }
-.live-pages { display: flex; align-items: center; justify-content: space-between; padding: 0 2px; font-variant-numeric: tabular-nums; }
 @media (pointer: coarse) {
-  #live-group > summary, .live-pages :is(button, select) { min-height: 44px; }
+  #live-group > summary, .more-row { min-height: 44px; }
 }
 .count { font-weight: 500; margin-left: 4px; }
 .list { list-style: none; margin: 0; padding: 0; }
@@ -3044,9 +3043,10 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
   .tm-sum { flex-basis: 100%; }
 }
 
-/* sidebar: 最近 shows a few, the rest behind a row */
-.more-row { all: unset; box-sizing: border-box; display: block; width: 100%; cursor: pointer; padding: 6px 10px 6px 42px; font-size: 12px; color: var(--fg-3); border-radius: 8px; }
+/* sidebar: 进行中 / 最近 show a few, the rest behind a light toggle row */
+.more-row { all: unset; box-sizing: border-box; display: flex; align-items: center; width: 100%; cursor: pointer; padding: 6px 10px 6px 42px; font-size: 12px; color: var(--fg-3); border-radius: 8px; }
 .more-row:hover { color: var(--fg-2); background: var(--bg-3); }
+.more-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 35%, transparent); outline-offset: 1px; }
 
 /* a newer web app is on the hub */
 #update-bar { position: fixed; z-index: 80; left: 50%; top: max(12px, env(safe-area-inset-top)); transform: translateX(-50%); border: 0; border-radius: 999px; padding: 8px 16px; background: var(--fg); color: var(--bg); font-size: 13px; box-shadow: var(--shadow-sm, 0 2px 8px rgba(0,0,0,.15)); animation: rise .2s; }

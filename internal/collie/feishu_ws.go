@@ -186,6 +186,8 @@ type FeishuAdapter struct {
 	lastFeedbackAt time.Time
 	origins        map[string]feishuRoute // entry_id -> originating Feishu chat/message
 	originOrder    []string
+	sentCards      map[string]string // outbound Feishu message_id -> clean text (fallback for quoted Card 2.0)
+	sentCardOrder  []string
 	senderNames    map[string]feishuSenderCache
 
 	pairUntil    time.Time
@@ -197,6 +199,7 @@ func newFeishuAdapter(sp *Super, mgr *IntegrationManager) *FeishuAdapter {
 		sp:          sp,
 		mgr:         mgr,
 		origins:     map[string]feishuRoute{},
+		sentCards:   map[string]string{},
 		senderNames: map[string]feishuSenderCache{},
 	}
 }
@@ -821,8 +824,11 @@ func (f *FeishuAdapter) completePairing(ctx context.Context, client *larksdk.Cli
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			card := buildFeishuNoticeCard("Collie · 配对成功", "green", "已将你的飞书账号加入 Collie 安全白名单，现在可以直接私信或在群里 @Collie 对话。", f.jumpLink())
-			_, _ = f.sendCard(cctx, client, "chat_id", chatID, "", card)
+			msgText := "已将你的飞书账号加入 Collie 安全白名单，现在可以直接私信或在群里 @Collie 对话。"
+			card := buildFeishuNoticeCard("Collie · 配对成功", "green", msgText, f.jumpLink())
+			if msgID, err := f.sendCard(cctx, client, "chat_id", chatID, "", card); err == nil {
+				f.recordSentCard(msgID, msgText)
+			}
 		}()
 	}
 }
@@ -837,7 +843,7 @@ type feishuQuotedParent struct {
 func (f *FeishuAdapter) extractInboundText(ctx context.Context, client *larksdk.Client, messageID, parentID, msgType, rawContent string, mentions []*larkim.MentionEvent) (string, error) {
 	mainText, mainPaths, err := f.extractMessageContentParts(ctx, client, messageID, msgType, rawContent, mentions)
 	var quote *feishuQuotedParent
-	if parentID != "" && parentID != messageID && client != nil {
+	if parentID != "" && parentID != messageID {
 		quote = f.fetchQuotedParent(ctx, client, parentID)
 	}
 	return composeFeishuInboundText(mainText, mainPaths, quote), err
@@ -918,8 +924,45 @@ func dedupNonEmpty(items []string) []string {
 	return out
 }
 
+func (f *FeishuAdapter) lookupOwnQuotedCard(parentID string) (string, bool) {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" {
+		return "", false
+	}
+	if f.mgr != nil && f.mgr.db != nil && f.sp != nil {
+		if rec, err := getIntegrationMessageByExternal(f.mgr.db, feishuKind, parentID); err == nil && rec != nil && rec.EntryID != "" {
+			f.sp.mu.Lock()
+			var text string
+			if e := f.sp.findEntryLocked(rec.EntryID); e != nil {
+				text = strings.TrimSpace(e.Text)
+			}
+			f.sp.mu.Unlock()
+			if text != "" {
+				return text, true
+			}
+		}
+	}
+	f.mu.RLock()
+	cached := strings.TrimSpace(f.sentCards[parentID])
+	f.mu.RUnlock()
+	if cached != "" {
+		return cached, true
+	}
+	return "", false
+}
+
 func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.Client, parentID string) *feishuQuotedParent {
-	if client == nil || parentID == "" {
+	if parentID == "" {
+		return nil
+	}
+	// Feishu im.v1.message.get downgrades Card JSON 2.0 into a client-upgrade
+	// placeholder plus a non-downloadable system icon. Resolve Collie's own
+	// outbound cards directly from local history/cache first so quotes carry
+	// the full original text without bogus image download failures.
+	if ownText, ok := f.lookupOwnQuotedCard(parentID); ok {
+		return &feishuQuotedParent{text: ownText}
+	}
+	if client == nil {
 		return nil
 	}
 	totalTimeout := feishuQuoteTotalTimeout
@@ -972,6 +1015,7 @@ func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.C
 	}
 
 	parentType := strings.ToLower(strings.TrimSpace(deref(item.MsgType)))
+	isInteractive := parentType == "interactive"
 	rawContent := ""
 	if item.Body != nil {
 		rawContent = deref(item.Body.Content)
@@ -1044,17 +1088,27 @@ func (f *FeishuAdapter) fetchQuotedParent(ctx context.Context, client *larksdk.C
 	}
 	for _, key := range imgKeys {
 		if totalCtx.Err() != nil {
-			q.failedImages++
+			if !isInteractive {
+				q.failedImages++
+			}
 			log.Printf("feishu-ws: quoted image download budget exceeded for parent %s", parentID)
 			continue
 		}
 		saved, derr := f.downloadImageWithLimit(totalCtx, client, parentID, key, maxBytes, imgTimeout)
 		if derr != nil || saved == "" {
-			q.failedImages++
-			log.Printf("feishu-ws: download quoted image %s/%s failed: %v", parentID, key, derr)
+			// Card-embedded images (e.g. icons/illustrations uploaded via image.create)
+			// are not message attachment resources; im.v1.messageResource.get rejects
+			// them with code=14005/234001. Do not report false download errors for them.
+			if !isInteractive {
+				q.failedImages++
+				log.Printf("feishu-ws: download quoted image %s/%s failed: %v", parentID, key, derr)
+			}
 			continue
 		}
 		q.attachments = append(q.attachments, saved)
+	}
+	if isInteractive && strings.TrimSpace(q.text) == "" && len(q.attachments) == 0 {
+		q.text = "[飞书卡片消息]"
 	}
 
 	if strings.TrimSpace(q.text) == "" && len(q.attachments) == 0 && q.failedImages == 0 {
@@ -1220,26 +1274,77 @@ func parseFeishuPostContent(raw string) (string, []string) {
 	return strings.Join(lines, "\n"), imgs
 }
 
+func isFeishuCardDowngradePlaceholder(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	clean := strings.TrimRight(s, "。.!！ \t\r\n")
+	if strings.Contains(clean, "请升级至最新版本客户端") ||
+		strings.Contains(clean, "请升级至最新版客户端") ||
+		strings.Contains(clean, "请升级到最新版本客户端") ||
+		strings.Contains(clean, "请升级到最新版客户端") {
+		return true
+	}
+	low := strings.ToLower(clean)
+	return strings.Contains(low, "please upgrade to the latest version") &&
+		(strings.Contains(low, "view") || strings.Contains(low, "content"))
+}
+
+func isLarkFooterLine(s string) bool {
+	s = strings.TrimSpace(s)
+	return s == larkFooterMarkdown || (strings.Contains(s, collieHomepageURL) && strings.Contains(s, "放牧一群 Agent"))
+}
+
 // parseFeishuInteractiveContent extracts readable text and image keys from
 // Feishu interactive card JSON (both im.v1.message.get downgraded format and
-// Card JSON 2.0 payloads).
+// Card JSON 1.0/2.0 payloads), filtering out Feishu's client-upgrade fallback
+// placeholder and Collie's own homepage footer.
 func parseFeishuInteractiveContent(raw string) (string, []string) {
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil || doc == nil {
 		return "", nil
 	}
-	var lines []string
+	var titleLines []string
+	var bodyLines []string
 	var imgs []string
-	if title, _ := doc["title"].(string); strings.TrimSpace(title) != "" {
-		lines = append(lines, strings.TrimSpace(title))
+	sawDowngrade := false
+
+	addTitle := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || isFeishuCardDowngradePlaceholder(s) || slices.Contains(titleLines, s) {
+			return
+		}
+		titleLines = append(titleLines, s)
+	}
+	addBody := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || isLarkFooterLine(s) {
+			return
+		}
+		if isFeishuCardDowngradePlaceholder(s) {
+			sawDowngrade = true
+			return
+		}
+		bodyLines = append(bodyLines, s)
+	}
+
+	if title, _ := doc["title"].(string); title != "" {
+		addTitle(title)
 	}
 	if header, ok := doc["header"].(map[string]any); ok {
 		if titleObj, ok := header["title"].(map[string]any); ok {
-			if content, _ := titleObj["content"].(string); strings.TrimSpace(content) != "" {
-				lines = append(lines, strings.TrimSpace(content))
+			if content, _ := titleObj["content"].(string); content != "" {
+				addTitle(content)
+			}
+		}
+		if subObj, ok := header["subtitle"].(map[string]any); ok {
+			if content, _ := subObj["content"].(string); content != "" {
+				addTitle(content)
 			}
 		}
 	}
+
 	var walk func(any)
 	walk = func(node any) {
 		switch v := node.(type) {
@@ -1251,7 +1356,33 @@ func parseFeishuInteractiveContent(raw string) (string, []string) {
 					tag, _ := m["tag"].(string)
 					switch tag {
 					case "text":
-						if s, _ := m["text"].(string); s != "" {
+						s, _ := m["text"].(string)
+						if s == "" {
+							s, _ = m["content"].(string)
+						}
+						if s != "" {
+							if isFeishuCardDowngradePlaceholder(s) {
+								sawDowngrade = true
+							} else {
+								rowParts = append(rowParts, s)
+								hasInline = true
+							}
+						}
+						continue
+					case "md", "markdown", "lark_md":
+						s, _ := m["content"].(string)
+						if s == "" {
+							s, _ = m["text"].(string)
+						}
+						if strings.TrimSpace(s) != "" {
+							addBody(s)
+						}
+						continue
+					case "at":
+						if name, _ := m["user_name"].(string); strings.TrimSpace(name) != "" {
+							rowParts = append(rowParts, "@"+strings.TrimSpace(name))
+							hasInline = true
+						} else if s, _ := m["text"].(string); s != "" {
 							rowParts = append(rowParts, s)
 							hasInline = true
 						}
@@ -1277,53 +1408,116 @@ func parseFeishuInteractiveContent(raw string) (string, []string) {
 							imgs = append(imgs, strings.TrimSpace(k))
 						}
 						continue
+					case "button", "hr", "action":
+						continue
 					}
 				}
 				walk(it)
 			}
 			if hasInline {
-				if line := strings.TrimSpace(strings.Join(rowParts, "")); line != "" {
-					lines = append(lines, line)
-				}
+				addBody(strings.Join(rowParts, ""))
 			}
 		case map[string]any:
 			tag, _ := v["tag"].(string)
 			switch tag {
-			case "markdown", "lark_md":
-				if content, _ := v["content"].(string); strings.TrimSpace(content) != "" {
-					lines = append(lines, strings.TrimSpace(content))
+			case "markdown", "lark_md", "md":
+				s, _ := v["content"].(string)
+				if s == "" {
+					s, _ = v["text"].(string)
 				}
+				addBody(s)
 			case "plain_text":
-				if content, _ := v["content"].(string); strings.TrimSpace(content) != "" {
-					lines = append(lines, strings.TrimSpace(content))
+				s, _ := v["content"].(string)
+				if s == "" {
+					s, _ = v["text"].(string)
 				}
+				addBody(s)
+			case "text":
+				s, _ := v["text"].(string)
+				if s == "" {
+					s, _ = v["content"].(string)
+				}
+				addBody(s)
 			case "img":
 				if k, _ := v["image_key"].(string); strings.TrimSpace(k) != "" {
 					imgs = append(imgs, strings.TrimSpace(k))
 				} else if k, _ := v["img_key"].(string); strings.TrimSpace(k) != "" {
 					imgs = append(imgs, strings.TrimSpace(k))
 				}
-			case "button":
+			case "button", "hr", "action":
 				return
 			default:
-				if els, ok := v["elements"]; ok {
-					walk(els)
+				if header, ok := v["header"].(map[string]any); ok {
+					if titleObj, ok := header["title"]; ok {
+						walk(titleObj)
+					}
 				}
 				if txt, ok := v["text"]; ok {
 					walk(txt)
 				}
+				if fields, ok := v["fields"]; ok {
+					walk(fields)
+				}
+				if cols, ok := v["columns"]; ok {
+					walk(cols)
+				}
+				if els, ok := v["elements"]; ok {
+					walk(els)
+				}
 			}
 		}
 	}
-	if els, ok := doc["elements"]; ok {
-		walk(els)
-	}
+
 	if body, ok := doc["body"].(map[string]any); ok {
 		if els, ok := body["elements"]; ok {
 			walk(els)
 		}
 	}
-	return strings.Join(lines, "\n"), imgs
+	if els, ok := doc["elements"]; ok {
+		walk(els)
+	}
+	if len(bodyLines) == 0 {
+		if i18nEls, ok := doc["i18n_elements"].(map[string]any); ok {
+			tryKeys := []string{"zh_cn", "en_us", "ja_jp"}
+			for k := range i18nEls {
+				if !slices.Contains(tryKeys, k) {
+					tryKeys = append(tryKeys, k)
+				}
+			}
+			for _, k := range tryKeys {
+				if sub, ok := i18nEls[k]; ok {
+					before := len(bodyLines)
+					walk(sub)
+					if len(bodyLines) > before {
+						break
+					}
+				}
+			}
+		}
+	}
+	if len(bodyLines) == 0 {
+		if cfg, ok := doc["config"].(map[string]any); ok {
+			if sum, ok := cfg["summary"].(map[string]any); ok {
+				if content, _ := sum["content"].(string); strings.TrimSpace(content) != "" && !slices.Contains(titleLines, strings.TrimSpace(content)) {
+					addBody(content)
+				}
+			}
+		}
+	}
+
+	if len(bodyLines) > 0 {
+		lines := append(append([]string{}, titleLines...), bodyLines...)
+		return strings.Join(lines, "\n"), imgs
+	}
+	if sawDowngrade {
+		// Downgraded Card 2.0 fallback payloads include a system placeholder icon
+		// (img_v3_...) alongside the upgrade notice; never try downloading it.
+		if len(titleLines) > 0 {
+			return fmt.Sprintf("[飞书卡片：%s]", strings.Join(titleLines, " · ")), nil
+		}
+		return "", nil
+	}
+	return strings.Join(titleLines, "\n"), imgs
 }
 
 func (f *FeishuAdapter) downloadImage(ctx context.Context, client *larksdk.Client, messageID, imageKey string) (string, error) {
@@ -1645,6 +1839,28 @@ func (f *FeishuAdapter) bindEntryOrigin(entryID string, r feishuRoute) {
 	f.origins[entryID] = r
 }
 
+func (f *FeishuAdapter) recordSentCard(msgID, text string) {
+	msgID = strings.TrimSpace(msgID)
+	text = strings.TrimSpace(text)
+	if msgID == "" || text == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sentCards == nil {
+		f.sentCards = map[string]string{}
+	}
+	if _, exists := f.sentCards[msgID]; !exists {
+		f.sentCardOrder = append(f.sentCardOrder, msgID)
+		if len(f.sentCardOrder) > feishuMaxTrackedOrigins {
+			drop := f.sentCardOrder[0]
+			f.sentCardOrder = f.sentCardOrder[1:]
+			delete(f.sentCards, drop)
+		}
+	}
+	f.sentCards[msgID] = text
+}
+
 func (f *FeishuAdapter) latestFeishuUserEntryID() string {
 	if f.sp == nil {
 		return ""
@@ -1811,6 +2027,7 @@ func (f *FeishuAdapter) SendReply(ctx context.Context, e *Entry, link string) (O
 	if err != nil {
 		return OutboundReceipt{}, err
 	}
+	f.recordSentCard(msgID, e.Text)
 	return OutboundReceipt{
 		Kind:       feishuKind,
 		ChatID:     recvID,
@@ -1861,9 +2078,24 @@ func (f *FeishuAdapter) SendNotices(ctx context.Context, ns []notice, link strin
 		}
 	}
 	raw := larkCard(ns, link)
-	_, err = f.sendRawCard(ctx, client, recvType, recvID, "", raw)
-	if err == nil && f.mgr != nil {
-		f.mgr.recordActivity(feishuKind)
+	msgID, err := f.sendRawCard(ctx, client, recvType, recvID, "", raw)
+	if err == nil {
+		if msgID != "" {
+			f.recordSentCard(msgID, noticesText(ns))
+			if len(ns) == 1 && ns[0].entryID != "" && f.mgr != nil && f.mgr.db != nil {
+				_ = saveIntegrationMessage(f.mgr.db, IntegrationMessage{
+					EntryID:    ns[0].entryID,
+					Kind:       feishuKind,
+					ChatID:     recvID,
+					ExternalID: msgID,
+					Resolved:   true,
+					CreatedAt:  time.Now().Unix(),
+				})
+			}
+		}
+		if f.mgr != nil {
+			f.mgr.recordActivity(feishuKind)
+		}
 	}
 	return err
 }
@@ -2149,6 +2381,7 @@ func buildFeishuEntryCard(e *Entry, link string, resolvedSummary string) map[str
 			},
 		})
 	}
+	els = appendLarkFooter(els)
 
 	summary := cardSummary([]notice{{tone: e.Tone, text: e.Text, options: opts, check: e.Check}})
 	return map[string]any{
@@ -2196,6 +2429,7 @@ func buildFeishuTestCard(link string) map[string]any {
 			},
 		})
 	}
+	els = appendLarkFooter(els)
 	return map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
@@ -2226,6 +2460,7 @@ func buildFeishuNoticeCard(title, template, markdownBody, link string) map[strin
 			},
 		})
 	}
+	els = appendLarkFooter(els)
 	return map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{

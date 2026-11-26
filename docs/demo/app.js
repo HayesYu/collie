@@ -3651,6 +3651,7 @@
       return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
     }).join("");
     const crewChanged = setHTML(crew, crewHTML) || crewHTML !== prevCrew;
+    if (crewChanged) crew._syncScrollFade?.();
 
     const allEntries = chatEntries();
     const isEmptyChat = !sup.entries.length && !pendingSays.length;
@@ -4043,6 +4044,50 @@
     sc?.addEventListener("keydown", onScrollKey);
     document.addEventListener("keydown", onScrollKey);
     addEventListener("resize", updateSuperJump);
+
+    // Horizontal wheel-to-scroll & fallback fade sync for overflowing worker capsule strips.
+    const supportsScrollFade = typeof CSS !== "undefined"
+      && CSS.supports?.("animation-timeline", "scroll(self inline)")
+      && CSS.supports?.("mask-composite", "subtract")
+      && CSS.supports?.("mask-clip", "no-clip");
+    const bindHorizontalStrip = (el) => {
+      if (!el || el._hStripBound) return;
+      el._hStripBound = true;
+      el.addEventListener("wheel", (e) => {
+        if (e.ctrlKey) return;
+        const maxScroll = el.scrollWidth - el.clientWidth;
+        if (maxScroll <= 1) return;
+        // Keep native trackpad / shift-wheel horizontal gestures untouched;
+        // map predominantly vertical mouse-wheel scrolling to horizontal scroll.
+        if (!e.deltaY || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+        let delta = e.deltaY;
+        if (e.deltaMode === 1) delta *= 24;
+        else if (e.deltaMode === 2) delta *= Math.max(120, el.clientWidth * 0.8);
+        e.preventDefault();
+        el.scrollLeft += delta;
+      }, { passive: false });
+      const syncFade = () => {
+        if (supportsScrollFade) return;
+        const maxScroll = el.scrollWidth - el.clientWidth;
+        const overflow = maxScroll > 1;
+        el.classList.toggle("more-start", overflow && el.scrollLeft > 1);
+        el.classList.toggle("more-end", overflow && el.scrollLeft < maxScroll - 1);
+      };
+      el._syncScrollFade = syncFade;
+      if (!supportsScrollFade) {
+        let raf = 0;
+        const schedule = () => {
+          if (raf) return;
+          raf = requestAnimationFrame(() => { raf = 0; syncFade(); });
+        };
+        el.addEventListener("scroll", schedule, { passive: true });
+        if (typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(el);
+        else addEventListener("resize", schedule, { passive: true });
+        syncFade();
+      }
+    };
+    bindHorizontalStrip($("#crew"));
+    bindHorizontalStrip($("#td-workers"));
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) flushPendingChatRead(true);
       else maybeScheduleReadAtBottom();
@@ -10672,6 +10717,7 @@
       }
       return `<span class="${cls}" data-td-worker="${esc(w.name)}" data-td-status="${esc(w.status)}" title="${esc(tip)}">${inner}</span>`;
     }).join("");
+    tdWorkersEl._syncScrollFade?.();
   }
 
   function syncThreadComposerHint() {

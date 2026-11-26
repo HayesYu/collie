@@ -139,6 +139,24 @@ func larkSend(ns []notice, link string) error {
 	return nil
 }
 
+const (
+	collieHomepageURL  = "https://lihuanyu0w0.github.io/collie/"
+	larkFooterMarkdown = "<font color='grey'>Collie · 在手机上养边牧，放牧一群 Agent · </font>[官网主页](" + collieHomepageURL + ")"
+)
+
+// appendLarkFooter appends a restrained Card JSON 2.0 divider and notation
+// caption linking to Collie's public homepage.
+func appendLarkFooter(els []any) []any {
+	return append(els,
+		map[string]any{"tag": "hr"},
+		map[string]any{
+			"tag":       "markdown",
+			"content":   larkFooterMarkdown,
+			"text_size": "notation",
+		},
+	)
+}
+
 // larkCard is a Feishu card (JSON 2.0): the header says how much it matters
 // (orange when it needs you, as on the page), the body is Collie's own
 // Markdown, and a button opens Collie.
@@ -181,6 +199,7 @@ func larkCard(ns []notice, link string) string {
 			"behaviors": []any{map[string]string{"type": "open_url", "default_url": link}},
 		})
 	}
+	els = appendLarkFooter(els)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)

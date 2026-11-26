@@ -1,3 +1,13 @@
+@property --fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
 :root {
   --bg: #ffffff;
   --bg-2: #f7f7f6;
@@ -236,7 +246,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .login-error { color: var(--attn); min-height: 1.5em; margin: 0 !important; font-size: 13px; }
 
 /* ─── layout ─── */
-.app { display: grid; grid-template-columns: var(--side-w) 1fr; height: var(--vh); }
+.app { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); height: var(--vh); }
 /* Phones: when the keyboard opens, the browser scrolls the page under the
    visible area. Pin the app to that area so the input stays in view. */
 @media (pointer: coarse) {
@@ -359,7 +369,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 
 /* ─── main ─── */
 .main { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.view { display: flex; flex-direction: column; min-height: 0; flex: 1; padding-top: env(safe-area-inset-top); }
+.view { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; padding-top: env(safe-area-inset-top); }
 .d-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); min-height: 61px; }
 .back { display: none; margin-left: -6px; }
 #detail .back, #v-ext .back { display: inline-grid; }
@@ -825,7 +835,50 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .need:hover .go { color: var(--fg); }
 
 /* crew strip: active workers */
-.crew { display: flex; gap: 8px; padding: 10px 16px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: none; }
+.crew {
+  display: flex; align-items: center; gap: 8px; flex: none; min-width: 0;
+  padding: 10px 16px;
+  overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+.crew, .td-workers {
+  --fade-size: 28px;
+  --fade-dir: right;
+  --fade-start-pos: 0;
+  --fade-end-pos: 100%;
+  scroll-padding-inline: var(--fade-size);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent 100%);
+  transition: --fade-start .16s ease, --fade-end .16s ease;
+}
+.crew.more-start, .td-workers.more-start { --fade-start: var(--fade-size); }
+.crew.more-end, .td-workers.more-end { --fade-end: var(--fade-size); }
+@supports (animation-timeline: scroll(self inline)) and (mask-composite: subtract) and (mask-clip: no-clip) {
+  .crew, .td-workers {
+    transition: none;
+    mask:
+      linear-gradient(#000, #000) no-clip subtract,
+      linear-gradient(to var(--fade-dir), #000, transparent) var(--fade-start-pos) 0 / var(--fade-start) calc(100% - 1px) no-repeat no-clip,
+      linear-gradient(to var(--fade-dir), transparent, #000) var(--fade-end-pos) 0 / var(--fade-end) calc(100% - 1px) no-repeat no-clip;
+    animation: strip-fade-start linear both, strip-fade-end linear both;
+    animation-timeline: scroll(self inline);
+    animation-range: 0 var(--fade-size), calc(100% - var(--fade-size)) 100%;
+  }
+  .crew:dir(rtl), .td-workers:dir(rtl) {
+    --fade-dir: left;
+    --fade-start-pos: 100%;
+    --fade-end-pos: 0;
+  }
+}
+@keyframes strip-fade-start {
+  to { --fade-start: var(--fade-size); }
+}
+@keyframes strip-fade-end {
+  from { --fade-end: var(--fade-size); }
+}
 
 /* super-agent history search: zero footprint when closed, floating results */
 .super-search {
@@ -1376,7 +1429,7 @@ body.dragging { cursor: col-resize; user-select: none; }
 .threadpane[hidden] { display: none; }
 .threadpane.is-dragging { transition: none !important; }
 .td-inner {
-  display: flex; flex-direction: column; flex: none;
+  display: flex; flex-direction: column; flex: none; min-width: 0;
   width: var(--thread-w, 432px); height: 100%; min-height: 0; background: var(--bg);
 }
 .td-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 4; }
@@ -1412,7 +1465,7 @@ body.dragging { cursor: col-resize; user-select: none; }
   min-height: 52px;
 }
 .td-workers {
-  display: flex; align-items: center; gap: 6px; flex: none;
+  display: flex; align-items: center; gap: 6px; flex: none; min-width: 0;
   padding: 4px 14px 10px 18px;
   overflow-x: auto; overflow-y: hidden;
   overscroll-behavior-x: contain;

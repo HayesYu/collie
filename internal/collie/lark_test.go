@@ -1,6 +1,7 @@
 package collie
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,4 +144,59 @@ func TestCollieQuote(t *testing.T) {
 	if sp.collieQuoteLocked("e2") != nil || sp.collieQuoteLocked("") != nil {
 		t.Error("only Collie's messages are quoted")
 	}
+}
+
+func TestLarkCardsIncludeHomepageFooter(t *testing.T) {
+	checkCard := func(t *testing.T, name, raw string) {
+		t.Helper()
+		var doc struct {
+			Schema string `json:"schema"`
+			Body   struct {
+				Elements []map[string]any `json:"elements"`
+			} `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+			t.Fatalf("%s: unmarshal card: %v\n%s", name, err, raw)
+		}
+		if doc.Schema != "2.0" {
+			t.Fatalf("%s: schema = %q, want 2.0", name, doc.Schema)
+		}
+		n := len(doc.Body.Elements)
+		if n < 3 {
+			t.Fatalf("%s: expected >=3 elements including footer, got %d", name, n)
+		}
+		if doc.Body.Elements[n-2]["tag"] != "hr" {
+			t.Fatalf("%s: element[%d] tag = %v, want hr", name, n-2, doc.Body.Elements[n-2]["tag"])
+		}
+		foot := doc.Body.Elements[n-1]
+		if foot["tag"] != "markdown" || foot["text_size"] != "notation" {
+			t.Fatalf("%s: unexpected footer element: %#v", name, foot)
+		}
+		content, _ := foot["content"].(string)
+		for _, want := range []string{"Collie · 在手机上养边牧，放牧一群 Agent", "[官网主页](https://lihuanyu0w0.github.io/collie/)"} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s: footer missing %q: %q", name, want, content)
+			}
+		}
+	}
+
+	checkCard(t, "larkCard", larkCard([]notice{{text: "你好"}}, "http://hub:7788/#/collie"))
+
+	entryRaw, err := marshalCardJSON(buildFeishuEntryCard(&Entry{ID: "e1", Text: "完成了"}, "http://hub:7788/#/collie", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkCard(t, "buildFeishuEntryCard", entryRaw)
+
+	testRaw, err := marshalCardJSON(buildFeishuTestCard("http://hub:7788/#/collie"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkCard(t, "buildFeishuTestCard", testRaw)
+
+	noticeRaw, err := marshalCardJSON(buildFeishuNoticeCard("Collie · 配对成功", "green", "已配对", "http://hub:7788/#/collie"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkCard(t, "buildFeishuNoticeCard", noticeRaw)
 }

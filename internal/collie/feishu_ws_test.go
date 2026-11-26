@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1649,6 +1650,203 @@ func TestFeishuQuotedMessageFailureDegradationAndLimits(t *testing.T) {
 	ff.mu.Unlock()
 	if callsAfterUnauth != callsBeforeUnauth {
 		t.Fatalf("unauthorized sender triggered %d Feishu API calls", callsAfterUnauth-callsBeforeUnauth)
+	}
+}
+
+func TestFeishuQuotedInteractiveCardsAndOwnCardRecovery(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	sp.integrations.humanBurst = 30
+	ctx := context.Background()
+
+	// 1) Collie sends its own Card JSON 2.0 via SendReply; Feishu im.v1.message.get
+	//    returns the downgraded client-upgrade placeholder + non-downloadable system icon.
+	//    Quoting that card must recover Collie's real original text without bogus image errors.
+	replyEntry, _ := sp.Reply(mainThread, "已完成接口改造，准备切 v0.2.79 发布。", "", nil)
+	sp.integrations.SendReply(ctx, replyEntry, "http://127.0.0.1:7788/#/collie")
+
+	rec, err := getIntegrationMessage(sp.db, replyEntry.ID, feishuKind)
+	if err != nil || rec == nil || rec.ExternalID == "" {
+		t.Fatalf("expected persisted outbound card mapping, got rec=%+v err=%v", rec, err)
+	}
+	ownCardMsgID := rec.ExternalID
+
+	ff.mu.Lock()
+	ff.messages[ownCardMsgID] = fakeFeishuMessage{
+		MessageID: ownCardMsgID,
+		MsgType:   "interactive",
+		Content:   `{"title":"Collie","elements":[[{"tag":"img","image_key":"img_v3_02ad_system_placeholder"},{"tag":"text","text":"请升级至最新版本客户端，以查看内容"}]]}`,
+	}
+	ff.resources["img_v3_02ad_system_placeholder"] = fakeFeishuResource{Code: 14005, Msg: "Resource Has Been Deleted"}
+	callsBeforeOwnQuote := len(ff.calls)
+	ff.mu.Unlock()
+
+	sendQuote := func(evID, msgID, parentID, text string) string {
+		t.Helper()
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: evID}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr(msgID),
+					ParentId:    strPtr(parentID),
+					ChatId:      strPtr("oc_p2p_owner"),
+					ChatType:    strPtr("p2p"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":` + strconv.Quote(text) + `}`),
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive(%s): %v", evID, err)
+		}
+		return sp.st.Entries[len(sp.st.Entries)-1].Text
+	}
+
+	gotOwn := sendQuote("evt_q_own_1", "om_q_own_1", ownCardMsgID, "顺便在卡片底部加一个官网链接")
+	if !strings.Contains(gotOwn, "已完成接口改造，准备切 v0.2.79 发布。") || !strings.Contains(gotOwn, "顺便在卡片底部加一个官网链接") {
+		t.Fatalf("quoted own card missing real text:\n%s", gotOwn)
+	}
+	for _, bad := range []string{"请升级至最新版本客户端", "图片下载失败"} {
+		if strings.Contains(gotOwn, bad) {
+			t.Fatalf("quoted own card leaked %q:\n%s", bad, gotOwn)
+		}
+	}
+	// Simulate hub restart (clear in-memory cache); DB mapping must still recover real text.
+	fa.mu.Lock()
+	fa.sentCards = map[string]string{}
+	fa.sentCardOrder = nil
+	fa.mu.Unlock()
+
+	gotOwnAfterRestart := sendQuote("evt_q_own_2", "om_q_own_2", ownCardMsgID, "重启后引用也要恢复原文")
+	if !strings.Contains(gotOwnAfterRestart, "已完成接口改造，准备切 v0.2.79 发布。") {
+		t.Fatalf("quoted own card after restart missing real text:\n%s", gotOwnAfterRestart)
+	}
+	ff.mu.Lock()
+	if len(ff.calls) != callsBeforeOwnQuote {
+		// Only async reaction calls (POST .../reactions) are expected, never GET message or resource for own card.
+		for _, c := range ff.calls[callsBeforeOwnQuote:] {
+			if c.Method == http.MethodGet {
+				ff.mu.Unlock()
+				t.Fatalf("unexpected Feishu GET call for own quoted card: %s %s", c.Method, c.Path)
+			}
+		}
+	}
+	ff.mu.Unlock()
+
+	// 2) External Card 2.0 payload with real body.elements (markdown, column_set, non-downloadable card image,
+	//    button, and homepage footer): extracts real text cleanly without false image download failure.
+	card20JSON, err := marshalCardJSON(map[string]any{
+		"schema": "2.0",
+		"header": map[string]any{
+			"title": map[string]string{"tag": "plain_text", "content": "发布提醒"},
+		},
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{"tag": "markdown", "content": "流水线已通过，等待审批。"},
+				map[string]any{
+					"tag": "column_set",
+					"columns": []any{
+						map[string]any{
+							"tag": "column",
+							"elements": []any{
+								map[string]any{"tag": "markdown", "content": "版本：v0.2.79"},
+							},
+						},
+					},
+				},
+				map[string]any{"tag": "img", "img_key": "img_v3_card_logo"},
+				map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": "打开详情"}},
+				map[string]any{"tag": "hr"},
+				map[string]any{"tag": "markdown", "text_size": "notation", "content": larkFooterMarkdown},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pngCard := []byte("\x89PNG\r\n\x1a\ncard-real-image")
+	ff.mu.Lock()
+	ff.messages["om_ext_card_20"] = fakeFeishuMessage{
+		MessageID: "om_ext_card_20",
+		MsgType:   "interactive",
+		Content:   card20JSON,
+	}
+	ff.messages["om_ext_card_downgraded"] = fakeFeishuMessage{
+		MessageID: "om_ext_card_downgraded",
+		MsgType:   "interactive",
+		Content:   `{"title":"Collie","elements":[[{"tag":"img","image_key":"img_v3_02ad_downgrade_icon"},{"tag":"text","text":"请升级至最新版本客户端，以查看内容"}]]}`,
+	}
+	ff.messages["om_ext_card_downgraded_en"] = fakeFeishuMessage{
+		MessageID: "om_ext_card_downgraded_en",
+		MsgType:   "interactive",
+		Content:   `{"elements":[[{"tag":"text","text":"Please upgrade to the latest version of Lark to view the content."}]]}`,
+	}
+	ff.messages["om_ext_card_img_only_fail"] = fakeFeishuMessage{
+		MessageID: "om_ext_card_img_only_fail",
+		MsgType:   "interactive",
+		Content:   `{"elements":[[{"tag":"img","image_key":"img_v3_card_logo"}]]}`,
+	}
+	ff.messages["om_ext_card_img_ok"] = fakeFeishuMessage{
+		MessageID: "om_ext_card_img_ok",
+		MsgType:   "interactive",
+		Content:   `{"title":"截图卡片","elements":[[{"tag":"text","text":"请看附图"},{"tag":"img","image_key":"img_card_ok"}]]}`,
+	}
+	ff.resources["img_v3_card_logo"] = fakeFeishuResource{Code: 14005, Msg: "Resource Has Been Deleted"}
+	ff.resources["img_v3_02ad_downgrade_icon"] = fakeFeishuResource{Code: 14005, Msg: "Resource Has Been Deleted"}
+	ff.resources["img_card_ok"] = fakeFeishuResource{Data: pngCard, FileName: "card.png"}
+	ff.mu.Unlock()
+
+	gotExt20 := sendQuote("evt_q_ext_20", "om_q_ext_20", "om_ext_card_20", "批准发版")
+	for _, want := range []string{"[引用消息]", "> 发布提醒", "> 流水线已通过，等待审批。", "> 版本：v0.2.79", "批准发版"} {
+		if !strings.Contains(gotExt20, want) {
+			t.Fatalf("quoted Card 2.0 missing %q:\n%s", want, gotExt20)
+		}
+	}
+	for _, bad := range []string{"图片下载失败", "打开详情", collieHomepageURL} {
+		if strings.Contains(gotExt20, bad) {
+			t.Fatalf("quoted Card 2.0 should not contain %q:\n%s", bad, gotExt20)
+		}
+	}
+
+	// 3) External downgraded Card 2.0: strips upgrade placeholder and skips downgrade icon completely.
+	gotDown := sendQuote("evt_q_ext_down", "om_q_ext_down", "om_ext_card_downgraded", "看下这条")
+	if !strings.Contains(gotDown, "> [飞书卡片：Collie]") || !strings.Contains(gotDown, "看下这条") {
+		t.Fatalf("unexpected downgraded card formatting:\n%s", gotDown)
+	}
+	for _, bad := range []string{"请升级至最新版本客户端", "图片下载失败"} {
+		if strings.Contains(gotDown, bad) {
+			t.Fatalf("downgraded card leaked %q:\n%s", bad, gotDown)
+		}
+	}
+	ff.mu.Lock()
+	for _, c := range ff.calls {
+		if strings.Contains(c.Path, "img_v3_02ad_downgrade_icon") {
+			ff.mu.Unlock()
+			t.Fatalf("downgraded card should never attempt downloading placeholder icon: %s", c.Path)
+		}
+	}
+	ff.mu.Unlock()
+
+	// 4) English downgrade placeholder without title falls back to clean generic card label.
+	gotDownEn := sendQuote("evt_q_ext_down_en", "om_q_ext_down_en", "om_ext_card_downgraded_en", "check this")
+	if !strings.Contains(gotDownEn, "> [飞书卡片消息]") || strings.Contains(strings.ToLower(gotDownEn), "please upgrade") {
+		t.Fatalf("unexpected english downgraded card formatting:\n%s", gotDownEn)
+	}
+
+	// 5) Card with only a non-downloadable card image key falls back cleanly without false image error.
+	gotImgOnlyFail := sendQuote("evt_q_ext_img_fail", "om_q_ext_img_fail", "om_ext_card_img_only_fail", "这张卡片")
+	if !strings.Contains(gotImgOnlyFail, "> [飞书卡片消息]") || strings.Contains(gotImgOnlyFail, "图片下载失败") || strings.Contains(gotImgOnlyFail, "下载失败") {
+		t.Fatalf("unexpected image-only card fallback:\n%s", gotImgOnlyFail)
+	}
+
+	// 6) Card with a downloadable image still attaches it cleanly alongside real text.
+	gotImgOK := sendQuote("evt_q_ext_img_ok", "om_q_ext_img_ok", "om_ext_card_img_ok", "收到")
+	if !strings.Contains(gotImgOK, "含 1 张图片") || !strings.Contains(gotImgOK, "> 请看附图") || !strings.Contains(gotImgOK, "附件：\n") {
+		t.Fatalf("unexpected downloadable card image formatting:\n%s", gotImgOK)
 	}
 }
 

@@ -274,3 +274,21 @@ func TestHandleHerdrStream(t *testing.T) {
 		t.Fatalf("expected 1 forwarded agent.start (for agy only), got %d in %v", startCount, gotMethods)
 	}
 }
+
+func TestForkReleaseRepoURL(t *testing.T) {
+	if releaseRepoURL != "https://github.com/HayesYu/collie" {
+		t.Fatalf("default releaseRepoURL = %q, want https://github.com/HayesYu/collie", releaseRepoURL)
+	}
+	cases := map[string]string{
+		"":                                     "https://github.com/HayesYu/collie",
+		"HayesYu/collie":                       "https://github.com/HayesYu/collie",
+		"HayesYu/collie.git":                   "https://github.com/HayesYu/collie",
+		"https://github.com/HayesYu/collie/":   "https://github.com/HayesYu/collie",
+		"https://github.com/lihuanyu0w0/collie": "https://github.com/lihuanyu0w0/collie",
+	}
+	for in, want := range cases {
+		if got := forkReleaseRepoURL(in); got != want {
+			t.Fatalf("forkReleaseRepoURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

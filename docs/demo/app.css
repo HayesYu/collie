@@ -411,9 +411,9 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .viewer[data-mode="chat"] > .chat { display: flex; }
 .viewer[data-mode="chat"] { background: var(--bg); }
 .viewer[data-mode="chat"] ~ .keys:not(.open) { display: none; }
-.screen { position: absolute; inset: 0; overflow: auto; overscroll-behavior-y: contain; overflow-anchor: none; scrollbar-gutter: stable; padding: 14px 16px 28px; outline: none; }
-.screen .xterm { width: max-content; }
-.screen .xterm-viewport { background: transparent !important; overflow: hidden !important; }
+.screen { position: absolute; inset: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain; overflow-anchor: none; padding: 14px 16px 14px; outline: none; contain: layout style; }
+.screen .xterm { width: max-content; min-width: 100%; }
+.screen .xterm-viewport { background: transparent !important; overflow-y: auto !important; overflow-x: hidden !important; overscroll-behavior-y: contain; }
 .log {
   position: absolute; inset: 0; margin: 0; overflow: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: 16px 18px 28px; outline: none;
   font: 12.5px/1.6 var(--mono); color: var(--term-fg); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
@@ -1542,6 +1542,13 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr);
   gap: 0 11px; padding: 10px 8px 14px; margin: 0 -8px;
   border-radius: 10px; cursor: pointer; transition: background .16s;
+  contain: layout style;
+}
+@supports (content-visibility: auto) {
+  #td-list > .td-node:nth-last-child(n+31) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto none auto 5.5rem;
+  }
 }
 .td-node:hover { background: color-mix(in srgb, var(--bg-2) 65%, transparent); }
 .td-node.is-focused { animation: td-focus 1.4s ease-out; }

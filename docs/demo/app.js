@@ -401,16 +401,24 @@
   addEventListener("resize", () => closePick());
   document.addEventListener("scroll", (e) => { if (pickOpen && !pickPop.contains(e.target)) closePick(); }, true);
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") syncPick(e.target); });
-  const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list"]);
+  const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "screen", "log"]);
+  let _screenSkipHost = null;
+  const isScreenDomTarget = (t) => {
+    if (!t) return false;
+    if (t.id === "screen" || t.id === "log") return true;
+    const host = _screenSkipHost || (_screenSkipHost = $("#screen"));
+    return !!(host && typeof host.contains === "function" && host.contains(t));
+  };
   new MutationObserver((ms) => {
     for (const m of ms) {
-      if (NO_SELECT_IDS.has(m.target?.id)) continue;
+      const t = m.target;
+      if (NO_SELECT_IDS.has(t?.id) || isScreenDomTarget(t)) continue;
       for (const n of m.addedNodes) {
         if (n.nodeType !== 1) continue;
         if (n.tagName === "SELECT") enhance(n);
         else if (n.childElementCount > 0) n.querySelectorAll?.("select").forEach(enhance);
       }
-      const s = m.target.tagName === "SELECT" ? m.target : m.target.closest?.("select");
+      const s = t.tagName === "SELECT" ? t : t.closest?.("select");
       if (s) syncPick(s);
     }
   }).observe(document.body, { childList: true, subtree: true });
@@ -1706,36 +1714,123 @@
     }
     return null;
   }
+  function extractCollieAnchorEl(box, hit) {
+    if (!hit || !box || (typeof box.contains === "function" && !box.contains(hit))) return null;
+    const direct = hit.closest?.(".msg[data-id], .event[data-id]");
+    if (direct && (!box.contains || box.contains(direct))) return direct;
+    const row = hit.closest?.(".say, .mine");
+    if (row && (!box.contains || box.contains(row))) {
+      return row.querySelector?.(".msg[data-id]") || null;
+    }
+    return null;
+  }
+  function neighborCollieAnchor(box, el, dir) {
+    if (!box || !el) return null;
+    let cur = el.closest?.(".say, .mine") || el;
+    for (let steps = 0; steps < 6 && cur; steps++) {
+      cur = dir < 0 ? cur.previousElementSibling : cur.nextElementSibling;
+      if (!cur) return null;
+      if (cur.matches?.(".msg[data-id], .event[data-id]")) return cur;
+      if (cur.classList?.contains("say") || cur.classList?.contains("mine")) {
+        const m = cur.querySelector?.(".msg[data-id]");
+        if (m) return m;
+      }
+    }
+    return null;
+  }
   function captureCollieAnchor(sc) {
     const box = $("#super-thread");
     if (!box || !sc || sc.clientHeight <= 0) return null;
-    const msgs = box.querySelectorAll(".msg[data-id], .event[data-id]");
-    if (!msgs.length) return null;
     const sr = sc.getBoundingClientRect();
     const edge = sr.top + 4;
-    let lo = 0, hi = msgs.length - 1, pickIdx = msgs.length - 1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const mr = msgs[mid].getBoundingClientRect();
-      if (mr.bottom > edge) {
-        pickIdx = mid;
-        hi = mid - 1;
-      } else {
-        lo = mid + 1;
+    let pick = null;
+    let pr = null;
+
+    // O(1) hit-test against the visible viewport top so off-screen `content-visibility: auto`
+    // messages are never forced to lay out by a full DOM scan or binary-search rects.
+    const hasEfp = typeof document.elementsFromPoint === "function" || typeof document.elementFromPoint === "function";
+    if (hasEfp && sr.width > 0 && sr.height > 0 && typeof box.getBoundingClientRect === "function") {
+      const br = box.getBoundingClientRect();
+      const left = Math.max(sr.left + 8, br.left + 8);
+      const right = Math.min(sr.right - 8, br.right - 8);
+      const probeX = right > left ? (left + right) * 0.5 : sr.left + sr.width * 0.5;
+      const vw = typeof innerWidth === "number" ? innerWidth : 0;
+      const vh = typeof innerHeight === "number" ? innerHeight : 0;
+      if ((!vw || (probeX >= 0 && probeX < vw)) && sr.bottom > 0) {
+        const offsets = [8, 36, 72];
+        for (let oi = 0; oi < offsets.length && !pick; oi++) {
+          const probeY = sr.top + offsets[oi];
+          if (probeY >= sr.bottom - 2 || probeY < 0 || (vh && probeY >= vh)) continue;
+          const hits = typeof document.elementsFromPoint === "function"
+            ? document.elementsFromPoint(probeX, probeY)
+            : [document.elementFromPoint(probeX, probeY)];
+          for (let hi = 0; hi < hits.length; hi++) {
+            const cand = extractCollieAnchorEl(box, hits[hi]);
+            if (cand) { pick = cand; break; }
+          }
+        }
+        if (pick) {
+          pr = pick.getBoundingClientRect();
+          // If the probe stepped past a compact row sitting right at the top edge, walk back.
+          for (let back = 0; back < 3 && pr.top > edge; back++) {
+            const prev = neighborCollieAnchor(box, pick, -1);
+            if (!prev) break;
+            const prevR = prev.getBoundingClientRect();
+            if (prevR.bottom > edge) { pick = prev; pr = prevR; }
+            else break;
+          }
+          // If the hit element ended above the edge, advance to the first row crossing `edge`.
+          for (let fwd = 0; fwd < 3 && pr.bottom <= edge; fwd++) {
+            const next = neighborCollieAnchor(box, pick, 1);
+            if (!next) break;
+            pick = next;
+            pr = next.getBoundingClientRect();
+          }
+          if (pr.bottom <= edge) {
+            pick = null;
+            pr = null;
+          } else if (pr.top < sr.top - 4) {
+            const next = neighborCollieAnchor(box, pick, 1);
+            if (next) {
+              const nr = next.getBoundingClientRect();
+              if (nr.top >= sr.top - 4 && nr.top < sr.bottom - 24) {
+                pick = next;
+                pr = nr;
+              }
+            }
+          }
+        }
       }
     }
-    let pick = msgs[pickIdx];
-    let pr = pick.getBoundingClientRect();
-    if (pr.top < sr.top - 4 && pickIdx + 1 < msgs.length) {
-      const next = msgs[pickIdx + 1];
-      const nr = next.getBoundingClientRect();
-      if (nr.top >= sr.top - 4 && nr.top < sr.bottom - 24) {
-        pick = next;
-        pr = nr;
+
+    // Boundary fallback (e.g. non-browser test DOM or a tall non-message gap spanning the probe band).
+    if (!pick) {
+      const msgs = box.querySelectorAll(".msg[data-id], .event[data-id]");
+      if (!msgs.length) return null;
+      let lo = 0, hi = msgs.length - 1, pickIdx = msgs.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const mr = msgs[mid].getBoundingClientRect();
+        if (mr.bottom > edge) {
+          pickIdx = mid;
+          hi = mid - 1;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      pick = msgs[pickIdx];
+      pr = pick.getBoundingClientRect();
+      if (pr.top < sr.top - 4 && pickIdx + 1 < msgs.length) {
+        const next = msgs[pickIdx + 1];
+        const nr = next.getBoundingClientRect();
+        if (nr.top >= sr.top - 4 && nr.top < sr.bottom - 24) {
+          pick = next;
+          pr = nr;
+        }
       }
     }
     const anchorId = pick?.dataset.id || "";
-    if (!anchorId) return null;
+    if (!anchorId || !pr) return null;
     return { anchorId, anchorOffset: pr.top - sr.top };
   }
   function applyCollieAnchor(sc, snap) {
@@ -1920,6 +2015,21 @@
   }
   function captureViewScroll(v = view, id = (v === "ext" ? extCur : current), idx = navCur) {
     if (!v) return null;
+    if (v === "pane" && ($("#viewer")?.dataset.mode || curMode()) === "screen" && term?.buffer?.active) {
+      const routeKey = routeKeyFor(v, id);
+      const buf = term.buffer.active;
+      const snap = {
+        routeKey,
+        atBottom: (buf.baseY - buf.viewportY) <= 2,
+        scrollTop: buf.viewportY,
+        termLine: buf.viewportY,
+        anchorId: "",
+        anchorOffset: 0,
+      };
+      if (typeof idx === "number") scrollByIdx.set(idx, snap);
+      if (routeKey) scrollByRoute.set(routeKey, snap);
+      return snap;
+    }
     const sc = viewScroller(v);
     if (!sc || sc.clientHeight <= 0) return null;
     const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
@@ -1947,29 +2057,37 @@
     apply();
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
   }
-  // Defer scroll-anchor capture until scrolling settles (`scrollend` with debounced fallback)
-  // so continuous scrolling never triggers per-frame querySelectorAll + getBoundingClientRect.
+  // Defer scroll-anchor capture until scrolling truly settles (`scrollend` + trailing coalesce
+  // so stepped wheel ticks or programmatic frame-by-frame scroll never trigger per-frame anchors).
   // route() still captures synchronously before departing a view.
   let scrollEndTimer = 0;
+  function scheduleScrollSettleCapture(delayMs) {
+    clearTimeout(scrollEndTimer);
+    scrollEndTimer = setTimeout(() => {
+      scrollEndTimer = 0;
+      if (!booted || !view || performance.now() < programmaticScrollUntil) return;
+      captureViewScroll(view, view === "ext" ? extCur : current, navCur);
+    }, delayMs);
+  }
   function captureOnScrollSettle(ev) {
     if (!booted || !view || performance.now() < programmaticScrollUntil) return;
     const sc = viewScroller(view);
     if (!sc || ev.target !== sc || sc.clientHeight <= 0) return;
-    captureViewScroll(view, view === "ext" ? extCur : current, navCur);
+    scheduleScrollSettleCapture(120);
   }
   if ("onscrollend" in window) {
+    document.addEventListener("scroll", (ev) => {
+      if (!scrollEndTimer) return;
+      const sc = viewScroller(view);
+      if (sc && ev.target === sc) { clearTimeout(scrollEndTimer); scrollEndTimer = 0; }
+    }, { capture: true, passive: true });
     document.addEventListener("scrollend", captureOnScrollSettle, { capture: true, passive: true });
   } else {
     document.addEventListener("scroll", (ev) => {
       if (!booted || !view || performance.now() < programmaticScrollUntil) return;
       const sc = viewScroller(view);
       if (!sc || ev.target !== sc || sc.clientHeight <= 0) return;
-      clearTimeout(scrollEndTimer);
-      scrollEndTimer = setTimeout(() => {
-        scrollEndTimer = 0;
-        if (!view || performance.now() < programmaticScrollUntil) return;
-        captureViewScroll(view, view === "ext" ? extCur : current, navCur);
-      }, 140);
+      scheduleScrollSettleCapture(140);
     }, { capture: true, passive: true });
   }
 
@@ -2091,13 +2209,15 @@
       const wantThread = pendingOpenThread;
       pendingOpenThread = null;
       const savedThread = !wantThread && wasExistingIdx ? threadByIdx.get(navCur) : null;
+      const superEl = $("#super-thread");
+      const needRebuild = !superBodyKey || (canPatchSuperDom(superEl) && !superEl?.firstElementChild);
       if (saved && !saved.atBottom) {
         unreadAnchorApplied = true;
-        renderSuper({ force: true, restore: saved });
+        renderSuper({ force: needRebuild, restore: saved });
       } else {
         unreadAnchorApplied = false;
         sessionUnreadMarkerId = "";
-        renderSuper({ force: true, unreadAnchor: true });
+        renderSuper({ force: needRebuild, unreadAnchor: true });
       }
       renderTarget(true);
       if (wantThread?.rootId) {
@@ -3002,13 +3122,13 @@
   }
   function maybeScheduleReadAtBottom(opts = {}) {
     if (view !== "collie" || document.hidden || collieLayoutLock) return;
+    const latestId = latestPersistedEntryId();
+    if (!latestId) return;
+    if (entryIdNum(latestId) <= entryIdNum(readCursorId) && entryIdNum(latestId) <= entryIdNum(serverReadCursorId)) return;
     const sc = $("#super-thread")?.parentElement;
     if (!sc || sc.clientHeight <= 0) return;
     const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
     if (dist > AT_BOTTOM_PX) return;
-    const latestId = latestPersistedEntryId();
-    if (!latestId) return;
-    if (entryIdNum(latestId) <= entryIdNum(readCursorId) && entryIdNum(latestId) <= entryIdNum(serverReadCursorId)) return;
     commitChatRead(latestId, opts);
     updateSuperJump();
   }
@@ -3861,7 +3981,6 @@
         let alias = "";
         if (promotedPendingKeys.has(k)) {
           alias = promotedPendingKeys.get(k);
-          promotedPendingKeys.delete(k);
         } else if (k.startsWith("__tsep:")) {
           const idPart = k.slice(7);
           const localPart = promotedPendingKeys.get(idPart);
@@ -4137,8 +4256,8 @@
     renderPendingBar();
     const busyChanged = (busy || "") !== prevBusy;
 
-    if (!force && nextBodyKey === superBodyKey) {
-      if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor) {
+    if (!force && nextBodyKey === superBodyKey && (!canPatchSuperDom(box) || box.firstElementChild)) {
+      if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
         updateSuperJump();
@@ -8665,6 +8784,9 @@
   }
 
   // ───────────────────────────── one agent: streams
+  const TERM_SCROLLBACK = 600;
+  const TERM_MIN_ROWS = 12;
+  const TERM_MAX_ROWS = 80;
   let mode = store.get("mode2", "chat");
   let stream = null;
   let term = null;
@@ -8672,6 +8794,11 @@
   let prevScreenLines = null;
   let pendingScreen = null;
   let screenFresh = true;
+  let screenSeq = 0;
+  let screenWriting = false;
+  let screenQueuedFrame = null;
+  let screenScrollRAF = 0;
+  let screenBufLines = 0;
 
   // A plain shell has no conversation to show, so it opens on the screen.
   const isShell = () => { const v = find(current); return !!v && !v.is_agent; };
@@ -8696,9 +8823,31 @@
   $$("#mode-seg button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
 
   const screenNearBottom = () => {
+    const buf = term?.buffer?.active;
+    if (buf) return (buf.baseY - buf.viewportY) <= 2;
     const el = $("#screen");
     return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
+  function desiredTermRows(el, paneRows, skipCachedCellH = false) {
+    const fallback = Math.max(TERM_MIN_ROWS, Math.min(TERM_MAX_ROWS, paneRows || size.rows || 40));
+    if (!el || !el.clientHeight) return fallback;
+    const cs = typeof getComputedStyle === "function" ? getComputedStyle(el) : null;
+    const padY = cs ? ((parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)) : 0;
+    const avail = el.clientHeight - padY;
+    if (avail <= 0) return fallback;
+    const cellH = skipCachedCellH ? 0 : (term?._core?._renderService?.dimensions?.css?.cell?.height || 0);
+    const estH = cellH > 4 ? cellH : Math.max(10, Math.ceil((term?.options?.fontSize || 13) * (term?.options?.lineHeight || 1.15) * 1.18));
+    return Math.max(TERM_MIN_ROWS, Math.min(TERM_MAX_ROWS, Math.floor(avail / estH)));
+  }
+  function handleScreenScrollChange() {
+    if (curMode() !== "screen") return;
+    if (screenNearBottom()) {
+      hideJump();
+      if (pendingScreen) { const p = pendingScreen; pendingScreen = null; drawScreen(p); }
+    } else {
+      $("#jump").hidden = false;
+    }
+  }
   function hideJump() {
     const j = $("#jump");
     if (j.hidden) return;
@@ -8707,31 +8856,65 @@
     if (hadFocus) (curMode() === "screen" ? $("#screen") : $("#log"))?.focus({ preventScroll: true });
   }
   function resetScreen() {
+    screenSeq++;
+    screenWriting = false;
+    screenQueuedFrame = null;
+    if (screenScrollRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(screenScrollRAF);
+      screenScrollRAF = 0;
+    }
     prevScreenLines = null;
     pendingScreen = null;
     screenFresh = true;
+    screenBufLines = 0;
     size = { cols: 0, rows: 0 };
     hideJump();
     if (term) {
       term.reset();
-      $("#screen").scrollTop = 0;
-      $("#screen").scrollLeft = 0;
+      const el = $("#screen");
+      if (el) { el.scrollTop = 0; el.scrollLeft = 0; }
     }
   }
 
   function ensureTerm() {
     if (term || !window.Terminal) return;
     const css = getComputedStyle(document.documentElement);
+    const el = $("#screen");
     term = new Terminal({
-      cols: 120, rows: 40, fontFamily: css.getPropertyValue("--mono"), fontSize: 13, lineHeight: 1.15,
-      cursorBlink: false, scrollback: 0, allowTransparency: true, theme: termTheme(),
+      cols: 120, rows: desiredTermRows(el, 40), fontFamily: css.getPropertyValue("--mono"), fontSize: 13, lineHeight: 1.15,
+      cursorBlink: false, scrollback: TERM_SCROLLBACK, allowTransparency: true, theme: termTheme(),
     });
-    // Native #screen handles 2D scrolling: never translate wheel into Up/Down
-    // arrow keys (\x1b[A/\x1b[B) or let xterm cancel horizontal touch pans.
-    term.attachCustomWheelEventHandler(() => false);
-    $("#screen").addEventListener("touchmove", (e) => e.stopPropagation(), { capture: true, passive: true });
-    term.open($("#screen"));
+    // Vertical wheel scrolls xterm's native scrollback buffer; horizontal wheel pans #screen;
+    // never translate wheel into Up/Down arrow keys when buffer has no scrollback.
+    term.attachCustomWheelEventHandler((e) => {
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return false;
+      if (!term?.buffer?.active?.baseY) return false;
+      return true;
+    });
+    // Mobile 2D touch pan: let horizontal swipes scroll #screen horizontally without xterm
+    // calling preventDefault(), while vertical swipes scroll xterm's scrollback buffer.
+    let touchStartX = 0, touchStartY = 0, touchAxis = "";
+    el.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1) return;
+      touchStartX = e.touches[0].pageX;
+      touchStartY = e.touches[0].pageY;
+      touchAxis = "";
+    }, { capture: true, passive: true });
+    el.addEventListener("touchmove", (e) => {
+      if (e.touches.length !== 1) return;
+      if (!touchAxis) {
+        const dx = Math.abs(e.touches[0].pageX - touchStartX);
+        const dy = Math.abs(e.touches[0].pageY - touchStartY);
+        if (dx > 6 || dy > 6) touchAxis = dx > dy ? "x" : "y";
+      }
+      if (touchAxis === "x" || !term?.buffer?.active?.baseY) e.stopPropagation();
+    }, { capture: true, passive: true });
+    term.open(el);
     term.onData(typeIntoPane);
+    term.onScroll(handleScreenScrollChange);
+    // xterm's Viewport._handleScroll sets suppressScrollEvent=true on native wheel/scrollbar scroll,
+    // so listen passively on .xterm-viewport as well (reads only pure-JS buffer.baseY/viewportY).
+    el.querySelector(".xterm-viewport")?.addEventListener("scroll", handleScreenScrollChange, { passive: true });
     term.onSelectionChange(() => {
       if (!term.hasSelection() && pendingScreen && curMode() === "screen") {
         const p = pendingScreen;
@@ -8741,12 +8924,23 @@
     });
     // The terminal is the input: tap or click it and type. (A drag that
     // selected text, or scrolled the screen sideways, isn't a tap.)
-    $("#screen").addEventListener("click", () => { if (!term.hasSelection()) term.focus(); });
+    el.addEventListener("click", () => { if (!term.hasSelection()) term.focus(); });
     term.textarea?.setAttribute("enterkeyhint", "enter");
     term.textarea?.addEventListener("focus", () => $("#viewer").classList.add("typing"));
     term.textarea?.addEventListener("blur", () => $("#viewer").classList.remove("typing"));
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { term.options.theme = termTheme(); });
     addEventListener("collie:theme", () => { term.options.theme = termTheme(); });
+    if (typeof ResizeObserver === "function") {
+      let fitRAF = 0;
+      const ro = new ResizeObserver(() => {
+        if (view !== "pane" || curMode() !== "screen" || !size.cols) return;
+        if (fitRAF) return;
+        const run = () => { fitRAF = 0; if (view === "pane" && curMode() === "screen") fitTerm(); };
+        if (typeof requestAnimationFrame === "function") fitRAF = requestAnimationFrame(run);
+        else run();
+      });
+      try { ro.observe(el); } catch {}
+    }
   }
   function termTheme() {
     const fg = getComputedStyle(document.documentElement).getPropertyValue("--term-fg").trim();
@@ -8759,13 +8953,23 @@
   function fitTerm() {
     if (!term || !size.cols) return;
     const el = $("#screen"), was = screenNearBottom();
+    if (!el || !el.clientWidth) return;
     const pad = parseFloat(getComputedStyle(el).paddingLeft) * 2;
     const fitW = Math.floor(((el.clientWidth - pad) / size.cols / 0.602) * 2) / 2;
     const overview = store.get("term-overview", false);
     const fs = narrowScreen.matches && !overview ? Math.min(14, Math.max(fitW, 11)) : Math.max(4.5, Math.min(14, fitW));
-    if (term.options.fontSize !== fs) {
-      term.options.fontSize = fs;
-      if (was) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; hideJump(); });
+    const fsChanged = term.options.fontSize !== fs;
+    if (fsChanged) term.options.fontSize = fs;
+    const wantRows = desiredTermRows(el, size.rows, fsChanged);
+    const rowsChanged = term.rows !== wantRows;
+    if (rowsChanged && !screenWriting && prevScreenLines) {
+      // Redraw against the new viewport height so buffer row addressing stays exact.
+      const replay = { text: prevScreenLines.join("\n"), cols: size.cols, rows: size.rows };
+      prevScreenLines = null;
+      drawScreen(replay, was ? { atBottom: true } : { atBottom: false, termLine: term.buffer?.active?.viewportY || 0 });
+    } else if (fsChanged && was) {
+      term.scrollToBottom?.();
+      hideJump();
     }
     $("#term-fit").textContent = overview ? "放大" : "全览";
     $("#term-fit").hidden = !narrowScreen.matches || fitW >= 11;
@@ -8791,18 +8995,128 @@
     });
     stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
   }
-  function closeStream() { stream?.close(); stream = null; term?.blur(); }
+  function closeStream() {
+    screenSeq++;
+    screenWriting = false;
+    screenQueuedFrame = null;
+    if (screenScrollRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(screenScrollRAF);
+      screenScrollRAF = 0;
+    }
+    stream?.close();
+    stream = null;
+    term?.blur();
+  }
+
+  // Compute minimal ANSI stream delta between consecutive `pane.read(recent, ansi, 500)` frames
+  // while keeping xterm sized to the visible viewport (`visRows`) with native scrollback.
+  // Invariant: after every write, xterm's cursor sits on the bottom-most logical line so
+  // subsequent scrolling output can be appended via `\r\n` without rewriting 500 DOM rows.
+  function computeScreenDelta(prevLines, lines, visRows) {
+    const N = lines.length;
+    if (!prevLines || !prevLines.length) {
+      return {
+        kind: "full",
+        out: "\x1b[?25l\x1b[?7l\x1b[0m" + lines.join("\r\n\x1b[0m"),
+        bufLines: Math.min(visRows + TERM_SCROLLBACK, N),
+      };
+    }
+    const M = prevLines.length;
+    // 1. Exact equality fast path.
+    if (M === N) {
+      let firstDiff = -1;
+      for (let i = 0; i < N; i++) {
+        if (prevLines[i] !== lines[i]) { firstDiff = i; break; }
+      }
+      if (firstDiff === -1) return { kind: "noop", out: "", bufLines: screenBufLines };
+      // 1b. In-place viewport-only update (e.g. TUI spinner / menu / status line).
+      const vpStart = Math.max(0, N - visRows);
+      if (firstDiff >= vpStart) {
+        let patches = "";
+        for (let i = firstDiff; i < N; i++) {
+          if (prevLines[i] !== lines[i]) {
+            const vpRow = (i - vpStart) + 1;
+            patches += `\x1b[${vpRow};1H\x1b[0m\x1b[2K${lines[i]}`;
+          }
+        }
+        const lastVpRow = N - vpStart;
+        return {
+          kind: "patch",
+          out: `\x1b[?25l\x1b[?7l${patches}\x1b[${lastVpRow};1H`,
+          bufLines: screenBufLines,
+        };
+      }
+    }
+    // 2. Pure growth / tail append (same prefix up to M - 1).
+    if (N >= M) {
+      let prefixOk = true;
+      for (let i = 0; i < M - 1; i++) {
+        if (prevLines[i] !== lines[i]) { prefixOk = false; break; }
+      }
+      if (prefixOk) {
+        let out = "\x1b[?25l\x1b[?7l";
+        if (prevLines[M - 1] !== lines[M - 1]) {
+          out += `\r\x1b[0m\x1b[2K${lines[M - 1]}`;
+        }
+        if (N > M) {
+          out += "\r\n\x1b[0m" + lines.slice(M).join("\r\n\x1b[0m");
+        }
+        return {
+          kind: "append",
+          out,
+          bufLines: Math.min(visRows + TERM_SCROLLBACK, screenBufLines + (N - M)),
+        };
+      }
+    }
+    // 3. Sliding rolling-window overlap (e.g. 500-line tail advanced by `shift` lines).
+    const minOverlap = Math.min(4, Math.max(1, Math.floor(M / 2)));
+    if (M >= 4 && N >= minOverlap) {
+      const h0 = lines[0], h1 = lines[1];
+      const maxShift = M - minOverlap;
+      for (let shift = 1; shift <= maxShift; shift++) {
+        if (prevLines[shift] !== h0 || prevLines[shift + 1] !== h1) continue;
+        const overlap = M - shift;
+        if (overlap > N) continue;
+        let match = true;
+        for (let i = 2; i < overlap - 1; i++) {
+          if (prevLines[shift + i] !== lines[i]) { match = false; break; }
+        }
+        if (!match) continue;
+        const lastSame = prevLines[M - 1] === lines[overlap - 1];
+        let out = "\x1b[?25l\x1b[?7l";
+        if (!lastSame) out += `\r\x1b[0m\x1b[2K${lines[overlap - 1]}`;
+        if (N > overlap) out += "\r\n\x1b[0m" + lines.slice(overlap).join("\r\n\x1b[0m");
+        if (out === "\x1b[?25l\x1b[?7l") return { kind: "noop", out: "", bufLines: screenBufLines };
+        return {
+          kind: "append",
+          out,
+          bufLines: Math.min(visRows + TERM_SCROLLBACK, screenBufLines + (N - overlap)),
+        };
+      }
+    }
+    // 4. Fallback: full reset + write into scrollback buffer (still renders only `visRows` DOM rows).
+    return {
+      kind: "full",
+      out: "\x1b[?25l\x1b[?7l\x1b[0m" + lines.join("\r\n\x1b[0m"),
+      bufLines: Math.min(visRows + TERM_SCROLLBACK, N),
+    };
+  }
 
   function drawScreen(f, restore = null) {
     if (!term) return;
+    if (!screenFresh && term.hasSelection?.()) {
+      pendingScreen = f;
+      return;
+    }
+    // Coalesce bursty frames while xterm is still flushing an in-flight write.
+    if (screenWriting && !restore) {
+      screenQueuedFrame = f;
+      return;
+    }
     const el = $("#screen");
     const stick = restore ? !!restore.atBottom : (screenFresh || screenNearBottom());
     const raw = (f.text || "").replace(/\r\n/g, "\n").replace(/\r/g, "");
     const lines = raw ? raw.split("\n") : [""];
-    if (!screenFresh && term.hasSelection()) {
-      pendingScreen = f;
-      return;
-    }
     if (!stick && prevScreenLines) {
       const check = Math.min(6, prevScreenLines.length);
       const sameHead = lines.length >= prevScreenLines.length &&
@@ -8814,41 +9128,71 @@
       }
     }
     pendingScreen = null;
-    const savedTop = restore && !restore.atBottom ? restore.scrollTop : el.scrollTop;
+    const savedLine = restore && !restore.atBottom && typeof restore.termLine === "number"
+      ? restore.termLine
+      : (term.buffer?.active?.viewportY ?? 0);
     const cols = f.cols || size.cols || 120;
     const paneRows = f.rows || size.rows || 40;
-    const rows = Math.max(1, lines.length);
     const dimChanged = cols !== size.cols || paneRows !== size.rows;
     if (dimChanged) size = { cols, rows: paneRows };
-    const full = !prevScreenLines || cols !== term.cols || rows < term.rows;
-    if (cols !== term.cols || rows !== term.rows) {
-      if (full) term.reset();
-      term.resize(cols, rows);
-    }
+    const prevFs = term.options.fontSize;
     if (dimChanged) fitTerm();
-    let out = "\x1b[?25l\x1b[?7l";
-    if (full) {
-      for (let r = 0; r < rows; r++) out += `\x1b[${r + 1};1H\x1b[0m\x1b[2K${lines[r]}`;
-    } else {
-      for (let r = 0; r < rows; r++) {
-        if (prevScreenLines[r] !== lines[r]) out += `\x1b[${r + 1};1H\x1b[0m\x1b[2K${lines[r]}`;
-      }
+    const visRows = desiredTermRows(el, paneRows, term.options.fontSize !== prevFs);
+    const needResize = cols !== term.cols || visRows !== term.rows;
+    const delta = (!prevScreenLines || needResize)
+      ? {
+          kind: "full",
+          out: "\x1b[?25l\x1b[?7l\x1b[0m" + lines.join("\r\n\x1b[0m"),
+          bufLines: Math.min(visRows + TERM_SCROLLBACK, lines.length),
+        }
+      : computeScreenDelta(prevScreenLines, lines, visRows);
+
+    if (delta.kind === "full") {
+      if (prevScreenLines || needResize) term.reset();
+      if (needResize) term.resize(cols, visRows);
     }
+
     prevScreenLines = lines;
     screenFresh = false;
-    const finishScroll = () => {
+    screenBufLines = delta.bufLines;
+
+    const applyScroll = () => {
+      const buf = term?.buffer?.active;
       if (stick) {
-        el.scrollTop = el.scrollHeight;
+        if (buf && buf.viewportY !== buf.baseY) term.scrollToBottom?.();
         hideJump();
       } else {
-        el.scrollTop = savedTop;
+        if (buf && buf.viewportY !== savedLine) term.scrollToLine?.(savedLine);
         if (screenNearBottom()) hideJump(); else $("#jump").hidden = false;
       }
     };
-    if (out === "\x1b[?25l\x1b[?7l") { finishScroll(); return; }
-    term.write(out, () => {
-      finishScroll();
-      requestAnimationFrame(finishScroll);
+
+    if (delta.kind === "noop" || !delta.out) {
+      applyScroll();
+      return;
+    }
+
+    const seq = screenSeq;
+    screenWriting = true;
+    term.write(delta.out, () => {
+      if (seq !== screenSeq) return;
+      screenWriting = false;
+      // Zero-reflow scroll sync: uses pure-JS xterm buffer viewportY/baseY instead of
+      // synchronous DOM `scrollHeight` reads inside the write callback and rAF.
+      applyScroll();
+      if (screenQueuedFrame) {
+        const nextF = screenQueuedFrame;
+        screenQueuedFrame = null;
+        if (typeof requestAnimationFrame === "function") {
+          if (screenScrollRAF && typeof cancelAnimationFrame === "function") cancelAnimationFrame(screenScrollRAF);
+          screenScrollRAF = requestAnimationFrame(() => {
+            screenScrollRAF = 0;
+            if (seq === screenSeq && curMode() === "screen") drawScreen(nextF);
+          });
+        } else {
+          drawScreen(nextF);
+        }
+      }
     });
   }
   function cleanLog(text) {
@@ -8868,13 +9212,8 @@
     if (atBottom) { el.scrollTop = el.scrollHeight; hideJump(); } else $("#jump").hidden = false;
   }
   $("#screen").addEventListener("scroll", () => {
-    if (curMode() !== "screen") return;
-    if (screenNearBottom()) {
-      hideJump();
-      if (pendingScreen) { const p = pendingScreen; pendingScreen = null; drawScreen(p); }
-    } else {
-      $("#jump").hidden = false;
-    }
+    if (curMode() !== "screen" || term?.buffer?.active) return;
+    handleScreenScrollChange();
   }, { passive: true });
   $("#log").addEventListener("scroll", () => {
     if (curMode() !== "log") return;
@@ -8883,8 +9222,8 @@
   }, { passive: true });
   $("#jump").addEventListener("click", () => {
     if (curMode() === "screen") {
-      const el = $("#screen");
-      el.scrollTop = el.scrollHeight;
+      if (term?.scrollToBottom) term.scrollToBottom();
+      else { const el = $("#screen"); el.scrollTop = el.scrollHeight; }
       hideJump();
       if (pendingScreen) { const p = pendingScreen; pendingScreen = null; drawScreen(p); }
     } else {
@@ -10067,7 +10406,7 @@
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
-  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "router-status"]);
+  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "router-status", "screen", "log"]);
   function triggerThumbLoads(root) {
     if (!root || root.nodeType !== 1) return;
     if (root.tagName === "IMG") {
@@ -10084,7 +10423,8 @@
   }
   new MutationObserver((ms) => {
     for (const m of ms) {
-      if (NO_THUMB_IDS.has(m.target?.id)) continue;
+      const t = m.target;
+      if (NO_THUMB_IDS.has(t?.id) || isScreenDomTarget(t)) continue;
       for (const n of m.addedNodes) triggerThumbLoads(n);
     }
   }).observe(document.body, { childList: true, subtree: true });
@@ -11377,6 +11717,196 @@
       if (activeThreadRoot) syncThreadDrawer();
     }
   }
+  function promoteThreadDrawerNodeInPlace(el, item) {
+    if (!el || !item.canPromoteInPlace) return false;
+    el.dataset.tdId = item.key;
+    el.dataset.entryId = item.entryId || "";
+    const top = el.querySelector?.(".td-node-top");
+    if (!top) return false;
+    if (item.at) {
+      const when = top.querySelector?.(".td-when");
+      const wt = sepTime(item.at), ft = fullTime(item.at);
+      if (when) {
+        if (when.textContent !== wt) when.textContent = wt;
+        if (when.getAttribute?.("title") !== ft) when.setAttribute?.("title", ft);
+      } else {
+        const wEl = parseSuperNode(`<span class="td-when" title="${esc(ft)}">${esc(wt)}</span>`);
+        const whoEl = top.querySelector?.(".td-who");
+        if (wEl && whoEl && whoEl.parentNode === top) top.insertBefore(wEl, whoEl.nextSibling);
+      }
+    }
+    const oldActs = top.querySelector?.(".td-node-acts");
+    const actsHtml = item.renderActs ? item.renderActs() : "";
+    if (actsHtml) {
+      const newActs = parseSuperNode(actsHtml);
+      if (newActs) {
+        if (oldActs && oldActs.parentNode === top) top.replaceChild(newActs, oldActs);
+        else top.appendChild(newActs);
+      }
+    } else if (oldActs && oldActs.parentNode === top) {
+      top.removeChild(oldActs);
+    }
+    el._tdKey = item.key;
+    el._tdSig = item.sig;
+    return true;
+  }
+  function patchThreadDrawerList(box, rootId, items) {
+    const t0 = performance.now();
+    const stats = box._tdPatchStats || (box._tdPatchStats = {
+      renders: 0, fullRebuilds: 0, lastAdded: 0, lastUpdated: 0, lastRemoved: 0, lastReused: 0, lastMs: 0,
+    });
+    stats.renders++;
+    let nodeMap = box._tdNodes;
+    const switchedRoot = !!(box._tdRoot && box._tdRoot !== rootId);
+    const isInitial = switchedRoot || !nodeMap || !nodeMap.size || !box.firstElementChild || items.length === 0;
+    box._tdRoot = rootId || "";
+    if (isInitial) {
+      nodeMap = new Map();
+      box._tdNodes = nodeMap;
+      if (!items.length) {
+        while (box.firstChild) box.removeChild(box.firstChild);
+        stats.fullRebuilds++;
+        stats.lastAdded = stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+        stats.lastMs = performance.now() - t0;
+        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, fullRebuild: true };
+      }
+      const frag = document.createDocumentFragment();
+      if (items.length > 16) {
+        _superPatchTpl.innerHTML = items.map((it) => it.render()).join("");
+        const parsed = [..._superPatchTpl.content.children];
+        if (parsed.length === items.length) {
+          for (let i = 0; i < items.length; i++) {
+            const el = parsed[i], it = items[i];
+            el._tdKey = it.key;
+            el._tdSig = it.sig;
+            if (it.msgSig !== undefined) el._tdMsgSig = it.msgSig;
+            nodeMap.set(it.key, el);
+            frag.appendChild(el);
+          }
+        } else {
+          _superPatchTpl.innerHTML = "";
+          for (let i = 0; i < items.length; i++) {
+            const it = items[i], el = parseSuperNode(it.render());
+            if (!el) continue;
+            el._tdKey = it.key;
+            el._tdSig = it.sig;
+            if (it.msgSig !== undefined) el._tdMsgSig = it.msgSig;
+            nodeMap.set(it.key, el);
+            frag.appendChild(el);
+          }
+        }
+      } else {
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i], el = parseSuperNode(it.render());
+          if (!el) continue;
+          el._tdKey = it.key;
+          el._tdSig = it.sig;
+          if (it.msgSig !== undefined) el._tdMsgSig = it.msgSig;
+          nodeMap.set(it.key, el);
+          frag.appendChild(el);
+        }
+      }
+      while (box.firstChild) box.removeChild(box.firstChild);
+      box.appendChild(frag);
+      stats.fullRebuilds++;
+      stats.lastAdded = items.length;
+      stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+      stats.lastMs = performance.now() - t0;
+      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, fullRebuild: true };
+    }
+
+    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0;
+    const nextKeys = new Set();
+    for (let i = 0; i < items.length; i++) {
+      const k = items[i].key;
+      nextKeys.add(k);
+      if (!nodeMap.has(k) && promotedPendingKeys.has(k)) {
+        const alias = promotedPendingKeys.get(k);
+        if (alias && nodeMap.has(alias)) {
+          const existing = nodeMap.get(alias);
+          nodeMap.delete(alias);
+          existing._tdKey = k;
+          nodeMap.set(k, existing);
+        }
+      }
+    }
+    for (const [k, el] of nodeMap) {
+      if (!nextKeys.has(k)) {
+        if (el.parentNode === box) box.removeChild(el);
+        nodeMap.delete(k);
+        removed++;
+      }
+    }
+
+    let cursor = box.firstElementChild;
+    let pendingFrag = null;
+    const flushFrag = () => {
+      if (!pendingFrag) return;
+      if (cursor) box.insertBefore(pendingFrag, cursor);
+      else box.appendChild(pendingFrag);
+      pendingFrag = null;
+    };
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      let el = nodeMap.get(it.key);
+      if (!el) {
+        el = parseSuperNode(it.render());
+        if (!el) continue;
+        el._tdKey = it.key;
+        el._tdSig = it.sig;
+        if (it.msgSig !== undefined) el._tdMsgSig = it.msgSig;
+        nodeMap.set(it.key, el);
+        if (!pendingFrag) pendingFrag = document.createDocumentFragment();
+        pendingFrag.appendChild(el);
+        added++;
+        continue;
+      }
+      flushFrag();
+      if (el._tdSig !== it.sig) {
+        if (it.canPromoteInPlace && el._tdMsgSig && el._tdMsgSig === it.msgSig && promoteThreadDrawerNodeInPlace(el, it)) {
+          updated++;
+          reused++;
+        } else {
+          const fresh = parseSuperNode(it.render());
+          if (fresh) {
+            fresh._tdKey = it.key;
+            fresh._tdSig = it.sig;
+            if (it.msgSig !== undefined) fresh._tdMsgSig = it.msgSig;
+            const wasCursor = el === cursor;
+            if (el.parentNode === box) box.replaceChild(fresh, el);
+            el = fresh;
+            nodeMap.set(it.key, el);
+            if (wasCursor) cursor = el;
+            updated++;
+          }
+        }
+      } else {
+        reused++;
+      }
+      if (el === cursor) {
+        cursor = el.nextElementSibling;
+      } else {
+        if (cursor) box.insertBefore(el, cursor);
+        else box.appendChild(el);
+        moved++;
+      }
+    }
+    flushFrag();
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      box.removeChild(cursor);
+      cursor = next;
+      removed++;
+    }
+    stats.lastAdded = added;
+    stats.lastUpdated = updated;
+    stats.lastRemoved = removed;
+    stats.lastReused = reused;
+    stats.lastMs = performance.now() - t0;
+    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, fullRebuild: false };
+  }
+
   function renderThreadDrawer(opts = {}) {
     if (!tdDrawer || !tdListEl) return;
     const allEntries = chatEntries();
@@ -11414,8 +11944,11 @@
       const ek = entryKey(allEntries[i]);
       if (ek) idxByKey.set(ek, i);
     }
+    const curDayStamp = dayBounds();
     const sig = JSON.stringify([
       th.rootId,
+      curDayStamp,
+      thumbRenderVer,
       th.missingRoot?.id || "",
       tdLoadingRoot ? 1 : 0,
       canLoadOlder() ? 1 : 0,
@@ -11424,26 +11957,37 @@
         const idx = idxByKey.get(k) ?? -1;
         const hasOpts = Array.isArray(m.options) && m.options.some((o) => typeof o === "string" && o.trim());
         const hasPendingOpts = m.role === "collie" && !!m.id && (hasOpts || !!m.check) && idx >= 0 && entryPendingNow(allEntries, idx, m.id, pendIds, hasOpts);
-        return [k, m.id || "", m.role, m.text, m.re?.entry || "", m.at || "", hasPendingOpts ? 1 : 0];
+        const picked = m.id ? pickedReplyOpts.get(m.id) : null;
+        return [k, m.id || "", m.role, m.text, m.re?.entry || "", m.at || "", hasPendingOpts ? 1 : 0, picked ? `${picked.sending ? 1 : 0}:${picked.text}` : ""];
       }),
     ]);
     if (sig !== tdLastSig || opts.force) {
       tdLastSig = sig;
       tdLastCount = th.list.length;
-      let html = "";
+      const items = [];
       if (th.missingRoot) {
         const statusText = tdLoadingRoot
           ? "正在拉取更早的话题起点…"
           : canLoadOlder()
             ? "起点消息在更早的历史记录中"
             : "起点消息已超出当前历史窗口";
-        const loadBtn = !tdLoadingRoot && canLoadOlder()
-          ? `<button type="button" class="btn small td-older-btn" data-td-load-older>加载更早起点</button>`
-          : "";
-        const qPreview = th.missingRoot.text
-          ? `<div class="td-older-quote"><b>${esc(th.missingRoot.who || "历史消息")}</b>${esc(plainLine(th.missingRoot.text))}</div>`
-          : "";
-        html += `<div class="td-older"><div class="td-older-top"><span>${esc(statusText)}</span></div>${qPreview}${loadBtn}</div>`;
+        const canLoad = !tdLoadingRoot && canLoadOlder();
+        const mrId = th.missingRoot.id || "";
+        const mrWho = th.missingRoot.who || "";
+        const mrText = th.missingRoot.text || "";
+        items.push({
+          key: "__td_older__",
+          sig: `${mrId}|${mrWho}|${mrText}|${tdLoadingRoot ? 1 : 0}|${canLoad ? 1 : 0}`,
+          render: () => {
+            const loadBtn = canLoad
+              ? `<button type="button" class="btn small td-older-btn" data-td-load-older>加载更早起点</button>`
+              : "";
+            const qPreview = mrText
+              ? `<div class="td-older-quote"><b>${esc(mrWho || "历史消息")}</b>${esc(plainLine(mrText))}</div>`
+              : "";
+            return `<div class="td-older"><div class="td-older-top"><span>${esc(statusText)}</span></div>${qPreview}${loadBtn}</div>`;
+          },
+        });
       }
       for (let i = 0; i < th.list.length; i++) {
         const m = th.list[i];
@@ -11455,49 +11999,96 @@
         const parent = pid ? info.byId.get(pid) : null;
         const at = +new Date(m.at) || 0;
         const who = threadWhoLabel(m);
-        const avHtml = m.role === "user"
-          ? `<span class="td-av user" aria-hidden="true">${ICON_TD_USER}</span>`
-          : `<span class="td-av collie" aria-hidden="true"><img src="icon.svg" alt=""></span>`;
-        const tagHtml = isRoot
-          ? `<span class="td-tag">起点</span>`
-          : isBranch
-            ? `<span class="td-tag">分支</span>`
-            : "";
-        const branchRefHtml = isBranch && parent
-          ? `<button type="button" class="td-branch-ref" data-jump-drawer="${esc(entryKey(parent))}" title="跳到分支来源消息">` +
-            `<span>↳ 回复 ${esc(+new Date(parent.at) ? sepTime(+new Date(parent.at)) + " " : "")}${esc(threadWhoLabel(parent))}「${esc(threadSnippet(threadCleanText(parent), 24))}」</span></button>`
-          : "";
         const isWorkerReport = !!info.workerReportOf?.has(k);
-        const rootQuoteHtml = (isRoot || isWorkerReport) && m.re && m.re.text
-          ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
-          : "";
+        const hasRootQuote = !!(isRoot || isWorkerReport) && !!(m.re && m.re.text);
         const entryIdx = idxByKey.get(k) ?? -1;
-        const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
-        const bodyHtml = m.role === "user"
-          ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
-          : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}${optsHtml}</div>`;
-        const canAct = !!m.id;
-        const actsHtml = canAct
+        const hasOpts = Array.isArray(m.options) && m.options.some((o) => typeof o === "string" && o.trim());
+        const hasPendingOpts = m.role === "collie" && !!m.id && (hasOpts || !!m.check) && entryIdx >= 0 && entryPendingNow(allEntries, entryIdx, m.id, pendIds, hasOpts);
+        const picked = m.id ? pickedReplyOpts.get(m.id) : null;
+        const pickedSig = picked ? `${picked.sending ? 1 : 0}:${picked.text}` : "";
+        const branchSig = isBranch && parent ? `${entryKey(parent)}|${parent.at || ""}|${threadWhoLabel(parent)}|${parent.text || ""}` : "";
+        const rootQuoteSig = hasRootQuote ? `${m.re.who || ""}|${m.re.text}` : "";
+        const hasMedia = !!(m.text && (m.text.includes("[file:") || m.text.includes("/api/uploads/") || m.text.includes("![")));
+        const msgSig = [
+          m.role, who, m.text || "", isRoot ? 1 : 0, isBranch ? 1 : 0,
+          branchSig, rootQuoteSig, hasMedia ? thumbRenderVer : 0,
+        ].join("\x1f");
+        const itemSig = [
+          k, m.id || "", at ? sepTime(at) : "", msgSig,
+          hasPendingOpts ? 1 : 0, pickedSig,
+        ].join("\x1f");
+        const renderActs = () => m.id
           ? `<div class="td-node-acts">
               <button type="button" class="td-act" data-td-reply="${esc(m.id)}" title="回复这条（新建分支）" aria-label="回复这条">${ICON_TD_REPLY}<span>回复</span></button>
               <button type="button" class="td-act" data-td-locate="${esc(m.id)}" title="在主聊天流中定位" aria-label="在主聊天流中定位">${ICON_TD_LOCATE}<span>定位</span></button>
             </div>`
           : "";
-        html += `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
+        items.push({
+          key: k,
+          sig: itemSig,
+          msgSig,
+          entryId: m.id || "",
+          at,
+          canPromoteInPlace: m.role === "user",
+          renderActs,
+          render: () => {
+            const avHtml = m.role === "user"
+              ? `<span class="td-av user" aria-hidden="true">${ICON_TD_USER}</span>`
+              : `<span class="td-av collie" aria-hidden="true"><img src="icon.svg" alt=""></span>`;
+            const tagHtml = isRoot
+              ? `<span class="td-tag">起点</span>`
+              : isBranch
+                ? `<span class="td-tag">分支</span>`
+                : "";
+            const branchRefHtml = isBranch && parent
+              ? `<button type="button" class="td-branch-ref" data-jump-drawer="${esc(entryKey(parent))}" title="跳到分支来源消息">` +
+                `<span>↳ 回复 ${esc(+new Date(parent.at) ? sepTime(+new Date(parent.at)) + " " : "")}${esc(threadWhoLabel(parent))}「${esc(threadSnippet(threadCleanText(parent), 24))}」</span></button>`
+              : "";
+            const rootQuoteHtml = hasRootQuote
+              ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
+              : "";
+            const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
+            const bodyHtml = m.role === "user"
+              ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
+              : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}${optsHtml}</div>`;
+            return `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
           <div class="td-rail">${avHtml}</div>
           <div class="td-content">
             <div class="td-node-top">
               <span class="td-who">${esc(who)}</span>
               ${at ? `<span class="td-when" title="${esc(fullTime(at))}">${esc(sepTime(at))}</span>` : ""}
               ${tagHtml}
-              ${actsHtml}
+              ${renderActs()}
             </div>
             ${branchRefHtml}
             ${bodyHtml}
           </div>
         </article>`;
+          },
+        });
       }
-      tdListEl.innerHTML = html;
+      if (canPatchSuperDom(tdListEl)) {
+        // Preserve reading scroll position if older messages were prepended while scrolled up.
+        let prepAnchor = null, prepTop = 0;
+        if (!scrollBottom && !opts.focusMsgId && typeof opts.restoreScrollTop !== "number"
+          && tdBodyEl && tdListEl._tdRoot === th.rootId && prevCount > 0 && th.list.length > prevCount) {
+          const curFirst = tdListEl.querySelector?.(".td-node[data-td-id]");
+          const firstKey = curFirst?.dataset?.tdId || "";
+          const nextFirstNodeItem = items.find((it) => it.key !== "__td_older__");
+          if (curFirst && firstKey && nextFirstNodeItem && nextFirstNodeItem.key !== firstKey
+            && typeof curFirst.getBoundingClientRect === "function") {
+            prepAnchor = curFirst;
+            prepTop = curFirst.getBoundingClientRect().top;
+          }
+        }
+        patchThreadDrawerList(tdListEl, th.rootId, items);
+        if (prepAnchor && prepAnchor.isConnected && typeof prepAnchor.getBoundingClientRect === "function") {
+          const delta = prepAnchor.getBoundingClientRect().top - prepTop;
+          if (Math.abs(delta) > 0.5) tdBodyEl.scrollTop += delta;
+        }
+      } else {
+        tdListEl.innerHTML = items.map((it) => it.render()).join("");
+      }
     }
     updateThreadTargetBanner(th, info.byId);
     syncThreadComposerHint();
@@ -13216,9 +13807,11 @@
     const v = window.visualViewport;
     const root = document.documentElement.style;
     // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-    const pinned = [...document.querySelectorAll(".viewer, #log, #screen, #td-body")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
+    const screenPinned = curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
+    const pinned = [...document.querySelectorAll(".viewer, #log, #td-body")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
     root.setProperty("--vh", (v ? v.height : innerHeight) + "px");
     pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
+    if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
     root.setProperty("--vtop", (v ? Math.max(0, v.offsetTop) : 0) + "px");
   }
   window.visualViewport?.addEventListener("resize", setVH);

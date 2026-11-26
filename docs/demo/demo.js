@@ -555,6 +555,8 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
 
   // ───────────────────────────── the API
   const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+  const demoUploads = new Map();
+  let demoUploadSeq = 0;
   const realFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     const u = new URL(typeof input === "string" ? input : input.url, location.href);
@@ -807,6 +809,14 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
       return json({ ok: true, mode: mode === "replace" ? "replace" : "merge", imported: memory.files.length, backup: `pre-import-${stamp}.zip` });
     }
+    if (p === "/api/uploads" && method === "POST") {
+      const rawName = (q.get("name") || "file.png").replace(/^.*[\\/]/, "") || "file.png";
+      const blob = init.body instanceof Blob ? init.body : new Blob([init.body || ""]);
+      const id = String(++demoUploadSeq).padStart(6, "0");
+      const path = `/home/alex/.collie/uploads/demo/${id}-${rawName}`;
+      demoUploads.set(path, { blob, name: rawName, size: blob.size || 0 });
+      return json({ path, name: rawName, size: blob.size || 0 });
+    }
     if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "", body.re, body.client_msg_id) });
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
@@ -820,6 +830,11 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/file") {
       const fp = q.get("path") || "", mach = q.get("machine") || "", dl = q.get("download") === "1";
       const dlHead = (name) => dl ? { "Content-Disposition": `attachment; filename="${name}"` } : {};
+      if (demoUploads.has(fp)) {
+        const up = demoUploads.get(fp);
+        const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(up.name);
+        return new Response(up.blob, { headers: { "X-File-Kind": dl ? "download" : (isImg ? "image" : "text"), "X-File-Size": String(up.size), "X-File-Path": encodeURIComponent(fp), ...dlHead(up.name) } });
+      }
       const demoImgs = [
         [/a1b2c3-ci-failure\.png$/i, "../img/screen.png", ""],
         [/d4e5f6-query-plan\.png$/i, "../img/agent.png", ""],

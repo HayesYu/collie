@@ -135,11 +135,11 @@ function getEl(sel) {
   return bySel.get(sel);
 }
 
-for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#composer", "#input"], ["#x-composer", "#x-input"]]) {
+for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#composer", "#input"], ["#x-composer", "#x-input"], ["#td-composer", "#td-input"]]) {
   const f = getEl(formSel);
   const inp = getEl(inputSel);
   f._qs["textarea"] = inp;
-  f._qs[".send"] = makeEl(formSel + " .send");
+  f._qs[".send"] = formSel === "#td-composer" ? getEl("#td-send") : makeEl(formSel + " .send");
   f._qs[".files"] = makeEl(formSel + " .files");
   f._qs[".attach"] = makeEl(formSel + " .attach");
   f._qs['input[type="file"]'] = makeEl(formSel + " input[type=file]");
@@ -522,6 +522,84 @@ function makeFakeFile({ name, type, bytes, failRead = false, readOnce = false, s
   assert.ok(form._files[0].err.includes("剪贴板里的图片已失效"), "keeps friendly Chinese error after clipboard.read() failure");
   form._clearFiles();
   delete ctx.navigator.clipboard;
+
+  // 13) Thread drawer composer (#td-composer) shares paste + clipboard.read() + drag/drop + picker + retry + delete
+  const tdForm = getEl("#td-composer");
+  const tdInput = getEl("#td-input");
+  const tdSend = getEl("#td-send");
+  const tdFilesBox = tdForm._qs[".files"];
+  const tdAttach = tdForm._qs[".attach"];
+  const tdPicker = tdForm._qs['input[type="file"]'];
+  let tdPickerClicked = 0;
+  tdPicker.click = () => { tdPickerClicked++; };
+  assert.equal(tdSend.disabled, true, "drawer send button disabled when empty");
+
+  // 13a) Click '+' attach button opens file picker & picker change uploads + enables send
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  nextUploadHandler = null;
+  tdAttach.dispatch("click");
+  assert.equal(tdPickerClicked, 1, "clicking drawer + button opens file picker");
+  const pickedImg = makeFakeFile({ name: "drawer-pick.png", type: "image/png", bytes: PNG_BYTES });
+  tdPicker.files = [pickedImg];
+  tdPicker.dispatch("change");
+  assert.equal(tdSend.disabled, false, "drawer send button enabled as soon as attachment added");
+  await settle();
+  assert.equal(tdForm._files.length, 1);
+  assert.equal(tdForm._files[0].path, "/tmp/uploads/abc123-file.png");
+  assert.ok(tdFilesBox.innerHTML.includes("drawer-pick.png"), "drawer preview strip renders picked image chip");
+
+  // Remove item -> disables send button again
+  const rmEl = { dataset: { rm: "0" }, closest: (s) => (s === "[data-rm]" ? rmEl : null) };
+  tdFilesBox.dispatch("click", { target: rmEl });
+  assert.equal(tdForm._files.length, 0, "clicking remove deletes drawer attachment");
+  assert.equal(tdSend.disabled, true, "drawer send button disabled after removing last attachment");
+
+  // 13b) Paste stale image into drawer textarea -> clipboard.read() fallback recovers bitmap
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  let tdClipReads = 0;
+  ctx.isSecureContext = true;
+  ctx.navigator.clipboard = {
+    async read() {
+      tdClipReads++;
+      return [{ types: ["image/png"], async getType() { return new Blob([PNG_BYTES], { type: "image/png" }); } }];
+    },
+  };
+  const tdBlocked = makeFakeFile({ name: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", type: "image/jpeg", size: 12000, failRead: true });
+  const tdPasteEv = tdInput.dispatch("paste", {
+    clipboardData: { items: [{ kind: "file", type: "image/jpeg", getAsFile: () => tdBlocked }], files: [tdBlocked], getData: () => "" },
+  });
+  assert.equal(tdPasteEv.defaultPrevented, true, "drawer paste prevents default");
+  await settle();
+  assert.equal(tdClipReads, 1, "drawer paste uses clipboard.read() fallback");
+  assert.equal(tdForm._files.length, 1);
+  assert.equal(tdForm._files[0].path, "/tmp/uploads/abc123-file.png");
+  tdForm._clearFiles();
+  delete ctx.navigator.clipboard;
+
+  // 13c) Dragover + drop onto drawer composer + upload failure + retry
+  fetchCalls.length = 0;
+  toastLog.length = 0;
+  nextUploadHandler = async () => { throw new TypeError("Failed to fetch"); };
+  const tdDragOver = tdForm.dispatch("dragover", { dataTransfer: { types: ["Files"] } });
+  assert.equal(tdDragOver.defaultPrevented, true, "drawer dragover prevents default for Files");
+  assert.equal(tdForm.classList.contains("drop"), true, "drawer composer gets .drop highlight on dragover");
+  const tdDropped = makeFakeFile({ name: "drop-drawer.png", type: "image/png", bytes: PNG_BYTES, readOnce: true });
+  const tdDropEv = tdForm.dispatch("drop", {
+    dataTransfer: { items: [{ kind: "file", type: "image/png", getAsFile: () => tdDropped }], files: [tdDropped], getData: () => "" },
+  });
+  assert.equal(tdDropEv.defaultPrevented, true);
+  assert.equal(tdForm.classList.contains("drop"), false, ".drop cleared on drop");
+  await settle();
+  assert.ok(tdFilesBox.innerHTML.includes('data-retry="0"'), "drawer renders retry button on failed upload");
+  nextUploadHandler = async () => okJSON({ path: "/tmp/uploads/drawer-retry.png", name: "drop-drawer.png", size: PNG_BYTES.byteLength });
+  const tdRetryEl = { dataset: { retry: "0" }, closest: (s) => (s === "[data-retry]" ? tdRetryEl : null) };
+  tdFilesBox.dispatch("click", { target: tdRetryEl });
+  await settle();
+  assert.equal(tdForm._files[0].err, "", "drawer retry clears error");
+  assert.equal(tdForm._files[0].path, "/tmp/uploads/drawer-retry.png", "drawer retry uploads preserved memory Blob");
+  tdForm._clearFiles();
 
   console.log("ALL_PASTE_UPLOAD_TESTS_OK");
 })().catch((e) => { console.error(e); process.exit(1); });

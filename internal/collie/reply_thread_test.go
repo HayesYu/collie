@@ -222,10 +222,10 @@ function getEl(sel) {
   return bySel.get(sel);
 }
 
-for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#composer", "#input"], ["#x-composer", "#x-input"]]) {
+for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#composer", "#input"], ["#x-composer", "#x-input"], ["#td-composer", "#td-input"]]) {
   const f = getEl(formSel);
   f._qs["textarea"] = getEl(inputSel);
-  f._qs[".send"] = makeEl(formSel + " .send");
+  f._qs[".send"] = formSel === "#td-composer" ? getEl("#td-send") : makeEl(formSel + " .send");
   f._qs[".files"] = makeEl(formSel + " .files");
   f._qs[".attach"] = makeEl(formSel + " .attach");
   f._qs['input[type="file"]'] = makeEl(formSel + " input[type=file]");
@@ -306,6 +306,12 @@ const doc = {
   },
 };
 
+let tdUrlSeq = 0;
+class FakeURL extends URL {
+  static createObjectURL() { return "blob:td-test/" + (++tdUrlSeq); }
+  static revokeObjectURL() {}
+}
+
 let focusedCount = 0;
 const ctx = {
   console: { log() {}, info() {}, warn() {}, error() {} },
@@ -326,8 +332,13 @@ const ctx = {
   isSecureContext: true,
   focus: () => { focusedCount++; },
   CSS: { escape: (s) => String(s), supports: () => true },
-  URL,
+  URL: FakeURL,
   URLSearchParams,
+  Blob,
+  Uint8Array,
+  TextEncoder,
+  atob,
+  AbortController,
   crypto: { randomUUID: () => "td-uuid-" + (++saySeq) },
   performance: { now: () => 0 },
   requestAnimationFrame: (fn) => { fn(); return 0; },
@@ -346,9 +357,16 @@ const ctx = {
   innerHeight: 900,
 };
 const okJSON = (data) => ({ ok: true, status: 200, headers: { get: () => "" }, json: async () => data });
+let uploadSeq = 0;
 ctx.fetch = async (url, init = {}) => {
   const u = String(url);
   fetchCalls.push({ url: u, method: init.method || "GET", body: init.body });
+  if (u.startsWith("/api/uploads")) {
+    const parsedU = new URL(u, "http://127.0.0.1:7788");
+    const name = parsedU.searchParams.get("name") || "file.png";
+    const id = String(++uploadSeq).padStart(6, "0");
+    return okJSON({ path: "/tmp/uploads/" + id + "-" + name, name, size: init.body?.size || 64 });
+  }
   if (u.startsWith("/api/models")) return okJSON({ models: [], efforts: [] });
   if (u === "/api/super/say") {
     if (sayGate) await sayGate.promise;
@@ -725,6 +743,82 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(!/\.td-worker\b[^}]*--mono/.test(appCss), ".td-worker pills strictly use --sans typography, never --mono");
   assert.ok(appCss.includes(".viewer > .gone {"), "pane-closed .gone banner must be scoped to .viewer > .gone");
   assert.ok(!/(?:^|\n)\s*\.gone\s*\{/.test(appCss), "unscoped .gone rule must not exist (would hijack .dot.gone to bottom-left of .threadpane)");
+
+  // ─── 7. Thread drawer image-only send, text+file send, instant blob thumb, cross-thread cleanup & HTML/CSS contracts ───
+  const PNG_BYTES = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
+  const makeFakeFile = (name, type, bytes) => ({
+    name,
+    type,
+    size: bytes.byteLength,
+    lastModified: Date.now(),
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); },
+  });
+  T.setView("collie");
+  T.setSup({ router: { status: "idle", alive: true }, entries: workerEntries, workers: sampleWorkers });
+  T.renderSuper({ force: true });
+  T.openThreadDrawer("eb1");
+
+  const tdSendEl = getEl("#td-send");
+  tdInput.value = "";
+  tdInput.dispatch("input");
+  assert.equal(tdSendEl.disabled, true, "drawer send disabled with empty input and no files");
+
+  // 7a) Image-only paste + send (zero text) -> uploads, enables send, sends attachments + re, renders instant blob thumb in drawer & main chat
+  fetchCalls.length = 0;
+  const pasteShot = makeFakeFile("drawer-shot.png", "image/png", PNG_BYTES);
+  tdInput.dispatch("paste", {
+    clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => pasteShot }], files: [pasteShot], getData: () => "" },
+  });
+  await settle();
+  assert.equal(tdComposer._files.length, 1);
+  assert.equal(tdSendEl.disabled, false, "drawer send enabled for image-only reply");
+  tdComposer.requestSubmit();
+  // Synchronous optimistic render with pre-seeded blob thumbnail!
+  assert.ok(getEl("#td-list").innerHTML.includes('class="thumbs"') && getEl("#td-list").innerHTML.includes('src="blob:td-test/'), "drawer instantly displays pre-seeded image thumbnail");
+  assert.ok(getEl("#super-thread").innerHTML.includes('class="thumbs"') && getEl("#super-thread").innerHTML.includes('src="blob:td-test/'), "main stream also displays image thumbnail");
+  await settle();
+  const imgOnlySay = fetchCalls.find((c) => c.url === "/api/super/say");
+  assert.ok(imgOnlySay, "image-only drawer send called /api/super/say");
+  const imgOnlyBody = JSON.parse(imgOnlySay.body);
+  assert.ok(imgOnlyBody.text.startsWith("附件：\n/tmp/uploads/") && imgOnlyBody.text.endsWith("-drawer-shot.png"), "image-only text carries uploaded path: " + imgOnlyBody.text);
+  assert.equal(imgOnlyBody.re, "eb3", "image-only drawer send carries reply_to latest entry eb3");
+  assert.equal(tdComposer._files.length, 0, "drawer files cleared after send");
+  assert.equal(tdSendEl.disabled, true, "drawer send disabled again after send");
+
+  // 7b) Text + non-image file drop -> carries text + attachment + re and renders .att link inside drawer
+  fetchCalls.length = 0;
+  const dropLog = makeFakeFile("trace.log", "text/plain", new TextEncoder().encode("hello log"));
+  tdComposer.dispatch("drop", {
+    dataTransfer: { items: [{ kind: "file", type: "text/plain", getAsFile: () => dropLog }], files: [dropLog], getData: () => "" },
+  });
+  await settle();
+  tdInput.value = "请看附件日志";
+  tdInput.dispatch("input");
+  tdComposer.requestSubmit();
+  await settle();
+  const textFileSay = fetchCalls.find((c) => c.url === "/api/super/say");
+  assert.ok(textFileSay);
+  const textFileBody = JSON.parse(textFileSay.body);
+  assert.ok(textFileBody.text.startsWith("请看附件日志\n\n附件：\n/tmp/uploads/") && textFileBody.text.endsWith("-trace.log"));
+  assert.ok(textFileBody.re && textFileBody.re !== "eb3", "follow-up drawer reply chains onto just-sent image entry: " + textFileBody.re);
+  assert.ok(getEl("#td-list").innerHTML.includes('class="att"') && getEl("#td-list").innerHTML.includes("trace.log"), "drawer renders non-image attachment chip");
+
+  // 7c) Switching to a different thread clears stale pending attachments (prevents cross-thread leak)
+  const pendingImg = makeFakeFile("other.png", "image/png", PNG_BYTES);
+  tdInput.dispatch("paste", {
+    clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => pendingImg }], files: [pendingImg], getData: () => "" },
+  });
+  await settle();
+  assert.equal(tdComposer._files.length, 1);
+  T.openThreadDrawer("ea1");
+  assert.equal(tdComposer._files.length, 0, "switching to another thread clears stale pending files");
+  T.closeThreadDrawer({ immediate: true });
+
+  // 7d) HTML & CSS contracts for thread drawer attachments
+  assert.ok(indexHtml.includes('<div class="files td-files" hidden></div>'), "index.html adds .td-files preview strip inside #td-composer");
+  assert.ok(indexHtml.includes('class="icon-btn attach td-attach"') && indexHtml.includes('aria-label="添加图片或文件"'), "index.html adds accessible + attach button to #td-composer");
+  assert.ok(appCss.includes(".td-foot.drop .td-cbox"), "CSS styles dragover drop highlight on .td-cbox");
+  assert.ok(appCss.includes(".td-files") && appCss.includes(".td-text .thumbs") && appCss.includes(".td-text .att"), "CSS styles drawer preview strip and rendered thumbs/attachments");
 
   console.log("OK: all reply-thread, settings, and notification JS tests passed");
 })().catch((err) => {

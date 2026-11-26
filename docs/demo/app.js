@@ -7847,7 +7847,7 @@
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
-    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
     const seen = new Set(), items = [];
     const add = (it) => {
@@ -8233,8 +8233,8 @@
       openLightbox([{ path: wideImg.dataset.wideImg, alt: wideImg.getAttribute("alt") || "" }], 0);
       return;
     }
-    const rawImg = e.target.closest(".msg img, .mem-body img, .fv-md img, .rv-md img");
-    if (rawImg && !rawImg.closest(".avatar, a[href]")) {
+    const rawImg = e.target.closest(".msg img, .td-text img, .mem-body img, .fv-md img, .rv-md img");
+    if (rawImg && !rawImg.closest(".avatar, .td-av, a[href]")) {
       const u = rawImg.currentSrc || rawImg.getAttribute("src") || "";
       if (u) {
         e.preventDefault();
@@ -8405,7 +8405,8 @@
   const tdGripEl = $("#td-grip");
   const setThreadW = (w) => document.documentElement.style.setProperty("--thread-w", Math.round(w) + "px");
   const threadMax = () => Math.max(360, Math.min(560, innerWidth - ($(".side")?.offsetWidth || 0) - 420));
-  let tdHideTimer = 0, tdFocusTimer = 0, tdSending = false, tdLoadingRoot = false, tdWorkersSig = "";
+  let tdHideTimer = 0, tdFocusTimer = 0, tdLoadingRoot = false, tdWorkersSig = "";
+  let tdComposerCtrl = null, tdAutoStickUntil = 0, tdDraftRoot = null;
 
   const escRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const THREAD_IGNORED_WORKERS = new Set(["", ROUTER, "you", "你", "Collie", "collie", "定时", "system", "router"]);
@@ -8618,9 +8619,11 @@
     tdHintEl.textContent = `${keyLabel} 发送 · 同步写入主聊天流`;
     if (tdSendBtn) tdSendBtn.title = `发送回复 (${keyLabel})`;
   }
-  function syncThreadSendBtn() {
+  function syncThreadSendBtn(sending = tdComposerCtrl?.isSending?.() || false) {
     if (!tdSendBtn || !tdInput) return;
-    tdSendBtn.disabled = tdSending || !String(tdInput.value || "").trim();
+    const hasText = !!String(tdInput.value || "").trim();
+    const hasFiles = !!(tdComposer?._files?.length);
+    tdSendBtn.disabled = !!sending || (!hasText && !hasFiles);
   }
   function growThreadInput() {
     if (!tdInput) return;
@@ -8826,6 +8829,8 @@
     if (hadFile) closeFilePane();
     clearTimeout(tdHideTimer);
     const switched = activeThreadRoot !== rootId;
+    if (tdDraftRoot && tdDraftRoot !== rootId) tdComposer?._clearFiles?.();
+    tdDraftRoot = rootId;
     activeThreadRoot = rootId;
     activeThreadAnchor = anchorId || focusMsgId || rootId;
     if (switched) {
@@ -9015,56 +9020,49 @@
       const eid = node?.dataset.entryId || "";
       if (eid) locateFromDrawer(eid);
     });
-    tdInput?.addEventListener("input", () => {
-      growThreadInput();
-      syncThreadSendBtn();
-    });
-    tdInput?.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.shiftKey) return;
-      const mod = e.metaKey || e.ctrlKey;
-      if (prefs.sendKey() === "mod" ? mod : !mod) {
-        e.preventDefault();
-        if (e.isComposing || e.keyCode === 229 || e.repeat || tdSending || tdSendBtn?.disabled) return;
-        tdComposer?.requestSubmit();
-      }
-    });
-    tdComposer?.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      if (tdSending || !activeThreadRoot || !tdInput) return;
-      const draft = tdInput.value;
-      const text = draft.trim();
-      if (!text) return;
-      const info = computeReplyThreads(chatEntries());
-      const th = info.threads.get(activeThreadRoot);
-      if (!th) return;
-      const fallbackLatest = [...th.list].reverse().find((x) => x.id) || th.latest;
-      const targetMsg = (drawerReplyTarget && info.byId.get(drawerReplyTarget)?.id)
-        ? info.byId.get(drawerReplyTarget)
-        : fallbackLatest;
-      if (!targetMsg?.id) return;
-      const targetRe = { entry: targetMsg.id, who: threadWhoLabel(targetMsg), text: targetMsg.text };
-      const prevBranch = drawerReplyTarget;
-
-      tdSending = true;
-      tdForceScroll = true;
-      drawerReplyTarget = null;
-      tdInput.value = "";
-      growThreadInput();
-      syncThreadSendBtn();
-      try {
-        await sendSuper(text, targetRe, false);
+    tdListEl?.addEventListener("load", (e) => {
+      if (e.target?.tagName !== "IMG" || !tdBodyEl) return;
+      if (performance.now() < tdAutoStickUntil) tdBodyEl.scrollTop = tdBodyEl.scrollHeight;
+    }, true);
+    if (tdComposer && tdInput) {
+      tdComposerCtrl = bindComposer(tdComposer, tdInput, async (text, ctx) => {
+        tdForceScroll = true;
+        tdAutoStickUntil = performance.now() + 1200;
+        await sendSuper(text, ctx.targetRe, false);
         if (tdBodyEl) requestAnimationFrame(() => { tdBodyEl.scrollTop = tdBodyEl.scrollHeight; });
-      } catch (err) {
-        tdInput.value = tdInput.value ? draft + "\n" + tdInput.value : draft;
-        drawerReplyTarget = prevBranch;
-        growThreadInput();
-        if (activeThreadRoot) syncThreadDrawer();
-        toast(err.message, "attn");
-      } finally {
-        tdSending = false;
-        syncThreadSendBtn();
-      }
-    });
+      }, () => targetNow().machine, {
+        sendBtn: tdSendBtn,
+        grow: growThreadInput,
+        trim: true,
+        syncSendBtn: syncThreadSendBtn,
+        onFilesChange: () => {
+          if (tdBodyEl && tdBodyEl.scrollHeight - tdBodyEl.scrollTop - tdBodyEl.clientHeight <= AT_BOTTOM_PX + 24) {
+            requestAnimationFrame(() => { tdBodyEl.scrollTop = tdBodyEl.scrollHeight; });
+          }
+        },
+        beforeSend: () => {
+          if (!activeThreadRoot) return false;
+          const info = computeReplyThreads(chatEntries());
+          const th = info.threads.get(activeThreadRoot);
+          if (!th) return false;
+          const fallbackLatest = [...th.list].reverse().find((x) => x.id) || th.latest;
+          const targetMsg = (drawerReplyTarget && info.byId.get(drawerReplyTarget)?.id)
+            ? info.byId.get(drawerReplyTarget)
+            : fallbackLatest;
+          if (!targetMsg?.id) return false;
+          const ctx = {
+            targetRe: { entry: targetMsg.id, who: threadWhoLabel(targetMsg), text: targetMsg.text },
+            prevBranch: drawerReplyTarget,
+          };
+          drawerReplyTarget = null;
+          return ctx;
+        },
+        onError: (ctx) => {
+          if (ctx) drawerReplyTarget = ctx.prevBranch;
+          if (activeThreadRoot) syncThreadDrawer();
+        },
+      });
+    }
     tdGripEl?.addEventListener("pointerdown", (e) => {
       if (innerWidth <= 1000) return;
       e.preventDefault();
@@ -9872,8 +9870,25 @@
     ? "有附件没传上去，点重试或移除后再发"
     : "有附件没传上去，移除后再发";
 
-  function bindFiles(form, machine) {
+  const hasDragFiles = (dt) => {
+    const t = dt?.types;
+    if (!t) return false;
+    return typeof t.includes === "function" ? t.includes("Files") : Array.from(t).includes("Files");
+  };
+  function seedUploadedThumbs(files) {
+    for (const f of files || []) {
+      if (f?.path && f.isImage && f.blob && !f.thumbFailed && !isUnpreviewableImage(f.mime) && !thumbs.has(f.path)) {
+        try {
+          thumbs.set(f.path, URL.createObjectURL(f.blob));
+          thumbMeta.set(f.path, { size: f.size || 0, machine: f.machine || "", path: f.path });
+        } catch {}
+      }
+    }
+  }
+
+  function bindFiles(form, machine, opts = {}) {
     const box = $(".files", form), picker = $('input[type="file"]', form);
+    if (!box || !picker) return;
     form._files = [];
     const iconFor = (f) => (f.isImage ? IMG_SVG : FILE_SVG);
     const draw = () => {
@@ -9890,6 +9905,7 @@
           : "";
         return `<span class="file ${cls}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="移除" aria-label="移除 ${esc(f.name)}">×</button></span>`;
       }).join("");
+      opts.onChange?.(form._files);
     };
     const uploadEntry = async (f) => {
       if (f.removed || !f.blob) return;
@@ -9899,6 +9915,7 @@
       f.retryable = false;
       draw();
       const m = machine();
+      f.machine = m || "";
       const up = routeReq(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
       const ctrl = typeof AbortController === "function" ? new AbortController() : null;
       f.abort = ctrl;
@@ -9960,6 +9977,7 @@
           thumbFailed: false,
           blob: null,
           mime: guessMime(primary),
+          machine: "",
           path: "",
           err: "",
           errTag: "",
@@ -10014,7 +10032,7 @@
       draw();
     };
     const add = (list, source = "pick") => addEntries(list.map((file) => ({ candidates: [{ file }] })), source);
-    $(".attach", form).addEventListener("click", () => picker.click());
+    $(".attach", form)?.addEventListener("click", () => picker.click());
     picker.addEventListener("change", () => { add([...picker.files], "pick"); picker.value = ""; });
     box.addEventListener("error", (e) => {
       const img = e.target;
@@ -10050,8 +10068,8 @@
       }
       draw();
     });
-    const ta = $("textarea", form);
-    ta.addEventListener("paste", (e) => {
+    const ta = opts.input || $("textarea", form);
+    ta?.addEventListener("paste", (e) => {
       const dt = e.clipboardData;
       const rawFiles = collectTransferFiles(dt);
       const html = dt?.getData?.("text/html") || "";
@@ -10072,7 +10090,7 @@
         toast("剪贴板里的图片已失效或受限，请重新复制或直接拖入/选择文件", "attn");
       }
     });
-    form.addEventListener("dragover", (e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); form.classList.add("drop"); } });
+    form.addEventListener("dragover", (e) => { if (hasDragFiles(e.dataTransfer)) { e.preventDefault(); form.classList.add("drop"); } });
     form.addEventListener("dragleave", (e) => { if (!e.relatedTarget || !form.contains?.(e.relatedTarget)) form.classList.remove("drop"); });
     form.addEventListener("drop", (e) => {
       form.classList.remove("drop");
@@ -10099,11 +10117,15 @@
       draw();
     };
   }
+  function formatWithFiles(files, text) {
+    if (!files?.length) return text;
+    return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
+  }
   async function withFiles(files, text) {
     if (!files?.length) return text;
     await Promise.all(files.map((f) => f.done));
     if (files.some((f) => f.err)) throw new Error(fileErrHint(files));
-    return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
+    return formatWithFiles(files, text);
   }
   // Images a Collie message points at (a screenshot a worker took) show
   // under it, so you need not open each one.
@@ -10132,10 +10154,24 @@
   }
 
   function bindComposer(form, input, send, machine, opts = {}) {
-    if (machine) bindFiles(form, machine);
-    const btn = $(".send", form);
+    if (!form || !input) return null;
+    const growFn = opts.grow || grow;
+    const btn = opts.sendBtn || $(".send", form);
     let sending = false;
-    input.addEventListener("input", () => grow(input));
+    const syncBtn = () => {
+      if (opts.syncSendBtn) opts.syncSendBtn(sending);
+      else if (btn) btn.disabled = sending;
+    };
+    if (machine) {
+      bindFiles(form, machine, {
+        input,
+        onChange: (files) => {
+          syncBtn();
+          opts.onFilesChange?.(files);
+        },
+      });
+    }
+    input.addEventListener("input", () => { growFn(input); syncBtn(); });
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
       const mod = e.metaKey || e.ctrlKey;
@@ -10156,29 +10192,40 @@
       }
       const draft = input.value;
       if (!opts.allowEmpty && !draft.trim() && !curFiles.length) return;
+      let ctx;
+      if (opts.beforeSend) {
+        ctx = opts.beforeSend();
+        if (ctx === false) return;
+      }
       sending = true;
-      if (btn) btn.disabled = true;
+      syncBtn();
       const files = form._takeFiles ? form._takeFiles() : [];
-      const ctx = opts.beforeSend ? opts.beforeSend() : undefined;
       input.value = "";
-      grow(input);
+      growFn(input);
       try {
-        const text = await withFiles(files, draft);
+        const text = !files.length
+          ? (opts.trim ? draft.trim() : draft)
+          : files.every((f) => f.path && !f.uploading && !f.err)
+            ? formatWithFiles(files, draft)
+            : await withFiles(files, draft);
+        seedUploadedThumbs(files);
         await send(text, ctx);
         form._revokeFiles?.(files);
       } catch (err) {
         if (draft) {
           input.value = input.value ? draft + "\n" + input.value : draft;
-          grow(input);
+          growFn(input);
         }
         form._restoreFiles?.(files);
         opts.onError?.(ctx);
         toast(err.message, "attn");
       } finally {
         sending = false;
-        if (btn) btn.disabled = false;
+        syncBtn();
       }
     });
+    syncBtn();
+    return { isSending: () => sending, syncBtn };
   }
 
   bindComposer($("#composer"), $("#input"), async (text) => {

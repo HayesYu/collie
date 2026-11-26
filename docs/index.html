@@ -337,7 +337,7 @@ footer a { color: var(--fg-2); }
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg><span data-i18n="cta_demo">Live Demo</span></a>
       <a class="btn" href="#install" data-i18n="cta_install">Install in 2 minutes</a>
     </div>
-    <div class="agents"><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>macOS · Linux</span><span>IPv4 · IPv6</span><span data-i18n="agent_devices">Phone · Tablet · Desktop</span></div>
+    <div class="agents"><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>macOS · Linux · WSL2</span><span>IPv4 · IPv6</span><span data-i18n="agent_devices">Phone · Tablet · Desktop</span></div>
 
     <div class="stage reveal">
       <div class="frame">
@@ -458,7 +458,7 @@ footer a { color: var(--fg-2); }
     <div class="wrap narrow center">
       <p class="kicker reveal" data-i18n="inst_kicker">Install</p>
       <h2 class="reveal" data-i18n="inst_h2">Running in two minutes</h2>
-      <p class="sub reveal" data-i18n="inst_sub">macOS &amp; Linux (amd64 / arm64). Verifies SHA-256 checksums, registers a background service (launchd or systemd --user, falling back to nohup), detects IPv4/IPv6 addresses, and installs herdr if missing.</p>
+      <p class="sub reveal" data-i18n="inst_sub">macOS, Linux (amd64 / arm64), and Windows via WSL2 (Ubuntu/Debian—run the same command in WSL2; for viewing or control only, open the web UI in Chrome or Edge). Verifies SHA-256 checksums, registers a background service (launchd or systemd --user, falling back to nohup), detects IPv4/IPv6 addresses, and installs herdr if missing.</p>
       <div class="install reveal">
         <div class="tabs" role="tablist" aria-label="Installation modes" data-i18n-aria="tabs_label">
           <button type="button" role="tab" id="tab-hub" aria-selected="true" aria-controls="panel-hub" data-tab="hub" data-i18n="tab_hub">Start hub</button>
@@ -589,7 +589,7 @@ const COPY = {
     fact4_d: "Upgrades remote nodes first, then the hub—running agents stay untouched",
     inst_kicker: "Install",
     inst_h2: "Running in two minutes",
-    inst_sub: "macOS & Linux (amd64 / arm64). Verifies SHA-256 checksums, registers a background service (launchd or systemd --user, falling back to nohup), detects IPv4/IPv6 addresses, and installs herdr if missing.",
+    inst_sub: "macOS, Linux (amd64 / arm64), and Windows via WSL2 (Ubuntu/Debian—run the same command in WSL2; for viewing or control only, open the web UI in Chrome or Edge). Verifies SHA-256 checksums, registers a background service (launchd or systemd --user, falling back to nohup), detects IPv4/IPv6 addresses, and installs herdr if missing.",
     tabs_label: "Installation modes",
     tab_hub: "Start hub",
     tab_node: "Join computer",
@@ -693,7 +693,7 @@ const COPY = {
     fact4_d: "先远端 node 后 hub 自动校验原地重启，不影响正在跑的 agent",
     inst_kicker: "安装",
     inst_h2: "两分钟装好",
-    inst_sub: "支持 macOS、Linux（amd64 / arm64）。下载自动校验 SHA-256，注册后台服务（launchd 或 systemd --user，无则回退 nohup），自动探测 IPv4 / 纯 IPv6 地址，没有 herdr 时一并装好。",
+    inst_sub: "支持 macOS、Linux（amd64 / arm64）与 Windows（在 WSL2 Ubuntu/Debian 终端内运行同一条一键安装命令即可开箱复用 Linux 二进制；纯控制/查看直接用 Chrome / Edge 打开网页即可）。下载自动校验 SHA-256，注册后台服务（launchd 或 systemd --user，无则回退 nohup），自动探测 IPv4 / 纯 IPv6 地址，没有 herdr 时一并装好。",
     tabs_label: "安装方式",
     tab_hub: "做 hub",
     tab_node: "加入电脑",

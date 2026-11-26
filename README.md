@@ -44,7 +44,9 @@ More screenshots: [Screen view](docs/img/screen.png) · [Automation & Memory](do
 
 ## Quick Start
 
-macOS & Linux (`amd64` / `arm64`). The installer verifies SHA-256 checksums, installs `collie` to `~/.local/bin/collie`, registers a background service (`launchd` or `systemd --user`), and installs [herdr](https://herdr.dev) if missing. Re-running the same command upgrades in place.
+macOS, Linux (`amd64` / `arm64`), and Windows via **WSL2**. The installer verifies SHA-256 checksums, installs `collie` to `~/.local/bin/collie`, registers a background service (`launchd` or `systemd --user`), and installs [herdr](https://herdr.dev) if missing. Re-running the same command upgrades in place.
+
+> **Windows (WSL2):** Run the exact same one-line command below inside a **WSL2 (Ubuntu / Debian)** terminal—it uses the Linux binary out of the box. If you only need to view or control remote agents from Windows, simply open the hub URL in Chrome or Edge.
 
 **1. Start a hub on an always-on machine**
 

@@ -44,7 +44,9 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 
 ## 快速开始
 
-支持 macOS / Linux（`amd64` / `arm64`）。安装脚本会自动校验 SHA-256、安装到 `~/.local/bin/collie`、注册后台服务（macOS 用 `launchd`，Linux 用 `systemd --user`），并在缺少 [herdr](https://herdr.dev) 时一并装好。之后重跑同一条命令就是升级。
+支持 macOS、Linux（`amd64` / `arm64`）与 Windows（**WSL2**）。安装脚本会自动校验 SHA-256、安装到 `~/.local/bin/collie`、注册后台服务（macOS 用 `launchd`，Linux 用 `systemd --user`），并在缺少 [herdr](https://herdr.dev) 时一并装好。之后重跑同一条命令就是升级。
+
+> **Windows（WSL2）**：直接在 **WSL2（Ubuntu / Debian）** 终端内运行下面同一条一键安装命令即可（开箱复用 Linux 二进制）；纯控制或查看远端 agent 时，直接用 Windows Chrome / Edge 打开网页即可。
 
 **1. 开发机：起 hub**
 

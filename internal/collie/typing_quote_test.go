@@ -150,7 +150,9 @@ const widenPos = htmlSrc.indexOf('id="td-widen"');
 const closePos = htmlSrc.indexOf('id="td-close"');
 assert.ok(locatePos > 0 && widenPos > locatePos && closePos > widenPos, "#td-widen sits immediately left of #td-close");
 assert.ok(/@media\s*\(max-width:\s*1000px\)[\s\S]*?\.td-widen\s*\{\s*display:\s*none;\s*\}/.test(cssSrc), ".td-widen hidden at <=1000px");
-assert.ok(cssSrc.includes("content-visibility: auto") && cssSrc.includes("contain-intrinsic-size: auto none auto 7rem"), "off-screen chat rows use content-visibility: auto with contain-intrinsic-size");
+assert.ok(cssSrc.includes("#super-thread > .say, #super-thread > .mine, #super-thread > .event { contain: layout style; }"), "main chat rows isolate layout and style containment");
+assert.ok(!/#super-thread\s*>\s*\.say:nth-last-child[\s\S]*?content-visibility:\s*auto/.test(cssSrc), "main chat rows must NOT use content-visibility: auto above the viewport");
+assert.ok(/\.viewer\.chatbg\s*\{[^}]*overscroll-behavior-y:\s*contain/.test(cssSrc), "main chat scroller contains vertical overscroll");
 
 // Minimal real DOM-tree engine so canPatchSuperDom(box) === true (live browser path!).
 const VOID_TAGS = new Set(["IMG", "INPUT", "BR", "HR", "META", "LINK", "PATH", "CIRCLE", "RECT", "ELLIPSE"]);

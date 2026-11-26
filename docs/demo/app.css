@@ -420,7 +420,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 
 /* ─── viewer ─── */
 .viewer { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
-.viewer.chatbg { background: var(--bg); overflow: auto; outline: none; contain: layout style; }
+.viewer.chatbg { background: var(--bg); overflow: auto; overscroll-behavior-y: contain; outline: none; contain: layout style; }
 .viewer > .screen, .viewer > .log, .viewer > .chat { display: none; }
 .viewer[data-mode="screen"] > .screen, .viewer[data-mode="log"] > .log { display: block; }
 .viewer[data-mode="chat"] > .chat { display: flex; }
@@ -452,13 +452,12 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .thread > .tools, .thread > * + .tools { margin-top: 14px; }
 .thread > .tools + .msg, .thread > .tools + .say { margin-top: 22px; }
 #super-thread > .say, #super-thread > .mine, #super-thread > .event { contain: layout style; }
-@supports (content-visibility: auto) {
-  #super-thread > .say:nth-last-child(n+31),
-  #super-thread > .mine:nth-last-child(n+31) {
-    content-visibility: auto;
-    contain-intrinsic-size: auto none auto 7rem;
-  }
-}
+/* Do not apply content-visibility: auto to #super-thread rows: the main chat
+   opens at the bottom and scrolls upward into never-laid-out messages above the
+   viewport, where placeholder-vs-actual height mismatches cause violent scroll
+   jumps (especially on Safari/iOS without overflow-anchor) and blank-box
+   flicker during fast touch momentum flings. Per-row layout/style containment
+   already isolates incremental message appends and updates. */
 .chatbg .thread { overflow: visible; min-height: 100%; }
 /* "还在跑" follows the last message instead of sitting at the bottom. */
 .chatbg .thread:has(+ .working-row:not([hidden])) { min-height: 0; }

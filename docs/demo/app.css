@@ -297,14 +297,22 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .group summary { cursor: pointer; }
 .group summary::-webkit-details-marker { display: none; }
 .group summary h2 { padding: 0; display: inline; }
-#live-group > summary { display: flex; align-items: center; justify-content: space-between; min-height: 32px; padding: 0 10px; border-radius: 8px; }
-#live-group > summary:hover { background: var(--bg-3); }
-#live-group > summary::after { content: ""; width: 6px; height: 6px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
-#live-group[open] > summary::after { transform: rotate(45deg); }
+#live-group > summary { display: flex; align-items: center; justify-content: flex-start; gap: 6px; min-height: 32px; padding: 0 10px; border-radius: 8px; transition: background .12s, color .12s; }
+#live-group > summary:hover { background: var(--bg-3); color: var(--fg-2); }
+#live-group > summary::after {
+  content: ""; flex: none; width: 5.5px; height: 5.5px;
+  border: solid currentColor; border-width: 0 1.4px 1.4px 0;
+  opacity: .68; transform: rotate(-45deg);
+  transition: transform .16s cubic-bezier(.32, .72, 0, 1), opacity .14s;
+}
+#live-group[open] > summary::after { transform: translateY(-1.5px) rotate(45deg); }
+#live-group > summary:hover::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { #live-group > summary::after { transition: none; } }
 @media (pointer: coarse) {
   #live-group > summary, .more-row { min-height: 44px; }
 }
 .count { font-weight: 500; margin-left: 4px; }
+.count:empty { display: none; }
 .list { list-style: none; margin: 0; padding: 0; }
 .empty-hint { margin: 2px 10px; color: var(--fg-3); font-size: 13px; }
 .item .glyph { width: 26px; height: 22px; display: grid; place-items: center; color: var(--fg-2); }

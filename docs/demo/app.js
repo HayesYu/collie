@@ -7908,7 +7908,16 @@
     const rank = (s) => RANK[s.status] ?? 3;
     const live = [...panes, ...ext.filter(going)].sort((a, b) => rank(a) - rank(b));
     const busy = live.filter((s) => rank(s) <= 1).length;
-    setText($("#live-count"), live.length ? `共 ${live.length} 个${busy ? ` · ${busy} 个在跑` : ""}` : "");
+    setText(
+      $("#live-count"),
+      !live.length
+        ? ""
+        : busy === live.length
+          ? `${live.length} 个在跑`
+          : busy > 0
+            ? `${busy}/${live.length} 在跑`
+            : `${live.length}`,
+    );
 
     // A deep link may resolve after the first poll: if the target session sits
     // past the initial 8 items (or the section was collapsed), expand once so
@@ -11323,11 +11332,18 @@
   const tdBackBtn = $("#td-back");
   const tdGripEl = $("#td-grip");
   const setThreadW = (w) => document.documentElement.style.setProperty("--thread-w", Math.round(w) + "px");
-  const threadMax = () => Math.max(360, Math.min(560, innerWidth - ($(".side")?.offsetWidth || 0) - 420));
-  const threadWideW = () => {
+  const threadAvail = () => {
     const sideW = $(".side")?.offsetWidth || 260;
-    const avail = Math.max(480, innerWidth - sideW);
-    return Math.max(480, Math.min(920, Math.round(avail * 0.78), avail - 200));
+    return Math.max(480, innerWidth - sideW);
+  };
+  const threadWideW = () => {
+    const avail = threadAvail();
+    return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 200));
+  };
+  const threadMax = () => Math.max(360, Math.min(560, innerWidth - ($(".side")?.offsetWidth || 0) - 420, threadWideW() - 24));
+  const threadDragMax = () => {
+    const avail = threadAvail();
+    return Math.max(threadMax(), threadWideW(), Math.min(Math.round(avail * 0.78), avail - 200));
   };
   let threadWide = !!store.get("threadWide", false);
   function syncThreadWideUI() {
@@ -12431,7 +12447,7 @@
       const grip = e.currentTarget;
       grip.setPointerCapture(e.pointerId);
       document.body.classList.add("dragging");
-      const max = Math.max(threadMax(), threadWideW());
+      const max = threadDragMax();
       const move = (ev) => {
         setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)));
         if (gripSnap && sc) {
@@ -12445,7 +12461,8 @@
         grip.removeEventListener("pointercancel", up);
         document.body.classList.remove("dragging");
         const finalW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--thread-w")) || 432;
-        if (finalW > threadMax() + 40) {
+        const wideCut = Math.min(threadMax() + 40, Math.max(460, threadWideW() - 24));
+        if (finalW > wideCut) {
           threadWide = true;
           store.set("threadWide", true);
         } else {

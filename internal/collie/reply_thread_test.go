@@ -1414,6 +1414,7 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   });
   updateAgents(pagedAgents);
   assert.deepEqual(liveRows(), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(getEl("#live-count").textContent, "17 个在跑", "all running omits redundant total prefix");
   assert.match(getEl("#live-list").innerHTML, /展开其余 9 个/);
   clickLiveMore();
   T.renderSide();
@@ -1436,8 +1437,24 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   ctx.location.hash = "#/collie";
   T.route();
   updateAgents(pagedAgents.slice(0, 8));
+  assert.equal(getEl("#live-count").textContent, "8 个在跑");
   assert.doesNotMatch(getEl("#live-list").innerHTML, /live-more/);
+  // #live-count concise states: partially running ("busy/total 在跑") and all idle ("total").
+  updateAgents([
+    { ...sampleAgents[0], pane_id: "mix-0", name: "mix-0", status: "working" },
+    { ...sampleAgents[0], pane_id: "mix-1", name: "mix-1", status: "starting" },
+    { ...sampleAgents[0], pane_id: "mix-2", name: "mix-2", status: "done" },
+    { ...sampleAgents[0], pane_id: "mix-3", name: "mix-3", status: "idle" },
+  ]);
+  assert.equal(getEl("#live-count").textContent, "2/4 在跑");
+  updateAgents([
+    { ...sampleAgents[0], pane_id: "idle-0", name: "idle-0", status: "done" },
+    { ...sampleAgents[0], pane_id: "idle-1", name: "idle-1", status: "idle" },
+    { ...sampleAgents[0], pane_id: "idle-2", name: "idle-2", status: "unknown" },
+  ]);
+  assert.equal(getEl("#live-count").textContent, "3");
   updateAgents([]);
+  assert.equal(getEl("#live-count").textContent, "");
   assert.match(getEl("#live-list").innerHTML, /empty-hint/);
 
   console.log("OK: all reply-thread, focus-drawer, filter, agent-card, worker-fold, memoization, settings, and notification JS tests passed");

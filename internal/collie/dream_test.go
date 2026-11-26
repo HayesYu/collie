@@ -146,6 +146,28 @@ func TestMemoryUpFrontSplitAnd10KBBudget(t *testing.T) {
 	if !strings.Contains(routerStr, "create a timer + a notes/ workflow directly,") || !strings.Contains(routerStr, "propose an actionable suggestion") {
 		t.Fatalf("ROUTER.md missing timer-in-notes or proactive --opt guidance:\n%s", routerStr)
 	}
+	for _, want := range []string{
+		"Strictly respect the human's default agent/model/effort from settings",
+		"Only pass",
+		"memory/instructions.md",
+		"unavailable or actually failed on that",
+		"NEVER override or upgrade to another (especially",
+		"subjective quality preferences in notes/agents.md",
+		"strictly honoring the human's",
+	} {
+		if !strings.Contains(routerStr, want) {
+			t.Fatalf("ROUTER.md missing strict default model policy %q:\n%s", want, routerStr)
+		}
+	}
+	for _, mirror := range []string{"AGENTS.md", "GEMINI.md", "CLAUDE.md"} {
+		b, err := os.ReadFile(filepath.Join(sp.routerDir(), mirror))
+		if err != nil {
+			t.Fatalf("read %s: %v", mirror, err)
+		}
+		if string(b) != routerStr {
+			t.Fatalf("%s diverged from ROUTER.md", mirror)
+		}
+	}
 	renderedDream := strings.ReplaceAll(dreamPrompt, "{{BUDGET}}", "10")
 	if !strings.Contains(renderedDream, "~10 KB") || strings.Contains(renderedDream, "6 KB") {
 		t.Fatalf("dreamPrompt budget text unexpected:\n%s", renderedDream)

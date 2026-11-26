@@ -2,10 +2,13 @@ package collie
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -79,5 +82,78 @@ func TestExternalSnapshotDuringDiscovery(t *testing.T) {
 	var patch msgPatch
 	if err := json.Unmarshal(res.Body.Bytes(), &patch); err != nil || res.Code != 200 || len(patch.Msgs) != 1 || patch.Msgs[0].Text != "hello" {
 		t.Fatalf("unexpected snapshot (%d): %s", res.Code, res.Body.String())
+	}
+}
+
+func TestHubForwardsExternalSnapshotToRemoteNode(t *testing.T) {
+	root := t.TempDir()
+	path := writeRollout(t, root, "remote-test", "/work", time.Now(), time.Now(),
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"from remote node"}]}}`+"\n")
+	e := &External{ID: "codex-42", path: path, format: "codex"}
+	prev := externalCache.snapshot.Swap(&externalSnapshot{at: time.Now(), list: []*External{e}})
+	defer externalCache.snapshot.Store(prev)
+
+	nodeSrv := &Server{home: root, node: true, web: fstest.MapFS{}}
+	var gotPath, gotAuth string
+	nodeHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		nodeSrv.NodeRoutes().ServeHTTP(w, r)
+	}))
+	defer nodeHTTP.Close()
+	nodeURL, _ := url.Parse(nodeHTTP.URL)
+
+	herdr := newHerdr(filepath.Join(root, "missing.sock"), "hub", root)
+	herdr.attach(&Machine{
+		ID:     "mac",
+		Name:   "mac",
+		Home:   root,
+		Online: true,
+		client: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				cp := req.Clone(req.Context())
+				cp.URL.Scheme = nodeURL.Scheme
+				cp.URL.Host = nodeURL.Host
+				cp.RequestURI = ""
+				return http.DefaultTransport.RoundTrip(cp)
+			}),
+		},
+	})
+	herdr.attach(&Machine{ID: "offline-mac", Name: "offline-mac", Online: false})
+
+	hubSrv := &Server{
+		herdr: herdr,
+		token: "secret-tok",
+		home:  root,
+		web:   fstest.MapFS{"index.html": {Data: []byte("ok")}, "app.js": {Data: []byte("")}, "app.css": {Data: []byte("")}},
+	}
+	handler := hubSrv.Routes()
+
+	// Encoded "@mac" as sent by web/app.js encodeURIComponent(id).
+	req := httptest.NewRequest(http.MethodGet, "/api/external/codex-42%40mac/snapshot", nil)
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("remote snapshot status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/api/external/codex-42/snapshot" {
+		t.Fatalf("forwarded path = %q, want /api/external/codex-42/snapshot", gotPath)
+	}
+	if gotAuth != "" {
+		t.Fatalf("Authorization header leaked to node: %q", gotAuth)
+	}
+	var patch msgPatch
+	if err := json.Unmarshal(rec.Body.Bytes(), &patch); err != nil || len(patch.Msgs) != 1 || patch.Msgs[0].Text != "from remote node" {
+		t.Fatalf("unexpected proxied snapshot (%d): %s", rec.Code, rec.Body.String())
+	}
+
+	// Offline remote machine returns 503.
+	offReq := httptest.NewRequest(http.MethodGet, "/api/external/codex-42%40offline-mac/snapshot", nil)
+	offReq.Header.Set("Authorization", "Bearer secret-tok")
+	offRec := httptest.NewRecorder()
+	handler.ServeHTTP(offRec, offReq)
+	if offRec.Code != 503 {
+		t.Fatalf("offline remote snapshot status = %d, want 503: %s", offRec.Code, offRec.Body.String())
 	}
 }

@@ -2190,6 +2190,7 @@
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
     }
     view = next; current = next === "ext" ? null : id;
+    liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
     const nextKey = routeKeyFor(next, id);
     const byIdx = wasExistingIdx ? scrollByIdx.get(navCur) : null;
     const saved = (byIdx && byIdx.routeKey === nextKey ? byIdx : null)
@@ -7868,6 +7869,11 @@
   // (other apps' resting conversations and ended herdr sessions, merged).
   // Which computer something is on is a detail on its row.
   const RECENT_N = 8;
+  const LIVE_N = 8;
+  let liveAll = store.get("liveAll", false), liveRevealTarget = null;
+  const liveGroup = $("#live-group");
+  liveGroup.open = store.get("liveGroupOpen", true);
+  liveGroup.addEventListener("toggle", () => store.set("liveGroupOpen", liveGroup.open));
   let extAll = store.get("extAll", false);
   const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
   const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
@@ -7898,13 +7904,42 @@
     // background, nothing running) is listed under 最近 by its time, its dot
     // saying it is still open.
     const going = (e) => e.live && e.status !== "idle" && e.status !== "unknown";
-    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked")
-      .map((a) => ({ rank: RANK[a.status] ?? 3, done: a.status === "done", html: itemHTML(a, wtMap, entries), on: view === "pane" && a.pane_id === current }));
-    const liveExt = ext.filter(going).map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
-    const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
-    const busy = live.filter((x) => x.rank <= 1).length;
-    setText($("#live-count"), busy ? `${busy} 个在跑` : live.length || "");
-    setHTML($("#live-list"), live.map((x) => x.html).join("")
+    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked");
+    const rank = (s) => RANK[s.status] ?? 3;
+    const live = [...panes, ...ext.filter(going)].sort((a, b) => rank(a) - rank(b));
+    const busy = live.filter((s) => rank(s) <= 1).length;
+    setText($("#live-count"), live.length ? `共 ${live.length} 个${busy ? ` · ${busy} 个在跑` : ""}` : "");
+
+    // A deep link may resolve after the first poll: if the target session sits
+    // past the initial 8 items (or the section was collapsed), expand once so
+    // the active item is immediately visible, then let the viewer toggle freely.
+    const liveId = (s) => (s.pane_id ? s.pane_id : s.id);
+    if (liveRevealTarget) {
+      const idx = live.findIndex((s) => liveId(s) === liveRevealTarget);
+      if (idx >= 0) {
+        if (!liveGroup.open) {
+          liveGroup.open = true;
+          store.set("liveGroupOpen", true);
+        }
+        if (idx >= LIVE_N && !liveAll) {
+          liveAll = true;
+          store.set("liveAll", true);
+        }
+        liveRevealTarget = null;
+      }
+    }
+    let liveShown = liveAll ? live : live.slice(0, LIVE_N);
+    const activeLiveID = view === "pane" ? current : (view === "ext" && extCur && !extCur.startsWith("h:") ? extCur : "");
+    if (activeLiveID && !liveShown.some((s) => liveId(s) === activeLiveID)) {
+      const activeItem = live.find((s) => liveId(s) === activeLiveID);
+      if (activeItem) liveShown = [...liveShown, activeItem];
+    }
+    const liveRest = Math.max(0, live.length - liveShown.length);
+    const liveMoreBtn = live.length > LIVE_N
+      ? `<li><button type="button" class="more-row" data-act="live-more" aria-expanded="${liveAll}">${liveAll ? "收起" : `展开其余 ${liveRest} 个`}</button></li>`
+      : "";
+    setHTML($("#live-list"), liveShown
+      .map((s) => s.pane_id ? itemHTML(s, wtMap, entries) : extRow(s)).join("") + liveMoreBtn
       || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`);
 
     // 最近: newest first; Collie's own sessions are reached from its conversation.
@@ -8013,6 +8048,14 @@
     return e?.hub ? tagged(e.machine || "", e.hub) : e?.machine || "";
   });
   function closeExt() { extStream?.close(); extStream = null; }
+  $("#live-list").addEventListener("click", (ev) => {
+    if (!ev.target.closest("[data-act=live-more]")) return;
+    ev.preventDefault();
+    liveRevealTarget = null;
+    liveAll = !liveAll;
+    store.set("liveAll", liveAll);
+    renderSessions();
+  });
   $("#recent-list").addEventListener("click", (ev) => {
     if (!ev.target.closest("[data-act=ext-more]")) return;
     ev.preventDefault();

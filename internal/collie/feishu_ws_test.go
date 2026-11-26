@@ -33,6 +33,7 @@ type fakeFeishuMessage struct {
 	Content   string
 	Deleted   bool
 	Mentions  []map[string]any
+	Items     []map[string]any
 	Status    int
 	Code      int
 	Msg       string
@@ -117,8 +118,12 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/resources/"):
 			idx := strings.LastIndex(r.URL.Path, "/resources/")
 			fileKey := r.URL.Path[idx+len("/resources/"):]
+			msgID := strings.TrimPrefix(r.URL.Path[:idx], "/open-apis/im/v1/messages/")
 			ff.mu.Lock()
-			res, hasCustom := ff.resources[fileKey]
+			res, hasCustom := ff.resources[msgID+"/"+fileKey]
+			if !hasCustom {
+				res, hasCustom = ff.resources[fileKey]
+			}
 			defaultData := ff.imgData
 			ff.mu.Unlock()
 			if hasCustom {
@@ -181,6 +186,14 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 			if msg.Status >= 400 {
 				w.WriteHeader(msg.Status)
 				_, _ = w.Write([]byte(`{"code":500,"msg":"internal error"}`))
+				return
+			}
+			if len(msg.Items) > 0 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": 0,
+					"msg":  "ok",
+					"data": map[string]any{"items": msg.Items},
+				})
 				return
 			}
 			id := msg.MessageID
@@ -1291,8 +1304,11 @@ func TestFeishuQuotedMessageTextImagePostAndFeedback(t *testing.T) {
 		t.Fatalf("quoted image: %v", err)
 	}
 	got2 := sp.st.Entries[len(sp.st.Entries)-1].Text
-	if !strings.Contains(got2, "[引用图片]") || !strings.Contains(got2, "看下这张报错截图") {
+	if !strings.Contains(got2, "看下这张报错截图") {
 		t.Fatalf("quoted image missing context:\n%s", got2)
+	}
+	if strings.Contains(got2, "[引用图片]") {
+		t.Fatalf("clean quoted image should not prepend redundant [引用图片] banner:\n%s", got2)
 	}
 	attIdx := strings.LastIndex(got2, "附件：\n")
 	if attIdx < 0 {
@@ -1432,10 +1448,13 @@ func TestFeishuQuotedMessageTextImagePostAndFeedback(t *testing.T) {
 		t.Fatal("feedback group quoted message must not create owner user entry")
 	}
 	fbTrig := sp.st.Triggers[len(sp.st.Triggers)-1]
-	for _, want := range []string{feishuGroupFeedbackTag, "[引用图片]", "暗色模式下这里文字重叠了", "附件：\n"} {
+	for _, want := range []string{feishuGroupFeedbackTag, "暗色模式下这里文字重叠了", "附件：\n"} {
 		if !strings.Contains(fbTrig.Text, want) {
 			t.Fatalf("feedback quoted trigger missing %q:\n%s", want, fbTrig.Text)
 		}
+	}
+	if strings.Contains(fbTrig.Text, "[引用图片]") {
+		t.Fatalf("clean feedback quoted image should not prepend redundant [引用图片]:\n%s", fbTrig.Text)
 	}
 
 	// 6) Recalled/deleted parent message shows clean placeholder without leaking content.
@@ -1847,6 +1866,578 @@ func TestFeishuQuotedInteractiveCardsAndOwnCardRecovery(t *testing.T) {
 	gotImgOK := sendQuote("evt_q_ext_img_ok", "om_q_ext_img_ok", "om_ext_card_img_ok", "收到")
 	if !strings.Contains(gotImgOK, "含 1 张图片") || !strings.Contains(gotImgOK, "> 请看附图") || !strings.Contains(gotImgOK, "附件：\n") {
 		t.Fatalf("unexpected downloadable card image formatting:\n%s", gotImgOK)
+	}
+}
+
+func TestCleanFeishuInboundHTML(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "single_p_paragraph",
+			in:   "<p>看看这个 case</p>",
+			want: "看看这个 case",
+		},
+		{
+			name: "multi_p_paragraphs",
+			in:   "<p>第一段</p><p>第二段</p>",
+			want: "第一段\n第二段",
+		},
+		{
+			name: "multi_p_with_newlines_and_blank_br",
+			in:   "<p>第一段</p>\n<p><br></p>\n<p>第二段</p>",
+			want: "第一段\n\n第二段",
+		},
+		{
+			name: "br_variants_and_trailing_br",
+			in:   "<p>第一行<br>第二行<br/>第三行<br /></p>",
+			want: "第一行\n第二行\n第三行",
+		},
+		{
+			name: "html_entities_and_nbsp",
+			in:   "<p>a &lt; b &amp;&amp; c &gt; d&nbsp;&quot;ok&quot;</p>",
+			want: `a < b && c > d "ok"`,
+		},
+		{
+			name: "escaped_html_code_inside_p_wrapper",
+			in:   `<p>看看代码：&lt;div class="box"&gt;&lt;p&gt;hi&lt;/p&gt;&lt;/div&gt;</p>`,
+			want: `看看代码：<div class="box"><p>hi</p></div>`,
+		},
+		{
+			name: "uppercase_tags_with_dir_attr",
+			in:   `<P dir="auto">大写标签<BR/>第二行</P>`,
+			want: "大写标签\n第二行",
+		},
+		{
+			name: "empty_p_only_nbsp",
+			in:   "<p>&nbsp;  </p>",
+			want: "",
+		},
+		{
+			name: "preserve_plain_text",
+			in:   "普通消息没有任何 HTML",
+			want: "普通消息没有任何 HTML",
+		},
+		{
+			name: "preserve_backtick_code_with_p",
+			in:   "`<p>看看这个</p>`",
+			want: "`<p>看看这个</p>`",
+		},
+		{
+			name: "preserve_inline_mention_of_p_tag",
+			in:   "把 <p> 标签去掉",
+			want: "把 <p> 标签去掉",
+		},
+		{
+			name: "preserve_mixed_text_outside_p",
+			in:   "<p>a</p> 和 <p>b</p>",
+			want: "<p>a</p> 和 <p>b</p>",
+		},
+		{
+			name: "preserve_outer_div_html_snippet",
+			in:   "<div><p>hello</p></div>",
+			want: "<div><p>hello</p></div>",
+		},
+		{
+			name: "preserve_p_with_class_attribute",
+			in:   `<p class="card">hello</p>`,
+			want: `<p class="card">hello</p>`,
+		},
+		{
+			name: "preserve_raw_nested_html_tags",
+			in:   "<p><div>raw html</div></p>",
+			want: "<p><div>raw html</div></p>",
+		},
+		{
+			name: "preserve_plain_entities_without_p_wrapper",
+			in:   "foo &lt; bar &amp; baz",
+			want: "foo &lt; bar &amp; baz",
+		},
+		{
+			name: "preserve_unclosed_p",
+			in:   "<p>unclosed paragraph",
+			want: "<p>unclosed paragraph",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cleanFeishuInboundHTML(tc.in); got != tc.want {
+				t.Fatalf("cleanFeishuInboundHTML(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFeishuInboundHTMLSanitizationInMessages(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	ctx := context.Background()
+
+	ff.mu.Lock()
+	ff.messages["om_html_parent"] = fakeFeishuMessage{
+		MessageID: "om_html_parent",
+		MsgType:   "text",
+		Content:   `{"text":"<p>父消息第一行<br/>父消息 &lt;ok&gt;</p>"}`,
+	}
+	ff.mu.Unlock()
+
+	sendMsg := func(evID, msgID, chatType, parentID, content string, mentions []*larkim.MentionEvent) string {
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: evID}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr(msgID),
+					ParentId:    strPtr(parentID),
+					ChatId:      strPtr("oc_html_chat"),
+					ChatType:    strPtr(chatType),
+					MessageType: strPtr("text"),
+					Content:     strPtr(content),
+					Mentions:    mentions,
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive(%s): %v", evID, err)
+		}
+		return sp.st.Entries[len(sp.st.Entries)-1].Text
+	}
+
+	gotDirect := sendMsg("evt_html_1", "om_html_1", "p2p", "", `{"text":"<p>看看这个 case</p>"}`, nil)
+	if gotDirect != "看看这个 case" {
+		t.Fatalf("direct <p> text = %q, want %q", gotDirect, "看看这个 case")
+	}
+
+	botMention := []*larkim.MentionEvent{{
+		Key:           strPtr("@_user_1"),
+		Name:          strPtr("Collie"),
+		MentionedType: strPtr("bot"),
+		Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+	}}
+	gotMentionInside := sendMsg("evt_html_2", "om_html_2", "group", "", `{"text":"<p>@_user_1 看看这个 case</p>"}`, botMention)
+	if gotMentionInside != "看看这个 case" {
+		t.Fatalf("group mention inside <p> = %q, want %q", gotMentionInside, "看看这个 case")
+	}
+
+	gotMentionOutside := sendMsg("evt_html_3", "om_html_3", "group", "", `{"text":"@_user_1 <p>再看一眼</p>"}`, botMention)
+	if gotMentionOutside != "再看一眼" {
+		t.Fatalf("group mention outside <p> = %q, want %q", gotMentionOutside, "再看一眼")
+	}
+
+	gotQuoted := sendMsg("evt_html_4", "om_html_4", "p2p", "om_html_parent", `{"text":"<p>回复它</p>"}`, nil)
+	for _, want := range []string{"[引用消息]", "> 父消息第一行", "> 父消息 <ok>", "回复它"} {
+		if !strings.Contains(gotQuoted, want) {
+			t.Fatalf("quoted HTML text missing %q:\n%s", want, gotQuoted)
+		}
+	}
+	if strings.Contains(gotQuoted, "<p>") || strings.Contains(gotQuoted, "</p>") {
+		t.Fatalf("quoted HTML text leaked raw <p> tags:\n%s", gotQuoted)
+	}
+}
+
+func TestFeishuMergeForwardInboundAndQuoted(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	ctx := context.Background()
+
+	pngSubImg := []byte("\x89PNG\r\n\x1a\nsub-image-bytes")
+	pngPostImg := []byte("\x89PNG\r\n\x1a\npost-image-bytes")
+
+	ff.mu.Lock()
+	// Direct merge_forward with out-of-order create_time, mixed sub-message types,
+	// multiple sender formats, HTML-wrapped text, downloadable + failing images.
+	ff.messages["om_mf_direct"] = fakeFeishuMessage{
+		Items: []map[string]any{
+			{
+				"message_id":  "om_mf_direct",
+				"msg_type":    "merge_forward",
+				"create_time": "1732620009000",
+				"body":        map[string]any{"content": "Merged and Forwarded Message"},
+			},
+			// Intentionally placed out of chronological order (t=3000 before t=1000).
+			{
+				"message_id":       "om_sub_post",
+				"upper_message_id": "om_mf_direct",
+				"msg_type":         "post",
+				"create_time":      "1732620003000",
+				"sender":           map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+				"body": map[string]any{
+					"content": `{"zh_cn":{"title":"排查日志","content":[[{"tag":"text","text":"附图如下"},{"tag":"img","image_key":"img_post_ok"},{"tag":"img","image_key":"img_post_fail"}]]}}`,
+				},
+			},
+			{
+				"message_id":       "om_sub_text",
+				"upper_message_id": "om_mf_direct",
+				"msg_type":         "text",
+				"create_time":      "1732620001000",
+				"sender":           map[string]any{"id": "ou_alice_123456", "id_type": "open_id", "sender_type": "user", "sender_name": "Alice"},
+				"body":             map[string]any{"content": `{"text":"<p>先看这个报错 &lt;500&gt;</p>"}`},
+			},
+			{
+				"message_id":       "om_sub_img",
+				"upper_message_id": "om_mf_direct",
+				"msg_type":         "image",
+				"create_time":      "1732620002000",
+				"sender":           map[string]any{"id": "ou_bob_123456", "id_type": "open_id", "sender_type": "user", "sender_i18n_names": map[string]any{"zh_cn": "鲍勃"}},
+				"body":             map[string]any{"content": `{"image_key":"img_sub_direct"}`},
+			},
+			{
+				"message_id":       "om_sub_file",
+				"upper_message_id": "om_mf_direct",
+				"msg_type":         "file",
+				"create_time":      "1732620004000",
+				"sender":           map[string]any{"id": "ou_colleague_noperm", "id_type": "open_id", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"file_name":"trace.log"}`},
+			},
+			{
+				"message_id":       "om_sub_deleted",
+				"upper_message_id": "om_mf_direct",
+				"msg_type":         "text",
+				"deleted":          true,
+				"create_time":      "1732620005000",
+				"sender":           map[string]any{"sender_name": "Charlie", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"text":"should not appear"}`},
+			},
+		},
+	}
+	// Bind resources strictly to their sub-message message_ids (NOT om_mf_direct).
+	ff.resources["om_sub_img/img_sub_direct"] = fakeFeishuResource{Data: pngSubImg, FileName: "sub-err.png"}
+	ff.resources["om_sub_post/img_post_ok"] = fakeFeishuResource{Data: pngPostImg, FileName: "post-log.png"}
+	ff.resources["om_sub_post/img_post_fail"] = fakeFeishuResource{Code: 234001, Msg: "download failed"}
+	// Ensure using the outer merge_forward ID would fail hard.
+	ff.resources["om_mf_direct/img_sub_direct"] = fakeFeishuResource{Code: 234001, Msg: "wrong message_id"}
+	ff.resources["om_mf_direct/img_post_ok"] = fakeFeishuResource{Code: 234001, Msg: "wrong message_id"}
+
+	// Quoted merge_forward reproducing the exact screenshot case (quote merge_forward + <p>看看这个 case</p>).
+	ff.messages["om_mf_quoted"] = fakeFeishuMessage{
+		Items: []map[string]any{
+			{
+				"message_id":  "om_mf_quoted",
+				"msg_type":    "merge_forward",
+				"create_time": "1732620010000",
+				"body":        map[string]any{"content": "Merged and Forwarded Message"},
+			},
+			{
+				"message_id":       "om_qsub_1",
+				"upper_message_id": "om_mf_quoted",
+				"msg_type":         "text",
+				"create_time":      "1732620011000",
+				"sender":           map[string]any{"sender_name": "张三", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"text":"线上出现偶发超时"}`},
+			},
+			{
+				"message_id":       "om_qsub_2",
+				"upper_message_id": "om_mf_quoted",
+				"msg_type":         "image",
+				"create_time":      "1732620012000",
+				"sender":           map[string]any{"sender_name": "李四", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"image_key":"img_qsub_2"}`},
+			},
+		},
+	}
+	ff.resources["om_qsub_2/img_qsub_2"] = fakeFeishuResource{Data: pngSubImg, FileName: "quoted-sub.png"}
+
+	// Nested merge_forward with inline depth-1, lazy depth-2, depth-3 limit, and cycle protection.
+	ff.messages["om_mf_nested_root"] = fakeFeishuMessage{
+		Items: []map[string]any{
+			{
+				"message_id":  "om_mf_nested_root",
+				"msg_type":    "merge_forward",
+				"create_time": "1732620020000",
+				"body":        map[string]any{"content": "Merged and Forwarded Message"},
+			},
+			{
+				"message_id":       "om_mf_lvl1",
+				"upper_message_id": "om_mf_nested_root",
+				"msg_type":         "merge_forward",
+				"create_time":      "1732620021000",
+				"sender":           map[string]any{"sender_name": "L1", "sender_type": "user"},
+				"body":             map[string]any{"content": "Merged and Forwarded Message"},
+			},
+			{
+				"message_id":       "om_mf_lvl1_txt",
+				"upper_message_id": "om_mf_lvl1",
+				"msg_type":         "text",
+				"create_time":      "1732620022000",
+				"sender":           map[string]any{"sender_name": "内层用户", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"text":"来自一层嵌套"}`},
+			},
+			{
+				"message_id":       "om_mf_lvl2_lazy",
+				"upper_message_id": "om_mf_lvl1",
+				"msg_type":         "merge_forward",
+				"create_time":      "1732620023000",
+				"sender":           map[string]any{"sender_name": "L2", "sender_type": "user"},
+				"body":             map[string]any{"content": "Merged and Forwarded Message"},
+			},
+			// Direct cycle back to root!
+			{
+				"message_id":       "om_mf_nested_root",
+				"upper_message_id": "om_mf_lvl1",
+				"msg_type":         "merge_forward",
+				"create_time":      "1732620024000",
+				"sender":           map[string]any{"sender_name": "Cycle", "sender_type": "user"},
+				"body":             map[string]any{"content": "Merged and Forwarded Message"},
+			},
+		},
+	}
+	ff.messages["om_mf_lvl2_lazy"] = fakeFeishuMessage{
+		Items: []map[string]any{
+			{
+				"message_id":  "om_mf_lvl2_lazy",
+				"msg_type":    "merge_forward",
+				"create_time": "1732620023000",
+				"body":        map[string]any{"content": "Merged and Forwarded Message"},
+			},
+			{
+				"message_id":       "om_mf_lvl2_txt",
+				"upper_message_id": "om_mf_lvl2_lazy",
+				"msg_type":         "text",
+				"create_time":      "1732620023100",
+				"sender":           map[string]any{"sender_name": "二层用户", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"text":"来自二层懒加载"}`},
+			},
+			{
+				"message_id":       "om_mf_lvl3_cap",
+				"upper_message_id": "om_mf_lvl2_lazy",
+				"msg_type":         "merge_forward",
+				"create_time":      "1732620023200",
+				"sender":           map[string]any{"sender_name": "L3", "sender_type": "user"},
+				"body":             map[string]any{"content": "Merged and Forwarded Message"},
+			},
+		},
+	}
+	ff.messages["om_mf_api_err"] = fakeFeishuMessage{
+		Code: 230011,
+		Msg:  "no permission",
+	}
+	ff.mu.Unlock()
+
+	sendEvent := func(evID, msgID, parentID, msgType, content string) string {
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: evID}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr(msgID),
+					ParentId:    strPtr(parentID),
+					ChatId:      strPtr("oc_mf_chat"),
+					ChatType:    strPtr("p2p"),
+					MessageType: strPtr(msgType),
+					Content:     strPtr(content),
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive(%s): %v", evID, err)
+		}
+		return sp.st.Entries[len(sp.st.Entries)-1].Text
+	}
+
+	// 1) Direct merge_forward expansion.
+	gotDirect := sendEvent("evt_mf_1", "om_mf_direct", "", "merge_forward", "Merged and Forwarded Message")
+	wantParts := []string{
+		"[合并转发]",
+		"Alice：先看这个报错 <500>",
+		"鲍勃：[图片]",
+		"林同学：排查日志",
+		"附图如下（含 1 张图片，1 张图片下载失败）",
+		"[飞书文件：trace.log]",
+		"Charlie：[原消息已撤回]",
+		"\n\n附件：\n",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(gotDirect, want) {
+			t.Fatalf("direct merge_forward missing %q:\n%s", want, gotDirect)
+		}
+	}
+	// Verify chronological ordering: Alice (1000) < 鲍勃 (2000) < 林同学 (3000) < trace.log (4000) < Charlie (5000).
+	posAlice := strings.Index(gotDirect, "Alice：")
+	posBob := strings.Index(gotDirect, "鲍勃：")
+	posLin := strings.Index(gotDirect, "林同学：")
+	posFile := strings.Index(gotDirect, "[飞书文件：trace.log]")
+	posCharlie := strings.Index(gotDirect, "Charlie：")
+	if !(posAlice < posBob && posBob < posLin && posLin < posFile && posFile < posCharlie) {
+		t.Fatalf("direct merge_forward not sorted chronologically (alice=%d bob=%d lin=%d file=%d charlie=%d):\n%s",
+			posAlice, posBob, posLin, posFile, posCharlie, gotDirect)
+	}
+	// Verify attachments saved to disk with expected bytes.
+	attachIdx := strings.Index(gotDirect, "\n\n附件：\n")
+	attachPaths := strings.Split(strings.TrimSpace(gotDirect[attachIdx+len("\n\n附件：\n"):]), "\n")
+	if len(attachPaths) != 2 {
+		t.Fatalf("expected 2 downloaded attachments, got %d (%v)\n%s", len(attachPaths), attachPaths, gotDirect)
+	}
+	b0, err := os.ReadFile(attachPaths[0])
+	if err != nil || !bytes.Equal(b0, pngSubImg) {
+		t.Fatalf("first attachment mismatch: err=%v bytes=%q", err, b0)
+	}
+	b1, err := os.ReadFile(attachPaths[1])
+	if err != nil || !bytes.Equal(b1, pngPostImg) {
+		t.Fatalf("second attachment mismatch: err=%v bytes=%q", err, b1)
+	}
+	// Verify sub-message resource URLs used sub-message IDs, never outer om_mf_direct.
+	ff.mu.Lock()
+	var sawSubImgCall, sawPostImgCall bool
+	for _, c := range ff.calls {
+		if c.Path == "/open-apis/im/v1/messages/om_sub_img/resources/img_sub_direct" {
+			sawSubImgCall = true
+		}
+		if c.Path == "/open-apis/im/v1/messages/om_sub_post/resources/img_post_ok" {
+			sawPostImgCall = true
+		}
+		if strings.HasPrefix(c.Path, "/open-apis/im/v1/messages/om_mf_direct/resources/") {
+			ff.mu.Unlock()
+			t.Fatalf("unexpected image download using outer merge_forward message_id: %s", c.Path)
+		}
+	}
+	ff.mu.Unlock()
+	if !sawSubImgCall || !sawPostImgCall {
+		t.Fatalf("expected sub-message image resource downloads (sub=%v post=%v)", sawSubImgCall, sawPostImgCall)
+	}
+
+	// 2) Quoted merge_forward + HTML-wrapped text reply ("<p>看看这个 case</p>").
+	callsBeforeQuote := 0
+	ff.mu.Lock()
+	callsBeforeQuote = len(ff.calls)
+	ff.mu.Unlock()
+
+	gotQuoted := sendEvent("evt_mf_2", "om_reply_mf", "om_mf_quoted", "text", `{"text":"<p>看看这个 case</p>"}`)
+	for _, want := range []string{
+		"[引用消息（含 1 张图片）]",
+		"> [合并转发]",
+		"> 张三：线上出现偶发超时",
+		"> 李四：[图片]",
+		"\n\n看看这个 case\n\n附件：\n",
+	} {
+		if !strings.Contains(gotQuoted, want) {
+			t.Fatalf("quoted merge_forward missing %q:\n%s", want, gotQuoted)
+		}
+	}
+	if strings.Contains(gotQuoted, "<p>") || strings.Contains(gotQuoted, "</p>") || strings.Contains(gotQuoted, "[飞书 merge_forward 消息]") {
+		t.Fatalf("quoted merge_forward leaked raw placeholder or HTML:\n%s", gotQuoted)
+	}
+	// Verify GET /messages/om_mf_quoted was called only once (no duplicate fetch).
+	getCount := 0
+	ff.mu.Lock()
+	for _, c := range ff.calls[callsBeforeQuote:] {
+		if c.Method == http.MethodGet && c.Path == "/open-apis/im/v1/messages/om_mf_quoted" {
+			getCount++
+		}
+	}
+	ff.mu.Unlock()
+	if getCount != 1 {
+		t.Fatalf("expected exactly 1 GET for quoted merge_forward, got %d", getCount)
+	}
+
+	// 3) Nested merge_forward with depth cap (depth 0 -> 1 -> 2 -> cap at 3).
+	gotNested := sendEvent("evt_mf_3", "om_mf_nested_root", "", "merge_forward", "Merged and Forwarded Message")
+	for _, want := range []string{
+		"[合并转发]",
+		"L1：[合并转发]",
+		"  内层用户：来自一层嵌套",
+		"  L2：[合并转发]",
+		"    二层用户：来自二层懒加载",
+		"    L3：[嵌套合并转发已达展开深度上限]",
+	} {
+		if !strings.Contains(gotNested, want) {
+			t.Fatalf("nested merge_forward missing %q:\n%s", want, gotNested)
+		}
+	}
+
+	// 4) Graceful fallback when API fails.
+	gotErr := sendEvent("evt_mf_4", "om_mf_api_err", "", "merge_forward", "Merged and Forwarded Message")
+	if gotErr != "[飞书 merge_forward 消息]" {
+		t.Fatalf("api error merge_forward = %q, want %q", gotErr, "[飞书 merge_forward 消息]")
+	}
+}
+
+func TestFeishuQuotedLocalImageUsesNativeReplyWithoutDuplication(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	ctx := context.Background()
+
+	pngBytes := []byte("\x89PNG\r\n\x1a\nlocal-quoted-screenshot")
+	ff.mu.Lock()
+	ff.resources["om_user_img_1/img_local_1"] = fakeFeishuResource{Data: pngBytes, FileName: "terminal.png"}
+	ff.mu.Unlock()
+
+	sendEv := func(evID, msgID, parentID, msgType, content string) {
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: evID}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr(msgID),
+					ParentId:    strPtr(parentID),
+					ChatId:      strPtr("oc_quote_img"),
+					ChatType:    strPtr("p2p"),
+					MessageType: strPtr(msgType),
+					Content:     strPtr(content),
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive(%s): %v", evID, err)
+		}
+	}
+
+	// Step 1: User sends an image in Feishu.
+	sendEv("evt_img_local_1", "om_user_img_1", "", "image", `{"image_key":"img_local_1"}`)
+	imgEntry := sp.st.Entries[len(sp.st.Entries)-1]
+	savedPaths := extractAttachmentPaths(imgEntry.Text)
+	if len(savedPaths) != 1 {
+		t.Fatalf("expected 1 saved image attachment, got %q", imgEntry.Text)
+	}
+
+	ff.mu.Lock()
+	callsBefore := len(ff.calls)
+	ff.mu.Unlock()
+
+	// Step 2: User quotes that exact image and sends "<p>merlin 上运行</p>".
+	sendEv("evt_img_local_2", "om_user_reply_1", "om_user_img_1", "text", `{"text":"<p>merlin 上运行</p>"}`)
+	replyEntry := sp.st.Entries[len(sp.st.Entries)-1]
+	if replyEntry.Text != "merlin 上运行" {
+		t.Fatalf("reply bubble should contain clean text without duplicate image or [引用图片], got:\n%s", replyEntry.Text)
+	}
+	if replyEntry.Re == nil || replyEntry.Re.Entry != imgEntry.ID {
+		t.Fatalf("reply bubble should link natively to image entry %s via Re, got %+v", imgEntry.ID, replyEntry.Re)
+	}
+	trig := sp.st.Triggers[len(sp.st.Triggers)-1]
+	if !strings.Contains(trig.Text, savedPaths[0]) || !strings.Contains(trig.Text, "merlin 上运行") {
+		t.Fatalf("router trigger must still receive image path %q and reply text:\n%s", savedPaths[0], trig.Text)
+	}
+	// Verify zero redundant GET calls to Feishu for the already-downloaded local image.
+	ff.mu.Lock()
+	for _, c := range ff.calls[callsBefore:] {
+		if c.Method == http.MethodGet {
+			ff.mu.Unlock()
+			t.Fatalf("unexpected Feishu GET when quoting local image entry: %s %s", c.Method, c.Path)
+		}
+	}
+	ff.mu.Unlock()
+
+	// Step 3: Simulate hub restart (clear in-memory msgEntries); DB fallback still links natively.
+	fa.mu.Lock()
+	fa.msgEntries = map[string]string{}
+	fa.msgEntryOrder = nil
+	fa.mu.Unlock()
+
+	sendEv("evt_img_local_3", "om_user_reply_2", "om_user_img_1", "text", `{"text":"<p>重启后再引用</p>"}`)
+	replyAfterRestart := sp.st.Entries[len(sp.st.Entries)-1]
+	if replyAfterRestart.Text != "重启后再引用" || replyAfterRestart.Re == nil || replyAfterRestart.Re.Entry != imgEntry.ID {
+		t.Fatalf("after restart expected native Re=%s clean text, got text=%q re=%+v", imgEntry.ID, replyAfterRestart.Text, replyAfterRestart.Re)
+	}
+	trig2 := sp.st.Triggers[len(sp.st.Triggers)-1]
+	if !strings.Contains(trig2.Text, savedPaths[0]) {
+		t.Fatalf("router trigger after restart missing image path %q:\n%s", savedPaths[0], trig2.Text)
 	}
 }
 

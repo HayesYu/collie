@@ -1398,6 +1398,48 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.equal(pendListWrites(), 0, "idle renderSuper() must not rewrite collapsed #pending-list.innerHTML");
   assert.equal(innerWrites, mainWritesBefore, "idle renderSuper() must not rewrite #super-thread.innerHTML");
 
+  // Running session list: collapsible <details id="live-group">, default first 8 rows + "展开其余 N 个 / 收起",
+  // and deep-link auto-expand when selecting a session beyond the first 8.
+  const pagedAgents = Array.from({ length: 17 }, (_, i) => ({
+    ...sampleAgents[0], pane_id: "page-" + i, name: "agent-" + i,
+  }));
+  const updateAgents = (agents) => {
+    T.setState({ ok: true, agents, shells: [] });
+    T.renderSide();
+  };
+  const liveRows = () => [...getEl("#live-list").innerHTML.matchAll(/href="#\/p\/page-(\d+)"/g)].map((m) => Number(m[1]));
+  const clickLiveMore = () => getEl("#live-list").dispatch("click", {
+    target: { closest: (sel) => sel === "[data-act=live-more]" ? {} : null },
+    preventDefault() {},
+  });
+  updateAgents(pagedAgents);
+  assert.deepEqual(liveRows(), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.match(getEl("#live-list").innerHTML, /展开其余 9 个/);
+  clickLiveMore();
+  T.renderSide();
+  assert.deepEqual(liveRows(), Array.from({ length: 17 }, (_, i) => i));
+  assert.match(getEl("#live-list").innerHTML, />收起</);
+  clickLiveMore();
+  assert.deepEqual(liveRows(), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.match(getEl("#live-list").innerHTML, /展开其余 9 个/);
+  // Deep link to item #12 while group is collapsed and folded: auto-opens group and expands list once.
+  getEl("#live-group").open = false;
+  ctx.location.hash = "#/p/page-12";
+  T.route();
+  updateAgents(pagedAgents);
+  assert.equal(getEl("#live-group").open, true, "deep link should open collapsed #live-group");
+  assert.deepEqual(liveRows(), Array.from({ length: 17 }, (_, i) => i));
+  // User can still fold back; active session #12 stays visible while others collapse.
+  clickLiveMore();
+  assert.deepEqual(liveRows(), [0, 1, 2, 3, 4, 5, 6, 7, 12]);
+  assert.match(getEl("#live-list").innerHTML, /展开其余 8 个/);
+  ctx.location.hash = "#/collie";
+  T.route();
+  updateAgents(pagedAgents.slice(0, 8));
+  assert.doesNotMatch(getEl("#live-list").innerHTML, /live-more/);
+  updateAgents([]);
+  assert.match(getEl("#live-list").innerHTML, /empty-hint/);
+
   console.log("OK: all reply-thread, focus-drawer, filter, agent-card, worker-fold, memoization, settings, and notification JS tests passed");
 })().catch((err) => {
   console.error(err);

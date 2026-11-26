@@ -215,7 +215,7 @@ Collie 同时支持 herdr 0.8 和 0.9：
 
 | 参数 | 环境变量 | 默认值 |
 |---|---|---|
-| `-addr` | `COLLIE_ADDR` | `0.0.0.0:7788` |
+| `-addr` | `COLLIE_ADDR` | `:7788` |
 | `-socket` | `HERDR_SOCKET_PATH` | `~/.config/herdr/herdr.sock` |
 | `-token` | `COLLIE_TOKEN` | 自动生成（主令牌） |
 | `-url` | `COLLIE_URL` | 自动探测内网地址；二维码和配对命令用它 |
@@ -240,7 +240,7 @@ Collie 同时支持 herdr 0.8 和 0.9：
 
 ```bash
 go build -o bin/collie .
-./bin/collie                       # 监听 0.0.0.0:7788
+./bin/collie                       # 监听 :7788（IPv4/IPv6 双栈）
 go test ./...
 scripts/release.sh v0.1.0 --dry    # 交叉编译四个平台到 dist/
 ```

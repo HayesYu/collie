@@ -33,6 +33,7 @@ type Server struct {
 	node  bool  // serving the node API inside a tunnel (no auth, no super)
 
 	port       int      // hub only: listening port, for addresses
+	localAddr  string   // hub only: local host:port for CLI and loopback links
 	publicURLs []string // hub only: addresses given with -url, shown first
 
 	startMu sync.Mutex

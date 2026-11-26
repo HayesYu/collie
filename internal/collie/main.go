@@ -54,7 +54,7 @@ func Main(v string) {
 func serve() {
 	home, _ := os.UserHomeDir()
 	dir := collieDir()
-	addr := flag.String("addr", envOr("COLLIE_ADDR", "0.0.0.0:7788"), "listen address")
+	addr := flag.String("addr", envOr("COLLIE_ADDR", ":7788"), "listen address")
 	sock := flag.String("socket", envOr("HERDR_SOCKET_PATH", filepath.Join(home, ".config/herdr/herdr.sock")), "herdr API socket")
 	token := flag.String("token", os.Getenv("COLLIE_TOKEN"), "access token (default: generated and stored in ~/.collie/token)")
 	publicURL := flag.String("url", os.Getenv("COLLIE_URL"), "address phones and computers should use, e.g. http://10.0.0.5:7788 (default: detected LAN addresses)")
@@ -95,8 +95,9 @@ func serve() {
 	}
 	tcp := ln.Addr().(*net.TCPAddr)
 	srv.port = tcp.Port
+	srv.localAddr = localDialAddr(tcp, hasIPv4Loopback)
 	// The CLI (used by router and worker sessions) finds the server here.
-	os.WriteFile(filepath.Join(dir, "addr"), []byte(fmt.Sprintf("127.0.0.1:%d\n", tcp.Port)), 0o600)
+	os.WriteFile(filepath.Join(dir, "addr"), []byte(srv.localAddr+"\n"), 0o600)
 	printBanner(srv, tcp, *token)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -146,21 +147,30 @@ func loadOrCreateToken(path, legacy string) string {
 	return t
 }
 
+func bannerAddresses(s *Server, a *net.TCPAddr) []string {
+	if a == nil {
+		return nil
+	}
+	if a.IP == nil || a.IP.IsUnspecified() {
+		return s.addresses(nil)
+	}
+	return []string{"http://" + formatTCPHostPort(a)}
+}
+
 func printBanner(s *Server, a *net.TCPAddr, token string) {
 	fmt.Println()
 	fmt.Println("  collie · herding your agents")
 	fmt.Println()
-	addrs := []string{fmt.Sprintf("http://127.0.0.1:%d", a.Port)}
-	if a.IP.IsUnspecified() {
-		addrs = s.addresses(nil)
-	} else if !a.IP.IsLoopback() {
-		addrs = []string{fmt.Sprintf("http://%s:%d", a.IP, a.Port)}
-	}
+	addrs := bannerAddresses(s, a)
 	for _, h := range addrs {
 		fmt.Printf("  %s/?t=%s\n", h, token)
 	}
-	if a.IP.IsLoopback() {
-		fmt.Println("\n  只监听本机。要让手机和其他电脑连进来，用 -addr 0.0.0.0:7788")
+	if a != nil && a.IP != nil && a.IP.IsLoopback() {
+		fmt.Println("\n  只监听本机。要让手机和其他电脑连进来，用 -addr :7788")
+		fmt.Println()
+		return
+	}
+	if len(addrs) == 0 {
 		fmt.Println()
 		return
 	}

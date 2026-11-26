@@ -2,6 +2,7 @@ package collie
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +43,26 @@ func (s *Server) getHubs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"hubs": loadHubs()})
 }
 
+func validHTTPBaseURL(raw string) (*url.URL, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" {
+		return nil, false
+	}
+	if strings.Contains(u.Hostname(), ":") && !strings.HasPrefix(u.Host, "[") {
+		return nil, false
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		if _, _, err := net.SplitHostPort(u.Host); err != nil {
+			if !strings.HasSuffix(u.Host, "]") || net.ParseIP(u.Hostname()) == nil {
+				return nil, false
+			}
+		} else if net.ParseIP(u.Hostname()) == nil {
+			return nil, false
+		}
+	}
+	return u, true
+}
+
 func (s *Server) setHubs(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Hubs []remoteHub `json:"hubs"`
@@ -54,9 +75,8 @@ func (s *Server) setHubs(w http.ResponseWriter, r *http.Request) {
 	for _, h := range body.Hubs {
 		h.Key, h.Name = strings.TrimSpace(h.Key), strings.TrimSpace(h.Name)
 		h.URL = strings.TrimRight(strings.TrimSpace(h.URL), "/")
-		u, err := url.Parse(h.URL)
-		if h.Key == "" || seen[h.Key] || strings.ContainsAny(h.Key, "!/?#&@ ") || err != nil ||
-			(u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || h.Token == "" {
+		u, ok := validHTTPBaseURL(h.URL)
+		if h.Key == "" || seen[h.Key] || strings.ContainsAny(h.Key, "!/?#&@ ") || !ok || h.Token == "" {
 			writeJSON(w, 400, map[string]any{"error": "hub 信息不完整：" + h.Name})
 			return
 		}

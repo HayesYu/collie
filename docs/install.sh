@@ -299,50 +299,258 @@ check_herdr() {
 }
 
 # ------------------------------------------------------------------ urls & browser
-detect_ip() {
-  ip=""
-  if [ "$os" = darwin ]; then
-    if command -v route >/dev/null 2>&1 && command -v ipconfig >/dev/null 2>&1; then
-      iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
-      if [ -n "$iface" ]; then
-        cand=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
-        case "$cand" in
-          "" | 127.* | 169.254.* | *[!0-9.]*) ;;
-          *.*.*.*) ip=$cand ;;
-        esac
+is_valid_ipv4() {
+  case "${1:-}" in
+    "" | 127.* | 169.254.* | 0.* | *[!0-9.]*) return 1 ;;
+    *.*.*.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_ipv6() {
+  v6=${1:-}
+  v6=${v6%%/*}
+  v6=${v6%%%*}
+  printf '%s' "${v6}" | tr '[:upper:]' '[:lower:]'
+}
+
+is_valid_ipv6() {
+  v6=$(normalize_ipv6 "${1:-}")
+  case "${v6}" in
+    "" | :: | ::1 | 0:0:0:0:0:0:0:1 | 0000:0000:0000:0000:0000:0000:0000:0001) return 1 ;;
+    *[!0-9a-f:]*) return 1 ;;
+    fe[89ab][0-9a-f]:* | ff[0-9a-f][0-9a-f]:*) return 1 ;;
+    *:*) ;;
+    *) return 1 ;;
+  esac
+  [ -n "$(printf '%s' "${v6}" | tr -d ':0')" ] || return 1
+  return 0
+}
+
+is_ula_ipv6() {
+  v6=$(normalize_ipv6 "${1:-}")
+  case "${v6}" in
+    fc[0-9a-f][0-9a-f]:* | fd[0-9a-f][0-9a-f]:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+has_ipv4_loopback() {
+  if [ "${os}" = darwin ]; then
+    if command -v ifconfig >/dev/null 2>&1; then
+      lo_out=$(ifconfig lo0 2>/dev/null || true)
+      if [ -n "${lo_out}" ]; then
+        printf '%s\n' "${lo_out}" | grep -q 'inet 127\.' && return 0
+        printf '%s\n' "${lo_out}" | grep -q 'inet6 ::1' && return 1
       fi
     fi
-    if [ -z "$ip" ] && command -v ipconfig >/dev/null 2>&1; then
+    return 0
+  else
+    if command -v ip >/dev/null 2>&1; then
+      lo_out=$(ip -o addr show dev lo 2>/dev/null || true)
+      if [ -n "${lo_out}" ]; then
+        printf '%s\n' "${lo_out}" | grep -q 'inet 127\.' && return 0
+        printf '%s\n' "${lo_out}" | grep -q 'inet6 ::1' && return 1
+      fi
+    fi
+    return 0
+  fi
+}
+
+detect_darwin_ipv6_iface() {
+  set -f
+  iface=$1
+  command -v ifconfig >/dev/null 2>&1 || return 1
+  out=$(ifconfig "${iface}" 2>/dev/null || true)
+  [ -n "${out}" ] || return 1
+  gua=""
+  ula=""
+  old_ifs=${IFS}
+  IFS='
+'
+  for line in ${out}; do
+    case "${line}" in
+      *"inet6 "*) ;;
+      *) continue ;;
+    esac
+    case "${line}" in
+      *deprecated* | *detached* | *tentative*) continue ;;
+    esac
+    cand=$(printf '%s\n' "${line}" | awk '{for(i=1;i<NF;i++) if($i=="inet6"){print $(i+1); exit}}')
+    cand=$(normalize_ipv6 "${cand}")
+    is_valid_ipv6 "${cand}" || continue
+    if is_ula_ipv6 "${cand}"; then
+      [ -z "${ula}" ] && ula=${cand}
+    else
+      case "${line}" in
+        *temporary*) [ -z "${gua}" ] && gua=${cand} ;;
+        *) gua=${cand}; break ;;
+      esac
+    fi
+  done
+  IFS=${old_ifs}
+  if [ -n "${gua}" ]; then
+    printf '%s\n' "${gua}"
+    return 0
+  fi
+  if [ -n "${ula}" ]; then
+    printf '%s\n' "${ula}"
+    return 0
+  fi
+  return 1
+}
+
+detect_ip() {
+  set -f
+  ip=""
+  if [ "${os}" = darwin ]; then
+    if command -v route >/dev/null 2>&1 && command -v ipconfig >/dev/null 2>&1; then
+      iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
+      if [ -n "${iface}" ]; then
+        cand=$(ipconfig getifaddr "${iface}" 2>/dev/null || true)
+        if is_valid_ipv4 "${cand}"; then
+          ip=${cand}
+        fi
+      fi
+    fi
+    if [ -z "${ip}" ] && command -v ipconfig >/dev/null 2>&1; then
       for iface in en0 en1 en2 en3 en4 en5; do
-        cand=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
-        case "$cand" in
-          "" | 127.* | 169.254.* | *[!0-9.]*) ;;
-          *.*.*.*) ip=$cand; break ;;
-        esac
+        cand=$(ipconfig getifaddr "${iface}" 2>/dev/null || true)
+        if is_valid_ipv4 "${cand}"; then
+          ip=${cand}
+          break
+        fi
+      done
+    fi
+    if [ -z "${ip}" ] && command -v route >/dev/null 2>&1; then
+      iface=$(route -n get -inet6 default 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
+      if [ -n "${iface}" ]; then
+        cand=$(detect_darwin_ipv6_iface "${iface}" || true)
+        if [ -n "${cand}" ]; then
+          ip=${cand}
+        fi
+      fi
+    fi
+    if [ -z "${ip}" ]; then
+      for iface in en0 en1 en2 en3 en4 en5; do
+        cand=$(detect_darwin_ipv6_iface "${iface}" || true)
+        if [ -n "${cand}" ]; then
+          ip=${cand}
+          break
+        fi
       done
     fi
   else
     if command -v ip >/dev/null 2>&1; then
       cand=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
-      case "$cand" in
-        "" | 127.* | 169.254.* | *[!0-9.]*) ;;
-        *.*.*.*) ip=$cand ;;
-      esac
+      if is_valid_ipv4 "${cand}"; then
+        ip=${cand}
+      fi
     fi
-    if [ -z "$ip" ] && command -v hostname >/dev/null 2>&1; then
+    if [ -z "${ip}" ] && command -v hostname >/dev/null 2>&1; then
       for cand in $(hostname -I 2>/dev/null || true); do
-        case "$cand" in
-          "" | 127.* | 169.254.* | *[!0-9.]*) ;;
-          *.*.*.*) ip=$cand; break ;;
-        esac
+        if is_valid_ipv4 "${cand}"; then
+          ip=${cand}
+          break
+        fi
       done
     fi
+    if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+      for cand in $(ip -4 -o addr show scope global up 2>/dev/null | awk '{print $4}' || true); do
+        cand=${cand%%/*}
+        if is_valid_ipv4 "${cand}"; then
+          ip=${cand}
+          break
+        fi
+      done
+    fi
+    if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+      cand=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
+      cand=$(normalize_ipv6 "${cand}")
+      if is_valid_ipv6 "${cand}"; then
+        ip=${cand}
+      fi
+    fi
+    if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+      gua=""
+      ula=""
+      for cand in $(ip -6 -o addr show scope global up 2>/dev/null | awk '!/deprecated|tentative/{print $4}' || true); do
+        cand=$(normalize_ipv6 "${cand}")
+        is_valid_ipv6 "${cand}" || continue
+        if is_ula_ipv6 "${cand}"; then
+          [ -z "${ula}" ] && ula=${cand}
+        else
+          gua=${cand}
+          break
+        fi
+      done
+      if [ -n "${gua}" ]; then
+        ip=${gua}
+      elif [ -n "${ula}" ]; then
+        ip=${ula}
+      fi
+    fi
+    if [ -z "${ip}" ] && command -v hostname >/dev/null 2>&1; then
+      gua=""
+      ula=""
+      for cand in $(hostname -I 2>/dev/null || true); do
+        cand=$(normalize_ipv6 "${cand}")
+        is_valid_ipv6 "${cand}" || continue
+        if is_ula_ipv6 "${cand}"; then
+          [ -z "${ula}" ] && ula=${cand}
+        else
+          gua=${cand}
+          break
+        fi
+      done
+      if [ -n "${gua}" ]; then
+        ip=${gua}
+      elif [ -n "${ula}" ]; then
+        ip=${ula}
+      fi
+    fi
   fi
-  printf '%s\n' "${ip:-127.0.0.1}"
+  if [ -z "${ip}" ]; then
+    if has_ipv4_loopback; then
+      ip=127.0.0.1
+    else
+      ip=::1
+    fi
+  fi
+  printf '%s\n' "${ip}"
+}
+
+format_http_url() {
+  host=${1:-}
+  port=${2:-7788}
+  case "${host}" in
+    \[*\]) printf 'http://%s:%s\n' "${host}" "${port}" ;;
+    *:*)   printf 'http://[%s]:%s\n' "${host}" "${port}" ;;
+    *)     printf 'http://%s:%s\n' "${host}" "${port}" ;;
+  esac
+}
+
+is_loopback_url() {
+  u=${1:-}
+  case "${u}" in
+    http://*)  rest=${u#http://} ;;
+    https://*) rest=${u#https://} ;;
+    *)         rest=${u} ;;
+  esac
+  auth=${rest%%/*}
+  auth=${auth%%\?*}
+  auth=${auth%%#*}
+  auth=$(printf '%s' "${auth}" | tr '[:upper:]' '[:lower:]')
+  case "${auth}" in
+    127.* | localhost | localhost:* | \[::1\] | \[::1\]:* | \[0:0:0:0:0:0:0:1\] | \[0:0:0:0:0:0:0:1\]:* | ::1)
+      return 0 ;;
+    *)
+      return 1 ;;
+  esac
 }
 
 open_browser() { # open_browser <url> [probe_url]
-  [ "$os" = darwin ] || return 0
+  [ "${os}" = darwin ] || return 0
   [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] || return 0
   [ -z "${COLLIE_NO_OPEN:-}" ] || return 0
   [ -z "${COLLIE_DRY_SERVICE:-}" ] || return 0
@@ -351,13 +559,13 @@ open_browser() { # open_browser <url> [probe_url]
   probe_url=${2:-$1}
   if command -v curl >/dev/null 2>&1; then
     w=0
-    while [ "$w" -lt 6 ]; do
-      curl -s --max-time 1 --noproxy '*' -o /dev/null "$probe_url" 2>/dev/null && break
+    while [ "${w}" -lt 6 ]; do
+      curl -s -g --max-time 1 --noproxy '*' -o /dev/null "${probe_url}" 2>/dev/null && break
       sleep 0.5 2>/dev/null || sleep 1
       w=$((w + 1))
     done
   fi
-  if open "$open_target" >/dev/null 2>&1; then
+  if open "${open_target}" >/dev/null 2>&1; then
     say "    已在浏览器打开 ${open_target}（不想自动打开可设 COLLIE_NO_OPEN=1）"
   fi
 }
@@ -366,7 +574,7 @@ open_browser() { # open_browser <url> [probe_url]
 mode=${1:-}
 [ $# -gt 0 ] && shift
 
-case "$mode" in
+case "${mode}" in
   "")
     install_binary
     say ""
@@ -378,34 +586,100 @@ case "$mode" in
     ;;
   node)
     install_binary
-    case " $* " in
-      *" --code "* | *" --code="*)
-        step "加入 hub"
-        "$BIN" node --pair-only "$@"
-        ;;
-      *)
-        [ -f "$HOME/.collie/node.json" ] || die "第一次要带上 hub 地址和配对码：sh -s -- node --hub http://<hub>:7788 --code <配对码>
+    has_code=0
+    for arg in "$@"; do
+      case "${arg}" in
+        --code | -code | --code=* | -code=*) has_code=1; break ;;
+      esac
+    done
+    if [ "${has_code}" -eq 1 ]; then
+      step "加入 hub"
+      "${BIN}" node --pair-only "$@"
+    else
+      [ -f "${HOME}/.collie/node.json" ] || die "第一次要带上 hub 地址和配对码：sh -s -- node --hub http://<hub>:7788 --code <配对码>
     配对码在 hub 的「设备 → 连接一台电脑」里拿。"
-        ;;
-    esac
+    fi
     # The service runs `collie node` with the saved address and token;
-    # --name stays only if given (otherwise the name chosen when joining).
+    # --name / --socket / --ui stay only if given.
+    node_ui_addr=""
     n=$#
     i=0
-    while [ "$i" -lt "$n" ]; do
+    while [ "${i}" -lt "${n}" ]; do
       a=$1; shift; i=$((i + 1))
-      case "$a" in
-        --name | --socket) set -- "$@" "$a" "$1"; shift; i=$((i + 1)) ;;
-        --name=* | --socket=*) set -- "$@" "$a" ;;
-        --hub | --code) shift; i=$((i + 1)) ;;
+      case "${a}" in
+        --name | -name | --socket | -socket)
+          if [ "${i}" -lt "${n}" ]; then
+            set -- "$@" "${a}" "$1"; shift; i=$((i + 1))
+          fi
+          ;;
+        --name=* | -name=* | --socket=* | -socket=*)
+          set -- "$@" "${a}"
+          ;;
+        --ui | -ui)
+          if [ "${i}" -lt "${n}" ]; then
+            node_ui_addr=$1
+            set -- "$@" "${a}" "$1"; shift; i=$((i + 1))
+          fi
+          ;;
+        --ui=*)
+          node_ui_addr=${a#--ui=}
+          set -- "$@" "${a}"
+          ;;
+        -ui=*)
+          node_ui_addr=${a#-ui=}
+          set -- "$@" "${a}"
+          ;;
+        --hub | -hub | --code | -code)
+          if [ "${i}" -lt "${n}" ]; then
+            shift; i=$((i + 1))
+          fi
+          ;;
         *) ;;
       esac
     done
     service node node "$@"
     say "    在 hub 的侧栏里能看到这台电脑了。"
-    say "    本机界面：http://127.0.0.1:17788（用 Chrome 打开可以安装成 app）"
-    check_herdr
-    open_browser "http://127.0.0.1:17788"
+    if [ "${node_ui_addr}" != "off" ]; then
+      if [ -n "${node_ui_addr}" ]; then
+        node_ui_host=""
+        node_ui_port=17788
+        case "${node_ui_addr}" in
+          \[*\]:*)
+            node_ui_host=${node_ui_addr%%\]*}
+            node_ui_host=${node_ui_host#\[}
+            p=${node_ui_addr##*\]:}
+            case "${p}" in "" | *[!0-9]*) ;; *) node_ui_port=${p} ;; esac
+            ;;
+          \[*\])
+            node_ui_host=${node_ui_addr#\[}
+            node_ui_host=${node_ui_host%\]}
+            ;;
+          *:*:*)
+            node_ui_host=${node_ui_addr}
+            ;;
+          *:*)
+            node_ui_host=${node_ui_addr%:*}
+            p=${node_ui_addr##*:}
+            case "${p}" in "" | *[!0-9]*) ;; *) node_ui_port=${p} ;; esac
+            ;;
+        esac
+        case "${node_ui_host}" in
+          "" | 0.0.0.0 | ::)
+            if has_ipv4_loopback; then node_ui_host=127.0.0.1; else node_ui_host=::1; fi
+            ;;
+        esac
+        node_ui_url=$(format_http_url "${node_ui_host}" "${node_ui_port}")
+      elif has_ipv4_loopback; then
+        node_ui_url="http://127.0.0.1:17788"
+      else
+        node_ui_url="http://[::1]:17788"
+      fi
+      say "    本机界面：${node_ui_url}（用 Chrome 打开可以安装成 app）"
+      check_herdr
+      open_browser "${node_ui_url}"
+    else
+      check_herdr
+    fi
     ;;
   hub)
     install_binary
@@ -426,41 +700,80 @@ case "$mode" in
       esac
     done
     hub_port=7788
-    case "$hub_addr" in
-      *:*)
-        p=${hub_addr##*:}
-        case "$p" in
+    hub_bind_host=""
+    case "${hub_addr}" in
+      \[*\]:*)
+        hub_bind_host=${hub_addr%%\]*}
+        hub_bind_host=${hub_bind_host#\[}
+        p=${hub_addr##*\]:}
+        case "${p}" in
           "" | *[!0-9]*) ;;
-          *) hub_port=$p ;;
+          *) hub_port=${p} ;;
+        esac
+        ;;
+      \[*\])
+        hub_bind_host=${hub_addr#\[}
+        hub_bind_host=${hub_bind_host%\]}
+        ;;
+      *:*:*)
+        hub_bind_host=${hub_addr}
+        ;;
+      *:*)
+        hub_bind_host=${hub_addr%:*}
+        p=${hub_addr##*:}
+        case "${p}" in
+          "" | *[!0-9]*) ;;
+          *) hub_port=${p} ;;
         esac
         ;;
     esac
-    local_url="http://127.0.0.1:${hub_port}"
-    if [ -n "$hub_url" ]; then
-      main_url=$hub_url
-      open_url=$hub_url
-    else
-      case "$hub_addr" in
-        127.0.0.1:* | localhost:*) hub_ip=127.0.0.1 ;;
-        *) hub_ip=$(detect_ip) ;;
-      esac
-      main_url="http://${hub_ip}:${hub_port}"
-      open_url=$local_url
-    fi
-    case "$main_url" in
-      http://127.0.0.1:* | http://127.0.0.1 | http://127.0.0.1/* | https://127.0.0.1:* | https://127.0.0.1 | https://127.0.0.1/*)
-        is_loopback=1 ;;
+    case "${hub_bind_host}" in
+      "" | ::)
+        if has_ipv4_loopback; then
+          local_url="http://127.0.0.1:${hub_port}"
+        else
+          local_url=$(format_http_url "::1" "${hub_port}")
+        fi
+        ;;
+      0.0.0.0 | 127.0.0.1 | localhost)
+        local_url="http://127.0.0.1:${hub_port}"
+        ;;
       *)
-        is_loopback=0 ;;
+        local_url=$(format_http_url "${hub_bind_host}" "${hub_port}")
+        ;;
     esac
+    if [ -n "${hub_url}" ]; then
+      case "${hub_url}" in
+        *://*)   main_url=${hub_url} ;;
+        \[*\]:*) main_url="http://${hub_url}" ;;
+        \[*\])   main_url=$(format_http_url "${hub_url}" "${hub_port}") ;;
+        *:*:*)   main_url=$(format_http_url "${hub_url}" "${hub_port}") ;;
+        *:*)     main_url="http://${hub_url}" ;;
+        *)       main_url=$(format_http_url "${hub_url}" "${hub_port}") ;;
+      esac
+      open_url=${main_url}
+    else
+      case "${hub_bind_host}" in
+        "" | 0.0.0.0 | ::) hub_ip=$(detect_ip) ;;
+        localhost) hub_ip=127.0.0.1 ;;
+        *) hub_ip=${hub_bind_host} ;;
+      esac
+      main_url=$(format_http_url "${hub_ip}" "${hub_port}")
+      open_url=${local_url}
+    fi
+    if is_loopback_url "${main_url}"; then
+      is_loopback=1
+    else
+      is_loopback=0
+    fi
     say "    打开 hub：${main_url}"
-    if [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] && [ "$is_loopback" -eq 0 ]; then
+    if [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] && [ "${is_loopback}" -eq 0 ] && [ "${local_url}" != "${main_url}" ]; then
       say "    本机访问：${local_url}"
     fi
     say "    手机配对：collie pair（或在「设备」页扫码）。"
     say "    首次登录的令牌在 ~/.collie/token。"
     check_herdr "hub 本身照常能用"
-    open_browser "$open_url" "$local_url"
+    open_browser "${open_url}" "${local_url}"
     ;;
   *)
     die "不认识的参数：${mode}（可以是 node、hub，或者不带参数）"

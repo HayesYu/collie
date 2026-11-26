@@ -408,10 +408,39 @@ func (a *Auth) save() {
 
 // ---------------------------------------------------------------- addresses
 
+type lanIface struct {
+	Name  string
+	Flags net.Flags
+	IPs   []net.IP
+}
+
+func systemLanIfaces() []lanIface {
+	ifs, _ := net.Interfaces()
+	out := make([]lanIface, 0, len(ifs))
+	for _, ifc := range ifs {
+		addrs, _ := ifc.Addrs()
+		ips := make([]net.IP, 0, len(addrs))
+		for _, a := range addrs {
+			switch v := a.(type) {
+			case *net.IPNet:
+				ips = append(ips, v.IP)
+			case *net.IPAddr:
+				ips = append(ips, v.IP)
+			}
+		}
+		out = append(out, lanIface{Name: ifc.Name, Flags: ifc.Flags, IPs: ips})
+	}
+	return out
+}
+
 // lanAddresses lists the URLs other devices can try, best first: addresses
-// given with -url, then private ranges (10/8, 192.168/16, 172.16/12), then
-// CGNAT/VPN (100.64/10), then anything else that is not loopback.
+// given with -url, then IPv4 (10/8, 192.168/16, 172.16/12, 100.64/10,
+// other global unicast), then IPv6 (global unicast, ULA), then loopback.
 func lanAddresses(port int, extra []string) []string {
+	return lanAddressesFrom(port, extra, systemLanIfaces())
+}
+
+func lanAddressesFrom(port int, extra []string, ifaces []lanIface) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(u string) {
@@ -430,42 +459,169 @@ func lanAddresses(port int, extra []string) []string {
 		rank int
 	}
 	var cs []cand
-	ifs, _ := net.Interfaces()
-	for _, ifc := range ifs {
-		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || virtualIf(ifc.Name) {
+	hasV4, hasV6 := false, false
+	hasLoopbackV4, hasLoopbackV6 := false, false
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || virtualIf(ifc.Name) {
 			continue
 		}
-		addrs, _ := ifc.Addrs()
-		for _, a := range addrs {
-			n, ok := a.(*net.IPNet)
-			if !ok || n.IP.To4() == nil {
+		if ifc.Flags&net.FlagLoopback != 0 {
+			for _, raw := range ifc.IPs {
+				if raw == nil || !raw.IsLoopback() {
+					continue
+				}
+				if raw.To4() != nil {
+					hasLoopbackV4 = true
+				} else if raw.To16() != nil {
+					hasLoopbackV6 = true
+				}
+			}
+			continue
+		}
+		for _, raw := range ifc.IPs {
+			if raw == nil || !raw.IsGlobalUnicast() {
 				continue
 			}
-			ip := n.IP.To4()
-			// Company networks are usually 10/8; home Wi-Fi 192.168/16;
-			// 172.16/12 is often a local or container network.
-			rank := 5
-			switch {
-			case ip[0] == 10:
-				rank = 0
-			case ip[0] == 192 && ip[1] == 168:
-				rank = 1
-			case ip[0] == 172 && ip[1]&0xf0 == 16:
-				rank = 2
-			case ip[0] == 100 && ip[1]&0xc0 == 64:
-				rank = 3
-			case ip[0] == 169 && ip[1] == 254:
+			if ip4 := raw.To4(); ip4 != nil {
+				hasV4 = true
+				// Company networks are usually 10/8; home Wi-Fi 192.168/16;
+				// 172.16/12 is often a local or container network.
+				rank := 4
+				switch {
+				case ip4[0] == 10:
+					rank = 0
+				case ip4[0] == 192 && ip4[1] == 168:
+					rank = 1
+				case ip4[0] == 172 && ip4[1]&0xf0 == 16:
+					rank = 2
+				case ip4[0] == 100 && ip4[1]&0xc0 == 64:
+					rank = 3
+				}
+				cs = append(cs, cand{ip4, rank})
 				continue
 			}
-			cs = append(cs, cand{ip, rank})
+			if ip16 := raw.To16(); ip16 != nil {
+				hasV6 = true
+				rank := 5
+				if ip16.IsPrivate() { // ULA fc00::/7
+					rank = 6
+				}
+				cs = append(cs, cand{ip16, rank})
+			}
 		}
 	}
 	sort.SliceStable(cs, func(i, j int) bool { return cs[i].rank < cs[j].rank })
+	portStr := strconv.Itoa(port)
 	for _, c := range cs {
-		add(fmt.Sprintf("http://%s:%d", c.ip, port))
+		add("http://" + net.JoinHostPort(c.ip.String(), portStr))
 	}
-	add(fmt.Sprintf("http://127.0.0.1:%d", port))
+	if !hasV4 && !hasLoopbackV4 && (hasV6 || hasLoopbackV6) {
+		add("http://" + net.JoinHostPort("::1", portStr))
+	} else {
+		add("http://" + net.JoinHostPort("127.0.0.1", portStr))
+	}
 	return out
+}
+
+func splitHost(hostport string) string {
+	hostport = strings.TrimSpace(hostport)
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		return host
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]")
+}
+
+func canonicalIP(host string) string {
+	h := strings.TrimSpace(host)
+	if i := strings.IndexByte(h, '%'); i >= 0 {
+		h = h[:i]
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.String()
+	}
+	return host
+}
+
+func isLoopbackHost(hostport string) bool {
+	h := splitHost(hostport)
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	if i := strings.IndexByte(h, '%'); i >= 0 {
+		h = h[:i]
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isLocalUIURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Host == "" || u.Port() == "" {
+		return false
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	return isLoopbackHost(u.Host)
+}
+
+func normalizeBaseURL(raw string) string {
+	a := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if a == "" || strings.Contains(a, "://") {
+		return a
+	}
+	if ip := net.ParseIP(a); ip != nil && ip.To4() == nil {
+		return "http://[" + a + "]"
+	}
+	return "http://" + a
+}
+
+func hasIPv4Loopback() bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return true
+	}
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip != nil && ip.To4() != nil && ip.IsLoopback() {
+			return true
+		}
+	}
+	return false
+}
+
+func formatTCPHostPort(a *net.TCPAddr) string {
+	host := a.IP.String()
+	if a.Zone != "" {
+		host += "%" + a.Zone
+	}
+	return net.JoinHostPort(host, strconv.Itoa(a.Port))
+}
+
+func localDialAddr(bound *net.TCPAddr, ipv4Loopback func() bool) string {
+	if bound == nil {
+		return ""
+	}
+	portStr := strconv.Itoa(bound.Port)
+	if bound.IP != nil && !bound.IP.IsUnspecified() {
+		return formatTCPHostPort(bound)
+	}
+	if bound.IP != nil && bound.IP.To4() != nil {
+		return net.JoinHostPort("127.0.0.1", portStr)
+	}
+	if ipv4Loopback == nil {
+		ipv4Loopback = hasIPv4Loopback
+	}
+	if ipv4Loopback() {
+		return net.JoinHostPort("127.0.0.1", portStr)
+	}
+	return net.JoinHostPort("::1", portStr)
 }
 
 // ---------------------------------------------------------------- hub endpoints
@@ -500,7 +656,7 @@ func (s *Server) addresses(r *http.Request) []string {
 				found = true
 			}
 		}
-		if !found && !strings.HasPrefix(r.Host, "localhost") && !strings.HasPrefix(r.Host, "127.") {
+		if !found && !isLoopbackHost(r.Host) {
 			list = append([]string{cur}, list...)
 		}
 	}
@@ -678,8 +834,8 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 	if n := strings.TrimSpace(r.Header.Get("X-Collie-Name")); n != "" {
 		m.Name = n
 	}
-	m.ip, _, _ = net.SplitHostPort(r.RemoteAddr)
-	if u := r.Header.Get("X-Collie-UI"); strings.HasPrefix(u, "http://127.0.0.1:") || strings.HasPrefix(u, "http://localhost:") {
+	m.ip = canonicalIP(splitHost(r.RemoteAddr))
+	if u := r.Header.Get("X-Collie-UI"); isLocalUIURL(u) {
 		m.ui = u
 	}
 	s.herdr.attach(m)

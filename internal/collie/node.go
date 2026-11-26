@@ -90,7 +90,7 @@ func runNode(args []string) {
 		fmt.Fprintln(os.Stderr, "这台电脑还没加入 hub。先在 hub 的「设备 → 连接电脑」里拿到命令，形如：\n  collie node --hub http://<hub 地址>:7788 --code <配对码>")
 		os.Exit(2)
 	} else if *hub != "" {
-		cfg.Hub = strings.TrimRight(*hub, "/")
+		cfg.Hub = normalizeBaseURL(*hub)
 	}
 
 	// Without --name, keep the name chosen when this computer joined.
@@ -137,10 +137,7 @@ func runNode(args []string) {
 }
 
 func pairNode(hub, code, name string) (nodeConfig, error) {
-	hub = strings.TrimRight(strings.TrimSpace(hub), "/")
-	if !strings.Contains(hub, "://") {
-		hub = "http://" + hub
-	}
+	hub = normalizeBaseURL(hub)
 	body, _ := json.Marshal(map[string]string{"code": code, "kind": "machine", "name": name, "os": runtime.GOOS + "/" + runtime.GOARCH})
 	// Dial the hub directly, as nodeSession does: a sandbox's http_proxy
 	// usually can't reach a hub on the private network and answers 502.
@@ -178,17 +175,29 @@ func pairNode(hub, code, name string) (nodeConfig, error) {
 
 var errRevoked = errors.New("revoked")
 
-func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock string, api http.Handler) error {
-	u, err := url.Parse(cfg.Hub)
+func hubDialAddr(rawHub string) (*url.URL, string, error) {
+	u, err := url.Parse(normalizeBaseURL(rawHub))
 	if err != nil {
-		return err
+		return nil, "", err
+	}
+	if u.Host == "" || u.Hostname() == "" {
+		return nil, "", fmt.Errorf("invalid hub address: %q", rawHub)
 	}
 	addr := u.Host
 	if u.Port() == "" {
-		addr = net.JoinHostPort(u.Hostname(), map[string]string{"https": "443"}[u.Scheme])
-		if u.Scheme != "https" {
-			addr = net.JoinHostPort(u.Hostname(), "80")
+		port := "80"
+		if u.Scheme == "https" {
+			port = "443"
 		}
+		addr = net.JoinHostPort(u.Hostname(), port)
+	}
+	return u, addr, nil
+}
+
+func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock string, api http.Handler) error {
+	u, addr, err := hubDialAddr(cfg.Hub)
+	if err != nil {
+		return err
 	}
 	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	var conn net.Conn
@@ -200,7 +209,11 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	if err != nil {
 		return err
 	}
-	req, _ := http.NewRequest("GET", strings.TrimRight(cfg.Hub, "/")+"/api/node/connect", nil)
+	req, err := http.NewRequest("GET", normalizeBaseURL(cfg.Hub)+"/api/node/connect", nil)
+	if err != nil {
+		conn.Close()
+		return err
+	}
 	req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "collie-node")

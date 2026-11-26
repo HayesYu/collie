@@ -47,7 +47,10 @@ func cliCall(method, path string, body any) ([]byte, error) {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, base+path, rd)
+	req, err := http.NewRequest(method, base+path, rd)
+	if err != nil {
+		return nil, fmt.Errorf("invalid collie server address %q: %w", base, err)
+	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
@@ -70,7 +73,7 @@ func cliCall(method, path string, body any) ([]byte, error) {
 // (with this computer's token); otherwise the hub running on this machine.
 func cliTarget() (base, token string, err error) {
 	if c, ok := loadNodeConfig(); ok {
-		return strings.TrimRight(c.Hub, "/"), c.Token, nil
+		return normalizeBaseURL(c.Hub), c.Token, nil
 	}
 	dir := collieDir()
 	tok, err := os.ReadFile(filepath.Join(dir, "token"))
@@ -81,11 +84,7 @@ func cliTarget() (base, token string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("collie server is not running (no %s/addr)", dir)
 	}
-	a := strings.TrimSpace(string(addr))
-	if !strings.Contains(a, "://") {
-		a = "http://" + a
-	}
-	return a, strings.TrimSpace(string(tok)), nil
+	return normalizeBaseURL(string(addr)), strings.TrimSpace(string(tok)), nil
 }
 
 // cliPair prints a one-time code: a QR code for a phone, or the command that
@@ -111,7 +110,11 @@ func cliPair(args []string) error {
 		return fmt.Errorf("hub has no address")
 	}
 	if *computer {
-		fmt.Printf("\n  在要加入的电脑上运行（10 分钟内有效，只能用一次）：\n\n    collie node --hub %s --code %s\n\n", r.Addresses[0], r.Code)
+		hubArg := r.Addresses[0]
+		if strings.ContainsAny(hubArg, "[]") {
+			hubArg = "'" + hubArg + "'"
+		}
+		fmt.Printf("\n  在要加入的电脑上运行（10 分钟内有效，只能用一次）：\n\n    collie node --hub %s --code %s\n\n", hubArg, r.Code)
 		if len(r.Addresses) > 1 {
 			fmt.Printf("  连不上的话换一个地址：%s\n\n", strings.Join(r.Addresses[1:], "  "))
 		}

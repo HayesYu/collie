@@ -992,7 +992,11 @@
       machines: [...(localState.machines && localState.machines.length ? localState.machines : [{ id: "", name: "本机", local: true, online: localState.ok }]),
         ...parts.flatMap((p) => p.machines)] };
   }
-  function setLocalState(next) { localState = next; state = mergedState(); }
+  function setLocalState(next) {
+    localState = next;
+    syncReadCursorFromServer(next?.last_read_entry_id, sup.entries);
+    state = mergedState();
+  }
   function remoteChanged() {
     const m = mergedState();
     notifyTransitions(m);
@@ -1052,6 +1056,7 @@
     });
     ev.addEventListener("state", (e) => {
       localState = JSON.parse(e.data);
+      syncReadCursorFromServer(localState?.last_read_entry_id, sup.entries);
       const next = mergedState();
       notifyTransitions(next);
       state = next;
@@ -1228,9 +1233,115 @@
   // Optimistic pin toggles before the hub's next stream frame lands: id -> { pinned, item }.
   const pinnedLocal = new Map();
   const AT_BOTTOM_PX = 36;
+  const CHAT_READ_KEY = "chatReadEntryId";
+  const UNREAD_TOP_PAD = 14;
+  const CHAT_READ_DEBOUNCE_MS = 450;
+  let readCursorId = "";
+  let serverReadCursorId = "";
+  let sessionUnreadMarkerId = "";
+  let unreadAnchorApplied = false;
+  let readSyncTimer = 0;
+  let pendingReadSyncId = "";
+  const latestEntryNum = (list) => {
+    let max = 0;
+    for (const e of list || []) {
+      const n = entryIdNum(e?.id);
+      if (n > max) max = n;
+    }
+    return max;
+  };
+  const latestPersistedEntryId = (list = chatEntries()) => {
+    let bestId = "", bestN = 0;
+    for (const e of list || []) {
+      const n = entryIdNum(e?.id);
+      if (n > bestN) { bestN = n; bestId = e.id; }
+    }
+    return bestId;
+  };
+  function syncReadCursorFromServer(rawId, entries = sup.entries) {
+    const srvId = typeof rawId === "string" ? rawId.trim() : "";
+    const srvN = entryIdNum(srvId);
+    const maxN = latestEntryNum(entries);
+    if (srvN > entryIdNum(serverReadCursorId)) {
+      serverReadCursorId = srvId;
+    }
+    let locId = store.get(CHAT_READ_KEY, "");
+    let locN = entryIdNum(locId);
+    if (locN > 0 && maxN > 0 && locN > maxN) {
+      locId = "";
+      locN = 0;
+      store.set(CHAT_READ_KEY, "");
+    }
+    const curN = entryIdNum(readCursorId);
+    if (curN > 0 && maxN > 0 && curN > maxN && srvN < curN) {
+      readCursorId = "";
+    }
+    const bestN = Math.max(entryIdNum(readCursorId), entryIdNum(serverReadCursorId), locN);
+    if (bestN > 0) {
+      const bestId = bestN === entryIdNum(serverReadCursorId) ? serverReadCursorId
+        : bestN === entryIdNum(readCursorId) ? readCursorId
+        : locId;
+      if (bestId !== readCursorId) readCursorId = bestId;
+      if (entryIdNum(bestId) > locN) store.set(CHAT_READ_KEY, bestId);
+    }
+  }
+  function sendChatReadNow(entryId, keepalive = false) {
+    const id = String(entryId || "").trim();
+    if (!id || entryIdNum(id) <= entryIdNum(serverReadCursorId)) return;
+    if (keepalive && typeof fetch === "function") {
+      try {
+        fetch("/api/chat/read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ entry_id: id }),
+          keepalive: true,
+        }).catch(() => {});
+      } catch {}
+      return;
+    }
+    api("/api/chat/read", { body: { entry_id: id } })
+      .then((r) => {
+        const ack = r?.last_read_entry_id || id;
+        if (entryIdNum(ack) > entryIdNum(serverReadCursorId)) serverReadCursorId = ack;
+      })
+      .catch(() => {});
+  }
+  function flushPendingChatRead(keepalive = false) {
+    if (!pendingReadSyncId) return;
+    clearTimeout(readSyncTimer);
+    readSyncTimer = 0;
+    const sendId = pendingReadSyncId;
+    pendingReadSyncId = "";
+    sendChatReadNow(sendId, keepalive);
+  }
+  function commitChatRead(entryId, opts = {}) {
+    const id = String(entryId || "").trim();
+    const n = entryIdNum(id);
+    if (n <= 0) return;
+    if (n > entryIdNum(readCursorId)) {
+      readCursorId = id;
+      store.set(CHAT_READ_KEY, id);
+    }
+    const targetId = readCursorId;
+    if (entryIdNum(targetId) <= entryIdNum(serverReadCursorId)) return;
+    pendingReadSyncId = targetId;
+    if (opts.immediate) {
+      flushPendingChatRead(!!opts.keepalive);
+      return;
+    }
+    clearTimeout(readSyncTimer);
+    readSyncTimer = setTimeout(() => {
+      readSyncTimer = 0;
+      const sendId = pendingReadSyncId;
+      pendingReadSyncId = "";
+      if (sendId) sendChatReadNow(sendId, false);
+    }, opts.delay ?? CHAT_READ_DEBOUNCE_MS);
+  }
   function normSup(s) {
     s.hasPending = Array.isArray(s.pending);
     s.entries ||= []; s.workers ||= []; s.pending ||= []; s.pinned ||= []; s.router ||= { status: "asleep" };
+    syncReadCursorFromServer(s.last_read_entry_id, s.entries);
     // Preserve entries sliding off the front of the hub's 200-entry window when
     // earlier pages are loaded or the viewer is reading above the bottom, so an
     // anchored historical message never vanishes from the DOM on SSE updates.
@@ -1422,6 +1533,19 @@
   function applyCollieAnchor(sc, snap) {
     if (!sc || !snap) return false;
     const box = $("#super-thread");
+    if (snap.unreadSep && box) {
+      const sep = $("#unread-sep", box);
+      if (sep) {
+        const sr = sc.getBoundingClientRect();
+        const mr = sep.getBoundingClientRect();
+        const delta = (mr.top - sr.top) - snap.anchorOffset;
+        if (Math.abs(delta) > 0.5) {
+          markProgrammaticScroll(120);
+          sc.scrollTop += delta;
+        }
+        return true;
+      }
+    }
     if (snap.anchorId && box) {
       const eid = CSS.escape(snap.anchorId);
       const el = box.querySelector(`.msg[data-id="${eid}"], .event[data-id="${eid}"]`);
@@ -1721,8 +1845,14 @@
     renderSide();
     if (next === "collie") {
       const savedThread = wasExistingIdx ? threadByIdx.get(navCur) : null;
-      if (saved && !saved.atBottom) renderSuper({ force: true, restore: saved });
-      else renderSuper({ force: true, scrollBottom: true });
+      if (saved && !saved.atBottom) {
+        unreadAnchorApplied = true;
+        renderSuper({ force: true, restore: saved });
+      } else {
+        unreadAnchorApplied = false;
+        sessionUnreadMarkerId = "";
+        renderSuper({ force: true, unreadAnchor: true });
+      }
       renderTarget(true);
       if (savedThread?.rootId) {
         openThreadDrawer(savedThread.rootId, "", savedThread.anchorId || savedThread.rootId, {
@@ -1788,6 +1918,38 @@
   // a dialog waiting on the human shows as a card below. Reports and errors stay.
   const CHATTER = /\s(完成了一轮|等你确认|已停止|已退出|回来了（herdr 恢复了它的窗格）)$/;
   const workerChatter = (e) => e.ref && e.ref !== ROUTER && (e.tone === "done" || e.tone === "info" || e.tone === "blocked") && CHATTER.test(e.text);
+  const isHiddenSuperEntry = (e) => {
+    if (!e) return true;
+    if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") return true;
+    if (e.role === "event" && workerChatter(e)) return true;
+    return false;
+  };
+  const isSubstantiveUnread = (e) => {
+    if (!e || !e.id || isHiddenSuperEntry(e)) return false;
+    if (e.role === "collie") return true;
+    if (e.role === "event" && (e.tone === "error" || e.tone === "blocked")) return true;
+    return false;
+  };
+  function computeUnreadInfo(allEntries = chatEntries(), cursorId = readCursorId) {
+    const curN = entryIdNum(cursorId);
+    if (curN <= 0) return { firstUnreadId: "", count: 0 };
+    let firstUnreadId = "", count = 0;
+    for (const e of allEntries || []) {
+      if (!isSubstantiveUnread(e)) continue;
+      if (entryIdNum(e.id) > curN) {
+        if (!firstUnreadId) firstUnreadId = e.id;
+        count++;
+      }
+    }
+    return { firstUnreadId, count };
+  }
+  function findUnreadRowEl(box, id) {
+    if (!box || !id) return null;
+    const eid = CSS.escape(id);
+    const el = box.querySelector(`.msg[data-id="${eid}"], .event[data-id="${eid}"]`);
+    if (!el) return null;
+    return el.closest(".say, .mine") || el;
+  }
   // Messages waiting for Collie itself (an older hub only counts them all).
   const routerQueued = () => sup.queued_router ?? sup.queued;
   // Messages you sent that the hub's stream hasn't shown yet.
@@ -1929,7 +2091,7 @@
   const ICON_X = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
   const ICON_PIN = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-body" d="M9.5 3.5h5v5l3 3v2h-11v-2l3-3z"/><path d="M8.5 3.5h7M12 13.5v7"/></svg>`;
   let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
-  const SUPER_JUMP_DIST = 160;
+  const SUPER_JUMP_DIST = 120;
 
   function scrollToAsync(sc, top, behavior = "smooth") {
     const res = sc.scrollTo({ top, behavior });
@@ -1954,11 +2116,34 @@
     if (!btn || !sc) return;
     const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
     if (dist <= 24) superJumpHiding = false;
-    const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > SUPER_JUMP_DIST;
+    const unreadCount = view === "collie" ? computeUnreadInfo().count : 0;
+    const threshold = unreadCount > 0 ? AT_BOTTOM_PX : SUPER_JUMP_DIST;
+    const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > threshold;
+    const labelText = unreadCount > 0 ? `${unreadCount} 条未读` : "回到底部";
+    const ariaText = unreadCount > 0 ? `回到底部，${unreadCount} 条未读` : "回到底部";
+    const labelEl = $("#super-jump-label", btn);
+    if (labelEl && labelEl.textContent !== labelText) labelEl.textContent = labelText;
+    btn.classList.toggle("has-unread", unreadCount > 0);
+    if (btn.title !== ariaText) {
+      btn.title = ariaText;
+      btn.setAttribute("aria-label", ariaText);
+    }
     if (btn.hidden === !show) return;
     const hadFocus = !show && document.activeElement === btn;
     btn.hidden = !show;
     if (hadFocus) sc.focus({ preventScroll: true });
+  }
+  function maybeScheduleReadAtBottom(opts = {}) {
+    if (view !== "collie" || document.hidden || collieLayoutLock) return;
+    const sc = $("#super-thread")?.parentElement;
+    if (!sc || sc.clientHeight <= 0) return;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    if (dist > AT_BOTTOM_PX) return;
+    const latestId = latestPersistedEntryId();
+    if (!latestId) return;
+    if (entryIdNum(latestId) <= entryIdNum(readCursorId) && entryIdNum(latestId) <= entryIdNum(serverReadCursorId)) return;
+    commitChatRead(latestId, opts);
+    updateSuperJump();
   }
 
   function optimisticallyResolved(id, list = chatEntries()) {
@@ -2503,6 +2688,7 @@
   function renderSuper(opts) {
     const force = opts === true || !!opts?.force;
     const forceBottom = !!opts?.scrollBottom;
+    const wantUnreadAnchor = !!opts?.unreadAnchor;
     const restore = opts?.restore || null;
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
     const scroller = box.parentElement;
@@ -2510,7 +2696,8 @@
     const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : distBefore <= AT_BOTTOM_PX;
     const jumping = flashEntry.until > Date.now();
-    const liveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy ? captureCollieAnchor(scroller) : null;
+    const shouldApplyUnreadAnchor = (wantUnreadAnchor || !unreadAnchorApplied) && !forceBottom && !holdRestore && !activeThreadRoot && view === "collie";
+    const liveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor ? captureCollieAnchor(scroller) : null;
     const prevScrollTop = scroller.scrollTop;
     const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew.innerHTML;
     const r = sup.router || {};
@@ -2562,6 +2749,12 @@
       // a word on the worker whose line it follows.
       let lastUser = "", sinceUser = 0, lastEvent = "", lastEventId = "", lastCollie = "", sinceCollie = 0;
       const allEntries = chatEntries();
+      const unreadNow = computeUnreadInfo(allEntries, readCursorId);
+      if (shouldApplyUnreadAnchor) {
+        sessionUnreadMarkerId = unreadNow.firstUnreadId;
+      } else if (!sessionUnreadMarkerId && (!atBottom || document.hidden) && unreadNow.firstUnreadId) {
+        sessionUnreadMarkerId = unreadNow.firstUnreadId;
+      }
       const threadInfo = computeReplyThreads(allEntries);
       curThreadInfo = threadInfo;
       if (activeThreadRoot && !threadInfo.threads.has(activeThreadRoot) && activeThreadAnchor) {
@@ -2639,8 +2832,11 @@
       renderCollieThreadsMenu(threadInfo);
       for (let ei = 0; ei < allEntries.length; ei++) {
         const e = allEntries[ei];
-        if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
-        if (e.role === "event" && workerChatter(e)) continue;
+        if (isHiddenSuperEntry(e)) continue;
+        if (sessionUnreadMarkerId && e.id === sessionUnreadMarkerId) {
+          html += `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(e.id)}" role="separator" aria-label="以下为未读消息"><span>以下为未读消息</span></div>`;
+          prev = "";
+        }
         // A quiet line with the time when the talk picks up again after a
         // while (or on a new day); hovering a message shows its exact time.
         const at = +new Date(e.at) || 0;
@@ -2726,13 +2922,113 @@
         box.querySelector(`.msg[data-id="${fid}"], .event[data-id="${fid}"]`)?.classList.add("flash");
       }
       if (activeThreadRoot) syncThreadDrawer();
-    } else if (!busyChanged && !crewChanged) {
+    } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor) {
       syncActiveThreadMarks(curThreadInfo);
       if (activeThreadRoot) syncThreadDrawer();
+      updateSuperJump();
       return;
     } else {
       syncActiveThreadMarks(curThreadInfo);
       if (activeThreadRoot) syncThreadDrawer();
+    }
+    if (shouldApplyUnreadAnchor && scroller.clientHeight > 0) {
+      const hasEntries = chatEntries().length > 0;
+      if (hasEntries) unreadAnchorApplied = true;
+      const sepEl = sessionUnreadMarkerId ? $("#unread-sep", box) : null;
+      const firstEl = sessionUnreadMarkerId ? findUnreadRowEl(box, sessionUnreadMarkerId) : null;
+      if (sepEl && firstEl) {
+        const placeUnread = () => {
+          const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+          const sr = scroller.getBoundingClientRect();
+          const sepRect = sepEl.getBoundingClientRect();
+          const firstRect = firstEl.getBoundingClientRect();
+          const sepTop = scroller.scrollTop + (sepRect.top - sr.top);
+          const firstTop = scroller.scrollTop + (firstRect.top - sr.top);
+          const wantTop = Math.max(0, Math.min(maxTop, sepTop - UNREAD_TOP_PAD));
+          const distAtAnchor = maxTop - wantTop;
+          const fitsAtBottom = maxTop <= 0 || (firstTop >= maxTop && distAtAnchor <= AT_BOTTOM_PX);
+          if (fitsAtBottom) {
+            activeCollieRestore = null;
+            markProgrammaticScroll();
+            scroller.scrollTop = scroller.scrollHeight;
+            return { fitsAtBottom: true, wantTop: maxTop };
+          }
+          markProgrammaticScroll(140);
+          scroller.scrollTop = wantTop;
+          return { fitsAtBottom: false, wantTop };
+        };
+        const placed = placeUnread();
+        if (placed.fitsAtBottom) {
+          const set = scroller.scrollTop;
+          if (typeof requestAnimationFrame === "function") {
+            if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+            superScrollRAF = requestAnimationFrame(() => {
+              if (scroller.scrollTop === set) {
+                markProgrammaticScroll();
+                scroller.scrollTop = scroller.scrollHeight;
+              }
+              captureViewScroll("collie", null, navCur);
+              updateSuperJump();
+              maybeScheduleReadAtBottom();
+            });
+          } else {
+            captureViewScroll("collie", null, navCur);
+            maybeScheduleReadAtBottom();
+          }
+        } else {
+          activeCollieRestore = {
+            unreadSep: true,
+            anchorId: sessionUnreadMarkerId,
+            anchorOffset: UNREAD_TOP_PAD,
+            atBottom: false,
+            scrollTop: placed.wantTop,
+            until: performance.now() + 360,
+          };
+          if (typeof cancelAnimationFrame === "function") {
+            cancelAnimationFrame(superScrollRAF);
+            cancelAnimationFrame(collieRestoreRAF);
+          }
+          if (typeof requestAnimationFrame === "function") {
+            collieRestoreRAF = requestAnimationFrame(() => {
+              if (view !== "collie" || !activeCollieRestore?.unreadSep) return;
+              const again = placeUnread();
+              if (again.fitsAtBottom) {
+                maybeScheduleReadAtBottom();
+              } else if (activeCollieRestore) {
+                activeCollieRestore.scrollTop = again.wantTop;
+              }
+              captureViewScroll("collie", null, navCur);
+              updateSuperJump();
+            });
+          } else {
+            captureViewScroll("collie", null, navCur);
+          }
+        }
+        updateSuperJump();
+        return;
+      }
+      // No unread (or first-time enablement with no read cursor): stick cleanly to bottom and record cursor.
+      activeCollieRestore = null;
+      markProgrammaticScroll();
+      scroller.scrollTop = scroller.scrollHeight;
+      const set = scroller.scrollTop;
+      if (typeof requestAnimationFrame === "function") {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+        superScrollRAF = requestAnimationFrame(() => {
+          if (scroller.scrollTop === set) {
+            markProgrammaticScroll();
+            scroller.scrollTop = scroller.scrollHeight;
+          }
+          captureViewScroll("collie", null, navCur);
+          updateSuperJump();
+          maybeScheduleReadAtBottom();
+        });
+      } else {
+        captureViewScroll("collie", null, navCur);
+        maybeScheduleReadAtBottom();
+      }
+      updateSuperJump();
+      return;
     }
     if (holdRestore && !holdRestore.atBottom) {
       activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
@@ -2766,7 +3062,10 @@
           }
           captureViewScroll("collie", null, navCur);
           updateSuperJump();
+          maybeScheduleReadAtBottom();
         });
+      } else {
+        maybeScheduleReadAtBottom();
       }
     } else {
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
@@ -2779,36 +3078,49 @@
   $("#super-thread")._loadMore = () => canLoadOlder() && loadOlder();
   {
     const sc = $("#super-thread")?.parentElement;
-    sc?.addEventListener("scroll", updateSuperJump, { passive: true });
+    sc?.addEventListener("scroll", () => {
+      updateSuperJump();
+      if (performance.now() >= programmaticScrollUntil) maybeScheduleReadAtBottom();
+    }, { passive: true });
     sc?.addEventListener("wheel", (e) => {
       cancelCollieLayoutLock();
       activeCollieRestore = null;
-      if (e.deltaY < 0 && superJumpHiding) { superJumpHiding = false; updateSuperJump(); }
+      if (e.deltaY < 0 && superJumpHiding) { jumpSeq++; superJumpHiding = false; updateSuperJump(); }
     }, { passive: true });
     sc?.addEventListener("touchmove", () => {
       cancelCollieLayoutLock();
       activeCollieRestore = null;
-      if (superJumpHiding) superJumpHiding = false;
+      if (superJumpHiding) { jumpSeq++; superJumpHiding = false; updateSuperJump(); }
     }, { passive: true });
     sc?.addEventListener("pointerdown", () => { cancelCollieLayoutLock(); activeCollieRestore = null; }, { passive: true });
     addEventListener("resize", updateSuperJump);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) flushPendingChatRead(true);
+      else maybeScheduleReadAtBottom();
+    });
+    addEventListener("pagehide", () => flushPendingChatRead(true));
     $("#super-jump")?.addEventListener("click", async () => {
       if (!sc) return;
-      jumpSeq++;
+      const seq = ++jumpSeq;
       cancelCollieLayoutLock();
       activeCollieRestore = null;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       superJumpHiding = true;
+      const latestId = latestPersistedEntryId();
+      if (latestId) commitChatRead(latestId, { immediate: true });
       updateSuperJump();
       const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (smooth && sc.scrollHeight - sc.scrollTop > sc.clientHeight * 2.5) {
         sc.scrollTop = sc.scrollHeight - sc.clientHeight * 1.8;
       }
       await scrollToAsync(sc, sc.scrollHeight, smooth ? "smooth" : "auto");
+      if (seq !== jumpSeq) return;
       markProgrammaticScroll();
       sc.scrollTop = sc.scrollHeight;
       captureViewScroll("collie", null, navCur);
       superJumpHiding = false;
+      const afterId = latestPersistedEntryId();
+      if (afterId) commitChatRead(afterId, { immediate: true });
       updateSuperJump();
     });
   }
@@ -3016,6 +3328,10 @@
     const mine = { id: "", _localId: "_p" + (++pendingSaySeq), role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
     activeCollieRestore = null;
+    unreadAnchorApplied = true;
+    sessionUnreadMarkerId = "";
+    const latestBeforeSend = latestPersistedEntryId();
+    if (latestBeforeSend) commitChatRead(latestBeforeSend, { immediate: false });
     renderSide();
     renderSuper({ force: true, scrollBottom: true });
     let r;
@@ -3037,6 +3353,7 @@
     }
     // The hub's copy may already be here (its push beat the reply): swap now.
     mine.id = r?.entry || "";
+    if (mine.id) commitChatRead(mine.id, { immediate: true });
     if (!mine.id || sup.entries.some((e) => e.id === mine.id)) {
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0) pendingSays.splice(idx, 1);

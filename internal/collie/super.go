@@ -2024,6 +2024,62 @@ func (sp *Super) pinnedLocked() []PinnedItem {
 	return out
 }
 
+// isValidEntryID reports whether id has the canonical entry form "e<positive-int>".
+func isValidEntryID(id string) bool {
+	if len(id) < 2 || len(id) > 32 || id[0] != 'e' {
+		return false
+	}
+	for i := 1; i < len(id); i++ {
+		if id[i] < '0' || id[i] > '9' {
+			return false
+		}
+	}
+	return idNum(id) > 0
+}
+
+// LastReadEntryID returns the persisted chat:main read cursor, or "" if unset.
+func (sp *Super) LastReadEntryID() string {
+	if sp == nil {
+		return ""
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.st.LastReadEntryID
+}
+
+// MarkChatRead monotonically advances the persisted chat:main read cursor and
+// writes it straight to SQLite kv without a full state rewrite.
+func (sp *Super) MarkChatRead(entryID string) (string, bool, error) {
+	id := strings.TrimSpace(entryID)
+	if !isValidEntryID(id) {
+		return "", false, errors.New("invalid entry_id")
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	cur := sp.st.LastReadEntryID
+	if idNum(id) <= idNum(cur) {
+		return cur, false, nil
+	}
+	if sp.db != nil {
+		if _, err := sp.db.Exec(
+			`INSERT INTO kv(k,v) VALUES('last_read_entry_id',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`,
+			id,
+		); err != nil {
+			return cur, false, err
+		}
+	} else {
+		sp.dirty = true
+	}
+	sp.st.LastReadEntryID = id
+	for ch := range sp.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return id, true, nil
+}
+
 // Dismiss marks one pending message as acknowledged/ignored by the human and persists it.
 func (sp *Super) Dismiss(id string) {
 	sp.dismiss(id, true)

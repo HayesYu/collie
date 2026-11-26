@@ -158,16 +158,17 @@ type Settings struct {
 }
 
 type State struct {
-	Seq       int                `json:"seq"`
-	Triggers  []*Trigger         `json:"triggers"`
-	Threads   map[string]*Thread `json:"threads"`
-	Workers   map[string]*Worker `json:"workers"`
-	Entries   []*Entry           `json:"entries"`
-	Dismissed map[string]bool    `json:"dismissed,omitempty"`
-	Pinned    []string           `json:"pinned,omitempty"`
-	Timers    []*Timer           `json:"timers"`
-	Policies  []Policy           `json:"policies"`
-	Settings  Settings           `json:"settings"`
+	Seq             int                `json:"seq"`
+	Triggers        []*Trigger         `json:"triggers"`
+	Threads         map[string]*Thread `json:"threads"`
+	Workers         map[string]*Worker `json:"workers"`
+	Entries         []*Entry           `json:"entries"`
+	Dismissed       map[string]bool    `json:"dismissed,omitempty"`
+	Pinned          []string           `json:"pinned,omitempty"`
+	LastReadEntryID string             `json:"last_read_entry_id,omitempty"`
+	Timers          []*Timer           `json:"timers"`
+	Policies        []Policy           `json:"policies"`
+	Settings        Settings           `json:"settings"`
 }
 
 const (

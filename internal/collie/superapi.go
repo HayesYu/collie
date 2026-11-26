@@ -26,6 +26,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/reply", s.superReply)
 	api("POST /api/super/dismiss", s.superDismiss)
 	api("POST /api/super/pin", s.superPin)
+	api("POST /api/chat/read", s.superMarkRead)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
 	api("POST /api/super/report", s.superReport)
@@ -89,9 +90,11 @@ type superView struct {
 	// Pending: Collie's --opt and --check messages in chat:main still waiting on the human.
 	Pending []PendingItem `json:"pending"`
 	// Pinned: messages in chat:main manually pinned by the human until unpinned.
-	Pinned  []PinnedItem `json:"pinned"`
-	Workers []*Worker    `json:"workers"`
-	Queued  int          `json:"queued"`
+	Pinned []PinnedItem `json:"pinned"`
+	// LastReadEntryID: persisted main-chat read watermark shared across devices.
+	LastReadEntryID string    `json:"last_read_entry_id,omitempty"`
+	Workers         []*Worker `json:"workers"`
+	Queued          int       `json:"queued"`
 	// QueuedRouter: those waiting for Collie itself, not for a worker.
 	QueuedRouter int  `json:"queued_router"`
 	Paused       bool `json:"paused"`
@@ -155,6 +158,7 @@ func (s *Server) superState(ctx context.Context) superView {
 	if v.Pinned == nil {
 		v.Pinned = []PinnedItem{}
 	}
+	v.LastReadEntryID = sp.st.LastReadEntryID
 	v.Workers = []*Worker{}
 	for _, w := range sp.st.Workers {
 		if !w.Ended || time.Since(w.CreatedAt) < 12*time.Hour {
@@ -384,6 +388,30 @@ func (s *Server) superPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "pinned": body.Pinned})
+}
+
+func (s *Server) superMarkRead(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EntryID         string `json:"entry_id"`
+		LastReadEntryID string `json:"last_read_entry_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := strings.TrimSpace(body.EntryID)
+	if id == "" {
+		id = strings.TrimSpace(body.LastReadEntryID)
+	}
+	if id == "" {
+		writeJSON(w, 400, map[string]any{"error": "entry_id is required"})
+		return
+	}
+	cur, changed, err := s.sup.MarkChatRead(id)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "last_read_entry_id": cur, "changed": changed})
 }
 
 // replyLen is a reply's length as people read it: each Chinese/Japanese/Korean

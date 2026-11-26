@@ -275,11 +275,12 @@ type AgentView struct {
 }
 
 type PaneState struct {
-	OK       bool        `json:"ok"`
-	Error    string      `json:"error,omitempty"`
-	Agents   []AgentView `json:"agents"`
-	Shells   []AgentView `json:"shells"`
-	Machines []Machine   `json:"machines"`
+	OK              bool        `json:"ok"`
+	Error           string      `json:"error,omitempty"`
+	Agents          []AgentView `json:"agents"`
+	Shells          []AgentView `json:"shells"`
+	Machines        []Machine   `json:"machines"`
+	LastReadEntryID string      `json:"last_read_entry_id,omitempty"`
 }
 
 func deref(p *string) string {
@@ -292,14 +293,18 @@ func deref(p *string) string {
 func (s *Server) state(ctx context.Context) PaneState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	lastRead := ""
+	if s.sup != nil {
+		lastRead = s.sup.LastReadEntryID()
+	}
 	machines := s.herdr.Machines()
 	ws, err := s.herdr.Workspaces(ctx)
 	if err != nil {
-		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines}
+		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, LastReadEntryID: lastRead}
 	}
 	panes, err := s.herdr.Panes(ctx)
 	if err != nil {
-		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines}
+		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, LastReadEntryID: lastRead}
 	}
 	agents, _ := s.herdr.Agents(ctx)
 
@@ -314,7 +319,7 @@ func (s *Server) state(ctx context.Context) PaneState {
 		names[a.PaneID] = deref(a.Name)
 	}
 
-	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines}
+	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, LastReadEntryID: lastRead}
 	topics := map[string]map[string]paneSession{"": s.titlesFor("", ctx)}
 	for _, m := range machines {
 		if !m.Local && m.Online {

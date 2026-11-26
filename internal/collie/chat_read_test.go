@@ -1,0 +1,652 @@
+package collie
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/fstest"
+)
+
+func TestChatReadCursorPersistenceAndAPI(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "herd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	st, err := loadState(db, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LastReadEntryID != "" {
+		t.Fatalf("fresh DB LastReadEntryID = %q, want empty", st.LastReadEntryID)
+	}
+
+	herdr := newHerdr(filepath.Join(dir, "missing-herdr.sock"), "devbox", dir)
+	herdr.local.conn.dial = func(context.Context) (net.Conn, error) { return nil, errors.New("offline") }
+	srv := &Server{
+		herdr: herdr,
+		token: "test-tok",
+		home:  dir,
+		web:   fstest.MapFS{},
+		auths: newAuth(db, "test-tok"),
+	}
+	sp := &Super{s: srv, db: db, dir: dir, st: st, subs: map[chan struct{}]bool{}}
+	srv.sup = sp
+	handler := srv.Routes()
+
+	call := func(method, path, tok string, body any) *httptest.ResponseRecorder {
+		var rd *bytes.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rd = bytes.NewReader(b)
+		} else {
+			rd = bytes.NewReader(nil)
+		}
+		req := httptest.NewRequest(method, path, rd)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Unauthenticated POST /api/chat/read is rejected.
+	if rec := call("POST", "/api/chat/read", "", map[string]any{"entry_id": "e10"}); rec.Code != 401 {
+		t.Fatalf("unauth POST /api/chat/read = %d, want 401", rec.Code)
+	}
+
+	// Initially both /api/state and /api/super omit last_read_entry_id (empty).
+	for _, ep := range []string{"/api/state", "/api/super"} {
+		rec := call("GET", ep, "test-tok", nil)
+		if rec.Code != 200 {
+			t.Fatalf("GET %s = %d: %s", ep, rec.Code, rec.Body.String())
+		}
+		var m map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+			t.Fatalf("GET %s invalid JSON: %v", ep, err)
+		}
+		if v, ok := m["last_read_entry_id"]; ok && v != "" {
+			t.Fatalf("initial GET %s last_read_entry_id = %v, want omitted/empty", ep, v)
+		}
+	}
+
+	// Invalid entry IDs return 400.
+	for _, bad := range []map[string]any{
+		{},
+		{"entry_id": ""},
+		{"entry_id": "e0"},
+		{"entry_id": "t12"},
+		{"entry_id": "abc"},
+		{"entry_id": "e-5"},
+		{"entry_id": "e12x"},
+	} {
+		if rec := call("POST", "/api/chat/read", "test-tok", bad); rec.Code != 400 {
+			t.Fatalf("POST /api/chat/read %v = %d, want 400", bad, rec.Code)
+		}
+	}
+
+	// Subscribe to SSE wakeup to confirm MarkChatRead notifies only on forward change.
+	ch, unsub := sp.subscribe()
+	defer unsub()
+
+	// Advance cursor via entry_id.
+	rec := call("POST", "/api/chat/read", "test-tok", map[string]any{"entry_id": "e12"})
+	if rec.Code != 200 {
+		t.Fatalf("POST /api/chat/read e12 = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		OK              bool   `json:"ok"`
+		LastReadEntryID string `json:"last_read_entry_id"`
+		Changed         bool   `json:"changed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK || !out.Changed || out.LastReadEntryID != "e12" {
+		t.Fatalf("advance e12 = %+v, want ok=true changed=true id=e12", out)
+	}
+	select {
+	case <-ch:
+	default:
+		t.Fatal("MarkChatRead did not wake SSE subscribers on advance")
+	}
+
+	// Monotonic: posting older or equal entry_id must not regress or spuriously notify.
+	for _, stale := range []string{"e5", "e12"} {
+		rec = call("POST", "/api/chat/read", "test-tok", map[string]any{"entry_id": stale})
+		if rec.Code != 200 {
+			t.Fatalf("POST /api/chat/read %s = %d", stale, rec.Code)
+		}
+		out = struct {
+			OK              bool   `json:"ok"`
+			LastReadEntryID string `json:"last_read_entry_id"`
+			Changed         bool   `json:"changed"`
+		}{}
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		if !out.OK || out.Changed || out.LastReadEntryID != "e12" {
+			t.Fatalf("stale %s response = %+v, want changed=false id=e12", stale, out)
+		}
+		select {
+		case <-ch:
+			t.Fatalf("stale %s should not wake subscribers", stale)
+		default:
+		}
+	}
+
+	// Paired browser device can also advance using last_read_entry_id alias.
+	code, _ := srv.auths.newCode("browser")
+	_, browserTok, err := srv.auths.redeem(code, "browser", "Phone · Safari", "iOS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = call("POST", "/api/chat/read", browserTok, map[string]any{"last_read_entry_id": "e42"})
+	if rec.Code != 200 {
+		t.Fatalf("browser POST /api/chat/read = %d: %s", rec.Code, rec.Body.String())
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if !out.OK || !out.Changed || out.LastReadEntryID != "e42" {
+		t.Fatalf("browser advance e42 = %+v, want changed=true id=e42", out)
+	}
+
+	// Both /api/state and /api/super now expose last_read_entry_id == "e42".
+	for _, ep := range []string{"/api/state", "/api/super"} {
+		rec := call("GET", ep, "test-tok", nil)
+		if rec.Code != 200 {
+			t.Fatalf("GET %s = %d", ep, rec.Code)
+		}
+		var m map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &m)
+		if got, _ := m["last_read_entry_id"].(string); got != "e42" {
+			t.Fatalf("GET %s last_read_entry_id = %q, want e42", ep, got)
+		}
+	}
+
+	// Persisted straight to SQLite without calling sp.flush(): reload immediately sees e42.
+	reloaded, err := loadState(db, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.LastReadEntryID != "e42" {
+		t.Fatalf("reloaded LastReadEntryID = %q, want e42", reloaded.LastReadEntryID)
+	}
+
+	// Full saveState round-trip also preserves LastReadEntryID.
+	reloaded.LastReadEntryID = "e99"
+	if err := saveState(db, reloaded, nil); err != nil {
+		t.Fatal(err)
+	}
+	reloaded2, err := loadState(db, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded2.LastReadEntryID != "e99" {
+		t.Fatalf("saveState round-trip LastReadEntryID = %q, want e99", reloaded2.LastReadEntryID)
+	}
+}
+
+func TestUnreadAnchorAndJumpPillJS(t *testing.T) {
+	nodeBin, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	root := filepath.Join("..", "..")
+	jsTest := `
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+const assert = require("assert/strict");
+
+const appSrc = fs.readFileSync(path.join(process.argv[1], "web", "app.js"), "utf8");
+
+function makeClassList() {
+  const set = new Set();
+  return {
+    add: (...cs) => cs.forEach((c) => c && set.add(c)),
+    remove: (...cs) => cs.forEach((c) => set.delete(c)),
+    toggle: (c, f) => { const on = f === undefined ? !set.has(c) : !!f; if (on) set.add(c); else set.delete(c); return on; },
+    contains: (c) => set.has(c),
+    toString: () => [...set].join(" "),
+  };
+}
+
+function makeEl(id = "") {
+  const listeners = new Map();
+  const attrs = new Map();
+  const el = {
+    id,
+    tagName: "DIV",
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    hidden: false,
+    disabled: false,
+    checked: false,
+    className: "",
+    style: { setProperty() {}, removeProperty() {} },
+    dataset: {},
+    classList: makeClassList(),
+    children: [],
+    scrollTop: 0,
+    scrollHeight: 200,
+    clientHeight: 200,
+    offsetWidth: 400,
+    offsetParent: {},
+    isConnected: true,
+    _qs: {},
+    _qsa: {},
+    _rect: { top: 0, bottom: 40, left: 0, right: 300, width: 300, height: 40 },
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(fn);
+    },
+    removeEventListener(type, fn) {
+      const list = listeners.get(type);
+      if (!list) return;
+      const idx = list.indexOf(fn);
+      if (idx >= 0) list.splice(idx, 1);
+    },
+    dispatch(type, ev = {}) {
+      const e = {
+        type,
+        target: el,
+        currentTarget: el,
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() {},
+        composedPath: () => [el],
+        ...ev,
+      };
+      for (const fn of [...(listeners.get(type) || [])]) fn(e);
+      return e;
+    },
+    requestSubmit() { this.dispatch("submit", {}); },
+    querySelector(sel) {
+      if (typeof el._querySelector === "function") {
+        const custom = el._querySelector(sel);
+        if (custom !== undefined) return custom;
+      }
+      if (el._qs[sel]) return el._qs[sel];
+      const child = makeEl(id + ":" + sel);
+      el._qs[sel] = child;
+      return child;
+    },
+    querySelectorAll(sel) {
+      if (typeof el._querySelectorAll === "function") return el._querySelectorAll(sel);
+      return el._qsa[sel] || [];
+    },
+    setAttribute(k, v) { attrs.set(k, String(v)); },
+    getAttribute(k) { return attrs.get(k) ?? ""; },
+    removeAttribute(k) { attrs.delete(k); },
+    hasAttribute(k) { return attrs.has(k); },
+    closest() { return null; },
+    contains() { return false; },
+    append() {},
+    remove() {},
+    after() {},
+    focus() {},
+    click() {},
+    scrollIntoView() {},
+    scrollTo(opts) {
+      const top = typeof opts === "object" ? opts.top : opts;
+      const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTop = Math.max(0, Math.min(maxTop, top));
+      return Promise.resolve();
+    },
+    getBoundingClientRect() {
+      if (typeof el._getRect === "function") return el._getRect();
+      return el._rect;
+    },
+  };
+  return el;
+}
+
+const bySel = new Map();
+function getEl(sel) {
+  if (!bySel.has(sel)) {
+    const el = makeEl(sel);
+    el.parentElement = makeEl(sel + ":parent");
+    bySel.set(sel, el);
+  }
+  return bySel.get(sel);
+}
+
+for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#composer", "#input"], ["#x-composer", "#x-input"], ["#td-composer", "#td-input"]]) {
+  const f = getEl(formSel);
+  f._qs["textarea"] = getEl(inputSel);
+  f._qs[".send"] = formSel === "#td-composer" ? getEl("#td-send") : makeEl(formSel + " .send");
+  f._qs[".files"] = makeEl(formSel + " .files");
+  f._qs[".attach"] = makeEl(formSel + " .attach");
+  f._qs['input[type="file"]'] = makeEl(formSel + " input[type=file]");
+}
+getEl("#re-draft")._qs[".re-t"] = makeEl("#re-draft .re-t");
+getEl("#re-draft")._qs["button"] = makeEl("#re-draft button");
+getEl("#super-jump")._qs["#super-jump-label"] = getEl("#super-jump-label");
+getEl("#super-jump").hidden = true;
+getEl("#thread-drawer").hidden = true;
+getEl("#thread-scrim").hidden = true;
+getEl("#file-view").hidden = true;
+
+// Wire dynamic layout model for #super-thread and its scroller.
+const threadBox = getEl("#super-thread");
+const scroller = threadBox.parentElement;
+scroller.clientHeight = 600;
+scroller.scrollHeight = 600;
+scroller.scrollTop = 0;
+scroller._getRect = () => ({ top: 0, bottom: scroller.clientHeight, left: 0, right: 800, width: 800, height: scroller.clientHeight });
+
+let layoutNodes = []; // [{ id, isSep, y, h }]
+function rebuildLayout(rowHeight = 140) {
+  const html = threadBox.innerHTML || "";
+  layoutNodes = [];
+  const tokenRe = /(<div class="unread-sep" id="unread-sep"[^>]*>)|data-id="(e\d+)"/g;
+  let m, y = 32;
+  while ((m = tokenRe.exec(html)) !== null) {
+    if (m[1]) {
+      layoutNodes.push({ id: "__sep__", isSep: true, y, h: 24 });
+      y += 40;
+    } else if (m[2]) {
+      layoutNodes.push({ id: m[2], isSep: false, y, h: rowHeight });
+      y += rowHeight + 28;
+    }
+  }
+  scroller.scrollHeight = Math.max(scroller.clientHeight, y + 24);
+}
+const wrapLayoutNode = (n) => {
+  const el = makeEl(n.id);
+  el.dataset = n.isSep ? {} : { id: n.id };
+  el._getRect = () => ({ top: n.y - scroller.scrollTop, bottom: n.y + n.h - scroller.scrollTop, left: 0, right: 700, width: 700, height: n.h });
+  el.closest = () => el;
+  return el;
+};
+threadBox._querySelector = (sel) => {
+  if (sel === "#unread-sep") {
+    const n = layoutNodes.find((x) => x.isSep);
+    return n ? wrapLayoutNode(n) : null;
+  }
+  const m = /data-id="([^"]+)"/.exec(sel);
+  if (m) {
+    const id = m[1].replace(/\\/g, "");
+    const n = layoutNodes.find((x) => !x.isSep && x.id === id);
+    return n ? wrapLayoutNode(n) : null;
+  }
+  return undefined;
+};
+threadBox._querySelectorAll = (sel) => {
+  if (sel.includes(".msg[data-id]")) {
+    return layoutNodes.filter((x) => !x.isSep).map(wrapLayoutNode);
+  }
+  return [];
+};
+let curRowHeight = 140;
+let innerHTMLVal = "";
+Object.defineProperty(threadBox, "innerHTML", {
+  get: () => innerHTMLVal,
+  set: (v) => { innerHTMLVal = String(v || ""); rebuildLayout(curRowHeight); },
+});
+
+const storage = new Map();
+const docListeners = new Map();
+const winListeners = new Map();
+const fetchCalls = [];
+let docHidden = false;
+let serverLastRead = "";
+let saySeq = 500;
+let uuidSeq = 0;
+
+class FakeES {
+  constructor(url) { this.url = url; this.readyState = 1; this.ls = {}; }
+  addEventListener(t, fn) { (this.ls[t] ||= []).push(fn); }
+  close() { this.readyState = 2; }
+}
+
+const doc = {
+  documentElement: makeEl("html"),
+  body: makeEl("body"),
+  activeElement: null,
+  get hidden() { return docHidden; },
+  hasFocus: () => !docHidden,
+  createElement: (tag) => makeEl(tag),
+  getElementById: (id) => getEl("#" + id),
+  querySelector: (sel) => (sel === "dialog[open]" ? null : getEl(sel)),
+  querySelectorAll: () => [],
+  addEventListener(type, fn) {
+    if (!docListeners.has(type)) docListeners.set(type, []);
+    docListeners.get(type).push(fn);
+  },
+  dispatchDoc(type, ev = {}) {
+    for (const fn of [...(docListeners.get(type) || [])]) fn({ type, target: makeEl("doc"), ...ev });
+  },
+};
+
+const okJSON = (data) => ({
+  ok: true, status: 200, statusText: "OK",
+  headers: { get: () => null },
+  json: async () => data,
+  text: async () => JSON.stringify(data),
+});
+
+const ctx = vm.createContext({
+  console, setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {}, URL, URLSearchParams,
+  Blob, Uint8Array, TextEncoder, atob, AbortController, Event,
+  Map, Set, Date, Math, JSON, RegExp, Array, Object, Promise, Error, Number, String, Boolean,
+  MutationObserver: class { observe() {} disconnect() {} },
+  ResizeObserver: class { observe() {} disconnect() {} },
+  HTMLDialogElement: { prototype: {} },
+  getComputedStyle: () => ({ getPropertyValue: () => "" }),
+  crypto: { randomUUID: () => "cr-uuid-" + (++uuidSeq) },
+  navigator: { userAgent: "Mac Chrome", platform: "MacIntel" },
+  location: { href: "http://127.0.0.1:7788/#/collie", origin: "http://127.0.0.1:7788", pathname: "/", search: "", hash: "#/collie", hostname: "127.0.0.1" },
+  history: { state: { collieIdx: 0 }, replaceState() {}, pushState() {}, back() {} },
+  localStorage: {
+    getItem: (k) => (storage.has(k) ? storage.get(k) : null),
+    setItem: (k, v) => storage.set(k, String(v)),
+    removeItem: (k) => storage.delete(k),
+  },
+  document: doc,
+  EventSource: FakeES,
+  CSS: { escape: (s) => String(s), supports: () => true },
+  matchMedia: () => ({ matches: false, addEventListener() {} }),
+  requestAnimationFrame: (fn) => { fn(); return 1; },
+  cancelAnimationFrame: () => {},
+  performance: { now: () => Date.now() },
+  innerWidth: 1440,
+  innerHeight: 900,
+  addEventListener(type, fn) {
+    if (!winListeners.has(type)) winListeners.set(type, []);
+    winListeners.get(type).push(fn);
+  },
+  removeEventListener() {},
+  dispatchEvent() {},
+  fetch: async (url, init = {}) => {
+    const u = String(url);
+    fetchCalls.push({ url: u, method: init.method || "GET", body: init.body, keepalive: !!init.keepalive });
+    if (u === "/api/session") return okJSON({ ok: true });
+    if (u === "/api/super") return okJSON({ router: { status: "idle" }, entries: [], workers: [], pending: [], pinned: [], last_read_entry_id: serverLastRead });
+    if (u === "/api/state") return okJSON({ ok: true, agents: [], shells: [], machines: [{ id: "", name: "hub", local: true, online: true }], last_read_entry_id: serverLastRead });
+    if (u === "/api/chat/read") {
+      const p = JSON.parse(init.body || "{}");
+      const id = p.entry_id || p.last_read_entry_id || "";
+      const n = parseInt(id.replace(/^e/, ""), 10) || 0;
+      const curN = parseInt(serverLastRead.replace(/^e/, ""), 10) || 0;
+      if (n > curN) serverLastRead = id;
+      return okJSON({ ok: true, last_read_entry_id: serverLastRead, changed: n > curN });
+    }
+    if (u === "/api/super/say") {
+      const id = "e" + (++saySeq);
+      return okJSON({ entry: id, trigger: "t" + saySeq });
+    }
+    if (u.startsWith("/api/super/settings")) return okJSON({ settings: { router_kind: "claude", worker_kind: "claude" } });
+    if (u.startsWith("/api/models")) return okJSON({ models: [], efforts: [] });
+    if (u === "/api/hubs") return okJSON({ hubs: [] });
+    if (u === "/api/version") return okJSON({ version: "v0.2.69", latest: "v0.2.69" });
+    if (u === "/api/external" || u === "/api/history") return okJSON({ sessions: [] });
+    return okJSON({ ok: true });
+  },
+});
+ctx.window = ctx;
+ctx.globalThis = ctx;
+
+const marker = "  boot();\n})();";
+assert.ok(appSrc.includes(marker), "expected boot marker in web/app.js");
+const instrumented = appSrc.replace(
+  marker,
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSuper, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
+);
+vm.runInContext(instrumented, ctx);
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const mkEntry = (n, role, text, extra = {}) => ({
+  id: "e" + n,
+  role,
+  thread: "chat:main",
+  text,
+  at: new Date(Date.now() - (50 - n) * 60000).toISOString(),
+  ...extra,
+});
+
+(async () => {
+  const T = ctx.__test;
+  T.setBooted(true);
+  T.setView("collie");
+
+  // 1) First-time enablement (no cursor): sticks to bottom, NO unread divider, seeds cursor.
+  fetchCalls.length = 0;
+  serverLastRead = "";
+  T.resetReadState("", "");
+  const tenEntries = [];
+  for (let i = 1; i <= 10; i++) tenEntries.push(mkEntry(i, i % 2 ? "user" : "collie", "msg " + i));
+  T.setSup({ router: { status: "idle" }, entries: tenEntries, workers: [], pending: [], pinned: [] });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(!threadBox.innerHTML.includes('id="unread-sep"'), "first-time open must not show unread divider");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "first-time open must stick to bottom");
+  assert.equal(getEl("#super-jump").hidden, true, "jump pill hidden at bottom");
+  await wait(520);
+  assert.equal(serverLastRead, "e10", "first-time bottom visit must persist cursor e10");
+
+  // 2) Substantive unread filtering + many unread (off-screen above bottom): anchors to divider with ~14px pad + shows pill.
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  const manyEntries = [
+    mkEntry(1, "user", "old u1"),
+    mkEntry(2, "collie", "old c2"),
+    mkEntry(3, "user", "old u3"),
+    mkEntry(4, "collie", "last read c4"),
+    mkEntry(5, "user", "own message after read"),
+    mkEntry(6, "event", "派出 w1（codex）", { tone: "spawn", ref: "w1" }),
+    mkEntry(7, "collie", "first unread collie reply"),
+    mkEntry(8, "collie", "second unread collie reply"),
+    mkEntry(9, "collie", "third unread collie reply"),
+    mkEntry(10, "collie", "fourth unread collie reply"),
+    mkEntry(11, "collie", "fifth unread collie reply"),
+    mkEntry(12, "event", "w1 启动失败", { tone: "error", ref: "w1" }),
+  ];
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e4" });
+  const info = T.computeUnreadInfo();
+  assert.equal(info.firstUnreadId, "e7", "first substantive unread must skip user & spawn event");
+  assert.equal(info.count, 6, "substantive unread count must include 5 collie + 1 error event");
+
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(threadBox.innerHTML.includes('id="unread-sep" data-first-unread="e7"'), "unread divider must sit above e7");
+  const sepNode = layoutNodes.find((x) => x.isSep);
+  assert.ok(sepNode, "layout must include unread-sep");
+  const sepVisualTop = sepNode.y - scroller.scrollTop;
+  assert.ok(sepVisualTop >= 12 && sepVisualTop <= 16, "divider top breathing room must be 12-16px, got " + sepVisualTop);
+  assert.equal(getEl("#super-jump").hidden, false, "jump pill must appear when anchored above bottom");
+  assert.equal(getEl("#super-jump-label").textContent, "6 条未读", "jump pill must show unread count");
+  assert.equal(getEl("#super-jump").classList.contains("has-unread"), true, "jump pill must carry has-unread class");
+  await wait(520);
+  assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "must not advance cursor while stopped above bottom");
+
+  // 3) Thread drawer 0px scroll anchor preservation while stopped at unread anchor.
+  const scrollBeforeDrawer = scroller.scrollTop;
+  T.openThreadDrawer("e7", "e7", "e7");
+  assert.equal(scroller.scrollTop, scrollBeforeDrawer, "opening thread drawer must keep 0px scroll drift");
+  T.closeThreadDrawer({ immediate: true });
+  assert.equal(scroller.scrollTop, scrollBeforeDrawer, "closing thread drawer must keep 0px scroll drift");
+  assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "drawer toggle must not prematurely advance read cursor");
+
+  // 4) Clicking jump pill scrolls to bottom and immediately advances server + local cursor.
+  getEl("#super-jump").dispatch("click");
+  await wait(30);
+  assert.equal(serverLastRead, "e12", "clicking jump pill must immediately POST /api/chat/read to e12");
+  assert.equal(JSON.parse(storage.get("collie.chatReadEntryId")), "e12", "localStorage cursor updated to e12");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "clicking jump pill must land at bottom");
+  assert.equal(getEl("#super-jump").hidden, true, "jump pill must hide at bottom");
+
+  // 5) Simulated reload after reading: lands at bottom, NO unread divider, NO jump pill.
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e12" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(!threadBox.innerHTML.includes('id="unread-sep"'), "reloading after read must not show unread divider");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "reloading after read must stick to bottom");
+  assert.equal(getEl("#super-jump").hidden, true, "reloading after read keeps jump pill hidden");
+
+  // 6) Few unread (fits at bottom): anti-annoyance boundary keeps bottom + subtle divider + debounced read.
+  fetchCalls.length = 0;
+  serverLastRead = "e11";
+  curRowHeight = 90;
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e11" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(threadBox.innerHTML.includes('id="unread-sep" data-first-unread="e12"'), "short unread still renders subtle divider");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "short unread visible at bottom must NOT pull viewport upward");
+  await wait(520);
+  assert.equal(serverLastRead, "e12", "short unread visible at bottom must advance read cursor after debounce");
+
+  // 7) Background tab guard: hidden tab receiving new message at bottom must NOT advance read cursor.
+  fetchCalls.length = 0;
+  docHidden = true;
+  const withE13 = [...manyEntries, mkEntry(13, "collie", "arrived while tab hidden")];
+  T.setSup({ router: { status: "idle" }, entries: withE13, workers: [], pending: [], pinned: [], last_read_entry_id: "e12" });
+  T.renderSuper();
+  await wait(520);
+  assert.equal(serverLastRead, "e12", "hidden tab must not auto-advance read cursor");
+  docHidden = false;
+
+  // 8) Sending a message clears unread divider and advances read cursor to the new entry.
+  curRowHeight = 140;
+  T.resetReadState("", "");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e4" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(threadBox.innerHTML.includes('id="unread-sep"'));
+  await T.sendSuper("收到，继续", null, false);
+  assert.ok(!threadBox.innerHTML.includes('id="unread-sep"'), "sending message clears unread divider");
+  assert.equal(serverLastRead, "e501", "sending message advances server cursor to new entry");
+
+  // 9) Stale localStorage cursor higher than hub sequence is ignored cleanly.
+  serverLastRead = "";
+  T.resetReadState("", "e9999");
+  T.setSup({ router: { status: "idle" }, entries: tenEntries, workers: [], pending: [], pinned: [] });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(!threadBox.innerHTML.includes('id="unread-sep"'), "stale localStorage cursor must be discarded");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "stale cursor reset sticks to bottom");
+
+  console.log("OK: all unread anchor & chat read JS regression checks passed");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+`
+	cmd := exec.Command(nodeBin, "-e", jsTest, root)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node unread anchor test failed: %v\n%s", err, string(out))
+	}
+	if !strings.Contains(string(out), "OK: all unread anchor & chat read JS regression checks passed") {
+		t.Fatalf("unexpected node output:\n%s", string(out))
+	}
+}

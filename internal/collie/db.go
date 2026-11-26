@@ -170,6 +170,12 @@ func loadStateWithMeta(db *sql.DB, home string) (*State, bool, error) {
 			}
 		}
 	}
+	if v, ok := kv["last_read_entry_id"]; ok {
+		v = strings.TrimSpace(v)
+		if isValidEntryID(v) {
+			st.LastReadEntryID = v
+		}
+	}
 
 	var trig []*Trigger
 	err = loadRows(db, `SELECT data FROM (SELECT data, n FROM triggers ORDER BY n DESC LIMIT 600) ORDER BY n`, func(t *Trigger) { trig = append(trig, t) })
@@ -233,6 +239,7 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 		pinned = pinned[len(pinned)-maxPinned:]
 	}
 	put(`INSERT INTO kv(k,v) VALUES('pinned',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(pinned))
+	put(`INSERT INTO kv(k,v) VALUES('last_read_entry_id',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, st.LastReadEntryID)
 	for _, t := range st.Triggers {
 		put(`INSERT INTO triggers(id,n,at,status,source,thread,data) VALUES(?,?,?,?,?,?,?)
 		     ON CONFLICT(id) DO UPDATE SET status=excluded.status, data=excluded.data`,

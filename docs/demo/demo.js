@@ -26,7 +26,8 @@
   const shells = [
     { pane_id: "w7:p1", workspace_id: "w7", workspace_label: "logs", name: "logs", kind: "", status: "shell", cwd: "/home/alex/code/shop-api", title: "", is_agent: false, machine: "" },
   ];
-  const state = () => ({ ok: true, agents, shells, machines });
+  let lastReadEntryId = "";
+  const state = () => ({ ok: true, agents, shells, machines, ...(lastReadEntryId ? { last_read_entry_id: lastReadEntryId } : {}) });
 
   const workers = [
     { name: "fix-flaky-test", kind: "codex", cwd: "/home/alex/code/shop-api", task: "找出 TestOrdersPagination 偶发失败的原因并修好", thread: "chat:main", pane_id: "w5:p1", workspace_id: "w5", machine: "", created_by: "collie", created_at: ago(14), status: "working", run: ["gpt-6.1-sol", "medium"] },
@@ -122,7 +123,7 @@
   };
   const sup = () => ({
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: routerRun.kind, context: 23, rotate_at: 70, model: routerRun.model, effort: routerRun.effort, pending: routerPending() },
-    entries, pending: computePending(), pinned: computePinned(), workers, queued: 0, queued_router: 0, paused: !!settings.settings.paused, earlier: true,
+    entries, pending: computePending(), pinned: computePinned(), ...(lastReadEntryId ? { last_read_entry_id: lastReadEntryId } : {}), workers, queued: 0, queued_router: 0, paused: !!settings.settings.paused, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
     integrations_summary: {
       connected: [demoFeishu, demoGitHub, demoGitCLI].filter((x) => x.enabled && x.health.state === "connected").length,
@@ -585,6 +586,14 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       return json({ ok: true });
     }
     if (p === "/api/super/seen") return json({ ok: true });
+    if (p === "/api/chat/read" && method === "POST") {
+      const idN = (id) => parseInt(String(id || "").replace(/^[a-z]+/i, ""), 10) || 0;
+      const cand = String(body.entry_id || body.last_read_entry_id || "").trim();
+      if (!/^e[0-9]+$/.test(cand) || idN(cand) <= 0) return json({ error: "invalid entry_id" }, 400);
+      const changed = idN(cand) > idN(lastReadEntryId);
+      if (changed) lastReadEntryId = cand;
+      return json({ ok: true, last_read_entry_id: lastReadEntryId, changed });
+    }
     if (p === "/api/super/dismiss") { if (body.id) dismissed.add(body.id); pushAll(); return json({ ok: true }); }
     if (p === "/api/super/pin") {
       const idx = pinnedIds.indexOf(body.id);

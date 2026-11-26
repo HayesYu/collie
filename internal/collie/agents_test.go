@@ -1,12 +1,15 @@
 package collie
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
 func TestAgentsHeader(t *testing.T) {
-	if got := parseAgentsHeader(agentsHeader([]string{"claude", "agy", "doubao"})); len(got) != 3 || got[0] != "claude" || got[1] != "agy" || got[2] != "doubao" {
+	if got := parseAgentsHeader(agentsHeader([]string{"claude", "agy", "doubao", "cursor"})); len(got) != 4 || got[0] != "claude" || got[1] != "agy" || got[2] != "doubao" || got[3] != "cursor" {
 		t.Fatalf("round trip: %v", got)
 	}
 	if got := parseAgentsHeader(agentsHeader(nil)); got == nil || len(got) != 0 {
@@ -34,6 +37,53 @@ func TestAgentMissingRemote(t *testing.T) {
 	}
 	if err := s.agentMissing("mac", "codex"); err == nil || !strings.Contains(err.Error(), "mac 上没装 Codex") {
 		t.Fatalf("missing: %v", err)
+	}
+	if err := s.agentMissing("mac", "cursor"); err == nil || !strings.Contains(err.Error(), "找不到 cursor-agent 命令") {
+		t.Fatalf("missing cursor: %v", err)
+	}
+}
+
+func TestCursorAgentBinMapping(t *testing.T) {
+	if got := binForKind("cursor"); got != "cursor-agent" {
+		t.Fatalf("binForKind(cursor) = %q, want cursor-agent", got)
+	}
+	if got := binForKind("claude"); got != "claude" {
+		t.Fatalf("binForKind(claude) = %q, want claude", got)
+	}
+
+	// Ensure a generic `agent` binary does not falsely detect Cursor, while
+	// `cursor-agent` in ~/.local/bin does.
+	home := t.TempDir()
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(localBin, "agent"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	prev, hadPrev := binCache.Load("cursor-agent")
+	binCache.Delete("cursor-agent")
+	defer func() {
+		if hadPrev {
+			binCache.Store("cursor-agent", prev)
+		} else {
+			binCache.Delete("cursor-agent")
+		}
+	}()
+
+	t.Setenv("PATH", localBin)
+	if got := findBin("cursor-agent", home); got != "" {
+		t.Fatalf("generic agent must not satisfy cursor-agent lookup, got %q", got)
+	}
+
+	cursorBin := filepath.Join(localBin, "cursor-agent")
+	if err := os.WriteFile(cursorBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binCache.Delete("cursor-agent")
+	if got := detectAgents(home); !slices.Contains(got, "cursor") {
+		t.Fatalf("detectAgents with cursor-agent = %v, want cursor included", got)
 	}
 }
 

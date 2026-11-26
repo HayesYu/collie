@@ -294,6 +294,8 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Kind == "agy" { // the composer's name for it
 		body.Kind = "antigravity"
+	} else if body.Kind == "cursor-agent" {
+		body.Kind = "cursor"
 	}
 	_, known := kinds[body.Kind]
 	if known && kinds[body.Kind] != kinds[st.WorkerKind] {
@@ -917,7 +919,7 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 	if body.Settings != nil {
 		prev := sp.st.Settings
 		ns := *body.Settings
-		if _, ok := kinds[ns.RouterKind]; !ok || kinds[ns.RouterKind] == "doubao" {
+		if _, ok := kinds[ns.RouterKind]; !ok || kinds[ns.RouterKind] == "doubao" || kinds[ns.RouterKind] == "cursor" {
 			ns.RouterKind = sp.st.Settings.RouterKind
 		}
 		if _, ok := kinds[ns.WorkerKind]; !ok {
@@ -1431,7 +1433,7 @@ func (s *Server) machineByName(n string) string {
 }
 
 // modelNameRe: model ids and effort names go onto a command line as one argument.
-var modelNameRe = regexp.MustCompile(`^[A-Za-z0-9._:/@\[\]-]{0,120}$`)
+var modelNameRe = regexp.MustCompile(`^[A-Za-z0-9._:/@\[\]=,-]{0,120}$`)
 
 // superAnswer: the router answers a dialog a worker is stuck on, by choice
 // number, label words or "esc". The human sees what it picked.

@@ -32,6 +32,9 @@ func TestResumeFrom(t *testing.T) {
 	if got := resumeArgs("doubao", "c"); !slices.Equal(got, []string{"--resume", "c"}) {
 		t.Errorf("doubao: %v", got)
 	}
+	if got := resumeArgs("cursor", "c"); !slices.Equal(got, []string{"--resume", "c"}) {
+		t.Errorf("cursor: %v", got)
+	}
 }
 
 func TestRouterDocChanged(t *testing.T) {
@@ -71,6 +74,10 @@ func TestAgentStopLine(t *testing.T) {
 		{"⚠ Error: 登录已失效，请重新登录\n❯ ", "上次正常回复", "Error: 登录已失效，请重新登录"},
 		{"⚠ Error: auth_unavailable: 登录二维码已过期\n❯ ", "", "Error: auth_unavailable: 登录二维码已过期"},
 		{"⚠ 触发风控，当前请求已被拦截\n❯ ", "", "触发风控，当前请求已被拦截"},
+		{"Error: Authentication required. Run 'agent login', or set CURSOR_API_KEY.\n❯ ", "", "Error: Authentication required. Run 'agent login', or set CURSOR_API_KEY."},
+		{"⚠ Warning: The provided API key is invalid.\n❯ ", "", "Warning: The provided API key is invalid."},
+		{"⚠ Error: Failed to initialize session services\n❯ ", "", "Error: Failed to initialize session services"},
+		{"⚠ Error: You have reached your spending limit for this month.\n❯ ", "", "Error: You have reached your spending limit for this month."},
 	}
 	for _, c := range cases {
 		if got := agentStopLine(c.screen, c.summary); got != c.want {

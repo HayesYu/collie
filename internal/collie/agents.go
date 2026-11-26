@@ -13,14 +13,33 @@ import (
 // Starting an agent checks again where it runs, so a stale list only greys
 // out the wrong choices in the UI, it never starts a pane for nothing.
 
-var agentKinds = []string{"claude", "codex", "agy", "doubao"}
+var agentKinds = []string{"claude", "codex", "agy", "doubao", "cursor"}
 
-var agentNames = map[string]string{"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity", "doubao": "Doubao"}
+var agentNames = map[string]string{
+	"claude": "Claude Code",
+	"codex":  "Codex",
+	"agy":    "Antigravity",
+	"doubao": "Doubao",
+	"cursor": "Cursor",
+}
+
+// agentBins maps a herdr kind to its CLI executable when the binary name
+// differs from the kind name (avoids matching generic `agent` binaries).
+var agentBins = map[string]string{
+	"cursor": "cursor-agent",
+}
+
+func binForKind(kind string) string {
+	if b := agentBins[kind]; b != "" {
+		return b
+	}
+	return kind
+}
 
 func detectAgents(home string) []string {
 	out := []string{}
 	for _, k := range agentKinds {
-		if findBin(k, home) != "" {
+		if findBin(binForKind(k), home) != "" {
 			out = append(out, k)
 		}
 	}
@@ -85,22 +104,23 @@ func localAgents(home string, wait bool) []string {
 	return c.list
 }
 
-// agentMissing says why kind (herdr's: claude, codex, agy) can't start on
-// machine, or nil. A list that isn't known yet lets it try.
+// agentMissing says why kind (herdr's: claude, codex, agy, doubao, cursor) can't
+// start on machine, or nil. A list that isn't known yet lets it try.
 func (s *Server) agentMissing(machine, kind string) error {
 	name := agentNames[kind]
 	if name == "" {
 		return nil
 	}
+	bin := binForKind(kind)
 	if machine == "" {
-		if findBin(kind, s.home) != "" {
+		if findBin(bin, s.home) != "" {
 			return nil
 		}
-		return fmt.Errorf("这台电脑上没装 %s（找不到 %s 命令）", name, kind)
+		return fmt.Errorf("这台电脑上没装 %s（找不到 %s 命令）", name, bin)
 	}
 	m, err := s.herdr.machine(machine)
 	if err != nil || m.Agents == nil || slices.Contains(m.Agents, kind) {
 		return nil
 	}
-	return fmt.Errorf("%s 上没装 %s（找不到 %s 命令）", m.Name, name, kind)
+	return fmt.Errorf("%s 上没装 %s（找不到 %s 命令）", m.Name, name, bin)
 }

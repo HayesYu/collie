@@ -91,18 +91,20 @@ func resumeArgs(agent, session string) []string {
 		return []string{"resume", session}
 	case "agy":
 		return []string{"--conversation", session}
-	case "doubao":
+	case "doubao", "cursor":
 		return []string{"--resume", session}
 	}
 	return nil
 }
 
 var kinds = map[string]string{
-	"claude":      "claude",
-	"codex":       "codex",
-	"antigravity": "agy",
-	"agy":         "agy",
-	"doubao":      "doubao",
+	"claude":       "claude",
+	"codex":        "codex",
+	"antigravity":  "agy",
+	"agy":          "agy",
+	"doubao":       "doubao",
+	"cursor":       "cursor",
+	"cursor-agent": "cursor",
 }
 
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
@@ -663,7 +665,7 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	effort := effectiveEffort(body.Kind, body.Model, body.Effort)
 	var mArgs []string
-	if !(kind == "doubao" && body.Model == "" && body.Effort == "" && contains(body.Args, "--resume")) {
+	if !((kind == "doubao" || kind == "cursor") && body.Model == "" && body.Effort == "" && contains(body.Args, "--resume")) {
 		mArgs = modelArgs(body.Kind, body.Model, effort)
 	}
 	args := append(mArgs, body.Args...)
@@ -728,8 +730,8 @@ func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, 
 	if err := s.agentMissing(machine, herdrKind); err != nil {
 		return "", "", err
 	}
-	if herdrKind == "doubao" {
-		return s.startDoubaoAgent(ctx, machine, name, cwd, label, args)
+	if herdrKind == "doubao" || herdrKind == "cursor" {
+		return s.startBridgeAgent(ctx, machine, herdrKind, name, cwd, label, args)
 	}
 	s.trustForStart(ctx, machine, herdrKind, cwd, args)
 	wsID, paneID, err = s.herdr.CreateWorkspace(ctx, machine, cwd, label)
@@ -790,25 +792,25 @@ func (s *Server) collieBinFor(machine string) string {
 	return stableBin(bin, collieDir())
 }
 
-func (s *Server) doubaoTranscriptDir() string {
+func (s *Server) bridgeTranscriptDir(kind string) string {
 	if s != nil && s.sup != nil && s.sup.dir != "" {
-		return filepath.Join(s.sup.dir, "transcripts", "doubao")
+		return filepath.Join(s.sup.dir, "transcripts", kind)
 	}
-	return filepath.Join(collieDir(), "transcripts", "doubao")
+	return filepath.Join(collieDir(), "transcripts", kind)
 }
 
-// startDoubaoAgent starts `collie _bridge doubao` inside a fresh Herdr pane
-// without modifying Herdr's built-in agent kinds. The bridge drives
-// `doubao acp serve` and reports lifecycle state back to Herdr via
+// startBridgeAgent starts `collie _bridge <kind>` inside a fresh Herdr pane
+// without modifying Herdr's built-in agent kinds. The bridge drives the agent's
+// ACP stdio server and reports lifecycle state back to Herdr via
 // `pane.report_agent`.
-func (s *Server) startDoubaoAgent(ctx context.Context, machine, name, cwd, label string, args []string) (paneID, wsID string, err error) {
+func (s *Server) startBridgeAgent(ctx context.Context, machine, kind, name, cwd, label string, args []string) (paneID, wsID string, err error) {
 	wsID, paneID, err = s.herdr.CreateWorkspace(ctx, machine, cwd, label)
 	if err != nil {
 		return "", "", err
 	}
-	cmdArgs := []string{s.collieBinFor(machine), "_bridge", "doubao", "--name", name}
+	cmdArgs := []string{s.collieBinFor(machine), "_bridge", kind, "--name", name}
 	if machine == "" {
-		if dir := s.doubaoTranscriptDir(); dir != "" {
+		if dir := s.bridgeTranscriptDir(kind); dir != "" {
 			if home := filepath.Dir(filepath.Dir(dir)); home != "" {
 				cmdArgs = append(cmdArgs, "--collie-home", home)
 			}
@@ -837,6 +839,7 @@ func (s *Server) startDoubaoAgent(ctx context.Context, machine, name, cwd, label
 		}
 	}
 
+	fatalPrefix := "[" + kind + "-bridge] fatal:"
 	deadline := time.Now().Add(45 * time.Second)
 	for poll := 0; ; poll++ {
 		var info struct {
@@ -846,19 +849,19 @@ func (s *Server) startDoubaoAgent(ctx context.Context, machine, name, cwd, label
 			} `json:"agent"`
 		}
 		if callErr := s.herdr.Call(ctx, "agent.get", map[string]any{"target": paneID}, &info); callErr == nil &&
-			info.Agent.Agent != nil && *info.Agent.Agent == "doubao" {
+			info.Agent.Agent != nil && *info.Agent.Agent == kind {
 			_ = s.herdr.Call(ctx, "agent.rename", map[string]any{"target": paneID, "name": name}, nil)
 			s.markStarted(paneID)
 			s.herdr.Remember(paneID, name)
 			if info.Agent.Status == "blocked" {
-				return paneID, wsID, &HerdrError{Code: "agent_not_ready", Message: "doubao agent blocked on startup"}
+				return paneID, wsID, &HerdrError{Code: "agent_not_ready", Message: kind + " agent blocked on startup"}
 			}
 			return paneID, wsID, nil
 		}
 		if poll > 0 && poll%6 == 0 {
 			if rr, rerr := s.herdr.Read(ctx, paneID, "recent_unwrapped", "text", 20); rerr == nil {
 				for _, l := range strings.Split(rr.Text, "\n") {
-					if i := strings.Index(l, "[doubao-bridge] fatal:"); i >= 0 {
+					if i := strings.Index(l, fatalPrefix); i >= 0 {
 						return paneID, wsID, errors.New(strings.TrimSpace(l[i:]))
 					}
 				}
@@ -870,7 +873,7 @@ func (s *Server) startDoubaoAgent(ctx context.Context, machine, name, cwd, label
 					return paneID, wsID, errors.New(why)
 				}
 			}
-			return paneID, wsID, errors.New("doubao bridge did not become ready in time")
+			return paneID, wsID, errors.New(kind + " bridge did not become ready in time")
 		}
 		select {
 		case <-ctx.Done():

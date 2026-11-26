@@ -131,6 +131,27 @@ func TestModelArgs(t *testing.T) {
 			effort: "",
 			want:   []string{"--model", "5101"},
 		},
+		{
+			name:   "cursor strips effort and passes model",
+			kind:   "cursor",
+			model:  "composer-2.5",
+			effort: "high",
+			want:   []string{"--model", "composer-2.5"},
+		},
+		{
+			name:   "cursor parameterized model preserved without effort",
+			kind:   "cursor-agent",
+			model:  "claude-opus-4-8[context=1m,effort=high,fast=false]",
+			effort: "max",
+			want:   []string{"--model", "claude-opus-4-8[context=1m,effort=high,fast=false]"},
+		},
+		{
+			name:   "cursor empty model omits flags",
+			kind:   "cursor",
+			model:  "",
+			effort: "high",
+			want:   nil,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,6 +163,12 @@ func TestModelArgs(t *testing.T) {
 	}
 	if got := bypassArgs("doubao"); !reflect.DeepEqual(got, []string{"-y"}) {
 		t.Fatalf("bypassArgs(doubao) = %#v, want [-y]", got)
+	}
+	if got := bypassArgs("cursor"); !reflect.DeepEqual(got, []string{"--force"}) {
+		t.Fatalf("bypassArgs(cursor) = %#v, want [--force]", got)
+	}
+	if got := effectiveEffort("cursor", "auto", "high"); got != "" {
+		t.Fatalf("effectiveEffort(cursor) = %q, want empty", got)
 	}
 }
 
@@ -387,5 +414,88 @@ func TestDesktopCodexFallback(t *testing.T) {
 	standalone := writeFakeCLIScript(t, pathDir, "codex", "exit 0")
 	if got := findBin("codex", home); got != standalone {
 		t.Fatalf("findBin = %q, want standalone CLI %q", got, standalone)
+	}
+}
+
+func TestParseAndFetchCursorModels(t *testing.T) {
+	raw := "\x1b[1mAvailable models\x1b[0m\n\n" +
+		"\x1b[32mauto\x1b[0m \x1b[2m- Auto (current, default)\x1b[0m\n" +
+		"\x1b[36mcomposer-2.5\x1b[0m \x1b[2m- Composer 2.5\x1b[0m\n" +
+		"\x1b[36mclaude-4.6-opus-max\x1b[0m \x1b[2m- Claude 4.6 Opus (Max) (current)\x1b[0m\n" +
+		"- claude-opus-4-8[context=1m,effort=high,fast=false] - Claude Opus 4.8\n" +
+		"gpt-5.4-high\n\n" +
+		"\x1b[2mTip: use --model <id> (or /model <id> in interactive mode) to switch. Parameterized models also accept quoted overrides, e.g. --model 'claude-opus-4-8[context=1m,effort=high,fast=false]'.\x1b[0m\n"
+
+	models, defID := parseCursorModels(raw)
+	if defID != "auto" {
+		t.Fatalf("defID = %q, want auto", defID)
+	}
+	if len(models) != 5 {
+		t.Fatalf("got %d models: %+v", len(models), models)
+	}
+	if models[0].ID != "auto" || models[0].Label != "Auto" {
+		t.Errorf("models[0] = %+v", models[0])
+	}
+	if models[2].ID != "claude-4.6-opus-max" || models[2].Label != "Claude 4.6 Opus (Max)" {
+		t.Errorf("models[2] display parenthetical disturbed: %+v", models[2])
+	}
+	if models[3].ID != "claude-opus-4-8[context=1m,effort=high,fast=false]" || models[3].Label != "Claude Opus 4.8" {
+		t.Errorf("models[3] parameterized mismatch: %+v", models[3])
+	}
+	if models[4].ID != "gpt-5.4-high" || models[4].Label != "" {
+		t.Errorf("models[4] bare id mismatch: %+v", models[4])
+	}
+	for _, m := range models {
+		if m.Efforts == nil || len(m.Efforts) != 0 {
+			t.Fatalf("model %s Efforts = %#v, want explicit empty []string{}", m.ID, m.Efforts)
+		}
+	}
+
+	// Empty account / error output must yield zero models.
+	if ms, def := parseCursorModels("\x1b[33mNo models available for this account.\x1b[0m\n"); len(ms) != 0 || def != "" {
+		t.Fatalf("expected empty on no models, got %+v / %q", ms, def)
+	}
+	if ms, def := parseCursorModels("\x1b[33m⚠ Warning: The provided API key is invalid.\x1b[0m\n"); len(ms) != 0 || def != "" {
+		t.Fatalf("expected empty on warning, got %+v / %q", ms, def)
+	}
+
+	// End-to-end cursorModels with ANSI stderr noise and explicit empty Efforts JSON.
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "cursor-agent")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" != \"--list-models\" ]; then exit 2; fi\n" +
+		"printf '\\033[33m⚠ stderr notice\\033[0m\\n' >&2\n" +
+		"printf 'Available models\\n\\n\\033[32mauto\\033[0m - Auto (default)\\ncomposer-2.5 - Composer 2.5\\n\\nTip: use --model <id>\\n'\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev, hadPrev := binCache.Load("cursor-agent")
+	binCache.Store("cursor-agent", fakeBin)
+	defer func() {
+		if hadPrev {
+			binCache.Store("cursor-agent", prev)
+		} else {
+			binCache.Delete("cursor-agent")
+		}
+	}()
+
+	s := &Server{home: dir}
+	info := &ModelInfo{Kind: "cursor", Efforts: allEfforts}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s.cursorModels(ctx, info)
+	if info.Default != "auto" || len(info.Models) != 2 {
+		t.Fatalf("cursorModels = %+v", info)
+	}
+	if info.Efforts == nil || len(info.Efforts) != 0 {
+		t.Fatalf("info.Efforts = %#v, want explicit empty []string{}", info.Efforts)
+	}
+	b, _ := json.Marshal(info)
+	var wire struct {
+		Efforts json.RawMessage `json:"efforts"`
+	}
+	_ = json.Unmarshal(b, &wire)
+	if string(wire.Efforts) != "[]" {
+		t.Fatalf("cursor ModelInfo JSON efforts = %s, want []", string(wire.Efforts))
 	}
 }

@@ -11,7 +11,7 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.53", agents: ["claude", "codex", "agy", "doubao"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.53", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
     { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.53", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
@@ -376,6 +376,16 @@
       default: "9",
       default_effort: "high",
       efforts: ["low", "medium", "high"],
+    },
+    cursor: {
+      models: [
+        { id: "auto", label: "Auto", efforts: [] },
+        { id: "composer-2.5", label: "Composer 2.5", efforts: [] },
+        { id: "claude-4.6-opus-max", label: "Claude 4.6 Opus (Max)", efforts: [] },
+        { id: "gpt-5.4-high", label: "GPT 5.4 High", efforts: [] },
+      ],
+      default: "auto",
+      efforts: [],
     },
   };
 

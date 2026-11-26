@@ -242,8 +242,8 @@ func (t *transcript) line(line []byte) bool {
 		return t.codexLine(line)
 	case "agy":
 		return t.agyLine(line)
-	case "doubao":
-		return t.doubaoLine(line)
+	case "doubao", "cursor":
+		return t.acpLine(line)
 	}
 	return t.claudeLine(line)
 }
@@ -621,9 +621,9 @@ func agyOutput(s string) string {
 	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
-// doubaoLine parses one incremental event line persisted by `collie _bridge doubao`.
-func (t *transcript) doubaoLine(line []byte) bool {
-	var e doubaoLogEntry
+// acpLine parses one incremental event line persisted by `collie _bridge <kind>`.
+func (t *transcript) acpLine(line []byte) bool {
+	var e acpLogEntry
 	if json.Unmarshal(line, &e) != nil {
 		return false
 	}
@@ -747,7 +747,7 @@ func (s *Server) transcriptFor(key, pane string, a agentDetail, cache map[string
 
 func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, format string) {
 	format = kind
-	if kind != "codex" && kind != "agy" && kind != "doubao" {
+	if kind != "codex" && kind != "agy" && kind != "doubao" && kind != "cursor" {
 		format = "claude"
 	}
 	if sessKind == "path" {
@@ -789,22 +789,22 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 			}
 		}
 		return s.guessAgy(brain, pane, cwd), "agy"
-	case "doubao":
-		dir := s.doubaoTranscriptDir()
+	case "doubao", "cursor":
+		dir := s.bridgeTranscriptDir(kind)
 		if value != "" {
 			if p := filepath.Join(dir, value+".jsonl"); isFile(p) {
-				return p, "doubao"
+				return p, kind
 			}
 		}
 		if pane != "" {
 			local, _ := split(pane)
-			if meta, ok := readDoubaoPaneMeta(dir, local); ok {
+			if meta, ok := readACPPaneMeta(dir, local); ok {
 				if meta.Path != "" && isFile(meta.Path) {
-					return meta.Path, "doubao"
+					return meta.Path, kind
 				}
 				if meta.SessionID != "" {
 					if p := filepath.Join(dir, meta.SessionID+".jsonl"); isFile(p) {
-						return p, "doubao"
+						return p, kind
 					}
 				}
 			}

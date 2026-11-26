@@ -206,6 +206,19 @@ func TestResolveDefaultSettings(t *testing.T) {
 			t.Fatalf("kinds = %q / %q, want claude / claude (doubao excluded from auto-detect)", got.RouterKind, got.WorkerKind)
 		}
 	})
+
+	t.Run("only cursor-agent installed does not auto-select cursor for router or default worker", func(t *testing.T) {
+		lookup := func(name, _ string) string {
+			if name == "cursor-agent" || name == "cursor" {
+				return "/usr/local/bin/cursor-agent"
+			}
+			return ""
+		}
+		got := resolveDefaultSettings(home, lookup, nil, time.Second)
+		if got.RouterKind != "claude" || got.WorkerKind != "claude" {
+			t.Fatalf("kinds = %q / %q, want claude / claude (cursor excluded from auto-detect)", got.RouterKind, got.WorkerKind)
+		}
+	})
 }
 
 func TestInitStatePersistsFreshAndNeverOverwritesSavedSettings(t *testing.T) {

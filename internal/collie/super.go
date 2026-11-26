@@ -2750,10 +2750,93 @@ func (sp *Super) closeStaleRouterWorkspaces(ctx context.Context) {
 	}
 }
 
+const agentFatalErrPattern = `api error|please run /login|invalid api key|quota exceeded|daily limit|rate.?limit(ed)?\b|overloaded|unauthori[sz]ed|credit balance|unexpected status \d{3}`
+
+// agentFatalErrRe matches explicit API, auth, quota, and HTTP status failures
+// from an agent CLI regardless of line prefix.
+var agentFatalErrRe = regexp.MustCompile(`(?i)(` + agentFatalErrPattern + `)`)
+
 // agentErrRe matches what an agent CLI prints when it can't run (the API
 // refused, the login expired, the quota ran out), not Collie's own words about
 // a task: "the backup failed twice" and "its error output" are work, not errors.
-var agentErrRe = regexp.MustCompile(`(?i)(api error|please run /login|invalid api key|quota exceeded|daily limit|rate.?limit(ed)?\b|overloaded|unauthori[sz]ed|credit balance|unexpected status \d{3}|^[\W]*(⚠|■|error\b|error:))`)
+var agentErrRe = regexp.MustCompile(`(?i)(` + agentFatalErrPattern + `|^[\W]*(⚠|■|error\b|error:))`)
+
+// agentWarnRe matches non-fatal CLI warnings (such as "⚠ Warning" and
+// model-fallback notices) so a silent router turn does not mistake a soft
+// warning for a fatal API error.
+var agentWarnRe = regexp.MustCompile(`(?i)^[\W]*⚠(?:[\s:：\-—–·•|│\[\(【（]*(?:warn(?:ing)?\b|警告)|.*(?:is no longer available\.?\s+using\b|falling back to\b))`)
+
+// isAgentErrLine reports whether a single terminal line looks like a fatal
+// agent/API error rather than normal output or a non-fatal CLI warning.
+func isAgentErrLine(line string) bool {
+	l := strings.TrimSpace(line)
+	if l == "" {
+		return false
+	}
+	if agentFatalErrRe.MatchString(l) {
+		return true
+	}
+	if agentWarnRe.MatchString(l) {
+		return false
+	}
+	return agentErrRe.MatchString(l)
+}
+
+func isWarnContinuation(s string) bool {
+	for _, p := range []string{"└", "├", "│", "⎿", "╰", "┃"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// routerScreenError scans the router's recent screen output after our last
+// prompt and returns the first fatal agent/API error block, skipping non-fatal
+// CLI warnings and their tree-indented continuation lines.
+func routerScreenError(screen string) string {
+	lines := strings.Split(screen, "\n")
+	// Only look at what the agent printed after our prompt, never at the event text itself.
+	start := 0
+	for i, l := range lines {
+		if strings.Contains(l, "collie reply") || strings.Contains(l, "yourself.") || strings.Contains(l, routerRetryMark) {
+			start = i + 1
+		}
+	}
+	for i := start; i < len(lines); i++ {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		if agentWarnRe.MatchString(l) && !agentFatalErrRe.MatchString(l) {
+			for i+1 < len(lines) {
+				next := strings.TrimSpace(lines[i+1])
+				if !isWarnContinuation(next) || agentFatalErrRe.MatchString(next) {
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if !isAgentErrLine(l) {
+			continue
+		}
+		// Messages wrap in the terminal: keep following lines of the same block.
+		msg := l
+		for j := i + 1; j < len(lines) && j <= i+3; j++ {
+			next := strings.TrimSpace(lines[j])
+			if next == "" || strings.HasPrefix(next, "─") || strings.HasPrefix(next, "✻") || strings.HasPrefix(next, "Error ID") {
+				break
+			}
+			msg += " " + next
+		}
+		if r := []rune(msg); len(r) > 240 {
+			msg = string(r[:240]) + "…"
+		}
+		return msg
+	}
+	return ""
+}
 
 // routerSettled runs once after the router finishes a turn that we prompted.
 // If it went quiet without a `collie reply` and its screen shows an error
@@ -2784,31 +2867,7 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 	if err != nil {
 		return
 	}
-	lines := strings.Split(rr.Text, "\n")
-	// Only look at what the agent printed after our prompt, never at the event text itself.
-	start := 0
-	for i, l := range lines {
-		if strings.Contains(l, "collie reply") || strings.Contains(l, "yourself.") || strings.Contains(l, routerRetryMark) {
-			start = i + 1
-		}
-	}
-	for i := start; i < len(lines); i++ {
-		l := strings.TrimSpace(lines[i])
-		if l == "" || !agentErrRe.MatchString(l) {
-			continue
-		}
-		// Messages wrap in the terminal: keep following lines of the same block.
-		msg := l
-		for j := i + 1; j < len(lines) && j <= i+3; j++ {
-			next := strings.TrimSpace(lines[j])
-			if next == "" || strings.HasPrefix(next, "─") || strings.HasPrefix(next, "✻") || strings.HasPrefix(next, "Error ID") {
-				break
-			}
-			msg += " " + next
-		}
-		if r := []rune(msg); len(r) > 240 {
-			msg = string(r[:240]) + "…"
-		}
+	if msg := routerScreenError(rr.Text); msg != "" {
 		sp.mu.Lock()
 		// Most of these pass (a region check, a busy API, a dropped
 		// connection): try again before calling it an error.

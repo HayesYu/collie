@@ -114,7 +114,7 @@ func runNode(args []string) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		start := time.Now()
-		err := nodeSession(ctx, cfg, *name, home, bin, *sock, api)
+		err := nodeSession(ctx, cfg, *name, home, bin, *sock, api, srv)
 		if errors.Is(err, errRevoked) {
 			fmt.Fprintln(os.Stderr, "hub 拒绝了这台电脑（可能已在设备列表里移除）。重新配对：collie node --hub", cfg.Hub, "--code <新配对码>")
 			os.Exit(1)
@@ -194,7 +194,7 @@ func hubDialAddr(rawHub string) (*url.URL, string, error) {
 	return u, addr, nil
 }
 
-func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock string, api http.Handler) error {
+func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock string, api http.Handler, srv *Server) error {
 	u, addr, err := hubDialAddr(cfg.Hub)
 	if err != nil {
 		return err
@@ -279,16 +279,7 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 			}
 			switch kind {
 			case "herdr":
-				h, err := dialHerdr(context.Background(), sock)
-				if err != nil {
-					log.Printf("herdr: %v", err)
-					st.Close()
-					return
-				}
-				go func() { io.Copy(h, st); h.(*net.UnixConn).CloseWrite() }()
-				io.Copy(st, h)
-				h.Close()
-				st.Close()
+				handleHerdrStream(ctx, st, sock, srv)
 			case "http":
 				select {
 				case ln.ch <- st:

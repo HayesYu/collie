@@ -223,6 +223,12 @@ func (c claudeSettings) env(k string) string {
 }
 
 func (s *Server) claudeModels(info *ModelInfo) {
+	if claudeSGLauncher() != "" {
+		for _, id := range []string{"opus", "sonnet", "haiku"} {
+			info.Models = append(info.Models, ModelOpt{ID: id, Label: strings.Title(id)})
+		}
+		return
+	}
 	cfg := s.readClaudeSettings()
 	info.Default, info.DefaultEffort = cfg.Model, cfg.Effort
 	seen := map[string]bool{}

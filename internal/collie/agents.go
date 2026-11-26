@@ -20,6 +20,12 @@ var agentNames = map[string]string{"claude": "Claude Code", "codex": "Codex", "a
 func detectAgents(home string) []string {
 	out := []string{}
 	for _, k := range agentKinds {
+		if k == "claude" && claudeSGLauncher() != "" {
+			if isExecutable(claudeSGLauncher()) {
+				out = append(out, k)
+			}
+			continue
+		}
 		if findBin(k, home) != "" {
 			out = append(out, k)
 		}
@@ -93,6 +99,12 @@ func (s *Server) agentMissing(machine, kind string) error {
 		return nil
 	}
 	if machine == "" {
+		if kind == "claude" && claudeSGLauncher() != "" {
+			if isExecutable(claudeSGLauncher()) {
+				return nil
+			}
+			return fmt.Errorf("找不到可执行的 Claude SG 启动器：%s", claudeSGLauncher())
+		}
 		if findBin(kind, s.home) != "" {
 			return nil
 		}

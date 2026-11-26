@@ -239,8 +239,12 @@ func doubaoACPArgs(cfg doubaoBridgeConfig) []string {
 }
 
 func runBridge(args []string) {
+	if len(args) > 0 && args[0] == "claude-sg" {
+		runClaudeSGBridge(args[1:])
+		return
+	}
 	if len(args) == 0 || args[0] != "doubao" {
-		fmt.Fprintln(os.Stderr, "usage: collie _bridge doubao [flags]")
+		fmt.Fprintln(os.Stderr, "usage: collie _bridge <doubao|claude-sg> [flags]")
 		os.Exit(2)
 	}
 	cfg, err := parseDoubaoBridgeArgs(args[1:])
@@ -1677,16 +1681,20 @@ func (b *doubaoBridge) reportRelease() {
 }
 
 func (b *doubaoBridge) callHerdr(method string, params map[string]any) error {
+	n := b.herdrSeq.Load()
+	return callHerdrSocket(b.herdrSock, "db-"+strconv.FormatInt(n, 10), method, params)
+}
+
+func callHerdrSocket(sock, id, method string, params map[string]any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", b.herdrSock)
+	conn, err := d.DialContext(ctx, "unix", sock)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	id := "db-" + strconv.FormatInt(b.herdrSeq.Load(), 10)
 	req, _ := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
 	if _, err := conn.Write(append(req, '\n')); err != nil {
 		return err

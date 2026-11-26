@@ -728,6 +728,9 @@ func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, 
 	if herdrKind == "doubao" {
 		return s.startDoubaoAgent(ctx, machine, name, cwd, label, args)
 	}
+	if herdrKind == "claude" && machine == "" && claudeSGLauncher() != "" {
+		return s.startClaudeSGAgent(ctx, name, cwd, label, args)
+	}
 	s.trustForStart(ctx, machine, herdrKind, cwd, args)
 	wsID, paneID, err = s.herdr.CreateWorkspace(ctx, machine, cwd, label)
 	if err != nil {

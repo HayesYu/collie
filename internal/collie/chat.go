@@ -761,6 +761,22 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 	}
 	switch kind {
 	case "claude":
+		if claudeSGLauncher() != "" {
+			dir := claudeSGStateDir(s.home)
+			if isSafeSessionID(value) {
+				if p := filepath.Join(dir, "transcripts", value+".jsonl"); isFile(p) {
+					return p, "claude"
+				}
+			}
+			if value == "" && pane != "" {
+				local, _ := split(pane)
+				if ev, ok := readClaudeSGEvent(claudeSGEventFile(dir, local)); ok && isSafeSessionID(ev.SessionID) {
+					if p := filepath.Join(dir, "transcripts", ev.SessionID+".jsonl"); isFile(p) {
+						return p, "claude"
+					}
+				}
+			}
+		}
 		if value == "" {
 			return "", ""
 		}

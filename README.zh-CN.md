@@ -14,14 +14,10 @@
 <a href="README.md">English</a> | <b>中文</b>
 </p>
 
-<!-- 首屏媒体位：后续视频发布后可直接替换为封面跳转链接 -->
+<!-- 首屏精华演示动图 -->
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/hero-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/img/hero-light.png">
-  <img src="docs/img/hero-light.png" alt="Collie 工作台：并行派出的 Claude Code 与 Codex 回报进展，Collie 给出精炼结论与一键决策选项" width="900">
-</picture>
+  <img src="docs/img/demo.gif" alt="Collie 工作台演示：一句话跨机并行派活，做完给出精炼结论与一键决策选项，并支持话题线抽屉与跨端未读同步" width="900">
 </a>
 </p>
 

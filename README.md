@@ -14,14 +14,10 @@ Open-source, self-hosted Super Agent for Claude Code, Codex, and Antigravity —
 <b>English</b> | <a href="README.zh-CN.md">中文</a>
 </p>
 
-<!-- Hero showcase media slot: ready to swap to video cover link when published -->
+<!-- Hero showcase animated demo -->
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/hero-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/img/hero-light.png">
-  <img src="docs/img/hero-light.png" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision options" width="900">
-</picture>
+  <img src="docs/img/demo.gif" alt="Collie workspace demo: delegate once across machines, tap one-tap decision options, and open reply-thread drawers with synced unread markers" width="900">
 </a>
 </p>
 

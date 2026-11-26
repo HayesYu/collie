@@ -543,13 +543,16 @@ footer a { color: var(--fg-2); }
       <span data-i18n="proof_ports">Zero open ports</span>
     </div>
 
-    <!-- Primary media slot: swap .stage-media contents with video cover/player when published -->
+    <!-- Primary media slot: silent looping hero showcase with static fallback -->
     <div class="stage reveal" data-media-slot="hero-showcase">
       <div class="frame">
         <div class="bar"><i></i><i></i><i></i><span data-i18n="stage_bar">collie · chat with Collie</span></div>
         <div class="stage-media" id="hero-media">
-          <img class="only-light" src="img/hero-light.png" width="2880" height="1800" fetchpriority="high" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
-          <img class="only-dark" src="img/hero-dark.png" width="2880" height="1800" fetchpriority="high" alt="Collie workspace in dark mode: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
+          <video id="hero-video" autoplay muted loop playsinline preload="metadata" poster="img/hero-light.png" width="1280" height="800" aria-label="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-aria="hero_img_alt">
+            <source src="img/hero-demo.mp4" type="video/mp4">
+            <img class="only-light" src="img/hero-light.png" width="2880" height="1800" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
+            <img class="only-dark" src="img/hero-dark.png" width="2880" height="1800" alt="Collie workspace in dark mode: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
+          </video>
         </div>
       </div>
       <div class="stage-phone">
@@ -1055,16 +1058,24 @@ langBtn.addEventListener("click", () => {
 const schemeMeta = document.querySelector('meta[name="color-scheme"]');
 const darkMQ = window.matchMedia("(prefers-color-scheme: dark)");
 const themeBtn = document.getElementById("theme-toggle");
+const heroVideo = document.getElementById("hero-video");
 
-function syncSchemeMeta() {
-  const saved = readStored("collie-theme");
-  schemeMeta.content = (saved === "light" || saved === "dark") ? saved : "light dark";
-}
 function renderedScheme() {
   const saved = readStored("collie-theme");
   if (saved === "light" || saved === "dark") return saved;
   return darkMQ.matches ? "dark" : "light";
 }
+function syncHeroPoster() {
+  if (!heroVideo) return;
+  heroVideo.poster = renderedScheme() === "dark" ? "img/hero-dark.png" : "img/hero-light.png";
+}
+function syncSchemeMeta() {
+  const saved = readStored("collie-theme");
+  schemeMeta.content = (saved === "light" || saved === "dark") ? saved : "light dark";
+  syncHeroPoster();
+}
+syncHeroPoster();
+darkMQ.addEventListener?.("change", syncHeroPoster);
 themeBtn.addEventListener("click", () => {
   const target = renderedScheme() === "dark" ? "light" : "dark";
   const sys = darkMQ.matches ? "dark" : "light";
@@ -1075,6 +1086,7 @@ themeBtn.addEventListener("click", () => {
     writeStored("collie-theme", target);
     schemeMeta.content = target;
   }
+  syncHeroPoster();
 });
 
 window.addEventListener("storage", (e) => {

@@ -163,6 +163,7 @@ func (s *Server) NodeRoutes() http.Handler {
 	mux := http.NewServeMux()
 	s.machineRoutes(mux, func(h http.HandlerFunc) http.Handler { return h })
 	mux.HandleFunc("POST /api/update/relay", s.relayUpdate)
+	mux.HandleFunc("GET /api/update/fetch", s.serveRelayAsset)
 	return mux
 }
 

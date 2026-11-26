@@ -115,7 +115,7 @@ jobs:
           TAG: ${{ steps.check.outputs.tag }}
         run: |
           set -euo pipefail
-          if ! go test -v ./internal/collie -run 'Test(ParseClaudeSGBridgeArgs|SafePaneFileNameAndSessionID|FindTranscriptClaudeSG|ClaudeModelsWithClaudeSGLauncher|ParseClaudeStartRPC|AgentMissingWithClaudeSGLauncher|HandleHerdrStream|ForkReleaseRepoURL)'; then
+          if ! go test -v ./internal/collie -run 'Test(ParseClaudeSGBridgeArgs|SafePaneFileNameAndSessionID|FindTranscriptClaudeSG|ClaudeModelsWithClaudeSGLauncher|ParseClaudeStartRPC|AgentMissingWithClaudeSGLauncher|HandleHerdrStream|ForkReleaseRepoURL|NodeAssistedHubSelfUpdate)'; then
             TITLE="[Auto-Sync] Tests failed syncing upstream ${TAG}"
             OPEN=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "\"${TITLE}\" in:title" --json number --jq 'length')
             if [ "${OPEN}" = "0" ]; then

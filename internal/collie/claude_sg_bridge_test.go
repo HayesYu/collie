@@ -3,13 +3,20 @@ package collie
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -290,5 +297,149 @@ func TestForkReleaseRepoURL(t *testing.T) {
 		if got := forkReleaseRepoURL(in); got != want {
 			t.Fatalf("forkReleaseRepoURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestNodeAssistedHubSelfUpdate(t *testing.T) {
+	saveUpdateHooks(t)
+	origWait := nodeRelayWaitTimeout
+	origPoll := nodeRelayPollInterval
+	t.Cleanup(func() {
+		nodeRelayWaitTimeout = origWait
+		nodeRelayPollInterval = origPoll
+	})
+	nodeRelayWaitTimeout = 2 * time.Second
+	nodeRelayPollInterval = 15 * time.Millisecond
+
+	const tag = "v0.2.82"
+	newScript := "#!/bin/sh\necho \"collie " + tag + "\"\n"
+	sum := sha256.Sum256([]byte(newScript))
+	newSHA := hex.EncodeToString(sum[:])
+	assetName := "collie-" + runtime.GOOS + "-" + runtime.GOARCH
+
+	var failDirect atomic.Bool
+	var mockGitHubHits atomic.Int32
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			http.Redirect(w, r, "/releases/tag/"+tag, http.StatusFound)
+		case "/releases/tag/" + tag:
+			w.WriteHeader(http.StatusOK)
+		case "/releases/download/" + tag + "/checksums.txt":
+			mockGitHubHits.Add(1)
+			if failDirect.Load() {
+				http.NotFound(w, r)
+				return
+			}
+			fmt.Fprintf(w, "%s  %s\n", newSHA, assetName)
+		case "/releases/download/" + tag + "/" + assetName:
+			mockGitHubHits.Add(1)
+			if failDirect.Load() {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(newScript))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gh.Close()
+	releaseRepoURL = gh.URL
+
+	// 1) Node /api/update/fetch validates auth mode, query params, and streams SHA-256 verified binary.
+	nodeSrv := &Server{node: true}
+	nodeRoutes := nodeSrv.NodeRoutes()
+
+	nonNodeRec := httptest.NewRecorder()
+	(&Server{node: false}).serveRelayAsset(nonNodeRec, httptest.NewRequest("GET", "/api/update/fetch?tag="+tag+"&os="+runtime.GOOS+"&arch="+runtime.GOARCH, nil))
+	if nonNodeRec.Code != 403 {
+		t.Fatalf("non-node serveRelayAsset status=%d, want 403", nonNodeRec.Code)
+	}
+
+	badRec := httptest.NewRecorder()
+	nodeRoutes.ServeHTTP(badRec, httptest.NewRequest("GET", "/api/update/fetch?tag=bad&os="+runtime.GOOS+"&arch="+runtime.GOARCH, nil))
+	if badRec.Code != 400 {
+		t.Fatalf("bad tag serveRelayAsset status=%d, want 400", badRec.Code)
+	}
+
+	okRec := httptest.NewRecorder()
+	nodeRoutes.ServeHTTP(okRec, httptest.NewRequest("GET", "/api/update/fetch?tag="+tag+"&os="+runtime.GOOS+"&arch="+runtime.GOARCH, nil))
+	if okRec.Code != 200 {
+		t.Fatalf("valid serveRelayAsset status=%d body=%s", okRec.Code, okRec.Body.String())
+	}
+	if okRec.Header().Get(relayUpdateTagHeader) != tag || okRec.Header().Get(relayUpdateSHAHeader) != newSHA {
+		t.Fatalf("unexpected relay headers: tag=%q sha=%q", okRec.Header().Get(relayUpdateTagHeader), okRec.Header().Get(relayUpdateSHAHeader))
+	}
+	if okRec.Body.String() != newScript {
+		t.Fatalf("serveRelayAsset body = %q, want %q", okRec.Body.String(), newScript)
+	}
+
+	// Helper to route Hub->Node HTTP calls through nodeRoutes in memory.
+	nodeClient := &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		nodeRoutes.ServeHTTP(rec, r)
+		return rec.Result(), nil
+	})}
+
+	// 2) COLLIE_UPDATE_PREFER_NODE=1 waits briefly for a reconnecting node and installs via node.
+	t.Setenv("COLLIE_UPDATE_PREFER_NODE", "1")
+	exe1 := filepath.Join(t.TempDir(), "collie-hub-1")
+	if err := os.WriteFile(exe1, []byte("#!/bin/sh\necho 'collie v0.2.81'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h1 := newHerdr("/nonexistent.sock", "hubbox", t.TempDir())
+	h1.attach(&Machine{ID: "mac", Name: "mac", OS: runtime.GOOS + "/" + runtime.GOARCH, Online: false})
+	hub1 := &Server{herdr: h1}
+
+	go func() {
+		time.Sleep(45 * time.Millisecond)
+		h1.attach(&Machine{ID: "mac", Name: "mac", OS: runtime.GOOS + "/" + runtime.GOARCH, Online: true, client: nodeClient})
+	}()
+
+	hitsBeforePrefer := mockGitHubHits.Load()
+	viaNode, err := hub1.downloadSelfUpdate(context.Background(), tag, exe1, false)
+	if err != nil || !viaNode {
+		t.Fatalf("prefer-node downloadSelfUpdate failed: viaNode=%v err=%v", viaNode, err)
+	}
+	got1, _ := os.ReadFile(exe1)
+	if string(got1) != newScript {
+		t.Fatalf("exe1 = %q, want %q", string(got1), newScript)
+	}
+	// Cached in node's getOrFetchRelayAsset from step 1, so mockGitHub saw zero extra hits.
+	if mockGitHubHits.Load() != hitsBeforePrefer {
+		t.Fatalf("expected node cache reuse, mockGitHub hits went %d -> %d", hitsBeforePrefer, mockGitHubHits.Load())
+	}
+
+	// 3) Default mode: when direct Hub download fails (or direct ctx expires), falls back to node cleanly.
+	t.Setenv("COLLIE_UPDATE_PREFER_NODE", "")
+	updateMaxAttempts = 1
+	failDirect.Store(true)
+	exe2 := filepath.Join(t.TempDir(), "collie-hub-2")
+	if err := os.WriteFile(exe2, []byte("#!/bin/sh\necho 'collie v0.2.81'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h2 := newHerdr("/nonexistent.sock", "hubbox", t.TempDir())
+	h2.attach(&Machine{
+		ID: "mac", Name: "mac", OS: runtime.GOOS + "/" + runtime.GOARCH, Online: true,
+		client: &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			// Node still succeeds (cached or via working network path) even while direct Hub path failed.
+			failDirect.Store(false)
+			rec := httptest.NewRecorder()
+			nodeRoutes.ServeHTTP(rec, r)
+			return rec.Result(), nil
+		})},
+	})
+	hub2 := &Server{herdr: h2}
+	// Even with an already-canceled direct context, fallback uses fresh selfUpdateRelayTimeout context.
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	viaNode2, err := hub2.downloadSelfUpdate(expiredCtx, tag, exe2, false)
+	if err != nil || !viaNode2 {
+		t.Fatalf("fallback downloadSelfUpdate failed: viaNode=%v err=%v", viaNode2, err)
+	}
+	got2, _ := os.ReadFile(exe2)
+	if string(got2) != newScript {
+		t.Fatalf("exe2 = %q, want %q", string(got2), newScript)
 	}
 }

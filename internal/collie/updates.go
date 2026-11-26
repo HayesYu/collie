@@ -656,7 +656,8 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"error": "找不到自己的程序文件：" + err.Error()})
 		return
 	}
-	if err := downloadReleaseWithHint(ctx, latest, exe, usedIPv4); err != nil {
+	viaNode, err := s.downloadSelfUpdate(ctx, latest, exe, usedIPv4)
+	if err != nil {
 		msg := formatUpdateError(err)
 		var fe *updateFileError
 		relayable := !errors.As(err, &fe) && !errors.Is(err, errExecVerifyFailed)
@@ -664,8 +665,12 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 502, map[string]any{"error": "更新失败：" + msg, "relayable": relayable})
 		return
 	}
-	log.Printf("updated %s → %s (dur=%s); restarting", version, latest, time.Since(start).Round(time.Millisecond))
-	writeJSON(w, 200, map[string]any{"ok": true, "from": version, "version": latest})
+	log.Printf("updated %s → %s (via_node=%v dur=%s); restarting", version, latest, viaNode, time.Since(start).Round(time.Millisecond))
+	out := map[string]any{"ok": true, "from": version, "version": latest}
+	if viaNode {
+		out["via_node"] = true
+	}
+	writeJSON(w, 200, out)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}

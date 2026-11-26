@@ -270,6 +270,10 @@ func (sp *Super) Reply(thread, text, reID string, options []string, check ...boo
 		if ref := sp.findEntryLocked(re.Entry); ref != nil && ref.Channel == feishuKind {
 			reFromFeishu = true
 		}
+	} else if tid := strings.TrimPrefix(strings.TrimSpace(reID), "#"); tid != "" {
+		if trig := sp.findTriggerLocked(tid); trig != nil && trig.Source == "webhook:"+feishuKind {
+			reFromFeishu = true
+		}
 	}
 	e := sp.addEntryReplyLocked("collie", thread, text, "", "", re, opts, chk)
 	instant := sp.feishu != nil && sp.feishu.ShouldInstantSync(e, reFromFeishu)

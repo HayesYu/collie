@@ -2363,7 +2363,7 @@ func (f *FeishuAdapter) handleCardAction(ctx context.Context, event *larkcallbac
 		f.recordInboundRoute(feishuRoute{
 			at:        time.Now(),
 			chatID:    openChatID,
-			chatType:  "p2p",
+			chatType:  f.knownChatType(openChatID, cfg),
 			messageID: openMsgID,
 			openID:    opOpenID,
 		})
@@ -2459,6 +2459,30 @@ func valueInt(m map[string]any, k string) (int, bool) {
 }
 
 // ---------------------------------------------------------------- outbound cards & reverse sync
+
+func (f *FeishuAdapter) knownChatType(chatID string, cfg FeishuConfig) string {
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return "p2p"
+	}
+	if f.isFeedbackChat(cfg, chatID) {
+		return "group"
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.lastP2P.chatID == chatID {
+		return "p2p"
+	}
+	if f.lastInbound.chatID == chatID && f.lastInbound.chatType != "" {
+		return f.lastInbound.chatType
+	}
+	for _, r := range f.origins {
+		if r.chatID == chatID && r.chatType != "" {
+			return r.chatType
+		}
+	}
+	return "p2p"
+}
 
 func (f *FeishuAdapter) recordInboundRoute(r feishuRoute) {
 	f.mu.Lock()
@@ -2573,7 +2597,7 @@ func (f *FeishuAdapter) ShouldInstantSync(e *Entry, reFromFeishu bool) bool {
 	if hasReOrigin && reOrigin.chatID != "" {
 		return true
 	}
-	if !last.at.IsZero() && time.Since(last.at) <= feishuInstantSyncWindow {
+	if !last.at.IsZero() && last.chatType != "group" && time.Since(last.at) <= feishuInstantSyncWindow {
 		return true
 	}
 	return false
@@ -2597,7 +2621,7 @@ func (f *FeishuAdapter) CanSendFallback() bool {
 	}
 	fc := parseFeishuConfig(rec.Config)
 	f.mu.RLock()
-	hasChat := f.lastInbound.chatID != ""
+	hasChat := (f.lastInbound.chatID != "" && f.lastInbound.chatType != "group") || f.lastP2P.chatID != ""
 	f.mu.RUnlock()
 	return len(fc.AllowOpenIDs) > 0 || hasChat
 }
@@ -2636,7 +2660,6 @@ func (f *FeishuAdapter) targetForEntry(e *Entry, cfg FeishuConfig) (recvType, re
 	}
 	last := f.lastInbound
 	lastP2P := f.lastP2P
-	lastFB := f.lastFeedbackAt
 	f.mu.RUnlock()
 
 	if origin.chatID != "" {
@@ -2645,18 +2668,10 @@ func (f *FeishuAdapter) targetForEntry(e *Entry, cfg FeishuConfig) (recvType, re
 		}
 		return "chat_id", origin.chatID, ""
 	}
-	// Never route unsolicited notices or post-feedback replies into a group chat
-	// (especially a configured feedback group); fall back to owner's private DM.
-	allowLast := last.chatID != ""
-	if allowLast && last.chatType == "group" {
-		if lastFB.After(last.at) || (e == nil && f.isFeedbackChat(cfg, last.chatID)) {
-			allowLast = false
-		}
-	}
+	// Never route fallback replies or unsolicited notices into a group chat:
+	// group chats are ONLY valid when explicitly replying to a tracked group origin.
+	allowLast := last.chatID != "" && last.chatType != "group"
 	if allowLast {
-		if last.chatType == "group" && last.messageID != "" {
-			return "chat_id", last.chatID, last.messageID
-		}
 		return "chat_id", last.chatID, ""
 	}
 	if lastP2P.chatID != "" {

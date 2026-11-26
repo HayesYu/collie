@@ -3,6 +3,7 @@ package collie
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -273,7 +274,9 @@ func TestClaudeModelsPreservesInheritAndExplicitEmptyEfforts(t *testing.T) {
 
 	s := &Server{home: home}
 	info := &ModelInfo{Kind: "claude", Efforts: allEfforts}
-	s.claudeModels(info)
+	claudeModelProbe = func(context.Context, []string) ([]claudeProbeModel, error) { return nil, errors.New("no claude") }
+	t.Cleanup(func() { claudeModelProbe = probeClaudeModels })
+	s.claudeModels(context.Background(), info)
 
 	byID := map[string]ModelOpt{}
 	for _, m := range info.Models {

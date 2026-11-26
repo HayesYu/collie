@@ -155,6 +155,9 @@ var modelCache = struct {
 type modelMark struct {
 	at   time.Time
 	info *ModelInfo
+	// fallback marks a list that could not be read from the agent itself;
+	// it is retried sooner than a real one.
+	fallback bool
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -170,13 +173,18 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	modelCache.Lock()
 	mk := modelCache.m[kind]
 	modelCache.Unlock()
-	if mk.info == nil || time.Since(mk.at) > 10*time.Minute || r.URL.Query().Get("refresh") != "" {
+	ttl := 10 * time.Minute
+	if mk.fallback {
+		ttl = time.Minute
+	}
+	if mk.info == nil || time.Since(mk.at) > ttl || r.URL.Query().Get("refresh") != "" {
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		defer cancel()
 		info := &ModelInfo{Kind: kind, Efforts: allEfforts}
+		fallback := false
 		switch kind {
 		case "claude":
-			s.claudeModels(info)
+			fallback = !s.claudeModels(ctx, info)
 		case "codex":
 			s.codexModels(ctx, info)
 		case "agy":
@@ -190,7 +198,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		if info.Efforts == nil {
 			info.Efforts = []string{}
 		}
-		mk = modelMark{at: time.Now(), info: info}
+		mk = modelMark{at: time.Now(), info: info, fallback: fallback}
 		modelCache.Lock()
 		modelCache.m[kind] = mk
 		modelCache.Unlock()
@@ -222,15 +230,34 @@ func (c claudeSettings) env(k string) string {
 	return os.Getenv(k)
 }
 
-func (s *Server) claudeModels(info *ModelInfo) {
-	if claudeSGLauncher() != "" {
+// claudeModels reports whether the list came from Claude Code itself (true)
+// or from the static fallback below (false).
+func (s *Server) claudeModels(ctx context.Context, info *ModelInfo) bool {
+	sg := claudeSGLauncher() != ""
+	var cfg claudeSettings
+	if !sg { // claude-sg's settings live inside the container
+		cfg = s.readClaudeSettings()
+		info.Default, info.DefaultEffort = cfg.Model, cfg.Effort
+	}
+	if models, err := claudeModelProbe(ctx, s.claudeProbeCommand()); err == nil {
+		applyClaudeProbe(info, models)
+		if cfg.Model != "" {
+			found := false
+			for _, m := range info.Models {
+				found = found || m.ID == cfg.Model
+			}
+			if !found {
+				info.Models = append(info.Models, ModelOpt{ID: cfg.Model, Note: "当前默认"})
+			}
+		}
+		return true
+	}
+	if sg {
 		for _, id := range []string{"opus", "sonnet", "haiku"} {
 			info.Models = append(info.Models, ModelOpt{ID: id, Label: strings.Title(id)})
 		}
-		return
+		return false
 	}
-	cfg := s.readClaudeSettings()
-	info.Default, info.DefaultEffort = cfg.Model, cfg.Effort
 	seen := map[string]bool{}
 	add := func(o ModelOpt) {
 		if o.ID != "" && !seen[o.ID] {
@@ -271,6 +298,7 @@ func (s *Server) claudeModels(info *ModelInfo) {
 		add(o)
 	}
 	add(ModelOpt{ID: cfg.Model})
+	return false
 }
 
 func (s *Server) codexModels(ctx context.Context, info *ModelInfo) {

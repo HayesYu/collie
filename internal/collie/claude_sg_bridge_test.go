@@ -154,7 +154,9 @@ func TestClaudeModelsWithClaudeSGLauncher(t *testing.T) {
 
 	srv := &Server{home: home}
 	info := &ModelInfo{Kind: "claude", Efforts: allEfforts}
-	srv.claudeModels(info)
+	if srv.claudeModels(context.Background(), info) {
+		t.Fatal("probe of a missing launcher should fall back")
+	}
 	if info.Default != "" || len(info.Models) != 3 {
 		t.Fatalf("unexpected info: %+v", info)
 	}

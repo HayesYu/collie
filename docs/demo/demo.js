@@ -761,6 +761,52 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       }
       return json(memory);
     }
+    if (p === "/api/memory/export" && method === "GET") {
+      const enc = new TextEncoder();
+      const crcTable = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1); crcTable[n] = c >>> 0; }
+      const crc32 = (u8) => { let c = 0xffffffff; for (let i = 0; i < u8.length; i++) c = crcTable[(c ^ u8[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+      const parts = [], central = [];
+      let offset = 0;
+      const mdFiles = memory.files.filter((f) => !f.legacy && /\.md$/.test(f.name));
+      for (const f of mdFiles) {
+        const nameB = enc.encode(f.name), dataB = enc.encode(f.text || ""), crc = crc32(dataB);
+        const lh = new ArrayBuffer(30), lv = new DataView(lh);
+        lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
+        lv.setUint32(14, crc, true); lv.setUint32(18, dataB.length, true); lv.setUint32(22, dataB.length, true); lv.setUint16(26, nameB.length, true);
+        const ch = new ArrayBuffer(46), cv = new DataView(ch);
+        cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(8, 0x0800, true);
+        cv.setUint32(16, crc, true); cv.setUint32(20, dataB.length, true); cv.setUint32(24, dataB.length, true); cv.setUint16(28, nameB.length, true); cv.setUint32(42, offset, true);
+        parts.push(new Uint8Array(lh), nameB, dataB);
+        central.push(new Uint8Array(ch), nameB);
+        offset += 30 + nameB.length + dataB.length;
+      }
+      const cdSize = central.reduce((s, b) => s + b.length, 0);
+      const eocd = new ArrayBuffer(22), ev = new DataView(eocd);
+      ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, mdFiles.length, true); ev.setUint16(10, mdFiles.length, true);
+      ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+      const blob = new Blob([...parts, ...central, new Uint8Array(eocd)], { type: "application/zip" });
+      const d = new Date(), pad = (n) => String(n).padStart(2, "0");
+      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+      return new Response(blob, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="collie-memory-${stamp}.zip"`,
+          "X-Memory-Files": String(mdFiles.length),
+        },
+      });
+    }
+    if (p === "/api/memory/import" && method === "POST") {
+      const mode = (q.get("mode") || (init.body instanceof FormData ? init.body.get("mode") : "") || "merge").toString();
+      const file = init.body instanceof FormData ? init.body.get("file") : null;
+      if (!file || typeof file.arrayBuffer !== "function") return json({ error: "请选择要导入的 .zip 文件" }, 400);
+      const buf = new Uint8Array(await file.arrayBuffer());
+      if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b) return json({ error: "无效的 .zip 压缩包" }, 400);
+      const d = new Date(), pad = (n) => String(n).padStart(2, "0");
+      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+      return json({ ok: true, mode: mode === "replace" ? "replace" : "merge", imported: memory.files.length, backup: `pre-import-${stamp}.zip` });
+    }
     if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "", body.re, body.client_msg_id) });
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });

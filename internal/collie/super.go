@@ -36,6 +36,7 @@ type Super struct {
 	dir string // ~/.config/collie
 
 	mu            sync.Mutex
+	memIOMu       sync.Mutex
 	st            *State
 	dirty         bool
 	deletedTimers []string

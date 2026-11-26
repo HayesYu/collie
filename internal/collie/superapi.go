@@ -46,6 +46,8 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("GET /api/super/search", s.superSearch)
 	api("GET /api/super/memory", s.superMemory)
 	api("POST /api/super/memory", s.superSaveMemory)
+	api("GET /api/memory/export", s.memoryExport)
+	api("POST /api/memory/import", s.memoryImport)
 	api("POST /api/super/dream", s.superDream)
 	api("POST /api/super/router/restart", s.superRestartRouter)
 	api("GET /api/super/integrations", s.superIntegrations)

@@ -4865,6 +4865,16 @@
           <label>上下文用到多少时换新会话<select name="rotate_pct" data-pick="compact" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
           <label>每晚做梦<select name="dream_at" data-pick="compact" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
         </div>
+        <div class="set-mem-io">
+          <div class="set-mem-io-copy">
+            <span class="set-mem-io-title">记忆备份与迁移</span>
+            <small>打包下载全部 <code>.md</code> 记忆，或从 <code>.zip</code> 备份恢复；导入前会自动备份当前记忆。</small>
+          </div>
+          <div class="set-mem-io-acts">
+            <button type="button" class="btn small" data-act="mem-export">导出记忆</button>
+            <button type="button" class="btn small" data-act="mem-import">导入记忆</button>
+          </div>
+        </div>
       </section>
 
       <section class="card set-sec">
@@ -5033,6 +5043,17 @@
       loadAuto();
       return;
     }
+    if (t.dataset.act === "mem-export") {
+      exportMemoryZipUI(t);
+      return;
+    }
+    if (t.dataset.act === "mem-import") {
+      if (memImportFile) {
+        memImportFile.value = "";
+        memImportFile.click();
+      }
+      return;
+    }
     if (t.dataset.delTimer) {
       await api(`/api/super/timers/${t.dataset.delTimer}/delete`, { method: "POST", body: {} }).catch((err) => toast(err.message));
       loadAuto();
@@ -5040,6 +5061,212 @@
       await copy(t.dataset.copy); toast("已复制");
     }
   });
+
+  // ───────────────────────────── memory export / import (ZIP + auto-backup)
+  const MEM_IMPORT_MAX = 20 * (1 << 20);
+  const memImportModal = $("#mem-import-modal");
+  const memImportForm = $("#mem-import-form");
+  const memImportFile = $("#mem-import-file");
+  let memImportPending = null;
+  let memImportBusy = false;
+
+  function fmtMemBytes(n) {
+    if (!(n >= 0)) return "";
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  }
+  function memZipStamp() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  }
+  async function exportMemoryZipUI(btn) {
+    if (!btn || btn.disabled) return;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "导出中…";
+    try {
+      const res = await authFetch("/api/memory/export", { credentials: "same-origin", cache: "no-store" });
+      if (res.status === 401) {
+        showLogin();
+        return;
+      }
+      if (!res.ok) {
+        let msg = "";
+        try { msg = (await res.json())?.error || ""; } catch {}
+        throw new Error(msg || `导出失败（HTTP ${res.status}）`);
+      }
+      const cd = res.headers?.get?.("Content-Disposition") || "";
+      const m = /filename="([^"]+)"/i.exec(cd);
+      const fileName = m?.[1] || `collie-memory-${memZipStamp()}.zip`;
+      const cntHdr = res.headers?.get?.("X-Memory-Files");
+      const cnt = cntHdr !== null && cntHdr !== "" ? Number(cntHdr) : NaN;
+      const blob = await res.blob();
+      triggerBlobDownload(blob, fileName);
+      toast(Number.isFinite(cnt) ? `已导出 ${cnt} 个记忆文件` : "已导出记忆");
+    } catch (err) {
+      toast(err.message || "导出失败", "attn");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+  function syncMemImportModeUI() {
+    if (!memImportForm) return;
+    const mode = memImportForm.querySelector('input[name="mode"]:checked')?.value || "merge";
+    const sub = $("#mem-io-submit");
+    if (sub && !memImportBusy) {
+      sub.textContent = mode === "replace" ? "覆盖并导入" : "开始导入";
+      sub.classList.toggle("is-danger", mode === "replace");
+    }
+  }
+  function setMemImportError(msg) {
+    const el = $("#mem-io-error");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.hidden = !msg;
+  }
+  async function closeMemImportModal(reason = "cancel") {
+    if (!memImportModal?.open || memImportModal.hasAttribute("data-closing")) return;
+    if (!supportsTopLayerExit()) {
+      memImportModal.setAttribute("data-closing", "");
+      const anims = memImportModal.getAnimations({ subtree: true });
+      if (anims.length) {
+        await Promise.race([
+          Promise.allSettled(anims.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 240)),
+        ]);
+      }
+      if (!memImportModal.hasAttribute("data-closing")) return;
+      memImportModal.removeAttribute("data-closing");
+    }
+    if (memImportModal.open) memImportModal.close(reason);
+  }
+  function openMemImportModal(file) {
+    if (!memImportModal || !memImportForm || !file) return;
+    memImportPending = file;
+    $("#mem-io-file-name").textContent = file.name;
+    $("#mem-io-file-meta").textContent = fmtMemBytes(file.size);
+    const mergeRadio = memImportForm.querySelector('input[name="mode"][value="merge"]');
+    if (mergeRadio) mergeRadio.checked = true;
+    setMemImportError("");
+    syncMemImportModeUI();
+    memImportModal.removeAttribute("data-closing");
+    if (!memImportModal.open) memImportModal.showModal();
+  }
+  if (memImportFile) {
+    memImportFile.addEventListener("change", () => {
+      const file = memImportFile.files?.[0];
+      memImportFile.value = "";
+      if (!file) return;
+      if (file.size > MEM_IMPORT_MAX) {
+        toast("压缩包太大了（最多 20 MiB）", "attn");
+        return;
+      }
+      if (!/\.zip$/i.test(file.name)) {
+        toast("请选择 .zip 格式的记忆备份文件", "attn");
+        return;
+      }
+      openMemImportModal(file);
+    });
+  }
+  if (memImportModal && memImportForm) {
+    $("#mem-io-close")?.addEventListener("click", () => { if (!memImportBusy) closeMemImportModal("cancel"); });
+    $("#mem-io-cancel")?.addEventListener("click", () => { if (!memImportBusy) closeMemImportModal("cancel"); });
+    $("#mem-io-repick")?.addEventListener("click", () => {
+      if (memImportBusy || !memImportFile) return;
+      memImportFile.value = "";
+      memImportFile.click();
+    });
+    memImportForm.addEventListener("change", (e) => {
+      if (e.target?.name === "mode") {
+        setMemImportError("");
+        syncMemImportModeUI();
+      }
+    });
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      let pressedOutside = false;
+      const outside = (ev) => {
+        const r = memImportModal.getBoundingClientRect();
+        return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+      };
+      memImportModal.addEventListener("pointerdown", (ev) => { pressedOutside = !memImportBusy && ev.target === memImportModal && outside(ev); });
+      memImportModal.addEventListener("pointerup", (ev) => { if (pressedOutside && !memImportBusy && outside(ev)) closeMemImportModal("cancel"); pressedOutside = false; });
+    }
+    memImportModal.addEventListener("cancel", (ev) => {
+      if (memImportBusy) {
+        ev.preventDefault();
+        return;
+      }
+      if (!supportsTopLayerExit()) {
+        ev.preventDefault();
+        closeMemImportModal("cancel");
+      }
+    });
+    memImportModal.addEventListener("close", () => {
+      memImportModal.returnValue = "";
+      memImportModal.removeAttribute("data-closing");
+      memImportPending = null;
+      setMemImportError("");
+    });
+    memImportForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (memImportBusy || !memImportPending) return;
+      const mode = memImportForm.querySelector('input[name="mode"]:checked')?.value === "replace" ? "replace" : "merge";
+      const sub = $("#mem-io-submit"), cancel = $("#mem-io-cancel"), closeBtn = $("#mem-io-close"), repick = $("#mem-io-repick");
+      memImportBusy = true;
+      setMemImportError("");
+      if (sub) { sub.disabled = true; sub.textContent = "导入中…"; }
+      if (cancel) cancel.disabled = true;
+      if (closeBtn) closeBtn.disabled = true;
+      if (repick) repick.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append("file", memImportPending);
+        fd.append("mode", mode);
+        const res = await authFetch(`/api/memory/import?mode=${encodeURIComponent(mode)}`, {
+          method: "POST",
+          body: fd,
+          credentials: "same-origin",
+        });
+        if (res.status === 401) {
+          memImportBusy = false;
+          await closeMemImportModal("cancel");
+          showLogin();
+          return;
+        }
+        let data = {};
+        let raw = "";
+        try {
+          raw = await res.text();
+          if (raw) data = JSON.parse(raw);
+        } catch {}
+        if (!res.ok) {
+          const msg = data.error || (raw && !/^\s*</.test(raw) ? raw.trim().slice(0, 200) : "") || `导入失败（HTTP ${res.status}）`;
+          setMemImportError(msg);
+          return;
+        }
+        memImportBusy = false;
+        await closeMemImportModal("ok");
+        $("#auto-body")._memSig = "";
+        const modeLbl = (data.mode || mode) === "replace" ? "覆盖导入" : "合并导入";
+        const n = Number(data.imported || 0);
+        const bak = data.backup ? `（原记忆已备份为 ${data.backup}）` : "";
+        toast(`已${modeLbl} ${n} 个记忆文件${bak}`);
+        if (view === "auto" && autoTab === "memory") loadAuto();
+      } catch (err) {
+        setMemImportError(err.message || "网络异常，请稍后重试");
+      } finally {
+        memImportBusy = false;
+        if (sub) sub.disabled = false;
+        if (cancel) cancel.disabled = false;
+        if (closeBtn) closeBtn.disabled = false;
+        if (repick) repick.disabled = false;
+        syncMemImportModeUI();
+      }
+    });
+  }
 
   // ───────────────────────────── agents in other terminals (outside herdr)
   let ext = [], extTimer, extStream = null, extCur = null;

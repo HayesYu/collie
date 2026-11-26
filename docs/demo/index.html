@@ -640,6 +640,55 @@
   </button>
 </dialog>
 
+<!-- ───────────── memory import confirm modal ───────────── -->
+<dialog class="sheet mem-io-sheet" id="mem-import-modal" closedby="any" aria-labelledby="mem-io-title">
+  <form class="mem-io-form" id="mem-import-form" method="post" action="/api/memory/import" enctype="multipart/form-data">
+    <header class="mem-io-head">
+      <h2 id="mem-io-title">导入记忆</h2>
+      <button type="button" class="icon-btn" id="mem-io-close" aria-label="关闭导入记忆弹窗" title="关闭 (Esc)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="mem-io-body">
+      <div class="mem-io-file">
+        <svg class="mem-io-file-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+        <div class="mem-io-file-info">
+          <span class="mem-io-file-name" id="mem-io-file-name"></span>
+          <span class="mem-io-file-meta muted" id="mem-io-file-meta"></span>
+        </div>
+        <button type="button" class="btn ghost small" id="mem-io-repick">重选</button>
+      </div>
+      <fieldset class="mem-io-modes">
+        <legend>导入方式</legend>
+        <label class="mem-io-opt">
+          <input type="radio" name="mode" value="merge" checked>
+          <span class="mem-io-opt-body">
+            <b>合并导入（默认）</b>
+            <small>写入压缩包中的 <code>.md</code> 文件并保留现有其他记忆，同名文件以导入为准。</small>
+          </span>
+        </label>
+        <label class="mem-io-opt is-replace">
+          <input type="radio" name="mode" value="replace">
+          <span class="mem-io-opt-body">
+            <b>覆盖导入</b>
+            <small>清空当前 <code>memory/</code> 并完整替换为压缩包中的记忆文件。</small>
+          </span>
+        </label>
+      </fieldset>
+      <p class="mem-io-notice" id="mem-io-notice">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3z"/><path d="M9.5 12.2l1.8 1.8 3.4-3.6"/></svg>
+        <span>导入前会自动备份当前记忆到 <code>router/memory-backups/</code>，可随时恢复。</span>
+      </p>
+      <p class="mem-io-err" id="mem-io-error" role="alert" aria-live="polite" hidden></p>
+    </div>
+    <footer class="mem-io-foot">
+      <button type="button" class="btn small" id="mem-io-cancel" autofocus>取消</button>
+      <button type="submit" class="btn primary small" id="mem-io-submit">开始导入</button>
+    </footer>
+  </form>
+</dialog>
+<input type="file" id="mem-import-file" accept=".zip,application/zip" class="visually-hidden" tabindex="-1" aria-label="选择记忆压缩包">
+
 <div class="toasts" id="toasts" popover="manual" role="region" aria-label="通知" aria-live="polite" aria-atomic="false"></div>
 
 <script src="demo.js"></script>

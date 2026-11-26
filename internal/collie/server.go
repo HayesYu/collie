@@ -179,7 +179,7 @@ func (s *Server) authed(r *http.Request) bool {
 	if d == nil {
 		return false
 	}
-	return d.Kind == "browser" || strings.HasPrefix(r.URL.Path, "/api/super/")
+	return d.Kind == "browser" || strings.HasPrefix(r.URL.Path, "/api/super/") || strings.HasPrefix(r.URL.Path, "/api/memory/")
 }
 
 func (s *Server) auth(h http.Handler) http.Handler {

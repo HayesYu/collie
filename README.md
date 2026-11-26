@@ -8,7 +8,7 @@ Open-source, self-hosted Super Agent for Claude Code, Codex, and Antigravity —
 
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ Live Demo (10s)</b></a> ·
-<a href="https://www.bilibili.com/video/BV1i71EzkE2i/"><b>▶ Video Walkthrough (Bilibili)</b></a> ·
+<a href="https://www.bilibili.com/video/BV1a41EziEsE/"><b>▶ Video Walkthrough (Bilibili)</b></a> ·
 <a href="https://lihuanyu0w0.github.io/collie/">Homepage</a> ·
 <a href="#quick-start">Quick Start (30s)</a> ·
 <a href="https://github.com/lihuanyu0w0/collie/releases">Releases</a> ·
@@ -23,7 +23,7 @@ Open-source, self-hosted Super Agent for Claude Code, Codex, and Antigravity —
 </p>
 
 <p align="center">
-<b><a href="https://www.bilibili.com/video/BV1i71EzkE2i/">▶ Watch the full 3-minute video walkthrough on Bilibili →</a></b>
+<b><a href="https://www.bilibili.com/video/BV1a41EziEsE/">▶ Watch the full 3-minute video walkthrough on Bilibili →</a></b>
 </p>
 
 Stop bouncing between terminal tabs and separate Claude, Codex, and Antigravity desktop apps. **Collie** is an open-source, self-hosted **Super Agent** that brings every coding agent across your Macs, Linux devboxes, and cloud VMs under one unified workspace—while still letting you take over any desktop or CLI session already running. Describe the goal in one chat: Collie dispatches workers in parallel, watches progress, retries stalls, and comes back with **a 3-line summary and 2–4 one-tap options**. Because Collie is **one pure Web UI** (Add to Home Screen as a PWA) with identical full capabilities on phone and desktop—delegate, read briefs, tap decisions, open thread drawers, inspect images and reports—you can **leave your laptop behind** on commutes, trips, or between meetings.

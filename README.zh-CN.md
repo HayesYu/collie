@@ -8,7 +8,7 @@
 
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ 10 秒在线体验</b></a> ·
-<a href="https://www.bilibili.com/video/BV1i71EzkE2i/"><b>▶ 完整介绍视频 (B 站)</b></a> ·
+<a href="https://www.bilibili.com/video/BV1a41EziEsE/"><b>▶ 完整介绍视频 (B 站)</b></a> ·
 <a href="https://lihuanyu0w0.github.io/collie/">主页</a> ·
 <a href="#快速开始">30 秒快速开始</a> ·
 <a href="https://github.com/lihuanyu0w0/collie/releases">下载</a> ·
@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-<b><a href="https://www.bilibili.com/video/BV1i71EzkE2i/">▶ 点击观看 3 分钟完整介绍视频（B 站）→</a></b>
+<b><a href="https://www.bilibili.com/video/BV1a41EziEsE/">▶ 点击观看 3 分钟完整介绍视频（B 站）→</a></b>
 </p>
 
 不用再在七八个终端窗口，以及 Claude、Codex、Antigravity 各自的桌面端 App 之间来回切窗口了。**Collie** 是一个开源自托管的 **Super Agent**，用一个统一工作台把所有电脑上的 Agent 全部收编（同时依然保留随时接管本机已有桌面/CLI 会话的能力）：在对话里说清目标，它帮你并行派活、盯进度、遇错自愈、定时巡检，**做完只把 3 行结论和 2–4 个一键决策选项端到你面前**。因为 Collie 只有一套**纯 Web UI**（手机加到主屏幕即 PWA），手机和电脑是完全一致的完整体验——发需求、看结论、点选项、翻话题抽屉、看图片和报告，**通勤、外出、开会根本不用背电脑**。

@@ -4015,6 +4015,7 @@
         app_secret: "",
         secret_set: !!item.secret_set,
         allow_open_id: cfg.allow_open_id || (Array.isArray(cfg.allow_open_ids) ? cfg.allow_open_ids.join(", ") : ""),
+        feedback_chat_ids: cfg.feedback_chat_id || (Array.isArray(cfg.feedback_chat_ids) ? cfg.feedback_chat_ids.join(", ") : ""),
         group_mention_only: cfg.group_mention_only !== false,
         instant_chat_sync: cfg.instant_chat_sync !== false,
         enabled: !!item.enabled,
@@ -4209,6 +4210,11 @@
           ${pairBanner}
           <p class="int-field-help">仅白名单账号可唤醒 Collie 与点击卡片拍板按钮，防止他人借机器人操作你的电脑。</p>
         </div>
+        <div class="int-field">
+          <label class="int-field-label" for="fs-feedback-chats">只读反馈监听群 Chat ID <span class="opt">可选</span></label>
+          <textarea id="fs-feedback-chats" name="feedback_chat_ids" rows="2" placeholder="oc_xxxxxxxxxxxx，多个逗号或换行隔开" aria-describedby="fs-feedback-help" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">${esc(d.feedback_chat_ids)}</textarea>
+          <p class="int-field-help" id="fs-feedback-help">仅在群内 @Collie 时以只读建议送入主会话，不响应普通闲聊、不授予执行权限。</p>
+        </div>
         <div class="int-toggle-row">
           <div class="tl">
             <b>群聊中仅响应 @Collie</b>
@@ -4244,10 +4250,12 @@
       </div>
     `;
 
+    const splitIDList = (raw) => String(raw || "").split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean);
     const draftConfigPayload = () => ({
       region: d.region,
       app_id: d.app_id.trim(),
       allow_open_id: d.allow_open_id.trim(),
+      feedback_chat_ids: splitIDList(d.feedback_chat_ids),
       group_mention_only: d.group_mention_only,
       instant_chat_sync: d.instant_chat_sync,
     });
@@ -4264,6 +4272,7 @@
     $("#fs-app-id")?.addEventListener("input", (ev) => { d.app_id = ev.target.value; });
     $("#fs-app-secret")?.addEventListener("input", (ev) => { d.app_secret = ev.target.value; });
     $("#fs-openid")?.addEventListener("input", (ev) => { d.allow_open_id = ev.target.value; });
+    $("#fs-feedback-chats")?.addEventListener("input", (ev) => { d.feedback_chat_ids = ev.target.value; });
     $("#fs-mention-sw")?.addEventListener("click", () => { d.group_mention_only = !d.group_mention_only; renderIntModal(item); });
     $("#fs-sync-sw")?.addEventListener("click", () => { d.instant_chat_sync = !d.instant_chat_sync; renderIntModal(item); });
 
@@ -4334,7 +4343,7 @@
           body: {
             enabled: false,
             clear_secret: true,
-            config: { region: "cn", app_id: "", allow_open_id: "", group_mention_only: true, instant_chat_sync: true },
+            config: { region: "cn", app_id: "", allow_open_id: "", feedback_chat_ids: [], group_mention_only: true, instant_chat_sync: true },
           },
         });
         toast("已清空飞书本地配置与凭据");

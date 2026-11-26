@@ -93,6 +93,22 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 			w.Header().Set("Content-Disposition", `attachment; filename="shot.png"`)
 			_, _ = w.Write(ff.imgData)
 
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/open-apis/contact/v3/users/"):
+			if r.URL.Query().Get("user_id_type") != "open_id" {
+				w.WriteHeader(400)
+				_, _ = w.Write([]byte(`{"code":400,"msg":"missing user_id_type=open_id"}`))
+				return
+			}
+			uid := strings.TrimPrefix(r.URL.Path, "/open-apis/contact/v3/users/")
+			switch uid {
+			case "ou_colleague_named":
+				_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{"user":{"name":"林同学"}}}`))
+			case "ou_colleague_noperm":
+				_, _ = w.Write([]byte(`{"code":99991672,"msg":"no permission"}`))
+			default:
+				_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{"user":{}}}`))
+			}
+
 		default:
 			w.WriteHeader(404)
 			_, _ = w.Write([]byte(`{"code":404,"msg":"not found"}`))
@@ -570,6 +586,317 @@ func TestFeishuTestCardAndImageDownloadAndPairing(t *testing.T) {
 	if !found {
 		t.Fatalf("paired open_id not persisted in allowlist: %+v", v.Config)
 	}
+}
+
+func TestFeishuFeedbackConfigParsing(t *testing.T) {
+	// 1) Array form + whitespace/dedup.
+	c1 := parseFeishuConfig(json.RawMessage(`{"app_id":"cli_x","allow_open_ids":["ou_1"],"feedback_chat_ids":["oc_1","oc_2, oc_1"]}`))
+	if len(c1.FeedbackChatIDs) != 2 || c1.FeedbackChatIDs[0] != "oc_1" || c1.FeedbackChatIDs[1] != "oc_2" {
+		t.Fatalf("array parse failed: %+v", c1.FeedbackChatIDs)
+	}
+	// 2) Single string form with comma, Chinese comma, and newline separators.
+	c2 := parseFeishuConfig(json.RawMessage(`{"feedback_chat_ids":"oc_a, oc_b\noc_c，oc_a"}`))
+	if len(c2.FeedbackChatIDs) != 3 || c2.FeedbackChatIDs[0] != "oc_a" || c2.FeedbackChatIDs[1] != "oc_b" || c2.FeedbackChatIDs[2] != "oc_c" {
+		t.Fatalf("string parse failed: %+v", c2.FeedbackChatIDs)
+	}
+	// 3) Convenience singular feedback_chat_id alias.
+	c3 := parseFeishuConfig(json.RawMessage(`{"feedback_chat_id":"oc_single\noc_second"}`))
+	if len(c3.FeedbackChatIDs) != 2 || c3.FeedbackChatIDs[0] != "oc_single" || c3.FeedbackChatIDs[1] != "oc_second" {
+		t.Fatalf("singular alias parse failed: %+v", c3.FeedbackChatIDs)
+	}
+	// 4) ValidateSave + SanitizeConfig roundtrip.
+	fa := newFeishuAdapter(nil, nil)
+	norm, err := fa.ValidateSave(json.RawMessage(`{"region":"cn","app_id":"cli_1","allow_open_id":"ou_owner","feedback_chat_ids":"oc_fb_1\noc_fb_2"}`))
+	if err != nil {
+		t.Fatalf("ValidateSave: %v", err)
+	}
+	san := fa.SanitizeConfig(IntegrationConfig{Config: norm})
+	gotIDs, _ := san["feedback_chat_ids"].([]string)
+	if len(gotIDs) != 2 || gotIDs[0] != "oc_fb_1" || gotIDs[1] != "oc_fb_2" || san["feedback_chat_id"] != "oc_fb_1, oc_fb_2" {
+		t.Fatalf("SanitizeConfig feedback_chat_ids mismatch: %+v", san)
+	}
+}
+
+func TestFeishuGroupFeedbackSecurityRouting(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	ctx := context.Background()
+
+	// Configure feedback_chat_ids and intentionally set GroupMentionOnly=false to
+	// verify feedback groups STILL strictly require @Collie for non-allowlisted users.
+	cfgJSON, _ := json.Marshal(FeishuConfig{
+		Region:           "cn",
+		AppID:            "cli_test_app",
+		AllowOpenIDs:     []string{"ou_allowed_owner"},
+		FeedbackChatIDs:  []string{"oc_feedback_group"},
+		GroupMentionOnly: false,
+		InstantChatSync:  true,
+	})
+	rec := IntegrationRecord{Kind: feishuKind, Enabled: true, Config: cfgJSON}
+	_ = saveIntegration(sp.db, rec)
+	sp.integrations.mu.Lock()
+	sp.integrations.records[feishuKind] = rec
+	sp.integrations.mu.Unlock()
+	fa.mu.Lock()
+	fa.activeCfg = parseFeishuConfig(cfgJSON)
+	fa.mu.Unlock()
+
+	countIMWrites := func() int {
+		ff.mu.Lock()
+		defer ff.mu.Unlock()
+		n := 0
+		for _, c := range ff.calls {
+			if c.Method == http.MethodPost && strings.HasPrefix(c.Path, "/open-apis/im/v1/messages") {
+				n++
+			}
+		}
+		return n
+	}
+
+	// 1) Feedback group, non-allowlisted colleague WITHOUT @Collie -> 100% silent drop.
+	chatter := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_fb_chatter"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_named")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_fb_1"),
+				ChatId:      strPtr("oc_feedback_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"大家中午吃啥"}`),
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, chatter, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.st.Entries) != 0 || len(sp.st.Triggers) != 0 || countIMWrites() != 0 {
+		t.Fatalf("feedback group chatter must be dropped silently: entries=%d triggers=%d writes=%d", len(sp.st.Entries), len(sp.st.Triggers), countIMWrites())
+	}
+
+	// 2) Non-feedback group, non-allowlisted colleague WITH @Collie -> 100% ignored.
+	otherGroupMention := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_other_grp"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_named")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_other_1"),
+				ChatId:      strPtr("oc_other_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 帮我删库"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, otherGroupMention, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.st.Entries) != 0 || len(sp.st.Triggers) != 0 || countIMWrites() != 0 {
+		t.Fatalf("non-feedback group stranger @Collie must be ignored: entries=%d triggers=%d writes=%d", len(sp.st.Entries), len(sp.st.Triggers), countIMWrites())
+	}
+
+	// 3) Feedback group, non-allowlisted colleague WITH @Collie (contact name resolved) ->
+	//    enqueued as read-only advisory event in chat:main, zero fake user entry, zero IM writes to group.
+	fbNamed := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_fb_named"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_named")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_fb_2"),
+				ChatId:      strPtr("oc_feedback_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 手机端未读角标暗色下太亮了，建议改成黑白灰"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, fbNamed, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.st.Entries) != 0 {
+		t.Fatalf("group feedback must not create fake owner user entry, got %+v", sp.st.Entries)
+	}
+	if len(sp.st.Triggers) != 1 {
+		t.Fatalf("expected 1 feedback trigger, got %d", len(sp.st.Triggers))
+	}
+	if len(fromHuman(sp.st.Triggers)) != 0 {
+		t.Fatalf("group feedback must not carry fromHuman interrupt priority")
+	}
+	trig := sp.st.Triggers[0]
+	if trig.Thread != mainThread || trig.Source != "webhook:feishu" || trig.Action != "respond" || len(trig.Targets) != 1 || trig.Targets[0] != routerName {
+		t.Fatalf("unexpected feedback trigger routing: %+v", trig)
+	}
+	for _, want := range []string{
+		feishuGroupFeedbackTag,
+		"林同学 (" + maskIdentifier("ou_colleague_named") + ")",
+		"群 ID：oc_feedback_group",
+		"手机端未读角标暗色下太亮了，建议改成黑白灰",
+	} {
+		if !strings.Contains(trig.Text, want) {
+			t.Errorf("feedback trigger text missing %q:\n%s", want, trig.Text)
+		}
+	}
+	if strings.Contains(trig.Text, "ou_colleague_named") || strings.Contains(trig.Text, "@_user_1") {
+		t.Errorf("feedback trigger leaked raw open_id or mention key:\n%s", trig.Text)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if countIMWrites() != 0 {
+		t.Fatalf("group feedback must never auto-reply or react into group; writes=%d", countIMWrites())
+	}
+
+	// 4) Feedback group, non-allowlisted colleague WITH @Collie when contact lookup is denied ->
+	//    gracefully falls back to masked open_id without leaking raw open_id.
+	fbNoPerm := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_fb_noperm"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_noperm")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_fb_3"),
+				ChatId:      strPtr("oc_feedback_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 列表滚动有点卡"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, fbNoPerm, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.st.Triggers) != 2 {
+		t.Fatalf("expected 2 feedback triggers, got %d", len(sp.st.Triggers))
+	}
+	trig2 := sp.st.Triggers[1]
+	wantMasked := maskIdentifier("ou_colleague_noperm")
+	if !strings.Contains(trig2.Text, "发送者："+wantMasked) || strings.Contains(trig2.Text, "ou_colleague_noperm") {
+		t.Fatalf("expected masked sender fallback %q, got:\n%s", wantMasked, trig2.Text)
+	}
+
+	// 5) Non-allowlisted user clicking a card button (even inside feedback group) -> strictly rejected.
+	unauthCard, err := fa.handleCardAction(ctx, &larkcallback.CardActionTriggerEvent{
+		Event: &larkcallback.CardActionTriggerRequest{
+			Operator: &larkcallback.Operator{OpenID: "ou_colleague_named"},
+			Context:  &larkcallback.Context{OpenChatID: "oc_feedback_group", OpenMessageID: "om_card_x"},
+			Action:   &larkcallback.CallBackAction{Value: map[string]any{"action": "pick_opt", "entry_id": "e1", "opt_idx": "0"}},
+		},
+	}, sink)
+	if err != nil || unauthCard.Toast == nil || unauthCard.Toast.Type != "warning" {
+		t.Fatalf("non-allowlisted card callback in feedback group must be rejected, got %+v err=%v", unauthCard, err)
+	}
+
+	// 6) Allowlisted owner behavior in feedback group remains 100% unchanged, AND a subsequent
+	//    colleague feedback followed by Collie's reply routes strictly to owner DM (never the group!).
+	ownerGrpMsg := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_owner_grp"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_owner_grp_1"),
+				ChatId:      strPtr("oc_feedback_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 看下当前版本"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, ownerGrpMsg, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.st.Entries) != 1 || sp.st.Entries[0].Role != "user" || sp.st.Entries[0].Text != "看下当前版本" {
+		t.Fatalf("allowlisted owner group @Collie should keep normal behavior, entries=%+v", sp.st.Entries)
+	}
+	ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages/om_owner_grp_1/reactions"
+	})
+
+	// Now a newer colleague feedback arrives AFTER owner's group message.
+	fbAfterOwner := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_fb_after_owner"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_named")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_fb_4"),
+				ChatId:      strPtr("oc_feedback_group"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 导出按钮偶尔点不动"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, fbAfterOwner, sink); err != nil {
+		t.Fatal(err)
+	}
+	latestTrig := sp.st.Triggers[len(sp.st.Triggers)-1]
+
+	// Collie replies quoting the feedback trigger with --opt buttons -> must route privately to owner DM!
+	replyEntry, warn := sp.Reply(mainThread, "群里林同学反馈导出按钮偶尔点不动，要派 worker 排查吗？", latestTrig.ID, []string{"派 worker 排查", "先记下来"}, false)
+	if warn != "" {
+		t.Fatalf("unexpected reply warning for feedback trigger quote: %q", warn)
+	}
+	if replyEntry.Re == nil || replyEntry.Re.Who != "群反馈·林同学" || !strings.Contains(replyEntry.Re.Text, "导出按钮偶尔点不动") {
+		t.Fatalf("unexpected feedback reply quote: %+v", replyEntry.Re)
+	}
+	dmCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), "派 worker 排查")
+	})
+	if !strings.Contains(dmCall.Query, "receive_id_type=open_id") || !strings.Contains(dmCall.Body, `"receive_id":"ou_allowed_owner"`) {
+		t.Fatalf("feedback reply must go to owner DM (open_id), got query=%q body=%s", dmCall.Query, dmCall.Body)
+	}
+	// Verify zero /reply calls were ever sent to the feedback group.
+	ff.mu.Lock()
+	for _, c := range ff.calls {
+		if strings.HasSuffix(c.Path, "/reply") || strings.Contains(c.Body, `"receive_id":"oc_feedback_group"`) {
+			ff.mu.Unlock()
+			t.Fatalf("outbound message leaked into feedback group: %+v", c)
+		}
+	}
+	ff.mu.Unlock()
 }
 
 func TestOpenSourceRepoZeroInternalTerms(t *testing.T) {

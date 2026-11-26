@@ -660,16 +660,16 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .unread-sep {
   display: flex; align-items: center; gap: 10px;
-  color: color-mix(in srgb, var(--attn) 82%, var(--fg-2));
+  color: color-mix(in srgb, var(--fg-3) 76%, var(--fg-2));
   font: 500 11.5px/1.2 var(--sans); letter-spacing: .02em;
   user-select: none;
 }
 .unread-sep::before, .unread-sep::after {
   content: ""; flex: 1; height: 1px;
-  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--attn) 34%, var(--line)) 22%, color-mix(in srgb, var(--attn) 34%, var(--line)));
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--line-2) 68%, var(--line)) 22%, color-mix(in srgb, var(--line-2) 68%, var(--line)));
 }
 .unread-sep::after {
-  background: linear-gradient(to left, transparent, color-mix(in srgb, var(--attn) 34%, var(--line)) 22%, color-mix(in srgb, var(--attn) 34%, var(--line)));
+  background: linear-gradient(to left, transparent, color-mix(in srgb, var(--line-2) 68%, var(--line)) 22%, color-mix(in srgb, var(--line-2) 68%, var(--line)));
 }
 .unread-sep span { flex: none; padding: 0 2px; }
 .thread > .unread-sep { margin-top: 22px; }
@@ -989,8 +989,8 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--attn);
-  color: #ffffff;
+  background: var(--accent);
+  color: var(--on-accent);
   font: 600 10px/1 var(--sans);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1000,12 +1000,10 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   box-shadow: 0 0 0 1.5px var(--bg), 0 1px 3px rgba(0, 0, 0, .14);
 }
 :root[data-theme="dark"] .super-jump .sj-badge {
-  color: var(--on-accent);
   box-shadow: 0 0 0 1.5px var(--bg), 0 1px 4px rgba(0, 0, 0, .46);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .super-jump .sj-badge {
-    color: var(--on-accent);
     box-shadow: 0 0 0 1.5px var(--bg), 0 1px 4px rgba(0, 0, 0, .46);
   }
 }
@@ -3449,6 +3447,7 @@ dialog.int-sheet .seg button {
 .int-sec + .int-sec { padding-top: 12px; border-top: 1px solid var(--line); }
 .int-sec-title { margin: 0; font-size: 12px; font-weight: 600; color: var(--fg-3); letter-spacing: .03em; }
 .int-field { display: grid; gap: 4px; min-width: 0; }
+.int-field textarea { min-height: 54px; }
 .int-field-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 500; color: var(--fg); }
 .int-field-label .opt { font-weight: 400; color: var(--fg-3); font-size: 12px; }
 .int-field-help { margin: 0; font-size: 11.5px; color: var(--fg-3); line-height: 1.45; }
@@ -3557,7 +3556,8 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
   dialog.int-sheet input:where(:not([type=checkbox], [type=radio])) {
     font-size: 16px; height: 36px; font-family: var(--sans);
   }
-  dialog.int-sheet input::placeholder { font-size: 14px; font-family: var(--sans); }
+  dialog.int-sheet textarea { font-size: 16px; font-family: var(--sans); }
+  dialog.int-sheet input::placeholder, dialog.int-sheet textarea::placeholder { font-size: 14px; font-family: var(--sans); }
   dialog.int-sheet .seg { height: 36px; }
   dialog.int-sheet .seg button { height: 32px; }
   .int-input-row .btn.small { height: 36px; }
@@ -3586,7 +3586,8 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
   dialog.int-sheet input:where(:not([type=checkbox], [type=radio])) {
     font-size: 16px; height: 36px; font-family: var(--sans);
   }
-  dialog.int-sheet input::placeholder { font-size: 14px; font-family: var(--sans); }
+  dialog.int-sheet textarea { font-size: 16px; font-family: var(--sans); }
+  dialog.int-sheet input::placeholder, dialog.int-sheet textarea::placeholder { font-size: 14px; font-family: var(--sans); }
   .int-sheet-head { padding: 12px 14px 10px 16px; }
   .int-sheet-body { padding: 11px 16px 14px; gap: 10px; }
   .int-sec + .int-sec { padding-top: 10px; }

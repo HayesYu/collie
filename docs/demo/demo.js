@@ -144,6 +144,8 @@
       app_id: "cli_demo84f00009f21",
       allow_open_ids: ["ou_demo9a2f7c10"],
       allow_open_id: "ou_demo9a2f7c10",
+      feedback_chat_ids: ["oc_demo7c3e91a2"],
+      feedback_chat_id: "oc_demo7c3e91a2",
       group_mention_only: true,
       instant_chat_sync: true,
     },
@@ -669,11 +671,17 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       }
       if (body.config) {
         const oid = String(body.config.allow_open_id || "").trim();
+        const rawFb = Array.isArray(body.config.feedback_chat_ids)
+          ? body.config.feedback_chat_ids.join(", ")
+          : String(body.config.feedback_chat_ids ?? body.config.feedback_chat_id ?? "").trim();
+        const fbList = rawFb ? rawFb.split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean) : [];
         demoFeishu.config = {
           ...demoFeishu.config,
           ...body.config,
           allow_open_id: oid,
           allow_open_ids: oid ? oid.split(/[,\s]+/).filter(Boolean) : [],
+          feedback_chat_ids: fbList,
+          feedback_chat_id: fbList.join(", "),
         };
       }
       demoFeishu.configured = !!(demoFeishu.config.app_id && demoFeishu.secret_set);

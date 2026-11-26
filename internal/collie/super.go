@@ -1846,6 +1846,18 @@ func (sp *Super) quoteLocked(id string) *Quote {
 		return &Quote{Who: "你", Text: humanText(t.Text)}
 	case "timer":
 		return &Quote{Who: "定时", Text: t.Text}
+	case "webhook:feishu":
+		if strings.HasPrefix(strings.TrimSpace(t.Text), feishuGroupFeedbackTag) {
+			who := "群反馈"
+			if from := strings.TrimSpace(t.From); from != "" {
+				who = "群反馈·" + from
+			}
+			body := strings.TrimSpace(t.Text)
+			if idx := strings.Index(body, "\n反馈内容：\n"); idx >= 0 {
+				body = strings.TrimSpace(body[idx+len("\n反馈内容：\n"):])
+			}
+			return &Quote{Who: who, Text: clip(oneLine(body), 300)}
+		}
 	}
 	name := t.Ref
 	if name == "" {

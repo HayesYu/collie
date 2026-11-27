@@ -15725,6 +15725,193 @@
     input.value = b.dataset.text;
     form.requestSubmit();
   });
+  const SUBAGENT_TOOL_RE = /^(?:invoke_subagent|agent|task|spawn_agent)$/i;
+  const UUID_FULL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const SUBAGENT_ID_RE = /"(?:conversationId|agentId|conversation_id|agent_id)"\s*:\s*"([^"]+)"/;
+  const LONG_TOOL_KEY_RE = /^(?:prompt|message|brief|systemprompt|system_prompt|description|content|replacement|target|script|text|body)$/i;
+
+  function unwrapToolVal(v) {
+    if (typeof v !== "string") return v;
+    const s = v.trim();
+    if (s.length >= 2 && ((s[0] === '"' && s[s.length - 1] === '"') || (s[0] === "{" && s[s.length - 1] === "}") || (s[0] === "[" && s[s.length - 1] === "]"))) {
+      try { return JSON.parse(s); } catch {}
+    }
+    return v;
+  }
+  function parseToolJSON(raw) {
+    if (typeof raw !== "string") return null;
+    const s = raw.trim();
+    if (!s.startsWith("{") || !s.endsWith("}")) return null;
+    try {
+      const obj = JSON.parse(s);
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+      const out = {};
+      for (const [k, v] of Object.entries(obj)) out[k] = unwrapToolVal(v);
+      return out;
+    } catch { return null; }
+  }
+  function toolArg(obj, keys) {
+    for (const k of keys) if (k in obj && obj[k] != null) return obj[k];
+    for (const k of keys) {
+      const lk = k.toLowerCase();
+      for (const [mk, mv] of Object.entries(obj)) if (mk.toLowerCase() === lk && mv != null) return mv;
+    }
+    return null;
+  }
+  function toolScalar(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v.trim();
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    if (Array.isArray(v)) return v.map(toolScalar).filter(Boolean).join(", ");
+    return "";
+  }
+  function firstToolLine(s) {
+    for (const raw of String(s || "").replace(/\r\n/g, "\n").split("\n")) {
+      const l = raw.trim().replace(/^[#>*•\-]+\s*/, "").replace(/\s+/g, " ").trim();
+      if (l) return l;
+    }
+    return "";
+  }
+  function shortToolRef(s) {
+    const t = String(s || "").trim();
+    return UUID_FULL_RE.test(t) ? t.slice(0, 8) : t;
+  }
+  function formatToolParams(obj) {
+    const keys = Object.keys(obj).filter((k) => k.toLowerCase() !== "toolsummary").sort((a, b) => {
+      const la = LONG_TOOL_KEY_RE.test(a), lb = LONG_TOOL_KEY_RE.test(b);
+      return la !== lb ? (la ? 1 : -1) : a.toLowerCase().localeCompare(b.toLowerCase());
+    });
+    const parts = [];
+    for (const k of keys) {
+      const v = obj[k];
+      if (v == null) continue;
+      let text = "", multi = false;
+      if (typeof v === "string") {
+        text = v.trim();
+        multi = text.includes("\n") || text.length > 100;
+      } else if (typeof v === "number" || typeof v === "boolean") {
+        text = String(v);
+      } else {
+        try { text = JSON.stringify(v, null, 2); multi = text.includes("\n"); } catch {}
+      }
+      if (!text) continue;
+      parts.push(multi ? `${parts.length ? "\n" : ""}${k}:\n${text}` : `${k}: ${text}`);
+    }
+    return parts.join("\n");
+  }
+  function summarizeToolObj(name, obj) {
+    const low = String(name || "").toLowerCase();
+    const str = (...ks) => toolScalar(toolArg(obj, ks));
+    if (low === "generate_image") {
+      const img = str("ImageName", "image_name", "name");
+      const ratio = str("AspectRatio", "aspect_ratio");
+      const pr = firstToolLine(str("Prompt", "prompt"));
+      const head = img && ratio ? `${img} (${ratio})` : (img || ratio);
+      return [head, pr].filter(Boolean).join(" · ");
+    }
+    if (low === "send_message") {
+      const rcpt = shortToolRef(str("Recipient", "recipient", "to", "target"));
+      const body = firstToolLine(str("Message", "message", "content", "text"));
+      return [rcpt ? `→ ${rcpt}` : "", body].filter(Boolean).join(" · ");
+    }
+    for (const k of ["command", "cmd", "CommandLine", "file_path", "path", "Path", "AbsolutePath", "TargetFile", "pattern", "query", "url", "toolSummary", "description", "title", "summary", "message", "prompt", "brief", "text", "task", "action", "name"]) {
+      const v = firstToolLine(str(k));
+      if (v) return v;
+    }
+    const pairs = [];
+    for (const [k, v] of Object.entries(obj)) {
+      if (k.toLowerCase() === "toolsummary") continue;
+      const sv = shortToolRef(firstToolLine(toolScalar(v)));
+      if (!sv) continue;
+      pairs.push(`${k}: ${sv.length > 60 ? sv.slice(0, 60) + " …" : sv}`);
+      if (pairs.length >= 3) break;
+    }
+    return pairs.join(" · ");
+  }
+  function extractSubagentId(text) {
+    const m = SUBAGENT_ID_RE.exec(String(text || ""));
+    return m ? m[1] : "";
+  }
+  function normalizeToolView(t) {
+    const name = String(t.name || "");
+    const rawIn = String(t.input || "");
+    const out = String(t.output || "");
+    let sub = t.subagent || null;
+    let summary = rawIn;
+    let detail = String(t.detail || "");
+    if (!sub) {
+      const parsed = parseToolJSON(rawIn);
+      if (parsed) {
+        const isSwarmAdd = /^swarm$/i.test(name) && /^add$/i.test(toolScalar(toolArg(parsed, ["action"])));
+        if (SUBAGENT_TOOL_RE.test(name) || isSwarmAdd) {
+          const model = toolScalar(toolArg(parsed, ["Model", "model"]));
+          sub = {
+            type: isSwarmAdd ? "swarm" : toolScalar(toolArg(parsed, ["TypeName", "type_name", "subagent_type", "agent_type", "type"])),
+            role: toolScalar(toolArg(parsed, ["Role", "role", "description", "nickname", "name"])),
+            prompt: toolScalar(toolArg(parsed, ["Prompt", "prompt", "brief", "message"])),
+            model: /^inherit$/i.test(model) ? "" : model,
+          };
+          summary = firstToolLine(sub.prompt) || [sub.role, sub.type].filter(Boolean).join(" · ");
+        } else {
+          summary = summarizeToolObj(name, parsed) || rawIn;
+          if (!detail) detail = formatToolParams(parsed);
+        }
+      } else if (SUBAGENT_TOOL_RE.test(name)) {
+        sub = { type: "", role: "", prompt: "" };
+      }
+    }
+    if (sub) {
+      const role = String(sub.role || "").trim();
+      const type = String(sub.type || "").trim();
+      const title = role || type || name || "subagent";
+      const typeTag = type && type !== title ? type : "";
+      const modelTag = sub.model && !/^inherit$/i.test(sub.model) ? String(sub.model).trim() : "";
+      const prompt = String(sub.prompt || "").trim();
+      let brief = firstToolLine(summary || prompt);
+      if (brief === title) brief = "";
+      const subId = String(sub.id || "").trim() || extractSubagentId(out);
+      return { isSubagent: true, title, typeTag, modelTag, brief, prompt, output: out, subId, error: !!t.error };
+    }
+    return { isSubagent: false, name, summary, detail, output: out, error: !!t.error };
+  }
+  function renderToolItem(t, k, open) {
+    const v = normalizeToolView(t);
+    const cls = v.error ? "err" : (v.output ? "" : "pending");
+    const isOpen = open.has(String(k));
+    if (v.isSubagent) {
+      const hasBody = !!(v.prompt || v.output);
+      const stateLabel = v.error ? "出错" : (!v.output ? "运行中" : "");
+      const body = hasBody
+        ? `<div class="sub-body">`
+          + (v.prompt ? `<div class="tool-sec"><div class="tool-sec-h"><span>任务指令</span></div><pre class="tool-pre sub-prompt">${esc(v.prompt)}</pre></div>` : "")
+          + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>返回结果</span>${v.subId ? `<span class="tool-sec-meta">${esc(v.subId.slice(0, 8))}</span>` : ""}</div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
+          + `</div>`
+        : "";
+      return `<details class="tool subagent ${cls}${hasBody ? " has-body" : ""}" data-i="${k}"${isOpen ? " open" : ""}>`
+        + `<summary class="sub-sum">`
+        + `<span class="sub-head"><span class="sub-dot" aria-hidden="true"></span><span class="sub-role">${esc(v.title)}</span>`
+        + (v.typeTag ? `<span class="sub-tag">${esc(v.typeTag)}</span>` : "")
+        + (v.modelTag ? `<span class="sub-meta">${esc(v.modelTag)}</span>` : "")
+        + (stateLabel ? `<span class="sub-state">${esc(stateLabel)}</span>` : "")
+        + `</span>`
+        + (v.brief ? `<span class="sub-brief">${esc(v.brief)}</span>` : "")
+        + `</summary>${body}</details>`;
+    }
+    const hasBody = !!(v.detail || v.output);
+    let body = "";
+    if (v.detail) {
+      body = `<div class="tool-detail">`
+        + `<div class="tool-sec"><div class="tool-sec-h"><span>参数</span></div><pre class="tool-pre">${esc(v.detail)}</pre></div>`
+        + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>输出</span></div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
+        + `</div>`;
+    } else if (v.output) {
+      body = `<pre>${esc(v.output)}</pre>`;
+    }
+    return `<details class="tool ${cls}${hasBody ? " has-body" : ""}" data-i="${k}"${isOpen ? " open" : ""}>`
+      + `<summary><span class="tname">${esc(v.name)}</span><span class="targ">${esc(v.summary)}</span></summary>`
+      + body + `</details>`;
+  }
+
   function drawThread(msgs, el = $("#thread"), empty = "还没有对话。发一条消息开始吧。") {
     const rest = el._restore;
     // Just opened: start at the latest message, unless restoring a scroll position.
@@ -15743,19 +15930,14 @@
         const start = i;
         while (i < msgs.length && msgs[i].kind === "tool") i++;
         const run = msgs.slice(start, i);
-        const row = (t, k) => {
-          const cls = t.error ? "err" : (t.output ? "" : "pending");
-          return `<details class="tool ${cls}" data-i="${k}" ${open.has(String(k)) ? "open" : ""}>`
-            + `<summary><span class="tname">${esc(t.name)}</span><span class="targ">${esc(t.input)}</span></summary>`
-            + (t.output ? `<pre>${esc(t.output)}</pre>` : "") + `</details>`;
-        };
+        const row = (t, k) => renderToolItem(t, k, open);
         if (run.length <= 3 || !prefs.fold()) {
           html += `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
           cut();
           continue;
         }
         const key = "run" + start;
-        const names = [...new Set(run.map((t) => t.name))].slice(0, 4).join("、");
+        const names = [...new Set(run.map((t) => (t.subagent?.type || t.subagent?.role || t.name)))].slice(0, 4).join("、");
         const errs = run.filter((t) => t.error).length;
         html += `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>
           <summary><span class="n">${run.length} 个步骤</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${errs} 个出错</b>` : ""}</span></summary>

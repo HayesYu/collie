@@ -587,9 +587,11 @@ func (s *Server) agyDesktopRows() []desktopRow {
 	defer db.Close()
 	// not_fully_idle: the turn is over but the agent will be back on its own
 	// (it set a timer, or a command runs in the background).
-	res, err := db.Query(`SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, last_modified_time, last_user_input_time
-		FROM conversation_summaries WHERE nesting_depth = 0 AND killed = 0 AND last_modified_time > ?
-		ORDER BY last_modified_time DESC LIMIT ?`, time.Now().Add(-desktopWindow).UTC().Format("2006-01-02 15:04:05"), desktopMax)
+	cols := agySummaryColumns(db)
+	q := `SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, last_modified_time, last_user_input_time
+		FROM conversation_summaries WHERE last_modified_time > ?` + agyTopLevelWhere(cols) + `
+		ORDER BY last_modified_time DESC LIMIT ?`
+	res, err := db.Query(q, time.Now().Add(-desktopWindow).UTC().Format("2006-01-02 15:04:05"), desktopMax)
 	if err != nil {
 		return nil
 	}

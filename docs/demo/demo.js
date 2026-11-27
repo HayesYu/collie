@@ -286,7 +286,7 @@
   let routerStatus = "idle";
 
   // Conversations, by pane. Tool steps read as one quiet line in the app.
-  const tool = (name, input, output, error) => ({ kind: "tool", name, input, output, error });
+  const tool = (name, input, output, error, extra) => ({ kind: "tool", name, input, output, error, ...(extra || {}) });
   const chats = {
     "w2:p1@macbook": [
       { kind: "user", text: "[image:~/.collie/images/0d3a9e5c71b2f4e8a6c1.png]\n首页加一个暗色模式：跟随系统，右上角可以手动切换，记住用户的选择。参考这张图的配色。" },
@@ -311,8 +311,18 @@
     ],
     "w4:p1": [
       { kind: "user", text: "migrations/ 里有不少重复和废弃的脚本，整理一下，保证从空库能一路升到最新。" },
-      tool("Bash", "ls migrations | wc -l", "41"),
-      tool("Bash", "make db-reset && make migrate", "ok: 41 migrations applied"),
+      tool("invoke_subagent", "扫描 migrations/ 目录下所有 SQL 脚本，找出重复加索引和未执行过的回滚文件。", 'Created the following subagent:\n{\n  "conversationId": "a84f2c19-9012-4e7b-b3d1-0123456789ab",\n  "subagentDescriptor": {\n    "typeName": "research",\n    "role": "Migration Auditor"\n  }\n}', false, {
+        subagent: {
+          type: "research",
+          role: "Migration Auditor",
+          prompt: "扫描 migrations/ 目录下所有 SQL 脚本，找出重复加索引和未执行过的回滚文件。\n\n输出：\n1. 可合并的重复索引脚本分组\n2. 从未上线过的废弃回滚脚本\n3. 合并后的依赖顺序校验建议",
+          id: "a84f2c19-9012-4e7b-b3d1-0123456789ab",
+        },
+      }),
+      tool("update_steps", "3/3 · 全部完成", "OK", false, {
+        detail: "[x] 扫描并分组重复索引脚本\n[x] 清理废弃回滚文件并验证空库迁移\n[x] 补充 migrations/README.md 规范",
+      }),
+      tool("Bash", "make db-reset && make migrate", "ok: 33 migrations applied"),
       tool("Edit", "migrations/README.md", "+18"),
       { kind: "assistant", text: "整理完了：\n\n- 合并了 6 个只加索引的小脚本，删掉 3 个从没在生产跑过的回滚脚本\n- 从空库升级到最新验证通过（41 → 33 个文件）\n- `migrations/README.md` 写了命名规则和怎么加新脚本" },
     ],

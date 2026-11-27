@@ -21,9 +21,10 @@ type peerCtxKey struct{}
 func (s *Server) peerRoutes(mux *http.ServeMux) {
 	// Narrow peer-to-peer surface (isolated from s.auth).
 	mux.HandleFunc("POST /api/peer/pair/accept", s.peerPairAccept)
-	mux.Handle("GET /api/peer/ping", s.peerAuth(s.peerPing, true))
-	mux.Handle("POST /api/peer/inbox", s.peerAuth(s.peerInbox, false))
-	mux.Handle("POST /api/peer/revoke", s.peerAuth(s.peerRevokeInbound, false))
+	mux.Handle("POST /api/peer/pair/activate", s.peerAuth(s.peerPairActivate, peerAuthActivate))
+	mux.Handle("GET /api/peer/ping", s.peerAuth(s.peerPing, peerAuthPing))
+	mux.Handle("POST /api/peer/inbox", s.peerAuth(s.peerInbox, peerAuthInbox))
+	mux.Handle("POST /api/peer/revoke", s.peerAuth(s.peerRevokeInbound, peerAuthRevoke))
 
 	// Owner management surface (standard s.auth).
 	api := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.auth(h)) }
@@ -31,6 +32,8 @@ func (s *Server) peerRoutes(mux *http.ServeMux) {
 	api("POST /api/super/peers/settings", s.superPeersSettings)
 	api("POST /api/super/peers/invite", s.superPeersInvite)
 	api("POST /api/super/peers/pair", s.superPeersPair)
+	api("POST /api/super/peers/{id}/approve", s.superPeersApprove)
+	api("POST /api/super/peers/{id}/reject", s.superPeersReject)
 	api("PATCH /api/super/peers/{id}", s.superPeersUpdate)
 	api("POST /api/super/peers/{id}/ping", s.superPeersPing)
 	api("DELETE /api/super/peers/{id}", s.superPeersDelete)
@@ -42,7 +45,7 @@ func (s *Server) peerRoutes(mux *http.ServeMux) {
 // peerAuth strictly validates `Authorization: Bearer clp_...` against the
 // isolated SQLite `peers` table. It never reads cookies or query parameters,
 // never grants access to any non-peer endpoint, and delays failed attempts.
-func (s *Server) peerAuth(h http.HandlerFunc, allowPending bool) http.Handler {
+func (s *Server) peerAuth(h http.HandlerFunc, scope peerAuthScope) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if s.sup == nil || s.sup.peers == nil {
@@ -58,7 +61,7 @@ func (s *Server) peerAuth(h http.HandlerFunc, allowPending bool) http.Handler {
 			return
 		}
 		tok := strings.TrimSpace(strings.TrimPrefix(hdr, "Bearer "))
-		res := s.sup.peers.Authenticate(tok, allowPending)
+		res := s.sup.peers.Authenticate(tok, scope)
 		if res.statusCode != http.StatusOK {
 			if res.statusCode == http.StatusUnauthorized && authFailDelay > 0 {
 				time.Sleep(authFailDelay)
@@ -102,7 +105,17 @@ func (s *Server) peerAddrs(r *http.Request) []string {
 			}
 		}
 		if len(raw) > 0 {
-			raw = append(raw, nonLoop...)
+			onlyLoopbackExplicit := true
+			for _, u := range raw {
+				host := strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+				if !isLoopbackHost(host) {
+					onlyLoopbackExplicit = false
+					break
+				}
+			}
+			if !onlyLoopbackExplicit {
+				raw = append(raw, nonLoop...)
+			}
 		} else if len(nonLoop) > 0 {
 			raw = append(raw, nonLoop...)
 		} else {
@@ -138,6 +151,25 @@ func (s *Server) peerPairAccept(w http.ResponseWriter, r *http.Request) {
 		if code == http.StatusUnauthorized && pairFailDelay > 0 {
 			time.Sleep(pairFailDelay)
 		}
+		writeJSON(w, code, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) peerPairActivate(w http.ResponseWriter, r *http.Request) {
+	p := peerFromCtx(r)
+	if p == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+	var req peerPairActivateReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	resp, code, err := s.sup.peers.ActivateOutgoingPeer(p, req, s.peerAddrs(r))
+	if err != nil {
 		writeJSON(w, code, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -253,7 +285,8 @@ func (s *Server) superPeersInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Mode string `json:"mode"`
+		Mode  string `json:"mode"`
+		Reset bool   `json:"reset"`
 	}
 	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
 	if len(strings.TrimSpace(string(raw))) > 0 {
@@ -262,7 +295,7 @@ func (s *Server) superPeersInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := s.sup.peers.CreateInvite(body.Mode, s.peerAddrs(r))
+	res, err := s.sup.peers.CreateInviteWithReset(body.Mode, s.peerAddrs(r), body.Reset)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
@@ -290,7 +323,61 @@ func (s *Server) superPeersPair(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]any{"error": err.Error()})
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"peer":    view,
+		"pending": view != nil && view.Status == "pending_outgoing",
+	})
+}
+
+func (s *Server) superPeersApprove(w http.ResponseWriter, r *http.Request) {
+	if s.sup == nil || s.sup.peers == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "peer manager not ready"})
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+		Mode string `json:"mode"`
+	}
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	view, code, err := s.sup.peers.ApprovePeer(ctx, r.PathValue("id"), body.Name, body.Mode, s.peerAddrs(r))
+	if err != nil {
+		writeJSON(w, code, map[string]any{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "peer": view})
+}
+
+func (s *Server) superPeersReject(w http.ResponseWriter, r *http.Request) {
+	if s.sup == nil || s.sup.peers == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "peer manager not ready"})
+		return
+	}
+	var body struct {
+		Block bool `json:"block"`
+	}
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+			return
+		}
+	}
+	block := body.Block || r.URL.Query().Get("block") == "1" || strings.EqualFold(r.URL.Query().Get("block"), "true")
+	blocked, code, err := s.sup.peers.RejectPeer(r.Context(), r.PathValue("id"), block)
+	if err != nil {
+		writeJSON(w, code, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "blocked": blocked})
 }
 
 func (s *Server) superPeersUpdate(w http.ResponseWriter, r *http.Request) {

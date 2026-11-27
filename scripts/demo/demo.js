@@ -138,11 +138,14 @@
       active: demoPeers.filter((x) => x.status === "active").length,
       online: demoPeers.filter((x) => x.status === "active").length,
       paused: demoPeers.filter((x) => x.status === "paused").length,
+      pending_incoming: demoPeers.filter((x) => x.status === "pending_incoming").length,
+      pending_outgoing: demoPeers.filter((x) => x.status === "pending_outgoing").length,
       enabled: demoPeersEnabled,
     },
   });
   let demoPeersEnabled = true;
   let demoPeerHubName = "Alex的边牧";
+  let demoPeerCardCode = "DEMO2026CARD";
   const demoPeerHubID = "hub_4c8e91a2d301";
   const demoPeers = [
     {
@@ -939,20 +942,45 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/super/peers/invite" && method === "POST") {
       const mode = body.mode || "advise";
-      const exp = Math.floor(Date.now() / 1000) + 600;
-      const payload = { v: 1, code: "DEMO2026PEER", hub_id: demoPeerHubID, hub_name: demoPeerHubName, addrs: ["http://192.168.1.20:7788"], exp };
+      if (body.reset) demoPeerCardCode = "DEMO" + Math.random().toString(36).slice(2, 10).toUpperCase();
+      const payload = { v: 1, code: demoPeerCardCode, hub_id: demoPeerHubID, hub_name: demoPeerHubName, addrs: ["http://192.168.1.20:7788"] };
       const bytes = new TextEncoder().encode(JSON.stringify(payload));
       let bin = "";
       bytes.forEach((b) => { bin += String.fromCharCode(b); });
-      const inv = "collie-peer://v1/" + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-      return json({ invite_code: inv, code: payload.code, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: payload.addrs, expires_at: new Date(exp * 1000).toISOString() });
+      const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const inv = "collie-peer://v1/" + b64;
+      const joinUrl = "https://lihuanyu0w0.github.io/collie/join/#" + b64;
+      return json({ invite_code: inv, join_url: joinUrl, code: payload.code, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: payload.addrs, permanent: true });
     }
     if (p === "/api/super/peers/pair" && method === "POST") {
       const id = "peer-" + (demoPeers.length + 1);
-      const np = { id, hub_id: "hub_demo_" + (demoPeers.length + 1), name: body.name || "新好友的边牧", addrs: ["http://192.168.1.88:7788"], primary_addr: "http://192.168.1.88:7788", mode: body.mode || "advise", status: "active", protocol_ver: 1, today_count: 0, last_ok_at: new Date().toISOString(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const np = { id, hub_id: "hub_demo_" + (demoPeers.length + 1), name: body.name || "新好友的边牧", addrs: ["http://192.168.1.88:7788"], primary_addr: "http://192.168.1.88:7788", mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       demoPeers.push(np);
       pushAll();
-      return json({ ok: true, peer: np });
+      return json({ ok: true, pending: true, peer: np });
+    }
+    const peerApproveM = /^\/api\/super\/peers\/([^/]+)\/approve$/.exec(p);
+    if (peerApproveM && method === "POST") {
+      const pid = decodeURIComponent(peerApproveM[1]);
+      const target = demoPeers.find((x) => x.id === pid);
+      if (!target) return json({ error: "not found" }, 404);
+      if (body.mode) target.mode = body.mode;
+      if (body.name) target.name = body.name;
+      target.status = "active";
+      target.last_ok_at = new Date().toISOString();
+      pushAll();
+      return json({ ok: true, peer: target });
+    }
+    const peerRejectM = /^\/api\/super\/peers\/([^/]+)\/reject$/.exec(p);
+    if (peerRejectM && method === "POST") {
+      const pid = decodeURIComponent(peerRejectM[1]);
+      const idx = demoPeers.findIndex((x) => x.id === pid);
+      if (idx < 0) return json({ error: "not found" }, 404);
+      const [rm] = demoPeers.splice(idx, 1);
+      const block = !!body.block;
+      if (block && rm) demoPeerBlocklist.push({ hub_id: rm.hub_id, name: rm.name, blocked_at: new Date().toISOString() });
+      pushAll();
+      return json({ ok: true, blocked: block });
     }
     const peerPingM = /^\/api\/super\/peers\/([^/]+)\/ping$/.exec(p);
     if (peerPingM && method === "POST") {

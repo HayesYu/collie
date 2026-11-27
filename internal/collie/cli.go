@@ -671,7 +671,7 @@ func parsePeerRevoke(args []string) (peerID string, block bool, err error) {
 
 func cliPeer(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: collie peer ls|list|invite|pair|ping|send|revoke …")
+		return fmt.Errorf("usage: collie peer ls|list|invite|pair|approve|reject|ping|send|revoke …")
 	}
 	switch args[0] {
 	case "ls", "list":
@@ -695,23 +695,28 @@ func cliPeer(args []string) error {
 		}
 		fmt.Printf("Hub: %s (%s) · inbox %s\n", r.HubName, r.HubID, state)
 		if len(r.Peers) == 0 {
-			fmt.Println("No paired peer hubs yet. Run `collie peer invite` or `collie peer pair <invite>`.")
+			fmt.Println("No paired peer hubs yet. Run `collie peer invite` or `collie peer pair <link-or-code>`.")
 			return nil
 		}
 		for _, p := range r.Peers {
-			fmt.Printf("%-16s %-18s %-8s %-8s %-28s today=%d\n", p.ID, p.Name, p.Status, p.Mode, p.PrimaryAddr, p.TodayCount)
+			fmt.Printf("%-16s %-18s %-16s %-8s %-28s today=%d\n", p.ID, p.Name, p.Status, p.Mode, p.PrimaryAddr, p.TodayCount)
 		}
 		return nil
 	case "invite":
 		fs := flag.NewFlagSet("peer invite", flag.ContinueOnError)
-		mode := fs.String("mode", "advise", "default inbound handling mode: advise | notify | propose")
+		mode := fs.String("mode", "", "default inbound handling mode: advise | notify | propose")
+		reset := fs.Bool("reset", false, "rotate personal business card secret (invalidates old links/QRs)")
 		if err := fs.Parse(args[1:]); err != nil {
 			if err == flag.ErrHelp {
 				return nil
 			}
 			return err
 		}
-		b, err := cliCall("POST", "/api/super/peers/invite", map[string]any{"mode": *mode})
+		reqBody := map[string]any{"reset": *reset}
+		if *mode != "" {
+			reqBody["mode"] = *mode
+		}
+		b, err := cliCall("POST", "/api/super/peers/invite", reqBody)
 		if err != nil {
 			return err
 		}
@@ -720,9 +725,13 @@ func cliPeer(args []string) error {
 			os.Stdout.Write(b)
 			return nil
 		}
-		fmt.Printf("\n  好友边牧一次性邀请码（10 分钟内有效，仅限使用一次，默认模式：%s）：\n\n", peerModeLabel(r.Mode))
-		printQR(os.Stdout, r.InviteCode)
-		fmt.Printf("\n  %s\n\n  地址：%s\n\n", r.InviteCode, strings.Join(r.Addrs, "  "))
+		qrTarget := orStr(r.JoinURL, r.InviteCode)
+		fmt.Printf("\n  我的边牧名片（长期有效 · 需对方申请并经你通过后接通，默认模式：%s）：\n\n", peerModeLabel(r.Mode))
+		printQR(os.Stdout, qrTarget)
+		if r.JoinURL != "" {
+			fmt.Printf("\n  分享链接：%s\n", r.JoinURL)
+		}
+		fmt.Printf("  原始邀请码：%s\n\n  地址：%s\n\n", r.InviteCode, strings.Join(r.Addrs, "  "))
 		return nil
 	case "pair":
 		inv, name, mode, err := parsePeerPair(args[1:])
@@ -737,6 +746,45 @@ func cliPeer(args []string) error {
 			"name":        name,
 			"mode":        mode,
 		})
+		if err == nil {
+			printResult(b)
+		}
+		return err
+	case "approve":
+		fs := flag.NewFlagSet("peer approve", flag.ContinueOnError)
+		nameFlag := fs.String("name", "", "display name override")
+		modeFlag := fs.String("mode", "", "handling mode override: advise | notify | propose")
+		reordered := reorderFlagsFirst(args[1:], map[string]bool{"name": true, "mode": true})
+		if err := fs.Parse(reordered); err != nil {
+			if err == flag.ErrHelp {
+				return nil
+			}
+			return err
+		}
+		if fs.NArg() != 1 {
+			return fmt.Errorf("usage: collie peer approve <peer_id> [--name \"...\"] [--mode advise|notify|propose]")
+		}
+		body := map[string]any{}
+		if strings.TrimSpace(*nameFlag) != "" {
+			body["name"] = strings.TrimSpace(*nameFlag)
+		}
+		if strings.TrimSpace(*modeFlag) != "" {
+			body["mode"] = strings.TrimSpace(*modeFlag)
+		}
+		b, err := cliCall("POST", "/api/super/peers/"+url.PathEscape(strings.TrimSpace(fs.Arg(0)))+"/approve", body)
+		if err == nil {
+			printResult(b)
+		}
+		return err
+	case "reject":
+		pid, block, err := parsePeerRevoke(args[1:])
+		if err == flag.ErrHelp {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("usage: collie peer reject <peer_id> [--block]")
+		}
+		b, err := cliCall("POST", "/api/super/peers/"+url.PathEscape(pid)+"/reject", map[string]any{"block": block})
 		if err == nil {
 			printResult(b)
 		}
@@ -781,7 +829,7 @@ func cliPeer(args []string) error {
 		}
 		return err
 	default:
-		return fmt.Errorf("unknown peer command %q (supported: ls, list, invite, pair, ping, send, revoke)", args[0])
+		return fmt.Errorf("unknown peer command %q (supported: ls, list, invite, pair, approve, reject, ping, send, revoke)", args[0])
 	}
 }
 

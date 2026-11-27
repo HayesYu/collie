@@ -33,6 +33,7 @@ import (
 const (
 	peerProtocolVer      = 1
 	peerInvitePrefix     = "collie-peer://v1/"
+	peerJoinBaseURL      = "https://lihuanyu0w0.github.io/collie/join/#"
 	peerTokenPrefix      = "clp_"
 	peerInviteTTL        = 10 * time.Minute
 	peerPendingPairTTL   = 20 * time.Second
@@ -48,6 +49,10 @@ var (
 	errPeerRedirectBlocked = errors.New("HTTP redirects are disabled for peer requests")
 	peerTopicRe            = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	peerMsgIDRe            = regexp.MustCompile(`^[A-Za-z0-9._:-]{4,128}$`)
+	peerDirectInviteRe     = regexp.MustCompile(`collie-peer://v1/([A-Za-z0-9_-]{16,}=*)`)
+	peerJoinHashRe         = regexp.MustCompile(`(?i)/join/?#(?:collie-peer://v1/)?([A-Za-z0-9_%-]{16,}=*)`)
+	peerQueryInviteRe      = regexp.MustCompile(`(?i)[?&#]peer_invite=([^&\s]+)`)
+	peerRawB64Re           = regexp.MustCompile(`^[A-Za-z0-9_-]{16,}=*$`)
 	peerSecretLeakPatterns = []struct {
 		label string
 		re    *regexp.Regexp
@@ -96,11 +101,13 @@ type PeerView struct {
 
 // PeersSummary is embedded in superView so the UI badge and card update over SSE.
 type PeersSummary struct {
-	Total   int  `json:"total"`
-	Active  int  `json:"active"`
-	Online  int  `json:"online"`
-	Paused  int  `json:"paused"`
-	Enabled bool `json:"enabled"`
+	Total           int  `json:"total"`
+	Active          int  `json:"active"`
+	Online          int  `json:"online"`
+	Paused          int  `json:"paused"`
+	PendingIncoming int  `json:"pending_incoming,omitempty"`
+	PendingOutgoing int  `json:"pending_outgoing,omitempty"`
+	Enabled         bool `json:"enabled"`
 }
 
 type PeerBlockEntry struct {
@@ -131,17 +138,19 @@ type PeerInvitePayload struct {
 	HubID   string   `json:"hub_id"`
 	HubName string   `json:"hub_name"`
 	Addrs   []string `json:"addrs"`
-	Exp     int64    `json:"exp"`
+	Exp     int64    `json:"exp,omitempty"` // 0 / omitted = permanent business card; >0 = legacy expiring invite
 }
 
 type PeerInviteResult struct {
-	InviteCode string    `json:"invite_code"`
-	Code       string    `json:"code"`
-	HubID      string    `json:"hub_id"`
-	HubName    string    `json:"hub_name"`
-	Mode       string    `json:"mode"`
-	Addrs      []string  `json:"addrs"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	InviteCode string     `json:"invite_code"`
+	JoinURL    string     `json:"join_url"`
+	Code       string     `json:"code"`
+	HubID      string     `json:"hub_id"`
+	HubName    string     `json:"hub_name"`
+	Mode       string     `json:"mode"`
+	Addrs      []string   `json:"addrs"`
+	Permanent  bool       `json:"permanent"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
 type peerInviteRecord struct {
@@ -164,17 +173,36 @@ type peerPairAcceptReq struct {
 	Addrs             []string `json:"addrs"`
 	OutboundTokenForA string   `json:"outbound_token_for_a"`
 	ProtocolVer       int      `json:"protocol_ver"`
+	RequestApproval   bool     `json:"request_approval,omitempty"`
 }
 
 type peerPairAcceptResp struct {
 	OK                bool     `json:"ok"`
+	Status            string   `json:"status,omitempty"` // "pending" for approval-first; "" / "active" for legacy immediate
 	HubID             string   `json:"hub_id"`
 	HubName           string   `json:"hub_name"`
 	Addrs             []string `json:"addrs,omitempty"`
 	ChosenAddr        string   `json:"chosen_addr"`
-	OutboundTokenForB string   `json:"outbound_token_for_b"`
+	OutboundTokenForB string   `json:"outbound_token_for_b,omitempty"`
 	ProtocolVer       int      `json:"protocol_ver"`
 	Error             string   `json:"error,omitempty"`
+}
+
+type peerPairActivateReq struct {
+	HubID             string   `json:"hub_id"`
+	HubName           string   `json:"hub_name"`
+	Addrs             []string `json:"addrs,omitempty"`
+	OutboundTokenForB string   `json:"outbound_token_for_b"`
+	ProtocolVer       int      `json:"protocol_ver"`
+}
+
+type peerPairActivateResp struct {
+	OK          bool     `json:"ok"`
+	HubID       string   `json:"hub_id"`
+	HubName     string   `json:"hub_name"`
+	Addrs       []string `json:"addrs,omitempty"`
+	ProtocolVer int      `json:"protocol_ver"`
+	Error       string   `json:"error,omitempty"`
 }
 
 type PeerInboxPayload struct {
@@ -223,6 +251,15 @@ type PeerPingResult struct {
 	Error         string `json:"error,omitempty"`
 }
 
+type peerAuthScope int
+
+const (
+	peerAuthInbox peerAuthScope = iota
+	peerAuthPing
+	peerAuthActivate
+	peerAuthRevoke
+)
+
 // peerAuthOutcome classifies an incoming /api/peer/* Bearer token check.
 type peerAuthOutcome struct {
 	peer       *Peer
@@ -240,6 +277,8 @@ type PeerManager struct {
 	hubID          string
 	hubName        string
 	enabled        bool
+	cardSecret     string
+	cardMode       string
 	invites        map[string]*peerInviteRecord
 	pendingTokens  map[string]peerPendingToken // sha256(tok) -> pending handshake token
 	peerBuckets    map[string]*tokenBucket
@@ -256,6 +295,7 @@ func newPeerManager(sp *Super, db *sql.DB, secrets *SecretStore) *PeerManager {
 		db:             db,
 		secrets:        secrets,
 		enabled:        true,
+		cardMode:       "advise",
 		invites:        map[string]*peerInviteRecord{},
 		pendingTokens:  map[string]peerPendingToken{},
 		peerBuckets:    map[string]*tokenBucket{},
@@ -281,6 +321,8 @@ func (pm *PeerManager) initIdentity() {
 		pm.hubID = newHubID()
 		pm.hubName = defaultHubDisplayName()
 		pm.enabled = true
+		pm.cardSecret = newPeerInviteCodeSecret()
+		pm.cardMode = "advise"
 		return
 	}
 	var id string
@@ -306,6 +348,26 @@ func (pm *PeerManager) initIdentity() {
 		pm.enabled = en != "0" && !strings.EqualFold(strings.TrimSpace(en), "false")
 	} else {
 		pm.enabled = true
+	}
+	var secret string
+	if pm.db.QueryRow(`SELECT v FROM kv WHERE k='peer_card_secret'`).Scan(&secret) == nil && strings.TrimSpace(secret) != "" {
+		pm.cardSecret = strings.ToUpper(strings.TrimSpace(secret))
+	} else {
+		pm.cardSecret = newPeerInviteCodeSecret()
+		_, _ = pm.db.Exec(`INSERT INTO kv(k,v) VALUES('peer_card_secret',?) ON CONFLICT(k) DO NOTHING`, pm.cardSecret)
+		var persisted string
+		if pm.db.QueryRow(`SELECT v FROM kv WHERE k='peer_card_secret'`).Scan(&persisted) == nil && strings.TrimSpace(persisted) != "" {
+			pm.cardSecret = strings.ToUpper(strings.TrimSpace(persisted))
+		}
+	}
+	var cm string
+	if pm.db.QueryRow(`SELECT v FROM kv WHERE k='peer_card_mode'`).Scan(&cm) == nil {
+		if norm, ok := normalizePeerMode(cm); ok {
+			pm.cardMode = norm
+		}
+	}
+	if pm.cardMode == "" {
+		pm.cardMode = "advise"
 	}
 }
 
@@ -437,8 +499,18 @@ func newPeerHTTPClient(timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = 4 * time.Second
 	}
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{}
+	}
+	// Peer Hub links are direct LAN / Tailscale / loopback connections and must
+	// never be hijacked by outbound HTTP_PROXY environment variables.
+	tr.Proxy = nil
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: tr,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return errPeerRedirectBlocked
 		},
@@ -501,6 +573,50 @@ func (pm *PeerManager) notifyChanged() {
 
 // ---------------------------------------------------------------- invite encoding
 
+func peerJoinURL(inviteCode string) string {
+	s := strings.TrimSpace(inviteCode)
+	payload := strings.TrimPrefix(s, peerInvitePrefix)
+	payload = strings.TrimRight(strings.TrimSpace(payload), "=")
+	if payload == "" {
+		return ""
+	}
+	return peerJoinBaseURL + payload
+}
+
+// extractPeerInvite normalizes pure collie-peer://v1/..., /join/#<payload>,
+// ?peer_invite=..., or multi-line share text into canonical collie-peer://v1/<b64>.
+func extractPeerInvite(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if m := peerDirectInviteRe.FindStringSubmatch(s); len(m) == 2 {
+		return peerInvitePrefix + m[1]
+	}
+	if m := peerJoinHashRe.FindStringSubmatch(s); len(m) == 2 {
+		frag := m[1]
+		if dec, err := url.QueryUnescape(frag); err == nil && dec != "" {
+			frag = dec
+		}
+		frag = strings.TrimSpace(strings.TrimPrefix(frag, peerInvitePrefix))
+		if peerRawB64Re.MatchString(frag) {
+			return peerInvitePrefix + frag
+		}
+	}
+	if m := peerQueryInviteRe.FindStringSubmatch(s); len(m) == 2 {
+		if dec, err := url.QueryUnescape(m[1]); err == nil {
+			dec = strings.TrimSpace(dec)
+			if strings.HasPrefix(dec, peerInvitePrefix) {
+				return dec
+			}
+			if peerRawB64Re.MatchString(dec) {
+				return peerInvitePrefix + dec
+			}
+		}
+	}
+	return s
+}
+
 func encodePeerInvite(p PeerInvitePayload) (string, error) {
 	p.V = peerProtocolVer
 	b, err := json.Marshal(p)
@@ -511,9 +627,9 @@ func encodePeerInvite(p PeerInvitePayload) (string, error) {
 }
 
 func decodePeerInvite(raw string, now time.Time) (*PeerInvitePayload, error) {
-	s := strings.TrimSpace(raw)
+	s := extractPeerInvite(raw)
 	if !strings.HasPrefix(s, peerInvitePrefix) {
-		return nil, fmt.Errorf("邀请码格式无效，应以 %s 开头", peerInvitePrefix)
+		return nil, fmt.Errorf("邀请码格式无效，应以 %s 开头或为有效的 /join/# 名片链接", peerInvitePrefix)
 	}
 	encoded := strings.TrimSpace(strings.TrimPrefix(s, peerInvitePrefix))
 	if encoded == "" || len(encoded) > 4096 {
@@ -542,7 +658,7 @@ func decodePeerInvite(raw string, now time.Time) (*PeerInvitePayload, error) {
 		return nil, fmt.Errorf("邀请码缺少必要字段（code / hub_id / addrs）")
 	}
 	if p.Exp > 0 && now.Unix() > p.Exp {
-		return nil, fmt.Errorf("邀请码已过期，请让对方重新生成")
+		return nil, fmt.Errorf("该旧版邀请码已过期，请让对方分享新版长期有效边牧名片")
 	}
 	return &p, nil
 }
@@ -808,6 +924,10 @@ func (pm *PeerManager) Summary() PeersSummary {
 			}
 		case "paused":
 			s.Paused++
+		case "pending_incoming":
+			s.PendingIncoming++
+		case "pending_outgoing":
+			s.PendingOutgoing++
 		}
 	}
 	return s
@@ -908,15 +1028,14 @@ func (pm *PeerManager) unregisterPendingToken(tok string) {
 }
 
 // Authenticate checks an incoming `Authorization: Bearer clp_...` token against
-// the isolated `peers` table (and optional short-lived handshake probe token
-// for GET /api/peer/ping only).
-func (pm *PeerManager) Authenticate(tok string, allowPending bool) peerAuthOutcome {
+// the isolated `peers` table according to the endpoint scope.
+func (pm *PeerManager) Authenticate(tok string, scope peerAuthScope) peerAuthOutcome {
 	if pm == nil || !isValidPeerTokenFormat(tok) {
 		return peerAuthOutcome{statusCode: http.StatusUnauthorized, errMsg: "unauthorized"}
 	}
 	gotHash := hashToken(tok)
 
-	if allowPending {
+	if scope == peerAuthPing {
 		now := pm.now()
 		pm.mu.Lock()
 		for h, p := range pm.pendingTokens {
@@ -941,15 +1060,34 @@ func (pm *PeerManager) Authenticate(tok string, allowPending bool) peerAuthOutco
 		FROM peers WHERE inbound_hash = ?`, gotHash)
 	p, err := scanPeer(row.Scan)
 	if err == nil && p != nil && subtle.ConstantTimeCompare([]byte(p.InboundHash), []byte(gotHash)) == 1 {
-		switch p.Status {
-		case "active":
-			return peerAuthOutcome{peer: p, statusCode: http.StatusOK}
-		case "paused":
-			return peerAuthOutcome{peer: p, statusCode: http.StatusForbidden, errMsg: "peer paused"}
-		case "blocked":
-			return peerAuthOutcome{peer: p, statusCode: http.StatusForbidden, errMsg: "peer blocked"}
-		default:
-			return peerAuthOutcome{statusCode: http.StatusUnauthorized, errMsg: "peer revoked"}
+		switch scope {
+		case peerAuthActivate:
+			if p.Status == "pending_outgoing" {
+				return peerAuthOutcome{peer: p, statusCode: http.StatusOK}
+			}
+			return peerAuthOutcome{peer: p, statusCode: http.StatusConflict, errMsg: "peer not pending activation"}
+		case peerAuthRevoke:
+			switch p.Status {
+			case "active", "paused", "pending_outgoing", "pending_incoming":
+				return peerAuthOutcome{peer: p, statusCode: http.StatusOK}
+			case "blocked":
+				return peerAuthOutcome{peer: p, statusCode: http.StatusForbidden, errMsg: "peer blocked"}
+			default:
+				return peerAuthOutcome{statusCode: http.StatusUnauthorized, errMsg: "peer revoked"}
+			}
+		default: // peerAuthInbox, peerAuthPing
+			switch p.Status {
+			case "active":
+				return peerAuthOutcome{peer: p, statusCode: http.StatusOK}
+			case "pending_incoming", "pending_outgoing":
+				return peerAuthOutcome{peer: p, statusCode: http.StatusForbidden, errMsg: "peer pending approval"}
+			case "paused":
+				return peerAuthOutcome{peer: p, statusCode: http.StatusForbidden, errMsg: "peer paused"}
+			case "blocked":
+				return peerAuthOutcome{peer: p, statusCode: http.StatusForbidden, errMsg: "peer blocked"}
+			default:
+				return peerAuthOutcome{statusCode: http.StatusUnauthorized, errMsg: "peer revoked"}
+			}
 		}
 	}
 
@@ -963,7 +1101,7 @@ func (pm *PeerManager) Authenticate(tok string, allowPending bool) peerAuthOutco
 	return peerAuthOutcome{statusCode: http.StatusUnauthorized, errMsg: "unauthorized"}
 }
 
-// ---------------------------------------------------------------- pairing (zero-relay bidirectional handshake)
+// ---------------------------------------------------------------- pairing (permanent card + approval-first handshake)
 
 func (pm *PeerManager) pruneInvitesLocked(now time.Time) {
 	for k, inv := range pm.invites {
@@ -974,29 +1112,52 @@ func (pm *PeerManager) pruneInvitesLocked(now time.Time) {
 }
 
 func (pm *PeerManager) CreateInvite(mode string, addrs []string) (PeerInviteResult, error) {
-	m, ok := normalizePeerMode(mode)
-	if !ok {
-		return PeerInviteResult{}, fmt.Errorf("不支持的接待级别 %q（可选 notify | advise | propose）", mode)
+	return pm.CreateInviteWithReset(mode, addrs, false)
+}
+
+func (pm *PeerManager) CreateInviteWithReset(mode string, addrs []string, reset bool) (PeerInviteResult, error) {
+	var m string
+	if strings.TrimSpace(mode) != "" {
+		norm, ok := normalizePeerMode(mode)
+		if !ok {
+			return PeerInviteResult{}, fmt.Errorf("不支持的接待级别 %q（可选 notify | advise | propose）", mode)
+		}
+		m = norm
 	}
 	cleanAddrs := sanitizePeerAddrs(addrs, 4)
 	if len(cleanAddrs) == 0 {
 		return PeerInviteResult{}, fmt.Errorf("当前 Hub 无可用直连地址，请使用 -url 指定或检查网络接口")
 	}
 
-	now := pm.now()
-	code := newPeerInviteCodeSecret()
-	exp := now.Add(peerInviteTTL)
-
 	pm.mu.Lock()
-	pm.pruneInvitesLocked(now)
-	pm.invites[code] = &peerInviteRecord{
-		code:    code,
-		mode:    m,
-		expires: exp,
+	if reset || pm.cardSecret == "" {
+		pm.cardSecret = newPeerInviteCodeSecret()
+		// Invalidating the card also clears any legacy in-memory invites.
+		pm.invites = map[string]*peerInviteRecord{}
 	}
+	if m != "" {
+		pm.cardMode = m
+	} else if pm.cardMode == "" {
+		pm.cardMode = "advise"
+	}
+	code := pm.cardSecret
+	curMode := pm.cardMode
 	hubID := pm.hubID
 	hubName := pm.hubName
 	pm.mu.Unlock()
+
+	if pm.db != nil {
+		if reset {
+			if _, err := pm.db.Exec(`INSERT INTO kv(k,v) VALUES('peer_card_secret',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, code); err != nil {
+				return PeerInviteResult{}, fmt.Errorf("保存名片密钥失败：%w", err)
+			}
+		}
+		if m != "" {
+			if _, err := pm.db.Exec(`INSERT INTO kv(k,v) VALUES('peer_card_mode',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, curMode); err != nil {
+				return PeerInviteResult{}, fmt.Errorf("保存默认接待方式失败：%w", err)
+			}
+		}
+	}
 
 	payload := PeerInvitePayload{
 		V:       peerProtocolVer,
@@ -1004,7 +1165,6 @@ func (pm *PeerManager) CreateInvite(mode string, addrs []string) (PeerInviteResu
 		HubID:   hubID,
 		HubName: hubName,
 		Addrs:   cleanAddrs,
-		Exp:     exp.Unix(),
 	}
 	encoded, err := encodePeerInvite(payload)
 	if err != nil {
@@ -1012,16 +1172,20 @@ func (pm *PeerManager) CreateInvite(mode string, addrs []string) (PeerInviteResu
 	}
 	return PeerInviteResult{
 		InviteCode: encoded,
+		JoinURL:    peerJoinURL(encoded),
 		Code:       code,
 		HubID:      hubID,
 		HubName:    hubName,
-		Mode:       m,
+		Mode:       curMode,
 		Addrs:      cleanAddrs,
-		ExpiresAt:  exp,
+		Permanent:  true,
 	}, nil
 }
 
-// AcceptPair handles Side A's `POST /api/peer/pair/accept` during handshake.
+// AcceptPair handles Side A's `POST /api/peer/pair/accept` when Side B submits
+// a friend request using Side A's permanent business card (or a legacy invite).
+// It NEVER activates inbound inbox permissions directly: the peer is recorded
+// as `pending_incoming` until Side A explicitly clicks Approve.
 func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, selfAddrs []string) (*peerPairAcceptResp, int, error) {
 	code := strings.ToUpper(strings.TrimSpace(req.Code))
 	remoteHubID := strings.TrimSpace(req.HubID)
@@ -1047,59 +1211,94 @@ func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, se
 		return nil, http.StatusForbidden, fmt.Errorf("对方已将该 Hub 加入黑名单，拒绝配对")
 	}
 
-	// Atomically reserve the one-time invite code so concurrent replays cannot race.
+	// Validate against permanent cardSecret (reusable by multiple requesters until
+	// manually reset), or fall back to any legacy one-time invite record.
 	now := pm.now()
 	pm.mu.Lock()
-	inv, ok := pm.invites[code]
-	if !ok {
-		pm.mu.Unlock()
-		return nil, http.StatusUnauthorized, fmt.Errorf("邀请码无效，请让对方重新生成")
+	pm.pruneInvitesLocked(now)
+	inviteMode := pm.cardMode
+	if inviteMode == "" {
+		inviteMode = "advise"
 	}
-	if !inv.usedAt.IsZero() {
-		pm.mu.Unlock()
-		return nil, http.StatusUnauthorized, fmt.Errorf("邀请码已被使用（每个邀请码仅限使用一次）")
+	matchedPermanent := pm.cardSecret != "" && len(code) == len(pm.cardSecret) &&
+		subtle.ConstantTimeCompare([]byte(code), []byte(pm.cardSecret)) == 1
+	var legacyInv *peerInviteRecord
+	if !matchedPermanent {
+		inv, ok := pm.invites[code]
+		if !ok {
+			pm.mu.Unlock()
+			return nil, http.StatusUnauthorized, fmt.Errorf("名片密钥无效或已重置，请让对方分享最新名片")
+		}
+		if !inv.usedAt.IsZero() {
+			pm.mu.Unlock()
+			return nil, http.StatusUnauthorized, fmt.Errorf("邀请码已被使用，请让对方分享最新名片")
+		}
+		if inv.inFlight {
+			pm.mu.Unlock()
+			return nil, http.StatusConflict, fmt.Errorf("邀请码正在处理中，请稍候")
+		}
+		if now.After(inv.expires) {
+			pm.mu.Unlock()
+			return nil, http.StatusUnauthorized, fmt.Errorf("邀请码已过期，请让对方分享最新名片")
+		}
+		inv.inFlight = true
+		inviteMode = inv.mode
+		legacyInv = inv
 	}
-	if inv.inFlight {
-		pm.mu.Unlock()
-		return nil, http.StatusConflict, fmt.Errorf("邀请码正在配对中，请稍候")
-	}
-	if now.After(inv.expires) {
-		pm.mu.Unlock()
-		return nil, http.StatusUnauthorized, fmt.Errorf("邀请码已过期，请让对方重新生成")
-	}
-	inv.inFlight = true
-	inviteMode := inv.mode
 	pm.mu.Unlock()
 
 	committed := false
-	defer func() {
-		pm.mu.Lock()
-		if cur, exists := pm.invites[code]; exists {
-			cur.inFlight = false
-			if committed {
-				cur.usedAt = pm.now()
+	if legacyInv != nil {
+		defer func() {
+			pm.mu.Lock()
+			if cur, exists := pm.invites[code]; exists {
+				cur.inFlight = false
+				if committed {
+					cur.usedAt = pm.now()
+				}
 			}
-		}
-		pm.mu.Unlock()
-	}()
-
-	// Reverse connectivity check: verify A can actually reach B's /api/peer/ping
-	// using the token B just offered, preventing broken one-way pairings.
-	chosenBAddr, probeErr := probeRemotePing(ctx, remoteAddrs, outboundForA, 2*time.Second)
-	if probeErr != nil {
-		return nil, http.StatusUnprocessableEntity, fmt.Errorf("双向连通性校验失败（对方无法被反向访问，请检查防火墙或端口可达性；已探测 %s）：%v", strings.Join(remoteAddrs, ", "), probeErr)
+			pm.mu.Unlock()
+		}()
 	}
-
-	tokForB := newPeerToken()
-	nowUnix := pm.now().Unix()
-	orderedRemoteAddrs := moveAddrFirst(remoteAddrs, chosenBAddr)
 
 	existing, err := pm.GetPeerByHubID(remoteHubID)
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("读取好友记录失败：%w", err)
 	}
+	if existing != nil && (existing.Status == "active" || existing.Status == "paused") {
+		return nil, http.StatusConflict, fmt.Errorf("已与 %s 配对，无需重复申请", existing.Name)
+	}
+
+	// Reverse connectivity check: verify A can actually reach B's /api/peer/ping
+	// using the token B just offered, preventing spoofed or unreachable requests.
+	chosenBAddr, probeErr := probeRemotePing(ctx, remoteAddrs, outboundForA, 2*time.Second)
+	if probeErr != nil {
+		return nil, http.StatusUnprocessableEntity, fmt.Errorf("双向连通性校验失败（对方无法被反向访问，请检查防火墙或端口可达性；已探测 %s）：%v", strings.Join(remoteAddrs, ", "), probeErr)
+	}
+
+	// Approval-first security boundary:
+	// - Modern v0.3.3+ requesters (RequestApproval=true): mint ZERO inbound
+	//   credentials now; `tokForB` is minted and delivered via /pair/activate
+	//   only after owner A explicitly clicks Approve.
+	// - Legacy v0.3.0-v0.3.2 requesters (RequestApproval=false): still stored as
+	//   `pending_incoming` (strictly 403-blocked on /inbox and /ping until A
+	//   clicks Approve), with a gated token returned so older clients can complete
+	//   once approved without forcing an immediate upgrade first.
+	var (
+		tokForB     string
+		inboundHash string
+	)
+	if !req.RequestApproval {
+		tokForB = newPeerToken()
+		inboundHash = hashToken(tokForB)
+	}
+
+	nowUnix := pm.now().Unix()
+	orderedRemoteAddrs := moveAddrFirst(remoteAddrs, chosenBAddr)
+
 	peerID := pm.uniquePeerID(remoteName, remoteHubID)
 	createdAt := nowUnix
+	alreadyPending := existing != nil && existing.Status == "pending_incoming"
 	if existing != nil {
 		peerID = existing.ID
 		createdAt = existing.CreatedAt
@@ -1117,8 +1316,8 @@ func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, se
 		Name:         remoteName,
 		Addrs:        orderedRemoteAddrs,
 		Mode:         inviteMode,
-		Status:       "active",
-		InboundHash:  hashToken(tokForB),
+		Status:       "pending_incoming",
+		InboundHash:  inboundHash,
 		ProtocolVer:  peerProtocolVer,
 		LastOKAt:     nowUnix,
 		LastActiveAt: nowUnix,
@@ -1126,18 +1325,24 @@ func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, se
 		UpdatedAt:    nowUnix,
 	}
 	if err := pm.savePeer(p); err != nil {
-		return nil, http.StatusInternalServerError, fmt.Errorf("保存好友记录失败：%w", err)
+		return nil, http.StatusInternalServerError, fmt.Errorf("保存好友申请失败：%w", err)
 	}
 	if pm.secrets != nil {
 		if err := pm.secrets.Update("peer:"+peerID, map[string]string{"outbound_token": outboundForA}); err != nil {
-			return nil, http.StatusInternalServerError, fmt.Errorf("保存出站令牌失败：%w", err)
+			return nil, http.StatusInternalServerError, fmt.Errorf("保存握手令牌失败：%w", err)
 		}
 	}
 	committed = true
+	if pm.sp != nil && !alreadyPending {
+		pm.sp.mu.Lock()
+		pm.sp.addEntryLocked("event", mainThread, fmt.Sprintf("%s（%s）发来好友边牧申请，点此审批", remoteName, chosenBAddr), "peer-req:"+peerID, "blocked")
+		pm.sp.mu.Unlock()
+	}
 	pm.notifyChanged()
 
 	return &peerPairAcceptResp{
 		OK:                true,
+		Status:            "pending",
 		HubID:             selfHubID,
 		HubName:           selfHubName,
 		Addrs:             sanitizePeerAddrs(selfAddrs, 4),
@@ -1147,7 +1352,8 @@ func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, se
 	}, http.StatusOK, nil
 }
 
-// PairWithInvite initiates the handshake from Side B after scanning or pasting A's invite.
+// PairWithInvite initiates the handshake from Side B after clicking a /join/#
+// link, scanning a QR business card, or pasting an invite code.
 func (pm *PeerManager) PairWithInvite(ctx context.Context, rawInvite, nameOverride, mode string, selfAddrs []string) (*PeerView, int, error) {
 	now := pm.now()
 	inv, err := decodePeerInvite(rawInvite, now)
@@ -1171,8 +1377,13 @@ func (pm *PeerManager) PairWithInvite(ctx context.Context, rawInvite, nameOverri
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("检查好友记录失败：%w", err)
 	}
-	if existing != nil && existing.Status != "revoked_by_peer" {
-		return nil, http.StatusConflict, fmt.Errorf("已与 %s 配对，无需重复添加", existing.Name)
+	if existing != nil {
+		switch existing.Status {
+		case "active", "paused":
+			return nil, http.StatusConflict, fmt.Errorf("已与 %s 配对，无需重复添加", existing.Name)
+		case "pending_incoming":
+			return nil, http.StatusConflict, fmt.Errorf("%s 已向你发来好友申请，请直接在列表中点击「通过」", existing.Name)
+		}
 	}
 
 	cleanSelfAddrs := sanitizePeerAddrs(selfAddrs, 4)
@@ -1192,6 +1403,7 @@ func (pm *PeerManager) PairWithInvite(ctx context.Context, rawInvite, nameOverri
 		Addrs:             cleanSelfAddrs,
 		OutboundTokenForA: tokBIn,
 		ProtocolVer:       peerProtocolVer,
+		RequestApproval:   true,
 	})
 
 	client := newPeerHTTPClient(8 * time.Second)
@@ -1235,11 +1447,13 @@ func (pm *PeerManager) PairWithInvite(ctx context.Context, rawInvite, nameOverri
 	if chosenAAddr == "" {
 		return nil, http.StatusBadGateway, fmt.Errorf("无法连接到对端 Hub（已探测 %s）：%v", strings.Join(inv.Addrs, ", "), lastDialErr)
 	}
-	if !isValidPeerTokenFormat(acceptResp.OutboundTokenForB) {
-		return nil, http.StatusBadGateway, fmt.Errorf("对端返回的令牌格式异常")
-	}
 	if acceptResp.HubID != "" && acceptResp.HubID != inv.HubID {
-		return nil, http.StatusBadGateway, fmt.Errorf("对端 Hub 标识与邀请码不匹配")
+		return nil, http.StatusBadGateway, fmt.Errorf("对端 Hub 标识与名片不匹配")
+	}
+
+	isPending := strings.EqualFold(strings.TrimSpace(acceptResp.Status), "pending")
+	if !isPending && !isValidPeerTokenFormat(acceptResp.OutboundTokenForB) {
+		return nil, http.StatusBadGateway, fmt.Errorf("对端返回的令牌格式异常")
 	}
 
 	displayName := strings.TrimSpace(nameOverride)
@@ -1265,13 +1479,18 @@ func (pm *PeerManager) PairWithInvite(ctx context.Context, rawInvite, nameOverri
 		createdAt = existing.CreatedAt
 	}
 
+	peerStatus := "active"
+	if isPending {
+		peerStatus = "pending_outgoing"
+	}
+
 	p := &Peer{
 		ID:           peerID,
 		HubID:        inv.HubID,
 		Name:         displayName,
 		Addrs:        mergedAddrs,
 		Mode:         m,
-		Status:       "active",
+		Status:       peerStatus,
 		InboundHash:  hashToken(tokBIn),
 		ProtocolVer:  peerProtocolVer,
 		LastOKAt:     nowUnix,
@@ -1283,13 +1502,250 @@ func (pm *PeerManager) PairWithInvite(ctx context.Context, rawInvite, nameOverri
 		return nil, http.StatusInternalServerError, fmt.Errorf("保存好友记录失败：%w", err)
 	}
 	if pm.secrets != nil {
-		if err := pm.secrets.Update("peer:"+peerID, map[string]string{"outbound_token": acceptResp.OutboundTokenForB}); err != nil {
-			return nil, http.StatusInternalServerError, fmt.Errorf("保存出站令牌失败：%w", err)
+		if isPending {
+			// Do not retain any outbound token until Side A explicitly approves.
+			_ = pm.secrets.Delete("peer:" + peerID)
+		} else {
+			if err := pm.secrets.Update("peer:"+peerID, map[string]string{"outbound_token": acceptResp.OutboundTokenForB}); err != nil {
+				return nil, http.StatusInternalServerError, fmt.Errorf("保存出站令牌失败：%w", err)
+			}
 		}
 	}
 	pm.notifyChanged()
 	v := peerToView(p, 0)
 	return &v, http.StatusOK, nil
+}
+
+// ApprovePeer approves an incoming `pending_incoming` friend request on Side A,
+// mints Side A's fresh inbound token for Side B, activates Side B over
+// `POST /api/peer/pair/activate` (or probes `/api/peer/ping` for legacy v0.3.0-v0.3.2
+// requesters), and transitions Side A to `active`.
+func (pm *PeerManager) ApprovePeer(ctx context.Context, id, nameOverride, modeOverride string, selfAddrs []string) (*PeerView, int, error) {
+	p, err := pm.GetPeer(id)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if p == nil {
+		return nil, http.StatusNotFound, fmt.Errorf("未找到好友申请 %q", id)
+	}
+	if p.Status != "pending_incoming" {
+		return nil, http.StatusConflict, fmt.Errorf("%s 当前不在待审批状态", p.Name)
+	}
+
+	if strings.TrimSpace(modeOverride) != "" {
+		m, ok := normalizePeerMode(modeOverride)
+		if !ok {
+			return nil, http.StatusBadRequest, fmt.Errorf("不支持的接待级别 %q（可选 notify | advise | propose）", modeOverride)
+		}
+		p.Mode = m
+	}
+	if n := strings.TrimSpace(nameOverride); n != "" {
+		if r := []rune(n); len(r) > 40 {
+			n = string(r[:40])
+		}
+		p.Name = n
+	}
+
+	tokAtoB := ""
+	if pm.secrets != nil {
+		tokAtoB = pm.secrets.GetKey("peer:"+p.ID, "outbound_token")
+	}
+	if tokAtoB == "" {
+		return nil, http.StatusConflict, fmt.Errorf("缺少对端握手凭证，请拒绝后让对方重新发起申请")
+	}
+
+	selfHubID, selfHubName, _ := pm.Identity()
+	cleanSelfAddrs := sanitizePeerAddrs(selfAddrs, 4)
+	nowUnix := pm.now().Unix()
+
+	if p.InboundHash != "" {
+		// Legacy v0.3.0-v0.3.2 requester already holds the gated token; verify reachability before activating.
+		chosenAddr, probeErr := probeRemotePing(ctx, p.Addrs, tokAtoB, 4*time.Second)
+		if probeErr != nil {
+			return nil, http.StatusBadGateway, fmt.Errorf("无法联系对方完成激活（对方 Hub 可能不在线或已取消申请）：%v", probeErr)
+		}
+		p.Addrs = moveAddrFirst(p.Addrs, chosenAddr)
+	} else {
+		// Modern v0.3.3+ requester: mint fresh 256-bit token and push activation to Side B.
+		tokForB := newPeerToken()
+		actBody, _ := json.Marshal(peerPairActivateReq{
+			HubID:             selfHubID,
+			HubName:           selfHubName,
+			Addrs:             cleanSelfAddrs,
+			OutboundTokenForB: tokForB,
+			ProtocolVer:       peerProtocolVer,
+		})
+		client := newPeerHTTPClient(6 * time.Second)
+		var (
+			chosenAddr  string
+			actResp     peerPairActivateResp
+			lastDialErr error
+		)
+		for _, addr := range p.Addrs {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, addr+"/api/peer/pair/activate", bytes.NewReader(actBody))
+			if err != nil {
+				lastDialErr = err
+				continue
+			}
+			req.Header.Set("Authorization", "Bearer "+tokAtoB)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				lastDialErr = err
+				continue
+			}
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+			resp.Body.Close()
+			var parsed peerPairActivateResp
+			_ = json.Unmarshal(raw, &parsed)
+			if resp.StatusCode == http.StatusOK && parsed.OK {
+				chosenAddr = addr
+				actResp = parsed
+				break
+			}
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+				return nil, http.StatusConflict, fmt.Errorf("对方已撤回好友申请或拒绝连接，请点击「拒绝」清理该条记录")
+			}
+			msg := strings.TrimSpace(parsed.Error)
+			if msg == "" {
+				msg = fmt.Sprintf("对端返回 HTTP %d", resp.StatusCode)
+			}
+			lastDialErr = errors.New(msg)
+		}
+		if chosenAddr == "" {
+			return nil, http.StatusBadGateway, fmt.Errorf("无法联系对方完成激活（对方 Hub 当前不在线），请待对方在线后重试：%v", lastDialErr)
+		}
+		p.InboundHash = hashToken(tokForB)
+		p.Addrs = moveAddrFirst(sanitizePeerAddrs(append(p.Addrs, actResp.Addrs...), 6), chosenAddr)
+	}
+
+	p.Status = "active"
+	p.LastOKAt = nowUnix
+	p.LastActiveAt = nowUnix
+	p.UpdatedAt = nowUnix
+	if err := pm.savePeer(p); err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("激活好友状态失败：%w", err)
+	}
+	if pm.sp != nil {
+		pm.sp.mu.Lock()
+		pm.sp.addEntryLocked("event", mainThread, fmt.Sprintf("已通过 %s 的好友边牧申请，双方已直连", p.Name), "peer:"+p.ID, "done")
+		pm.sp.mu.Unlock()
+	}
+	pm.notifyChanged()
+	counts := pm.todayCountsByPeer()
+	v := peerToView(p, counts[p.ID])
+	return &v, http.StatusOK, nil
+}
+
+// ActivateOutgoingPeer handles Side B's `POST /api/peer/pair/activate` once
+// Side A approves the friend request and delivers Side B's outbound token.
+func (pm *PeerManager) ActivateOutgoingPeer(p *Peer, req peerPairActivateReq, selfAddrs []string) (*peerPairActivateResp, int, error) {
+	if p == nil || p.Status != "pending_outgoing" {
+		return nil, http.StatusConflict, fmt.Errorf("当前没有等待通过的好友申请")
+	}
+	if strings.TrimSpace(req.HubID) != p.HubID {
+		return nil, http.StatusBadRequest, fmt.Errorf("Hub 标识不匹配")
+	}
+	tokForB := strings.TrimSpace(req.OutboundTokenForB)
+	if !isValidPeerTokenFormat(tokForB) {
+		return nil, http.StatusBadRequest, fmt.Errorf("激活令牌格式无效")
+	}
+
+	nowUnix := pm.now().Unix()
+	if len(req.Addrs) > 0 {
+		p.Addrs = sanitizePeerAddrs(append(p.Addrs, req.Addrs...), 6)
+	}
+	p.Status = "active"
+	p.LastOKAt = nowUnix
+	p.LastActiveAt = nowUnix
+	p.UpdatedAt = nowUnix
+	if err := pm.savePeer(p); err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("激活好友状态失败：%w", err)
+	}
+	if pm.secrets != nil {
+		if err := pm.secrets.Update("peer:"+p.ID, map[string]string{"outbound_token": tokForB}); err != nil {
+			return nil, http.StatusInternalServerError, fmt.Errorf("保存出站令牌失败：%w", err)
+		}
+	}
+	if pm.sp != nil {
+		pm.sp.mu.Lock()
+		pm.sp.addEntryLocked("event", mainThread, fmt.Sprintf("%s 已通过你的好友边牧申请，现在可以双向协作了", p.Name), "peer:"+p.ID, "done")
+		pm.sp.mu.Unlock()
+	}
+	pm.notifyChanged()
+
+	selfHubID, selfHubName, _ := pm.Identity()
+	return &peerPairActivateResp{
+		OK:          true,
+		HubID:       selfHubID,
+		HubName:     selfHubName,
+		Addrs:       sanitizePeerAddrs(selfAddrs, 4),
+		ProtocolVer: peerProtocolVer,
+	}, http.StatusOK, nil
+}
+
+// RejectPeer rejects an incoming `pending_incoming` friend request on Side A,
+// ensuring zero inbound credentials are ever granted, wiping local records,
+// optionally adding the hub to peer_blocklist, and notifying Side B.
+func (pm *PeerManager) RejectPeer(ctx context.Context, id string, block bool) (bool, int, error) {
+	p, err := pm.GetPeer(id)
+	if err != nil {
+		return false, http.StatusInternalServerError, err
+	}
+	if p == nil {
+		return false, http.StatusNotFound, fmt.Errorf("未找到好友申请 %q", id)
+	}
+	if p.Status != "pending_incoming" {
+		return false, http.StatusConflict, fmt.Errorf("%s 当前不在待审批状态", p.Name)
+	}
+
+	outTok := ""
+	if pm.secrets != nil {
+		outTok = pm.secrets.GetKey("peer:"+p.ID, "outbound_token")
+	}
+
+	tx, err := pm.db.Begin()
+	if err != nil {
+		return false, http.StatusInternalServerError, err
+	}
+	defer tx.Rollback()
+
+	if block {
+		if _, err := tx.Exec(`
+			INSERT INTO peer_blocklist(hub_id, name, blocked_at, token_hash)
+			VALUES(?,?,?,?)
+			ON CONFLICT(hub_id) DO UPDATE SET name=excluded.name, blocked_at=excluded.blocked_at, token_hash=excluded.token_hash`,
+			p.HubID, p.Name, pm.now().Unix(), p.InboundHash); err != nil {
+			return false, http.StatusInternalServerError, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE peers SET inbound_hash = '' WHERE id = ?`, p.ID); err != nil {
+		return false, http.StatusInternalServerError, err
+	}
+	if _, err := tx.Exec(`DELETE FROM peers WHERE id = ?`, p.ID); err != nil {
+		return false, http.StatusInternalServerError, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, http.StatusInternalServerError, err
+	}
+
+	if pm.secrets != nil {
+		_ = pm.secrets.Delete("peer:" + p.ID)
+	}
+	pm.mu.Lock()
+	delete(pm.peerBuckets, p.ID)
+	pm.mu.Unlock()
+	pm.notifyChanged()
+
+	if outTok != "" && len(p.Addrs) > 0 {
+		addrs := append([]string(nil), p.Addrs...)
+		reason := "rejected"
+		if block {
+			reason = "blocked"
+		}
+		go notifyRemoteRevoke(addrs, outTok, reason)
+	}
+	return block, http.StatusOK, nil
 }
 
 func probeRemotePing(ctx context.Context, addrs []string, bearerTok string, timeout time.Duration) (string, error) {
@@ -1357,6 +1813,9 @@ func (pm *PeerManager) UpdatePeer(ctx context.Context, id string, name, mode, st
 			}
 			return nil, true, http.StatusOK, nil
 		case "active", "paused":
+			if p.Status == "pending_incoming" || p.Status == "pending_outgoing" {
+				return nil, false, http.StatusConflict, fmt.Errorf("好友申请尚未通过，请使用「通过」或「拒绝」操作")
+			}
 			if p.Status == "revoked_by_peer" && st == "active" {
 				return nil, false, http.StatusConflict, fmt.Errorf("对方已解除连接，请重新扫码或粘贴邀请码配对")
 			}
@@ -1487,8 +1946,12 @@ func (pm *PeerManager) HandleRemoteRevoke(p *Peer, reason string) error {
 		_ = pm.secrets.Delete("peer:" + p.ID)
 	}
 	if pm.sp != nil {
+		msg := fmt.Sprintf("%s 已解除好友边牧连接", p.Name)
+		if p.Status == "pending_outgoing" && (reason == "rejected" || reason == "blocked") {
+			msg = fmt.Sprintf("%s 拒绝了你的好友边牧申请", p.Name)
+		}
 		pm.sp.mu.Lock()
-		pm.sp.addEntryLocked("event", mainThread, fmt.Sprintf("%s 已解除好友边牧连接", p.Name), "peer:"+p.ID, "info")
+		pm.sp.addEntryLocked("event", mainThread, msg, "peer:"+p.ID, "info")
 		pm.sp.mu.Unlock()
 	}
 	pm.notifyChanged()
@@ -1502,6 +1965,12 @@ func (pm *PeerManager) PingPeer(ctx context.Context, id string) (PeerPingResult,
 	}
 	if p == nil {
 		return PeerPingResult{OK: false, PeerID: id, Error: fmt.Sprintf("未找到好友 %q", id)}, http.StatusNotFound
+	}
+	if p.Status == "pending_incoming" {
+		return PeerPingResult{OK: false, PeerID: p.ID, Error: "好友申请待你审批"}, http.StatusOK
+	}
+	if p.Status == "pending_outgoing" {
+		return PeerPingResult{OK: false, PeerID: p.ID, Error: "已发送好友申请，等待对方通过"}, http.StatusOK
 	}
 	if p.Status == "revoked_by_peer" {
 		return PeerPingResult{OK: false, PeerID: p.ID, Error: "对方已解除连接"}, http.StatusOK
@@ -1862,6 +2331,9 @@ func (pm *PeerManager) SendToPeer(ctx context.Context, id string, req PeerSendRe
 	}
 	if p == nil {
 		return PeerSendResult{}, http.StatusNotFound, fmt.Errorf("未找到好友 %q", id)
+	}
+	if p.Status == "pending_incoming" || p.Status == "pending_outgoing" {
+		return PeerSendResult{}, http.StatusForbidden, fmt.Errorf("与 %s 的好友申请尚未通过，暂不能发信", p.Name)
 	}
 	if p.Status == "revoked_by_peer" {
 		return PeerSendResult{}, http.StatusConflict, fmt.Errorf("%s 已解除好友连接，无法发信", p.Name)

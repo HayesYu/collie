@@ -109,7 +109,7 @@ assert.ok(cssSrc.includes("--notes-w: 248px"), "notebook must use fixed 248px wi
 assert.ok(!cssSrc.includes("--notes-w-exp"), "notebook must not change width via --notes-w-exp");
 assert.ok(!cssSrc.includes("#v-collie.has-notes.notes-expanded"), "notebook must never alter main chat column padding/reserve via expand state");
 assert.ok(cssSrc.includes("max-height: min(62vh, 520px)"), "notebook must cap height cleanly to min(62vh, 520px)");
-assert.ok(cssSrc.includes("(100% - var(--np-col-right) - var(--notes-w)) * 0.55"), "notebook must center optically in the right empty channel");
+assert.ok(cssSrc.includes("(var(--np-ref-right-space) - var(--notes-w)) * 0.45") && cssSrc.includes("right: var(--notes-right"), "notebook must center optically in the right empty channel anchored to viewport right");
 assert.ok(cssSrc.includes(".np-fold") && cssSrc.includes("grid-template-rows: 0fr") && cssSrc.includes("grid-template-rows: 1fr"), "notebook expand/collapse must use isolated CSS Grid 0fr -> 1fr disclosure");
 assert.ok(!cssSrc.includes(".np-expand-btn"), "redundant .np-expand-btn CSS must be removed");
 

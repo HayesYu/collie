@@ -1354,6 +1354,14 @@
   bindCompositionGuard($("#super-input"));
   bindCompositionGuard($("#td-input"));
 
+  function setConnDotState(online) {
+    const isOn = !!online;
+    for (const el of [$("#conn"), $("#rail-conn")]) {
+      if (!el?.classList) continue;
+      el.classList.toggle("on", isOn);
+      el.classList.toggle("off", !isOn);
+    }
+  }
   function connect() {
     const ev = new EventSource("/api/events");
     let lastSuperRaw = "", lastStateRaw = "";
@@ -1392,9 +1400,9 @@
       state = next;
       scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
     });
-    ev.onopen = () => $("#conn").className = "conn on";
+    ev.onopen = () => setConnDotState(true);
     ev.onerror = async () => {
-      $("#conn").className = "conn off";
+      setConnDotState(false);
       try { await api("/api/session"); } catch {}
       if (!$("#login").hidden) return;
       // A restart can answer with an error status, which closes the stream
@@ -2306,14 +2314,20 @@
   // O(1)-ish click-frame sidebar active sync: toggles only active classes + unread badge
   // without rebuilding #live-list/#recent-list/#attention/#shells innerHTML on route changes.
   function syncSideActive(opts = {}) {
-    $("#nav-collie")?.classList.toggle("active", view === "collie");
-    $("#nav-auto")?.classList.toggle("active", view === "auto");
-    $("#nav-devices")?.classList.toggle("active", view === "devices");
-    $("#nav-prefs")?.classList.toggle("active", view === "prefs");
-    $("#rail-collie")?.classList.toggle("active", view === "collie");
-    $("#rail-auto")?.classList.toggle("active", view === "auto");
-    $("#rail-devices")?.classList.toggle("active", view === "devices");
-    $("#rail-prefs")?.classList.toggle("active", view === "prefs");
+    const syncNavAct = (el, on) => {
+      if (!el) return;
+      el.classList.toggle("active", on);
+      if (on) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
+    };
+    syncNavAct($("#nav-collie"), view === "collie");
+    syncNavAct($("#nav-auto"), view === "auto");
+    syncNavAct($("#nav-devices"), view === "devices");
+    syncNavAct($("#nav-prefs"), view === "prefs");
+    syncNavAct($("#rail-collie"), view === "collie");
+    syncNavAct($("#rail-auto"), view === "auto");
+    syncNavAct($("#rail-devices"), view === "devices");
+    syncNavAct($("#rail-prefs"), view === "prefs");
     const wantHref = view === "pane" && current
       ? "#/p/" + encodeURIComponent(current)
       : view === "ext" && extCur
@@ -2384,19 +2398,12 @@
     $("#shell-group").hidden = state.shells.length === 0;
 
     const online = machines.filter((m) => m.local ? state.ok : m.online).length;
-    const connEl = $("#conn");
-    if (connEl) {
-      const connCls = connEl.classList?.contains("sf-conn-dot")
-        ? ("conn sf-conn-dot " + (online ? "on" : "off"))
-        : ("conn " + (online ? "on" : "off"));
-      if (connEl.className !== connCls) connEl.className = connCls;
-    }
-    const railConn = $("#rail-conn");
-    if (railConn) {
-      const rcCls = "sr-conn-dot " + (online ? "on" : "off");
-      if (railConn.className !== rcCls) railConn.className = rcCls;
-    }
-    const devStatus = !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
+    setConnDotState(online > 0);
+    const devStatus = !online
+      ? "herdr 不可用"
+      : multi
+        ? `${online}/${machines.length} 台电脑在线`
+        : (state.agents.length ? `本机在线 · ${state.agents.length} 个 agent` : "本机在线");
     setText($("#herdr-status"), devStatus);
     if (!state.ok && state.error && $("#herdr-status")) $("#herdr-status").title = state.error;
     const devTip = !state.ok && state.error ? `设备与连接 · ${state.error}` : `设备与连接 · ${devStatus}`;
@@ -3072,6 +3079,7 @@
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
       if (activeWorkerKey) closeWorkerDrawer({ immediate: true });
     }
+    if (next !== "pane" || id !== current) disarmInterrupt("detail");
     view = next; current = next === "ext" ? null : id;
     liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
     const nextKey = routeKeyFor(next, id);
@@ -17924,8 +17932,6 @@
     const colW = currentColW();
     const lockSnap = canGlide && sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const prevNotesShift = hasNotes ? computeCollieShiftPx(280) : 0;
-    const notesBeforeLeft = canGlide && hasNotes && notesPane && typeof notesPane.getBoundingClientRect === "function"
-      ? notesPane.getBoundingClientRect().left : null;
 
     appEl.classList.toggle("side-collapsed", want);
     document.body?.classList?.toggle("side-collapsed", want);
@@ -17962,7 +17968,6 @@
 
     const deltaW = Math.max(0, sideW - SIDE_RAIL_W);
     let sideFrom = 0, sideTo = 0, chatFrom = 0, chatTo = 0;
-    let notesFrom = 0, notesTo = 0;
     let isOpening = false;
     sideEl.style.setProperty("--side-anim-w", sideW + "px");
     if (want) {
@@ -17974,11 +17979,6 @@
       const toM = threadMetrics(Math.max(320, innerWidth - SIDE_RAIL_W - drawerW), colW, gutter);
       chatFrom = (sideW + fromM.padLeft + prevNotesShift) - (SIDE_RAIL_W + toM.padLeft);
       chatTo = nextNotesShift;
-      if (notesBeforeLeft != null && notesPane && typeof notesPane.getBoundingClientRect === "function") {
-        const notesAfterLeft = notesPane.getBoundingClientRect().left;
-        notesFrom = notesBeforeLeft - notesAfterLeft;
-        notesTo = 0;
-      }
     } else {
       // Expanding left sidebar (54px rail -> sideW): stage Column 1 at 54px, zero Frame-0 reflow (#t12980, #t12984)
       isOpening = true;
@@ -17989,15 +17989,11 @@
       const toM = threadMetrics(Math.max(320, innerWidth - sideW - drawerW), colW, gutter);
       chatFrom = prevNotesShift;
       chatTo = (sideW + toM.padLeft + nextNotesShift) - (SIDE_RAIL_W + fromM.padLeft);
-      if (hasNotes && notesPane) {
-        notesFrom = 0;
-        notesTo = (toM.padLeft + nextNotesShift + sideW) - (fromM.padLeft + prevNotesShift + SIDE_RAIL_W);
-      }
     }
 
     const dur = 240;
     let t0 = 0;
-    const applyFrame = (sx, cx, nx, prog) => {
+    const applyFrame = (sx, cx, prog) => {
       const counterX = (-sx).toFixed(2);
       sideEl.style.transform = `translate3d(${sx.toFixed(2)}px, 0, 0)`;
       if (sideFullEl?.style) {
@@ -18019,10 +18015,6 @@
         const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
         for (const el of chatEls) el.style.transform = ctr;
       }
-      if (hasNotes && notesPane?.style && (Math.abs(notesFrom) > 0.5 || Math.abs(notesTo) > 0.5)) {
-        notesPane.style.transition = "none";
-        notesPane.style.transform = `translate3d(${nx.toFixed(2)}px, 0, 0)`;
-      }
     };
     _sideGlideCleanup = () => {
       sideEl.classList.remove("is-side-closing");
@@ -18032,7 +18024,6 @@
       if (sideRailEl?.style) { sideRailEl.style.transform = ""; sideRailEl.style.opacity = ""; }
       for (const el of headPushEls) el.style.transform = "";
       if (isOpening) appEl.classList.remove("is-side-opening");
-      if (notesPane?.style) { notesPane.style.transform = ""; notesPane.style.transition = ""; }
       for (const el of chatEls) el.style.transform = "";
       _collieShiftCur = hasNotes ? nextNotesShift : 0;
       if (view === "collie") {
@@ -18047,7 +18038,7 @@
       if (activeThreadRoot) applyThreadWidth();
       if (activeWorkerKey) { applyWorkerWidth(); if (curWdMode() === "screen") fitWdTerm(); }
     };
-    applyFrame(sideFrom, chatFrom, notesFrom, 0);
+    applyFrame(sideFrom, chatFrom, 0);
     let sync = true;
     const step = (now) => {
       if (sync) { finishSideGlide(true); return; }
@@ -18058,7 +18049,6 @@
       applyFrame(
         sideFrom + (sideTo - sideFrom) * e,
         chatFrom + (chatTo - chatFrom) * e,
-        notesFrom + (notesTo - notesFrom) * e,
         e,
       );
       _sideGlideRAF = requestAnimationFrame(step);
@@ -18242,7 +18232,15 @@
     if (!h) {
       const topEl = $("#v-collie .collie-top");
       if (!topEl) return;
-      h = Math.round(topEl.offsetHeight || 98);
+      h = Math.round(topEl.offsetHeight || 60);
+    }
+    // Wide desktop (>= 1360px): #crew is bounded to the left of #notes-pane, so excluding
+    // #crew's height from --collie-top-h ensures toggling the left sidebar never shifts
+    // #notes-pane vertically when #crew appears or disappears (dy = 0).
+    if (isWideNotesViewport()) {
+      const crewEl = $("#crew");
+      const crewH = crewEl && typeof crewEl.offsetHeight === "number" ? Math.round(crewEl.offsetHeight) : 0;
+      if (crewH > 0 && h > crewH) h -= crewH;
     }
     if (h === _lastCollieTopH) return;
     _lastCollieTopH = h;
@@ -20332,7 +20330,10 @@
         if (bm === "chat") b.hidden = isWdShell();
       });
     }
-    if (wdInterruptBtn) wdInterruptBtn.hidden = !isLive;
+    if (wdInterruptBtn) {
+      wdInterruptBtn.hidden = !isLive;
+      if (!isLive) disarmInterrupt("worker");
+    }
     if (wdBarEl) wdBarEl.hidden = !showDevTabs;
   }
   function syncDevModeUI() {
@@ -20791,6 +20792,60 @@
       syncWorkerDrawerMeta();
     });
   }
+  const INTERRUPT_ARM_MS = 3000;
+  const interruptArms = new Map(); // scope ("worker" | "detail") -> { btn, targetId, timer, defaultTitle, defaultAria, defaultText }
+  function disarmInterrupt(scope) {
+    if (!scope) {
+      for (const k of [...interruptArms.keys()]) disarmInterrupt(k);
+      return;
+    }
+    const st = interruptArms.get(scope);
+    if (!st) return;
+    clearTimeout(st.timer);
+    interruptArms.delete(scope);
+    if (st.btn) {
+      st.btn.classList.remove("is-armed");
+      st.btn.removeAttribute("data-armed");
+      if (st.defaultTitle !== undefined) st.btn.title = st.defaultTitle;
+      if (st.defaultAria !== undefined) st.btn.setAttribute("aria-label", st.defaultAria);
+      if (st.defaultText !== undefined) st.btn.textContent = st.defaultText;
+    }
+  }
+  function isInterruptArmed(scope, targetId) {
+    const st = interruptArms.get(scope);
+    return !!(st && st.targetId && st.targetId === targetId);
+  }
+  function triggerArmedInterrupt(scope, btn, targetId, sendFn, opts = {}) {
+    if (!targetId || !btn) return false;
+    const cur = interruptArms.get(scope);
+    if (cur && cur.targetId === targetId) {
+      disarmInterrupt(scope);
+      sendFn();
+      toast("已发送中断 (Ctrl-C)");
+      return true;
+    }
+    disarmInterrupt(scope);
+    const defaultTitle = btn.title || "发送 Ctrl-C 中断当前执行";
+    const defaultAria = btn.getAttribute("aria-label") || "";
+    const defaultText = opts.replaceText ? btn.textContent : undefined;
+    btn.classList.add("is-armed");
+    btn.setAttribute("data-armed", "true");
+    btn.title = "再点一次确认中断";
+    if (defaultAria) btn.setAttribute("aria-label", "再点一次确认中断");
+    if (opts.replaceText) btn.textContent = "再点一次确认中断";
+    const timer = setTimeout(() => disarmInterrupt(scope), INTERRUPT_ARM_MS);
+    interruptArms.set(scope, {
+      btn,
+      targetId,
+      timer,
+      defaultTitle,
+      defaultAria: defaultAria || undefined,
+      defaultText,
+    });
+    toast("再点一次确认中断（3 秒内有效）", "attn");
+    return false;
+  }
+
   function openWorkerDrawer(opts = {}) {
     if (!wdDrawer) return;
     const worker = String(opts.worker || "").trim();
@@ -20820,6 +20875,7 @@
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
     clearTimeout(wdHideTimer);
     if (!hadWorker) resetDrawerMotion(wdDrawer);
+    if (switchedTarget) disarmInterrupt("worker");
     activeWorkerKey = nextKey;
     wdWorkerName = worker;
     wdPaneId = paneHint || (worker ? paneOf(worker) || "" : "");
@@ -20874,6 +20930,7 @@
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && innerWidth > THREAD_DESKTOP_MIN && !wdDrawer.hidden;
 
+    disarmInterrupt("worker");
     wdSeq++;
     closeWorkerDrawerStream();
     activeWorkerKey = null;
@@ -20964,7 +21021,10 @@
       if (rootId) openThreadDrawer(rootId, "", "");
     });
     wdInterruptBtn?.addEventListener("click", () => {
-      if (wdPaneId) sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+      if (!wdPaneId) return;
+      triggerArmedInterrupt("worker", wdInterruptBtn, wdPaneId, () => {
+        sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+      });
     });
     wdInterjectBtn?.addEventListener("click", () => {
       if (!wdPaneId) return;
@@ -22491,8 +22551,15 @@
   // ───────────────────────────── menus
   document.addEventListener("click", (e) => {
     const opener = e.target.closest("[data-menu]");
+    const clickedMoreInterrupt = !!e.target.closest?.('#more-menu [data-act="interrupt"]');
+    const armingMoreInterrupt = !!(clickedMoreInterrupt && current && !isInterruptArmed("detail", current));
     const prevCollieMenuOpen = collieMenuOpen;
-    $$(".menu").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
+    $$(".menu").forEach((m) => {
+      if ((!opener || m.id !== opener.dataset.menu) && !(armingMoreInterrupt && m.id === "more-menu")) {
+        m.hidden = true;
+      }
+    });
+    if (!clickedMoreInterrupt && $("#more-menu")?.hidden) disarmInterrupt("detail");
     if (opener) {
       const m = $("#" + opener.dataset.menu);
       const willOpen = opener.dataset.menu === "collie-menu" ? !collieMenuOpen : !!m?.hidden;
@@ -22501,6 +22568,7 @@
         closeSuperSearchFn?.(false);
       }
       if (m) m.hidden = !willOpen;
+      if (m?.id === "more-menu" && m.hidden) disarmInterrupt("detail");
       collieMenuOpen = opener.dataset.menu === "collie-menu" ? willOpen : false;
     } else {
       collieMenuOpen = false;
@@ -22508,9 +22576,16 @@
     if (prevCollieMenuOpen !== collieMenuOpen) syncNotebookVisibility();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && collieMenuOpen) {
-      closeCollieMenus();
-      syncNotebookVisibility();
+    if (e.key === "Escape") {
+      if (collieMenuOpen) {
+        closeCollieMenus();
+        syncNotebookVisibility();
+      }
+      const moreMenu = $("#more-menu");
+      if (moreMenu && !moreMenu.hidden) {
+        moreMenu.hidden = true;
+        disarmInterrupt("detail");
+      }
     }
   });
 
@@ -22520,7 +22595,13 @@
     if (!act) return;
     const v = find(current);
     try {
-      if (act === "interrupt") sendKeys(["ctrl+c"]);
+      if (act === "interrupt") {
+        const sent = triggerArmedInterrupt("detail", btn, current, () => sendKeys(["ctrl+c"]), { replaceText: true });
+        if (!sent) {
+          const m = btn.closest?.(".menu");
+          if (m) m.hidden = false;
+        }
+      }
       if (act === "copy" && v) { await copy(v.pane_id); toast("已复制 " + v.pane_id); }
       if (act === "shell-here" && v) {
         const r = await api("/api/agents", { body: { kind: "shell", cwd: v.cwd, machine: v.machine || "" } });

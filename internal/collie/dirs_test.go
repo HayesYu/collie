@@ -460,7 +460,7 @@ const tabsMatch = html.match(/<div class="tabs" id="auto-tabs">([\s\S]*?)<\/div>
 assert.ok(tabsMatch, "auto-tabs must exist");
 const tabKeys = [...tabsMatch[1].matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
 assert.deepEqual(tabKeys, ["memory", "timers", "inbox", "integrations", "settings"], "auto-tabs must contain memory, timers, inbox, integrations, settings");
-assert.match(html, /id="nav-auto-sub">记忆 · 定时 · 接入</, "nav-auto-sub default text must be 记忆 · 定时 · 接入");
+assert.match(html, /id="nav-auto-sub">接入与定时</, "nav-auto-sub default text must be 接入与定时");
 assert.doesNotMatch(appJs, /id="settings-hooks-fold"/, "hooks UI must not be rendered in settings");
 assert.match(appJs, /id="inbox-thread-filter"/, "multi-thread filter must live in inbox");
 

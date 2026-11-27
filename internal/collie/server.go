@@ -112,6 +112,9 @@ var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /", s.static())
+	for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		mux.Handle(m+" /api/", s.auth(http.NotFoundHandler()))
+	}
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
 
@@ -125,6 +128,7 @@ func (s *Server) Routes() http.Handler {
 	api("GET /api/events", s.streamState)
 	s.machineRoutes(mux, func(h http.HandlerFunc) http.Handler { return s.auth(s.routed(h)) })
 	s.superRoutes(mux)
+	s.peerRoutes(mux)
 	s.hubRoutes(mux)
 	return securityHeaders(cors(mux))
 }
@@ -940,6 +944,9 @@ func init() {
 }
 
 func (s *Server) static() http.Handler {
+	if s.web == nil {
+		return http.NotFoundHandler()
+	}
 	files := http.FileServerFS(s.web)
 	// Embedded files have no modification time, so browsers would guess how
 	// long to keep them and run an old app.js after an upgrade. Tag each file
@@ -993,13 +1000,13 @@ func crossSite(r *http.Request) bool {
 // already hold a token.
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if crossSite(r) && strings.HasPrefix(r.URL.Path, "/api/") {
+		if crossSite(r) && strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/peer/") {
 			hd := w.Header()
 			hd.Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			hd.Add("Vary", "Origin")
 			hd.Set("Access-Control-Expose-Headers", "X-Collie-Web, X-File-Kind, X-File-Size, X-File-Path, Content-Disposition")
 			if r.Method == http.MethodOptions {
-				hd.Set("Access-Control-Allow-Methods", "GET, POST")
+				hd.Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE")
 				hd.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 				hd.Set("Access-Control-Max-Age", "600")
 				w.WriteHeader(http.StatusNoContent)

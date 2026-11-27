@@ -77,6 +77,7 @@ type Super struct {
 	integrations  *IntegrationManager
 	feishu        *FeishuAdapter
 	feishuOnboard *feishuOnboarder
+	peers         *PeerManager
 }
 
 type sayReceipt struct {
@@ -134,6 +135,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 	for _, cliProv := range DiscoverCLIProviders(dir) {
 		sp.integrations.Register(newGitForgeAdapter(sp, sp.integrations, cliProv))
 	}
+	sp.peers = newPeerManager(sp, db, sec)
 	return sp, nil
 }
 
@@ -2081,6 +2083,11 @@ func (sp *Super) quoteLocked(id string) *Quote {
 				body = strings.TrimSpace(body[idx+len("\n反馈内容：\n"):])
 			}
 			return &Quote{Who: who, Text: clip(oneLine(body), 300)}
+		}
+	}
+	if strings.HasPrefix(t.Source, "peer:") {
+		if q := formatPeerTriggerQuote(t); q != nil {
+			return q
 		}
 	}
 	name := t.Ref

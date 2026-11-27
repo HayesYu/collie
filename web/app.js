@@ -222,7 +222,7 @@
     let res;
     try {
       res = await fetch(r.url, {
-        method: opts.body ? "POST" : (opts.method || "GET"),
+        method: opts.method || (opts.body ? "POST" : "GET"),
         headers, body: r.body,
         credentials: r.hub ? "omit" : "same-origin",
         signal: t.signal,
@@ -1298,15 +1298,18 @@
       if (e.data === lastSuperRaw) return;
       lastSuperRaw = e.data;
       const prevSum = JSON.stringify(sup.integrations_summary || null);
+      const prevPeerSum = JSON.stringify(sup.peers_summary || null);
       const prevInboxKey = `${sup.queued}:${(sup.entries || []).length}:${sup.entries?.[sup.entries.length - 1]?.id || ""}`;
       sup = normSup(JSON.parse(e.data));
       syncCollieNotifyWatermark(sup.entries, true);
       scheduleLiveUpdates(LIVE_SIDE | LIVE_PENDING_BARS | (view === "collie" ? LIVE_SUPER : 0));
       if (view === "auto" && autoTab === "integrations") {
         const nextSum = JSON.stringify(sup.integrations_summary || null);
-        if (nextSum !== prevSum) {
+        const nextPeerSum = JSON.stringify(sup.peers_summary || null);
+        if (nextSum !== prevSum || nextPeerSum !== prevPeerSum) {
           if (!$("#int-modal")?.open) loadAuto();
-          else if (intModalKind === "feishu" && intModalDraft) refreshFeishuModalHealth();
+          else if (intModalKind === "feishu" && intModalDraft && nextSum !== prevSum) refreshFeishuModalHealth();
+          else if (intModalKind === "peers" && intModalDraft && nextPeerSum !== prevPeerSum) refreshPeerModalData();
         }
       }
       if (view === "auto" && autoTab === "inbox") {
@@ -1768,16 +1771,15 @@
     const sumFull = sumText ? (sum.full || sumText) : "";
     const cardTitle = sumFull ? `${label} — ${sumFull}` : label;
     const sumHtml = sumText ? `<div class="item-sum" title="${esc(sumFull)}">${esc(sumText)}</div>` : "";
-    const itemCls = `item${sumHtml ? " has-sum" : ""}${linked ? " has-th" : ""}${view === "pane" && v.pane_id === current ? " active" : ""}`;
+    const itemCls = `item${sumHtml ? " has-sum" : ""}${linked ? " has-th" : ""}`;
     const card = `<a class="${itemCls}" href="#/p/${encodeURIComponent(v.pane_id)}" title="${esc(cardTitle)}">
       <span class="glyph">${glyph(v)}</span>
       <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm" title="${esc(label)}">${esc(label)}</span><span class="by-collie">Collie 派出</span>` : esc(label)}</div>${sumHtml}<div class="sub">${esc(sub)}</div></span>
       <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a>`;
     if (!linked) return `<li>${card}</li>`;
-    const isThActive = view === "collie" && !!activeThreadRoot && activeThreadRoot === linked.rootId;
     const thTip = linked.title ? `打开关联话题：${linked.title}` : "打开关联话题抽屉";
     const thAria = linked.title ? `打开 ${label} 关联的话题抽屉：${linked.title}` : `打开 ${label} 关联的话题抽屉`;
-    return `<li class="item-wrap">${card}<button type="button" class="item-th-btn${isThActive ? " active" : ""}" data-agent-thread="${esc(linked.rootId)}" data-agent-focus="${esc(linked.focusId)}" aria-expanded="${isThActive ? "true" : "false"}" title="${esc(thTip)}" aria-label="${esc(thAria)}">${ICON_TOPIC}</button></li>`;
+    return `<li class="item-wrap">${card}<button type="button" class="item-th-btn" data-agent-thread="${esc(linked.rootId)}" data-agent-focus="${esc(linked.focusId)}" aria-expanded="false" title="${esc(thTip)}" aria-label="${esc(thAria)}">${ICON_TOPIC}</button></li>`;
   }
 
   const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
@@ -1789,7 +1791,99 @@
     const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 864e5);
     return days === 0 ? hm : days === 1 ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   }
+  function formatAutoNavSub(s) {
+    const intSum = s?.integrations_summary || {};
+    const peerSum = s?.peers_summary || null;
+    const intErr = Number(intSum.error) || 0;
+    const peerConnected = peerSum && peerSum.enabled !== false && (Number(peerSum.active) || 0) > 0 ? 1 : 0;
+    const okCount = (Number(intSum.connected) || 0) + peerConnected;
+    const timersCount = typeof s?.timers_count === "number"
+      ? Math.max(0, s.timers_count)
+      : (s?.follow?.next ? 1 : 0);
+    if (intErr > 0) {
+      const text = timersCount > 0 ? `${intErr} 接入异常 · ${timersCount} 定时` : `${intErr} 接入异常`;
+      return { text, err: true, title: `${intErr} 个外部接入异常，点开检查接入状态` };
+    }
+    const parts = [];
+    if (okCount > 0) parts.push(`${okCount} 接入`);
+    if (timersCount > 0) parts.push(`${timersCount} 定时`);
+    if (parts.length) return { text: parts.join(" · "), err: false, title: "" };
+    return { text: "接入与定时", err: false, title: "" };
+  }
+  let sideRenderedOnce = false;
+  function syncNavPendingBadge(allEntries = null) {
+    const pend = activePending();
+    const unreadCount = pend.length === 0 && view !== "collie" ? computeUnreadInfo(allEntries || chatEntries()).count : 0;
+    const np = $("#nav-pending");
+    if (!np) return;
+    if (pend.length > 0) {
+      np.hidden = false;
+      np.classList.add("attn");
+      np.classList.remove("unread");
+      setText(np, pend.length > 99 ? "99+" : String(pend.length));
+      const lbl = `${pend.length} 条待处理`;
+      if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
+    } else if (unreadCount > 0) {
+      np.hidden = false;
+      np.classList.remove("attn");
+      np.classList.add("unread");
+      setText(np, unreadCount > 99 ? "99+" : String(unreadCount));
+      const lbl = `${unreadCount} 条未读`;
+      if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
+    } else {
+      np.hidden = true;
+      np.classList.add("attn");
+      np.classList.remove("unread");
+      setText(np, "");
+      if (np.title !== "") { np.title = ""; np.removeAttribute("aria-label"); }
+    }
+  }
+  // O(1)-ish click-frame sidebar active sync: toggles only active classes + unread badge
+  // without rebuilding #live-list/#recent-list/#attention/#shells innerHTML on route changes.
+  function syncSideActive(opts = {}) {
+    $("#nav-collie")?.classList.toggle("active", view === "collie");
+    $("#nav-auto")?.classList.toggle("active", view === "auto");
+    $("#nav-devices")?.classList.toggle("active", view === "devices");
+    $("#nav-prefs")?.classList.toggle("active", view === "prefs");
+    const wantHref = view === "pane" && current
+      ? "#/p/" + encodeURIComponent(current)
+      : view === "ext" && extCur
+        ? (extCur.startsWith("h:") ? "#/h/" + encodeURIComponent(extCur.slice(2)) : "#/x/" + encodeURIComponent(extCur))
+        : "";
+    let foundTarget = !wantHref;
+    const sideEl = $(".side");
+    if (sideEl && typeof sideEl.querySelectorAll === "function") {
+      sideEl.querySelectorAll("a.item.active").forEach((a) => {
+        if (!wantHref || a.getAttribute("href") !== wantHref) a.classList.remove("active");
+        else foundTarget = true;
+      });
+      if (wantHref && !foundTarget) {
+        const hit = sideEl.querySelector(`a.item[href="${CSS.escape(wantHref)}"]`);
+        if (hit) {
+          hit.classList.add("active");
+          foundTarget = true;
+        }
+      }
+      const wantThread = view === "collie" && activeThreadRoot ? activeThreadRoot : "";
+      sideEl.querySelectorAll(".item-th-btn.active").forEach((b) => {
+        if (!wantThread || b.dataset.agentThread !== wantThread) {
+          b.classList.remove("active");
+          b.setAttribute("aria-expanded", "false");
+        }
+      });
+      if (wantThread) {
+        sideEl.querySelectorAll(`.item-th-btn[data-agent-thread="${CSS.escape(wantThread)}"]`).forEach((b) => {
+          b.classList.add("active");
+          b.setAttribute("aria-expanded", "true");
+        });
+      }
+    }
+    if (!opts.skipBadge) syncNavPendingBadge(opts.allEntries || null);
+    syncAnimPowerState();
+    return foundTarget;
+  }
   function renderSide() {
+    sideRenderedOnce = true;
     const allEntries = chatEntries();
     const wtMap = computeWorkerThreadMap(null, allEntries);
     const blocked = state.agents.filter((a) => a.status === "blocked");
@@ -1816,41 +1910,17 @@
     const active = sup.workers.filter((w) => !w.ended);
     const running = active.filter(workerBusy).length;
     setText($("#nav-collie-sub"), collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : ""));
-    // The next time Collie set itself to look again, under 自动化 where its
-    // timers are: "明天 09:00 再看：复查 paper_df…".
-    const f = sup.follow;
-    setText($("#nav-auto-sub"), f?.next ? `${whenShort(f.next)} 再看：${f.next_text || ""}` : "记忆 · 定时 · 接入");
-    const wantFollowTitle = f?.next ? `Collie 设的下一次跟进：${f.next_text || ""}（点开看进行中的任务）` : "";
-    if ($("#nav-auto-sub").title !== wantFollowTitle) $("#nav-auto-sub").title = wantFollowTitle;
-    $("#nav-auto-sub").classList.toggle("follow", !!f?.next);
+    const autoSub = formatAutoNavSub(sup);
+    const autoSubEl = $("#nav-auto-sub");
+    if (autoSubEl) {
+      setText(autoSubEl, autoSub.text);
+      if (autoSubEl.title !== autoSub.title) autoSubEl.title = autoSub.title;
+      autoSubEl.classList.toggle("is-err", autoSub.err);
+      autoSubEl.classList.remove("follow");
+    }
     const dotCls = "dot " + collieDot(r.status);
     if ($("#nav-collie-dot").className !== dotCls) $("#nav-collie-dot").className = dotCls;
-    const pend = activePending();
-    const unreadCount = pend.length === 0 && view !== "collie" ? computeUnreadInfo(allEntries).count : 0;
-    const np = $("#nav-pending");
-    if (np) {
-      if (pend.length > 0) {
-        np.hidden = false;
-        np.classList.add("attn");
-        np.classList.remove("unread");
-        setText(np, pend.length > 99 ? "99+" : String(pend.length));
-        const lbl = `${pend.length} 条待处理`;
-        if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
-      } else if (unreadCount > 0) {
-        np.hidden = false;
-        np.classList.remove("attn");
-        np.classList.add("unread");
-        setText(np, unreadCount > 99 ? "99+" : String(unreadCount));
-        const lbl = `${unreadCount} 条未读`;
-        if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
-      } else {
-        np.hidden = true;
-        np.classList.add("attn");
-        np.classList.remove("unread");
-        setText(np, "");
-        if (np.title !== "") { np.title = ""; np.removeAttribute("aria-label"); }
-      }
-    }
+    syncNavPendingBadge(allEntries);
     const intErr = sup.integrations_summary?.error || 0;
     const nie = $("#nav-int-err");
     if (nie) {
@@ -1861,11 +1931,7 @@
     }
     $("#nav-queue").hidden = !sup.queued;
     setText($("#nav-queue"), sup.queued);
-    $("#nav-collie").classList.toggle("active", view === "collie");
-    $("#nav-auto").classList.toggle("active", view === "auto");
-    $("#nav-devices").classList.toggle("active", view === "devices");
-    $("#nav-prefs").classList.toggle("active", view === "prefs");
-    syncAnimPowerState();
+    syncSideActive({ skipBadge: true });
   }
 
   // ───────────────────────────── routing & scroll restoration
@@ -2332,6 +2398,70 @@
     if (a && a.getAttribute("href") === location.hash) e.preventDefault();
   });
 
+  let collieMounted = false;
+  let collieBgHydrated = false;
+  let collieBgRAF = 0;
+  let lastSuperFastSig = "";
+  let paneOpenSeq = 0;
+  let lastRenderedPaneId = "";
+  function setCollieParked(parked) {
+    const col = $("#v-collie");
+    if (!col) return;
+    if (parked) {
+      if (collieMounted || (!col.hidden && superBodyKey)) {
+        collieMounted = true;
+        if (!col.hidden && col.classList.contains("is-parked")) return;
+        col.hidden = false;
+        col.classList.add("is-parked");
+        col.setAttribute("aria-hidden", "true");
+      } else {
+        if (col.hidden && !col.classList.contains("is-parked")) return;
+        col.hidden = true;
+        col.classList.remove("is-parked");
+        col.removeAttribute("aria-hidden");
+      }
+    } else {
+      collieMounted = true;
+      if (!col.hidden && !col.classList.contains("is-parked")) return;
+      col.hidden = false;
+      col.classList.remove("is-parked");
+      col.removeAttribute("aria-hidden");
+    }
+  }
+  function computeSuperFastSig(allEntries = null) {
+    const entries = allEntries || chatEntries();
+    const r = sup.router || {};
+    const pend = activePending();
+    const pins = activePinned();
+    return [
+      entriesFingerprint(entries),
+      r.status || "",
+      r.replied ? 1 : 0,
+      r.alive ? 1 : 0,
+      r.context || 0,
+      r.handover ? 1 : 0,
+      r.dreaming ? 1 : 0,
+      r.pending ? 1 : 0,
+      r.kind || "",
+      r.model || "",
+      r.effort || "",
+      sup.paused ? 1 : 0,
+      routerQueued() || 0,
+      workerStateFingerprint(),
+      superThreadWorkerFingerprint(),
+      pend.map((p) => p.id).join(","),
+      pins.map((p) => p.id).join(","),
+      readCursorId || "",
+      sessionUnreadMarkerId || "",
+      olderShowRow ? 1 : 0,
+      dismissedLocal.size ? [...dismissedLocal].join(",") : "",
+      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.state || "picked"}:${v.text}`).join(",") : "",
+      openInlineDecisionId || "",
+      superAsksGen,
+      dayBounds(),
+    ].join("|");
+  }
+
   function route() {
     closePick();
     closeDirPick(false);
@@ -2363,7 +2493,7 @@
     }
     if (next && next !== "file") store.set("last", h);
     if (next === view && id === (next === "ext" ? extCur : current)) return;
-    // Snapshot the departing view right before its DOM is hidden.
+    // Snapshot the departing view right before its DOM is hidden/parked.
     if (prevView && performance.now() >= programmaticScrollUntil) {
       captureViewScroll(prevView, prevId, prevIdx);
     }
@@ -2385,6 +2515,10 @@
       }
     }
     if (next !== "collie") {
+      if (collieBgRAF && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(collieBgRAF);
+        collieBgRAF = 0;
+      }
       endCollieUserScroll(true);
       clearScrollReadTimer();
       cancelCollieLayoutLock();
@@ -2395,8 +2529,8 @@
       if (superSearchOpen) closeSuperSearchFn?.(false);
       else hideSearchPanel();
       closeCollieMenus();
+      closeCollieThreadsPop({ sync: false });
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
-      syncNotebookVisibility();
     }
     view = next; current = next === "ext" ? null : id;
     liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
@@ -2407,21 +2541,32 @@
 
     document.body.classList.toggle("reading-file", next === "file");
     document.body.classList.toggle("show-main", !!next);
-    $("#v-collie").hidden = next !== "collie";
+    const colEl = $("#v-collie");
+    const wasCollieParked = !!colEl?.classList?.contains("is-parked");
+    // Sync notebook steady state BEFORE revealing #v-collie so returning from another route
+    // never flashes an un-shifted frame or replays the notebook open transition.
+    if (next === "collie") syncNotebookVisibility({ immediate: true });
+    setCollieParked(next !== "collie");
     $("#v-auto").hidden = next !== "auto";
     $("#v-devices").hidden = next !== "devices";
     $("#v-prefs").hidden = next !== "prefs";
     $("#v-ext").hidden = next !== "ext";
     $("#detail").hidden = next !== "pane";
     $("#v-file").hidden = next !== "file";
-    renderSide();
+    if (prevView === "collie" && next !== "collie") syncNotebookVisibility({ immediate: true });
+    if (!sideRenderedOnce || !syncSideActive()) {
+      renderSide();
+    }
     if (next === "collie") {
+      if (_lastCollieTopH <= 0) syncCollieTopHeight();
       const wantThread = pendingOpenThread;
       pendingOpenThread = null;
       const savedThread = !wantThread && wasExistingIdx ? threadByIdx.get(navCur) : null;
       const superEl = $("#super-thread");
+      const sc = superEl?.parentElement || null;
       const needRebuild = !superBodyKey || (canPatchSuperDom(superEl) && !superEl?.firstElementChild);
-      const unreadNow = computeUnreadInfo(chatEntries(), readCursorId);
+      const allEntries = chatEntries();
+      const unreadNow = computeUnreadInfo(allEntries, readCursorId);
       const curCursorN = entryIdNum(readCursorId);
       const savedCursorN = entryIdNum(saved?.readCursorId);
       const savedAnchorN = entryIdNum(saved?.anchorId);
@@ -2429,7 +2574,22 @@
         || (!wasExistingIdx && unreadNow.count > 0)
         || (saved.wasUnreadAnchor && curCursorN > 0 && savedAnchorN > 0 && savedAnchorN <= curCursorN)
         || (savedCursorN > 0 && curCursorN > savedCursorN);
-      if (!preferUnreadAnchor) {
+      const fastSig = wasCollieParked && !needRebuild ? computeSuperFastSig(allEntries) : "";
+      const parkedUnchanged = wasCollieParked && !needRebuild && fastSig === lastSuperFastSig && !!sc && sc.clientHeight > 0;
+      const canSkipSuperRender = parkedUnchanged && (
+        !preferUnreadAnchor
+        || (unreadNow.count === 0 && (sc.scrollHeight - sc.scrollTop - sc.clientHeight) <= AT_BOTTOM_PX)
+      );
+      if (canSkipSuperRender) {
+        unreadAnchorApplied = true;
+        if (preferUnreadAnchor) {
+          collieStickBottom = true;
+          scrollByRoute.delete("collie");
+          if (typeof navCur === "number") scrollByIdx.delete(navCur);
+          activeCollieRestore = null;
+        }
+        updateSuperJump();
+      } else if (!preferUnreadAnchor) {
         unreadAnchorApplied = true;
         renderSuper({ force: needRebuild, restore: saved });
       } else {
@@ -2440,10 +2600,19 @@
         sessionUnreadMarkerId = "";
         renderSuper({ force: needRebuild, unreadAnchor: true });
       }
-      renderTarget(true);
-      loadNotebook(true);
-      syncNotebookVisibility();
-      syncCollieTopScrolled();
+      if (collieBgHydrated && typeof requestAnimationFrame === "function") {
+        if (collieBgRAF) cancelAnimationFrame(collieBgRAF);
+        collieBgRAF = requestAnimationFrame(() => {
+          collieBgRAF = 0;
+          if (view !== "collie") return;
+          renderTarget(true);
+          loadNotebook(false);
+        });
+      } else {
+        collieBgHydrated = true;
+        renderTarget(true);
+        loadNotebook(false);
+      }
       if (wantThread?.rootId) {
         openThreadDrawer(wantThread.rootId, wantThread.focusId || "", wantThread.focusId || wantThread.rootId);
       } else if (savedThread?.rootId) {
@@ -2461,11 +2630,28 @@
     if (next === "ext") openExt(id, saved);
     if (next === "pane") {
       $("#gone").hidden = true;
-      $("#log").textContent = "";
-      resetChat();
-      resetScreen();
+      const paneChanged = lastRenderedPaneId !== id;
+      lastRenderedPaneId = id;
+      applyMode();
       renderHead();
-      openStream(saved);
+      const m = curMode();
+      if (paneChanged) {
+        $("#log").textContent = "";
+        if (m === "chat") {
+          resetChat();
+          if (!threadCache.has("p:" + id)) $("#thread").innerHTML = SKELETON;
+        } else if (m === "screen") {
+          resetScreen();
+        }
+      }
+      const seq = ++paneOpenSeq;
+      const startPane = () => {
+        if (seq !== paneOpenSeq || view !== "pane" || current !== id) return;
+        if (!paneChanged && m === "screen") resetScreen();
+        openStream(saved);
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(startPane);
+      else startPane();
       if (!narrow()) $("#input").focus({ preventScroll: true });
     }
   }
@@ -3503,8 +3689,12 @@
   let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
   const SUPER_JUMP_DIST = 120;
 
+  const SMART_SCROLL_GLIDE_PX = 180;
+  const SMART_SCROLL_MAX_SMOOTH_PX = 1400;
+  const SMART_SCROLL_VIEWPORT_MULT = 1.5;
+
   function scrollToAsync(sc, top, behavior = "smooth") {
-    const res = sc.scrollTo({ top, behavior });
+    const res = typeof sc.scrollTo === "function" ? sc.scrollTo({ top, behavior }) : (sc.scrollTop = top, undefined);
     if (res instanceof Promise) return res;
     if (behavior !== "smooth" || Math.abs(sc.scrollTop - top) < 2) return Promise.resolve();
     return new Promise((resolve) => {
@@ -3520,6 +3710,52 @@
       sc.addEventListener("scroll", onScroll, { passive: true });
       tid = setTimeout(done, 120);
     });
+  }
+  // Distance-aware jump scroll: smooth when target is nearby (<= 1.5x viewport & <= 1400px);
+  // for long jumps across rich message histories, teleport instantaneously to ~180px before the
+  // target so the browser never rasterizes hundreds of intermediate bubbles, then perform a
+  // short smooth glide into place on the next animation frame.
+  async function smartScrollCollie(sc, targetTop, opts = {}) {
+    if (!sc) return "noop";
+    const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const want = Math.max(0, Math.min(maxTop, targetTop));
+    const diff = want - sc.scrollTop;
+    const delta = Math.abs(diff);
+    if (delta < 2) return "noop";
+    const reduceMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const markMs = opts.markMs ?? 260;
+    if (reduceMotion) {
+      markProgrammaticScroll(markMs);
+      if (typeof sc.scrollTo === "function") sc.scrollTo({ top: want, behavior: "auto" });
+      else sc.scrollTop = want;
+      return "instant";
+    }
+    const nearLimit = Math.min(SMART_SCROLL_MAX_SMOOTH_PX, Math.max(400, (sc.clientHeight || 800) * SMART_SCROLL_VIEWPORT_MULT));
+    if (delta <= nearLimit) {
+      markProgrammaticScroll(markMs);
+      await scrollToAsync(sc, want, "smooth");
+      return "smooth";
+    }
+    const glidePx = opts.glidePx ?? SMART_SCROLL_GLIDE_PX;
+    const preTop = Math.max(0, Math.min(maxTop, want - Math.sign(diff) * glidePx));
+    markProgrammaticScroll(markMs);
+    if (typeof sc.scrollTo === "function") sc.scrollTo({ top: preTop, behavior: "auto" });
+    else sc.scrollTop = preTop;
+    if (typeof requestAnimationFrame === "function") {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    if (opts.isCanceled?.()) return "canceled";
+    let finalWant = want;
+    if (typeof opts.remeasureTarget === "function") {
+      const re = opts.remeasureTarget();
+      if (typeof re === "number" && Number.isFinite(re)) {
+        const curMax = Math.max(0, sc.scrollHeight - sc.clientHeight);
+        finalWant = Math.max(0, Math.min(curMax, re));
+      }
+    }
+    markProgrammaticScroll(markMs);
+    await scrollToAsync(sc, finalWant, "smooth");
+    return "teleport-glide";
   }
   let _lastJumpUiKey = "";
   function updateSuperJump() {
@@ -3951,22 +4187,27 @@
     }
     if (!m) { toast("这条消息太早了，已经不在这里"); return; }
     if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+    collieStickBottom = false;
+    collieForceBottomUntil = 0;
     const sc = $("#super-thread").parentElement;
-    const sr = sc.getBoundingClientRect(), mr = m.getBoundingClientRect();
-    const want = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + (mr.top - sr.top) - Math.max(24, (sc.clientHeight - mr.height) / 2)));
-    const dist = want - sc.scrollTop;
-    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (smooth && Math.abs(dist) > sc.clientHeight * 2.2) {
-      sc.scrollTop = want - Math.sign(dist) * sc.clientHeight * 0.9;
-    }
+    const measureTargetTop = (el) => {
+      const sr = sc.getBoundingClientRect(), mr = el.getBoundingClientRect();
+      return Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + (mr.top - sr.top) - Math.max(24, (sc.clientHeight - mr.height) / 2)));
+    };
+    const want = measureTargetTop(m);
     flashEntry = { id, until: Date.now() + 2200 };
-    await scrollToAsync(sc, want, smooth ? "smooth" : "auto");
+    await smartScrollCollie(sc, want, {
+      isCanceled: () => seq !== jumpSeq,
+      remeasureTarget: () => {
+        const cur = document.querySelector(sel);
+        return cur ? measureTargetTop(cur) : null;
+      },
+    });
     if (seq !== jumpSeq) return;
     // Settle once if off-screen content-visibility sizing shifted the target after scrolling into view.
     const settledHit = document.querySelector(sel);
     if (settledHit) {
-      const sr2 = sc.getBoundingClientRect(), mr2 = settledHit.getBoundingClientRect();
-      const want2 = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + (mr2.top - sr2.top) - Math.max(24, (sc.clientHeight - mr2.height) / 2)));
+      const want2 = measureTargetTop(settledHit);
       if (Math.abs(want2 - sc.scrollTop) > 48) {
         markProgrammaticScroll();
         sc.scrollTop = want2;
@@ -4159,6 +4400,7 @@
     const openSuperSearch = (selectExisting = false) => {
       if (!wrap || !input || !btn) return;
       const wasHidden = wrap.hidden;
+      closeCollieThreadsPop({ sync: false });
       closeCollieMenus();
       superSearchOpen = true;
       wrap.hidden = false;
@@ -4395,7 +4637,6 @@
       captureViewScroll("collie", null, navCur);
     }
     updateSuperJump();
-    syncCollieTopScrolled();
   }
   function beginInitialAnchor(mode, opts = {}) {
     cancelInitialAnchor();
@@ -4438,7 +4679,9 @@
   function promoteUserNodeInPlace(el, item) {
     const msgEl = el.querySelector?.(".msg.user");
     if (!msgEl) return false;
-    const nextCls = `mine${item.pinned ? " is-pinned" : ""}`;
+    const hasMedia = el.classList?.contains("has-media");
+    const isMediaOnly = el.classList?.contains("is-media-only");
+    const nextCls = `mine${hasMedia ? " has-media" : ""}${isMediaOnly ? " is-media-only" : ""}${item.pinned ? " is-pinned" : ""}`;
     if (el.className !== nextCls) el.className = nextCls;
     if (item.rootId) el.dataset.threadRoot = item.rootId;
     else delete el.dataset.threadRoot;
@@ -4449,7 +4692,7 @@
     const curPin = el.querySelector?.(".pin-ind");
     if (item.pinned && !curPin) {
       const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
-      if (pinEl) el.insertBefore(pinEl, msgEl);
+      if (pinEl) el.insertBefore(pinEl, el.firstElementChild || msgEl);
     } else if (!item.pinned && curPin && curPin.parentNode === el) {
       el.removeChild(curPin);
     }
@@ -4745,6 +4988,34 @@
     return superBusyShown;
   }
 
+  let collieStickBottom = true;
+  let collieForceBottomUntil = 0;
+  const isDesktopThreadSideBySide = () => !!(activeThreadRoot && innerWidth > 1000 && $("#app")?.classList?.contains("has-thread"));
+  function snapCollieStickBottom(sc = viewScroller("collie")) {
+    if (view !== "collie" || !sc || collieInitialAnchor || activeCollieRestore || olderBusy) return;
+    if (isDesktopThreadSideBySide()) return;
+    if (flashEntry.until > Date.now()) return;
+    if (!collieStickBottom && performance.now() >= collieForceBottomUntil) return;
+    markProgrammaticScroll(140);
+    sc.scrollTop = sc.scrollHeight;
+    if (typeof requestAnimationFrame === "function") {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+      superScrollRAF = requestAnimationFrame(() => {
+        if (view !== "collie" || collieInitialAnchor || activeCollieRestore || isDesktopThreadSideBySide()) return;
+        if (!collieStickBottom && performance.now() >= collieForceBottomUntil) return;
+        markProgrammaticScroll(120);
+        sc.scrollTop = sc.scrollHeight;
+        captureViewScroll("collie", null, navCur);
+        updateSuperJump();
+        maybeScheduleReadAtBottom();
+      });
+    } else {
+      captureViewScroll("collie", null, navCur);
+      updateSuperJump();
+      maybeScheduleReadAtBottom();
+    }
+  }
+
   function renderSuper(opts) {
     const force = opts === true || !!opts?.force;
     const forceBottom = !!opts?.scrollBottom;
@@ -4752,12 +5023,25 @@
     const restore = opts?.restore || null;
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
     const scroller = box.parentElement;
+    const drawerSideBySide = isDesktopThreadSideBySide();
+    const drawerFreezeMain = !forceBottom && drawerSideBySide;
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
     const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && (collieInitialAnchor?.mode === "bottom" || (collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom))
       && performance.now() <= collieInitialAnchor.until;
-    const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || distBefore <= AT_BOTTOM_PX);
+    const stickBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
+      && performance.now() < collieForceBottomUntil;
+    const atBottom = forceBottom ? true : drawerFreezeMain ? false : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || stickBottomLock || distBefore <= AT_BOTTOM_PX);
+    if (forceBottom) {
+      collieStickBottom = true;
+      collieForceBottomUntil = performance.now() + 4000;
+    } else if (drawerFreezeMain) {
+      collieForceBottomUntil = 0;
+    } else if (holdRestore && !holdRestore.atBottom) {
+      collieStickBottom = false;
+      collieForceBottomUntil = 0;
+    }
     const jumping = flashEntry.until > Date.now();
     const shouldApplyUnreadAnchor = (wantUnreadAnchor || !unreadAnchorApplied) && !forceBottom && !holdRestore && !activeThreadRoot && view === "collie";
     const needLiveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread" && collieInitialAnchor?.mode !== "unread-auto";
@@ -4785,8 +5069,10 @@
     if (st.className !== stCls) st.className = stCls;
     setHTML(st, `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`);
     // While Collie is busy on a human turn (or blocked/dreaming), show the indicator
-    // where its next message will appear; quiet background inspections stay in header.
-    const busyInfo = resolveSuperBusy(r, allEntries, opts || {});
+    // where its next message will appear; quiet background inspections stay in header,
+    // and desktop side-by-side focus drawer keeps the left stream calm without a mirrored thinking row.
+    const rawBusyInfo = resolveSuperBusy(r, allEntries, opts || {});
+    const busyInfo = drawerSideBySide ? null : rawBusyInfo;
     const busy = busyInfo?.text || null;
     const busyChanged = (busy || "") !== prevBusy;
     if (busyChanged) ensureLiveAnchor();
@@ -4874,6 +5160,7 @@
     ].join("|");
 
     renderPendingBar();
+    lastSuperFastSig = computeSuperFastSig(allEntries);
     if (view === "collie") {
       const nbSig = [
         sup.entries.length,
@@ -5020,7 +5307,14 @@
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                return `<div class="mine${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${renderQuoteHtml(qi, e)}${userText(e.text)}</div>${renderFoot()}</div>`;
+                const parts = parseUserParts(e.text);
+                const quoteHtml = renderQuoteHtml(qi, e);
+                const mediaHtml = renderUserMedia(parts.imgs);
+                const idTitleAttrs = `data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}`;
+                if (mediaHtml && !parts.hasBubbleContent) {
+                  return `<div class="mine is-media-only${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user is-media-only" ${idTitleAttrs}>${quoteHtml}${mediaHtml}</div>${renderFoot()}</div>`;
+                }
+                return `<div class="mine${mediaHtml ? " has-media" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${quoteHtml}${parts.textHtml}${parts.attHtml}</div>${renderFoot()}</div>`;
               },
             });
             lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
@@ -5108,7 +5402,7 @@
           if (fEl && !fEl.classList.contains("flash")) fEl.classList.add("flash");
         }
         if (activeThreadRoot) syncThreadDrawer();
-      } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor) {
+      } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
         updateSuperJump();
@@ -5177,6 +5471,7 @@
       }
       // No unread (or first-time enablement with no read cursor): stick cleanly to bottom and record cursor.
       activeCollieRestore = null;
+      collieStickBottom = true;
       beginInitialAnchor("bottom");
       markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
@@ -5246,6 +5541,7 @@
         pendingUnreadAnchorOnVisible = false;
         clearScrollReadTimer();
       }
+      collieStickBottom = true;
       activeCollieRestore = null;
       markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
@@ -5253,7 +5549,7 @@
       if (typeof requestAnimationFrame === "function") {
         if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
         superScrollRAF = requestAnimationFrame(() => {
-          if (collieInitialAnchor?.mode === "bottom" || scroller.scrollTop === set) {
+          if (collieInitialAnchor?.mode === "bottom" || collieStickBottom || scroller.scrollTop === set) {
             markProgrammaticScroll();
             scroller.scrollTop = scroller.scrollHeight;
           }
@@ -5265,19 +5561,14 @@
         maybeScheduleReadAtBottom();
       }
     } else {
+      collieStickBottom = false;
+      collieForceBottomUntil = 0;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       if (!jumping && !olderBusy && liveAnchor) {
         applyCollieAnchor(scroller, { anchorId: liveAnchor.anchorId, anchorOffset: liveAnchor.anchorOffset, scrollTop: prevScrollTop });
       }
     }
     updateSuperJump();
-    syncCollieTopScrolled();
-  }
-  function syncCollieTopScrolled() {
-    const sc = $("#super-thread")?.parentElement;
-    const topEl = $("#v-collie .collie-top");
-    if (!sc || !topEl) return;
-    topEl.classList.toggle("is-scrolled", (sc.scrollTop || 0) > 4);
   }
   function syncCrewCompact(crew) {
     if (!crew) return;
@@ -5319,10 +5610,31 @@
         }
       }
       if (collieInitialAnchor) applyInitialAnchor();
+      else snapCollieStickBottom(sc);
     }, true);
     box?.addEventListener("error", (e) => {
-      if (e.target?.tagName === "IMG" && collieInitialAnchor) applyInitialAnchor();
+      if (e.target?.tagName === "IMG") {
+        if (collieInitialAnchor) applyInitialAnchor();
+        else snapCollieStickBottom(sc);
+      }
     }, true);
+    sc?.addEventListener("wheel", (e) => {
+      if (e.deltaY < 0) {
+        collieForceBottomUntil = 0;
+        collieStickBottom = false;
+      }
+    }, { passive: true });
+    let touchStartY = 0;
+    sc?.addEventListener("touchstart", (e) => {
+      touchStartY = e.touches?.[0]?.clientY || 0;
+    }, { passive: true });
+    sc?.addEventListener("touchmove", (e) => {
+      const y = e.touches?.[0]?.clientY || 0;
+      if (touchStartY && y > touchStartY + 6) {
+        collieForceBottomUntil = 0;
+        collieStickBottom = false;
+      }
+    }, { passive: true });
     let superJumpScrollRAF = 0;
     const maybePrefetchOlder = () => {
       if (view !== "collie" || olderBusy || !canLoadOlder() || !sc) return;
@@ -5338,10 +5650,14 @@
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
       noteCollieScrollAnimPause();
+      if (performance.now() >= programmaticScrollUntil) {
+        const nearB = isCollieNearBottom(sc);
+        collieStickBottom = nearB;
+        if (!nearB) collieForceBottomUntil = 0;
+      }
       if (superJumpScrollRAF) return;
       const run = () => {
         superJumpScrollRAF = 0;
-        syncCollieTopScrolled();
         updateSuperJump();
         if (performance.now() >= programmaticScrollUntil) {
           maybeScheduleReadAtBottom();
@@ -5480,16 +5796,18 @@
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
+      collieStickBottom = true;
+      collieForceBottomUntil = 0;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       superJumpHiding = true;
       const latestId = latestPersistedEntryId();
       if (latestId) commitChatRead(latestId, { immediate: true });
       updateSuperJump();
-      const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (smooth && sc.scrollHeight - sc.scrollTop > sc.clientHeight * 2.5) {
-        sc.scrollTop = sc.scrollHeight - sc.clientHeight * 1.8;
-      }
-      await scrollToAsync(sc, sc.scrollHeight, smooth ? "smooth" : "auto");
+      const bottomTarget = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      await smartScrollCollie(sc, bottomTarget, {
+        isCanceled: () => seq !== jumpSeq,
+        remeasureTarget: () => Math.max(0, sc.scrollHeight - sc.clientHeight),
+      });
       if (seq !== jumpSeq) return;
       markProgrammaticScroll();
       sc.scrollTop = sc.scrollHeight;
@@ -6120,11 +6438,20 @@
   let inboxLoadSeq = 0;
   let autoTimer;
   let intPayload = null;
+  let peersPayload = null;
   let intModalKind = null;
   let intModalDraft = null;
   let intPairTimer = null;
   let intOnboardPollTimer = null;
   let intOnboardTickTimer = null;
+  let peerInviteTimer = null;
+  let peerScanStream = null;
+  let peerScanRAF = 0;
+  const PEER_MODE_TEXT = {
+    advise: "先帮我查清，草稿给我审",
+    notify: "只留个便签，不自动回复",
+    propose: "查完给方案，批准再干活",
+  };
   const INT_STATUS_TEXT = {
     connected: "已连通",
     connecting: "连接中",
@@ -6136,6 +6463,7 @@
     feishu: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 17.5V6.8l7.2 4.2L19 5.5v10.2c0 1.4-.9 2.6-2.3 2.9L9.8 20c-2.6.5-4.8-1-4.8-2.5Z"/><path d="M12.2 11 19 15.2"/></svg>`,
     github: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.5 1.4-4.5-2.3-6.2-2.8m12.4 5.6v-3.5a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.3a4.9 4.9 0 0 0-1.3-3.4 4.6 4.6 0 0 0-.1-3.4s-1.1-.3-3.5 1.3a12.1 12.1 0 0 0-6.4 0C6.5 2.6 5.4 2.9 5.4 2.9a4.6 4.6 0 0 0-.1 3.4A4.9 4.9 0 0 0 4 9.7c0 4.9 3 6 5.8 6.3a3 3 0 0 0-.8 2.3v3.5"/></svg>`,
     gitforge: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.2"/><circle cx="6.5" cy="17.5" r="2.2"/><circle cx="17.5" cy="9.5" r="2.2"/><path d="M6.5 8.7v6.6M17.5 11.7c0 3.2-2.2 5.8-8.8 5.8"/></svg>`,
+    peers: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3ZM8 13a3 3 0 1 0-3-3 3 3 0 0 0 3 3Z"/><path d="M2 19a5 5 0 0 1 10 0M13 19a4.5 4.5 0 0 1 9 0"/></svg>`,
   };
   const INT_CLI_HINT_CARD = {
     kind: "gitforge-cli-hint",
@@ -6153,15 +6481,16 @@
     openAuto(saved);
   });
 
-  // The follow-up line under 自动化 opens the open tasks (top of 记忆).
+  // Clicking the error summary under 自动化 jumps straight to 接入.
   $("#nav-auto-sub").addEventListener("click", () => {
-    if (sup.follow?.next) {
-      autoTab = "memory"; store.set("autoTab", autoTab);
-      scrollByRoute.delete("auto:memory");
+    if ((sup.integrations_summary?.error || 0) > 0) {
+      autoTab = "integrations"; store.set("autoTab", autoTab);
+      scrollByRoute.delete("auto:integrations");
       if (view === "auto") { markProgrammaticScroll(); $("#auto-body").scrollTop = 0; openAuto(); }
     }
   });
 
+  let autoOpenRAF = 0;
   function openAuto(restore = null) {
     autoTab = normalizeAutoTab(autoTab);
     store.set("autoTab", autoTab);
@@ -6173,14 +6502,32 @@
       clearMemInsUndo();
     }
     const body = $("#auto-body");
-    body._memSig = "";
-    body._inboxSig = "";
-    body._inboxRendered = false;
+    const sameTabCached = body._renderedTab === autoTab && !!body._tabRendered;
+    if (!sameTabCached) {
+      body._memSig = "";
+      body._inboxSig = "";
+      body._inboxRendered = false;
+      body._timersSig = "";
+      body._intSig = "";
+      body._settingsSig = "";
+      body._tabRendered = false;
+    }
     body.classList.toggle("is-integrations", autoTab === "integrations");
     $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
     if (restore) restoreSimpleScroll(body, restore);
     clearInterval(autoTimer);
-    loadAuto(restore);
+    if (autoOpenRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(autoOpenRAF);
+      autoOpenRAF = 0;
+    }
+    if (sameTabCached && typeof requestAnimationFrame === "function") {
+      autoOpenRAF = requestAnimationFrame(() => {
+        autoOpenRAF = 0;
+        if (view === "auto") loadAuto(null);
+      });
+    } else {
+      loadAuto(restore);
+    }
     if (autoTab === "inbox") autoTimer = setInterval(() => loadAuto(), 4000);
     if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
     if (autoTab === "integrations") autoTimer = setInterval(() => { if (!$("#int-modal")?.open) loadAuto(); }, 6000);
@@ -6350,6 +6697,8 @@
         const anchor = !restore ? captureInboxScrollAnchor(body) : null;
         body._inboxSig = sig;
         body._inboxRendered = true;
+        body._renderedTab = "inbox";
+        body._tabRendered = true;
         body.innerHTML = inboxHTML(triggers, threads);
         if (subsOpen) { const d = body.querySelector(".inbox-subs-fold"); if (d) d.open = true; }
         syncInboxOverflow(body);
@@ -6369,6 +6718,8 @@
         if (sig !== body._memSig || !body.querySelector("#mem-content")) {
           const first = !body._memSig;
           body._memSig = sig;
+          body._renderedTab = "memory";
+          body._tabRendered = true;
           renderMemoryView(body, r, { preserveOpen: !first && !memQuery.trim() });
           applyAfter();
         } else if (restore) {
@@ -6378,21 +6729,42 @@
       } else if (autoTab === "timers") {
         const r = await api("/api/super/timers");
         if (view !== "auto" || autoTab !== "timers") return;
+        const timers = r.timers || [];
+        const sig = JSON.stringify(timers);
+        if (sig === body._timersSig && body._renderedTab === "timers" && body._tabRendered) {
+          if (restore) restoreSimpleScroll(body, restore);
+          return;
+        }
         const endedOpen = !!body.querySelector("details[data-ended-timers][open]");
-        body.innerHTML = timersHTML(r.timers || []);
+        body._timersSig = sig;
+        body._renderedTab = "timers";
+        body._tabRendered = true;
+        body.innerHTML = timersHTML(timers);
         if (endedOpen) { const d = body.querySelector("details[data-ended-timers]"); if (d) d.open = true; }
         applyAfter();
       } else if (autoTab === "integrations") {
-        const r = await api("/api/super/integrations");
+        const [r, pr] = await Promise.all([
+          api("/api/super/integrations"),
+          api("/api/super/peers").catch(() => null),
+        ]);
         if (view !== "auto" || autoTab !== "integrations") return;
         const advOpen = !!body.querySelector("#int-adv-fold[open]");
         const focusedWebhook = document.activeElement?.id === "int-adv-webhook";
         const draftWebhook = focusedWebhook ? document.activeElement.value : null;
         intPayload = r;
+        if (pr) peersPayload = pr;
+        const sig = JSON.stringify({ r, p: peersPayload });
         if (!focusedWebhook) {
-          body.innerHTML = integrationsHTML(r);
-          if (advOpen) { const d = body.querySelector("#int-adv-fold"); if (d) d.open = true; }
-          applyAfter();
+          if (sig !== body._intSig || body._renderedTab !== "integrations" || !body._tabRendered) {
+            body._intSig = sig;
+            body._renderedTab = "integrations";
+            body._tabRendered = true;
+            body.innerHTML = integrationsHTML(r, peersPayload);
+            if (advOpen) { const d = body.querySelector("#int-adv-fold"); if (d) d.open = true; }
+            applyAfter();
+          } else if (restore) {
+            restoreSimpleScroll(body, restore);
+          }
         } else if (draftWebhook !== null && $("#int-adv-webhook")) {
           $("#int-adv-webhook").value = draftWebhook;
         }
@@ -6403,14 +6775,22 @@
       } else {
         const r = await api("/api/super/settings");
         if (view !== "auto" || autoTab !== "settings") return;
-        body.innerHTML = settingsHTML(r);
-        applyAfter();
+        const sig = JSON.stringify(r);
+        if (sig !== body._settingsSig || body._renderedTab !== "settings" || !body._tabRendered) {
+          body._settingsSig = sig;
+          body._renderedTab = "settings";
+          body._tabRendered = true;
+          body.innerHTML = settingsHTML(r);
+          applyAfter();
+        } else if (restore) {
+          restoreSimpleScroll(body, restore);
+        }
         api("/api/super/lark?fresh").then((l) => {
           const el = $("#lark-who");
           if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
         }).catch(() => {});
       }
-    } catch (err) { body._inboxSig = ""; body._inboxRendered = false; body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
+    } catch (err) { body._inboxSig = ""; body._inboxRendered = false; body._tabRendered = false; body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
   }
 
   // ───────────────────────────── integrations store & centered modal
@@ -6433,12 +6813,35 @@
     if (item.extra?.engine === "gitforge") return item.health?.detail || "轮询就绪";
     return "长连接在线";
   }
-  function integrationsHTML(r) {
+  function peerCardSummary(pr) {
+    const enabled = pr ? pr.enabled !== false : (sup.peers_summary ? sup.peers_summary.enabled !== false : true);
+    const list = Array.isArray(pr?.peers) ? pr.peers : [];
+    const total = pr ? list.length : (sup.peers_summary?.total || 0);
+    const active = pr ? list.filter((x) => x.status === "active").length : (sup.peers_summary?.active || 0);
+    const paused = pr ? list.filter((x) => x.status === "paused").length : (sup.peers_summary?.paused || 0);
+    if (!enabled) {
+      return { enabled, total, active, paused, state: "disabled", stateLbl: "已暂停", hint: "收件箱暂停接收", act: "管理 ›" };
+    }
+    if (total === 0) {
+      return { enabled, total, active, paused, state: "unconfigured", stateLbl: "未配对", hint: "扫码或粘贴添加好友", act: "去添加 ›" };
+    }
+    if (active === 0) {
+      return { enabled, total, active, paused, state: "disabled", stateLbl: "已暂停", hint: `${paused} 位好友已暂停`, act: "管理 ›" };
+    }
+    return {
+      enabled, total, active, paused, state: "connected", stateLbl: "已连通",
+      hint: paused > 0 ? `${active} 位活跃 · ${paused} 位暂停` : `${active} 位好友直连`,
+      act: "管理 ›",
+    };
+  }
+  function integrationsHTML(r, pr = peersPayload) {
     const live = Array.isArray(r?.integrations) ? r.integrations : [];
     const hasCLIProvider = live.some((x) => x.extra?.provider_type === "cli");
     const notify = r?.notify || {};
     const hasWebhook = !!String(notify.notify_webhook || "").trim();
-    const okCount = live.filter((x) => intEffectiveState(x) === "connected").length + (hasWebhook ? 1 : 0);
+    const peerInfo = peerCardSummary(pr);
+    const peerList = Array.isArray(pr?.peers) ? pr.peers : [];
+    const okCount = live.filter((x) => intEffectiveState(x) === "connected").length + (hasWebhook ? 1 : 0) + (peerInfo.state === "connected" ? 1 : 0);
     const errCount = live.filter((x) => intEffectiveState(x) === "error").length;
     const summaryText = `已连通 ${okCount} 项 · ${errCount > 0 ? `${errCount} 项需处理` : "运行正常"}`;
     const hookURL = `${location.origin}/hooks/ci?key=${encodeURIComponent(r?.hook_key || "")}`;
@@ -6448,7 +6851,58 @@
         ? `<span class="sdot disabled" aria-hidden="true"></span><span>仅兜底开启</span>`
         : `<span class="sdot unconfigured" aria-hidden="true"></span><span>未配置</span>`;
 
-    const cards = live.map((item) => {
+    const peerCard = `<article class="int-card is-peer-featured" id="peer-int-card">
+        <div class="int-card-top">
+          <span class="int-logo">${INT_ICONS.peers}</span>
+          <div class="int-head">
+            <h3 class="int-title"><button type="button" class="int-card-hit" data-peer-open="auto" aria-label="配置 好友边牧">好友边牧</button></h3>
+            <p class="int-sub">受控点对点收件箱 · 扫码加好友</p>
+          </div>
+          <div class="int-switch-wrap">
+            <button type="button" class="switch" role="switch" aria-checked="${peerInfo.enabled ? "true" : "false"}" aria-label="开关 好友边牧收件箱" data-peer-global-toggle></button>
+          </div>
+        </div>
+        <p class="int-desc">各自保留本机工作区与记忆，只收发受控消息；默认先帮你查清并拟好草稿，确认后才回复对方。</p>
+        <div class="int-foot">
+          <span class="int-status is-${esc(peerInfo.state)}">
+            <span class="sdot ${esc(peerInfo.state)}" aria-hidden="true"></span>
+            <span class="int-status-txt"><span class="int-state-lbl">${esc(peerInfo.stateLbl)}</span> · ${esc(peerInfo.hint)}</span>
+          </span>
+          <span class="int-act" aria-hidden="true">${esc(peerInfo.act)}</span>
+        </div>
+      </article>`;
+
+    const peerOverview = peerList.length ? `
+      <section class="peer-ov-card" aria-label="已配对好友边牧速览">
+        <div class="peer-ov-head">
+          <div class="peer-ov-title">
+            <span>已配对的好友边牧</span>
+            <span class="peer-ov-sub">${peerList.length} 位 · 内网 / Tailscale 直连</span>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn small" data-peer-open="list">管理权限</button>
+            <button type="button" class="btn primary small" data-peer-open="add">名片 / 扫码添加</button>
+          </div>
+        </div>
+        <ul class="peer-ov-list">${peerList.map((p) => {
+          const stDot = p.status === "active" ? (peerInfo.enabled ? "connected" : "disabled") : p.status === "paused" ? "paused" : "disabled";
+          const stLbl = p.status === "active" ? (peerInfo.enabled ? "已连通" : "总开关已暂停") : p.status === "paused" ? "已暂停" : "对方已解绑";
+          return `<li class="peer-ov-row">
+            <div class="peer-ov-main">
+              <div class="peer-ov-name"><span class="sdot ${stDot}" aria-hidden="true"></span><span>${esc(p.name)}</span><span class="mono">@${esc(p.id)}</span></div>
+              <div class="peer-ov-meta">
+                <span class="peer-ov-mode">${esc(PEER_MODE_TEXT[p.mode] || p.mode)}</span>
+                <span>${esc(stLbl)}</span>
+                ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
+                <span>今日 ${Number(p.today_count) || 0} 条</span>
+              </div>
+            </div>
+            <button type="button" class="btn ghost small" data-peer-open="list">管理 ›</button>
+          </li>`;
+        }).join("")}</ul>
+      </section>` : "";
+
+    const cards = peerCard + live.map((item) => {
       const st = intEffectiveState(item);
       const actLabel = st === "error" ? "去修复 ›" : st === "unconfigured" ? "去配置 ›" : "配置 ›";
       return `<article class="int-card${st === "error" ? " is-error" : ""}">
@@ -6495,6 +6949,7 @@
         <span class="int-summary-stat">${esc(summaryText)}</span>
       </div>
       <section class="int-grid" aria-label="可用接入">${cards}</section>
+      ${peerOverview}
       <details class="adv-fold" id="int-adv-fold">
         <summary>
           <span class="adv-sum-title">自定义通知与本地脚本（高级）</span>
@@ -6572,12 +7027,32 @@
     } catch {}
   }
 
+  function stopPeerCameraScan() {
+    if (peerScanRAF) {
+      cancelAnimationFrame(peerScanRAF);
+      peerScanRAF = 0;
+    }
+    if (peerScanStream) {
+      try { peerScanStream.getTracks().forEach((tr) => tr.stop()); } catch {}
+      peerScanStream = null;
+    }
+    if (intModalKind === "peers" && intModalDraft) {
+      intModalDraft.scanning = false;
+    }
+  }
+  function stopPeerModalResources() {
+    clearInterval(peerInviteTimer);
+    peerInviteTimer = null;
+    stopPeerCameraScan();
+  }
+
   const intModal = $("#int-modal");
   async function closeIntModal(reason = "cancel") {
     if (!intModal?.open || intModal.hasAttribute("data-closing")) return;
     clearInterval(intPairTimer);
     intPairTimer = null;
     stopOnboardTimers();
+    stopPeerModalResources();
     if (!supportsTopLayerExit()) {
       intModal.setAttribute("data-closing", "");
       const anims = intModal.getAnimations({ subtree: true });
@@ -6613,6 +7088,9 @@
       clearInterval(intPairTimer);
       intPairTimer = null;
       stopOnboardTimers();
+      stopPeerModalResources();
+      const tabsEl = $("#int-modal-tabs");
+      if (tabsEl) { tabsEl.hidden = true; tabsEl.innerHTML = ""; }
       intModal.returnValue = "";
       intModal.removeAttribute("data-closing");
       intModalKind = null;
@@ -6663,6 +7141,9 @@
   function openIntModal(kind) {
     const item = (intPayload?.integrations || []).find((x) => x.kind === kind);
     if (!item || !intModal) return;
+    intModal.removeAttribute("data-modal-kind");
+    const tabsEl = $("#int-modal-tabs");
+    if (tabsEl) { tabsEl.hidden = true; tabsEl.innerHTML = ""; }
     intModalKind = kind;
     const cfg = item.config || {};
     if (kind === "feishu") {
@@ -8028,6 +8509,932 @@
         renderIntModal(item);
         toast(err.message, "attn");
       }
+    });
+  }
+
+  // ───────────────────────────── Peer Hub controlled inbox modal (QR business card & scanner)
+  function parsePeerInviteClient(raw, selfHubId = "") {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    const prefix = "collie-peer://v1/";
+    if (!s.startsWith(prefix)) return { error: `邀请码应以 ${prefix} 开头` };
+    const b64 = s.slice(prefix.length).trim().replace(/-/g, "+").replace(/_/g, "/");
+    if (!b64) return { error: "邀请码内容为空" };
+    try {
+      const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+      const bin = atob(padded);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const obj = JSON.parse(new TextDecoder().decode(bytes));
+      if (!obj || obj.v !== 1 || !obj.code || !obj.hub_id || !Array.isArray(obj.addrs) || !obj.addrs.length) {
+        return { error: "邀请码缺少必要字段，请检查是否复制完整" };
+      }
+      if (selfHubId && obj.hub_id === selfHubId) {
+        return { error: "不能添加自己的边牧（Hub 标识与本机相同）" };
+      }
+      if (obj.exp && Date.now() / 1000 > obj.exp) {
+        return { error: "该邀请码已过期，请让对方重新生成" };
+      }
+      return { ok: true, payload: obj };
+    } catch {
+      return { error: "邀请码解码失败，请确认粘贴完整" };
+    }
+  }
+
+  function peerInviteRemainStr(d) {
+    if (!d?.invite?.expires_at) return "";
+    const sec = Math.max(0, Math.ceil((new Date(d.invite.expires_at).getTime() - Date.now()) / 1000));
+    if (sec <= 0) return "已过期";
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return `剩余 ${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  function startPeerInviteCountdown() {
+    clearInterval(peerInviteTimer);
+    peerInviteTimer = setInterval(() => {
+      if (!intModal?.open || intModalKind !== "peers" || !intModalDraft?.invite) {
+        clearInterval(peerInviteTimer);
+        peerInviteTimer = null;
+        return;
+      }
+      const el = $("#peer-invite-countdown");
+      if (el) el.textContent = peerInviteRemainStr(intModalDraft);
+    }, 1000);
+  }
+
+  function peerDataSig(pr) {
+    if (!pr) return "";
+    return JSON.stringify([pr.hub_id || "", pr.hub_name || "", pr.enabled !== false, pr.peers || [], pr.blocklist || []]);
+  }
+
+  function preloadPeerQRImage(url) {
+    if (!url || typeof Image !== "function") return Promise.resolve();
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; clearTimeout(tm); resolve(); } };
+      const tm = setTimeout(done, 1500);
+      try {
+        const img = new Image();
+        img.onload = done;
+        img.onerror = done;
+        img.src = url;
+        if (img.complete) done();
+      } catch {
+        done();
+      }
+    });
+  }
+
+  async function refreshPeerModalData() {
+    if (!intModal?.open || intModalKind !== "peers" || !intModalDraft) return;
+    const d = intModalDraft;
+    try {
+      const pr = await api("/api/super/peers");
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+      const prevSig = d._dataSig || "";
+      const nextSig = peerDataSig(pr);
+      peersPayload = pr;
+      d.data = pr;
+      d._dataSig = nextSig;
+      if (!d.editingHubName) {
+        d.hubNameInput = pr.hub_name || "";
+        const nameInput = $("#peer-hub-name");
+        if (nameInput && nameInput.value !== d.hubNameInput) nameInput.value = d.hubNameInput;
+      }
+      if (nextSig !== prevSig) {
+        patchPeerHeaderAndList();
+      }
+    } catch {}
+  }
+
+  async function ensurePeerInvite(force = false) {
+    if (!intModal?.open || intModalKind !== "peers" || !intModalDraft) return;
+    const d = intModalDraft;
+    const hubNameKey = d.data?.hub_name || d.hubNameInput || "";
+    const cacheKey = `${hubNameKey}|${d.genMode}`;
+    if (!force) {
+      const cached = d.invitesByMode?.[cacheKey];
+      if (cached && cached.mode === d.genMode && (new Date(cached.expires_at).getTime() - Date.now()) > 20000) {
+        d.inviteSeq++;
+        d.invite = cached;
+        d.inviteLoading = false;
+        d.inviteErr = "";
+        patchPeerQRCard();
+        startPeerInviteCountdown();
+        return;
+      }
+    }
+    const seq = ++d.inviteSeq;
+    d.inviteLoading = true;
+    d.inviteErr = "";
+    patchPeerQRCard();
+    try {
+      const inv = await api("/api/super/peers/invite", { body: { mode: d.genMode } });
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
+      const qrSrc = inv?.invite_code ? `/api/qr?text=${encodeURIComponent(inv.invite_code)}` : "";
+      if (qrSrc) await preloadPeerQRImage(qrSrc);
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
+      d.invitesByMode[cacheKey] = inv;
+      d.invite = inv;
+      d.inviteLoading = false;
+      d.inviteErr = "";
+      patchPeerQRCard();
+      startPeerInviteCountdown();
+    } catch (err) {
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
+      d.inviteLoading = false;
+      d.inviteErr = err.message;
+      patchPeerQRCard();
+    }
+  }
+
+  async function openPeerModal(initialTab = "auto") {
+    if (!intModal) return;
+    stopPeerModalResources();
+    let data = peersPayload;
+    if (!data) {
+      try { data = await api("/api/super/peers"); peersPayload = data; } catch (err) { toast(err.message, "attn"); return; }
+    }
+    const list = Array.isArray(data?.peers) ? data.peers : [];
+    const tab = initialTab === "add" ? "add" : initialTab === "list" ? "list" : (list.length > 0 ? "list" : "add");
+    intModal.setAttribute("data-modal-kind", "peers");
+    intModalKind = "peers";
+    intModalDraft = {
+      kind: "peers",
+      data,
+      _dataSig: peerDataSig(data),
+      _mounted: false,
+      tab,
+      addSub: "gen", // gen | scan
+      genMode: "advise",
+      hubNameInput: data?.hub_name || "",
+      editingHubName: false,
+      invite: null,
+      invitesByMode: {},
+      inviteSeq: 0,
+      inviteLoading: false,
+      inviteErr: "",
+      pasteRaw: "",
+      pairName: "",
+      pairMode: "advise",
+      pairing: false,
+      pairErr: "",
+      scanning: false,
+      scanNote: "",
+      pingState: {}, // peerId -> {busy, ok, msg}
+      confirmRevokeId: "",
+      busyPeerId: "",
+    };
+    renderPeerModal();
+    if (!intModal.open) intModal.showModal();
+    $("#int-modal-body").scrollTop = 0;
+    if (tab === "add") ensurePeerInvite(false);
+    // Refresh live peers data in the background in case another device changed it.
+    refreshPeerModalData();
+  }
+
+  async function startPeerCameraScan() {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers") return;
+    stopPeerCameraScan();
+    const isSecure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    if (!isSecure) {
+      d.scanNote = "当前通过局域网 HTTP 访问，浏览器安全策略限制直接调用摄像头；请点击「从相册/截图识别」或用手机系统相机扫码后粘贴下方邀请码。";
+      renderPeerModal();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      d.scanNote = "当前设备或浏览器未提供摄像头访问接口，请改用「从相册/截图识别」或直接粘贴邀请码。";
+      renderPeerModal();
+      return;
+    }
+    if (typeof window.BarcodeDetector !== "function") {
+      d.scanNote = "当前浏览器暂不支持原生二维码实时解码（BarcodeDetector）；请用系统相机扫描名片二维码后粘贴邀请码，或更换 Chrome/Edge。";
+      renderPeerModal();
+      return;
+    }
+    let detector;
+    try {
+      const fmts = typeof window.BarcodeDetector.getSupportedFormats === "function"
+        ? await window.BarcodeDetector.getSupportedFormats()
+        : ["qr_code"];
+      if (Array.isArray(fmts) && fmts.length && !fmts.includes("qr_code")) {
+        d.scanNote = "当前系统不支持 qr_code 原生解码，请直接粘贴同事发来的邀请码。";
+        renderPeerModal();
+        return;
+      }
+      detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+    } catch {
+      d.scanNote = "原生扫码引擎初始化失败，请上传二维码图片或直接粘贴邀请码。";
+      renderPeerModal();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) {
+        stream.getTracks().forEach((tr) => tr.stop());
+        return;
+      }
+      peerScanStream = stream;
+      d.scanning = true;
+      d.scanNote = "";
+      renderPeerModal();
+      const video = $("#peer-scan-video");
+      if (!video) { stopPeerCameraScan(); return; }
+      video.srcObject = stream;
+      await video.play().catch(() => {});
+      let lastTick = 0;
+      const loop = async (ts) => {
+        if (!peerScanStream || !intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        if (ts - lastTick >= 180 && video.readyState >= 2) {
+          lastTick = ts;
+          try {
+            const codes = await detector.detect(video);
+            for (const c of codes || []) {
+              const val = String(c?.rawValue || "").trim();
+              if (val.startsWith("collie-peer://v1/")) {
+                stopPeerCameraScan();
+                d.pasteRaw = val;
+                d.scanNote = "";
+                const parsed = parsePeerInviteClient(val, d.data?.hub_id);
+                if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
+                  d.pairName = parsed.payload.hub_name;
+                }
+                renderPeerModal();
+                toast("已扫码识别好友边牧邀请码");
+                return;
+              }
+            }
+          } catch {}
+        }
+        peerScanRAF = requestAnimationFrame(loop);
+      };
+      peerScanRAF = requestAnimationFrame(loop);
+    } catch (err) {
+      stopPeerCameraScan();
+      const name = err?.name || "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        d.scanNote = "未授予摄像头权限，已优雅降级：可上传二维码截图或直接粘贴邀请码。";
+      } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        d.scanNote = "未检测到可用摄像头（桌面端常见），请直接粘贴同事的邀请码或上传二维码截图。";
+      } else {
+        d.scanNote = `无法打开摄像头（${err?.message || name || "设备受限"}），请直接上传二维码图片或粘贴邀请码。`;
+      }
+      renderPeerModal();
+    }
+  }
+
+  async function decodePeerQRImage(file) {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers" || !file) return;
+    if (typeof window.BarcodeDetector !== "function") {
+      d.scanNote = "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请码文本。";
+      renderPeerModal();
+      $("#peer-paste-input")?.focus();
+      return;
+    }
+    try {
+      const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+      const bmp = typeof createImageBitmap === "function" ? await createImageBitmap(file) : null;
+      if (!bmp) throw new Error("浏览器不支持读取图片位图");
+      try {
+        const codes = await detector.detect(bmp);
+        const hit = (codes || []).map((c) => String(c?.rawValue || "").trim()).find((v) => v.startsWith("collie-peer://v1/"));
+        if (!hit) {
+          d.scanNote = "未在图片中识别到有效的 collie-peer://v1/ 二维码，请确认图片清晰或直接粘贴邀请码。";
+          renderPeerModal();
+          return;
+        }
+        d.pasteRaw = hit;
+        d.scanNote = "";
+        const parsed = parsePeerInviteClient(hit, d.data?.hub_id);
+        if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
+          d.pairName = parsed.payload.hub_name;
+        }
+        renderPeerModal();
+        toast("已从图片识别好友边牧二维码");
+      } finally {
+        bmp.close?.();
+      }
+    } catch (err) {
+      d.scanNote = `图片识别失败（${err?.message || "不支持该格式"}），请直接粘贴邀请码。`;
+      renderPeerModal();
+    }
+  }
+
+  function peerModeRadiosHTML(groupName, current, attr) {
+    return [
+      ["advise", "先帮我查清，草稿给我审", "推荐", "本地只读查证并拟好回复，你点确认才发给对方"],
+      ["notify", "只留个便签，不自动回复", "", "只在聊天里记一条提醒，不自动查也不消耗额度"],
+      ["propose", "查完给方案，批准再干活", "", "先评估并提议派人处理，动手和回复都等你拍板"],
+    ].map(([val, lbl, rec, desc]) => `
+      <label class="int-mode-opt">
+        <input type="radio" name="${esc(groupName)}" value="${val}" ${current === val ? "checked" : ""} ${attr}>
+        <span><b>${esc(lbl)}${rec ? `<span class="rec">${rec}</span>` : ""}</b><small>${esc(desc)}</small></span>
+      </label>`).join("");
+  }
+
+  function syncPeerModalTabs() {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers" || !intModal) return;
+    const tList = $("#peer-tab-list"), tAdd = $("#peer-tab-add");
+    if (tList) {
+      const on = d.tab === "list";
+      tList.setAttribute("aria-selected", String(on));
+      tList.tabIndex = on ? 0 : -1;
+      tList.toggleAttribute?.("focusgroupstart", on);
+    }
+    if (tAdd) {
+      const on = d.tab === "add";
+      tAdd.setAttribute("aria-selected", String(on));
+      tAdd.tabIndex = on ? 0 : -1;
+      tAdd.toggleAttribute?.("focusgroupstart", on);
+    }
+    const pList = $("#peer-panel-list"), pAdd = $("#peer-panel-add");
+    if (pList) pList.hidden = d.tab !== "list";
+    if (pAdd) pAdd.hidden = d.tab !== "add";
+
+    for (const btn of intModal.querySelectorAll("[data-peer-add-sub]")) {
+      const on = btn.dataset.peerAddSub === d.addSub;
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-pressed", String(on));
+    }
+    const sGen = $("#peer-sub-gen"), sScan = $("#peer-sub-scan");
+    if (sGen) sGen.hidden = d.addSub !== "gen";
+    if (sScan) sScan.hidden = d.addSub !== "scan";
+  }
+
+  function patchPeerQRCard() {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers" || !intModal) return;
+    const card = $("#peer-qr-card");
+    if (!card) return;
+    const data = d.data || { hub_name: "我的边牧" };
+    const inv = d.invite;
+    const qrSrc = inv?.invite_code ? `/api/qr?text=${encodeURIComponent(inv.invite_code)}` : "";
+
+    if (inv && qrSrc) {
+      card.classList.toggle("is-refreshing", !!d.inviteLoading);
+      let imgEl = $("#peer-qr-img", card);
+      if (!imgEl) {
+        card.innerHTML = `
+          <div class="peer-qr-top">
+            <div class="int-qr-frame"><img id="peer-qr-img" width="156" height="156" alt="好友边牧名片二维码" src="${qrSrc}"></div>
+            <div class="peer-qr-meta">
+              <div class="peer-qr-title">
+                <span id="peer-qr-hub-name">${esc(inv.hub_name || data.hub_name || "我的边牧")}</span>
+                <span class="peer-qr-countdown" id="peer-invite-countdown">${esc(peerInviteRemainStr(d))}</span>
+              </div>
+              <p class="peer-qr-hint">同事在 Collie「接入 → 好友边牧」扫码或粘贴邀请码即可完成直连配对；邀请码仅一次有效，10 分钟后自动作废。</p>
+              <div class="peer-qr-addrs" id="peer-qr-addrs">直连地址：${esc((inv.addrs || []).join(" · "))}</div>
+              <div class="peer-qr-btns">
+                <button type="button" class="btn primary small" id="peer-copy-invite">一键复制邀请码</button>
+                <button type="button" class="btn small" id="peer-invite-regen">重新生成</button>
+              </div>
+            </div>
+          </div>
+          <div class="int-code-line">
+            <span id="peer-qr-code-text" title="${esc(inv.invite_code)}">${esc(inv.invite_code)}</span>
+            <button type="button" class="btn ghost small" id="peer-qr-code-copy" data-copy="${esc(inv.invite_code)}">复制</button>
+          </div>`;
+        $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(true));
+        $("#peer-copy-invite", card)?.addEventListener("click", async () => {
+          if (!d.invite?.invite_code) return;
+          const ok = await copyText(d.invite.invite_code);
+          if (ok) toast("已复制好友边牧邀请码（10 分钟内一次性有效）");
+          else toast("复制失败，请手动选中下方邀请码复制", "attn");
+        });
+      } else {
+        if (imgEl.getAttribute("src") !== qrSrc) imgEl.setAttribute("src", qrSrc);
+        setText($("#peer-qr-hub-name", card), inv.hub_name || data.hub_name || "我的边牧");
+        setText($("#peer-invite-countdown", card), peerInviteRemainStr(d));
+        setText($("#peer-qr-addrs", card), `直连地址：${(inv.addrs || []).join(" · ")}`);
+        const codeEl = $("#peer-qr-code-text", card);
+        if (codeEl) {
+          setText(codeEl, inv.invite_code);
+          codeEl.title = inv.invite_code;
+        }
+        const cpBtn = $("#peer-qr-code-copy", card);
+        if (cpBtn) cpBtn.dataset.copy = inv.invite_code;
+      }
+      const regenBtn = $("#peer-invite-regen", card);
+      if (regenBtn) regenBtn.disabled = !!d.inviteLoading;
+      return;
+    }
+
+    card.classList.remove("is-refreshing");
+    if (d.inviteLoading) {
+      card.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2)"><span class="int-spinner" aria-hidden="true"></span><span>正在生成 10 分钟一次性名片二维码…</span></div>`;
+    } else if (d.inviteErr) {
+      card.innerHTML = `<div class="int-onboard-err"><span class="int-onboard-err-txt">${esc(d.inviteErr)}</span><button type="button" class="btn small" id="peer-invite-regen">重试</button></div>`;
+      $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(true));
+    } else {
+      card.innerHTML = `<button type="button" class="btn primary small" id="peer-invite-regen">生成名片二维码与邀请码</button>`;
+      $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(true));
+    }
+  }
+
+  function patchPeerScanPanel() {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers" || !intModal) return;
+    const data = d.data || { hub_id: "" };
+    const camBtn = $("#peer-scan-cam");
+    const stopBtn = $("#peer-scan-stop");
+    if (camBtn) camBtn.hidden = !!d.scanning;
+    if (stopBtn) stopBtn.hidden = !d.scanning;
+    const stageSlot = $("#peer-scan-stage-slot");
+    if (stageSlot) {
+      if (d.scanning) {
+        if (!$("#peer-scan-video", stageSlot)) {
+          stageSlot.innerHTML = `<div class="peer-scan-stage">
+            <video id="peer-scan-video" autoplay playsinline muted></video>
+            <div class="peer-scan-frame" aria-hidden="true"></div>
+            <span class="peer-scan-tip">将镜头对准好友的边牧名片二维码</span>
+          </div>`;
+        }
+        stageSlot.hidden = false;
+      } else {
+        stageSlot.hidden = true;
+        if (stageSlot.innerHTML) stageSlot.innerHTML = "";
+      }
+    }
+    const noteSlot = $("#peer-scan-note-slot");
+    if (noteSlot) {
+      noteSlot.hidden = !d.scanNote;
+      setText(noteSlot, d.scanNote || "");
+    }
+    const pasteEl = $("#peer-paste-input");
+    if (pasteEl && pasteEl.value !== d.pasteRaw) pasteEl.value = d.pasteRaw;
+    const nameEl = $("#peer-pair-name");
+    if (nameEl && nameEl.value !== d.pairName) nameEl.value = d.pairName;
+
+    const parsed = parsePeerInviteClient(d.pasteRaw, data.hub_id);
+    const parsedSlot = $("#peer-scan-parsed-slot");
+    if (parsedSlot) {
+      if (!parsed) {
+        parsedSlot.hidden = true;
+        parsedSlot.innerHTML = "";
+      } else {
+        parsedSlot.hidden = false;
+        parsedSlot.innerHTML = parsed.ok
+          ? `<div class="peer-parsed">
+              <div>识别到好友边牧：<b>${esc(parsed.payload.hub_name || parsed.payload.hub_id)}</b></div>
+              <div class="mono" style="font-size:11.5px">${esc((parsed.payload.addrs || []).join(" · "))}</div>
+            </div>`
+          : `<div class="peer-parsed is-err" role="alert">${esc(parsed.error)}</div>`;
+      }
+    }
+    const errSlot = $("#peer-pair-err-slot");
+    if (errSlot) {
+      errSlot.hidden = !d.pairErr;
+      setText(errSlot, d.pairErr || "");
+    }
+    const submitBtn = $("#peer-pair-submit");
+    if (submitBtn) {
+      submitBtn.disabled = !(!d.pairing && !!parsed?.ok);
+      setText(submitBtn, d.pairing ? "正在连接并配对…" : "验证并完成配对");
+    }
+  }
+
+  function patchPeerHeaderAndList() {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers" || !intModal) return;
+    const data = d.data || { hub_id: "", hub_name: "我的边牧", enabled: true, addrs: [], peers: [], blocklist: [] };
+    const peers = Array.isArray(data.peers) ? data.peers : [];
+    const blocklist = Array.isArray(data.blocklist) ? data.blocklist : [];
+    const info = peerCardSummary(data);
+
+    setHTML($("#int-modal-state"), `<span class="sdot ${esc(info.state)}" aria-hidden="true"></span><span>${esc(info.stateLbl)}</span>`);
+    setText($("#peer-tab-list-cnt"), String(peers.length));
+    setText($("#peer-foot-hub-id"), data.hub_id || "-");
+
+    const slot = $("#peer-list-slot");
+    if (!slot) return;
+    slot.innerHTML = `
+      <div class="peer-guard">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
+        <span>好友仅能往收件箱发消息，<strong>无法碰你的终端、文件、记忆，也不能直接派活</strong>；随时可一键暂停、移除或拉黑。</span>
+      </div>
+      ${!peers.length ? `
+        <div class="peer-empty">
+          <p>还没有配对的好友边牧。把你的边牧名片二维码亮给同内网 / Tailscale 的同事，或扫码/粘贴对方的邀请码即可 10 秒直连。</p>
+          <button type="button" class="btn primary small" id="peer-go-add-btn">生成名片二维码 / 扫码添加</button>
+        </div>` : peers.map((p) => {
+          const isPaused = p.status === "paused";
+          const isRevoked = p.status === "revoked_by_peer";
+          const stDot = p.status === "active" ? (data.enabled !== false ? "connected" : "disabled") : isPaused ? "paused" : "disabled";
+          const stText = p.status === "active" ? (data.enabled !== false ? "活跃" : "总开关已暂停") : isPaused ? "已暂停" : "对方已解除";
+          const ping = d.pingState[p.id];
+          const confirming = d.confirmRevokeId === p.id;
+          const busy = d.busyPeerId === p.id;
+          return `<article class="peer-card${isPaused || isRevoked ? " is-paused" : ""}">
+            <div class="peer-card-top">
+              <div class="peer-card-ident">
+                <div class="peer-card-name">
+                  <span class="sdot ${stDot}" aria-hidden="true"></span>
+                  <span>${esc(p.name)}</span>
+                  <span class="peer-id-pill">@${esc(p.id)}</span>
+                </div>
+                <div class="peer-card-sub">
+                  <span>${esc(stText)}</span>
+                  ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
+                  <span>今日 ${Number(p.today_count) || 0} 条</span>
+                  ${p.last_ok_at ? `<span>最近连通 ${esc(ago(p.last_ok_at))}</span>` : ""}
+                </div>
+              </div>
+              ${!isRevoked ? `<button type="button" class="switch" role="switch" aria-checked="${!isPaused ? "true" : "false"}" aria-label="${isPaused ? "恢复接收" : "暂停接收"} ${esc(p.name)}" data-peer-pause="${esc(p.id)}" ${busy ? "disabled" : ""}></button>` : ""}
+            </div>
+            <div class="int-mode-list">
+              ${peerModeRadiosHTML("peer_mode_" + p.id, p.mode || "advise", `data-peer-mode="${esc(p.id)}" ${busy || isRevoked ? "disabled" : ""}`)}
+            </div>
+            <div class="peer-card-acts">
+              <button type="button" class="btn small" data-peer-ping="${esc(p.id)}" ${ping?.busy || busy ? "disabled" : ""}>${ping?.busy ? "探测中…" : "测连通"}</button>
+              ${ping?.msg ? `<span class="peer-ping-msg ${ping.ok ? "ok" : "err"}" role="status">${esc(ping.msg)}</span>` : ""}
+              <span class="spacer"></span>
+              <button type="button" class="btn ghost small peer-danger" data-peer-ask-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>移除 / 拉黑</button>
+            </div>
+            ${confirming ? `<div class="peer-confirm-row" role="alert">
+              <span>立即吊销令牌并断开 <strong>${esc(p.name)}</strong>？</span>
+              <div class="peer-confirm-btns">
+                <button type="button" class="btn small" data-peer-cancel-revoke>取消</button>
+                <button type="button" class="btn small peer-danger" data-peer-do-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>仅移除</button>
+                <button type="button" class="btn small peer-danger" data-peer-do-block="${esc(p.id)}" ${busy ? "disabled" : ""}>移除并拉黑</button>
+              </div>
+            </div>` : ""}
+          </article>`;
+        }).join("")}
+      ${blocklist.length ? `<div class="peer-block-sec">
+        <h3 class="int-sec-title">已拉黑的 Hub（${blocklist.length}）</h3>
+        ${blocklist.map((b) => `<div class="peer-block-row">
+          <span><strong>${esc(b.name || b.hub_id)}</strong> <span class="mono muted">${esc(b.hub_id)}</span></span>
+          <button type="button" class="btn ghost small" data-peer-unblock="${esc(b.hub_id)}">解除拉黑</button>
+        </div>`).join("")}
+      </div>` : ""}`;
+
+    bindPeerListEvents(slot);
+  }
+
+  function renderPeerModal() {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers" || !intModal) return;
+    const data = d.data || { hub_id: "", hub_name: "我的边牧", enabled: true, addrs: [], peers: [], blocklist: [] };
+    const peers = Array.isArray(data.peers) ? data.peers : [];
+
+    if (!d._mounted) {
+      d._mounted = true;
+      $("#int-modal-icon").innerHTML = INT_ICONS.peers;
+      $("#int-modal-title").textContent = "好友边牧 · 受控收件箱";
+      $("#int-modal-sub").textContent = "内网 / Tailscale 直连 · 令牌仅存本机";
+
+      const tabsEl = $("#int-modal-tabs");
+      if (tabsEl) {
+        tabsEl.hidden = false;
+        tabsEl.setAttribute("role", "tablist");
+        tabsEl.setAttribute("focusgroup", "tablist nomemory");
+        tabsEl.setAttribute("aria-label", "好友边牧管理页签");
+        tabsEl.innerHTML = `
+          <button type="button" role="tab" id="peer-tab-list" aria-selected="${d.tab === "list"}" ${d.tab === "list" ? "focusgroupstart" : ""} data-peer-tab="list">已配对好友 (<span id="peer-tab-list-cnt">${peers.length}</span>)</button>
+          <button type="button" role="tab" id="peer-tab-add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""} data-peer-tab="add">扫码 / 添加好友</button>`;
+      }
+
+      $("#int-modal-body").innerHTML = `
+        <div class="peer-panel" id="peer-panel-list" role="tabpanel" aria-labelledby="peer-tab-list" ${d.tab === "list" ? "" : "hidden"}>
+          <div class="peer-panel-inner" id="peer-list-slot"></div>
+        </div>
+        <div class="peer-panel" id="peer-panel-add" role="tabpanel" aria-labelledby="peer-tab-add" ${d.tab === "add" ? "" : "hidden"}>
+          <div class="peer-panel-inner">
+            <div class="seg" role="group" aria-label="添加好友方式">
+              <button type="button" class="${d.addSub === "gen" ? "on" : ""}" data-peer-add-sub="gen" aria-pressed="${d.addSub === "gen"}">我的边牧名片</button>
+              <button type="button" class="${d.addSub === "scan" ? "on" : ""}" data-peer-add-sub="scan" aria-pressed="${d.addSub === "scan"}">扫码 / 粘贴加好友</button>
+            </div>
+            <div class="int-sec" id="peer-sub-gen" ${d.addSub === "gen" ? "" : "hidden"}>
+              <div class="int-field">
+                <div class="int-field-label"><span>我的边牧名片昵称</span><span class="opt">展示给好友</span></div>
+                <div class="int-input-row">
+                  <input id="peer-hub-name" type="text" maxlength="40" value="${esc(d.hubNameInput)}" placeholder="例如：Alex的边牧">
+                  <button type="button" class="btn small" id="peer-hub-name-save">保存并刷新名片</button>
+                </div>
+              </div>
+              <div class="int-field">
+                <div class="int-field-label"><span>新好友默认接待方式</span></div>
+                <div class="int-mode-list">
+                  ${peerModeRadiosHTML("peer_gen_mode", d.genMode, 'data-peer-gen-mode')}
+                </div>
+              </div>
+              <div class="peer-qr-card" id="peer-qr-card"></div>
+            </div>
+            <div class="int-sec" id="peer-sub-scan" ${d.addSub === "scan" ? "" : "hidden"}>
+              <div class="peer-scan-actions">
+                <button type="button" class="btn primary small" id="peer-scan-cam">摄像头扫码加好友</button>
+                <button type="button" class="btn small" id="peer-scan-stop" hidden>停止摄像头扫码</button>
+                <button type="button" class="btn small" id="peer-scan-img-btn">从相册 / 截图识别</button>
+                <input id="peer-scan-file" type="file" accept="image/*" capture="environment" hidden>
+              </div>
+              <div id="peer-scan-stage-slot" hidden></div>
+              <div class="peer-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
+              <div class="int-field">
+                <div class="int-field-label"><span>或直接粘贴好友邀请码</span></div>
+                <textarea id="peer-paste-input" class="mono" rows="3" style="word-break:break-all;font-size:12px" placeholder="collie-peer://v1/..." spellcheck="false">${esc(d.pasteRaw)}</textarea>
+                <p class="int-field-help">聊天软件里只发 10 分钟一次性邀请码；配对成功后，双方连接凭据仅保存在各自本机。</p>
+              </div>
+              <div id="peer-scan-parsed-slot" hidden></div>
+              <div class="peer-parsed is-err" id="peer-pair-err-slot" role="alert" hidden></div>
+              <div class="int-field">
+                <div class="int-field-label"><span>给对方的备注名</span><span class="opt">可选</span></div>
+                <input id="peer-pair-name" type="text" maxlength="40" value="${esc(d.pairName)}" placeholder="留空自动使用对方名片昵称">
+              </div>
+              <div class="int-field">
+                <div class="int-field-label"><span>我对这位好友的接待方式</span></div>
+                <div class="int-mode-list">
+                  ${peerModeRadiosHTML("peer_pair_mode", d.pairMode, 'data-peer-pair-mode')}
+                </div>
+              </div>
+              <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:2px">
+                <button type="button" class="btn primary" id="peer-pair-submit" disabled>验证并完成配对</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+
+      $("#int-modal-foot").innerHTML = `
+        <span class="peer-foot-id">本机 Hub：<span class="mono" id="peer-foot-hub-id">${esc(data.hub_id || "-")}</span></span>
+        <div class="int-sheet-foot-right">
+          <button type="button" class="btn small" id="peer-modal-done">完成</button>
+        </div>`;
+
+      bindPeerModalStaticEvents();
+    }
+
+    syncPeerModalTabs();
+    patchPeerHeaderAndList();
+    patchPeerQRCard();
+    patchPeerScanPanel();
+  }
+
+  function bindPeerModalStaticEvents() {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers") return;
+
+    $("#peer-modal-done")?.addEventListener("click", () => closeIntModal("done"));
+
+    const tabs = [...intModal.querySelectorAll("[data-peer-tab]")];
+    tabs.forEach((btn, idx) => {
+      btn.addEventListener("click", () => {
+        const next = btn.dataset.peerTab;
+        if (next === d.tab) return;
+        stopPeerCameraScan();
+        d.tab = next;
+        syncPeerModalTabs();
+        patchPeerScanPanel();
+        $("#int-modal-body").scrollTop = 0;
+        if (next === "add" && d.addSub === "gen") ensurePeerInvite(false);
+      });
+      btn.addEventListener("keydown", (ev) => {
+        if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight" && ev.key !== "Home" && ev.key !== "End") return;
+        ev.preventDefault();
+        const nextIdx = ev.key === "Home" ? 0 : ev.key === "End" ? tabs.length - 1 : (idx + (ev.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        const target = tabs[nextIdx];
+        if (!target) return;
+        stopPeerCameraScan();
+        d.tab = target.dataset.peerTab;
+        syncPeerModalTabs();
+        patchPeerScanPanel();
+        target.focus();
+        if (d.tab === "add" && d.addSub === "gen") ensurePeerInvite(false);
+      });
+    });
+
+    intModal.querySelectorAll("[data-peer-add-sub]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const sub = btn.dataset.peerAddSub;
+        if (sub === d.addSub) return;
+        stopPeerCameraScan();
+        d.addSub = sub;
+        d.pairErr = "";
+        syncPeerModalTabs();
+        patchPeerScanPanel();
+        if (sub === "gen") ensurePeerInvite(false);
+      });
+    });
+
+    $("#peer-hub-name")?.addEventListener("focus", () => { d.editingHubName = true; });
+    $("#peer-hub-name")?.addEventListener("input", (ev) => { d.hubNameInput = ev.target.value; });
+    $("#peer-hub-name-save")?.addEventListener("click", async () => {
+      const name = String(d.hubNameInput || "").trim();
+      if (!name) { toast("昵称不能为空", "attn"); return; }
+      try {
+        await api("/api/super/peers/settings", { body: { hub_name: name } });
+        d.editingHubName = false;
+        const pr = await api("/api/super/peers");
+        peersPayload = pr;
+        d.data = pr;
+        d._dataSig = peerDataSig(pr);
+        d.hubNameInput = pr.hub_name || name;
+        d.invitesByMode = {};
+        toast("已更新本机名片昵称");
+        await ensurePeerInvite(true);
+      } catch (err) { toast(err.message, "attn"); }
+    });
+
+    intModal.querySelectorAll("[data-peer-gen-mode]").forEach((r) => {
+      r.addEventListener("change", () => {
+        if (!r.checked) return;
+        d.genMode = r.value;
+        ensurePeerInvite(false);
+      });
+    });
+
+    $("#peer-scan-cam")?.addEventListener("click", () => startPeerCameraScan());
+    $("#peer-scan-stop")?.addEventListener("click", () => { stopPeerCameraScan(); patchPeerScanPanel(); });
+    $("#peer-scan-img-btn")?.addEventListener("click", () => $("#peer-scan-file")?.click());
+    $("#peer-scan-file")?.addEventListener("change", (ev) => {
+      const f = ev.target.files?.[0];
+      ev.target.value = "";
+      if (f) decodePeerQRImage(f);
+    });
+
+    $("#peer-paste-input")?.addEventListener("input", (ev) => {
+      d.pasteRaw = ev.target.value;
+      d.pairErr = "";
+      if (ev.isComposing) return;
+      const parsed = parsePeerInviteClient(d.pasteRaw, d.data?.hub_id);
+      if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
+        d.pairName = parsed.payload.hub_name;
+      }
+      patchPeerScanPanel();
+    });
+    $("#peer-pair-name")?.addEventListener("input", (ev) => { d.pairName = ev.target.value; });
+    intModal.querySelectorAll("[data-peer-pair-mode]").forEach((r) => {
+      r.addEventListener("change", () => { d.pairMode = r.value; });
+    });
+
+    $("#peer-pair-submit")?.addEventListener("click", async () => {
+      const parsed = parsePeerInviteClient(d.pasteRaw, d.data?.hub_id);
+      if (!parsed?.ok) return;
+      d.pairing = true;
+      d.pairErr = "";
+      patchPeerScanPanel();
+      try {
+        const res = await api("/api/super/peers/pair", {
+          body: { invite_code: d.pasteRaw.trim(), name: d.pairName.trim(), mode: d.pairMode },
+        });
+        const pr = await api("/api/super/peers");
+        peersPayload = pr;
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        d.data = pr;
+        d._dataSig = peerDataSig(pr);
+        d.pairing = false;
+        d.pasteRaw = "";
+        d.pairName = "";
+        d.tab = "list";
+        syncPeerModalTabs();
+        patchPeerHeaderAndList();
+        patchPeerScanPanel();
+        toast(`已与 ${res.peer?.name || "好友边牧"} 完成双向直连配对`);
+        if (view === "auto" && autoTab === "integrations") loadAuto();
+      } catch (err) {
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        d.pairing = false;
+        d.pairErr = err.message;
+        patchPeerScanPanel();
+      }
+    });
+  }
+
+  function bindPeerListEvents(slot) {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers" || !slot) return;
+
+    $("#peer-go-add-btn", slot)?.addEventListener("click", () => {
+      d.tab = "add";
+      d.addSub = "gen";
+      syncPeerModalTabs();
+      ensurePeerInvite(false);
+    });
+
+    slot.querySelectorAll("[data-peer-pause]").forEach((sw) => {
+      sw.addEventListener("click", async () => {
+        const pid = sw.dataset.peerPause;
+        const curActive = sw.getAttribute("aria-checked") === "true";
+        const nextStatus = curActive ? "paused" : "active";
+        d.busyPeerId = pid;
+        patchPeerHeaderAndList();
+        try {
+          await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "PATCH", body: { status: nextStatus } });
+          const pr = await api("/api/super/peers");
+          peersPayload = pr;
+          d.data = pr;
+          d._dataSig = peerDataSig(pr);
+          d.busyPeerId = "";
+          patchPeerHeaderAndList();
+          toast(nextStatus === "paused" ? "已暂停接收该好友来信" : "已恢复接收该好友来信");
+          if (view === "auto" && autoTab === "integrations") loadAuto();
+        } catch (err) {
+          d.busyPeerId = "";
+          patchPeerHeaderAndList();
+          toast(err.message, "attn");
+        }
+      });
+    });
+
+    slot.querySelectorAll("[data-peer-mode]").forEach((r) => {
+      r.addEventListener("change", async () => {
+        const pid = r.dataset.peerMode;
+        const nextMode = r.value;
+        d.busyPeerId = pid;
+        patchPeerHeaderAndList();
+        try {
+          await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "PATCH", body: { mode: nextMode } });
+          const pr = await api("/api/super/peers");
+          peersPayload = pr;
+          d.data = pr;
+          d._dataSig = peerDataSig(pr);
+          d.busyPeerId = "";
+          patchPeerHeaderAndList();
+          toast(`已切换接待方式：${PEER_MODE_TEXT[nextMode] || nextMode}`);
+          if (view === "auto" && autoTab === "integrations") loadAuto();
+        } catch (err) {
+          d.busyPeerId = "";
+          patchPeerHeaderAndList();
+          toast(err.message, "attn");
+        }
+      });
+    });
+
+    slot.querySelectorAll("[data-peer-ping]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const pid = btn.dataset.peerPing;
+        d.pingState[pid] = { busy: true, ok: false, msg: "" };
+        patchPeerHeaderAndList();
+        try {
+          const res = await api(`/api/super/peers/${encodeURIComponent(pid)}/ping`, { method: "POST" });
+          const latTxt = Number(res.latency_ms) > 0 ? `${res.latency_ms}ms` : "<1ms";
+          d.pingState[pid] = res.ok
+            ? { busy: false, ok: true, msg: `连通 · ${latTxt}${res.paused ? "（对方总开关暂停）" : ""}` }
+            : { busy: false, ok: false, msg: res.error || "连接失败" };
+          if (res.ok) {
+            const pr = await api("/api/super/peers").catch(() => null);
+            if (pr) { peersPayload = pr; d.data = pr; d._dataSig = peerDataSig(pr); }
+          }
+          patchPeerHeaderAndList();
+        } catch (err) {
+          d.pingState[pid] = { busy: false, ok: false, msg: err.message };
+          patchPeerHeaderAndList();
+        }
+      });
+    });
+
+    slot.querySelectorAll("[data-peer-ask-revoke]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const pid = btn.dataset.peerAskRevoke;
+        d.confirmRevokeId = d.confirmRevokeId === pid ? "" : pid;
+        patchPeerHeaderAndList();
+      });
+    });
+    slot.querySelector("[data-peer-cancel-revoke]")?.addEventListener("click", () => {
+      d.confirmRevokeId = "";
+      patchPeerHeaderAndList();
+    });
+
+    const runRevoke = async (pid, block) => {
+      d.busyPeerId = pid;
+      patchPeerHeaderAndList();
+      try {
+        await api(`/api/super/peers/${encodeURIComponent(pid)}${block ? "?block=1" : ""}`, { method: "DELETE" });
+        const pr = await api("/api/super/peers");
+        peersPayload = pr;
+        d.data = pr;
+        d._dataSig = peerDataSig(pr);
+        d.confirmRevokeId = "";
+        d.busyPeerId = "";
+        patchPeerHeaderAndList();
+        toast(block ? "已立即吊销令牌并拉黑该 Hub" : "已立即吊销令牌并移除好友");
+        if (view === "auto" && autoTab === "integrations") loadAuto();
+      } catch (err) {
+        d.busyPeerId = "";
+        patchPeerHeaderAndList();
+        toast(err.message, "attn");
+      }
+    };
+    slot.querySelectorAll("[data-peer-do-revoke]").forEach((btn) => btn.addEventListener("click", () => runRevoke(btn.dataset.peerDoRevoke, false)));
+    slot.querySelectorAll("[data-peer-do-block]").forEach((btn) => btn.addEventListener("click", () => runRevoke(btn.dataset.peerDoBlock, true)));
+
+    slot.querySelectorAll("[data-peer-unblock]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const hid = btn.dataset.peerUnblock;
+        try {
+          await api(`/api/super/peers/blocklist/${encodeURIComponent(hid)}`, { method: "DELETE" });
+          const pr = await api("/api/super/peers");
+          peersPayload = pr;
+          d.data = pr;
+          d._dataSig = peerDataSig(pr);
+          patchPeerHeaderAndList();
+          toast("已从黑名单移除");
+        } catch (err) { toast(err.message, "attn"); }
+      });
     });
   }
 
@@ -9404,6 +10811,21 @@
       toast("将声明式插件 JSON 放入 ~/.collie/providers/ 并重启 Hub 即可自动出现在这里");
       return;
     }
+    if (t.dataset.peerOpen) {
+      openPeerModal(t.dataset.peerOpen);
+      return;
+    }
+    if (t.hasAttribute("data-peer-global-toggle")) {
+      e.stopPropagation();
+      const next = t.getAttribute("aria-checked") !== "true";
+      t.disabled = true;
+      try {
+        await api("/api/super/peers/settings", { body: { enabled: next } });
+        toast(next ? "已开启好友边牧受控收件箱" : "已暂停接收全部好友边牧来信");
+        await loadAuto();
+      } catch (err) { toast(err.message, "attn"); t.disabled = false; }
+      return;
+    }
     if (t.dataset.intOpen) {
       openIntModal(t.dataset.intOpen);
       return;
@@ -10017,14 +11439,14 @@
       const name = extName(e);
       const where = [e.app || KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
       const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "正在运行")}"></span>` : "";
-      return `<li><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}" title="${esc(name)}">
+      return `<li><a class="item ${e.live ? "" : "ended"}" href="#/x/${encodeURIComponent(e.id)}" title="${esc(name)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(name)}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
     };
     const histRow = (h) => {
       const name = histName(h);
       const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
-      return `<li><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}" title="${esc(name)}">
+      return `<li><a class="item ended" href="#/h/${encodeURIComponent(h.id)}" title="${esc(name)}">
         <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(name)}</div><div class="sub">${esc(sub)}</div></span></a></li>`;
     };
@@ -10344,18 +11766,29 @@
   applyLook();
 
   function renderPrefs(restore = null) {
+    const body = $("#prefs-body");
+    const env = notifyEnvState();
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+    const sig = [
+      prefs.theme(), prefs.accent(), prefs.text(), mode, prefs.sendKey(), prefs.fold(),
+      env.active ? 1 : 0, env.supported ? 1 : 0, env.warn ? 1 : 0, env.text, mac ? 1 : 0,
+    ].join("|");
+    if (body._prefsSig === sig && body._prefsRendered) {
+      if (restore) restoreSimpleScroll(body, restore);
+      return;
+    }
+    body._prefsSig = sig;
+    body._prefsRendered = true;
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
     const accentPick = (cur) => `<div class="accent-pick" role="radiogroup" aria-label="点睛色" data-pref="accent">${ACCENTS.map(([v, label]) =>
       `<button type="button" class="accent-opt${v === cur ? " on" : ""}" role="radio" aria-checked="${v === cur}" tabindex="${v === cur ? "0" : "-1"}" data-v="${v}"><span class="accent-dot ${v}" aria-hidden="true"></span><span>${label}</span></button>`).join("")}</div>`;
     const sw = (key, on, disabled = false) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"${disabled ? " disabled" : ""}></button>`;
     const row = (title, sub, ctl, warn = false) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small${warn ? ' class="pref-hint-warn"' : ""}>${sub}</small>` : ""}</div>${ctl}</div>`;
-    const env = notifyEnvState();
     const notifyCtl = env.active
       ? `<div class="pref-ctls"><button type="button" class="btn small ghost pref-test-btn" data-act="test-notify">测试</button>${sw("notify", true)}</div>`
       : sw("notify", false, !env.supported);
-    const mac = /Mac|iPhone|iPad/.test(navigator.platform);
-    $("#prefs-body").innerHTML = `<div class="prefs">
+    body.innerHTML = `<div class="prefs">
       <div class="card"><div class="card-h">外观</div>
         ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
         ${row("点睛色", "仅用于未读、待处理圆点与告警等少数提醒", accentPick(prefs.accent()))}
@@ -10375,7 +11808,7 @@
       </div>
       <p class="panel-intro">Collie 本身的设置（它自己用哪个 agent、派活默认在哪台电脑、通知机器人）在 <a href="#/auto" data-auto-tab="settings">自动化 → 设置</a>；电脑和手机的连接在 <a href="#/devices">设备</a>。</p>
     </div>`;
-    if (restore) restoreSimpleScroll($("#prefs-body"), restore);
+    if (restore) restoreSimpleScroll(body, restore);
   }
   $("#prefs-body").addEventListener("click", async (e) => {
     const link = e.target.closest("a[data-auto-tab]");
@@ -10436,10 +11869,23 @@
   let devAddr = store.get("pairAddr", "");
   let pairing = { browser: null, machine: null }; // {code, expires}
 
+  let devOpenRAF = 0;
   function openDevices(restore = null) {
     clearInterval(devTimer);
-    if (restore) restoreSimpleScroll($("#devices-body"), restore);
-    loadDevices(restore);
+    if (devOpenRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(devOpenRAF);
+      devOpenRAF = 0;
+    }
+    const body = $("#devices-body");
+    if (restore) restoreSimpleScroll(body, restore);
+    if (body?._devRendered && typeof requestAnimationFrame === "function") {
+      devOpenRAF = requestAnimationFrame(() => {
+        devOpenRAF = 0;
+        if (view === "devices") loadDevices(null);
+      });
+    } else {
+      loadDevices(restore);
+    }
     devTimer = setInterval(() => loadDevices(), 5000);
   }
 
@@ -10826,7 +12272,28 @@
     const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr" data-pick="compact">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
     const keepOpen = (pickOpen && pickOpen.id === "dev-addr") || document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
     if (keepOpen) return; // don't redraw under an open select or a half-typed form
+    const devSig = JSON.stringify({
+      r,
+      devAddr,
+      pbCode: pb?.code || "",
+      pmCode: pm?.code || "",
+      hubs: hubs.map((h) => [h.key, h.name, h.url, !!remote.get(h.key)?.online]),
+      upBusy: updateFlow.busy,
+      upPhase: updateFlow.phase,
+      upCur: updateFlow.currentId,
+      upErrs: [...updateFlow.errors.entries()],
+    });
+    if (body._devSig === devSig && body._devRendered) {
+      const bLeft = body.querySelector('[data-pair-left="browser"]');
+      if (bLeft && pb) setText(bLeft, left(pb));
+      const mLeft = body.querySelector('[data-pair-left="machine"]');
+      if (mLeft && pm) setText(mLeft, left(pm));
+      if (restore) restoreSimpleScroll(body, restore);
+      return;
+    }
     const typed = [...document.querySelectorAll("#add-hub input")].map((i) => i.value);
+    body._devSig = devSig;
+    body._devRendered = true;
 
     $("#devices-body").innerHTML = `
       <p class="panel-intro">Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac 等电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。</p>
@@ -10835,7 +12302,7 @@
         <div class="card pair-card">
           <div class="card-h">连接手机或平板</div>
           <div class="qr-wrap">${pb ? `<img class="qr" alt="配对二维码" src="/api/qr?text=${encodeURIComponent(phoneURL)}">` : ""}</div>
-          <p class="pair-hint">用相机扫一下，在浏览器里打开即可，之后可「添加到主屏幕」。<b>${pb ? left(pb) : ""}</b> 内有效，只能用一次。</p>
+          <p class="pair-hint">用相机扫一下，在浏览器里打开即可，之后可「添加到主屏幕」。<b data-pair-left="browser">${pb ? left(pb) : ""}</b> 内有效，只能用一次。</p>
           <div class="code"><span>${esc(phoneURL)}</span><button class="icon-btn" data-copy="${esc(phoneURL)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
           ${addrSel}
         </div>
@@ -10846,7 +12313,7 @@
           ${pm ? `<div class="code big"><span>${esc(installCmd)}</span><button class="icon-btn" data-copy="${esc(installCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
                <p class="pair-hint">已经装了 collie 的话：</p>
                <div class="code"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
-               <p class="pair-hint"><b>${left(pm)}</b> 内有效，只能用一次。之后它会自动重连。</p>`
+               <p class="pair-hint"><b data-pair-left="machine">${left(pm)}</b> 内有效，只能用一次。之后它会自动重连。</p>`
              : `<button class="btn primary small" id="new-node-code">生成连接命令</button>`}
           <p class="pair-hint muted">需要这台电脑能访问上面的地址（同一内网或 VPN）。</p>
         </div>
@@ -11267,6 +12734,7 @@
     stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
   }
   function closeStream() {
+    paneOpenSeq++;
     screenSeq++;
     screenWriting = false;
     screenQueuedFrame = null;
@@ -11703,7 +13171,19 @@
         i++;
         continue;
       }
-      html += m.kind === "user" ? `<div class="msg user">${userText(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
+      if (m.kind === "user") {
+        const parts = parseUserParts(m.text);
+        const mediaHtml = renderUserMedia(parts.imgs);
+        if (mediaHtml && !parts.hasBubbleContent) {
+          html += `<div class="msg user is-media-only">${mediaHtml}</div>`;
+        } else if (mediaHtml) {
+          html += `<div class="mine-group">${mediaHtml}<div class="msg user">${parts.textHtml}${parts.attHtml}</div></div>`;
+        } else {
+          html += `<div class="msg user">${parts.textHtml}${parts.attHtml}</div>`;
+        }
+      } else {
+        html += `<div class="msg assistant">${md(m.text)}</div>`;
+      }
       cut();
       i++;
     }
@@ -13115,7 +14595,7 @@
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
-    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".mine") || triggerEl?.closest(".mine-group") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
     const seen = new Set(), items = [];
     const add = (it) => {
@@ -13619,81 +15099,49 @@
     grip.addEventListener("pointerup", up, { once: true });
   });
 
-  // ───────────────────────────── Unified Right Floating Dock「小本本 | 话题线」(single-state card + compositor motion)
+  // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」&「话题线」）
   const NOTES_WIDE_MIN = 1360;
+  const NOTES_COMPACT_TASKS = 3;
+  const NOTES_COMPACT_FILES = 2;
+  const NOTES_COMPACT_TIMERS = 1;
   const notesPane = $("#notes-pane");
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
-  const dockTriggerDot = $("#dock-trigger-dot");
-  const dkTablist = $("#dk-tablist");
-  const dkTabNotes = $("#dk-tab-notes");
-  const dkTabThreads = $("#dk-tab-threads");
-  const dkPanelNotes = $("#dk-panel-notes");
-  const dkPanelThreads = $("#dk-panel-threads");
-  const dkThDot = $("#dk-th-dot");
-  const dkThCnt = $("#dk-th-cnt");
+  const npTitleEl = $("#np-title");
+  const npDateEl = $("#np-date");
+  const npHeadEl = $("#np-head");
+  const npBodyEl = $("#np-body");
+  const npThreadsBodyEl = $("#np-threads-body");
+  const thPopWrap = $("#collie-threads-wrap");
+  const thHeadBtn = $("#collie-threads-btn");
+  const thHeadDot = $("#collie-threads-dot");
+  const thPopTabs = $("#collie-threads-tabs");
+  const thPopCntAll = $("#collie-threads-cnt-all");
+  const thPopCntActive = $("#collie-threads-cnt-active");
+  const thPopSub = $("#collie-threads-sub");
+  const thPopList = $("#collie-threads-list");
+  const normalizeSidePanePref = (v) => (v === "notes" || v === "threads" || v === "none") ? v : "";
+  let sidePanePref = (() => {
+    const saved = normalizeSidePanePref(store.get("sidePane", ""));
+    if (saved) return saved;
+    return store.get("notesClosed", false) ? "none" : "notes";
+  })();
+  let sidePaneOverlay = ""; // "" | "notes" | "threads" on < 1360px
+  let sidePaneActiveMode = sidePanePref === "threads" ? "threads" : "notes";
   let notebookData = null;
   let notebookFetching = false;
   let notebookRefreshTimer = 0;
   let notebookLastRefreshSig = "";
-  let notesUserClosed = !!store.get("notesClosed", false);
   let notesOpen = false;
-  let notesManualOverlay = false;
-  let dockTab = store.get("dockTab", "notes") === "threads" ? "threads" : "notes";
-  let dockPendingThreads = 0;
+  let notesExpanded = false;
   let _lastCollieTopH = 0;
   let _lastNotebookRenderKey = "";
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
-  function syncDockTriggerBadge() {
-    if (!dockTriggerDot) return;
-    const showDot = dockPendingThreads > 0 && !notesOpen;
-    dockTriggerDot.hidden = !showDot;
-  }
-  function setDockTab(nextTab, opts = {}) {
-    const target = nextTab === "threads" ? "threads" : "notes";
-    const changed = target !== dockTab;
-    const prevIdx = dockTab === "threads" ? 1 : 0;
-    const nextIdx = target === "threads" ? 1 : 0;
-    dockTab = target;
-    if (opts.persist !== false) store.set("dockTab", dockTab);
-    const tabs = [
-      [dkTabNotes, "notes"],
-      [dkTabThreads, "threads"],
-    ];
-    for (const [tb, key] of tabs) {
-      if (!tb) continue;
-      const sel = key === dockTab;
-      tb.setAttribute("aria-selected", sel ? "true" : "false");
-      tb.tabIndex = sel ? 0 : -1;
-      if (typeof tb.toggleAttribute === "function") tb.toggleAttribute("focusgroupstart", sel);
-    }
-    const panels = [
-      [dkPanelNotes, dockTab === "notes"],
-      [dkPanelThreads, dockTab === "threads"],
-    ];
-    for (const [panel, active] of panels) {
-      if (!panel) continue;
-      if (active) {
-        panel.hidden = false;
-        if (changed && opts.animate !== false) {
-          panel.style?.setProperty?.("--dk-dir", nextIdx > prevIdx ? "6px" : "-6px");
-          panel.classList?.remove("is-entering");
-          void panel.offsetWidth;
-          panel.classList?.add("is-entering");
-        }
-      } else {
-        panel.classList?.remove("is-entering");
-        panel.hidden = "until-found";
-      }
-    }
-    if (dockTab === "notes" && notesOpen) {
-      renderNotebook();
-      if (!notebookData) loadNotebook(false);
-    } else if (dockTab === "threads" && notesOpen) {
-      const entries = chatEntries();
-      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
-    }
+  function persistSidePanePref(next) {
+    sidePanePref = normalizeSidePanePref(next) || "none";
+    store.set("sidePane", sidePanePref);
+    store.set("notesClosed", sidePanePref === "none");
   }
   function syncCollieTopHeight(measuredH) {
     if (!notesPane) return;
@@ -13738,59 +15186,151 @@
       default: return "";
     }
   }
+  function syncNotebookExpanded() {
+    if (!notesPane) return;
+    const isNotes = sidePaneActiveMode === "notes";
+    const showFull = isNotes && (notesExpanded || !isWideNotesViewport());
+    notesPane.classList.toggle("is-expanded", showFull);
+    notesPane.setAttribute("data-expanded", showFull ? "true" : "false");
+    const moreFolds = notesPane.querySelectorAll?.(".np-fold-more") || [];
+    for (const el of moreFolds) {
+      if ("inert" in el) el.inert = !showFull;
+      el.setAttribute?.("aria-hidden", showFull ? "false" : "true");
+    }
+    for (const id of ["#np-tasks-more", "#np-files-more", "#np-timers-more"]) {
+      const pill = $(id);
+      if (!pill) continue;
+      pill.tabIndex = showFull ? -1 : 0;
+      pill.setAttribute("aria-hidden", showFull ? "true" : "false");
+    }
+  }
+  function setNotesExpanded(next) {
+    const want = !!next;
+    if (want === notesExpanded) {
+      syncNotebookExpanded();
+      return;
+    }
+    notesExpanded = want;
+    syncNotebookExpanded();
+  }
   function renderNotebook() {
     if (!notesPane) return;
     const data = notebookData || { date: "", tasks: [], artifacts: [], timers: [] };
     const allTasks = Array.isArray(data.tasks) ? data.tasks : [];
     const allFiles = Array.isArray(data.artifacts) ? data.artifacts : [];
     const allTimers = Array.isArray(data.timers) ? data.timers : [];
+    // Stable DOM key: intentionally excludes notesExpanded so CSS 0fr -> 1fr transitions run without rebuilding nodes.
     const renderKey = `${data.date || ""}|${JSON.stringify(allTasks)}|${JSON.stringify(allFiles)}|${JSON.stringify(allTimers)}`;
-    if (renderKey === _lastNotebookRenderKey) return;
+    if (renderKey === _lastNotebookRenderKey) {
+      syncNotebookExpanded();
+      return;
+    }
     _lastNotebookRenderKey = renderKey;
     const dateEl = $("#np-date");
     if (dateEl) dateEl.textContent = formatNotebookDate(data.date);
 
-    // 1. 进行中 (single-state clean card showing all active tasks)
+    // 1. 进行中 (primary rows + isolated 0fr->1fr fold for overflow rows and per-item notes)
+    const primaryTasks = allTasks.slice(0, NOTES_COMPACT_TASKS);
+    const extraTasks = allTasks.slice(NOTES_COMPACT_TASKS);
+    const taskMoreEl = $("#np-tasks-more");
+    if (taskMoreEl) {
+      const rem = extraTasks.length;
+      taskMoreEl.hidden = rem <= 0;
+      if (rem > 0) {
+        taskMoreEl.textContent = `+${rem}`;
+        taskMoreEl.title = `展开查看全部 ${allTasks.length} 项`;
+      }
+    }
+    const taskRowHTML = (tk) => {
+      const dotCls = tk.tone === "attn" ? "is-attn" : tk.tone === "idle" ? "is-idle" : "";
+      const noteHtml = tk.note
+        ? `<div class="np-fold" style="--stagger: 35ms"><div class="np-fold-inner"><div class="np-item-note">${esc(tk.note)}</div></div></div>`
+        : "";
+      return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><div class="np-item-main"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span></div>${noteHtml}</button></li>`;
+    };
     const tasksListEl = $("#np-tasks-list");
     if (tasksListEl) {
       tasksListEl.innerHTML = allTasks.length
-        ? allTasks.map((tk) => {
-            const dotCls = tk.tone === "attn" ? "is-attn" : tk.tone === "idle" ? "is-idle" : "";
-            const noteHtml = tk.note ? `<span class="np-item-note">${esc(tk.note)}</span>` : "";
-            return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span>${noteHtml}</button></li>`;
-          }).join("")
+        ? primaryTasks.map(taskRowHTML).join("") +
+          (extraTasks.length
+            ? `<li class="np-fold np-fold-more" style="--stagger: 65ms"><div class="np-fold-inner"><ul class="np-list">${extraTasks.map(taskRowHTML).join("")}</ul></div></li>`
+            : "")
         : `<li class="np-empty">暂无进行中事项</li>`;
     }
 
     // 2. 今日产物
+    const primaryFiles = allFiles.slice(0, NOTES_COMPACT_FILES);
+    const extraFiles = allFiles.slice(NOTES_COMPACT_FILES);
+    const filesMoreEl = $("#np-files-more");
+    if (filesMoreEl) {
+      const rem = extraFiles.length;
+      filesMoreEl.hidden = rem <= 0;
+      if (rem > 0) {
+        filesMoreEl.textContent = `+${rem}`;
+        filesMoreEl.title = `展开查看全部 ${allFiles.length} 个产物`;
+      }
+    }
+    const fileRowHTML = (f) => {
+      const ext = String(f.ext || "").toLowerCase();
+      const isHtml = ext === "html" || ext === "htm";
+      const atStr = f.at ? hhmm(f.at) : "";
+      const sub = [f.name, atStr].filter(Boolean).join(" · ");
+      const subHtml = sub
+        ? `<div class="np-fold" style="--stagger: 50ms"><div class="np-fold-inner"><div class="np-file-sub">${esc(sub)}</div></div></div>`
+        : "";
+      return `<li><button type="button" class="np-file" data-np-file="${esc(f.path)}" title="${esc(f.path)}"><div class="np-file-main"><svg class="np-file-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><span class="np-file-title">${esc(f.title || f.name)}</span><span class="np-file-ext${isHtml ? " is-html" : ""}">${esc(ext.toUpperCase())}</span></div>${subHtml}</button></li>`;
+    };
     const filesListEl = $("#np-files-list");
     if (filesListEl) {
       filesListEl.innerHTML = allFiles.length
-        ? allFiles.map((f) => {
-            const ext = String(f.ext || "").toLowerCase();
-            const isHtml = ext === "html" || ext === "htm";
-            const atStr = f.at ? hhmm(f.at) : "";
-            const sub = [f.name, atStr].filter(Boolean).join(" · ");
-            return `<li><button type="button" class="np-file" data-np-file="${esc(f.path)}" title="${esc(f.path)}"><svg class="np-file-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><span class="np-file-title">${esc(f.title || f.name)}</span><span class="np-file-ext${isHtml ? " is-html" : ""}">${esc(ext.toUpperCase())}</span><span class="np-file-sub">${esc(sub)}</span></button></li>`;
-          }).join("")
+        ? primaryFiles.map(fileRowHTML).join("") +
+          (extraFiles.length
+            ? `<li class="np-fold np-fold-more" style="--stagger: 85ms"><div class="np-fold-inner"><ul class="np-list">${extraFiles.map(fileRowHTML).join("")}</ul></div></li>`
+            : "")
         : `<li class="np-empty">今日暂无新产物</li>`;
     }
 
     // 3. 下一条定时
+    const primaryTimers = allTimers.slice(0, NOTES_COMPACT_TIMERS);
+    const extraTimers = allTimers.slice(NOTES_COMPACT_TIMERS);
+    const timersMoreEl = $("#np-timers-more");
+    if (timersMoreEl) {
+      const rem = extraTimers.length;
+      timersMoreEl.hidden = rem <= 0;
+      if (rem > 0) {
+        timersMoreEl.textContent = `+${rem}`;
+        timersMoreEl.title = `展开查看全部 ${allTimers.length} 条定时`;
+      }
+    }
+    const timerRowHTML = (tm) => {
+      const clk = formatNotebookTimerClock(tm.next_run);
+      const freq = formatNotebookTimerFreq(tm.spec);
+      return `<li class="np-timer" title="${esc((clk ? clk + " " : "") + tm.text)}"><span class="np-timer-at">${esc(clk)}</span><span class="np-timer-txt">${esc(tm.text)}${freq ? `<span class="np-timer-freq">${esc(freq)}</span>` : ""}</span></li>`;
+    };
     const timersListEl = $("#np-timers-list");
     if (timersListEl) {
       timersListEl.innerHTML = allTimers.length
-        ? allTimers.map((tm) => {
-            const clk = formatNotebookTimerClock(tm.next_run);
-            const freq = formatNotebookTimerFreq(tm.spec);
-            return `<li class="np-timer" title="${esc((clk ? clk + " " : "") + tm.text)}"><span class="np-timer-at">${esc(clk)}</span><span class="np-timer-txt">${esc(tm.text)}${freq ? `<span class="np-timer-freq">${esc(freq)}</span>` : ""}</span></li>`;
-          }).join("")
+        ? primaryTimers.map(timerRowHTML).join("") +
+          (extraTimers.length
+            ? `<li class="np-fold np-fold-more" style="--stagger: 105ms"><div class="np-fold-inner"><ul class="np-list">${extraTimers.map(timerRowHTML).join("")}</ul></div></li>`
+            : "")
         : `<li class="np-empty">暂无待跑定时</li>`;
     }
+
+    syncNotebookExpanded();
   }
-  function syncNotebookVisibility() {
+  let _noNotesAnimRAF = 0;
+  function syncNotebookVisibility(opts = {}) {
     const col = $("#v-collie");
     if (!col || !notesPane) return;
+    const immediate = !!opts.immediate;
+    if (immediate) {
+      col.classList.add("no-notes-anim");
+      if (_noNotesAnimRAF && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(_noNotesAnimRAF);
+        _noNotesAnimRAF = 0;
+      }
+    }
     const appEl = $("#app");
     const blockedByDrawer = !!(activeThreadRoot || appEl?.classList?.contains("has-file") || appEl?.classList?.contains("has-thread"));
     const blockedByPopover = hasTopRightOverlay();
@@ -13798,32 +15338,61 @@
     let keepSlot = false;
     if (view === "collie" && !blockedByDrawer) {
       if (isWideNotesViewport()) {
-        notesManualOverlay = false;
-        keepSlot = !notesUserClosed;
+        sidePaneOverlay = "";
+        keepSlot = sidePanePref !== "none";
         wantOpen = keepSlot && !blockedByPopover;
+        if (sidePanePref !== "none") sidePaneActiveMode = sidePanePref;
       } else {
-        if (blockedByPopover) notesManualOverlay = false;
-        wantOpen = notesManualOverlay;
+        if (blockedByPopover) sidePaneOverlay = "";
+        wantOpen = !!sidePaneOverlay;
         keepSlot = wantOpen;
+        if (sidePaneOverlay) sidePaneActiveMode = sidePaneOverlay;
       }
     } else {
-      notesManualOverlay = false;
+      sidePaneOverlay = "";
     }
+    const isThreads = sidePaneActiveMode === "threads";
     notesOpen = wantOpen;
     col.classList.toggle("has-notes", keepSlot);
     document.body?.classList?.toggle("collie-has-notes", keepSlot);
     notesPane.classList.toggle("is-hidden", !wantOpen);
+    notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
+    notesPane.setAttribute("aria-label", isThreads ? "话题线" : "小本本");
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
     if ("inert" in notesPane) notesPane.inert = !wantOpen;
+    if (npTitleEl) setText(npTitleEl, isThreads ? "话题线" : "小本本");
+    if (npDateEl) npDateEl.hidden = isThreads;
+    if (thPopSub) thPopSub.hidden = !isThreads;
+    if (npBodyEl) npBodyEl.hidden = isThreads;
+    if (npThreadsBodyEl) npThreadsBodyEl.hidden = !isThreads;
+    if (npHeadEl) npHeadEl.title = isThreads ? "" : "点击切换紧凑或展开";
     if (notesBtn) {
-      notesBtn.classList.toggle("on", wantOpen);
-      notesBtn.setAttribute("aria-pressed", wantOpen ? "true" : "false");
+      const onNotes = wantOpen && !isThreads;
+      notesBtn.classList.toggle("on", onNotes);
+      notesBtn.setAttribute("aria-pressed", onNotes ? "true" : "false");
     }
-    syncDockTriggerBadge();
+    if (thHeadBtn) {
+      const onThreads = wantOpen && isThreads;
+      thHeadBtn.classList.toggle("on", onThreads);
+      thHeadBtn.setAttribute("aria-pressed", onThreads ? "true" : "false");
+    }
     if (wantOpen) {
-      syncCollieTopHeight();
-      setDockTab(dockTab, { animate: false, persist: false });
-      renderNotebook();
+      if (!col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
+      if (isThreads) renderCollieThreadsMenu();
+      else renderNotebook();
+    }
+    syncNotebookExpanded();
+    if (immediate) {
+      if (typeof requestAnimationFrame === "function") {
+        _noNotesAnimRAF = requestAnimationFrame(() => {
+          _noNotesAnimRAF = requestAnimationFrame(() => {
+            _noNotesAnimRAF = 0;
+            col.classList.remove("no-notes-anim");
+          });
+        });
+      } else {
+        col.classList.remove("no-notes-anim");
+      }
     }
   }
   async function loadNotebook(force = false) {
@@ -13833,7 +15402,7 @@
       const r = await api("/api/super/notebook");
       if (r && typeof r === "object") {
         notebookData = r;
-        if (notesOpen) renderNotebook();
+        if (notesOpen && sidePaneActiveMode === "notes") renderNotebook();
       }
     } catch {
       // Quiet read-only failure: never disrupt main chat.
@@ -13842,87 +15411,50 @@
     }
   }
   function scheduleNotebookRefresh(sig = "") {
-    if (!notesOpen) return;
+    if (!notesOpen || sidePaneActiveMode !== "notes") return;
     if (sig && sig === notebookLastRefreshSig && notebookData) return;
     if (sig) notebookLastRefreshSig = sig;
     if (notebookRefreshTimer) return;
     notebookRefreshTimer = setTimeout(() => {
       notebookRefreshTimer = 0;
-      if (view === "collie" && notesOpen) loadNotebook(false);
+      if (view === "collie" && notesOpen && sidePaneActiveMode === "notes") loadNotebook(false);
     }, 2500);
   }
-  dkTablist?.addEventListener("click", (ev) => {
-    const tab = ev.target.closest?.("[data-dk-tab]");
-    if (!tab) return;
-    ev.stopPropagation();
-    setDockTab(tab.dataset.dkTab);
-  });
-  dkTablist?.addEventListener("keydown", (ev) => {
-    const tabs = [dkTabNotes, dkTabThreads].filter(Boolean);
-    if (!tabs.length) return;
-    const cur = tabs.findIndex((t) => t.getAttribute?.("aria-selected") === "true");
-    let next = -1;
-    if (ev.key === "ArrowRight") next = (cur + 1) % tabs.length;
-    else if (ev.key === "ArrowLeft") next = (cur - 1 + tabs.length) % tabs.length;
-    else if (ev.key === "Home") next = 0;
-    else if (ev.key === "End") next = tabs.length - 1;
-    if (next < 0) return;
-    ev.preventDefault();
-    setDockTab(tabs[next].dataset.dkTab);
-    tabs[next].focus?.();
-  });
-  dkPanelNotes?.addEventListener("beforematch", () => {
-    if (dockTab !== "notes") setDockTab("notes", { animate: false });
-  });
-  dkPanelThreads?.addEventListener("beforematch", () => {
-    if (dockTab !== "threads") setDockTab("threads", { animate: false });
-  });
-  setDockTab(dockTab, { animate: false, persist: false });
 
   notesBtn?.addEventListener("click", () => {
     if (view !== "collie") return;
-    if (notesOpen) {
-      if (isWideNotesViewport()) {
-        notesUserClosed = true;
-        store.set("notesClosed", true);
-      } else {
-        notesManualOverlay = false;
-      }
+    if (notesOpen && sidePaneActiveMode === "notes") {
+      if (isWideNotesViewport()) persistSidePanePref("none");
+      else sidePaneOverlay = "";
       syncNotebookVisibility();
     } else {
       closeAllColliePopovers();
       if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
       if ($("#app")?.classList?.contains("has-file")) closeFilePane();
-      if (isWideNotesViewport()) {
-        notesUserClosed = false;
-        store.set("notesClosed", false);
-      } else {
-        notesManualOverlay = true;
-      }
+      if (isWideNotesViewport()) persistSidePanePref("notes");
+      else sidePaneOverlay = "notes";
       loadNotebook(true);
       syncNotebookVisibility();
     }
   });
   const hideNotebookFromCard = (ev) => {
     ev?.stopPropagation?.();
-    if (isWideNotesViewport()) {
-      notesUserClosed = true;
-      store.set("notesClosed", true);
-    } else {
-      notesManualOverlay = false;
-    }
+    if (isWideNotesViewport()) persistSidePanePref("none");
+    else sidePaneOverlay = "";
     syncNotebookVisibility();
   };
   $("#np-close")?.addEventListener("click", hideNotebookFromCard);
+  $("#np-back")?.addEventListener("click", hideNotebookFromCard);
   $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("#np-close, #np-handle")) return;
+    if (ev.target.closest("#np-close, #np-back, #np-handle, #np-threads-body")) return;
+    if (sidePaneActiveMode !== "notes") return;
     const fBtn = ev.target.closest("[data-np-file]");
     if (fBtn) {
       ev.preventDefault();
       const fp = fBtn.dataset.npFile;
-      if (!isWideNotesViewport()) notesManualOverlay = false;
+      if (!isWideNotesViewport()) sidePaneOverlay = "";
       if (fp) openFile(fp);
       return;
     }
@@ -13932,7 +15464,7 @@
       const entryId = tBtn.dataset.npEntry || "";
       const worker = tBtn.dataset.npWorker || "";
       if (!isWideNotesViewport()) {
-        notesManualOverlay = false;
+        sidePaneOverlay = "";
         syncNotebookVisibility();
       }
       if (entryId) {
@@ -13946,12 +15478,27 @@
         store.set("autoTab", "memory");
         location.hash = "#/auto";
       }
+      return;
     }
+    if (!isWideNotesViewport()) return;
+    if (ev.target.closest("[data-np-expand]")) {
+      ev.preventDefault();
+      setNotesExpanded(true);
+      return;
+    }
+    const sel = window.getSelection?.();
+    if (sel && !sel.isCollapsed && typeof notesPane.contains === "function" && notesPane.contains(sel.anchorNode)) return;
+    ev.preventDefault();
+    setNotesExpanded(!notesExpanded);
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && notesOpen && !isWideNotesViewport() && !document.querySelector("dialog[open]")) {
-      notesManualOverlay = false;
-      syncNotebookVisibility();
+    if (ev.key === "Escape" && notesOpen && !document.querySelector("dialog[open]")) {
+      if (!isWideNotesViewport()) {
+        sidePaneOverlay = "";
+        syncNotebookVisibility();
+      } else if (sidePaneActiveMode === "notes" && notesExpanded) {
+        setNotesExpanded(false);
+      }
     }
   });
   if (typeof ResizeObserver === "function") {
@@ -13969,11 +15516,6 @@
   });
 
   // ───────────────────────────── natural reply-chain thread drawer
-  const thPopTabs = $("#collie-threads-tabs");
-  const thPopCntAll = $("#collie-threads-cnt-all");
-  const thPopCntActive = $("#collie-threads-cnt-active");
-  const thPopSub = $("#collie-threads-sub");
-  const thPopList = $("#collie-threads-list");
   let thPopFilter = "all"; // "all" | "active"
   let thPopSig = "";
 
@@ -14035,10 +15577,13 @@
         }
       }
     }
-    if (thPopList && !opts.skipMenu) {
+    if (thPopWrap && !opts.skipMenu) {
       const entries = chatEntries();
       renderCollieThreadsMenu(threadInfo || computeReplyThreads(entries), entries);
     }
+  }
+  function closeCollieThreadsPop() {
+    // Threads now live inside the unified #notes-pane side card; no standalone dropdown popover exists.
   }
   function setCollieThreadsFilter(nextFilter) {
     const f = nextFilter === "active" ? "active" : "all";
@@ -14050,13 +15595,13 @@
   let _thMenuRowsCache = { key: "", allRows: [], activeRows: [] };
   let _thPopInputSig = "";
   function renderCollieThreadsMenu(threadInfo, allEntries) {
-    if (!thPopList) return;
+    if (!thPopWrap || !thHeadBtn || !thPopList) return;
     const entries = allEntries || chatEntries();
     const info = threadInfo || computeReplyThreads(entries);
     const pendList = activePending();
     const pendKey = `${sup.hasPending ? 1 : 0}:${pendList.map((p) => p.id).join(",")}:${dismissedLocal.size ? [...dismissedLocal].join(",") : ""}`;
     const rowsKey = `${entriesFingerprint(entries)}|${workerStateFingerprint()}|${pendKey}`;
-    const fullInputSig = `${rowsKey}|${thPopFilter}|${activeThreadRoot || ""}|${dayBounds()}`;
+    const fullInputSig = `${rowsKey}|${thPopFilter}|${activeThreadRoot || ""}|${sidePanePref}|${sidePaneOverlay}|${dayBounds()}`;
     if (fullInputSig === _thPopInputSig) return;
     _thPopInputSig = fullInputSig;
 
@@ -14094,16 +15639,17 @@
       activeRows = allRows.filter((r) => r.inProgress);
       _thMenuRowsCache = { key: rowsKey, allRows, activeRows };
     }
-    const pendingRowsCount = allRows.filter((r) => r.pending).length;
-    dockPendingThreads = pendingRowsCount;
-    syncDockTriggerBadge();
-    if (dkThDot) dkThDot.hidden = pendingRowsCount === 0;
-    if (dkTabThreads) dkTabThreads.classList.toggle("has-unread", pendingRowsCount > 0);
-    if (dkThCnt) {
-      const badgeNum = pendingRowsCount > 0 ? pendingRowsCount : allRows.length;
-      dkThCnt.hidden = badgeNum === 0;
-      setText(dkThCnt, badgeNum > 0 ? String(badgeNum) : "");
+    const keepThreadsVisible = sidePanePref === "threads" || sidePaneOverlay === "threads";
+    if (!allRows.length && !keepThreadsVisible) {
+      thPopWrap.hidden = true;
+      thPopSig = "";
+      return;
     }
+    const pendingRowsCount = allRows.filter((r) => r.pending).length;
+    thPopWrap.hidden = false;
+    thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
+    thHeadBtn.classList.toggle("has-pending", pendingRowsCount > 0);
+    if (thHeadDot) thHeadDot.hidden = pendingRowsCount === 0;
     if (thPopCntAll) setText(thPopCntAll, String(allRows.length));
     if (thPopCntActive) setText(thPopCntActive, String(activeRows.length));
     if (thPopTabs) {
@@ -14119,7 +15665,7 @@
       setText(thPopSub, filtered.length > shown.length
         ? `前 ${shown.length} / ${filtered.length} 条`
         : pendingRowsCount > 0 ? `${pendingRowsCount} 条待处理`
-        : filtered.length > 0 ? "按最近活跃" : "");
+        : filtered.length > 0 ? `${filtered.length} 条` : "");
     }
     const sig = JSON.stringify([
       thPopFilter,
@@ -14174,12 +15720,31 @@
     e.stopPropagation();
     setCollieThreadsFilter(tab.dataset.thFilter);
   });
+  thHeadBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (view !== "collie") return;
+    if (notesOpen && sidePaneActiveMode === "threads") {
+      if (isWideNotesViewport()) persistSidePanePref("none");
+      else sidePaneOverlay = "";
+      syncNotebookVisibility();
+      return;
+    }
+    closeAllColliePopovers();
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
+    if ($("#app")?.classList?.contains("has-file")) closeFilePane();
+    if (isWideNotesViewport()) persistSidePanePref("threads");
+    else sidePaneOverlay = "threads";
+    const entries = chatEntries();
+    renderCollieThreadsMenu(computeReplyThreads(entries), entries);
+    syncNotebookVisibility();
+  });
   thPopList?.addEventListener("click", (e) => {
     const item = e.target.closest("[data-th-pick]");
     if (!item) return;
+    e.stopPropagation();
     const rootId = item.dataset.thPick;
     const latestId = item.dataset.thLatest || "";
-    if (!isWideNotesViewport()) notesManualOverlay = false;
+    if (!isWideNotesViewport()) sidePaneOverlay = "";
     if (rootId) openThreadDrawer(rootId, latestId, latestId);
   });
 
@@ -14199,7 +15764,6 @@
   const tdLocateRootBtn = $("#td-locate-root");
   const tdWidenBtn = $("#td-widen");
   const tdCloseBtn = $("#td-close");
-  const tdBackBtn = $("#td-back");
   const tdGripEl = $("#td-grip");
   const setThreadW = (w) => document.documentElement.style.setProperty("--thread-w", Math.round(w) + "px");
   const threadAvail = () => {
@@ -14622,8 +16186,7 @@
         maxTop,
         tdBodyEl.scrollTop + (nr.top - br.top) - Math.max(16, (tdBodyEl.clientHeight - nr.height) / 2),
       ));
-      if (typeof tdBodyEl.scrollTo === "function") tdBodyEl.scrollTo({ top: want, behavior: smooth ? "smooth" : "auto" });
-      else tdBodyEl.scrollTop = want;
+      smartScrollCollie(tdBodyEl, want, { markMs: 220 });
     }
     clearTimeout(tdFocusTimer);
     tdListEl.querySelectorAll(".td-node.is-focused").forEach((n) => n.classList.remove("is-focused"));
@@ -15077,7 +16640,16 @@
     tdDrawer.style.transform = "";
     if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = false; }
     tdDrawer.setAttribute("aria-hidden", "false");
+    $("#v-collie")?.classList?.remove("is-main-focused");
     appEl.classList.add("has-thread");
+    if (innerWidth > 1000) {
+      // Quietly hide the main-stream thinking row and clear left focus while side-by-side drawer takes focus.
+      const wk = $("#super-working"), st = $("#router-status");
+      if (wk) wk.hidden = true;
+      if (st) st.hidden = false;
+      const ae = document.activeElement;
+      if (ae && $("#v-collie")?.contains?.(ae) && typeof ae.blur === "function") ae.blur();
+    }
     syncNotebookVisibility();
     syncActiveThreadMarks(info);
     const hasRestore = typeof opts.restoreScrollTop === "number";
@@ -15113,6 +16685,7 @@
     if (tdScrim) tdScrim.style.opacity = "";
     appEl.classList.remove("has-thread");
     appEl.classList.remove("thread-wide");
+    $("#v-collie")?.classList?.remove("is-main-focused");
     syncThreadWideUI();
     syncNotebookVisibility();
     tdDrawer.setAttribute("aria-hidden", "true");
@@ -15127,6 +16700,9 @@
       syncActiveThreadMarks();
       if (lockSnap) {
         beginCollieLayoutLock(lockSnap, { trackTransition: hadThread && innerWidth > 1000 && !opts.immediate });
+      }
+      if (hadThread && innerWidth > 1000) {
+        renderSuper(lockSnap ? { restore: lockSnap } : undefined);
       }
     }
   }
@@ -15144,6 +16720,12 @@
       if (innerWidth <= 1000 || !activeThreadRoot) return;
       setThreadWide(!threadWide);
     });
+    $("#v-collie")?.addEventListener("pointerdown", () => {
+      if (isDesktopThreadSideBySide()) $("#v-collie")?.classList?.add("is-main-focused");
+    });
+    tdDrawer.addEventListener("pointerdown", () => {
+      $("#v-collie")?.classList?.remove("is-main-focused");
+    });
     $("#v-collie")?.addEventListener("click", (e) => {
       if (!activeThreadRoot || !threadWide || innerWidth <= 1000) return;
       if (window.getSelection?.()?.toString()) return;
@@ -15155,7 +16737,6 @@
       else syncThreadWideUI();
     });
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
-    tdBackBtn?.addEventListener("click", () => closeThreadDrawer());
     tdScrim?.addEventListener("click", () => closeThreadDrawer());
     tdHandleBtn?.addEventListener("click", () => {
       if (performance.now() < tdSkipHandleClickUntil) return;
@@ -15962,12 +17543,11 @@
     }
     return out;
   }
-  const isSyntheticClipImg = (f, now = Date.now()) => {
+  const isSyntheticClipImg = (f) => {
     if (!f || !isImageFile(f)) return false;
     const n = String(f.name || "").trim();
-    const generic = !n || /^image\.(png|jpe?g|webp|gif|bmp)$/i.test(n) || /^picture\.(png|jpe?g)$/i.test(n);
-    if (!generic) return false;
-    return !f.lastModified || Math.abs(now - f.lastModified) < 5000;
+    return !n
+      || /^(?:image|picture|clipboard|paste|粘贴的图片)(?:[ _-]?\d+)?\.(?:png|jpe?g|webp|gif|bmp|tiff?)$/i.test(n);
   };
   function collectTransferFiles(dt) {
     if (!dt) return [];
@@ -15979,6 +17559,9 @@
         try {
           const f = item.getAsFile?.();
           if (f && !seenObj.has(f)) {
+            if (!f.type && item.type) {
+              try { f._itemType = item.type; } catch {}
+            }
             seenObj.add(f);
             itemKeys.add(keyOf(f));
             out.push(f);
@@ -15995,38 +17578,37 @@
     return out;
   }
   function buildTransferEntries(rawFiles, htmlImgs, source) {
-    const now = Date.now();
+    const htmlCands = (htmlImgs || []).slice(0, 1).map((h) => ({ prebuilt: { ...h, fromHtml: true } }));
     if (!rawFiles.length) {
-      return htmlImgs.map((h) => ({ candidates: [{ prebuilt: h }] }));
+      return (htmlImgs || []).map((h) => ({ candidates: [{ prebuilt: { ...h, fromHtml: true } }] }));
     }
     if (rawFiles.length === 1) {
       const f = rawFiles[0];
-      const extra = (source === "paste" || source === "drop") && isImageFile(f) && htmlImgs.length
-        ? htmlImgs.slice(0, 1).map((h) => ({ prebuilt: h }))
-        : [];
+      const extra = (source === "paste" || source === "drop") && isImageFile(f) ? htmlCands : [];
       return [{ candidates: [{ file: f }, ...extra] }];
     }
     if (source === "paste" && rawFiles.every(isImageFile)) {
-      const nonSynth = rawFiles.filter((f) => !isSyntheticClipImg(f, now));
+      const nonSynth = rawFiles.filter((f) => !isSyntheticClipImg(f));
       const sameStem = new Set(rawFiles.map((f) => stemOf(f.name)).filter(Boolean)).size <= 1;
-      if (nonSynth.length <= 1 || sameStem) {
+      const hasHashCache = rawFiles.some((f) => isHashCacheName(f.name));
+      if (nonSynth.length <= 1 || sameStem || (hasHashCache && rawFiles.length <= 3)) {
         return [{
           candidates: [
             ...rawFiles.map((f) => ({ file: f })),
-            ...htmlImgs.slice(0, 1).map((h) => ({ prebuilt: h })),
+            ...htmlCands,
           ],
         }];
       }
     }
-    return rawFiles.map((f) => ({ candidates: [{ file: f }] }));
+    return rawFiles.map((f) => ({ candidates: [{ file: f }, ...(source === "paste" && isImageFile(f) ? htmlCands : [])] }));
   }
-  function startReadCandidate(cand, source, now = Date.now()) {
+  function startReadCandidate(cand, source) {
     if (cand.prebuilt) {
       return Promise.resolve({ ok: true, ...cand.prebuilt, synthetic: true });
     }
     const file = cand.file;
-    const mime = guessMime(file);
-    const img = isImageFile(file);
+    const mime = guessMime(file) || String(file?._itemType || "").toLowerCase();
+    const img = isImageFile(file) || mime.startsWith("image/");
     if ((file?.size || 0) > MAX_UPLOAD_BYTES) {
       return Promise.resolve({ ok: false, reason: "too-large", file });
     }
@@ -16056,7 +17638,7 @@
         type: mime,
         size: file?.size || 0,
         sniffed: img ? mime : "",
-        synthetic: isSyntheticClipImg(file, now),
+        synthetic: isSyntheticClipImg(file),
         file,
       });
     }
@@ -16076,12 +17658,12 @@
         type: finalMime,
         size: byteLen,
         sniffed,
-        synthetic: isSyntheticClipImg(file, now),
+        synthetic: isSyntheticClipImg(file),
         file,
       };
     }, (err) => ({ ok: false, reason: "unreadable", err, file }));
   }
-  const CLIP_IMG_TYPES = ["image/png", "image/jpeg", "image/webp"];
+  const CLIP_IMG_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
   async function readClipboardBitmapFallback(baseName) {
     if (typeof navigator === "undefined" || typeof navigator.clipboard?.read !== "function") return null;
     if (window.isSecureContext === false) return null;
@@ -16089,26 +17671,32 @@
       const items = await navigator.clipboard.read();
       for (const item of items || []) {
         const types = Array.isArray(item?.types) ? item.types : [];
-        const match = CLIP_IMG_TYPES.find((t) => types.includes(t))
-          || types.find((t) => typeof t === "string" && t.startsWith("image/"));
-        if (!match || typeof item.getType !== "function") continue;
-        const raw = await item.getType(match);
-        if (!raw) continue;
-        const buf = typeof raw.arrayBuffer === "function" ? await raw.arrayBuffer() : null;
-        const byteLen = buf ? buf.byteLength : (raw.size || 0);
-        if (!byteLen || byteLen > MAX_UPLOAD_BYTES) continue;
-        const sniffed = buf ? sniffImageMime(buf) : "";
-        const finalMime = sniffed || raw.type || match;
-        const blob = buf && typeof Blob === "function" ? new Blob([buf], { type: finalMime }) : raw;
-        return {
-          ok: true,
-          blob,
-          name: swapExtForMime(baseName || "粘贴的图片.png", finalMime),
-          type: finalMime,
-          size: byteLen,
-          sniffed: sniffed || finalMime,
-          synthetic: true,
-        };
+        const imgTypes = [
+          ...CLIP_IMG_TYPES.filter((t) => types.includes(t)),
+          ...types.filter((t) => typeof t === "string" && t.startsWith("image/") && !CLIP_IMG_TYPES.includes(t)),
+        ];
+        if (!imgTypes.length || typeof item.getType !== "function") continue;
+        for (const match of imgTypes) {
+          try {
+            const raw = await item.getType(match);
+            if (!raw) continue;
+            const buf = typeof raw.arrayBuffer === "function" ? await raw.arrayBuffer() : null;
+            const byteLen = buf ? buf.byteLength : (raw.size || 0);
+            if (!byteLen || byteLen > MAX_UPLOAD_BYTES) continue;
+            const sniffed = buf ? sniffImageMime(buf) : "";
+            const finalMime = sniffed || raw.type || match;
+            const blob = buf && typeof Blob === "function" ? new Blob([buf], { type: finalMime }) : raw;
+            return {
+              ok: true,
+              blob,
+              name: swapExtForMime(baseName || "粘贴的图片.png", finalMime),
+              type: finalMime,
+              size: byteLen,
+              sniffed: sniffed || finalMime,
+              synthetic: true,
+            };
+          } catch {}
+        }
       }
     } catch {}
     return null;
@@ -16238,6 +17826,11 @@
         if (!f.removed) {
           f.path = d.path;
           if (typeof d.size === "number" && d.size > 0) f.size = d.size;
+          if (f.isImage && f.path && f.blob && !thumbs.get(f.path)) {
+            try {
+              thumbs.set(f.path, URL.createObjectURL(f.blob));
+            } catch {}
+          }
         }
       } catch (err) {
         if (f.removed) return;
@@ -16253,25 +17846,25 @@
       }
     };
     const addEntries = (entries, source = "pick") => {
-      const now = Date.now();
       let pasteClipReadUsed = false;
       for (const entry of entries) {
         const cands = entry.candidates || [];
         if (!cands.length) continue;
         // Start reading all candidate handles synchronously before the paste/drop
         // event finishes so transient clipboard file handles stay accessible.
-        const attempts = cands.map((c) => startReadCandidate(c, source, now));
-        const primary = cands.find((c) => c.file && !isSyntheticClipImg(c.file, now))?.file
+        const attempts = cands.map((c) => startReadCandidate(c, source));
+        const primary = cands.find((c) => c.file && !isSyntheticClipImg(c.file))?.file
           || cands[0].file
           || cands[0].prebuilt;
+        const primaryMime = guessMime(primary) || String(primary?._itemType || "").toLowerCase();
         const f = {
-          name: primary?.name || (isImageFile(primary) ? "粘贴的图片.png" : "文件"),
+          name: primary?.name || (isImageFile(primary) || primaryMime.startsWith("image/") ? "粘贴的图片.png" : "文件"),
           size: primary?.size || 0,
-          isImage: isImageFile(primary),
+          isImage: isImageFile(primary) || primaryMime.startsWith("image/"),
           thumb: "",
           thumbFailed: false,
           blob: null,
-          mime: guessMime(primary),
+          mime: primaryMime,
           machine: "",
           path: "",
           err: "",
@@ -16284,16 +17877,22 @@
         f.done = (async () => {
           const results = await Promise.all(attempts);
           if (f.removed) return;
-          const good = results.filter((r) => r.ok);
-          let winner = good.find((r) => !r.synthetic && r.sniffed)
-            || good.find((r) => r.sniffed)
-            || good.find((r) => !r.synthetic && !isUnpreviewableImage(r.type))
-            || good[0];
+          // 1) Prefer readable clipboardData file items first (e.g. WeChat memory image/png when sandboxed .jpg fails).
+          const goodFile = results.filter((r) => r.ok && !r.fromHtml);
+          let winner = goodFile.find((r) => !r.synthetic && r.sniffed)
+            || goodFile.find((r) => r.sniffed)
+            || goodFile.find((r) => !r.synthetic && !isUnpreviewableImage(r.type))
+            || goodFile[0];
           const tooBig = !winner && results.some((r) => r.reason === "too-large");
+          // 2) If all clipboardData file entries failed to read, try navigator.clipboard.read() bitmap fallback.
           if (!winner && !tooBig && source === "paste" && f.isImage && !pasteClipReadUsed) {
             pasteClipReadUsed = true;
             winner = await readClipboardBitmapFallback(f.name);
             if (f.removed) return;
+          }
+          // 3) Final fallback: text/html data:image/ embedded bitmap.
+          if (!winner && !tooBig) {
+            winner = results.find((r) => r.ok && r.fromHtml) || null;
           }
           if (!winner) {
             const info = tooBig
@@ -16382,7 +17981,10 @@
       }
       if (!plain.trim() && /<img\b[^>]*\bsrc\s*=/i.test(html)) {
         e.preventDefault();
-        toast("剪贴板里的图片已失效或受限，请重新复制或直接拖入/选择文件", "attn");
+        readClipboardBitmapFallback("粘贴的图片.png").then((rec) => {
+          if (rec?.ok) addEntries([{ candidates: [{ prebuilt: rec }] }], "paste");
+          else toast("剪贴板里的图片已失效或受限，请重新复制或直接拖入/选择文件", "attn");
+        });
       }
     });
     form.addEventListener("dragover", (e) => { if (hasDragFiles(e.dataTransfer)) { e.preventDefault(); form.classList.add("drop"); } });
@@ -16437,6 +18039,39 @@
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
   const linkUserFiles = (escaped) => escaped.replace(FILE_RE, (_, pre, p) => `${pre}<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`);
+  function parseUserParts(raw) {
+    const t = String(raw || "");
+    const i = t.lastIndexOf("附件：\n");
+    let bodyRaw = i >= 0 ? t.slice(0, i).trimEnd() : t;
+    const imgs = [];
+    const rest = [];
+    if (bodyRaw.includes("[image:")) {
+      bodyRaw = bodyRaw.replace(IMG_TOKEN, (_, p) => {
+        if (p) imgs.push(p);
+        return "";
+      }).replace(/^\n+|\n+$/g, "");
+    }
+    if (i >= 0) {
+      const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
+      for (const p of paths) {
+        if (IMG_EXT.test(p)) imgs.push(p);
+        else rest.push(p);
+      }
+    }
+    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
+    const textHtml = bodyRaw ? linkUserFiles(esc(bodyRaw)) : "";
+    const attHtml = rest.length
+      ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>`
+      : "";
+    return { imgs, textHtml, attHtml, hasBubbleContent: !!(textHtml || attHtml) };
+  }
+  function renderUserMedia(imgs) {
+    if (!imgs.length) return "";
+    const gridCls = imgs.length === 1 ? "is-single"
+      : (imgs.length === 2 || imgs.length === 4) ? "is-grid-2"
+      : "is-grid-3";
+    return `<div class="mine-media ${gridCls}" data-count="${imgs.length}"><span class="thumbs">${imgs.map(thumbBtn).join("")}</span></div>`;
+  }
   function userText(t) {
     const i = t.lastIndexOf("附件：\n");
     if (i < 0) return withImages(linkUserFiles(esc(t)));
@@ -16583,6 +18218,7 @@
     if (opener) {
       const m = $("#" + opener.dataset.menu);
       const willOpen = opener.dataset.menu === "collie-menu" ? !collieMenuOpen : !!m?.hidden;
+      closeCollieThreadsPop({ sync: false });
       if (opener.dataset.menu === "collie-menu" && willOpen && superSearchOpen) {
         closeSuperSearchFn?.(false);
       }

@@ -92,9 +92,14 @@ func TestSuperStateSlimsEndedWorkersPreservesActiveAndShow(t *testing.T) {
 		CreatedAt:  now.Add(-30 * time.Minute),
 		ReportAt:   now.Add(-20 * time.Minute),
 	}
+	sup.st.Timers = []*Timer{
+		{ID: "m1", Spec: "daily 09:00", Text: "晨报", Enabled: true, NextRun: now.Add(time.Hour)},
+		{ID: "m2", Spec: "in 30m", Text: "复核", Enabled: true, NextRun: now.Add(30 * time.Minute)},
+		{ID: "m3", Spec: "daily 10:00", Text: "已停用", Enabled: false, NextRun: now.Add(2 * time.Hour)},
+	}
 	sup.mu.Unlock()
 
-	// 1) GET /api/super slims ended/gone/stopped copies while keeping active untouched
+	// 1) GET /api/super slims ended/gone/stopped copies while keeping active untouched and reports timers_count
 	rec := call(http.MethodGet, "/api/super", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /api/super status=%d body=%s", rec.Code, rec.Body.String())
@@ -102,6 +107,9 @@ func TestSuperStateSlimsEndedWorkersPreservesActiveAndShow(t *testing.T) {
 	var view superView
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatalf("unmarshal /api/super: %v", err)
+	}
+	if view.TimersCount != 2 {
+		t.Fatalf("timers_count = %d, want 2 (only enabled timers)", view.TimersCount)
 	}
 	byName := map[string]*Worker{}
 	for _, w := range view.Workers {
@@ -176,16 +184,32 @@ assert.ok(cssSrc.includes(".side.is-scroll-paused .dot::after"), "scroll-pause g
 assert.ok(!/\.dot\.idle\s*\{[^}]*animation:/.test(cssSrc), ".dot.idle must be calm static with zero infinite animation");
 assert.ok(cssSrc.includes("wait-halo 2.8s ease-in-out infinite"), "preserve active wait-halo animation contract");
 
-// 1b) Unified Right Dock「小本本 | 话题线」+ clean panel-right icon + single-state + v0.2.94 left-biased layout
-assert.ok(!htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"'), "separate top-bar threads popover must be merged into unified right dock");
-assert.ok(!htmlSrc.includes('id="np-tasks-more"') && !htmlSrc.includes('id="np-back"'), "single-state dock must omit expand/back controls");
-assert.ok(htmlSrc.includes('id="dk-tablist"') && htmlSrc.includes('id="dk-tab-notes"') && htmlSrc.includes('id="dk-tab-threads"'), "unified dock must expose accessible dual-tab bar");
-assert.ok(htmlSrc.includes('id="dk-panel-notes"') && htmlSrc.includes('id="dk-panel-threads"'), "unified dock must expose dual tabpanels");
-assert.ok(htmlSrc.includes('class="dock-ico-pane"') && htmlSrc.includes('M15 4v16'), "unified dock trigger must use crisp panel-right linear SVG");
-assert.ok(!htmlSrc.match(/id="open-notes-btn"[\s\S]*?<\/button>/)[0].includes("<circle"), "dock trigger icon must not contain microwave-style dots");
+// 1b) v0.3.2 Symmetrical plain-text 话题线 & 小本本 triggers sharing unified right floating card, peer modal anti-clip + human copy, desktop drawer main-stream calm & detached user media cards
+assert.ok(htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"') && htmlSrc.includes('id="np-threads-body"'), "threads list must live inside unified #notes-pane without standalone #collie-threads-pop dropdown");
+assert.ok(!htmlSrc.includes('id="dk-tablist"') && !htmlSrc.includes('id="dk-tab-notes"') && !htmlSrc.includes('id="dk-tab-threads"'), "notebook card must drop dual-tab bar and restore pure v0.2.94 header");
+assert.ok(!htmlSrc.includes("展开详情"), "notebook card must never include a bottom 展开详情 text bar");
+assert.ok(htmlSrc.includes('id="np-tasks-more"') && htmlSrc.includes('id="np-files-more"') && htmlSrc.includes('id="np-timers-more"'), "notebook must restore +N overflow pills");
+const notesBtnHtml = htmlSrc.match(/<button[^>]*id="open-notes-btn"[\s\S]*?<\/button>/)?.[0] || "";
+const thBtnHtml = htmlSrc.match(/<button[^>]*id="collie-threads-btn"[\s\S]*?<\/button>/)?.[0] || "";
+assert.ok(notesBtnHtml.includes("小本本") && !notesBtnHtml.includes("<svg"), "notebook trigger must be plain-text 小本本 button without SVG icon");
+assert.ok(thBtnHtml.includes("话题线") && !thBtnHtml.includes("<svg"), "threads trigger must be plain-text 话题线 button without SVG icon");
+assert.ok(thBtnHtml.includes('id="collie-threads-dot"') && !thBtnHtml.includes('id="collie-threads-cnt"'), "threads trigger must expose subtle pending dot without trailing number badge");
+assert.ok(!htmlSrc.includes('id="td-back"'), "thread focus drawer header must omit redundant ← 话题线 back button");
+assert.ok(!cssSrc.includes(".collie-top::after") && !cssSrc.includes(".collie-top.is-scrolled"), ".collie-top must stay seamless without bottom hairline or fog veil");
+assert.ok(!appSrc.includes("+ 添加好友边牧"), "integrations top status row must not render redundant + 添加好友边牧 CTA button");
 assert.ok(cssSrc.includes("--notes-reserve: calc(var(--notes-w) + var(--notes-gap))"), "wide desktop must preserve v0.2.94 left-biased --notes-reserve layout");
-assert.ok(cssSrc.includes(".notepane.is-hidden") && cssSrc.includes("transform-origin: calc(100% - 16px) -12px"), "desktop dock open/close must use compositor transform+opacity from top-right origin");
-assert.ok(cssSrc.includes(".dk-tabs::before") && cssSrc.includes("border-block-end: 1.5px solid var(--fg)"), "tab underline must use border-block-end with anchor positioning");
+assert.ok(cssSrc.includes(".notepane.is-hidden") && cssSrc.includes("transform-origin: right top") && cssSrc.includes("translate3d(12px, 0, 0) scale(.985)"), "desktop notebook open/close must use silky compositor transform+opacity");
+assert.ok(cssSrc.includes("transform: translate3d(var(--notes-shift), 0, 0)"), "main chat yield for notebook must use pure GPU transform translate3d without column-width rewrap");
+assert.ok(cssSrc.includes(".np-fold") && cssSrc.includes("grid-template-rows: 0fr") && cssSrc.includes("grid-template-rows: 1fr"), "notebook compact<->expand must use isolated 0fr->1fr grid-row disclosure");
+assert.ok(cssSrc.includes("#v-collie.is-parked") && cssSrc.includes("contain: strict"), "#v-collie must use parked layer with strict containment instead of display:none churn");
+assert.ok(cssSrc.includes(".peer-qr-card") && cssSrc.includes("min-height: 214px"), "peer QR card must keep stable min-height to prevent tab/mode flicker");
+assert.ok(cssSrc.includes('dialog.int-sheet[data-modal-kind="peers"]') && cssSrc.includes("max-height: min(620px, calc(100dvh - 32px))") && !cssSrc.includes("min-height: min(620px, calc(var(--vh) - 180px))"), "peer modal must enforce max-height: min(620px, calc(100dvh - 32px)) and flex scroll without clipping footer");
+assert.ok(appSrc.includes("内网 / Tailscale 直连 · 令牌仅存本机") && !appSrc.includes("窄权令牌存 secrets.json"), "peer modal subtitle must use plain human language without secrets.json jargon");
+assert.ok(appSrc.includes("先帮我查清，草稿给我审") && appSrc.includes("只留个便签，不自动回复") && appSrc.includes("查完给方案，批准再干活"), "peer reception modes must use plain human language");
+assert.ok(cssSrc.includes(".app.has-thread #v-collie .viewer") && cssSrc.includes(".is-main-focused"), "desktop side-by-side thread drawer must gently dim left main stream and restore on hover/focus/click");
+assert.ok(cssSrc.includes(".mine-media") && cssSrc.includes(".msg.user.is-media-only"), "user image messages must render detached rounded media cards above compact text bubble or standalone without dark box");
+assert.ok(appSrc.includes("function syncPeerModalTabs") && appSrc.includes("function patchPeerQRCard") && appSrc.includes("invitesByMode"), "peer modal must mount once, cache invites, and patch in-place");
+assert.ok(appSrc.includes("async function smartScrollCollie") && appSrc.includes("function syncSideActive") && appSrc.includes("function setCollieParked"), "smartScrollCollie, O(1) syncSideActive, and parked #v-collie must exist");
 
 // 1c) Homepage & README Gemini / Antigravity copy
 assert.ok(homeHtml.includes("Gemini") && homeHtml.includes("专武") && homeHtml.includes("Cursor"), "docs/index.html must include restrained bilingual Gemini/Antigravity positioning");
@@ -260,10 +284,10 @@ for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#compo
 }
 getEl("#re-draft")._qs[".re-t"] = makeEl("#re-draft .re-t");
 getEl("#re-draft")._qs["button"] = makeEl("#re-draft button");
-getEl("#dk-tab-notes").dataset.dkTab = "notes";
-getEl("#dk-tab-threads").dataset.dkTab = "threads";
 getEl("#super-search").hidden = true;
 getEl("#collie-menu").hidden = true;
+getEl("#collie-threads-pop").hidden = true;
+getEl("#file-view").hidden = true;
 
 const docListeners = new Map();
 const storage = new Map();
@@ -322,7 +346,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, syncAnimPowerState, superThreadWorkerFingerprint, setDockTab, getDockTab: () => dockTab, syncNotebookVisibility, renderCollieThreadsMenu, replyOptsMarkup, bucketDoneMemoryItems, renderMemoryHTML, showFilePane, closeFilePane, getCollieLayoutLock: () => collieLayoutLock };\n})();"
+  "  globalThis.__test = { setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, syncAnimPowerState, superThreadWorkerFingerprint, setNotesExpanded, getNotesExpanded: () => notesExpanded, syncNotebookVisibility, setNotebookData: (d) => { notebookData = d; }, renderCollieThreadsMenu, formatAutoNavSub, integrationsHTML, openThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, replyOptsMarkup, bucketDoneMemoryItems, renderMemoryHTML, showFilePane, closeFilePane, getCollieLayoutLock: () => collieLayoutLock, smartScrollCollie, renderPrefs, renderSuper, setCollieStickBottom: (v) => { collieStickBottom = !!v; }, getCollieStickBottom: () => collieStickBottom };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -353,7 +377,7 @@ assert.equal(doc.documentElement.classList.contains("is-bg"), true, "document.hi
 doc.hidden = false;
 T.syncAnimPowerState();
 
-// 2b) Unified dock tab navigation, beforematch, unread dot when collapsed
+// 2b) Independent top-bar 话题线 popover & 小本本 compact<->expand + Escape collapse + mutual exclusion
 T.setView("collie");
 const nowIso = new Date().toISOString();
 T.setSup({
@@ -362,29 +386,58 @@ T.setSup({
   pending: [{ id: "e1", at: nowIso, summary: "要发布吗？", options: ["发版", "暂缓"] }],
   workers: [],
 });
+T.setNotebookData({
+  date: "2026-11-27",
+  tasks: [
+    { id: "t1", title: "任务 1", note: "详情 1", tone: "live" },
+    { id: "t2", title: "任务 2", note: "详情 2", tone: "attn" },
+    { id: "t3", title: "任务 3", note: "详情 3", tone: "live" },
+    { id: "t4", title: "任务 4", note: "详情 4", tone: "idle" },
+  ],
+  artifacts: [],
+  timers: [],
+});
 ctx.innerWidth = 1440;
 T.syncNotebookVisibility();
 T.renderCollieThreadsMenu();
-assert.equal(getEl("#dock-trigger-dot").hidden, true, "top-bar unread dot hides while dock is open");
-assert.equal(getEl("#dk-th-dot").hidden, false, "threads tab unread dot shows for pending thread");
-assert.equal(getEl("#dk-th-cnt").textContent, "1");
+assert.equal(getEl("#collie-threads-wrap").hidden, false);
+assert.equal(getEl("#collie-threads-dot").hidden, false, "threads button shows pending dot when pending > 0");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
+assert.equal(T.getNotesExpanded(), false);
 
-// Collapse dock -> top-bar unread dot appears
+// Expand via blank click, collapse via Escape
+getEl("#notes-pane").dispatch("click", { target: makeEl("blank") });
+assert.equal(T.getNotesExpanded(), true);
+assert.equal(getEl("#notes-pane").classList.contains("is-expanded"), true);
+doc.dispatch("keydown", { key: "Escape" });
+assert.equal(T.getNotesExpanded(), false, "Escape collapses expanded floating notebook back to compact");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape from expanded stays open in compact state");
+
+// Switch side card in-place to 话题线 -> persists "threads"; click again -> closes & persists "none"; click 小本本 -> restores "notes"
+getEl("#collie-threads-btn").dispatch("click");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads");
+assert.equal(getEl("#np-threads-body").hidden, false);
+assert.equal(getEl("#np-body").hidden, true);
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "threads", "switching to threads persists collie.sidePane = threads");
+getEl("#collie-threads-btn").dispatch("click");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
+assert.equal(getEl("#notes-pane").inert, true);
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "none", "closing side card persists collie.sidePane = none");
+getEl("#open-notes-btn").dispatch("click");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "notes", "reopening notebook persists collie.sidePane = notes");
+
+// Close & reopen notebook via card close × button
 getEl("#np-close").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
 assert.equal(getEl("#notes-pane").inert, true);
-assert.equal(getEl("#dock-trigger-dot").hidden, false, "top-bar unread dot must appear when dock is collapsed with pending threads");
-
-// Reopen via single top-bar trigger & keyboard ArrowRight switches tab
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "none");
 getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
-assert.equal(getEl("#dock-trigger-dot").hidden, true);
-getEl("#dk-tablist").dispatch("keydown", { key: "ArrowRight" });
-assert.equal(T.getDockTab(), "threads", "ArrowRight must switch dock tab to threads");
-assert.equal(getEl("#dk-panel-notes").hidden, "until-found", "inactive panel must use hidden=until-found");
-assert.equal(getEl("#dk-panel-threads").hidden, false);
-getEl("#dk-panel-notes").dispatch("beforematch");
-assert.equal(T.getDockTab(), "notes", "beforematch on hidden panel must activate that tab");
+assert.equal(getEl("#notes-pane").inert, false);
 
 // 2c) Decision card free-text reply dedup (#t11377)
 const decEntry = { id: "e50", role: "collie", text: "怎么处理？", at: "2026-11-27T10:00:00Z", options: ["方案 A", "方案 B"] };
@@ -468,7 +521,120 @@ assert.ok(!getEl("#app").classList.contains("has-file"), "closeFilePane must rem
 const closeLock = T.getCollieLayoutLock();
 assert.ok(closeLock && closeLock.snap && closeLock.snap.anchorId === "e42", "closeFilePane must preserve layout scroll lock so closing CSV/file preview does not drift main chat");
 
-console.log("OK: all v0.2.95 perf, right-dock, memory-bucket, reply-dedup & filepane-anchor checks passed");
+// 2f) Sidebar 自动化 overview subtitle & clean integrations top row
+assert.deepEqual(
+  T.formatAutoNavSub({ integrations_summary: { connected: 2, error: 0 }, peers_summary: { enabled: true, active: 1 }, timers_count: 3 }),
+  { text: "3 接入 · 3 定时", err: false, title: "" },
+);
+assert.equal(
+  T.formatAutoNavSub({ integrations_summary: { connected: 2, error: 1 }, timers_count: 2 }).text,
+  "1 接入异常 · 2 定时",
+);
+assert.equal(
+  T.formatAutoNavSub({ integrations_summary: { connected: 0, error: 0 }, timers_count: 0 }).text,
+  "接入与定时",
+);
+const intHtml = T.integrationsHTML({ integrations: [], notify: {}, hook_key: "k" }, { enabled: true, peers: [] });
+assert.ok(!intHtml.includes("+ 添加好友边牧"), "integrations top status row must omit redundant + 添加好友边牧 button");
+assert.ok(intHtml.includes("peer-int-card") && intHtml.includes('data-peer-open="auto"'), "peer card entry must remain intact");
+
+(async () => {
+  // 2g) #t11669 Distance-aware smartScrollCollie: near -> direct smooth; far -> auto teleport ~180px + short smooth glide
+  const calls = [];
+  const fakeSc = {
+    scrollTop: 0,
+    scrollHeight: 12000,
+    clientHeight: 800,
+    scrollTo({ top, behavior }) {
+      calls.push({ top: Math.round(top), behavior });
+      this.scrollTop = top;
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  // Near jump (600px <= 1200px): single smooth scroll
+  calls.length = 0;
+  const nearMode = await T.smartScrollCollie(fakeSc, 600);
+  assert.equal(nearMode, "smooth", "near jump must use direct smooth scroll");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].behavior, "smooth");
+  assert.equal(calls[0].top, 600);
+
+  // Far jump downward (600 -> 9000, delta=8400 > 1200): instant auto teleport to 8820, rAF, then 180px smooth glide to 9000
+  calls.length = 0;
+  rafQueue.length = 0;
+  const farPromise = T.smartScrollCollie(fakeSc, 9000);
+  assert.equal(calls.length, 1, "far jump must synchronously teleport first before rAF");
+  assert.equal(calls[0].behavior, "auto", "far jump teleport must use behavior:auto");
+  assert.equal(calls[0].top, 8820, "far jump must teleport to 180px before target (9000-180)");
+  while (rafQueue.length) rafQueue.shift()(16);
+  const farMode = await farPromise;
+  assert.equal(farMode, "teleport-glide", "far jump must complete with teleport-glide");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].behavior, "smooth", "second phase must be short smooth glide");
+  assert.equal(calls[1].top, 9000);
+
+  // Far jump upward (9000 -> 400): instant auto teleport to 580, rAF, then smooth glide to 400
+  calls.length = 0;
+  rafQueue.length = 0;
+  const upPromise = T.smartScrollCollie(fakeSc, 400);
+  assert.equal(calls[0].behavior, "auto");
+  assert.equal(calls[0].top, 580, "upward far jump must teleport to 180px below target (400+180)");
+  while (rafQueue.length) rafQueue.shift()(32);
+  await upPromise;
+  assert.equal(calls[1].behavior, "smooth");
+  assert.equal(calls[1].top, 400);
+
+  // 2h) #t11654 / #t11679: Parked #v-collie preserves layout tree across route switches & renderPrefs caches unchanged HTML
+  T.setBooted(true);
+  T.setView("");
+  ctx.location.hash = "#/collie";
+  T.route();
+  assert.equal(getEl("#v-collie").hidden, false);
+  assert.equal(getEl("#v-collie").classList.contains("is-parked"), false);
+  const prefsEl = getEl("#prefs-body");
+  let prefsHtmlWrites = 0;
+  let prefsHtmlVal = prefsEl.innerHTML;
+  Object.defineProperty(prefsEl, "innerHTML", {
+    get: () => prefsHtmlVal,
+    set: (v) => { prefsHtmlWrites++; prefsHtmlVal = v; },
+    configurable: true,
+  });
+  ctx.location.hash = "#/prefs";
+  T.route();
+  assert.equal(getEl("#v-collie").hidden, false, "leaving #/collie must keep #v-collie mounted (not display:none)");
+  assert.equal(getEl("#v-collie").classList.contains("is-parked"), true, "leaving #/collie must apply .is-parked");
+  assert.equal(getEl("#v-collie").getAttribute("aria-hidden"), "true", "parked #v-collie must set aria-hidden");
+  assert.equal(prefsHtmlWrites, 1, "first visit to #/prefs writes HTML once");
+  ctx.location.hash = "#/collie";
+  T.route();
+  assert.equal(getEl("#v-collie").classList.contains("is-parked"), false, "returning to #/collie unparks instantly");
+  assert.equal(getEl("#v-collie").hasAttribute("aria-hidden"), false, "unparked #v-collie restores a11y visibility");
+  ctx.location.hash = "#/prefs";
+  T.route();
+  assert.equal(prefsHtmlWrites, 1, "second visit to #/prefs with unchanged state must skip innerHTML rebuild");
+
+  // 2i) #t11640: Sticky-bottom snaps when attachment <img> finishes loading, and yields when user wheels upward
+  ctx.location.hash = "#/collie";
+  T.route();
+  const threadBox = getEl("#super-thread");
+  const chatSc = threadBox.parentElement;
+  chatSc.scrollHeight = 1400;
+  chatSc.clientHeight = 600;
+  chatSc.scrollTop = 800;
+  T.setCollieStickBottom(true);
+  chatSc.scrollHeight = 1950; // simulate async image expanding bubble height
+  threadBox.dispatch("load", { target: { tagName: "IMG" } });
+  assert.equal(chatSc.scrollTop, 1950, "image load while sticky-bottom must re-snap scroller to bottom");
+  chatSc.dispatch("wheel", { deltaY: -40 });
+  assert.equal(T.getCollieStickBottom(), false, "upward wheel must immediately cancel sticky-bottom");
+  chatSc.scrollTop = 1200;
+  chatSc.scrollHeight = 2300;
+  threadBox.dispatch("load", { target: { tagName: "IMG" } });
+  assert.equal(chatSc.scrollTop, 1200, "image load after upward wheel must not yank user back to bottom");
+
+  console.log("OK: all v0.2.95+v0.3.1 perf, notebook/threads split, memory-bucket, reply-dedup, filepane-anchor, auto-sub, smart-scroll, parked-view & image-stick checks passed");
+})().catch((e) => { console.error(e); process.exit(1); });
 `
 	cmd := exec.Command("node", "-e", script)
 	cmd.Dir = filepath.Join("..", "..")

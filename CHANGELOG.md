@@ -4,6 +4,100 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.2 (2026-11-27)
+
+### Highlights
+
+- **Unified Right Minimalist Side Card for「小本本」&「话题线」+ Symmetrical Top Bar (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Replaced the standalone threads dropdown popover (`#collie-threads-pop`) with the exact same minimalist white-paper right floating card used by「小本本」— sharing identical placement, typography, shadows, mobile/tablet drawers, and GPU `translate3d` synchronized main-chat yield.
+  - Kept two symmetrical pure-text top-bar toggles (`话题线` and `小本本`, removing the trailing count badge from `话题线` while keeping only a subtle dot when unresolved items exist): defaults to「小本本」, switches smoothly in-place between「小本本」and「话题线」, collapses cleanly to neither on second click or `×`, and persists the user's last choice (`collie.sidePane`: `notes` / `threads` / `none`).
+- **Peer Hub Modal Anti-Clipping Layout & Plain-Language Reception Modes (`web/{app.css,app.js}`, `internal/collie/peer.go`, `docs/demo/`)**:
+  - Fixed bottom-bar clipping on shorter screens (such as iPad landscape `1024×768`) by constraining `dialog.int-sheet[data-modal-kind="peers"]` to `max-height: min(620px, calc(100dvh - 32px))` with a fixed header/tabs/footer flex column and scrollable `flex: 1; min-height: 0; overflow-y: auto` body—guaranteeing zero footer truncation and zero tab-switch height flicker across desktop, iPad, and mobile.
+  - Replaced engineering jargon with plain-language copy in the modal subtitle (`内网 / Tailscale 直连 · 令牌仅存本机`), invitation notes, and the three reception modes (`先帮我查清，草稿给我审`, `只留个便签，不自动回复`, `查完给方案，批准再干活`).
+- **Calm Left Main Stream During Desktop Side-by-Side Thread Focus (`web/{app.css,app.js}`)**:
+  - When replying inside the side-by-side desktop thread drawer (`> 1000px`), froze the left main conversation's scroll position, suppressed mirrored pop-in and `Collie 在想…` thinking-row animations in the left stream, and softly receded the left stream into the background (restoring full clarity immediately on hover, focus, click, or drawer close).
+- **Modern Detached Rounded User Image Cards (`web/{app.css,app.js}`, `docs/demo/`)**:
+  - Separated attached images out of the dark user text bubble into right-aligned rounded media cards (subtle 1px border + soft shadow, 6px gap above the compact text bubble, compact 2/3-column grid for multiple images, and pure standalone rounded cards with zero dark background wrapper for image-only messages), preserving click-to-zoom lightbox gallery navigation.
+
+### Client / API Changes
+
+- None.
+
+---
+
+## v0.3.1 (2026-11-27)
+
+### Highlights
+
+- **Independent Minimalist「小本本」&「话题线」with Dual Silky Motion (`web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Split「小本本」and「话题线」back into two independent, harmonized plain-text top-bar triggers (zero SVG icons, subtle pending dot/count on `话题线`, automatic mutual exclusion between `#notes-pane`, `#collie-threads-pop`, search, and menu, and removed the redundant `← 话题线` back button from the thread focus drawer header).
+  - Restored the pure v0.2.94 minimalist「小本本」floating card (compact header `小本本` + date + `×`, no dual tabs and no bottom `展开详情` bar) with two isolated compositor-friendly motions:
+    1. **Open / close**: Smooth GPU-composited card entrance (`240ms` open / `180ms` close, `translate3d(12px, 0, 0) scale(0.985)` + `opacity`) synchronized with pure `transform: translate3d(var(--notes-shift), 0, 0)` main-chat yield so opening/closing the notebook never abruptly resizes the chat column or rewraps message text (and applies `0px` shift on ultra-wide screens where right-side breathing room already fits).
+    2. **Compact ↔ expanded**: Clicking the card header, blank space, or `+N` overflow pill smoothly unfolds extra rows in-place via isolated `contain: layout style paint` CSS Grid `0fr → 1fr` disclosure without rebuilding DOM, with fast fade-out before collapse and `Esc` stepwise collapse-then-close.
+- **Seamless Top Bar, Cleaner Sidebar & Integrations Polish (`internal/collie/superapi.go`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Removed the `.collie-top` 1px scrolled bottom hairline so the top bar blends seamlessly into the chat stream whether static or scrolled.
+  - Replaced the sidebar「自动化」subtitle with a compact global overview (`N 接入 · M 定时`, prioritizing `N 接入异常 · M 定时` on errors, or `接入与定时` when empty), backed by an optional `timers_count` field on `superView`.
+  - Removed the redundant `+ 添加好友边牧` button from the「自动化 → 接入」top status row, keeping friend management cleanly inside the「好友边牧」card.
+- **Zero-Flicker Peer Modal, Image Paste & Sticky-Bottom Reliability (`web/{app.css,app.js}`)**:
+  - **Zero-flicker Peer Modal**: Mounted the「好友边牧 · 受控收件箱」dialog structure once, switched main tabs / sub-tabs / default handling modes via in-place visibility & class updates, cached generated invites per mode, preloaded updated QR images before swapping `src`, and stabilized QR card & modal body heights so tab/mode switches never flicker or collapse into spinners.
+  - **Desktop Messaging App Image Paste Recovery**: Removed the 5-second `lastModified` cutoff that split delayed clipboard copies into separate failing entries, grouped hash-named sandbox `.jpg` references with memory bitmap candidates synchronously inside `paste`, and enforced strict layered fallback (`clipboardData` file items → `navigator.clipboard.read()` across all `image/*` types → `text/html` `data:image/`), eliminating false `剪贴板里的图片已失效` errors on macOS desktop pastes.
+  - **Image Attachment Send Auto-Scroll**: Added sticky-bottom tracking with capture `load`/`error` listeners on `#super-thread` and blob-URL thumbnail pre-seeding so sending messages with image attachments scrolls cleanly below the rendered image while immediately yielding if the user scrolls upward.
+- **View-Switch & Long-Distance Jump Performance Overhaul (`web/{app.css,app.js}`)**:
+  - **Zero-Flash, Zero-Layout-Rebuild Sidebar Navigation**: Parked `#v-collie` in a strict-contained offscreen layer (`.is-parked` with `contain: strict`, `inert`, and paused animations) instead of `display: none` so switching away from and back to main chat preserves the entire message layout tree and exact `scrollTop` with zero flash; replaced full sidebar `innerHTML` rebuilds on click with O(1) `syncSideActive()`; added signature caching and next-frame background refreshes for「自动化」,「设备」(including in-place pairing countdown patching),「偏好设置」, and Agent terminal view entry.
+  - **Distance-Aware Pin / Quote / Jump-to-Bottom Scroll**: Replaced long-distance `behavior: "smooth"` scrolling across hundreds of rich bubbles with `smartScrollCollie()`: nearby targets (`<= 1.5×` viewport and `<= 1400px`) glide smoothly directly, while distant jumps teleport instantaneously (`behavior: "auto"`) to `~180px` before the target and perform a short smooth glide on the next frame followed by target highlight.
+
+### Client / API Changes
+
+- **`GET /api/super` & SSE `event: super` (`superView`)**: Added optional field `timers_count?: number` (count of enabled timers; backwards-compatible, omitted when zero, older clients ignore safely).
+- **Breaking changes**: None.
+
+---
+
+## v0.3.0 (2026-11-27)
+
+### Highlights
+
+- **Peer Hub Controlled Inbox & Physical Auth Isolation (`internal/collie/db.go`, `peer.go`, `peer_api.go`, `server.go`)**:
+  - Introduced zero-relay peer-to-peer collaboration between private Collie Hubs on the same LAN or Tailscale network while preserving strict per-owner Hub, node, and memory sovereignty.
+  - Added isolated SQLite tables (`peers`, `peer_messages`, `peer_blocklist`); minted 256-bit `clp_` inbound peer tokens stored exclusively as SHA-256 hashes in SQLite, while storing outbound peer tokens solely in `SecretStore` (`~/.collie/secrets.json`, `0600`) — never mixing peer credentials into `Auth.devices` or `hubs.json`.
+  - Added a dedicated narrow `peerAuth` middleware (Bearer header only, no cookies, no query params, no CORS) strictly scoped to `/api/peer/{ping,inbox,revoke}` (0 terminal / 0 file / 0 memory / 0 direct worker-spawn access), guarded unmatched `/api/*` routes through `s.auth`, and added instant one-sided pause, revoke, and hub blocklist controls.
+- **Zero-Relay Bidirectional Pairing & Built-In Local QR Code Friend Adding (`internal/collie/peer.go`, `hub.go`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Reused `lanAddresses()` and Collie's built-in local `go-qrcode` generator (zero third-party CDN) to issue 10-minute one-time `collie-peer://v1/...` invites and high-contrast white-surface QR business cards; handshake executes atomic bidirectional token exchange with reverse `/api/peer/ping` reachability checks and HTTP redirects disabled (`CheckRedirect`).
+  - Added the「好友边牧」card and paired-peer overview inside「自动化 → 接入」, reusing `<dialog class="sheet int-sheet">` for managing paired peers (per-peer pause/resume, handling mode, live latency ping, two-step revoke/block, and unblock) and adding friends via「我的边牧名片」QR card + one-click copy or「扫码 / 粘贴加好友」(browser `BarcodeDetector` live camera scan with graceful degradation to QR image upload or invite-code paste with real-time UTF-8 preview).
+- **Async Investigation & Handoff Loop + `collie peer` CLI (`internal/collie/peer.go`, `super.go`, `superapi.go`, `cli.go`, `main.go`)**:
+  - Routed peer exchanges to stable threads (`peer:<peer_id>:<topic_id>`) with `source="peer:<peer_id>"` so incoming peer messages never interrupt the owner's active human `chat` turn, backed by durable `integration_dedup` idempotency, dual-layer token-bucket rate limiting (per-peer 6/min burst 3, global 20/min burst 8, queue backpressure 10), L0 `notify` (0 Router wake), L1 `advise` (default read-only investigation wrapped with explicit anti-prompt-injection guardrails), and L3 `propose` readiness.
+  - Added `collie peer ls|list|invite|pair|ping|send --confirm|revoke [--block]` CLI subcommands with double-latch confirmation (`--confirm` + `confirm: true`), outbound `SecretStore` / master token / private-key / common-token leak blocking, and updated `ROUTER.md` guidance.
+  - Added end-to-end dual-Hub HTTP loopback race tests (`internal/collie/peer_test.go`) and regenerated `docs/demo/` via `scripts/demo.sh`.
+- **Unified Dock & Thread Drawer Navigation Polish (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Replaced the top-bar `panel-right` icon with an ultra-light plain-text `小本本` button aligned with the `派活 · 默认` aesthetic, showing a subtle unread dot and count badge when collapsed with pending threads.
+  - Added a lightweight `← 话题线` back button at the top-left of the thread focus drawer header (`.td-head`) that closes the thread drawer and returns directly to the `话题线` tab in the right dock (and the mobile dual-tab bottom drawer), unifying the thread-list → thread-focus → back-to-list loop.
+
+### Client / API Changes
+
+- **`GET /api/super` & SSE `event: super` (`superView`)**: Added optional field `peers_summary?: { total, active, online, paused, enabled }` (backwards-compatible; older clients ignore it safely).
+- **New narrow peer-to-peer HTTP endpoints (`/api/peer/*`, authenticated strictly by `peerAuth` Bearer `clp_` token or one-time invite code; CORS disabled)**:
+  - `POST /api/peer/pair/accept`: Redeems a 10-minute one-time invite code with reverse `/api/peer/ping` verification and exchanges independent 256-bit tokens.
+  - `GET /api/peer/ping`: Returns `{ ok, hub_name, version, protocol_ver, paused }`.
+  - `POST /api/peer/inbox`: Delivers a structured message (`msg_id`, `topic_id`, `kind`: `ask|handoff|reply|ack`, `in_reply_to`, `hop`, `subject`, `body`, `sent_at`; max 32 KB request / 16 KB body) into the controlled inbox with idempotent dedup and rate limiting.
+  - `POST /api/peer/revoke`: Notifies the remote hub of unilateral unpairing.
+- **New owner peer-management HTTP endpoints (`/api/super/peers*`, standard `s.auth`)**:
+  - `GET /api/super/peers`: Returns `{ hub_id, hub_name, enabled, addrs, peers, blocklist, blocked_count, summary }`.
+  - `POST /api/super/peers/settings`: Updates `{ enabled?, hub_name? }`.
+  - `POST /api/super/peers/invite`: Issues a 10-minute one-time invite `{ invite_code, code, hub_id, hub_name, mode, addrs, expires_at }`.
+  - `POST /api/super/peers/pair`: Initiates bidirectional handshake from `{ invite_code, name?, mode? }`.
+  - `PATCH /api/super/peers/{id}`: Updates `{ name?, mode?, status? }` (`active | paused | blocked`).
+  - `POST /api/super/peers/{id}/ping`: Probes remote reachability and round-trip latency (`{ ok, peer_id, addr, latency_ms, remote_name, remote_version, protocol_ver, paused, error? }`).
+  - `DELETE /api/super/peers/{id}[?block=1]`: Immediately revokes local hash/secret and optionally adds `hub_id` to `peer_blocklist`.
+  - `POST /api/super/peers/{id}/send`: Sends a human-confirmed message (`{ topic_id?, kind?, subject?, body, in_reply_to?, hop?, confirm: true }`) with outbound secret-leak blocking.
+  - `GET /api/super/peers/{id}/messages`: Lists recent peer message records.
+  - `DELETE /api/super/peers/blocklist/{hub_id}`: Removes a hub from the blocklist.
+- **Existing endpoint adjustments**:
+  - `GET /api/qr`: Raised `text` parameter limit from 512 to 1024 bytes (auto EC Low above 256 bytes) to accommodate `collie-peer://v1/...` business card QR codes.
+  - Unmatched `/api/*` paths now pass through `s.auth` before returning `404` so unauthenticated or narrow peer tokens receive `401`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.95 (2026-11-27)
 
 ### Highlights

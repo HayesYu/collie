@@ -110,8 +110,12 @@ type superView struct {
 	Paused       bool `json:"paused"`
 	// Follow: the next time Collie set itself to look at something again.
 	Follow *followView `json:"follow,omitempty"`
+	// TimersCount: total number of enabled scheduled timers for sidebar overview.
+	TimersCount int `json:"timers_count,omitempty"`
 	// IntegrationsSummary: live counts of connected/error integrations for sidebar & UI badges.
 	IntegrationsSummary *IntegrationsSummary `json:"integrations_summary,omitempty"`
+	// PeersSummary: live counts of paired peer hubs for UI card & SSE updates.
+	PeersSummary *PeersSummary `json:"peers_summary,omitempty"`
 }
 
 type followView struct {
@@ -230,9 +234,18 @@ func (s *Server) superState(ctx context.Context) superView {
 	}
 	sort.Slice(v.Workers, func(i, j int) bool { return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt) })
 	v.Follow = sp.followLocked()
+	for _, t := range sp.st.Timers {
+		if t.Enabled {
+			v.TimersCount++
+		}
+	}
 	if sp.integrations != nil {
 		sum := sp.integrations.Summary()
 		v.IntegrationsSummary = &sum
+	}
+	if sp.peers != nil {
+		psum := sp.peers.Summary()
+		v.PeersSummary = &psum
 	}
 	hasQueuedChat := false
 	for _, t := range sp.st.Triggers {

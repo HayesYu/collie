@@ -127,12 +127,56 @@
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: routerRun.kind, context: 23, rotate_at: 70, model: routerRun.model, effort: routerRun.effort, pending: routerPending() },
     entries, pending: computePending(), pinned: computePinned(), ...(lastReadEntryId ? { last_read_entry_id: lastReadEntryId } : {}), workers, queued: 0, queued_router: 0, paused: !!settings.settings.paused, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
+    timers_count: timers.filter((t) => t.enabled).length,
     integrations_summary: {
       connected: [demoFeishu, demoGitHub, demoGitCLI].filter((x) => x.enabled && x.health.state === "connected").length,
       error: [demoFeishu, demoGitHub, demoGitCLI].filter((x) => x.enabled && x.health.state === "error").length,
       total: 3,
     },
+    peers_summary: {
+      total: demoPeers.length,
+      active: demoPeers.filter((x) => x.status === "active").length,
+      online: demoPeers.filter((x) => x.status === "active").length,
+      paused: demoPeers.filter((x) => x.status === "paused").length,
+      enabled: demoPeersEnabled,
+    },
   });
+  let demoPeersEnabled = true;
+  let demoPeerHubName = "Alex的边牧";
+  const demoPeerHubID = "hub_4c8e91a2d301";
+  const demoPeers = [
+    {
+      id: "sam",
+      hub_id: "hub_9f2a4c8e1d7b",
+      name: "Sam的边牧",
+      addrs: ["http://192.168.1.42:7788"],
+      primary_addr: "http://192.168.1.42:7788",
+      mode: "advise",
+      status: "active",
+      protocol_ver: 1,
+      today_count: 2,
+      last_ok_at: ago(4),
+      last_active_at: ago(6),
+      created_at: ago(60 * 24 * 3),
+      updated_at: ago(6),
+    },
+    {
+      id: "lin",
+      hub_id: "hub_3b7e1d5c8a20",
+      name: "Lin的边牧",
+      addrs: ["http://192.168.1.58:7788"],
+      primary_addr: "http://192.168.1.58:7788",
+      mode: "notify",
+      status: "active",
+      protocol_ver: 1,
+      today_count: 1,
+      last_ok_at: ago(18),
+      last_active_at: ago(28),
+      created_at: ago(60 * 24 * 2),
+      updated_at: ago(28),
+    },
+  ];
+  const demoPeerBlocklist = [];
   const demoFeishu = {
     kind: "feishu",
     name: "飞书机器人",
@@ -874,6 +918,72 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/super/notify/test" && method === "POST") {
       return json({ ok: true, message: "测试提醒已发送（演示模式 HTTP 200）" });
+    }
+    if (p === "/api/super/peers" && method === "GET") {
+      return json({
+        hub_id: demoPeerHubID,
+        hub_name: demoPeerHubName,
+        enabled: demoPeersEnabled,
+        addrs: ["http://192.168.1.20:7788"],
+        peers: demoPeers,
+        blocklist: demoPeerBlocklist,
+        blocked_count: demoPeerBlocklist.length,
+        summary: sup().peers_summary,
+      });
+    }
+    if (p === "/api/super/peers/settings" && method === "POST") {
+      if (typeof body.enabled === "boolean") demoPeersEnabled = body.enabled;
+      if (typeof body.hub_name === "string" && body.hub_name.trim()) demoPeerHubName = body.hub_name.trim();
+      pushAll();
+      return json({ ok: true, hub_name: demoPeerHubName, enabled: demoPeersEnabled, summary: sup().peers_summary });
+    }
+    if (p === "/api/super/peers/invite" && method === "POST") {
+      const mode = body.mode || "advise";
+      const exp = Math.floor(Date.now() / 1000) + 600;
+      const payload = { v: 1, code: "DEMO2026PEER", hub_id: demoPeerHubID, hub_name: demoPeerHubName, addrs: ["http://192.168.1.20:7788"], exp };
+      const bytes = new TextEncoder().encode(JSON.stringify(payload));
+      let bin = "";
+      bytes.forEach((b) => { bin += String.fromCharCode(b); });
+      const inv = "collie-peer://v1/" + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      return json({ invite_code: inv, code: payload.code, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: payload.addrs, expires_at: new Date(exp * 1000).toISOString() });
+    }
+    if (p === "/api/super/peers/pair" && method === "POST") {
+      const id = "peer-" + (demoPeers.length + 1);
+      const np = { id, hub_id: "hub_demo_" + (demoPeers.length + 1), name: body.name || "新好友的边牧", addrs: ["http://192.168.1.88:7788"], primary_addr: "http://192.168.1.88:7788", mode: body.mode || "advise", status: "active", protocol_ver: 1, today_count: 0, last_ok_at: new Date().toISOString(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      demoPeers.push(np);
+      pushAll();
+      return json({ ok: true, peer: np });
+    }
+    const peerPingM = /^\/api\/super\/peers\/([^/]+)\/ping$/.exec(p);
+    if (peerPingM && method === "POST") {
+      return json({ ok: true, peer_id: decodeURIComponent(peerPingM[1]), addr: "http://192.168.1.42:7788", latency_ms: 12, remote_name: "Sam的边牧", remote_version: "v0.2.95", protocol_ver: 1 });
+    }
+    const peerBlockDelM = /^\/api\/super\/peers\/blocklist\/([^/]+)$/.exec(p);
+    if (peerBlockDelM && method === "DELETE") {
+      const hid = decodeURIComponent(peerBlockDelM[1]);
+      const idx = demoPeerBlocklist.findIndex((b) => b.hub_id === hid);
+      if (idx >= 0) demoPeerBlocklist.splice(idx, 1);
+      return json({ ok: true });
+    }
+    const peerOneM = /^\/api\/super\/peers\/([^/]+)$/.exec(p);
+    if (peerOneM) {
+      const pid = decodeURIComponent(peerOneM[1]);
+      const idx = demoPeers.findIndex((x) => x.id === pid);
+      if (idx < 0) return json({ error: "not found" }, 404);
+      if (method === "PATCH") {
+        if (body.mode) demoPeers[idx].mode = body.mode;
+        if (body.status) demoPeers[idx].status = body.status;
+        if (body.name) demoPeers[idx].name = body.name;
+        pushAll();
+        return json({ ok: true, peer: demoPeers[idx], blocked: false });
+      }
+      if (method === "DELETE") {
+        const [rm] = demoPeers.splice(idx, 1);
+        const block = q.get("block") === "1";
+        if (block && rm) demoPeerBlocklist.push({ hub_id: rm.hub_id, name: rm.name, blocked_at: new Date().toISOString() });
+        pushAll();
+        return json({ ok: true, blocked: block });
+      }
     }
     if (p === "/api/super/triggers") return json({ triggers, threads });
     if (p === "/api/super/subscribe" && method === "POST") {

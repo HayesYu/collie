@@ -727,11 +727,15 @@ func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 
 func (s *Server) qr(w http.ResponseWriter, r *http.Request) {
 	text := r.URL.Query().Get("text")
-	if text == "" || len(text) > 512 {
+	if text == "" || len(text) > 1024 {
 		http.Error(w, "bad text", 400)
 		return
 	}
-	png, err := qrcode.Encode(text, qrcode.Medium, 512)
+	level := qrcode.Medium
+	if len(text) > 256 {
+		level = qrcode.Low
+	}
+	png, err := qrcode.Encode(text, level, 512)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

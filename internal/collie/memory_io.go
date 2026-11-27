@@ -722,6 +722,7 @@ func (s *Server) memoryImport(w http.ResponseWriter, r *http.Request) {
 		writeMemoryIOErr(w, err)
 		return
 	}
+	sp.bumpMemoryVersion(true)
 	sp.changed()
 	writeJSON(w, 200, res)
 }

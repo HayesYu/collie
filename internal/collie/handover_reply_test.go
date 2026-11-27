@@ -88,6 +88,7 @@ func TestFinishHandoverLinksHistory(t *testing.T) {
 }
 
 func TestReplyOptionsStoreDBAndAPI(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "herd.db")
 	db, err := openDB(dbPath)

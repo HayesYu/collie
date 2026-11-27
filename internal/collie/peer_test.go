@@ -90,6 +90,9 @@ func (h *testPeerHub) doOwner(method, path string, body any) (*http.Response, []
 
 func disableAuthDelaysForTest(t *testing.T) {
 	t.Helper()
+	if authFailDelay == 0 && pairFailDelay == 0 {
+		return
+	}
 	oldAuth := authFailDelay
 	oldPair := pairFailDelay
 	authFailDelay = 0
@@ -101,6 +104,7 @@ func disableAuthDelaysForTest(t *testing.T) {
 }
 
 func TestPeerDualHubEndToEndLoopback(t *testing.T) {
+	t.Parallel()
 	disableAuthDelaysForTest(t)
 
 	hubA := newTestPeerHub(t, "Alice的边牧")
@@ -564,6 +568,7 @@ func TestPeerDualHubEndToEndLoopback(t *testing.T) {
 }
 
 func TestPeerOutboundSecretLeakBlocked(t *testing.T) {
+	t.Parallel()
 	disableAuthDelaysForTest(t)
 	hubA := newTestPeerHub(t, "Alice")
 	hubB := newTestPeerHub(t, "Bob")
@@ -623,6 +628,7 @@ func TestPeerOutboundSecretLeakBlocked(t *testing.T) {
 }
 
 func TestPeerInboundValidationRateLimitAndRedirectBlock(t *testing.T) {
+	t.Parallel()
 	disableAuthDelaysForTest(t)
 	hubA := newTestPeerHub(t, "Alice")
 	hubB := newTestPeerHub(t, "Bob")
@@ -727,6 +733,7 @@ func TestPeerInboundValidationRateLimitAndRedirectBlock(t *testing.T) {
 }
 
 func TestPeerCLIAndRouterDoc(t *testing.T) {
+	t.Parallel()
 	// parsePeerSend must reject without --confirm.
 	if _, _, err := parsePeerSend([]string{"--to", "sam", "hello"}, strings.NewReader(""), true); err == nil {
 		t.Fatalf("parsePeerSend must fail without --confirm")
@@ -764,6 +771,7 @@ func TestPeerCLIAndRouterDoc(t *testing.T) {
 }
 
 func TestPeerPermanentCardResetAndLegacyCompat(t *testing.T) {
+	t.Parallel()
 	disableAuthDelaysForTest(t)
 
 	hubA := newTestPeerHub(t, "AliceCard")
@@ -941,6 +949,7 @@ func TestPeerPermanentCardResetAndLegacyCompat(t *testing.T) {
 }
 
 func TestPeerInviteV2CompactAndCompat(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	secret := newPeerInviteCodeSecret()
 	if len(secret) != 22 {

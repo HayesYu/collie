@@ -6,6 +6,7 @@ import (
 )
 
 func TestSeenPanes(t *testing.T) {
+	t.Parallel()
 	var sp seenPanes
 	if got := sp.status("p1", "done"); got != "done" {
 		t.Fatalf("unseen done: %s", got)

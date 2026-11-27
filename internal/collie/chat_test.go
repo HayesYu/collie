@@ -20,6 +20,7 @@ func parse(t *testing.T, format, data string) []*Message {
 }
 
 func TestClaudeTranscript(t *testing.T) {
+	t.Parallel()
 	msgs := parse(t, "claude", `{"type":"mode","mode":"x"}
 {"type":"user","message":{"content":"<command-name>/clear</command-name>"}}
 {"type":"user","message":{"content":"fix the tests"}}
@@ -49,6 +50,7 @@ func TestClaudeTranscript(t *testing.T) {
 }
 
 func TestCodexTranscript(t *testing.T) {
+	t.Parallel()
 	msgs := parse(t, "codex", `{"type":"session_meta","payload":{}}
 {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"sys"}]}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions"},{"type":"input_text","text":"<environment_context/>"}]}}
@@ -63,6 +65,7 @@ func TestCodexTranscript(t *testing.T) {
 }
 
 func TestAgyTranscript(t *testing.T) {
+	t.Parallel()
 	msgs := parse(t, "agy", `{"type":"USER_INPUT","source":"USER_EXPLICIT","content":"<USER_REQUEST>\nlist files\n</USER_REQUEST>\n<ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>"}
 {"type":"PLANNER_RESPONSE","source":"MODEL","tool_calls":[{"name":"run_command","args":{"CommandLine":"\"ls -la\"","toolSummary":"\"List files\""}}]}
 {"type":"GENERIC","source":"MODEL","content":"Created At: x\nCommand exited with code 0.\n\nCommand output:\na b"}
@@ -76,6 +79,7 @@ func TestAgyTranscript(t *testing.T) {
 }
 
 func TestDoubaoTranscript(t *testing.T) {
+	t.Parallel()
 	msgs := parse(t, "doubao", `{"type":"user","text":"check sample.txt"}
 {"type":"assistant_chunk","id":"m1","text":"我先"}
 {"type":"assistant_chunk","id":"m1","text":"看看。"}
@@ -105,6 +109,7 @@ func TestDoubaoTranscript(t *testing.T) {
 }
 
 func TestDoubaoApprovalMenuParsed(t *testing.T) {
+	t.Parallel()
 	screen := "────────────────────────────────────────\nDoubao 请求执行权限：Bash\n  echo hello\n\n1. Allow once\n2. Reject\nEnter number (1-2) to confirm · Esc to cancel\n"
 	if !screenAsks(screen) {
 		t.Fatal("screenAsks should detect doubao permission menu")
@@ -119,6 +124,7 @@ func TestDoubaoApprovalMenuParsed(t *testing.T) {
 }
 
 func TestCursorTranscriptAndApprovalMenu(t *testing.T) {
+	t.Parallel()
 	msgs := parse(t, "cursor", `{"type":"user","text":"inspect build"}
 {"type":"tool","id":"tc1","title":"Run shell command","kind":"execute","status":"in_progress"}
 {"type":"tool","id":"tc1","title":"Run shell command","kind":"execute","status":"completed","locations":["/tmp/repo"],"output":"PASS\n"}
@@ -149,6 +155,7 @@ func TestCursorTranscriptAndApprovalMenu(t *testing.T) {
 }
 
 func TestApprovalNumbered(t *testing.T) {
+	t.Parallel()
 	a := parseApproval("╭────╮\n│ Bash command\n│   git push origin main\n│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. Yes, and don't ask again\n│   3. No, and tell Claude what to do differently (esc)\n╰────╯")
 	if len(a.Choices) != 3 || a.Choices[0].Text != "1" || !a.Choices[0].Current || a.Choices[1].Label != "Yes, and don't ask again" {
 		t.Fatalf("choices = %+v", a.Choices)
@@ -159,6 +166,7 @@ func TestApprovalNumbered(t *testing.T) {
 }
 
 func TestApprovalCursorMenu(t *testing.T) {
+	t.Parallel()
 	a := parseApproval(" Quick safety check: Is this a project you trust?\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel")
 	if len(a.Choices) != 2 || a.Choices[0].Label != "No, exit" || a.Choices[1].Label != "Yes, I trust this folder" {
 		t.Fatalf("choices = %+v", a.Choices)
@@ -172,6 +180,7 @@ func TestApprovalCursorMenu(t *testing.T) {
 }
 
 func TestTimerSpecs(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.Local)
 	if n, _ := parseSpec("weekly sat,mon 09:00", now); n.Weekday() != time.Saturday && n.Weekday() != time.Monday {
 		t.Fatalf("weekly = %v", n)
@@ -208,6 +217,7 @@ func TestTimerSpecs(t *testing.T) {
 }
 
 func TestMsgSyncPatches(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	line := func(text string) string {
 		return `{"type":"user","message":{"content":"` + text + `"}}` + "\n"
@@ -238,6 +248,7 @@ func TestMsgSyncPatches(t *testing.T) {
 }
 
 func TestOpenTail(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	var b strings.Builder
 	pad := strings.Repeat("x", 60000)
@@ -266,6 +277,7 @@ func TestOpenTail(t *testing.T) {
 func itoa(i int) string { return strconv.Itoa(i) }
 
 func TestEarlierMessagesWalkBack(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	var b strings.Builder
 	pad := strings.Repeat("y", 3000)
@@ -307,6 +319,7 @@ func TestEarlierMessagesWalkBack(t *testing.T) {
 }
 
 func TestEarlierCursorShortLog(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	os.WriteFile(p, []byte(`{"type":"user","message":{"content":"hi"}}`+"\n"), 0o600)
 	tr := newTranscript(p, "claude")
@@ -317,6 +330,7 @@ func TestEarlierCursorShortLog(t *testing.T) {
 }
 
 func TestActivityLine(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		// counters without a key hint (newer Claude)
 		"✻ Pondering… (42s · ↓ 1.8k tokens)\n❯ ": "Pondering…|42s · ↓ 1.8k tokens",

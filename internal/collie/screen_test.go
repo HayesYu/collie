@@ -70,6 +70,7 @@ const wrappedMenu = `───────────────────�
  Esc to cancel · Tab to amend`
 
 func TestWrappedChoices(t *testing.T) {
+	t.Parallel()
 	a := parseApproval(wrappedMenu)
 	if len(a.Choices) != 3 || !a.Choices[0].Current || !strings.HasPrefix(a.Choices[1].Label, "Yes, allow reading from /home/u") || a.Choices[2].Label != "No" {
 		t.Fatalf("choices: %+v", a.Choices)
@@ -80,6 +81,7 @@ func TestWrappedChoices(t *testing.T) {
 }
 
 func TestScreenAsks(t *testing.T) {
+	t.Parallel()
 	if screenAsks(idleClaude) {
 		t.Error("idle prompt taken for a question")
 	}
@@ -124,6 +126,7 @@ const trustFull = `u@host:~/collie-card-test$ claude
 `
 
 func TestApprovalKeepsParagraphs(t *testing.T) {
+	t.Parallel()
 	a := parseApproval(trustFull)
 	if len(a.Choices) != 2 {
 		t.Fatalf("choices: %+v", a.Choices)
@@ -176,6 +179,7 @@ const agyTrust = ` Accessing workspace:
                                                      auto · Gemini 4 Carbon · high`
 
 func TestScreenAsksQuoted(t *testing.T) {
+	t.Parallel()
 	if screenAsks(quotedDialog) {
 		t.Error("a dialog quoted in the transcript counted as a question")
 	}
@@ -204,6 +208,7 @@ Which color for the button?
 Enter to select · ↑/↓ to navigate · Esc to cancel`
 
 func TestAskBox(t *testing.T) {
+	t.Parallel()
 	if !screenAsks(askBox) {
 		t.Fatal("not seen as a question")
 	}
@@ -224,6 +229,7 @@ func TestAskBox(t *testing.T) {
 }
 
 func TestCodexFolderAccessApproval(t *testing.T) {
+	t.Parallel()
 	codexFolder := "Folder access\n  /Users/u/agent-workspace/collie\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Back to Agent Command Center\n  enter continue · esc back"
 	if !screenAsks(codexFolder) {
 		t.Fatal("codex folder access dialog not seen as a question")
@@ -266,6 +272,7 @@ const agyIdleNumberedReply = `○ Thought for 31.7s (MR merged, verifying deploy
 ? for shortcuts                                         auto · Gemini 4 Neon · medium`
 
 func TestScreenAsksFalsePositivesAndRealDialogs(t *testing.T) {
+	t.Parallel()
 	negatives := map[string]string{
 		"agy idle reply with markdown numbered list": agyIdleNumberedReply,
 		"plain markdown numbered list at bottom":     "已完成：\n1. 修复第一项\n2. 补齐回归测试\n",
@@ -348,6 +355,7 @@ Press enter to select reasoning effort, or esc to dismiss.`,
 }
 
 func TestTrimScreenBlankTail(t *testing.T) {
+	t.Parallel()
 	in := "\x1b[0m\x1b[32mline 1\x1b[0m\r\n\r\nline 3\r\n   \r\n\x1b[0m   \r\n"
 	want := "\x1b[0m\x1b[32mline 1\x1b[0m\r\n\r\nline 3"
 	if got := trimScreenBlankTail(in); got != want {
@@ -364,6 +372,7 @@ func TestTrimScreenBlankTail(t *testing.T) {
 }
 
 func TestStreamPaneScreenRecentANSI(t *testing.T) {
+	t.Parallel()
 	var reads atomic.Int32
 	var gotSource, gotFormat string
 	var gotLines int

@@ -14,6 +14,7 @@ import (
 )
 
 func TestWebEmbeddedKaTeXOffline(t *testing.T) {
+	t.Parallel()
 	cssBytes, err := fs.ReadFile(web.FS, "vendor/katex/katex.min.css")
 	if err != nil {
 		t.Fatalf("read katex.min.css: %v", err)
@@ -55,6 +56,7 @@ func TestWebEmbeddedKaTeXOffline(t *testing.T) {
 }
 
 func TestMarkdownEscapingAndMathRender(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed; skipping JS mdRender tests")
@@ -352,6 +354,7 @@ console.log("ALL_MD_MATH_TESTS_PASSED");
 }
 
 func TestWebMarkdownTableCodeWrapCSS(t *testing.T) {
+	t.Parallel()
 	cssBytes, err := fs.ReadFile(web.FS, "app.css")
 	if err != nil {
 		t.Fatalf("read web/app.css: %v", err)

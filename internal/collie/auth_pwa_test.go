@@ -18,14 +18,16 @@ import (
 
 func newTestAuthServer(t *testing.T, master string) (*Server, *Auth, http.Handler) {
 	t.Helper()
-	oldAuthDelay := authFailDelay
-	oldPairDelay := pairFailDelay
-	authFailDelay = 0
-	pairFailDelay = 0
-	t.Cleanup(func() {
-		authFailDelay = oldAuthDelay
-		pairFailDelay = oldPairDelay
-	})
+	if authFailDelay != 0 || pairFailDelay != 0 {
+		oldAuthDelay := authFailDelay
+		oldPairDelay := pairFailDelay
+		authFailDelay = 0
+		pairFailDelay = 0
+		t.Cleanup(func() {
+			authFailDelay = oldAuthDelay
+			pairFailDelay = oldPairDelay
+		})
+	}
 
 	home := t.TempDir()
 	auths := newAuth(nil, master)
@@ -76,6 +78,7 @@ func findCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 }
 
 func TestLoginBrowserTokenRestoreAndRevocation(t *testing.T) {
+	t.Parallel()
 	const master = "master-secret-token"
 	_, _, h := newTestAuthServer(t, master)
 
@@ -211,6 +214,7 @@ func TestLoginBrowserTokenRestoreAndRevocation(t *testing.T) {
 }
 
 func TestPairCodeDistinctErrors(t *testing.T) {
+	t.Parallel()
 	const master = "master-secret-token"
 	_, auths, h := newTestAuthServer(t, master)
 
@@ -266,6 +270,7 @@ func TestPairCodeDistinctErrors(t *testing.T) {
 }
 
 func TestPWAAssetsUnauthenticated(t *testing.T) {
+	t.Parallel()
 	_, _, h := newTestAuthServer(t, "master-secret-token")
 
 	// 1. GET /apple-touch-icon.png without any cookie or Authorization header.
@@ -340,6 +345,7 @@ func TestPWAAssetsUnauthenticated(t *testing.T) {
 }
 
 func TestPWAFrontendRecoveryAndAvatarContract(t *testing.T) {
+	t.Parallel()
 	cssBytes, err := os.ReadFile(filepath.Join("..", "..", "web", "app.css"))
 	if err != nil {
 		t.Fatalf("read web/app.css: %v", err)

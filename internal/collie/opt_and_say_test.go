@@ -17,6 +17,7 @@ import (
 )
 
 func TestCleanOptionsLongChineseAndCap(t *testing.T) {
+	t.Parallel()
 	longCN := "先按样例表（1,020w）跑完增量核验，你顺手提 256G 升配申请后再灌全量并补齐回归单测与监控看板检查"
 	if len(longCN) <= 80 {
 		t.Fatalf("test fixture must exceed legacy 80-byte clip limit, got %d bytes", len(longCN))
@@ -106,6 +107,7 @@ func TestCleanOptionsLongChineseAndCap(t *testing.T) {
 }
 
 func TestSuperSayClientMsgIDDedup(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -207,6 +209,7 @@ func TestSuperSayClientMsgIDDedup(t *testing.T) {
 }
 
 func TestWebComposerNoDoubleSendAndLongOpts(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed; skipping JS composer regression tests")

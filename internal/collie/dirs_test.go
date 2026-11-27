@@ -18,6 +18,7 @@ import (
 )
 
 func TestListDirsLocalFilteringHiddenLimitsAndRecent(t *testing.T) {
+	t.Parallel()
 	realHome := t.TempDir()
 	// Simulate a symlinked $HOME (e.g. /home/u -> /data00/home/u).
 	linkRoot := t.TempDir()
@@ -168,6 +169,7 @@ func TestListDirsLocalFilteringHiddenLimitsAndRecent(t *testing.T) {
 }
 
 func TestListDirsRemoteNodeOnlineLegacyAndOffline(t *testing.T) {
+	t.Parallel()
 	hubHome := t.TempDir()
 	nodeHome := t.TempDir()
 	for _, rel := range []string{"agent-workspace/mac-app", "Desktop", ".ssh"} {
@@ -298,6 +300,7 @@ func TestListDirsRemoteNodeOnlineLegacyAndOffline(t *testing.T) {
 }
 
 func TestRouterPendingTracksAllLaunchSettings(t *testing.T) {
+	t.Parallel()
 	dbDir := t.TempDir()
 	db, err := openDB(filepath.Join(dbDir, "herd.db"))
 	if err != nil {
@@ -411,6 +414,7 @@ func TestRouterPendingTracksAllLaunchSettings(t *testing.T) {
 }
 
 func TestWebDirPickerAutoSaveAndFooterContracts(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed; skipping JS unit tests")

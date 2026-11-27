@@ -18,6 +18,7 @@ import (
 )
 
 func TestDoubaoEnv(t *testing.T) {
+	t.Parallel()
 	base := []string{
 		"PATH=/usr/bin",
 		"no_proxy=localhost,127.0.0.1,doubao.com",
@@ -47,6 +48,7 @@ func TestDoubaoEnv(t *testing.T) {
 }
 
 func TestDoubaoBridgeArgsAndACPArgs(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh defaults align to Auto + high", func(t *testing.T) {
 		cfg, err := parseDoubaoBridgeArgs([]string{"-y", "-C", "/tmp/work"})
 		if err != nil {
@@ -96,6 +98,7 @@ func TestDoubaoBridgeArgsAndACPArgs(t *testing.T) {
 }
 
 func TestReadBridgeInput(t *testing.T) {
+	t.Parallel()
 	pr, pw := io.Pipe()
 	var permActive sync.Map
 	evCh := make(chan bridgeInputEvent, 16)
@@ -146,6 +149,7 @@ func TestReadBridgeInput(t *testing.T) {
 }
 
 func TestDoubaoBridgeEndToEndWithFakeACP(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	fakeSock := filepath.Join(tmp, "herdr.sock")
 

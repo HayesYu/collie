@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseTaskMarkdownSkipsMetadataAndExtractsReadableNote(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		stem      string
@@ -78,6 +79,7 @@ func TestParseTaskMarkdownSkipsMetadataAndExtractsReadableNote(t *testing.T) {
 }
 
 func TestWebV0293NotebookPolishContracts(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}

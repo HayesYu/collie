@@ -17,6 +17,7 @@ import (
 )
 
 func TestFeishuFeedbackControlledReplyGuardrailsAndSuccess(t *testing.T) {
+	t.Parallel()
 	var replyHits atomic.Int32
 	var gotPath, gotMsgType, gotContentText string
 
@@ -205,6 +206,7 @@ func TestFeishuFeedbackControlledReplyGuardrailsAndSuccess(t *testing.T) {
 }
 
 func TestGitForgeControlledCommentGitHubAndCLIProvider(t *testing.T) {
+	t.Parallel()
 	// 1. Thread parser checks.
 	if p, r, n, ok := parseForgeThread("github:octo/collie#42"); !ok || p != "github" || r != "octo/collie" || n != 42 {
 		t.Fatalf("parseForgeThread github failed: %q %q %d %v", p, r, n, ok)
@@ -399,6 +401,7 @@ echo '[]'
 }
 
 func TestCLIFeishuReplyAndForgeCommentParsers(t *testing.T) {
+	t.Parallel()
 	// feishu reply refuses without --confirm.
 	if _, err := parseFeishuReply([]string{"--chat", "oc_1", "--reply-to", "om_1", "hello"}, nil, true); err == nil {
 		t.Fatalf("parseFeishuReply should fail without --confirm")
@@ -439,6 +442,7 @@ func TestCLIFeishuReplyAndForgeCommentParsers(t *testing.T) {
 }
 
 func TestRouterDocIncludesRouteAConfirmationGuardrails(t *testing.T) {
+	t.Parallel()
 	for _, want := range []string{
 		"feishu reply --chat",
 		"forge comment --thread",

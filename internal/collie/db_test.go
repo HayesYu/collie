@@ -8,6 +8,7 @@ import (
 
 // Everything the super-agent keeps must survive a restart.
 func TestStateRoundTrip(t *testing.T) {
+	t.Parallel()
 	db, err := openDB(filepath.Join(t.TempDir(), "herd.db"))
 	if err != nil {
 		t.Fatal(err)

@@ -14,6 +14,7 @@ import (
 )
 
 func TestMemorySummaryDoneFileSearchAndETag(t *testing.T) {
+	t.Parallel()
 	sp, _, call := newPendingTestEnv(t)
 	sp.ensureMemory()
 	memDir := sp.memDir()
@@ -242,6 +243,7 @@ func TestMemorySummaryDoneFileSearchAndETag(t *testing.T) {
 }
 
 func TestTimersPaginationAndAutoETags(t *testing.T) {
+	t.Parallel()
 	sp, _, call := newPendingTestEnv(t)
 	now := time.Now()
 	sp.mu.Lock()
@@ -335,6 +337,7 @@ func TestTimersPaginationAndAutoETags(t *testing.T) {
 }
 
 func TestAutoTabsPerfAndZeroFlashContractsJS(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")

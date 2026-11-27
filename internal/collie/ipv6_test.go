@@ -19,6 +19,7 @@ import (
 )
 
 func TestLanAddressesIPv4AndIPv6Priority(t *testing.T) {
+	t.Parallel()
 	ifaces := []lanIface{
 		{
 			Name:  "lo",
@@ -75,6 +76,7 @@ func TestLanAddressesIPv4AndIPv6Priority(t *testing.T) {
 }
 
 func TestLanAddressesPureIPv6(t *testing.T) {
+	t.Parallel()
 	t.Run("global_and_ula_with_ipv6_only_loopback", func(t *testing.T) {
 		ifaces := []lanIface{
 			{
@@ -170,6 +172,7 @@ func TestLanAddressesPureIPv6(t *testing.T) {
 }
 
 func TestLocalDialAddrAndBanner(t *testing.T) {
+	t.Parallel()
 	yesV4 := func() bool { return true }
 	noV4 := func() bool { return false }
 
@@ -403,6 +406,7 @@ func TestIPv6LoopbackListenCLIAndLocalUI(t *testing.T) {
 }
 
 func TestInstallScriptIPv6(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell test")
 	}
@@ -420,9 +424,15 @@ func TestInstallScriptIPv6(t *testing.T) {
 		tmp := t.TempDir()
 		homeDir := filepath.Join(tmp, "home")
 		binDir := filepath.Join(tmp, "bin")
+		herdrMockDir := filepath.Join(tmp, "herdr-mock")
 		stubBin := filepath.Join(tmp, "collie-stub")
 		pairLog := filepath.Join(tmp, "pair.log")
-		if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		for _, d := range []string{homeDir, herdrMockDir} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(herdrMockDir, "herdr"), []byte("#!/bin/sh\nif [ \"${1:-}\" = \"status\" ]; then echo 'status: running'; fi\nexit 0\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		stub := "#!/bin/sh\nif [ \"${1:-}\" = \"version\" ]; then echo 'collie v0.2.68-test'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"" + pairLog + "\"\n"
@@ -430,7 +440,7 @@ func TestInstallScriptIPv6(t *testing.T) {
 			t.Fatal(err)
 		}
 		cmd := exec.Command("sh", append([]string{scriptPath}, args...)...)
-		pathVal := os.Getenv("PATH")
+		pathVal := herdrMockDir + ":" + os.Getenv("PATH")
 		if mockBinDir != "" {
 			pathVal = mockBinDir + ":" + pathVal
 		}
@@ -453,6 +463,7 @@ func TestInstallScriptIPv6(t *testing.T) {
 	}
 
 	t.Run("explicit_ipv6_url_and_loopback", func(t *testing.T) {
+		t.Parallel()
 		out, _ := runInstall(t, "", "hub", "--url", "http://[2001:db8::1]:7788")
 		if !strings.Contains(out, "打开 hub：http://[2001:db8::1]:7788") {
 			t.Fatalf("missing bracketed --url output:\n%s", out)
@@ -484,6 +495,7 @@ func TestInstallScriptIPv6(t *testing.T) {
 	})
 
 	t.Run("node_with_ipv6_hub", func(t *testing.T) {
+		t.Parallel()
 		out, logged := runInstall(t, "", "node", "--hub", "http://[2001:db8::1]:7788", "--code", "TESTCODE", "--name", "box6")
 		if !strings.Contains(logged, "node --pair-only --hub http://[2001:db8::1]:7788 --code TESTCODE --name box6") {
 			t.Fatalf("pair-only args mismatch: %q", logged)
@@ -510,6 +522,7 @@ func TestInstallScriptIPv6(t *testing.T) {
 		}
 
 		t.Run("linux_pure_ipv6_global_detection", func(t *testing.T) {
+			t.Parallel()
 			mockDir := writeMockTools(t, `
 case "$*" in
   "route get 1.1.1.1") exit 2 ;;
@@ -528,6 +541,7 @@ exit 0`, `echo "2001:db8::42"`)
 		})
 
 		t.Run("linux_pure_ipv6_skips_link_local_picks_ula", func(t *testing.T) {
+			t.Parallel()
 			mockDir := writeMockTools(t, `
 case "$*" in
   "route get 1.1.1.1") exit 2 ;;
@@ -550,6 +564,7 @@ exit 0`, `echo "fe80::1 fd00::7"`)
 		})
 
 		t.Run("linux_dual_stack_prefers_ipv4", func(t *testing.T) {
+			t.Parallel()
 			mockDir := writeMockTools(t, `
 case "$*" in
   "route get 1.1.1.1") echo "1.1.1.1 via 10.0.0.1 dev eth0 src 10.2.3.4 uid 1000"; exit 0 ;;
@@ -566,6 +581,7 @@ exit 0`, `echo "10.2.3.4 2001:db8::42"`)
 		})
 
 		t.Run("linux_ipv6_only_loopback_fallback", func(t *testing.T) {
+			t.Parallel()
 			mockDir := writeMockTools(t, `
 case "$*" in
   "route get 1.1.1.1") exit 2 ;;
@@ -587,6 +603,7 @@ exit 0`, `echo "fe80::1"`)
 }
 
 func TestInstallScriptHubAutoLoginBrowser(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell test")
 	}
@@ -628,6 +645,7 @@ func TestInstallScriptHubAutoLoginBrowser(t *testing.T) {
 			}
 		}
 		writeMock("uname", `if [ "${1:-}" = "-s" ]; then echo Darwin; elif [ "${1:-}" = "-m" ]; then echo arm64; else echo Darwin; fi`)
+		writeMock("herdr", `if [ "${1:-}" = "status" ]; then echo 'status: running'; fi; exit 0`)
 		writeMock("launchctl", launchctlBody)
 		writeMock("curl", `exit 0`)
 		writeMock("open", `printf '%s\n' "$*" >> "`+openLog+`"`)
@@ -655,8 +673,9 @@ func TestInstallScriptHubAutoLoginBrowser(t *testing.T) {
 	}
 
 	t.Run("opens_with_token_and_never_prints_token", func(t *testing.T) {
+		t.Parallel()
 		tok := "secret9f8e7d6c5b4a3210fedcba"
-		out, opened := runDarwinHub(t, `exit 0`, tok, false)
+		out, opened := runDarwinHub(t, `if [ "${1:-}" = "print" ]; then exit 113; fi; exit 0`, tok, false)
 		wantOpen := "http://127.0.0.1:7788/?t=" + tok
 		if opened != wantOpen {
 			t.Fatalf("open received %q, want %q", opened, wantOpen)
@@ -670,10 +689,14 @@ func TestInstallScriptHubAutoLoginBrowser(t *testing.T) {
 	})
 
 	t.Run("waits_for_async_token_file_and_supports_custom_port", func(t *testing.T) {
+		t.Parallel()
 		tok := "delayed1234567890abcdef"
 		launchctlBody := `
+if [ "${1:-}" = "print" ]; then
+  exit 113
+fi
 if [ "${1:-}" = "bootstrap" ]; then
-  (sleep 0.3; mkdir -p "${HOME}/.collie"; printf '%s\n' "` + tok + `" > "${HOME}/.collie/token") >/dev/null 2>&1 &
+  (sleep 0.05; mkdir -p "${HOME}/.collie"; printf '%s\n' "` + tok + `" > "${HOME}/.collie/token") >/dev/null 2>&1 &
 fi
 exit 0`
 		out, opened := runDarwinHub(t, launchctlBody, "", false, "--addr", "127.0.0.1:8899")
@@ -690,7 +713,8 @@ exit 0`
 	})
 
 	t.Run("falls_back_cleanly_when_token_missing", func(t *testing.T) {
-		out, opened := runDarwinHub(t, `exit 0`, "", true)
+		t.Parallel()
+		out, opened := runDarwinHub(t, `if [ "${1:-}" = "print" ]; then exit 113; fi; exit 0`, "", true)
 		if opened != "http://127.0.0.1:7788" {
 			t.Fatalf("fallback open received %q, want %q", opened, "http://127.0.0.1:7788")
 		}

@@ -6,6 +6,7 @@ import (
 )
 
 func TestLastTurnOpen(t *testing.T) {
+	t.Parallel()
 	pad := strings.Repeat(`{"type":"event_msg","payload":{"type":"token_count"}}`+"\n", 40000) // ~2 MB
 	start := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n"
 	done := `{"type":"event_msg","payload":{"type":"task_complete"}}` + "\n"
@@ -25,6 +26,7 @@ func TestLastTurnOpen(t *testing.T) {
 }
 
 func TestDeathReason(t *testing.T) {
+	t.Parallel()
 	screen := "  ~  codex -m gpt\nfile:///x/codex.js:108\n  throw new Error(\n        ^\nError: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex\n    at findCodexExecutable (file:///x)\nNode.js v22.22.0"
 	if got := deathReason(screen); got != "Error: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex" {
 		t.Fatalf("got %q", got)

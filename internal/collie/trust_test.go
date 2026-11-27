@@ -9,6 +9,7 @@ import (
 )
 
 func TestTrustAgyFolder(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	real := filepath.Join(home, "real")
 	os.Mkdir(real, 0o755)
@@ -39,6 +40,7 @@ func TestTrustAgyFolder(t *testing.T) {
 }
 
 func TestTrustDialogFor(t *testing.T) {
+	t.Parallel()
 	claude := " Accessing workspace:\n\n /data00/home/u/agent-workspace   \n\n Quick safety check: Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n Enter to confirm · Esc to cancel"
 	if !trustDialogFor(claude, "/home/u/agent-workspace", "~/agent-workspace") {
 		t.Error("trust dialog for a symlinked folder not recognised")
@@ -60,6 +62,7 @@ func TestTrustDialogFor(t *testing.T) {
 }
 
 func TestPickChoice(t *testing.T) {
+	t.Parallel()
 	a := Approval{Choices: []Choice{
 		{Label: "GPT-6.1-Sol (current)   Latest workhorse model", Text: "1"},
 		{Label: "GPT-6-Astra   Frontier intelligence", Text: "2"},

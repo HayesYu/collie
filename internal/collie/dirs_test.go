@@ -434,14 +434,14 @@ assert.doesNotMatch(html, /id="dir-up"/, "legacy launcher #dir-up should be repl
 const footMatch = html.match(/<footer class="side-foot">([\s\S]*?)<\/footer>/);
 assert.ok(footMatch, "side-foot must exist");
 const foot = footMatch[1];
-assert.match(foot, /id="nav-devices"/, "side-foot keeps clickable device status link");
 assert.match(foot, /id="update-all-btn"/, "side-foot keeps update capsule");
-assert.match(foot, /id="nav-prefs"/, "side-foot keeps single prefs gear icon");
+assert.match(foot, /class="sf-bar"/, "side-foot uses unified 4-icon .sf-bar matching collapsed rail");
+const footOrder = [...foot.matchAll(/id="(nav-auto|nav-peers|nav-devices|nav-prefs)"/g)].map((m) => m[1]);
+assert.deepEqual(footOrder, ["nav-auto", "nav-peers", "nav-devices", "nav-prefs"], "side-foot keeps exact 4-icon order matching rail");
 assert.doesNotMatch(foot, /id="logout"/, "logout must be moved out of side-foot");
-assert.equal((foot.match(/class="icon-btn\b/g) || []).length, 1, "side-foot must contain only one icon button (prefs gear)");
 
-// 2. CSS contracts: green update capsule replacing status & amber restart bar.
-assert.match(css, /\.side-foot:has\(\.update-pill:not\(\[hidden\]\)\)\s+\.foot-status\s*\{\s*display:\s*none;/, "update pill must replace foot-status");
+// 2. CSS contracts: green update capsule, unified 4-icon footer & amber restart bar.
+assert.match(css, /\.sf-bar\s*\{[\s\S]*?display:\s*flex;/, "unified .sf-bar flex layout must exist");
 assert.match(css, /\.update-pill\s*\{[\s\S]*?color:\s*var\(--ok\);/, "update pill must use green var(--ok)");
 assert.match(css, /\.router-pending-bar\s*\{/, "router-pending-bar styles must exist");
 
@@ -460,7 +460,7 @@ const tabsMatch = html.match(/<div class="tabs" id="auto-tabs">([\s\S]*?)<\/div>
 assert.ok(tabsMatch, "auto-tabs must exist");
 const tabKeys = [...tabsMatch[1].matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
 assert.deepEqual(tabKeys, ["memory", "timers", "inbox", "integrations", "settings"], "auto-tabs must contain memory, timers, inbox, integrations, settings");
-assert.match(html, /id="nav-auto-sub">接入与定时</, "nav-auto-sub default text must be 接入与定时");
+assert.match(foot, /id="nav-auto"[^>]*title="自动化 · 接入与定时"/, "side-foot #nav-auto keeps tooltip 自动化 · 接入与定时");
 assert.doesNotMatch(appJs, /id="settings-hooks-fold"/, "hooks UI must not be rendered in settings");
 assert.match(appJs, /id="inbox-thread-filter"/, "multi-thread filter must live in inbox");
 

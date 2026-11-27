@@ -700,6 +700,100 @@ function makeFakeFile({ name, type, bytes, failRead = false, readOnce = false, s
   form._clearFiles();
   delete ctx.navigator.clipboard;
 
+  // 17) #t13006: macOS WeChat stale hash .jpg + companion item with empty file.type (uses _itemType)
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  nextUploadHandler = null;
+  const wxSandboxJpg = makeFakeFile({ name: "592f4e66e91b4aa2bb33cc44dd55434df0.jpg", type: "image/jpeg", size: 92000, failRead: true });
+  const wxTypedViaItem = makeFakeFile({ name: "image.png", type: "", bytes: PNG_BYTES, readOnce: true });
+  const wx17Ev = input.dispatch("paste", {
+    clipboardData: {
+      items: [
+        { kind: "file", type: "image/jpeg", getAsFile: () => wxSandboxJpg },
+        { kind: "file", type: "image/png", getAsFile: () => wxTypedViaItem },
+      ],
+      files: [wxSandboxJpg],
+      getData: () => "",
+    },
+  });
+  assert.equal(wx17Ev.defaultPrevented, true);
+  assert.equal(form._files.length, 1, "stale WeChat jpg + companion _itemType png must group into 1 entry");
+  await settle();
+  assert.equal(toastLog.length, 0, "companion _itemType png must recover cleanly without toast: " + JSON.stringify(toastLog.map((t) => t.msg)));
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 1);
+  assert.equal(form._files[0].err, "");
+  form._clearFiles();
+
+  // 18) #t13006: WeChat UUID .jpg unreadable -> navigator.clipboard.read() recovers from text/html data:image/png
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  ctx.isSecureContext = true;
+  ctx.navigator.clipboard = {
+    async read() {
+      return [{
+        types: ["text/html"],
+        async getType(t) {
+          assert.equal(t, "text/html");
+          return new Blob(['<img src="data:image/png;base64,' + PNG_B64 + '">'], { type: "text/html" });
+        },
+      }];
+    },
+  };
+  const wxUuidDead = makeFakeFile({ name: "592f4e66-e91b-4aa2-bb33-cc44dd55434d.jpg", type: "image/jpeg", size: 42000, failRead: true });
+  input.dispatch("paste", {
+    clipboardData: {
+      items: [{ kind: "file", type: "image/jpeg", getAsFile: () => wxUuidDead }],
+      files: [wxUuidDead],
+      getData: () => "",
+    },
+  });
+  await settle();
+  assert.equal(toastLog.length, 0, "text/html data:image fallback must recover without error toast: " + JSON.stringify(toastLog.map((t) => t.msg)));
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 1);
+  assert.equal(form._files[0].err, "");
+  form._clearFiles();
+
+  // 19) #t13006: Raw TIFF bytes from macOS NSPasteboardTypeTIFF sniff as image/tiff
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  const TIFF_BYTES = Uint8Array.from([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  ctx.navigator.clipboard = {
+    async read() {
+      return [{ types: ["image/tiff"], async getType() { return new Blob([TIFF_BYTES], { type: "image/tiff" }); } }];
+    },
+  };
+  const wxDeadForTiff = makeFakeFile({ name: "592f4e66e91b4aa2bb33cc44dd55434df9.jpg", type: "image/jpeg", size: 42000, failRead: true });
+  input.dispatch("paste", {
+    clipboardData: {
+      items: [{ kind: "file", type: "image/jpeg", getAsFile: () => wxDeadForTiff }],
+      files: [wxDeadForTiff],
+      getData: () => "",
+    },
+  });
+  await settle();
+  assert.equal(toastLog.length, 0, "TIFF fallback must upload cleanly without error toast: " + JSON.stringify(toastLog.map((t) => t.msg)));
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 1);
+  assert.equal(form._files[0].err, "");
+  form._clearFiles();
+
+  // 20) #t13006: Non-HTTPS origin without navigator.clipboard.read() shows actionable HTTPS/drag hint
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  ctx.isSecureContext = false;
+  delete ctx.navigator.clipboard;
+  const wxNonSecure = makeFakeFile({ name: "592f4e66e91b4aa2bb33cc44dd55434df8.jpg", type: "image/jpeg", size: 42000, failRead: true });
+  input.dispatch("paste", {
+    clipboardData: {
+      items: [{ kind: "file", type: "image/jpeg", getAsFile: () => wxNonSecure }],
+      files: [wxNonSecure],
+      getData: () => "",
+    },
+  });
+  await settle();
+  assert.ok(toastLog.some((t) => /HTTPS|拖入/.test(t.msg)), "non-HTTPS unreadable WeChat paste must explain HTTPS/drag fallback: " + JSON.stringify(toastLog.map((t) => t.msg)));
+  ctx.isSecureContext = true;
+  form._clearFiles();
+
   console.log("ALL_PASTE_UPLOAD_TESTS_OK");
 })().catch((e) => { console.error(e); process.exit(1); });
 `

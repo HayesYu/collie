@@ -180,7 +180,7 @@ assert.ok(cssSrc.includes(".viewer.chatbg") && cssSrc.includes("will-change: scr
 assert.ok(!/\.msg-acts\s*\{[^}]*transition:\s*opacity/.test(cssSrc), ".msg-acts must not animate opacity transition during scroll hover");
 assert.ok(cssSrc.includes(".crew.is-overflow") && cssSrc.includes(".td-workers.is-overflow"), "ScrollTimeline strip-fade mask must be gated behind .is-overflow");
 assert.ok(cssSrc.includes("html.is-bg .dot::after") && cssSrc.includes("html.is-idle .dot::after"), "idle/background animation power-saving gates must exist");
-assert.ok(cssSrc.includes(".side.is-scroll-paused .dot::after"), "scroll-pause gate must freeze sidebar/crew/working animations during chat scroll");
+assert.ok(!cssSrc.includes("is-scroll-paused") && !appSrc.includes("is-scroll-paused"), "main-chat scroll must NOT freeze sidebar/crew working spinners (#t13213)");
 assert.ok(!/\.dot\.idle\s*\{[^}]*animation:/.test(cssSrc), ".dot.idle must be calm static with zero infinite animation");
 assert.ok(cssSrc.includes("wait-halo 2.8s ease-in-out infinite"), "preserve active wait-halo animation contract");
 

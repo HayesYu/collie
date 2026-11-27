@@ -402,7 +402,7 @@
   addEventListener("resize", () => closePick());
   document.addEventListener("scroll", (e) => { if (pickOpen && !pickPop.contains(e.target)) closePick(); }, { capture: true, passive: true });
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") syncPick(e.target); });
-  const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "screen", "log"]);
+  const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "rail-live", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "screen", "log"]);
   let _screenSkipHost = null;
   const isScreenDomTarget = (t) => {
     if (!t) return false;
@@ -2028,12 +2028,22 @@
     const sumText = sum && sum.short && sum.short !== label ? sum.short : "";
     const sumFull = sumText ? (sum.full || sumText) : "";
     const nameTip = hasAlias ? `${label} (${v.name})` : label;
-    const cardTitle = sumFull ? `${nameTip} — ${sumFull}` : nameTip;
-    const sumHtml = sumText ? `<div class="item-sum" title="${esc(sumFull)}">${esc(sumText)}</div>` : "";
-    const itemCls = `item${sumHtml ? " has-sum" : ""}${linked ? " has-th" : ""}`;
-    const card = `<a class="${itemCls}" href="#/p/${encodeURIComponent(v.pane_id)}" title="${esc(cardTitle)}">
+    const nmTitle = sumFull ? `${nameTip} — ${sumFull}` : nameTip;
+    const cardTitle = sub && sub !== sumFull ? `${nmTitle} · ${sub}` : nmTitle;
+    // Uniform minimalist 2-line sidebar card (#t12801):
+    // Line 1: name (+ Collie 派出 badge) + top-right status dot
+    // Line 2: single concise metadata line (prefer short task summary when available, else kind · machine · dir);
+    //         full summary and machine/path stay in hover title and right worker drawer.
+    const line2Html = sumText
+      ? `<div class="sub item-sum" title="${esc(sumFull)}">${esc(sumText)}</div>`
+      : `<div class="sub">${esc(sub)}</div>`;
+    const itemCls = `item${sumText ? " has-sum" : ""}${linked ? " has-th" : ""}`;
+    const isCollieWorker = isCollieOwned(v) && v.name !== ROUTER;
+    const workerAttr = isCollieWorker ? ` data-side-worker="${esc(v.name)}"` : "";
+    const paneAttr = v.pane_id ? ` data-pane-id="${esc(v.pane_id)}"` : "";
+    const card = `<a class="${itemCls}" href="#/p/${encodeURIComponent(v.pane_id)}"${workerAttr}${paneAttr} title="${esc(cardTitle)}">
       <span class="glyph">${glyph(v)}</span>
-      <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm" title="${esc(cardTitle)}">${esc(label)}</span><span class="by-collie">Collie 派出</span>` : esc(label)}</div>${sumHtml}<div class="sub">${esc(sub)}</div></span>
+      <span class="body"><div class="name">${isCollieWorker ? `<span class="nm" title="${esc(nmTitle)}">${esc(label)}</span><span class="by-collie">Collie 派出</span>` : esc(label)}</div>${line2Html}</span>
       <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a>`;
     if (!linked) return `<li>${card}</li>`;
     const thTip = linked.title ? `打开关联话题：${linked.title}` : "打开关联话题抽屉";
@@ -2101,6 +2111,8 @@
       setText(np, "");
       if (np.title !== "") { np.title = ""; np.removeAttribute("aria-label"); }
     }
+    const railCollieDot = $("#rail-collie-dot");
+    if (railCollieDot) railCollieDot.hidden = !(pend.length > 0 || unreadCount > 0);
   }
   // O(1)-ish click-frame sidebar active sync: toggles only active classes + unread badge
   // without rebuilding #live-list/#recent-list/#attention/#shells innerHTML on route changes.
@@ -2109,17 +2121,24 @@
     $("#nav-auto")?.classList.toggle("active", view === "auto");
     $("#nav-devices")?.classList.toggle("active", view === "devices");
     $("#nav-prefs")?.classList.toggle("active", view === "prefs");
+    $("#rail-collie")?.classList.toggle("active", view === "collie");
+    $("#rail-auto")?.classList.toggle("active", view === "auto");
+    $("#rail-devices")?.classList.toggle("active", view === "devices");
+    $("#rail-prefs")?.classList.toggle("active", view === "prefs");
     const wantHref = view === "pane" && current
       ? "#/p/" + encodeURIComponent(current)
       : view === "ext" && extCur
         ? (extCur.startsWith("h:") ? "#/h/" + encodeURIComponent(extCur.slice(2)) : "#/x/" + encodeURIComponent(extCur))
         : "";
+    const wantWorker = view === "collie" && activeWorkerKey ? activeWorkerKey : "";
     let foundTarget = !wantHref;
     const sideEl = $(".side");
     if (sideEl && typeof sideEl.querySelectorAll === "function") {
       sideEl.querySelectorAll("a.item.active").forEach((a) => {
-        if (!wantHref || a.getAttribute("href") !== wantHref) a.classList.remove("active");
-        else foundTarget = true;
+        const matchHref = !!(wantHref && a.getAttribute("href") === wantHref);
+        const matchWorker = !!(wantWorker && (a.dataset.sideWorker === wantWorker || a.dataset.paneId === wantWorker));
+        if (!matchHref && !matchWorker) a.classList.remove("active");
+        else if (matchHref) foundTarget = true;
       });
       if (wantHref && !foundTarget) {
         const hit = sideEl.querySelector(`a.item[href="${CSS.escape(wantHref)}"]`);
@@ -2128,6 +2147,19 @@
           foundTarget = true;
         }
       }
+      if (wantWorker) {
+        const escW = CSS.escape(wantWorker);
+        sideEl.querySelectorAll(`a.item[data-side-worker="${escW}"], a.item[data-pane-id="${escW}"]`).forEach((a) => {
+          a.classList.add("active");
+        });
+      }
+      sideEl.querySelectorAll(".sr-agent").forEach((b) => {
+        const match = !!(
+          (wantWorker && (b.dataset.railWorker === wantWorker || b.dataset.railPane === wantWorker)) ||
+          (wantHref && b.getAttribute("href") === wantHref)
+        );
+        b.classList.toggle("active", match);
+      });
       const wantThread = view === "collie" && activeThreadRoot ? activeThreadRoot : "";
       sideEl.querySelectorAll(".item-th-btn.active").forEach((b) => {
         if (!wantThread || b.dataset.agentThread !== wantThread) {
@@ -2165,6 +2197,11 @@
     const online = machines.filter((m) => m.local ? state.ok : m.online).length;
     const connCls = "conn " + (online ? "on" : "off");
     if ($("#conn").className !== connCls) $("#conn").className = connCls;
+    const railConn = $("#rail-conn");
+    if (railConn) {
+      const rcCls = "sr-conn-dot " + (online ? "on" : "off");
+      if (railConn.className !== rcCls) railConn.className = rcCls;
+    }
     setText($("#herdr-status"), !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`);
     if (!state.ok && state.error) $("#herdr-status").title = state.error;
     const wantDocTitle = blocked.length ? `(${blocked.length}) Collie` : "Collie";
@@ -2193,6 +2230,10 @@
       const errTitle = intErr ? `${intErr} 个外部接入异常` : "";
       if (nie.title !== errTitle) nie.title = errTitle;
     }
+    const railAutoDot = $("#rail-auto-dot");
+    if (railAutoDot) railAutoDot.hidden = !(intErr > 0 || (sup.queued || 0) > 0);
+    const railPeersDot = $("#rail-peers-dot");
+    if (railPeersDot) railPeersDot.hidden = !((sup.peers_summary?.pending_incoming || 0) > 0);
     $("#nav-queue").hidden = !sup.queued;
     setText($("#nav-queue"), sup.queued);
     syncSideActive({ skipBadge: true });
@@ -12353,6 +12394,36 @@
       .map((s) => s.pane_id ? itemHTML(s, wtMap, entries) : extRow(s)).join("") + liveMoreBtn
       || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`);
 
+    // Collapsed 54px Icon Rail: restrained vertical monogram + status dot strip for active agents (#t12760)
+    const railLiveEl = $("#rail-live");
+    const railSepEl = $("#rail-live-sep");
+    if (railLiveEl) {
+      const blockedAgents = state.agents.filter((a) => a.name !== ROUTER && a.status === "blocked");
+      const railItems = [...blockedAgents, ...live].slice(0, 10);
+      if (railSepEl) railSepEl.hidden = railItems.length === 0;
+      const monoOf = (str) => {
+        const s = String(str || "").replace(/^[^A-Za-z0-9\u4e00-\u9fff]+/, "").trim();
+        const ch = Array.from(s)[0] || "•";
+        return /[a-z]/.test(ch) ? ch.toUpperCase() : ch;
+      };
+      const railHTML = railItems.map((s) => {
+        if (s.pane_id) {
+          const lbl = title(s);
+          const isW = isCollieOwned(s) && s.name !== ROUTER;
+          const st = s.status || "idle";
+          const stTxt = STATUS_LABEL[st] || st;
+          const tip = `${lbl}${s.name && lbl !== s.name ? ` (${s.name})` : ""} · ${stTxt}`;
+          const cls = `sr-agent${st === "blocked" ? " is-blocked" : ""}`;
+          return `<a class="${cls}" role="listitem" href="#/p/${encodeURIComponent(s.pane_id)}" data-rail-pane="${esc(s.pane_id)}"${isW ? ` data-rail-worker="${esc(s.name)}"` : ""} title="${esc(tip)}" aria-label="${esc(tip)}"><span class="sr-mono" aria-hidden="true">${esc(monoOf(lbl))}</span><span class="sr-dot ${esc(st)}" aria-hidden="true"></span></a>`;
+        }
+        const lbl = extName(s);
+        const st = s.status || "unknown";
+        const tip = `${lbl} · ${EXT_STATE[st] || "正在运行"}`;
+        return `<a class="sr-agent" role="listitem" href="#/x/${encodeURIComponent(s.id)}" title="${esc(tip)}" aria-label="${esc(tip)}"><span class="sr-mono" aria-hidden="true">${esc(monoOf(lbl))}</span><span class="sr-dot ${esc(st)}" aria-hidden="true"></span></a>`;
+      }).join("");
+      setHTML(railLiveEl, railHTML);
+    }
+
     // 最近: newest first; Collie's own sessions are reached from its conversation.
     const collieWorkerNames = getWorkerLookup().byName;
     const collieRan = (name) => name === ROUTER || collieWorkerNames.has(name);
@@ -12461,14 +12532,42 @@
     return e?.hub ? tagged(e.machine || "", e.hub) : e?.machine || "";
   });
   function closeExt() { extStream?.close(); extStream = null; }
-  $("#live-list").addEventListener("click", (ev) => {
-    if (!ev.target.closest("[data-act=live-more]")) return;
+  const handleSideWorkerClick = (ev) => {
+    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
+    if (ev.target.closest(".item-th-btn")) return;
+    const item = ev.target.closest("a.item[data-side-worker]");
+    if (!item || view !== "collie" || innerWidth <= 1000) return;
     ev.preventDefault();
-    liveRevealTarget = null;
-    liveAll = !liveAll;
-    store.set("liveAll", liveAll);
-    renderSessions();
+    openWorkerDrawer({ worker: item.dataset.sideWorker, paneId: item.dataset.paneId || "" });
+  };
+  $("#live-list").addEventListener("click", (ev) => {
+    if (ev.target.closest("[data-act=live-more]")) {
+      ev.preventDefault();
+      liveRevealTarget = null;
+      liveAll = !liveAll;
+      store.set("liveAll", liveAll);
+      renderSessions();
+      return;
+    }
+    handleSideWorkerClick(ev);
   });
+  $("#attention")?.addEventListener("click", handleSideWorkerClick);
+  $("#rail-live")?.addEventListener("click", (ev) => {
+    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
+    const a = ev.target.closest("a.sr-agent[data-rail-pane]");
+    if (!a || innerWidth <= 1000) return;
+    const worker = a.dataset.railWorker || "";
+    const paneId = a.dataset.railPane || "";
+    if (!worker && !paneId) return;
+    ev.preventDefault();
+    if (view !== "collie") {
+      location.hash = "#/collie";
+      if (view !== "collie") route();
+    }
+    openWorkerDrawer({ worker, paneId });
+  });
+  $("#rail-new-btn")?.addEventListener("click", () => openLauncher());
+  $("#rail-peers")?.addEventListener("click", () => openPeerModal("auto"));
   $("#recent-list").addEventListener("click", (ev) => {
     if (!ev.target.closest("[data-act=ext-more]")) return;
     ev.preventDefault();
@@ -12591,6 +12690,7 @@
     sendKey: () => store.get("sendKey", "enter"),
     notify: () => store.get("notify", true),
     fold: () => store.get("fold", true),
+    devMode: () => !!store.get("devMode", false),
   };
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
   function applyLook() {
@@ -12602,13 +12702,17 @@
     const cs = $('meta[name="color-scheme"]');
     if (cs) cs.content = t === "light" || t === "dark" ? t : "light dark";
     const dark = t === "dark" || (t === "system" && darkMQ.matches);
-    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#0b0b0c" : "#ffffff"; });
+    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#111113" : "#ffffff"; });
     dispatchEvent(new Event("collie:theme"));
   }
   darkMQ.addEventListener("change", applyLook);
   addEventListener("storage", (ev) => {
     if (!ev.key || ev.key === "collie.theme" || ev.key === "collie.accent" || ev.key === "collie.text") {
       applyLook();
+      if (view === "prefs") renderPrefs();
+    }
+    if (!ev.key || ev.key === "collie.devMode") {
+      syncDevModeUI();
       if (view === "prefs") renderPrefs();
     }
   });
@@ -12618,8 +12722,9 @@
     const body = $("#prefs-body");
     const env = notifyEnvState();
     const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+    const devOn = prefs.devMode();
     const sig = [
-      prefs.theme(), prefs.accent(), prefs.text(), mode, prefs.sendKey(), prefs.fold(),
+      prefs.theme(), prefs.accent(), prefs.text(), mode, prefs.sendKey(), prefs.fold(), devOn ? 1 : 0,
       env.active ? 1 : 0, env.supported ? 1 : 0, env.warn ? 1 : 0, env.text, mac ? 1 : 0,
     ].join("|");
     if (body._prefsSig === sig && body._prefsRendered) {
@@ -12644,12 +12749,15 @@
         ${row("对话文字", "", seg("text", prefs.text(), [["small", "小"], ["normal", "标准"], ["large", "大"]]))}
       </div>
       <div class="card"><div class="card-h">对话</div>
-        ${row("打开 agent 时显示", "对话：从会话记录整理的消息；屏幕：终端原样；日志：自动换行的滚动输出", seg("mode2", mode, [["chat", "对话"], ["screen", "屏幕"], ["log", "日志"]]))}
         ${row("发送消息", "另一种按法用来换行；Shift+Enter 总是换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
         ${row("折叠连续的工具步骤", "超过 3 步时收成一行，只露出最后一步", sw("fold", prefs.fold()))}
       </div>
       <div class="card"><div class="card-h">通知</div>
         ${row("浏览器通知", esc(env.text), notifyCtl, env.warn)}
+      </div>
+      <div class="card"><div class="card-h">开发者</div>
+        ${row("开发者模式", "在工作会话中显示底层终端屏幕与原始日志视图", sw("devMode", devOn))}
+        ${devOn ? row("打开 agent 时默认视图", "对话：从会话记录整理的消息；屏幕：终端原样；日志：自动换行的滚动输出", seg("mode2", mode, [["chat", "对话"], ["screen", "屏幕"], ["log", "日志"]])) : ""}
       </div>
       <div class="card"><div class="card-h">登录状态</div>
         ${row("退出登录", "清除当前浏览器的登录凭证，下次需要重新配对或输入访问令牌", `<button type="button" class="btn small danger-ghost" data-act="logout">退出登录</button>`)}
@@ -12684,6 +12792,7 @@
         }
       }
       store.set(key, on);
+      if (key === "devMode") syncDevModeUI();
     } else {
       const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
       if (key === "mode2") setMode(v); else store.set(key, v);
@@ -13397,17 +13506,26 @@
   let screenBufLines = 0;
 
   // A plain shell has no conversation to show, so it opens on the screen.
+  // With Developer Mode off (default), agent sessions stay strictly on clean conversation mode (#t12833).
   const isShell = () => { const v = find(current); return !!v && !v.is_agent; };
   let shellMode = null; // a shell's own pick; never overwrites the agent default
-  const curMode = () => isShell() ? (shellMode || (mode === "chat" ? "screen" : mode)) : mode;
+  const curMode = () => {
+    if (isShell()) return prefs.devMode() ? (shellMode || (mode === "chat" ? "screen" : mode)) : "screen";
+    return prefs.devMode() ? mode : "chat";
+  };
   function applyMode() {
     const m = curMode();
+    const showDevTabs = prefs.devMode();
     $("#viewer").dataset.mode = m;
     $("#detail").classList.toggle("chat-mode", m === "chat");
     $("#detail").classList.toggle("shell", isShell());
     if (m === "chat") hideJump();
+    const modeSeg = $("#mode-seg");
+    if (modeSeg) modeSeg.hidden = !showDevTabs;
     $$("#mode-seg button").forEach((b) => {
-      b.classList.toggle("on", b.dataset.mode === m);
+      const on = b.dataset.mode === m;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
       if (b.dataset.mode === "chat") b.hidden = isShell();
     });
   }
@@ -15381,7 +15499,7 @@
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
-  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "router-status", "screen", "log"]);
+  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "rail-live", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "router-status", "screen", "log"]);
   function triggerThumbLoads(root) {
     if (!root || root.nodeType !== 1) return;
     if (root.tagName === "IMG") {
@@ -15949,7 +16067,8 @@
   const pane = $("#file-view");
   const fileScrim = $("#file-scrim");
   const fvWidenBtn = $("#fv-widen");
-  let fileWide = false;
+  let drawerWide = !!store.get("drawerWide", store.get("threadWide", false));
+  let fileWide = drawerWide;
   let _lastFileW = 0;
   let activeWorkerKey = null; // "" | workerName | paneId when #worker-drawer is open
   let wdPaneId = "";
@@ -15960,13 +16079,14 @@
   let wdTaskNote = "";
   let wdMode = store.get("wdMode", "chat");
   let wdComposerOpen = false;
-  let workerWide = false;
+  let workerWide = drawerWide;
   let _lastWorkerW = 0;
-  let _lastDrawerW = 432;
+  let _lastDrawerW = 460;
 
+  const SIDE_RAIL_W = 54;
   const currentSideW = () => {
     if (innerWidth <= 760) return 0;
-    if (innerWidth > 1000 && $("#app")?.classList?.contains("side-collapsed")) return 0;
+    if (innerWidth > 1000 && $("#app")?.classList?.contains("side-collapsed")) return SIDE_RAIL_W;
     return $(".side")?.offsetWidth || (innerWidth <= 1100 ? 268 : 300);
   };
   const isAnyRightDrawerOpen = () => {
@@ -15980,8 +16100,37 @@
     );
   };
   const drawerAvail = () => {
-    const sideW = $("#app")?.classList?.contains("side-collapsed") ? 0 : ($(".side")?.offsetWidth || 260);
+    const sideW = currentSideW();
     return Math.max(480, innerWidth - sideW);
+  };
+  // Single unified desktop width policy shared by #file-view, #thread-drawer, and #worker-drawer (#t12811, #t12820):
+  // default matches CSS --drawer-default-w: clamp(440px, 34vw, 540px); widened state is unified 50/50 split.
+  const drawerDefaultW = () => {
+    const avail = drawerAvail();
+    const std = Math.round(Math.min(540, Math.max(440, innerWidth * 0.34)));
+    return Math.max(360, Math.min(std, avail - 340));
+  };
+  const drawerWideW = () => {
+    const avail = drawerAvail();
+    return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 320));
+  };
+  const drawerMaxW = () => Math.max(420, drawerAvail() - 340);
+  const drawerDragMaxW = () => {
+    const avail = drawerAvail();
+    return Math.max(drawerMaxW(), drawerWideW(), Math.min(Math.round(avail * 0.78), avail - 200));
+  };
+  const unifiedDrawerW = () => (
+    drawerWide
+      ? drawerWideW()
+      : Math.max(360, Math.min(store.get("drawerW", 0) || drawerDefaultW(), drawerMaxW()))
+  );
+  const setUnifiedDrawerWide = (next) => {
+    drawerWide = !!next;
+    fileWide = drawerWide;
+    threadWide = drawerWide;
+    workerWide = drawerWide;
+    store.set("drawerWide", drawerWide);
+    store.set("threadWide", drawerWide);
   };
   const setAppDrawerW = (px) => {
     const w = Math.round(px);
@@ -16069,6 +16218,7 @@
     const chatEls = view === "collie"
       ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
       : [];
+    const headActsEl = view === "collie" ? $("#v-collie .d-head-acts") : null;
     let chatFrom = 0, chatTo = 0, drawerFrom = 0, drawerTo = 0;
     let useStaging = false;
     let fadeDrawer = false;
@@ -16139,6 +16289,10 @@
         const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
         for (const el of chatEls) el.style.transform = ctr;
       }
+      if (headActsEl?.style) {
+        if (useStaging) headActsEl.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`;
+        else if (fadeDrawer) headActsEl.style.transform = `translate3d(${(dx - fromW).toFixed(2)}px, 0, 0)`;
+      }
       if (drawerEl?.style && (useStaging || fadeDrawer)) {
         drawerEl.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`;
         if (fadeDrawer) drawerEl.style.opacity = op.toFixed(3);
@@ -16155,6 +16309,7 @@
         }
         syncCollieTopThreadClearance(0);
       }
+      if (headActsEl?.style) headActsEl.style.transform = "";
       if (drawerEl?.style) {
         drawerEl.style.transform = "";
         if (useStaging) drawerEl.style.width = "";
@@ -16225,16 +16380,13 @@
     }
     setAppDrawerW(px);
   };
-  // The widest the panel may be: the conversation keeps at least 360px.
-  const fileMax = () => Math.max(420, innerWidth - currentSideW() - 360);
-  const fileWideW = () => {
-    const avail = drawerAvail();
-    return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 320));
-  };
+  // The widest the panel may be: unified with #thread-drawer and #worker-drawer (#t12811).
+  const fileMax = () => drawerDragMaxW();
+  const fileWideW = () => drawerWideW();
   let paneTimer = 0;
   function syncFileWidenUI() {
     if (!fvWidenBtn) return;
-    const on = !!(fileWide && innerWidth > THREAD_DESKTOP_MIN && !pane?.hidden);
+    const on = !!(drawerWide && innerWidth > THREAD_DESKTOP_MIN && !pane?.hidden);
     fvWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
     const lbl = on ? "还原宽度" : "拓宽抽屉";
     fvWidenBtn.title = lbl;
@@ -16253,9 +16405,7 @@
     if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
     clearTimeout(paneTimer);
     resetDrawerMotion(pane);
-    const baseW = fileWide
-      ? fileWideW()
-      : Math.max(380, Math.min(store.get("fileW", 0) || Math.min(Math.round(drawerAvail() * 0.44), 560), fileMax()));
+    const baseW = unifiedDrawerW();
     setFileW(baseW);
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
     pane.setAttribute("aria-hidden", "false");
@@ -16330,11 +16480,11 @@
   fvWidenBtn?.addEventListener("click", () => {
     if (innerWidth <= THREAD_DESKTOP_MIN || pane?.hidden) return;
     finishDrawerGlide(true);
-    const prevW = _lastFileW || _lastDrawerW || 520;
+    const prevW = _lastFileW || _lastDrawerW || drawerDefaultW();
     const sc = view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
-    fileWide = !fileWide;
-    const nextW = fileWide ? fileWideW() : Math.max(380, Math.min(store.get("fileW", 0) || Math.min(Math.round(drawerAvail() * 0.44), 560), fileMax()));
+    setUnifiedDrawerWide(!drawerWide);
+    const nextW = unifiedDrawerW();
     setFileW(nextW);
     syncFileWidenUI();
     if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevW, toW: nextW });
@@ -16358,7 +16508,7 @@
     const dragSnap = sc ? captureColliePos(sc) : null;
     const max = fileMax();
     const move = (ev) => {
-      fileWide = false;
+      setUnifiedDrawerWide(false);
       const nextW = Math.max(360, Math.min(Math.round(innerWidth - ev.clientX), max));
       if (nextW === _lastFileW) return;
       setFileW(nextW);
@@ -16370,7 +16520,7 @@
       grip.removeEventListener("pointerup", up);
       grip.removeEventListener("pointercancel", up);
       document.body.classList.remove("dragging");
-      store.set("fileW", _lastFileW || 520);
+      store.set("drawerW", _lastFileW || drawerDefaultW());
       if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
     };
     grip.addEventListener("pointermove", move);
@@ -16495,8 +16645,9 @@
       }
     }
     if (!canGlide) {
-      if (activeThreadRoot && threadWide) applyThreadWidth();
-      if (activeWorkerKey && workerWide) applyWorkerWidth();
+      if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
+      if (activeThreadRoot) applyThreadWidth();
+      if (activeWorkerKey) applyWorkerWidth();
       if (hasNotes) _collieShiftCur = nextNotesShift;
       return;
     }
@@ -16504,23 +16655,30 @@
     const chatEls = view === "collie"
       ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
       : [];
+    const activeViewEl = $(".view:not([hidden]):not(.is-parked)") || col;
+    const headPushEls = [
+      activeViewEl?.querySelector?.(".d-head .d-title"),
+      view === "collie" ? $("#crew") : null,
+    ].filter((e) => e?.style);
+    const sideFullEl = sideEl.querySelector?.(".side-full");
     if (_collieShiftRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(_collieShiftRAF);
       _collieShiftRAF = 0;
     }
 
+    const deltaW = Math.max(0, sideW - SIDE_RAIL_W);
     let sideFrom = 0, sideTo = 0, chatFrom = 0, chatTo = 0;
     let isOpening = false;
     sideEl.style.setProperty("--side-anim-w", sideW + "px");
     if (want) {
-      // Collapsing left sidebar (sideW -> 0): Column 2 immediately expands to full width (zero clipping)
+      // Collapsing left sidebar (sideW -> 54px rail): flat same-plane glide, zero shadow, lockstep header push
       sideEl.classList.add("is-side-closing");
       sideFrom = 0;
-      sideTo = -sideW;
-      chatFrom = prevNotesShift + sideW / 2;
+      sideTo = -deltaW;
+      chatFrom = prevNotesShift + deltaW / 2;
       chatTo = nextNotesShift;
     } else {
-      // Expanding left sidebar (0 -> sideW): stage Column 1 at 0px so Column 2 never clips during 240ms glide
+      // Expanding left sidebar (54px rail -> sideW): stage Column 1 at 54px so Column 2 never clips during 240ms glide
       isOpening = true;
       appEl.classList.add("is-side-opening");
       const targetMainW = Math.max(320, innerWidth - sideW - drawerW);
@@ -16529,16 +16687,25 @@
         col.style.setProperty("--drawer-comp-w", Math.min(804, Math.max(296, Math.round(targetMainW - 24))) + "px");
         col.classList.add("has-drawer-col-cap");
       }
-      sideFrom = -sideW;
+      sideFrom = -deltaW;
       sideTo = 0;
       chatFrom = prevNotesShift;
-      chatTo = nextNotesShift + sideW / 2;
+      chatTo = nextNotesShift + deltaW / 2;
     }
 
     const dur = 240;
     const t0 = performance.now();
-    const applyFrame = (sx, cx) => {
+    const applyFrame = (sx, cx, prog) => {
       sideEl.style.transform = `translate3d(${sx.toFixed(2)}px, 0, 0)`;
+      if (sideFullEl?.style) {
+        const op = want ? Math.max(0.08, 1 - prog * 1.15) : Math.min(1, 0.25 + prog * 0.85);
+        sideFullEl.style.opacity = op.toFixed(3);
+      }
+      const headOffset = Math.max(0, deltaW + sx);
+      if (headPushEls.length) {
+        const htr = `translate3d(${headOffset.toFixed(2)}px, 0, 0)`;
+        for (const el of headPushEls) el.style.transform = htr;
+      }
       if (chatEls.length) {
         const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
         for (const el of chatEls) el.style.transform = ctr;
@@ -16548,6 +16715,8 @@
       sideEl.classList.remove("is-side-closing");
       sideEl.style.transform = "";
       sideEl.style.removeProperty("--side-anim-w");
+      if (sideFullEl?.style) sideFullEl.style.opacity = "";
+      for (const el of headPushEls) el.style.transform = "";
       if (isOpening) {
         appEl.classList.remove("is-side-opening");
         if (col) {
@@ -16559,17 +16728,18 @@
       for (const el of chatEls) el.style.transform = "";
       _collieShiftCur = hasNotes ? nextNotesShift : 0;
       if (view === "collie") syncCollieTopHeight();
-      if (activeThreadRoot && threadWide) applyThreadWidth();
-      if (activeWorkerKey && workerWide) applyWorkerWidth();
+      if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
+      if (activeThreadRoot) applyThreadWidth();
+      if (activeWorkerKey) applyWorkerWidth();
     };
-    applyFrame(sideFrom, chatFrom);
+    applyFrame(sideFrom, chatFrom, 0);
     let sync = true;
     const step = (now) => {
       if (sync) { finishSideGlide(true); return; }
       const p = Math.min(1, Math.max(0, (now - t0) / dur));
       if (p >= 1) { finishSideGlide(true); return; }
       const e = easeOutSilk(p);
-      applyFrame(sideFrom + (sideTo - sideFrom) * e, chatFrom + (chatTo - chatFrom) * e);
+      applyFrame(sideFrom + (sideTo - sideFrom) * e, chatFrom + (chatTo - chatFrom) * e, e);
       _sideGlideRAF = requestAnimationFrame(step);
     };
     _sideGlideRAF = requestAnimationFrame(step);
@@ -16592,25 +16762,28 @@
   });
   if (sideCollapsed) setSideCollapsed(true, { immediate: true, force: true, skipPersist: true });
 
-  // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」卡内双档：事项 / 话题）
+  // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」第一组内联斜杠切换：进行中 / 话题）
   const NOTES_WIDE_MIN = 1360;
   const NOTES_COMPACT_TASKS = 3;
   const NOTES_COMPACT_FILES = 2;
   const NOTES_COMPACT_TIMERS = 1;
-  const THREADS_COMPACT_ACTIVE = 5;
+  const THREADS_COMPACT_ACTIVE = 3;
   const notesPane = $("#notes-pane");
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
   const notesBtnDot = $("#open-notes-dot");
+  const npTabsEl = $("#np-tabs");
   const npTabNotesBtn = $("#np-tab-notes");
   const npTabThreadsBtn = $("#np-tab-threads");
-  const npTabInkEl = $("#np-tab-ink");
+  const npSecTasksEl = $("#np-sec-tasks");
+  const npPanelTasksEl = $("#np-panel-tasks");
+  const npPanelThreadsEl = $("#np-panel-threads");
+  const npTasksMoreEl = $("#np-tasks-more");
+  const npThreadsMoreEl = $("#np-threads-more");
   const npDateEl = $("#np-date");
   const npHeadEl = $("#np-head");
   const npBodyEl = $("#np-body");
-  const npThreadsBodyEl = $("#np-threads-body");
   const thHeadDot = $("#collie-threads-dot");
-  const thPopSub = $("#collie-threads-sub");
   const thPopList = $("#collie-threads-list");
   const normalizeSidePanePref = (v) => (v === "notes" || v === "threads" || v === "none") ? v : "";
   let sidePanePref = (() => {
@@ -16627,6 +16800,8 @@
   let notesOpen = false;
   let notesExpanded = false;
   let threadsExpanded = false;
+  let _npHasExtraTasks = false;
+  let _npHasExtraThreads = false;
   let _lastCollieTopH = 0;
   let _lastNotebookRenderKey = "";
   let _collieShiftMode = null; // null | "none" | "notes"
@@ -16634,14 +16809,14 @@
   let _collieShiftTarget = 0;
   let _collieShiftRAF = 0;
   let _npModeAnimTimer = 0;
-  const _npScrollByMode = { notes: 0, threads: 0 };
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
+  const currentColW = () => Math.max(780, Math.min(880, 480 + innerWidth * (100 / 480)));
   function computeCollieShiftPx(reservePx = 280) {
     if (reservePx <= 0) return 0;
     const sideW = currentSideW();
     const canvas = Math.max(0, innerWidth - sideW);
-    const free = (canvas - 780) / 2;
+    const free = (canvas - currentColW()) / 2;
     return -Math.min(reservePx / 2, Math.max(0, free - 20));
   }
   function syncCollieTopThreadClearance(px) {
@@ -16746,18 +16921,10 @@
     _lastCollieTopH = h;
     notesPane.style.setProperty("--collie-top-h", h + "px");
   }
-  function syncNotebookTabInk(immediate = false) {
-    if (!npTabInkEl) return;
-    const activeTab = sidePaneActiveMode === "threads" ? npTabThreadsBtn : npTabNotesBtn;
-    if (!activeTab) return;
-    const x = activeTab.offsetLeft || 0;
-    const w = activeTab.offsetWidth || 26;
-    if (immediate) npTabInkEl.style.transition = "none";
-    npTabInkEl.style.transform = `translate3d(${x}px, 0, 0) scaleX(${(w / 26).toFixed(4)})`;
-    if (immediate) {
-      void npTabInkEl.offsetWidth;
-      npTabInkEl.style.transition = "";
-    }
+  function syncSection1MorePills() {
+    const isThreads = sidePaneActiveMode === "threads";
+    if (npTasksMoreEl) npTasksMoreEl.hidden = isThreads || !_npHasExtraTasks;
+    if (npThreadsMoreEl) npThreadsMoreEl.hidden = !isThreads || !_npHasExtraThreads;
   }
   function formatNotebookDate(isoDate) {
     const d = isoDate ? new Date(isoDate + "T00:00:00") : new Date();
@@ -16792,31 +16959,32 @@
   }
   function syncNotebookExpanded() {
     if (!notesPane) return;
-    const isNotes = sidePaneActiveMode === "notes";
-    const showFull = !isWideNotesViewport() || (isNotes ? notesExpanded : threadsExpanded);
+    const isThreads = sidePaneActiveMode === "threads";
+    const showFull = !isWideNotesViewport() || notesExpanded;
     notesPane.classList.toggle("is-expanded", showFull);
     notesPane.setAttribute("data-expanded", showFull ? "true" : "false");
-    const activeContainer = isNotes ? npBodyEl : npThreadsBodyEl;
-    const moreFolds = (activeContainer || notesPane).querySelectorAll?.(".np-fold-more") || [];
+    const moreFolds = notesPane.querySelectorAll?.(".np-fold-more") || [];
     for (const el of moreFolds) {
       if ("inert" in el) el.inert = !showFull;
       el.setAttribute?.("aria-hidden", showFull ? "false" : "true");
     }
-    const pills = (activeContainer || notesPane).querySelectorAll?.(".np-more-pill") || [];
-    for (const pill of pills) {
-      pill.tabIndex = showFull ? -1 : 0;
-      pill.setAttribute("aria-hidden", showFull ? "true" : "false");
-    }
-    for (const id of ["#np-tasks-more", "#np-files-more", "#np-timers-more"]) {
+    syncSection1MorePills();
+    for (const [id, active] of [
+      ["#np-tasks-more", !isThreads],
+      ["#np-threads-more", isThreads],
+      ["#np-files-more", true],
+      ["#np-timers-more", true],
+    ]) {
       const pill = $(id);
       if (!pill) continue;
-      const hiddenState = isNotes ? showFull : true;
+      const hiddenState = !active || showFull || pill.hidden;
       pill.tabIndex = hiddenState ? -1 : 0;
       pill.setAttribute("aria-hidden", hiddenState ? "true" : "false");
     }
   }
   function setNotesExpanded(next) {
     const want = !!next;
+    threadsExpanded = want;
     if (want === notesExpanded) {
       syncNotebookExpanded();
       return;
@@ -16825,13 +16993,7 @@
     syncNotebookExpanded();
   }
   function setThreadsExpanded(next) {
-    const want = !!next;
-    if (want === threadsExpanded) {
-      syncNotebookExpanded();
-      return;
-    }
-    threadsExpanded = want;
-    syncNotebookExpanded();
+    setNotesExpanded(next);
   }
   function renderNotebook() {
     if (!notesPane) return;
@@ -16852,13 +17014,12 @@
     // 1. 进行中 (primary rows + isolated 0fr->1fr fold for overflow rows and per-item notes)
     const primaryTasks = allTasks.slice(0, NOTES_COMPACT_TASKS);
     const extraTasks = allTasks.slice(NOTES_COMPACT_TASKS);
-    const taskMoreEl = $("#np-tasks-more");
-    if (taskMoreEl) {
+    _npHasExtraTasks = extraTasks.length > 0;
+    if (npTasksMoreEl) {
       const rem = extraTasks.length;
-      taskMoreEl.hidden = rem <= 0;
       if (rem > 0) {
-        taskMoreEl.textContent = `+${rem}`;
-        taskMoreEl.title = `展开查看全部 ${allTasks.length} 项`;
+        npTasksMoreEl.textContent = `+${rem}`;
+        npTasksMoreEl.title = `展开查看全部 ${allTasks.length} 项`;
       }
     }
     const taskRowHTML = (tk) => {
@@ -16984,10 +17145,6 @@
     const hadNotes = col.classList.contains("has-notes");
     const stateUnchanged = (wasHidden === !wantOpen) && (hadNotes === keepSlot);
     const modeChanged = prevMode !== sidePaneActiveMode;
-    if (modeChanged && !wasHidden) {
-      if (prevMode === "notes" && npBodyEl) _npScrollByMode.notes = npBodyEl.scrollTop || 0;
-      else if (prevMode === "threads" && thPopList) _npScrollByMode.threads = thPopList.scrollTop || 0;
-    }
     if (immediate && !stateUnchanged) {
       col.classList.add("no-notes-anim");
       if (_noNotesAnimRAF && typeof cancelAnimationFrame === "function") {
@@ -17008,21 +17165,22 @@
     }
     if (wasHidden !== !wantOpen) notesPane.classList.toggle("is-hidden", !wantOpen);
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
-    notesPane.setAttribute("aria-label", isThreads ? "小本本 · 话题" : "小本本 · 事项");
+    notesPane.setAttribute("aria-label", isThreads ? "小本本 · 话题" : "小本本");
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
     if ("inert" in notesPane) notesPane.inert = !wantOpen;
+    npSecTasksEl?.setAttribute("aria-labelledby", isThreads ? "np-tab-threads" : "np-tab-notes");
     if (npTabNotesBtn) {
       npTabNotesBtn.classList.toggle("on", !isThreads);
       npTabNotesBtn.setAttribute("aria-selected", !isThreads ? "true" : "false");
+      npTabNotesBtn.tabIndex = !isThreads ? 0 : -1;
     }
     if (npTabThreadsBtn) {
       npTabThreadsBtn.classList.toggle("on", isThreads);
       npTabThreadsBtn.setAttribute("aria-selected", isThreads ? "true" : "false");
+      npTabThreadsBtn.tabIndex = isThreads ? 0 : -1;
     }
-    if (npDateEl) npDateEl.hidden = isThreads;
-    if (thPopSub) thPopSub.hidden = !isThreads;
-    if (npBodyEl) npBodyEl.hidden = isThreads;
-    if (npThreadsBodyEl) npThreadsBodyEl.hidden = !isThreads;
+    if (npPanelTasksEl) npPanelTasksEl.hidden = isThreads;
+    if (npPanelThreadsEl) npPanelThreadsEl.hidden = !isThreads;
     if (npHeadEl) npHeadEl.title = "点击空白处切换紧凑或展开";
     if (notesBtn) {
       notesBtn.classList.toggle("on", wantOpen);
@@ -17030,12 +17188,13 @@
     }
     if (wantOpen) {
       if (!col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
-      if (isThreads) renderCollieThreadsMenu();
-      else renderNotebook();
-      // Smooth 140ms restrained fade + subtle vertical micro-shift ONLY on explicit in-card tab switch.
+      renderNotebook();
+      renderCollieThreadsMenu();
+      // Smooth 130ms restrained fade-in ONLY on the first-group panel when switching 进行中 <-> 话题.
+      // 下方的「今日产物」与「下一条定时」保持原位纹丝不动。
       if (opts.animateModeSwap && modeChanged && !wasHidden && !immediate) {
-        const incoming = isThreads ? npThreadsBodyEl : npBodyEl;
-        const outgoing = isThreads ? npBodyEl : npThreadsBodyEl;
+        const incoming = isThreads ? npPanelThreadsEl : npPanelTasksEl;
+        const outgoing = isThreads ? npPanelTasksEl : npPanelThreadsEl;
         outgoing?.classList?.remove("is-mode-entering");
         if (incoming) {
           clearTimeout(_npModeAnimTimer);
@@ -17045,16 +17204,8 @@
           _npModeAnimTimer = setTimeout(() => {
             _npModeAnimTimer = 0;
             incoming.classList.remove("is-mode-entering");
-          }, 180);
+          }, 170);
         }
-        const scTarget = isThreads ? thPopList : npBodyEl;
-        const savedScroll = _npScrollByMode[sidePaneActiveMode] || 0;
-        if (scTarget) scTarget.scrollTop = savedScroll;
-      }
-      const inkImmediate = immediate || wasHidden || !opts.animateModeSwap;
-      syncNotebookTabInk(inkImmediate);
-      if (wasHidden && typeof requestAnimationFrame === "function") {
-        requestAnimationFrame(() => syncNotebookTabInk(true));
       }
     }
     syncNotebookExpanded();
@@ -17091,7 +17242,7 @@
       const r = await api("/api/super/notebook");
       if (r && typeof r === "object") {
         notebookData = r;
-        if (notesOpen && sidePaneActiveMode === "notes") renderNotebook();
+        if (notesOpen) renderNotebook();
       }
     } catch {
       // Quiet read-only failure: never disrupt main chat.
@@ -17100,13 +17251,13 @@
     }
   }
   function scheduleNotebookRefresh(sig = "") {
-    if (!notesOpen || sidePaneActiveMode !== "notes") return;
+    if (!notesOpen) return;
     if (sig && sig === notebookLastRefreshSig && notebookData) return;
     if (sig) notebookLastRefreshSig = sig;
     if (notebookRefreshTimer) return;
     notebookRefreshTimer = setTimeout(() => {
       notebookRefreshTimer = 0;
-      if (view === "collie" && notesOpen && sidePaneActiveMode === "notes") loadNotebook(false);
+      if (view === "collie" && notesOpen) loadNotebook(false);
     }, 2500);
   }
 
@@ -17118,18 +17269,27 @@
       syncNotebookVisibility();
     } else {
       closeAllColliePopovers();
-      if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
-      if (activeWorkerKey) closeWorkerDrawer({ immediate: true });
-      if ($("#app")?.classList?.contains("has-file")) closeFilePane({ immediate: true });
       const targetMode = sidePaneActiveMode === "threads" ? "threads" : "notes";
       if (isWideNotesViewport()) persistSidePanePref(targetMode);
       else sidePaneOverlay = targetMode;
-      if (targetMode === "notes") loadNotebook(true);
-      else {
+      loadNotebook(true);
+      if (targetMode === "threads") {
         const entries = chatEntries();
         renderCollieThreadsMenu(computeReplyThreads(entries), entries);
       }
-      syncNotebookVisibility();
+      // Smooth 240ms lockstep handoff when switching from an open right 3-in-1 drawer to 小本本 (#t12807):
+      // never pass immediate:true (which caused a 1-frame hard snap); let close*Drawer glide out and
+      // invoke syncNotebookVisibility({ deferShift: desktopCloseAnim }) on the exact same curve.
+      const hadThread = !!activeThreadRoot;
+      const hadWorker = !!activeWorkerKey;
+      const hadFile = !!$("#app")?.classList?.contains("has-file");
+      if (hadThread || hadWorker || hadFile) {
+        if (hadThread) closeThreadDrawer({ rerender: true });
+        if (hadWorker) closeWorkerDrawer();
+        if (hadFile) closeFilePane();
+      } else {
+        syncNotebookVisibility();
+      }
     }
   });
   const hideNotebookFromCard = (ev) => {
@@ -17152,6 +17312,15 @@
     ev.stopPropagation();
     switchNotebookTab("threads");
   });
+  npTabsEl?.addEventListener("keydown", (ev) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
+    ev.preventDefault();
+    const nextTab = ev.key === "Home" ? "notes"
+      : ev.key === "End" ? "threads"
+      : sidePaneActiveMode === "threads" ? "notes" : "threads";
+    switchNotebookTab(nextTab);
+    (nextTab === "threads" ? npTabThreadsBtn : npTabNotesBtn)?.focus?.();
+  });
   notesPane?.addEventListener("click", (ev) => {
     if (ev.target.closest("#np-close, #np-back, #np-handle")) return;
     const tabBtn = ev.target.closest("[data-np-tab]");
@@ -17161,21 +17330,8 @@
       switchNotebookTab(tabBtn.dataset.npTab);
       return;
     }
-    if (sidePaneActiveMode === "threads") {
-      if (ev.target.closest("[data-th-pick]")) return;
-      if (!isWideNotesViewport()) return;
-      if (ev.target.closest("[data-np-expand]")) {
-        ev.preventDefault();
-        setThreadsExpanded(true);
-        return;
-      }
-      const sel = window.getSelection?.();
-      if (sel && !sel.isCollapsed && typeof notesPane.contains === "function" && notesPane.contains(sel.anchorNode)) return;
-      ev.preventDefault();
-      setThreadsExpanded(!threadsExpanded);
-      return;
-    }
-    if (sidePaneActiveMode !== "notes") return;
+    if (ev.target.closest("#np-tabs")) return;
+    if (ev.target.closest("[data-th-pick]")) return;
     const fBtn = ev.target.closest("[data-np-file]");
     if (fBtn) {
       ev.preventDefault();
@@ -17223,10 +17379,8 @@
       if (!isWideNotesViewport()) {
         sidePaneOverlay = "";
         syncNotebookVisibility();
-      } else if (sidePaneActiveMode === "notes" && notesExpanded) {
+      } else if (notesExpanded) {
         setNotesExpanded(false);
-      } else if (sidePaneActiveMode === "threads" && threadsExpanded) {
-        setThreadsExpanded(false);
       }
     }
   });
@@ -17242,11 +17396,9 @@
       clearCollieShiftInline();
       syncCollieTopHeight();
       syncNotebookVisibility({ immediate: true });
-      if (notesOpen) syncNotebookTabInk(true);
     }
     if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) {
-      const w = fileWide ? fileWideW() : Math.max(380, Math.min(_lastFileW || store.get("fileW", 0) || 520, fileMax()));
-      setFileW(w);
+      setFileW(unifiedDrawerW());
       syncFileWidenUI();
     } else if (pane && !pane.hidden) {
       syncFileWidenUI();
@@ -17380,11 +17532,6 @@
     if (notesBtn) notesBtn.classList.toggle("has-pending", pendingRowsCount > 0);
     const shownActive = activeRows.slice(0, 20);
     const shownInactive = inactiveRows.slice(0, Math.max(0, 30 - shownActive.length));
-    if (thPopSub) {
-      setText(thPopSub, pendingRowsCount > 0 ? `${pendingRowsCount} 条待处理`
-        : activeRows.length > 0 ? `${activeRows.length} 活跃`
-        : allRows.length > 0 ? `${allRows.length} 条历史` : "");
-    }
     const rowSigOf = ({ th, pending, activeWorkers, hasBlockedWorker, inProgress }) => [
       th.rootId,
       th.replyCount,
@@ -17398,7 +17545,7 @@
       hasBlockedWorker ? 1 : 0,
       inProgress ? 1 : 0,
     ];
-    // Stable DOM signature: intentionally excludes threadsExpanded so CSS 0fr -> 1fr runs without DOM rebuild.
+    // Stable DOM signature: intentionally excludes notesExpanded so CSS 0fr -> 1fr runs without DOM rebuild.
     const sig = JSON.stringify([
       activeThreadRoot || "",
       allRows.length,
@@ -17412,7 +17559,8 @@
     }
     thPopSig = sig;
     if (!allRows.length) {
-      thPopList.innerHTML = `<div class="th-pop-empty" role="status">暂无多轮话题线</div>`;
+      _npHasExtraThreads = false;
+      thPopList.innerHTML = `<div class="np-empty" role="status">暂无多轮话题线</div>`;
       syncNotebookExpanded();
       return;
     }
@@ -17452,28 +17600,21 @@
     const moreTitle = shownInactive.length > 0
       ? `展开查看全部 ${allRows.length} 条话题（含 ${inactiveRows.length} 条历史）`
       : `展开查看全部 ${activeRows.length} 条活跃话题`;
-    const activeSecHtml = `<section class="np-sec np-th-sec-active" aria-labelledby="np-h-th-active">
-      <div class="np-sec-head">
-        <h3 class="np-sec-title" id="np-h-th-active">活跃话题</h3>
-        ${moreLabel ? `<button type="button" class="np-more-pill" id="np-threads-more" data-np-expand title="${esc(moreTitle)}">${esc(moreLabel)}</button>` : ""}
-      </div>
-      ${shownActive.length
-        ? primaryActive.map((r) => renderRow(r, true)).join("") +
-          (extraActive.length
-            ? `<div class="np-fold np-fold-more" style="--stagger: 55ms"><div class="np-fold-inner">${extraActive.map((r) => renderRow(r, true)).join("")}</div></div>`
-            : "")
-        : `<div class="th-pop-empty" role="status">暂无活跃话题</div>`}
-    </section>`;
+    _npHasExtraThreads = hiddenTotal > 0;
+    if (npThreadsMoreEl && moreLabel) {
+      npThreadsMoreEl.textContent = moreLabel;
+      npThreadsMoreEl.title = moreTitle;
+    }
+    const activeRowsHtml = shownActive.length
+      ? primaryActive.map((r) => renderRow(r, true)).join("") +
+        (extraActive.length
+          ? `<div class="np-fold np-fold-more" style="--stagger: 55ms"><div class="np-fold-inner"><div class="np-th-sublist">${extraActive.map((r) => renderRow(r, true)).join("")}</div></div></div>`
+          : "")
+      : `<div class="np-empty" role="status">暂无活跃话题</div>`;
     const inactiveSecHtml = shownInactive.length
-      ? `<div class="np-fold np-fold-more np-th-inactive-fold" style="--stagger: 65ms"><div class="np-fold-inner"><section class="np-sec np-th-sec-inactive" aria-labelledby="np-h-th-inactive">
-          <div class="np-sec-head">
-            <h3 class="np-sec-title" id="np-h-th-inactive">历史话题</h3>
-            <span class="np-sub">${inactiveRows.length}</span>
-          </div>
-          ${shownInactive.map((r) => renderRow(r, false)).join("")}
-        </section></div></div>`
+      ? `<div class="np-fold np-fold-more np-th-inactive-fold" style="--stagger: 65ms"><div class="np-fold-inner"><div class="np-th-sec-inactive${shownActive.length === 0 ? " is-solo" : ""}"><div class="np-th-subhead"><h3 class="np-sec-title" id="np-h-th-inactive">历史话题</h3><span class="np-sub">${inactiveRows.length}</span></div><div class="np-th-sublist">${shownInactive.map((r) => renderRow(r, false)).join("")}</div></div></div></div>`
       : "";
-    thPopList.innerHTML = activeSecHtml + inactiveSecHtml;
+    thPopList.innerHTML = activeRowsHtml + inactiveSecHtml;
     syncNotebookExpanded();
   }
   thPopList?.addEventListener("click", (e) => {
@@ -17513,22 +17654,13 @@
     }
     setAppDrawerW(px);
   };
-  const threadAvail = () => {
-    const sideW = $("#app")?.classList?.contains("side-collapsed") ? 0 : ($(".side")?.offsetWidth || 260);
-    return Math.max(480, innerWidth - sideW);
-  };
-  const threadWideW = () => {
-    const avail = threadAvail();
-    return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 200));
-  };
-  const threadMax = () => Math.max(360, Math.min(560, innerWidth - currentSideW() - 420, threadWideW() - 24));
-  const threadDragMax = () => {
-    const avail = threadAvail();
-    return Math.max(threadMax(), threadWideW(), Math.min(Math.round(avail * 0.78), avail - 200));
-  };
-  let threadWide = !!store.get("threadWide", false);
+  const threadAvail = () => drawerAvail();
+  const threadWideW = () => drawerWideW();
+  const threadMax = () => drawerMaxW();
+  const threadDragMax = () => drawerDragMaxW();
+  let threadWide = drawerWide;
   function syncThreadWideUI() {
-    const activeWide = !!(activeThreadRoot && threadWide && innerWidth > THREAD_DESKTOP_MIN);
+    const activeWide = !!(activeThreadRoot && drawerWide && innerWidth > THREAD_DESKTOP_MIN);
     $("#app")?.classList.toggle("thread-wide", activeWide);
     syncAppDrawerClasses();
     if (tdWidenBtn) {
@@ -17543,27 +17675,22 @@
       syncThreadWideUI();
       return;
     }
-    const defW = 432;
-    const w = threadWide
-      ? threadWideW()
-      : Math.max(360, Math.min(store.get("threadW", 0) || defW, threadMax()));
-    setThreadW(w);
+    setThreadW(unifiedDrawerW());
     syncThreadWideUI();
   }
   function setThreadWide(next, opts = {}) {
     const wide = !!next;
-    if (threadWide === wide && !opts.force) {
+    if (drawerWide === wide && !opts.force) {
       syncThreadWideUI();
       return;
     }
     finishDrawerGlide(true);
-    const prevW = _lastThreadW || _lastDrawerW || 432;
+    const prevW = _lastThreadW || _lastDrawerW || drawerDefaultW();
     const sc = view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
-    threadWide = wide;
-    store.set("threadWide", wide);
+    setUnifiedDrawerWide(wide);
     applyThreadWidth();
-    const nextW = _lastThreadW || _lastDrawerW || 432;
+    const nextW = _lastThreadW || _lastDrawerW || drawerDefaultW();
     if (!opts.immediate && activeThreadRoot && innerWidth > THREAD_DESKTOP_MIN) {
       if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
       else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
@@ -18695,15 +18822,13 @@
         grip.removeEventListener("pointerup", up);
         grip.removeEventListener("pointercancel", up);
         document.body.classList.remove("dragging");
-        const finalW = _lastThreadW || parseInt(getComputedStyle(tdDrawer).getPropertyValue("--thread-w")) || 432;
+        const finalW = _lastThreadW || parseInt(getComputedStyle(tdDrawer).getPropertyValue("--thread-w")) || drawerDefaultW();
         const wideCut = Math.min(threadMax() + 40, Math.max(460, threadWideW() - 24));
         if (finalW > wideCut) {
-          threadWide = true;
-          store.set("threadWide", true);
+          setUnifiedDrawerWide(true);
         } else {
-          threadWide = false;
-          store.set("threadWide", false);
-          store.set("threadW", finalW);
+          setUnifiedDrawerWide(false);
+          store.set("drawerW", finalW);
         }
         syncThreadWideUI();
         if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
@@ -18783,14 +18908,11 @@
     if (wdDrawer) wdDrawer.style.setProperty("--drawer-w", px + "px");
     setAppDrawerW(px);
   };
-  const workerMax = () => Math.max(420, innerWidth - currentSideW() - 340);
-  const workerWideW = () => {
-    const avail = drawerAvail();
-    return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 320));
-  };
+  const workerMax = () => drawerDragMaxW();
+  const workerWideW = () => drawerWideW();
   function syncWorkerWidenUI() {
     if (!wdWidenBtn) return;
-    const on = !!(activeWorkerKey && workerWide && innerWidth > THREAD_DESKTOP_MIN);
+    const on = !!(activeWorkerKey && drawerWide && innerWidth > THREAD_DESKTOP_MIN);
     wdWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
     const lbl = on ? "还原宽度" : "拓宽抽屉";
     wdWidenBtn.title = lbl;
@@ -18802,11 +18924,7 @@
       syncWorkerWidenUI();
       return;
     }
-    const defW = Math.min(Math.max(460, Math.round(drawerAvail() * 0.42)), 540);
-    const w = workerWide
-      ? workerWideW()
-      : Math.max(380, Math.min(store.get("workerW", 0) || defW, workerMax()));
-    setWorkerW(w);
+    setWorkerW(unifiedDrawerW());
     syncWorkerWidenUI();
   }
   function syncWorkerComposerUI() {
@@ -18857,15 +18975,17 @@
   }
   function curWdMode() {
     if (!wdPaneId || !find(wdPaneId)) return "chat";
-    return isWdShell() ? (wdMode === "chat" ? "screen" : wdMode) : wdMode;
+    if (isWdShell()) return prefs.devMode() ? (wdMode === "chat" ? "screen" : wdMode) : "screen";
+    return prefs.devMode() ? wdMode : "chat";
   }
   function applyWdModeUI() {
     const m = curWdMode();
     const isLive = !!wdPaneId && !!find(wdPaneId);
+    const showDevTabs = isLive && prefs.devMode();
     if (wdViewerEl) wdViewerEl.dataset.mode = m;
     if (wdJumpBtn && m === "chat") wdJumpBtn.hidden = true;
     if (wdModeSegEl) {
-      wdModeSegEl.hidden = !isLive;
+      wdModeSegEl.hidden = !showDevTabs;
       wdModeSegEl.querySelectorAll("button").forEach((b) => {
         const bm = b.dataset.wdMode;
         const on = bm === m;
@@ -18875,7 +18995,20 @@
       });
     }
     if (wdInterruptBtn) wdInterruptBtn.hidden = !isLive;
-    if (wdBarEl) wdBarEl.hidden = !isLive && (wdThreadBtn?.hidden ?? true);
+    if (wdBarEl) wdBarEl.hidden = !showDevTabs;
+  }
+  function syncDevModeUI() {
+    const viewerEl = $("#viewer");
+    const prevPaneMode = viewerEl?.dataset?.mode || "";
+    applyMode();
+    if (view === "pane" && current && viewerEl?.dataset?.mode !== prevPaneMode) {
+      closeStream(); resetChat(); resetScreen(); openStream();
+    }
+    const prevWdMode = wdViewerEl?.dataset?.mode || "";
+    applyWdModeUI();
+    if (activeWorkerKey && wdPaneId && wdViewerEl?.dataset?.mode !== prevWdMode) {
+      openWorkerDrawerStream();
+    }
   }
   function closeWorkerDrawerStream() {
     wdScreenSeq++;
@@ -19151,7 +19284,10 @@
         ? (wdTaskNote && !wdTaskTitle.includes(wdTaskNote) ? `${wdTaskTitle} · ${wdTaskNote}` : wdTaskTitle)
         : (sum.full || sum.short || supW?.task || supW?.last_report || wdTaskNote || "");
       wdSummaryEl.hidden = !noteText;
-      if (noteText) wdSummaryTextEl.textContent = noteText;
+      if (noteText) {
+        wdSummaryTextEl.textContent = noteText;
+        wdSummaryTextEl.title = noteText;
+      }
     }
     if (wdGoneEl) wdGoneEl.hidden = isLive || !wdPaneId;
     applyWdModeUI();
@@ -19306,6 +19442,7 @@
     }
     syncWorkerDrawerMeta();
     syncWorkerSendBtn();
+    syncSideActive({ skipBadge: true });
     openWorkerDrawerStream();
   }
   function closeWorkerDrawer(opts = {}) {
@@ -19343,6 +19480,7 @@
     appEl.classList.remove("has-worker");
     if (!switching) syncAppDrawerClasses();
     syncWorkerWidenUI();
+    syncSideActive({ skipBadge: true });
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim });
     wdDrawer.setAttribute("aria-hidden", "true");
     if (lockSnap && view === "collie") {
@@ -19373,12 +19511,12 @@
     wdWidenBtn?.addEventListener("click", () => {
       if (innerWidth <= THREAD_DESKTOP_MIN || !activeWorkerKey) return;
       finishDrawerGlide(true);
-      const prevW = _lastWorkerW || _lastDrawerW || 480;
+      const prevW = _lastWorkerW || _lastDrawerW || drawerDefaultW();
       const sc = view === "collie" ? viewScroller("collie") : null;
       const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
-      workerWide = !workerWide;
+      setUnifiedDrawerWide(!drawerWide);
       applyWorkerWidth();
-      const nextW = _lastWorkerW || _lastDrawerW || 480;
+      const nextW = _lastWorkerW || _lastDrawerW || drawerDefaultW();
       if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
       else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
       if (curWdMode() === "screen") requestAnimationFrame(() => fitWdTerm());
@@ -19388,8 +19526,13 @@
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       closeWorkerDrawer({ immediate: true });
     });
-    wdSummaryTextEl?.addEventListener("click", () => {
-      wdSummaryEl?.classList?.toggle("is-expanded");
+    const toggleWdSummary = () => {
+      const exp = wdSummaryEl?.classList?.toggle("is-expanded");
+      wdSummaryTextEl?.setAttribute("aria-expanded", exp ? "true" : "false");
+    };
+    wdSummaryTextEl?.addEventListener("click", toggleWdSummary);
+    wdSummaryTextEl?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleWdSummary(); }
     });
     wdModeSegEl?.addEventListener("click", (e) => {
       const b = e.target.closest("button[data-wd-mode]");
@@ -19490,8 +19633,8 @@
       const dragSnap = sc ? captureColliePos(sc) : null;
       const max = workerMax();
       const move = (ev) => {
-        workerWide = false;
-        const nextW = Math.max(380, Math.min(Math.round(innerWidth - ev.clientX), max));
+        setUnifiedDrawerWide(false);
+        const nextW = Math.max(360, Math.min(Math.round(innerWidth - ev.clientX), max));
         if (nextW === _lastWorkerW) return;
         setWorkerW(nextW);
         syncWorkerWidenUI();
@@ -19502,7 +19645,7 @@
         grip.removeEventListener("pointerup", up);
         grip.removeEventListener("pointercancel", up);
         document.body.classList.remove("dragging");
-        store.set("workerW", _lastWorkerW || 480);
+        store.set("drawerW", _lastWorkerW || drawerDefaultW());
         if (curWdMode() === "screen") requestAnimationFrame(() => fitWdTerm());
         if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
       };
@@ -20520,7 +20663,14 @@
       draw();
     };
     const add = (list, source = "pick") => addEntries(list.map((file) => ({ candidates: [{ file }] })), source);
-    $(".attach", form)?.addEventListener("click", () => picker.click());
+    $(".attach", form)?.addEventListener("click", (ev) => {
+      ev?.preventDefault?.();
+      try { picker.value = ""; } catch {}
+      if (typeof picker.showPicker === "function") {
+        try { picker.showPicker(); return; } catch {}
+      }
+      picker.click();
+    });
     picker.addEventListener("change", () => { add([...picker.files], "pick"); picker.value = ""; });
     box.addEventListener("error", (e) => {
       const img = e.target;

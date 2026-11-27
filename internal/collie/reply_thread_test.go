@@ -1163,10 +1163,9 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.renderSuper({ force: true });
 
   assert.equal(getEl("#collie-threads-dot").hidden, false, "threads trigger shows pending dot when pending > 0");
-  assert.equal(getEl("#collie-threads-sub").textContent, "1 条待处理", "threads header sub shows pending count");
+  assert.equal(getEl("#np-threads-more").textContent, "+1 历史", "section-1 threads +N pill surfaces +1 历史 when historical threads exist");
   const thListHtml = getEl("#collie-threads-list").innerHTML;
-  assert.ok(thListHtml.includes("活跃话题") && thListHtml.includes("历史话题"), "threads card separates 活跃话题 and 历史话题 sections");
-  assert.ok(thListHtml.includes(">+1 历史<"), "collapsed threads card surfaces +1 历史 pill when historical threads exist");
+  assert.ok(thListHtml.includes("历史话题"), "threads list includes foldable 历史话题 sub-section");
   assert.ok(thListHtml.includes('data-th-pick="q1"') && thListHtml.includes("1 个在跑"), "T1 shows running agent count in foldable meta");
   assert.ok(thListHtml.includes('data-th-pick="q10"') && thListHtml.includes("Agent 等确认"), "T2 (2-msg blocked agent) included with Agent 等确认 meta");
   assert.ok(thListHtml.includes('data-th-pick="q20"') && thListHtml.includes("1 条消息"), "T3 (1-msg pending) included with 1 条消息 meta");
@@ -1186,9 +1185,8 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.setSup({ router: { status: "idle", alive: true }, entries: filterEntries, workers: settledWorkers, pending: [] });
   T.renderSuper({ force: true });
   assert.equal(getEl("#collie-threads-dot").hidden, true, "pending dot hides when pending clears");
-  assert.equal(getEl("#collie-threads-sub").textContent, "2 条历史", "header sub shows historical count when 0 active");
   assert.ok(getEl("#collie-threads-list").innerHTML.includes("暂无活跃话题"), "calm empty state rendered when 0 active threads");
-  assert.ok(getEl("#collie-threads-list").innerHTML.includes(">+2 历史<"), "pill reflects 2 settled historical threads");
+  assert.equal(getEl("#np-threads-more").textContent, "+2 历史", "section-1 +N pill reflects 2 settled historical threads");
 
   // ─── 11. Left sidebar Agent card: 1-line human summary + direct topic drawer button ───
   // 11a) extractGoalFromTask handles preamble skipping, explicit goal labels, and bracket topics
@@ -1219,8 +1217,10 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   const liveListHtml = getEl("#live-list").innerHTML;
   const attnListHtml = getEl("#attention").innerHTML;
 
-  // wk-run: Chinese bracket topic "查询索引优化" from chat + hover full description includes task goal + linked topic q1
-  assert.ok(liveListHtml.includes('class="item-sum"') && liveListHtml.includes(">查询索引优化</div>"), "wk-run displays Chinese bracket topic summary: " + liveListHtml);
+  // wk-run: uniform 2-line card — line 2 prioritizes Chinese bracket topic "查询索引优化" (no 3rd meta line) + hover full description includes task goal & machine/path + linked topic q1
+  assert.ok(liveListHtml.includes('class="sub item-sum"') && liveListHtml.includes(">查询索引优化</div>"), "wk-run displays Chinese bracket topic summary on unified line 2: " + liveListHtml);
+  const wkRunItem = liveListHtml.match(/<li[^>]*>(?:(?!<\/li>)[\s\S])*w31%3Ap1(?:(?!<\/li>)[\s\S])*<\/li>/)?.[0] || "";
+  assert.equal((wkRunItem.match(/class="sub(?:\s|")/g) || []).length, 1, "uniform 2-line card renders strictly 1 subtitle line (no 3-line cards): " + wkRunItem);
   assert.ok(liveListHtml.includes("查询索引优化 — 重构查询索引并补齐基准测试"), "wk-run hover tooltip combines topic and full task description");
   assert.ok(liveListHtml.includes('data-agent-thread="q1"'), "wk-run gets direct topic drawer button for q1");
   assert.ok(liveListHtml.includes('</a><button type="button" class="item-th-btn"'), "topic button rendered immediately after </a>");
@@ -1236,7 +1236,8 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   // claude-1 (non-worker whose label already IS its topic "首页暗色模式"): NO duplicate .item-sum and NO .item-th-btn
   const claude1Item = liveListHtml.match(/<li[^>]*>(?:(?!<\/li>)[\s\S])*w34%3Ap1(?:(?!<\/li>)[\s\S])*<\/li>/)?.[0] || "";
   assert.ok(claude1Item, "claude-1 card rendered");
-  assert.ok(!claude1Item.includes('class="item-sum"'), "non-worker agent whose title already equals topic must not duplicate .item-sum");
+  assert.ok(!claude1Item.includes('item-sum'), "non-worker agent whose title already equals topic must not duplicate .item-sum");
+  assert.equal((claude1Item.match(/class="sub(?:\s|")/g) || []).length, 1, "non-worker card also renders strictly 1 subtitle line");
   assert.ok(!claude1Item.includes("data-agent-thread"), "unlinked agent must not render topic icon button");
 
   // 11c) openThreadFromAnywhere navigates from terminal view #/p/... to #/collie and opens target drawer
@@ -1250,8 +1251,8 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.equal(T.getActiveThreadRoot(), "q1", "target topic drawer opens automatically after routing to #/collie");
   T.closeThreadDrawer({ immediate: true });
 
-  // 11d) HTML & CSS contracts for new focus drawer, symmetrical threads card & sidebar agent summary/topic button
-  assert.ok(!indexHtml.includes('id="collie-threads-tabs"') && indexHtml.includes('id="np-threads-body"'), "index.html drops legacy filter tabs in favor of symmetrical collapsible 话题线 card");
+  // 11d) HTML & CSS contracts for new focus drawer, section-1 inline slash threads & uniform 2-line sidebar card
+  assert.ok(!indexHtml.includes('id="collie-threads-tabs"') && indexHtml.includes('id="np-panel-threads"'), "index.html hosts threads inside section-1 #np-panel-threads with inline slash tabs");
   assert.ok(appCss.includes(".np-th-sec-inactive") && appCss.includes(".th-pop-empty"), "CSS defines symmetrical inactive threads section and empty state");
   assert.ok(appCss.includes(".item-wrap") && appCss.includes(".item-sum") && appCss.includes(".item-th-btn"), "CSS defines sidebar agent summary and corner topic icon button");
   assert.ok(appCss.includes("#v-collie .say .msg-acts:focus-within") && appCss.includes(".msg-acts button.focus-btn.active"), "CSS exposes hover actions on keyboard focus and highlights active focus-btn");

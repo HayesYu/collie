@@ -11,8 +11,8 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.93", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.93", agents: ["claude", "codex"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.3.9", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.3.9", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -1125,7 +1125,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
     if (p === "/api/version") return json({
-      version: "v0.2.93", latest: "v0.2.93", outdated: null,
+      version: "v0.3.9", latest: "v0.3.9", outdated: null,
       machines: machines.map((x) => ({ id: x.id, name: x.name, version: x.version, local: !!x.local, online: !!x.online, outdated: false })),
     });
     if (p === "/api/local-app") return json({ url: "" });
@@ -1247,11 +1247,11 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.93", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.3.9", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.93", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.93",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.3.9", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.3.9",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

@@ -113,10 +113,10 @@ function checkPaletteContrast(label, block, bg, bg2) {
   assert.ok(contrast(tok["on-attn-solid"], tok["attn-solid"]) >= 4.5, label + " --on-attn-solid vs --attn-solid < 4.5");
 }
 checkPaletteContrast("amber light", cssBlock(":root"), "#ffffff", "#f7f7f6");
-checkPaletteContrast("amber dark", cssBlock(':root[data-theme="dark"]'), "#0b0b0c", "#131315");
+checkPaletteContrast("amber dark", cssBlock(':root[data-theme="dark"]'), "#111113", "#151518");
 for (const preset of ["cobalt", "pine", "ink"]) {
   checkPaletteContrast(preset + " light", cssBlock(':root[data-accent="' + preset + '"]'), "#ffffff", "#f7f7f6");
-  checkPaletteContrast(preset + " dark", cssBlock(':root[data-theme="dark"][data-accent="' + preset + '"]'), "#0b0b0c", "#131315");
+  checkPaletteContrast(preset + " dark", cssBlock(':root[data-theme="dark"][data-accent="' + preset + '"]'), "#111113", "#151518");
 }
 
 // ─── 2. Live DOM / JS behavior tests ───

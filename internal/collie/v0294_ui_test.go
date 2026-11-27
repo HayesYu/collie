@@ -190,12 +190,13 @@ assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "noteb
 assert.equal(getEl("#v-collie").classList.contains("has-notes"), true);
 assert.equal(doc.body.classList.contains("collie-has-notes"), true, "body.collie-has-notes must sync with notebook slot");
 
-// Switch to 话题 in-place via in-card #np-tab-threads -> stays open in threads mode; clicking 小本本 toggles closed/open; #np-tab-notes restores notes
+// Switch section 1 in-place via inline #np-tab-threads -> stays open, swaps ONLY section 1 panel while #np-body (files & timers) stays visible
 getEl("#np-tab-threads").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "switching to threads keeps unified side card open");
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads");
-assert.equal(getEl("#np-threads-body").hidden, false);
-assert.equal(getEl("#np-body").hidden, true);
+assert.equal(getEl("#np-panel-threads").hidden, false);
+assert.equal(getEl("#np-panel-tasks").hidden, true);
+assert.equal(getEl("#np-body").hidden, false, "switching to threads must keep #np-body (今日产物 & 下一条定时) completely untouched");
 assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot stays stable when switching side card modes");
 getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "clicking active 小本本 button closes unified side card");
@@ -204,6 +205,8 @@ getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "clicking 小本本 reopens unified side card");
 getEl("#np-tab-notes").dispatch("click");
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
+assert.equal(getEl("#np-panel-tasks").hidden, false);
+assert.equal(getEl("#np-panel-threads").hidden, true);
 
 // Open search -> notebook hides; close search -> notebook restores
 getEl("#super-search-btn").dispatch("click");

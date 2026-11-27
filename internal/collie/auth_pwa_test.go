@@ -348,8 +348,8 @@ func TestPWAFrontendRecoveryAndAvatarContract(t *testing.T) {
 	for _, want := range []string{
 		"--human-bg: #111111;",
 		"--human-line: #f7f7f5;",
-		"--human-bg: #f2f2f0;",
-		"--human-line: #111111;",
+		"--human-bg: #25252a;",
+		"--human-line: #ededeb;",
 		".td-av.user { background: var(--human-bg); border: 1px solid var(--human-bg); color: var(--human-line); }",
 		".td-av.user svg { width: 21px; height: 21px; display: block; }",
 		".login-tip {",

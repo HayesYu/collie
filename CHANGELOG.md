@@ -4,6 +4,31 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.9 (2026-11-28)
+
+### Highlights
+
+- **Linear Deep Graphite Dark Theme (`web/{app.css,index.html,app.js,manifest.webmanifest}`, `docs/demo/`)**:
+  - Upgraded both dark-mode entry points (`@media (prefers-color-scheme: dark)` and `:root[data-theme="dark"]`) to a warm-neutral Linear Deep Graphite palette (`--bg: #111113`, `--bg-2: #151518`, `--bg-3: #1b1b1f`, `--line: #26262b`, `--line-2: #34343b`, `--code-bg: #16161a`, `--term-bg: #131316`) with lifted WCAG AA secondary/tertiary text (`--fg-2: #a8a8a3`, `--fg-3: #858580`, 5.1:1 contrast) and eye-friendly status hues (`--attn: #dfa057`, `--ok: #58c285`).
+  - Replaced glaring pure-white dark-mode user bubbles (`#f2f2f0`) with soft deep charcoal bubbles (`--human-bg: #25252a`, `--human-line: #ededeb`) accented by a subtle `1px` inner rim (`rgba(255,255,255,.07)`), and elevated the dark「小本本」floating card to `#1b1b1f` with a soft top hairline highlight while leaving light mode completely unchanged.
+- **Restrained Inline `进行中 / 话题` Slash Switcher in「小本本」(`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Restored the minimalist sticky-note card header (`小本本  M月D日` + single `×`) by removing the top tab bar and ink slider, and tucked a lightweight frameless inline slash switcher (`进行中 / 话题`, with a subtle pending micro-dot next to `话题` and full keyboard arrow-key navigation) directly into the first section heading row alongside its `+N` expand pill.
+  - Switching `进行中` ↔ `话题` replaces only the first section's list in place (with a soft 130ms compositor fade-in), keeping「今日产物」and「下一条定时」permanently anchored and untouched underneath; expanding `+N` in `话题` mode unfolds overflow active topics and the folded「历史话题」sub-section in place without rebuilding DOM.
+- **Desktop 54px Minimalist Icon Rail & Flat Same-Plane Split Transitions (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Collapsing the desktop (`> 1000px`) left sidebar now docks into a clean 54px vertical Icon Rail (`#side-rail`) separated by a single `1px` hairline—keeping expand toggle, Collie chat (with unread/pending dot), quick New Agent `+`, running-agent monogram/status tiles (hover tooltip + click to open the right task drawer), and bottom Automation / Peer Collies / Devices / Preferences icons always one click away.
+  - Unified the desktop default width (`--drawer-default-w: clamp(440px, 34vw, 540px)`), custom drag width, and 50/50 widened split across all three right drawers (`#file-view`, `#thread-drawer`, `#worker-drawer`) so switching between artifacts, topics, and tasks keeps a rock-steady width with zero jump.
+  - Eliminated the floating drop-shadow elevation feel across desktop left-sidebar collapse/expand (`> 1000px`) and right three-in-one drawer open/widen/close (`>= 1181px`): removed transition `box-shadow` and high overlay `z-index` on desktop so all three columns stay flush on the same plane while keeping 240ms GPU-composited lockstep motion (overlay shadows remain scoped to tablet/mobile sheets); smoothed the handoff between any open right three-in-one drawer and the「小本本」floating card (removing the 1-frame hard cut when clicking top-bar「小本本」), replaced discrete desktop column/sidebar width breakpoints (`1680px` / `1100px`) with continuous linear `clamp(...)` formulas for jump-free window resizing, and hardened composer `+` file-picker triggers for desktop Chrome/PWA windows (rendered `.file-picker-input` + `showPicker()`/`click()`).
+- **Left Sidebar「工作中」Click-to-Drawer, Slimmed Worker Drawer Header & Aligned Topic Icons (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Clicking a Collie-dispatched worker inside the desktop left sidebar「工作中」list while on the main conversation view now opens it directly in the right three-in-one task drawer (keeping the header popout link for full-screen navigation and highlighting the active worker in both the full sidebar and the 54px rail).
+  - Slimmed and decluttered the right worker drawer's upper chrome to the essentials: replaced the heavy gray summary box with a single-line muted caption (full text on hover, click or Enter/Space to expand), tucked「关联话题」and「中断」into the drawer header's restrained linear icon action strip, and added a **Developer Mode** (`collie.devMode`, default off) switch in Preferences (`#/prefs`) — keeping both the right task drawer and standalone Agent views focused on clean conversation view by default (plain non-agent shells still open directly on terminal screen), and revealing frameless underlined `对话 / 屏幕 / 日志` tabs on demand when Developer Mode is enabled.
+  - Unified all left-sidebar「工作中」cards into uniform equal-height minimalist 2-line rows (Line 1: display label + `Collie 派出` tag + top-right status dot; Line 2: single concise task summary or `kind · machine · dir` metadata, keeping full details in hover tooltips and the right drawer) with every「关联话题」chat-bubble icon aligned strictly on the same bottom-right vertical axis directly underneath its top-right status dot.
+
+### Client / API Changes
+
+- None (Web UI layout, styling, and interaction polish release only; no HTTP endpoint, SSE event, JSON schema, or CLI changes).
+
+---
+
 ## v0.3.8 (2026-11-27)
 
 ### Highlights

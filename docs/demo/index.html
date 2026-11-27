@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -51,66 +51,104 @@
 <div id="app" class="app" hidden>
 
   <aside class="side">
-    <header class="side-head">
-      <a class="brand" href="#/collie">
-        <img src="icon.svg" alt="">
-        <span>Collie</span>
-      </a>
-      <div class="side-head-acts">
-        <button type="button" class="icon-btn side-toggle-btn" id="side-collapse-btn" data-toggle-side title="收起侧栏" aria-label="收起侧栏" aria-pressed="false">
+    <div class="side-full">
+      <header class="side-head">
+        <a class="brand" href="#/collie">
+          <img src="icon.svg" alt="">
+          <span>Collie</span>
+        </a>
+        <div class="side-head-acts">
+          <button type="button" class="icon-btn side-toggle-btn" id="side-collapse-btn" data-toggle-side title="收起侧栏 (⌘\)" aria-label="收起侧栏" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
+          </button>
+          <button class="icon-btn" id="new-btn" title="新建 Agent" aria-label="新建 Agent">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <nav class="side-nav">
+        <a class="nav-item" id="nav-collie" href="#/collie">
+          <span class="nav-ico"><img src="icon.svg" alt=""></span>
+          <span class="body"><div class="name">和 Collie 对话</div><div class="sub" id="nav-collie-sub">休眠中</div></span>
+          <span class="nav-right"><span class="count-pill attn" id="nav-pending" hidden></span><span class="dot" id="nav-collie-dot"></span></span>
+        </a>
+        <a class="nav-item" id="nav-auto" href="#/auto">
+          <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
+          <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">接入与定时</div></span>
+          <span class="nav-right"><span class="count-pill attn" id="nav-int-err" hidden></span><span class="count-pill" id="nav-queue" hidden></span></span>
+        </a>
+      </nav>
+
+      <div class="side-scroll">
+        <section class="group" id="attention-group" hidden>
+          <h2>需要你</h2>
+          <ul class="list attn" id="attention"></ul>
+        </section>
+        <details class="group" id="live-group" open>
+          <summary><h2>工作中 <span class="count" id="live-count"></span></h2></summary>
+          <ul class="list" id="live-list"></ul>
+        </details>
+        <section class="group" id="recent-group" hidden>
+          <h2>最近</h2>
+          <ul class="list" id="recent-list"></ul>
+        </section>
+        <details class="group" id="shell-group">
+          <summary><h2>终端 <span class="count" id="shell-count"></span></h2></summary>
+          <ul class="list" id="shells"></ul>
+        </details>
+      </div>
+
+      <div class="local-app" id="local-app" hidden>
+        <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span>在 Collie app 中打开</span></a>
+        <button class="icon-btn" id="local-app-x" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <footer class="side-foot">
+        <a class="foot-status" href="#/devices" id="nav-devices" title="管理电脑与连接">
+          <span class="conn" id="conn"></span><span id="herdr-status" class="muted">connecting…</span><svg class="foot-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.25 3.75L10.5 8l-4.25 4.25"/></svg>
+        </a>
+        <button type="button" class="update-pill" id="update-all-btn" hidden></button>
+        <a class="icon-btn side-prefs-btn" href="#/prefs" id="nav-prefs" title="偏好设置" aria-label="偏好设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </a>
+      </footer>
+    </div>
+    <nav class="side-rail" id="side-rail" aria-label="快捷窄轨">
+      <div class="sr-top">
+        <button type="button" class="icon-btn sr-btn side-expand-btn" id="side-expand-btn" data-toggle-side title="展开侧栏 (⌘\)" aria-label="展开侧栏" aria-pressed="true">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
         </button>
-        <button class="icon-btn" id="new-btn" title="新建 Agent" aria-label="新建 Agent">
+        <a class="sr-btn sr-brand" id="rail-collie" href="#/collie" title="和 Collie 对话" aria-label="和 Collie 对话">
+          <img src="icon.svg" alt="">
+          <span class="sr-badge-dot" id="rail-collie-dot" aria-hidden="true" hidden></span>
+        </a>
+        <button type="button" class="icon-btn sr-btn" id="rail-new-btn" title="新建 Agent" aria-label="新建 Agent">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
       </div>
-    </header>
-
-    <nav class="side-nav">
-      <a class="nav-item" id="nav-collie" href="#/collie">
-        <span class="nav-ico"><img src="icon.svg" alt=""></span>
-        <span class="body"><div class="name">和 Collie 对话</div><div class="sub" id="nav-collie-sub">休眠中</div></span>
-        <span class="nav-right"><span class="count-pill attn" id="nav-pending" hidden></span><span class="dot" id="nav-collie-dot"></span></span>
-      </a>
-      <a class="nav-item" id="nav-auto" href="#/auto">
-        <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
-        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">接入与定时</div></span>
-        <span class="nav-right"><span class="count-pill attn" id="nav-int-err" hidden></span><span class="count-pill" id="nav-queue" hidden></span></span>
-      </a>
+      <div class="sr-mid">
+        <div class="sr-sep" id="rail-live-sep" aria-hidden="true" hidden></div>
+        <div class="sr-agents" id="rail-live" role="list" aria-label="工作中的 Agent"></div>
+      </div>
+      <div class="sr-foot">
+        <div class="sr-sep" aria-hidden="true"></div>
+        <a class="sr-btn" id="rail-auto" href="#/auto" title="自动化 · 接入与定时" aria-label="自动化">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg>
+          <span class="sr-badge-dot" id="rail-auto-dot" aria-hidden="true" hidden></span>
+        </a>
+        <button type="button" class="icon-btn sr-btn" id="rail-peers" title="好友边牧" aria-label="好友边牧">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 18.5c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M15.8 14.3c2 .3 3.8 1.6 4.7 4.2"/></svg>
+          <span class="sr-badge-dot" id="rail-peers-dot" aria-hidden="true" hidden></span>
+        </button>
+        <a class="sr-btn" id="rail-devices" href="#/devices" title="设备与连接" aria-label="设备与连接">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M8 20h8M12 17v3"/></svg>
+          <span class="sr-conn-dot" id="rail-conn" aria-hidden="true"></span>
+        </a>
+        <a class="sr-btn" id="rail-prefs" href="#/prefs" title="偏好设置" aria-label="偏好设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </a>
+      </div>
     </nav>
-
-    <div class="side-scroll">
-      <section class="group" id="attention-group" hidden>
-        <h2>需要你</h2>
-        <ul class="list attn" id="attention"></ul>
-      </section>
-      <details class="group" id="live-group" open>
-        <summary><h2>工作中 <span class="count" id="live-count"></span></h2></summary>
-        <ul class="list" id="live-list"></ul>
-      </details>
-      <section class="group" id="recent-group" hidden>
-        <h2>最近</h2>
-        <ul class="list" id="recent-list"></ul>
-      </section>
-      <details class="group" id="shell-group">
-        <summary><h2>终端 <span class="count" id="shell-count"></span></h2></summary>
-        <ul class="list" id="shells"></ul>
-      </details>
-    </div>
-
-    <div class="local-app" id="local-app" hidden>
-      <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span>在 Collie app 中打开</span></a>
-      <button class="icon-btn" id="local-app-x" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-    </div>
-    <footer class="side-foot">
-      <a class="foot-status" href="#/devices" id="nav-devices" title="管理电脑与连接">
-        <span class="conn" id="conn"></span><span id="herdr-status" class="muted">connecting…</span><svg class="foot-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.25 3.75L10.5 8l-4.25 4.25"/></svg>
-      </a>
-      <button type="button" class="update-pill" id="update-all-btn" hidden></button>
-      <a class="icon-btn side-prefs-btn" href="#/prefs" id="nav-prefs" title="偏好设置" aria-label="偏好设置">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      </a>
-    </footer>
   </aside>
 
   <main class="main">
@@ -120,7 +158,6 @@
       <div class="collie-top">
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <button type="button" class="icon-btn side-expand-btn" id="side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title">
           <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
@@ -170,14 +207,9 @@
             <button type="button" class="icon-btn np-back" id="np-back" aria-label="返回对话" title="返回对话">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
             </button>
-            <div class="np-tabs" id="np-tabs" role="tablist" aria-label="小本本视图切换">
-              <button type="button" class="np-tab on" id="np-tab-notes" role="tab" aria-selected="true" aria-controls="np-body" data-np-tab="notes">事项</button>
-              <button type="button" class="np-tab" id="np-tab-threads" role="tab" aria-selected="false" aria-controls="np-threads-body" data-np-tab="threads"><span>话题</span><span class="np-tab-dot" id="collie-threads-dot" aria-hidden="true" hidden></span></button>
-              <span class="np-tab-ink" id="np-tab-ink" aria-hidden="true"></span>
-            </div>
-            <div class="np-head-meta">
+            <div class="np-title-row">
+              <h2 class="np-title" id="np-title">小本本</h2>
               <span class="np-sub" id="np-date"></span>
-              <span class="np-sub" id="collie-threads-sub" hidden></span>
             </div>
             <div class="np-head-acts">
               <button type="button" class="icon-btn np-act-btn" id="np-close" aria-label="隐藏小本本" title="隐藏到顶栏">
@@ -185,13 +217,23 @@
               </button>
             </div>
           </header>
-          <div class="np-body" id="np-body" role="tabpanel" aria-labelledby="np-tab-notes">
-            <section class="np-sec" id="np-sec-tasks" aria-labelledby="np-h-tasks">
+          <div class="np-body" id="np-body">
+            <section class="np-sec np-sec-primary" id="np-sec-tasks" aria-labelledby="np-tab-notes">
               <div class="np-sec-head">
-                <h3 class="np-sec-title" id="np-h-tasks">进行中</h3>
+                <div class="np-slash-tabs" id="np-tabs" role="tablist" aria-label="进行中与话题切换">
+                  <button type="button" class="np-slash-tab on" id="np-tab-notes" role="tab" aria-selected="true" tabindex="0" data-np-tab="notes">进行中</button>
+                  <span class="np-slash-sep" aria-hidden="true">/</span>
+                  <button type="button" class="np-slash-tab" id="np-tab-threads" role="tab" aria-selected="false" tabindex="-1" data-np-tab="threads"><span>话题</span><span class="np-tab-dot" id="collie-threads-dot" aria-hidden="true" hidden></span></button>
+                </div>
                 <button type="button" class="np-more-pill" id="np-tasks-more" data-np-expand hidden></button>
+                <button type="button" class="np-more-pill" id="np-threads-more" data-np-expand hidden></button>
               </div>
-              <ul class="np-list" id="np-tasks-list"></ul>
+              <div class="np-sec-panel" id="np-panel-tasks" role="tabpanel" aria-labelledby="np-tab-notes">
+                <ul class="np-list" id="np-tasks-list"></ul>
+              </div>
+              <div class="np-sec-panel" id="np-panel-threads" role="tabpanel" aria-labelledby="np-tab-threads" hidden>
+                <div class="np-th-list th-pop-list" id="collie-threads-list" role="list"></div>
+              </div>
             </section>
             <section class="np-sec" id="np-sec-files" aria-labelledby="np-h-files">
               <div class="np-sec-head">
@@ -208,9 +250,6 @@
               <ul class="np-list" id="np-timers-list"></ul>
             </section>
           </div>
-          <div class="np-threads-body" id="np-threads-body" role="tabpanel" aria-labelledby="np-tab-threads" hidden>
-            <div class="np-th-list th-pop-list" id="collie-threads-list" role="list"></div>
-          </div>
         </div>
       </aside>
 
@@ -225,7 +264,7 @@
           <div class="files" hidden></div>
           <textarea id="super-input" rows="1" placeholder="告诉 Collie 你要做什么…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <div class="chips is-collapsed" id="t-bar">
               <button type="button" class="dispatch-pill" id="t-toggle" aria-expanded="false" aria-controls="t-controls" title="按记忆偏好优先；点击可临时指定本次派活目标">
                 <span class="dp-lbl" id="t-toggle-lbl">派活 · 默认</span>
@@ -243,7 +282,7 @@
             <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
-        <input type="file" multiple hidden>
+        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
       </form>
     </section>
 
@@ -251,7 +290,6 @@
     <section class="view" id="v-auto" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title"><div class="d-name">自动化</div></div>
       </header>
       <div class="tabs" id="auto-tabs">
@@ -268,7 +306,6 @@
     <section class="view" id="v-devices" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title"><div class="d-name">设备</div><div class="d-meta muted">这台 hub 管着哪些电脑，谁能连进来</div></div>
       </header>
       <div class="auto-body" id="devices-body"></div>
@@ -278,7 +315,6 @@
     <section class="view" id="v-ext" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title">
           <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag">只读</span></div>
           <div class="d-meta"><span class="status" id="x-status"></span><span class="muted mono" id="x-cwd"></span></div>
@@ -293,13 +329,13 @@
           <div class="files" hidden></div>
           <textarea id="x-input" rows="1" placeholder="发消息给它，它会在原来的窗口里接着做…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <span class="muted x-hint" id="x-hint"></span>
             <span class="spacer"></span>
             <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
-        <input type="file" multiple hidden>
+        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
       </form>
       <div class="ext-bar">
         <p id="x-note"></p>
@@ -312,7 +348,6 @@
     <section class="view" id="v-prefs" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title"><div class="d-name">偏好设置</div><div class="d-meta muted">只影响这台设备上的这个浏览器</div></div>
       </header>
       <div class="auto-body" id="prefs-body"></div>
@@ -322,15 +357,14 @@
     <section class="view detail" id="detail" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title">
           <div class="d-name"><span id="d-name"></span><span class="kind" id="d-kind"></span><span class="tag" id="d-worker" hidden></span></div>
           <div class="d-meta"><span class="status" id="d-status"></span><span class="muted mono d-worker-id" id="d-worker-id" hidden></span><span class="muted" id="d-model" hidden></span><span class="muted mono" id="d-cwd"></span></div>
         </div>
-        <div class="seg" id="mode-seg">
-          <button data-mode="chat">对话</button>
-          <button data-mode="screen">屏幕</button>
-          <button data-mode="log">日志</button>
+        <div class="wd-mode-tabs d-mode-tabs" id="mode-seg" role="group" aria-label="切换视图" hidden>
+          <button type="button" data-mode="chat" class="on" aria-pressed="true">对话</button>
+          <button type="button" data-mode="screen" aria-pressed="false">屏幕</button>
+          <button type="button" data-mode="log" aria-pressed="false">日志</button>
         </div>
         <div class="menu-wrap">
           <button class="icon-btn" data-menu="more-menu" title="更多">
@@ -381,7 +415,7 @@
           <div class="files" hidden></div>
           <textarea id="input" rows="1" placeholder="给 agent 发消息…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <button type="button" class="icon-btn kbd-toggle" id="kbd-toggle" title="按键">
               <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>
             </button>
@@ -389,7 +423,7 @@
             <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
-        <input type="file" multiple hidden>
+        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
       </form>
     </section>
 
@@ -534,7 +568,7 @@
             </button>
           </div>
         </div>
-        <input type="file" multiple hidden>
+        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
       </form>
     </div>
   </aside>
@@ -561,6 +595,12 @@
             </div>
           </div>
           <div class="wd-head-acts sd-head-acts">
+            <button type="button" class="icon-btn sd-act-btn" id="wd-thread-btn" aria-label="打开关联话题" title="打开关联话题" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a7.5 7.5 0 0 1-7.5 7.5c-1.2 0-2.4-.3-3.4-.8L5 20l1.3-4.1A7.46 7.46 0 0 1 5.5 12 7.5 7.5 0 1 1 21 12z"/></svg>
+            </button>
+            <button type="button" class="icon-btn sd-act-btn is-stop" id="wd-interrupt" aria-label="中断当前执行" title="发送 Ctrl-C 中断当前执行" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
             <a class="icon-btn sd-act-btn" id="wd-popout" href="#/collie" aria-label="独立全屏打开" title="独立全屏打开" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
             </a>
@@ -574,17 +614,13 @@
           </div>
         </header>
         <div class="wd-summary" id="wd-summary" hidden>
-          <div class="wd-summary-text" id="wd-summary-text"></div>
+          <p class="wd-summary-text" id="wd-summary-text" tabindex="0" role="button" aria-expanded="false"></p>
         </div>
-        <div class="wd-bar" id="wd-bar">
-          <div class="seg wd-mode-seg" id="wd-mode-seg" role="group" aria-label="切换任务视图">
+        <div class="wd-bar" id="wd-bar" hidden>
+          <div class="wd-mode-tabs" id="wd-mode-seg" role="group" aria-label="切换任务视图">
             <button type="button" data-wd-mode="chat" class="on" aria-pressed="true">对话</button>
             <button type="button" data-wd-mode="screen" aria-pressed="false">屏幕</button>
             <button type="button" data-wd-mode="log" aria-pressed="false">日志</button>
-          </div>
-          <div class="wd-bar-acts">
-            <button type="button" class="wd-pill-btn" id="wd-thread-btn" hidden>关联话题</button>
-            <button type="button" class="wd-pill-btn" id="wd-interrupt" title="发送 Ctrl-C 中断当前执行" hidden>中断 ^C</button>
           </div>
         </div>
       </div>
@@ -634,7 +670,7 @@
             </button>
           </div>
         </div>
-        <input type="file" multiple hidden>
+        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
       </form>
     </div>
   </aside>

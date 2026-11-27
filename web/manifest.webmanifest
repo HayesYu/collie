@@ -13,7 +13,7 @@
   ],
   "background_color": "#ffffff",
   "theme_color": "#ffffff",
-  "user_preferences": { "color_scheme": { "dark": { "background_color": "#0b0b0c", "theme_color": "#0b0b0c" } } },
+  "user_preferences": { "color_scheme": { "dark": { "background_color": "#111113", "theme_color": "#111113" } } },
   "icons": [
     { "src": "/app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

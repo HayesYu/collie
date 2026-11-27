@@ -90,17 +90,18 @@ const htmlSrc = fs.readFileSync("web/index.html", "utf8");
 const cssSrc = fs.readFileSync("web/app.css", "utf8");
 const appSrc = fs.readFileSync("web/app.js", "utf8");
 
-// 1) Plan A (#t12590): single top-bar plain-text 小本本 trigger (with subtle pending dot) + frameless in-card 事项/话题 tabs
+// 1) Minimalist sticky-note header (小本本 + M月D日 + ×) + first-section inline slash toggle (进行中 / 话题)
 const notesBtnMatch = htmlSrc.match(/id="open-notes-btn"[\s\S]*?<\/button>/);
 assert.ok(notesBtnMatch, "expected #open-notes-btn in index.html");
 assert.ok(notesBtnMatch[0].includes("小本本") && !notesBtnMatch[0].includes("<svg"), "header notebook trigger must be plain-text 小本本 button without SVG icon");
 assert.ok(notesBtnMatch[0].includes('id="open-notes-dot"'), "header 小本本 button exposes subtle pending dot");
-assert.ok(!htmlSrc.includes('id="collie-threads-btn"'), "Plan A removes duplicate top-bar #collie-threads-btn");
+assert.ok(!htmlSrc.includes('id="collie-threads-btn"'), "single top-bar 小本本 button without duplicate #collie-threads-btn");
 const thTabMatch = htmlSrc.match(/id="np-tab-threads"[\s\S]*?<\/button>/);
-assert.ok(thTabMatch && thTabMatch[0].includes("话题") && thTabMatch[0].includes('id="collie-threads-dot"'), "in-card 话题 tab exposes subtle pending dot without heavy badge");
+assert.ok(thTabMatch && thTabMatch[0].includes("话题") && thTabMatch[0].includes('id="collie-threads-dot"'), "inline 话题 slash tab exposes subtle pending dot without heavy badge");
 
-// 2) Minimalist in-card two-tab header (事项 / 话题 + sliding ink + ×, no bottom 展开详情 bar, no top-right expand pill)
-assert.ok(!htmlSrc.includes('id="np-expand"') && !htmlSrc.includes('id="dk-tablist"') && htmlSrc.includes('id="np-tabs"') && htmlSrc.includes('id="np-tab-ink"') && htmlSrc.includes('id="np-close"'), "notebook header uses frameless #np-tabs + #np-tab-ink + #np-close without legacy #dk-tablist or expand pill");
+// 2) Minimalist sticky-note header (小本本 + date + ×, no top tab bar or sliding ink, inline slash tabs in section 1)
+assert.ok(!htmlSrc.includes('id="np-expand"') && !htmlSrc.includes('id="dk-tablist"') && !htmlSrc.includes('id="np-tab-ink"') && !htmlSrc.includes('id="np-threads-body"'), "notebook card drops top tab ink and full-card #np-threads-body");
+assert.ok(htmlSrc.includes('id="np-title">小本本</h2>') && htmlSrc.includes('id="np-date"') && htmlSrc.includes('id="np-close"') && htmlSrc.includes('class="np-slash-tabs" id="np-tabs"'), "notebook restores minimalist header with inline section-1 进行中/话题 slash toggle");
 assert.ok(!htmlSrc.includes("展开详情"), "notebook card must never render a bottom 展开详情 text bar");
 
 // 3) Fixed width (no horizontal width jump), centered in right empty channel, 0px chat shift, isolated 0fr->1fr disclosure

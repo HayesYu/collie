@@ -12702,7 +12702,7 @@
     const cs = $('meta[name="color-scheme"]');
     if (cs) cs.content = t === "light" || t === "dark" ? t : "light dark";
     const dark = t === "dark" || (t === "system" && darkMQ.matches);
-    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#0b0b0c" : "#ffffff"; });
+    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#111113" : "#ffffff"; });
     dispatchEvent(new Event("collie:theme"));
   }
   darkMQ.addEventListener("change", applyLook);
@@ -16811,11 +16811,12 @@
   let _npModeAnimTimer = 0;
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
+  const currentColW = () => Math.max(780, Math.min(880, 480 + innerWidth * (100 / 480)));
   function computeCollieShiftPx(reservePx = 280) {
     if (reservePx <= 0) return 0;
     const sideW = currentSideW();
     const canvas = Math.max(0, innerWidth - sideW);
-    const free = (canvas - 780) / 2;
+    const free = (canvas - currentColW()) / 2;
     return -Math.min(reservePx / 2, Math.max(0, free - 20));
   }
   function syncCollieTopThreadClearance(px) {
@@ -20662,7 +20663,14 @@
       draw();
     };
     const add = (list, source = "pick") => addEntries(list.map((file) => ({ candidates: [{ file }] })), source);
-    $(".attach", form)?.addEventListener("click", () => picker.click());
+    $(".attach", form)?.addEventListener("click", (ev) => {
+      ev?.preventDefault?.();
+      try { picker.value = ""; } catch {}
+      if (typeof picker.showPicker === "function") {
+        try { picker.showPicker(); return; } catch {}
+      }
+      picker.click();
+    });
     picker.addEventListener("change", () => { add([...picker.files], "pick"); picker.value = ""; });
     box.addEventListener("error", (e) => {
       const img = e.target;

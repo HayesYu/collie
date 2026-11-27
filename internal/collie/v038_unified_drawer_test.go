@@ -63,6 +63,18 @@ assert.ok(cssSrc.includes(".app:not(.side-collapsed) #v-collie #crew { display: 
 assert.ok(cssSrc.includes(".app > .main { grid-column: 2; grid-row: 1; }"), "desktop .main must stay pinned to grid column 2");
 assert.ok(cssSrc.includes(".app.side-collapsed { --side-w: 54px; }") && cssSrc.includes(".app.is-side-opening { --side-w: 54px; }"), "desktop left sidebar collapses to 54px icon rail instead of 0px");
 assert.ok(cssSrc.includes(':root[data-theme="dark"] .brand img') && cssSrc.includes('.sr-brand img'), "dark mode inverts 54px icon rail Collie brand icon consistently");
+assert.ok(
+  cssSrc.includes("--bg: #111113;") &&
+  cssSrc.includes("--bg-2: #151518;") &&
+  cssSrc.includes("--bg-3: #1b1b1f;") &&
+  cssSrc.includes("--human-bg: #25252a;") &&
+  cssSrc.includes("--human-line: #ededeb;") &&
+  cssSrc.includes("--user-bubble-shadow: inset 0 0 0 1px rgba(255,255,255,.07);") &&
+  cssSrc.includes("--fg-3: #858580;"),
+  "dark mode uses Plan A Linear Deep Graphite palette with eye-friendly charcoal user bubbles (#t12900)"
+);
+assert.ok(!htmlSrc.includes('<input type="file" multiple hidden>') && htmlSrc.includes('class="file-picker-input"'), "composer file pickers stay mounted in render tree (not display:none) for desktop/PWA reliability (#t12920)");
+assert.ok(!cssSrc.includes("@media (min-width: 1680px) { :root { --col: 880px; } }") && cssSrc.includes("--col: clamp(780px, calc(480px + 20.8333vw), 880px);"), "conversation column width scales continuously via clamp() with zero 1680px step jump (#t12924)");
 assert.ok(!cssSrc.includes("box-shadow: 8px 0 28px") && !cssSrc.includes("box-shadow: -8px 0 28px") && !cssSrc.includes("box-shadow: 12px 0 36px") && !cssSrc.includes("box-shadow: -12px 0 36px"), "desktop sidebar & right drawer glides must stay flat on the same plane with zero drop-shadow");
 assert.ok(!cssSrc.includes(".item-wrap:has(> .item.has-th:not(.has-sum)) .item-th-btn") && !cssSrc.includes(".item.has-th:not(.has-sum) .dot"), "sidebar 关联话题 icon must align identically at bottom-right across 2-line and 3-line cards");
 assert.ok(appSrc.includes("handleCollieScrollResize") && appSrc.includes("new ResizeObserver(handleCollieScrollResize)"), "main chat scroller must lock bottom/anchor across viewport width resizing (#t12699)");
@@ -397,6 +409,21 @@ assert.equal(getEl("#wd-bar").hidden, true, "disabling developer mode hides work
 assert.equal(getEl("#mode-seg").hidden, true, "disabling developer mode hides standalone detail tabs again");
 assert.equal(T.curWdMode(), "chat", "disabling developer mode returns worker drawer to 对话");
 T.closeWorkerDrawer({ immediate: true });
+
+// 2i) Clicking #super-composer .attach reliably triggers file picker (showPicker + click fallback) (#t12920)
+const superAttach = getEl("#super-composer")._qs[".attach"];
+const superPicker = getEl("#super-composer")._qs['input[type="file"]'];
+let superClickHits = 0;
+let superShowPickerHits = 0;
+superPicker.click = () => { superClickHits++; };
+superAttach.dispatch("click");
+assert.equal(superClickHits, 1, "clicking #super-composer .attach triggers picker.click() fallback");
+superPicker.showPicker = () => { superShowPickerHits++; };
+superAttach.dispatch("click");
+assert.equal(superShowPickerHits, 1, "clicking #super-composer .attach prefers native showPicker() when available");
+superPicker.showPicker = () => { throw new Error("blocked"); };
+superAttach.dispatch("click");
+assert.equal(superClickHits, 2, "showPicker() error cleanly falls back to picker.click()");
 
 console.log("OK: all v0.3.8 + v0.3.9 unified drawer, inline slash tabs, 54px rail, flat glide, alignment & developer mode contracts passed");
 `

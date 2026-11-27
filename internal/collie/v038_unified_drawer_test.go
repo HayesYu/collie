@@ -27,20 +27,24 @@ for (const id of ["file-view", "thread-drawer", "worker-drawer"]) {
 assert.ok(cssSrc.includes("@property --drawer-w") && cssSrc.includes("inherits: false"), "--drawer-w must register as non-inheriting @property");
 assert.ok(/\.sd-inner[^{]*\{[^}]*width:\s*100%/.test(cssSrc), ".sd-inner must use width: 100% (prevents non-inheriting --file-w left blank void)");
 assert.ok(!/\.fv-inner\s*\{[^}]*width:\s*var\(--file-w/.test(cssSrc), ".fv-inner must NOT bind width to non-inheriting --file-w");
-assert.ok(cssSrc.includes("grid-template-columns: var(--side-w) minmax(0, 1fr) var(--drawer-w, 432px);"), "desktop >=1181px docks unified right drawer in grid column 3");
+assert.ok(cssSrc.includes("--drawer-default-w: clamp(440px, 34vw, 540px);"), "all three right drawers share single --drawer-default-w golden default width");
+assert.ok(cssSrc.includes("grid-template-columns: var(--side-w) minmax(0, 1fr) var(--drawer-w, var(--drawer-default-w, 460px));"), "desktop >=1181px docks unified right drawer in grid column 3 with shared default width");
 
 // 1b) Silky 240ms GPU glide staging (#t12615) — zero grid-template-columns animation
 assert.ok(cssSrc.includes(".app.has-drawer.is-drawer-opening"), "desktop drawer open/widen uses GPU staging state");
 assert.ok(cssSrc.includes("#v-collie.has-drawer-col-cap"), "narrow desktop open caps column width once on frame 0 for 0px handoff jump");
 assert.ok(appSrc.includes("function easeOutSilk(") && appSrc.includes("function runDesktopDrawerGlide("), "JS lockstep cubic-bezier(0.22, 1, 0.36, 1) GPU glide engine must exist");
 
-// 1c) Plan A in-card two-tab switcher inside #notes-pane (#t12590)
-assert.ok(!htmlSrc.includes('id="collie-threads-btn"'), "Plan A drops duplicate top-bar 话题线 button");
-assert.ok(htmlSrc.includes('id="np-tabs"') && htmlSrc.includes('id="np-tab-notes"') && htmlSrc.includes('id="np-tab-threads"') && htmlSrc.includes('id="np-tab-ink"'), "Plan A in-card 事项/话题 switcher markup must exist");
-assert.ok(cssSrc.includes("@keyframes np-mode-enter"), "in-card tab switch uses restrained 140ms compositor enter");
+// 1c) Minimalist sticky-note header (小本本 + date + ×) + section-1 inline slash toggle 进行中 / 话题 (#t12746)
+assert.ok(!htmlSrc.includes('id="collie-threads-btn"'), "drops duplicate top-bar 话题线 button");
+assert.ok(htmlSrc.includes('id="np-title">小本本</h2>') && htmlSrc.includes('id="np-date"') && !htmlSrc.includes('id="np-tab-ink"') && !htmlSrc.includes('id="np-threads-body"'), "notebook header restores minimalist 小本本 + date without top tab bar or ink slider");
+assert.ok(htmlSrc.includes('class="np-slash-tabs" id="np-tabs"') && htmlSrc.includes('id="np-tab-notes"') && htmlSrc.includes('id="np-tab-threads"') && htmlSrc.includes('id="np-panel-tasks"') && htmlSrc.includes('id="np-panel-threads"') && htmlSrc.includes('id="np-threads-more"'), "section-1 inline slash switcher 进行中 / 话题 and in-place panels must exist");
+assert.ok(cssSrc.includes("@keyframes np-mode-enter") && cssSrc.includes(".np-sec-panel.is-mode-entering"), "first-group panel switch uses restrained 130ms compositor enter");
 
-// 1d) Worker drawer default read-only peek bar without permanent composer (#t12601)
+// 1d) Worker drawer ultra-slim header by default + Developer Mode toggle for frameless tabs (#t12601, #t12760, #t12833)
 assert.ok(htmlSrc.includes('id="wd-peek-foot"') && htmlSrc.includes('id="wd-interject-btn"') && htmlSrc.includes('id="wd-composer"') && htmlSrc.includes('id="wd-composer-collapse"'), "worker drawer must expose calm peek bar with on-demand 直接插话 composer");
+assert.ok(htmlSrc.includes('class="wd-mode-tabs" id="wd-mode-seg"') && htmlSrc.includes('id="wd-bar" hidden') && htmlSrc.includes('class="wd-mode-tabs d-mode-tabs" id="mode-seg"') && htmlSrc.includes('id="wd-thread-btn"') && htmlSrc.includes('id="wd-interrupt"'), "worker drawer and standalone detail share frameless mode tabs hidden by default, with restrained header icon actions");
+assert.ok(!/\.wd-summary-text\s*\{[^}]*background:\s*var\(--bg-2\)/.test(cssSrc), "worker drawer summary must NOT use heavy gray bordered card box");
 
 // 1e) Raycast/Linear centered command search outside #v-collie (escaping contain: strict) (#t12579)
 const vCollieCloseIdx = htmlSrc.indexOf("<!-- ── detail:");
@@ -53,11 +57,14 @@ assert.ok(!/\.ss-hit\.active\s*\{[^}]*border-left:\s*3px/.test(cssSrc), "search 
 assert.ok(cssSrc.includes("#v-collie .say:hover, #v-collie .mine:hover,\n#v-collie .say:focus-within, #v-collie .mine:focus-within { z-index: 4; }"), "hovered/focused message row must elevate z-index above next sibling stacking context");
 assert.ok(cssSrc.includes("#v-collie .mine .msg-acts { justify-content: flex-end; height: 26px; padding-top: 2px; margin: 0 -6px -26px 0; }"), ".mine .msg-acts must replace margin-top gap with padding-top for seamless hover bridge");
 
-// 1g) Desktop left sidebar collapse/expand (>1000px) + hide duplicate #crew when sidebar expanded + ResizeObserver scroll anchor lock (#t12615, #t12693, #t12699, #t12702)
-assert.ok(htmlSrc.includes('id="side-collapse-btn"') && htmlSrc.includes('id="side-expand-btn"'), "desktop left sidebar collapse/expand buttons must exist");
+// 1g) Desktop 54px Icon Rail, flat same-plane zero-shadow transitions, unified sidebar topic-icon alignment (#t12760, #t12764, #t12772)
+assert.ok(htmlSrc.includes('id="side-collapse-btn"') && htmlSrc.includes('id="side-expand-btn"') && htmlSrc.includes('id="side-rail"') && htmlSrc.includes('id="rail-live"') && htmlSrc.includes('id="rail-peers"'), "desktop 54px icon rail controls must exist");
 assert.ok(cssSrc.includes(".app:not(.side-collapsed) #v-collie #crew { display: none; }"), "desktop (>1000px) hides duplicate top #crew strip when left sidebar is expanded");
-assert.ok(cssSrc.includes(".app > .main { grid-column: 2; grid-row: 1; }"), "desktop .main must stay pinned to grid column 2 so hiding .side never collapses .main into 0px column 1");
-assert.ok(cssSrc.includes(".app.side-collapsed { --side-w: 0px; }") && cssSrc.includes(".app.is-side-opening"), "desktop left sidebar collapse/expand uses 0px grid staging for silky GPU glide");
+assert.ok(cssSrc.includes(".app > .main { grid-column: 2; grid-row: 1; }"), "desktop .main must stay pinned to grid column 2");
+assert.ok(cssSrc.includes(".app.side-collapsed { --side-w: 54px; }") && cssSrc.includes(".app.is-side-opening { --side-w: 54px; }"), "desktop left sidebar collapses to 54px icon rail instead of 0px");
+assert.ok(cssSrc.includes(':root[data-theme="dark"] .brand img') && cssSrc.includes('.sr-brand img'), "dark mode inverts 54px icon rail Collie brand icon consistently");
+assert.ok(!cssSrc.includes("box-shadow: 8px 0 28px") && !cssSrc.includes("box-shadow: -8px 0 28px") && !cssSrc.includes("box-shadow: 12px 0 36px") && !cssSrc.includes("box-shadow: -12px 0 36px"), "desktop sidebar & right drawer glides must stay flat on the same plane with zero drop-shadow");
+assert.ok(!cssSrc.includes(".item-wrap:has(> .item.has-th:not(.has-sum)) .item-th-btn") && !cssSrc.includes(".item.has-th:not(.has-sum) .dot"), "sidebar 关联话题 icon must align identically at bottom-right across 2-line and 3-line cards");
 assert.ok(appSrc.includes("handleCollieScrollResize") && appSrc.includes("new ResizeObserver(handleCollieScrollResize)"), "main chat scroller must lock bottom/anchor across viewport width resizing (#t12699)");
 
 // ─── 2. Runtime VM Tests ───
@@ -199,7 +206,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, easeOutSilk, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, openThreadDrawer, closeThreadDrawer, showFilePane, closeFilePane, switchNotebookTab, syncNotebookVisibility };\n})();"
+  "  globalThis.__test = { setView: (v) => { view = v; }, setCurrent: (c) => { current = c; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, setNotebookData: (d) => { notebookData = d; }, currentSideW, easeOutSilk, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, openThreadDrawer, closeThreadDrawer, showFilePane, closeFilePane, switchNotebookTab, syncNotebookVisibility, renderPrefs, applyMode, curMode, curWdMode, syncDevModeUI, store, prefs };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -244,27 +251,57 @@ getEl("#wd-composer-collapse").dispatch("click");
 assert.equal(getEl("#wd-composer").hidden, true, "clicking 收起 collapses composer back to peek bar");
 assert.equal(getEl("#wd-peek-foot").hidden, false);
 
-// Seamless 3-way mutual exclusion: Worker -> Thread -> File -> Close
+// Seamless 3-way mutual exclusion & 100% identical unified desktop width: Worker -> Thread -> File -> Close (#t12811)
+const workerDrawerW = getEl("#app").style.getPropertyValue("--drawer-w");
+assert.ok(workerDrawerW, "worker drawer sets unified --drawer-w");
 getEl("#wd-thread-btn").dispatch("click");
 assert.equal(getEl("#app").classList.contains("has-worker"), false, "switching to thread closes worker drawer");
 assert.equal(getEl("#app").classList.contains("has-thread"), true, "thread drawer opens seamlessly");
 assert.equal(getEl("#app").classList.contains("has-drawer"), true);
+assert.equal(getEl("#app").style.getPropertyValue("--drawer-w"), workerDrawerW, "thread drawer shares 100% identical default width with worker drawer");
 
 T.showFilePane();
 assert.equal(getEl("#app").classList.contains("has-thread"), false, "opening file preview closes thread drawer");
 assert.equal(getEl("#app").classList.contains("has-file"), true, "file preview opens seamlessly");
 assert.equal(getEl("#app").classList.contains("has-drawer"), true);
+assert.equal(getEl("#app").style.getPropertyValue("--drawer-w"), workerDrawerW, "file preview shares 100% identical default width with worker & thread drawers");
 
 T.closeFilePane({ immediate: true });
 assert.equal(getEl("#app").classList.contains("has-file"), false);
 assert.equal(getEl("#app").classList.contains("has-drawer"), false);
 
-// 2c) Plan A in-card 事项 <-> 话题 tab switch updates ink & mode without hiding card
+// 2c) Section-1 inline slash switch 进行中 <-> 话题 replaces ONLY section-1 panel while 今日产物 & 下一条定时 stay untouched (#t12744, #t12746)
+T.setNotebookData({
+  date: "2026-11-28",
+  tasks: [
+    { id: "t1", title: "任务 1", note: "进展 1", tone: "live" },
+    { id: "t2", title: "任务 2", note: "进展 2", tone: "live" },
+    { id: "t3", title: "任务 3", note: "进展 3", tone: "live" },
+    { id: "t4", title: "任务 4", note: "进展 4", tone: "idle" },
+  ],
+  artifacts: [{ path: "~/report.md", name: "report.md", title: "实验复盘", ext: "md" }],
+  timers: [{ id: "tm1", spec: "daily 09:00", text: "晨检", next_run: "2026-11-28T09:00:00Z" }],
+});
 T.syncNotebookVisibility({ immediate: true });
+const filesBefore = getEl("#np-files-list").innerHTML;
+const timersBefore = getEl("#np-timers-list").innerHTML;
+assert.equal(getEl("#np-tasks-more").hidden, false, "进行中 shows +1 pill when > 3 tasks");
+assert.equal(getEl("#np-threads-more").hidden, true, "话题 +N pill stays hidden in 进行中 mode");
 T.switchNotebookTab("threads");
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads");
-assert.ok(getEl("#np-tab-ink").style.transform.includes("translate3d(40px"), "sliding tab ink moves smoothly to 话题 tab");
-assert.equal(getEl("#np-threads-body").classList.contains("is-mode-entering"), true, "explicit tab switch plays 140ms restrained enter");
+assert.equal(getEl("#np-panel-tasks").hidden, true);
+assert.equal(getEl("#np-panel-threads").hidden, false);
+assert.equal(getEl("#np-body").hidden, false, "#np-body stays visible so 今日产物 & 下一条定时 never disappear");
+assert.equal(getEl("#np-date").hidden, false, "minimalist header date stays visible in 话题 mode");
+assert.equal(getEl("#np-tasks-more").hidden, true, "进行中 +N pill hides when switched to 话题");
+assert.equal(getEl("#np-panel-threads").classList.contains("is-mode-entering"), true, "switching section-1 plays restrained compositor enter");
+assert.equal(getEl("#np-files-list").innerHTML, filesBefore, "今日产物 DOM stays completely untouched");
+assert.equal(getEl("#np-timers-list").innerHTML, timersBefore, "下一条定时 DOM stays completely untouched");
+// ArrowLeft keyboard nav on #np-tabs switches back to 进行中
+getEl("#np-tabs").dispatch("keydown", { key: "ArrowLeft" });
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
+assert.equal(getEl("#np-panel-tasks").hidden, false);
+assert.equal(getEl("#np-panel-threads").hidden, true);
 
 // 2d) Centered command search backdrop mousedown & Escape close
 getEl("#super-search-btn").dispatch("click");
@@ -272,16 +309,17 @@ assert.equal(getEl("#super-search").hidden, false);
 getEl("#super-search").dispatch("mousedown", { target: getEl("#super-search") });
 assert.equal(getEl("#super-search").hidden, true, "clicking backdrop closes centered search overlay");
 
-// 2e) Desktop left sidebar collapse/expand persists state & toggles .side-collapsed cleanly (#t12615, #t12693)
+// 2e) Desktop left sidebar collapse keeps 54px icon rail (currentSideW === 54) & persists state (#t12760, #t12772)
 T.setSideCollapsed(true);
 assert.equal(getEl("#app").classList.contains("side-collapsed"), true, "collapsing sidebar sets .side-collapsed on #app");
 assert.equal(doc.body.classList.contains("side-collapsed"), true, "collapsing sidebar syncs .side-collapsed on body");
+assert.equal(T.currentSideW(), 54, "collapsed desktop sidebar keeps 54px icon rail width");
 assert.equal(storage.get("collie.sideCollapsed"), "true");
 T.setSideCollapsed(false);
 assert.equal(getEl("#app").classList.contains("side-collapsed"), false, "expanding sidebar removes .side-collapsed");
 assert.equal(storage.get("collie.sideCollapsed"), "false");
 
-// Clicking a #crew chip opens worker drawer on #/collie (#t12693)
+// 2f) Clicking a #crew chip, left sidebar 工作中 Collie worker, or icon-rail agent opens right 3-in-1 worker drawer (#t12693, #t12760)
 const chipTarget = makeEl("chip");
 chipTarget.dataset.worker = "fix-drawer";
 chipTarget.closest = (sel) => (sel === "a.chip[data-worker]" ? chipTarget : null);
@@ -289,7 +327,78 @@ getEl("#crew").dispatch("click", { target: chipTarget, button: 0 });
 assert.equal(getEl("#app").classList.contains("has-worker"), true, "clicking #crew chip opens right 3-in-1 worker drawer");
 T.closeWorkerDrawer({ immediate: true });
 
-console.log("OK: all unified drawer, Plan A tabs, centered search, GPU glide & hover contracts passed");
+const liveWorkerTarget = makeEl("side-worker");
+liveWorkerTarget.dataset.sideWorker = "fix-drawer";
+liveWorkerTarget.dataset.paneId = "p-w1";
+liveWorkerTarget.closest = (sel) => (sel === "a.item[data-side-worker]" ? liveWorkerTarget : null);
+getEl("#live-list").dispatch("click", { target: liveWorkerTarget, button: 0 });
+assert.equal(getEl("#app").classList.contains("has-worker"), true, "clicking Collie worker in left sidebar 工作中 opens right 3-in-1 worker drawer");
+T.closeWorkerDrawer({ immediate: true });
+
+const railWorkerTarget = makeEl("rail-worker");
+railWorkerTarget.dataset.railWorker = "fix-drawer";
+railWorkerTarget.dataset.railPane = "p-w1";
+railWorkerTarget.closest = (sel) => (sel === "a.sr-agent[data-rail-pane]" ? railWorkerTarget : null);
+getEl("#rail-live").dispatch("click", { target: railWorkerTarget, button: 0 });
+assert.equal(getEl("#app").classList.contains("has-worker"), true, "clicking agent icon in collapsed 54px icon rail opens right 3-in-1 worker drawer");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening worker drawer hides floating notebook");
+
+// 2g) Smooth drawer <-> notebook handoff via top-bar 小本本 button (no immediate:true hard cut, #t12807)
+assert.ok(!appSrc.includes('closeWorkerDrawer({ immediate: true });\n      if ($("#app")?.classList?.contains("has-file")) closeFilePane({ immediate: true });'), "notesBtn must not hard-cut open right drawer with immediate:true");
+getEl("#open-notes-btn").dispatch("click");
+assert.equal(getEl("#app").classList.contains("has-worker"), false, "clicking 小本本 closes open right drawer cleanly");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "clicking 小本本 smoothly reveals floating notebook");
+
+// 2h) Developer Mode preference (localStorage default OFF): hides 对话/屏幕/日志 tabs across worker drawer & standalone detail, plain shell auto-screen, ON reveals frameless tabs (#t12833)
+assert.equal(T.prefs.devMode(), false, "developer mode defaults to false");
+T.renderPrefs();
+assert.ok(getEl("#prefs-body").innerHTML.includes('data-pref="devMode"') && getEl("#prefs-body").innerHTML.includes('aria-checked="false"'), "prefs renders 开发者模式 switch off by default");
+assert.ok(!getEl("#prefs-body").innerHTML.includes('data-pref="mode2"'), "default prefs hides 屏幕/日志 default-view selector while developer mode is off");
+
+T.setState({
+  agents: [{ pane_id: "p-w1", name: "fix-drawer", label: "三合一抽屉", kind: "claude", status: "working", is_agent: true, cwd: "/tmp/proj" }],
+  shells: [{ pane_id: "p-sh1", name: "logs", kind: "", status: "shell", is_agent: false, cwd: "/tmp/proj" }],
+  machines: [],
+});
+T.openWorkerDrawer({ worker: "fix-drawer", fromThreadRoot: "e1" });
+assert.equal(getEl("#wd-bar").hidden, true, "worker drawer hides mode tab bar when developer mode is off");
+assert.equal(getEl("#wd-mode-seg").hidden, true, "worker drawer hides 对话/屏幕/日志 tabs when developer mode is off");
+assert.equal(getEl("#wd-viewer").dataset.mode, "chat", "worker drawer forces clean 对话 view when developer mode is off");
+assert.equal(getEl("#wd-thread-btn").hidden, false, "关联话题 icon stays accessible in drawer header");
+assert.equal(getEl("#wd-interrupt").hidden, false, "中断 icon stays accessible in drawer header");
+
+T.setCurrent("p-w1");
+T.applyMode();
+assert.equal(getEl("#mode-seg").hidden, true, "standalone agent detail hides 对话/屏幕/日志 when developer mode is off");
+assert.equal(T.curMode(), "chat", "standalone agent defaults to 对话 when developer mode is off");
+
+T.setCurrent("p-sh1");
+T.applyMode();
+assert.equal(getEl("#mode-seg").hidden, true, "plain shell hides mode switcher when developer mode is off");
+assert.equal(T.curMode(), "screen", "plain non-agent shell still auto-displays terminal screen when developer mode is off");
+
+// Enable Developer Mode -> tabs appear immediately in both worker drawer and standalone detail + prefs shows mode2
+T.store.set("devMode", true);
+T.syncDevModeUI();
+T.renderPrefs();
+assert.equal(T.prefs.devMode(), true);
+assert.ok(getEl("#prefs-body").innerHTML.includes('data-pref="devMode"') && getEl("#prefs-body").innerHTML.includes('aria-checked="true"'), "prefs reflects developer mode ON");
+assert.ok(getEl("#prefs-body").innerHTML.includes('data-pref="mode2"'), "prefs reveals default-view selector when developer mode is ON");
+assert.equal(getEl("#wd-bar").hidden, false, "enabling developer mode reveals worker drawer tab bar");
+assert.equal(getEl("#wd-mode-seg").hidden, false, "enabling developer mode reveals worker drawer 对话/屏幕/日志 tabs");
+T.setCurrent("p-w1");
+T.applyMode();
+assert.equal(getEl("#mode-seg").hidden, false, "enabling developer mode reveals standalone detail 对话/屏幕/日志 tabs");
+
+// Disable Developer Mode again -> tabs hide and active views return to 对话
+T.store.set("devMode", false);
+T.syncDevModeUI();
+assert.equal(getEl("#wd-bar").hidden, true, "disabling developer mode hides worker drawer tab bar again");
+assert.equal(getEl("#mode-seg").hidden, true, "disabling developer mode hides standalone detail tabs again");
+assert.equal(T.curWdMode(), "chat", "disabling developer mode returns worker drawer to 对话");
+T.closeWorkerDrawer({ immediate: true });
+
+console.log("OK: all v0.3.8 + v0.3.9 unified drawer, inline slash tabs, 54px rail, flat glide, alignment & developer mode contracts passed");
 `
 	cmd := exec.Command("node", "-e", script)
 	cmd.Dir = filepath.Join("..", "..")

@@ -923,7 +923,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   const tdDrawerEl = getEl("#thread-drawer");
   const appEl = getEl("#app");
   T.openThreadDrawer("e290", "e290", "e290");
-  assert.equal(tdDrawerEl.style.getPropertyValue("--thread-w"), "432px", "default drawer width is restrained 432px on #thread-drawer");
+  assert.equal(tdDrawerEl.style.getPropertyValue("--thread-w"), "490px", "default drawer width is unified golden 490px on #thread-drawer");
   assert.equal(doc.documentElement.style.getPropertyValue("--thread-w"), "", "P0-1: --thread-w must NEVER be written to <html>");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "false");
   assert.equal(tdWiden.title, "拓宽抽屉");
@@ -971,9 +971,10 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), 440, "dragging narrower keeps exact width without jumping");
   assert.equal(appEl.classList.contains("thread-wide"), false, "dragging below wide threshold exits wide mode");
   assert.equal(storage.get("collie.threadWide"), "false");
-  assert.equal(storage.get("collie.threadW"), "440");
+  assert.equal(storage.get("collie.drawerW"), "440");
 
   // Re-enter wide mode via button; close & reopen remembers widened preference.
+  storage.delete("collie.drawerW");
   storage.delete("collie.threadW");
   tdWiden.dispatch("click");
   assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), wideW);
@@ -983,10 +984,10 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), wideW, "reopen restores widened preference");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "true");
 
-  // Clicking blank area of exposed main-stream (#v-collie) collapses back to restrained width.
+  // Clicking blank area of exposed main-stream (#v-collie) collapses back to unified default width.
   const blankTarget = new DomNode("DIV");
   getEl("#v-collie").dispatch("click", { target: blankTarget });
-  assert.equal(tdDrawerEl.style.getPropertyValue("--thread-w"), "432px", "clicking blank main area restores restrained width");
+  assert.equal(tdDrawerEl.style.getPropertyValue("--thread-w"), "490px", "clicking blank main area restores unified default width");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "false");
   assert.equal(storage.get("collie.threadWide"), "false", "restored preference persisted");
 

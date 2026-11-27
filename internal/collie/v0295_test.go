@@ -184,8 +184,8 @@ assert.ok(cssSrc.includes(".side.is-scroll-paused .dot::after"), "scroll-pause g
 assert.ok(!/\.dot\.idle\s*\{[^}]*animation:/.test(cssSrc), ".dot.idle must be calm static with zero infinite animation");
 assert.ok(cssSrc.includes("wait-halo 2.8s ease-in-out infinite"), "preserve active wait-halo animation contract");
 
-// 1b) Plan A (#t12590) single plain-text 小本本 trigger + frameless in-card 事项/话题 tabs, peer modal anti-clip + human copy, desktop drawer main-stream calm & detached user media cards
-assert.ok(!htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"') && htmlSrc.includes('id="np-threads-body"') && htmlSrc.includes('id="np-tabs"'), "threads list must live inside unified #notes-pane with in-card #np-tabs and no duplicate top-bar button or dropdown");
+// 1b) Single plain-text 小本本 trigger + inline section-1 进行中/话题 slash toggle, peer modal anti-clip + human copy, desktop drawer main-stream calm & detached user media cards
+assert.ok(!htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"') && !htmlSrc.includes('id="np-threads-body"') && htmlSrc.includes('id="np-panel-threads"') && htmlSrc.includes('id="np-tabs"'), "threads list lives inside section-1 #np-panel-threads of #notes-pane with inline #np-tabs and no duplicate top-bar button");
 assert.ok(!htmlSrc.includes('id="dk-tablist"') && !htmlSrc.includes('id="dk-tab-notes"') && !htmlSrc.includes('id="dk-tab-threads"'), "legacy #dk-tablist markup stays removed");
 assert.ok(!htmlSrc.includes("展开详情"), "notebook card must never include a bottom 展开详情 text bar");
 assert.ok(htmlSrc.includes('id="np-tasks-more"') && htmlSrc.includes('id="np-files-more"') && htmlSrc.includes('id="np-timers-more"'), "notebook must restore +N overflow pills");
@@ -413,12 +413,13 @@ doc.dispatch("keydown", { key: "Escape" });
 assert.equal(T.getNotesExpanded(), false, "Escape collapses expanded floating notebook back to compact");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape from expanded stays open in compact state");
 
-// Switch side card in-place to 话题 -> persists "threads"; click 小本本 -> closes & persists "none"; click 小本本 again -> reopens; switch back to 事项 -> persists "notes"
+// Switch section 1 in-place to 话题 -> persists "threads" while keeping #np-body (files & timers) visible; click 小本本 -> closes & persists "none"; reopen -> restores tab; switch back -> persists "notes"
 getEl("#np-tab-threads").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads");
-assert.equal(getEl("#np-threads-body").hidden, false);
-assert.equal(getEl("#np-body").hidden, true);
+assert.equal(getEl("#np-panel-threads").hidden, false);
+assert.equal(getEl("#np-panel-tasks").hidden, true);
+assert.equal(getEl("#np-body").hidden, false, "switching section 1 to 话题 must leave #np-body visible");
 assert.equal(JSON.parse(storage.get("collie.sidePane")), "threads", "switching to threads persists collie.sidePane = threads");
 getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
@@ -429,7 +430,9 @@ assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads", "reopening restores last active tab");
 getEl("#np-tab-notes").dispatch("click");
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
-assert.equal(JSON.parse(storage.get("collie.sidePane")), "notes", "switching back to 事项 persists collie.sidePane = notes");
+assert.equal(getEl("#np-panel-tasks").hidden, false);
+assert.equal(getEl("#np-panel-threads").hidden, true);
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "notes", "switching back to 进行中 persists collie.sidePane = notes");
 
 // Close & reopen notebook via card close × button
 getEl("#np-close").dispatch("click");

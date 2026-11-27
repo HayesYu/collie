@@ -58,10 +58,10 @@ assert.ok(cssSrc.includes("max-inline-size: 184px;"), "Item 8: crew chip names k
 assert.ok(!cssSrc.includes(".crew.is-tight") && !cssSrc.includes("--crew-chip-max"), "Item 8: remove over-truncating .is-tight / --crew-chip-max");
 assert.ok(!cssSrc.includes(".chip:hover .chip-name") && !/\.chip\s*\{[^}]*interpolate-size/.test(cssSrc), "Item 8: remove hover width-expansion animation on crew chips");
 
-// 10) De-colliding labels: left sidebar 工作中 vs right 话题线 活跃话题 / 历史话题
+// 10) De-colliding labels: left sidebar 工作中 vs notebook section-1 进行中 / 话题 + folded 历史话题
 assert.ok(htmlSrc.includes('<h2>工作中 <span class="count" id="live-count"></span></h2>'), "Item 10: left sidebar uses 工作中");
 assert.ok(!htmlSrc.includes('<h2>进行中 <span class="count" id="live-count"></span></h2>'), "Item 10: left sidebar no longer uses 进行中");
-assert.ok(appSrc.includes('>活跃话题</h3>') && appSrc.includes('>历史话题</h3>'), "Item 10: right 话题线 uses 活跃话题 and 历史话题");
+assert.ok(htmlSrc.includes('>进行中</button>') && htmlSrc.includes('>话题</span>') && appSrc.includes('>历史话题</h3>'), "Item 10: section 1 uses inline 进行中/话题 switcher and folded 历史话题");
 // 11) Zero view-switch jitter on #notes-pane (#t12442): no always-replaying np-swap-in animation
 assert.ok(!cssSrc.includes("np-swap-in"), "Item 11: remove np-swap-in keyframe that replayed opacity/translateY jitter on route return");
 

@@ -688,6 +688,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   // ═══════════════════════════════════════════════════════════════════════
   // 1) P0: High-frequency streaming terminal (#screen) & MutationObservers
   // ═══════════════════════════════════════════════════════════════════════
+  ctx.localStorage.setItem("collie.devMode", "true");
   T.setView("pane");
   T.setMode("screen");
   const screenEl = getEl("#screen");

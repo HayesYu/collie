@@ -1,11 +1,13 @@
 package collie
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,12 +16,16 @@ import (
 
 // Antigravity does not tell herdr which conversation a pane is running, so we
 // pair them ourselves. Showing the wrong conversation would leak an unrelated
-// session into this pane, so a candidate must be provably this pane's:
+// session (or a child subagent transcript) into this pane, so a candidate must
+// be provably this pane's:
 //
 //   - Collie itself started the pane with --conversation/--resume <id>; or
-//   - agy's own index (conversation_summaries.db) lists the pane's cwd as the
-//     conversation's workspace (after resolving symlinks), and the conversation
-//     was born after the agent started (or within the last few hours).
+//   - agy's own index (conversation_summaries.db) lists the pane's cwd as a
+//     top-level (non-subagent, non-killed) conversation's workspace (after
+//     resolving symlinks), the transcript's first entry is not a subagent
+//     SYSTEM_MESSAGE and does not belong to another Collie worker/router, and
+//     the conversation was born after the agent started (or within the last few
+//     hours).
 //
 // Each transcript is claimed by at most one pane.
 
@@ -27,7 +33,115 @@ var agyIndex struct {
 	sync.Mutex
 	root string
 	at   time.Time
-	ws   map[string][]string // conversation id → workspace paths
+	ws   map[string][]string // top-level conversation id → workspace paths
+}
+
+func forgetAgyIndex() {
+	agyIndex.Lock()
+	agyIndex.root = ""
+	agyIndex.at = time.Time{}
+	agyIndex.ws = nil
+	agyIndex.Unlock()
+}
+
+type agyMeta struct {
+	born       time.Time
+	subagent   bool
+	workerName string
+	isRouter   bool
+}
+
+var agyWorkerLineRe = regexp.MustCompile(`You are worker "([^"]+)", managed by Collie`)
+
+// agyTranscriptMeta reads only the first line of an Antigravity transcript to
+// recover its immutable creation timestamp (dir mtime mutates on Linux whenever
+// artifacts are saved in brain/<id>/), detect subagent transcripts started by a
+// parent SYSTEM_MESSAGE, and identify Collie worker/router prompts.
+func agyTranscriptMeta(path string) agyMeta {
+	f, err := os.Open(path)
+	if err != nil {
+		return agyMeta{}
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 64<<10)
+	line, err := r.ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return agyMeta{}
+	}
+	var e struct {
+		Type      string `json:"type"`
+		Source    string `json:"source"`
+		CreatedAt string `json:"created_at"`
+		Content   string `json:"content"`
+	}
+	if json.Unmarshal(line, &e) != nil {
+		return agyMeta{}
+	}
+	var m agyMeta
+	if e.CreatedAt != "" {
+		if t, err := time.Parse(time.RFC3339Nano, e.CreatedAt); err == nil {
+			m.born = t
+		}
+	}
+	if e.Type == "SYSTEM_MESSAGE" || (e.Source == "SYSTEM" && e.Type != "" && e.Type != "USER_INPUT") {
+		m.subagent = true
+	}
+	if match := agyWorkerLineRe.FindStringSubmatch(e.Content); match != nil {
+		m.workerName = match[1]
+	}
+	if strings.Contains(e.Content, "[collie] Session start.") {
+		m.isRouter = true
+	}
+	return m
+}
+
+// agySummaryColumns inspects conversation_summaries columns so queries work
+// across Antigravity versions (older schemas may omit parent_conversation_id or
+// agent_name).
+func agySummaryColumns(db *sql.DB) map[string]bool {
+	cols := map[string]bool{}
+	rows, err := db.Query(`PRAGMA table_info(conversation_summaries)`)
+	if err != nil {
+		return cols
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk) == nil {
+			cols[name] = true
+		}
+	}
+	return cols
+}
+
+func agyTopLevelWhere(cols map[string]bool) string {
+	var parts []string
+	if cols["nesting_depth"] {
+		parts = append(parts, "COALESCE(nesting_depth, 0) = 0")
+	}
+	if cols["killed"] {
+		parts = append(parts, "COALESCE(killed, 0) = 0")
+	}
+	if cols["parent_conversation_id"] {
+		parts = append(parts, "COALESCE(parent_conversation_id, '') = ''")
+	}
+	if cols["agent_name"] {
+		parts = append(parts, "COALESCE(agent_name, '') = ''")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " AND " + strings.Join(parts, " AND ")
+}
+
+func (s *Server) paneName(pane string) string {
+	if s == nil || s.herdr == nil || pane == "" {
+		return ""
+	}
+	return s.herdr.Name(pane)
 }
 
 // agyPaneSessions remembers the conversation id Collie explicitly passed to
@@ -144,8 +258,9 @@ func agyWorkspaces(root string) map[string][]string {
 		return m
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE last_modified_time > ?`,
-		time.Now().Add(-48*time.Hour).UTC().Format("2006-01-02 15:04:05"))
+	cols := agySummaryColumns(db)
+	q := `SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE (last_modified_time > ? OR last_modified_time < '0002')` + agyTopLevelWhere(cols)
+	rows, err := db.Query(q, time.Now().Add(-48*time.Hour).UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		agyIndex.ws = m
 		return m
@@ -184,6 +299,10 @@ func (s *Server) guessAgy(brain, pane, cwd string) string {
 			return p
 		}
 	}
+	pane, _ = split(pane)
+	if pane == "" {
+		return ""
+	}
 	claimed.Lock()
 	defer claimed.Unlock()
 	for p, owner := range claimed.m {
@@ -199,14 +318,18 @@ func (s *Server) guessAgy(brain, pane, cwd string) string {
 	if !known {
 		since = time.Now().Add(-6 * time.Hour)
 	}
+	wantName := s.paneName(pane)
 	index := agyWorkspaces(filepath.Dir(brain))
 
 	files, _ := filepath.Glob(filepath.Join(brain, "*", ".system_generated", "logs", "transcript.jsonl"))
 	type cand struct {
-		path string
-		born time.Time
+		path  string
+		born  time.Time
+		mod   time.Time
+		exact bool
 	}
 	var cs []cand
+	cutoff := since.Add(-10 * time.Second)
 	for _, f := range files {
 		if _, taken := claimed.m[f]; taken {
 			continue
@@ -222,24 +345,70 @@ func (s *Server) guessAgy(brain, pane, cwd string) string {
 		if !match {
 			continue
 		}
+		meta := agyTranscriptMeta(f)
+		// Never pair a child subagent transcript with a parent worker pane.
+		if meta.subagent {
+			continue
+		}
+		// Prevent cross-talk between sibling Collie workers (or router) running
+		// concurrently in the same cwd.
+		if wantName != "" {
+			if meta.workerName != "" && meta.workerName != wantName {
+				continue
+			}
+			if meta.isRouter && wantName != routerName {
+				continue
+			}
+			if wantName == routerName && meta.workerName != "" {
+				continue
+			}
+		}
 		di, err := os.Stat(dir)
 		if err != nil {
 			continue
 		}
-		born := di.ModTime()
-		if bt := birthTime(di); !bt.IsZero() {
-			born = bt
+		born := meta.born
+		if born.IsZero() {
+			born = di.ModTime()
+			if bt := birthTime(di); !bt.IsZero() {
+				born = bt
+			}
 		}
-		if born.Before(since.Add(-10 * time.Second)) {
+		if born.Before(cutoff) {
 			continue
 		}
-		cs = append(cs, cand{f, born})
+		mod := di.ModTime()
+		if fi, err := os.Stat(f); err == nil {
+			mod = fi.ModTime()
+		}
+		exact := wantName != "" && (meta.workerName == wantName || (wantName == routerName && meta.isRouter))
+		cs = append(cs, cand{path: f, born: born, mod: mod, exact: exact})
 	}
 	if len(cs) == 0 {
 		return ""
 	}
-	// The earliest conversation after the start is the one the agent opened.
-	sort.Slice(cs, func(i, j int) bool { return cs[i].born.Before(cs[j].born) })
+	sort.Slice(cs, func(i, j int) bool {
+		if cs[i].exact != cs[j].exact {
+			return cs[i].exact
+		}
+		if known {
+			// Prefer conversations born at/after pane start (earliest first),
+			// then those within the 10s pre-start clock-skew slack (closest first).
+			ai, aj := !cs[i].born.Before(since), !cs[j].born.Before(since)
+			if ai != aj {
+				return ai
+			}
+			if ai {
+				return cs[i].born.Before(cs[j].born)
+			}
+			return cs[i].born.After(cs[j].born)
+		}
+		// Unknown start time (e.g. after hub restart): prefer the most recently active.
+		if !cs[i].mod.Equal(cs[j].mod) {
+			return cs[i].mod.After(cs[j].mod)
+		}
+		return cs[i].born.After(cs[j].born)
+	})
 	claimed.m[cs[0].path] = pane
 	return cs[0].path
 }
@@ -308,7 +477,16 @@ func (s *Server) recentAgyCLI() []desktopRow {
 			return nil
 		}
 		defer db.Close()
-		meta, err = db.Prepare(`SELECT title, preview, workspace_uris, nesting_depth, killed
+		cols := agySummaryColumns(db)
+		parentExpr := "''"
+		if cols["parent_conversation_id"] {
+			parentExpr = "COALESCE(parent_conversation_id, '')"
+		}
+		agentExpr := "''"
+		if cols["agent_name"] {
+			agentExpr = "COALESCE(agent_name, '')"
+		}
+		meta, err = db.Prepare(`SELECT title, preview, workspace_uris, nesting_depth, killed, ` + parentExpr + `, ` + agentExpr + `
 			FROM conversation_summaries WHERE conversation_id = ?`)
 		if err != nil {
 			return nil
@@ -317,11 +495,14 @@ func (s *Server) recentAgyCLI() []desktopRow {
 	}
 	var rows []desktopRow
 	for _, d := range candidates {
+		if agyTranscriptMeta(d.path).subagent {
+			continue
+		}
 		if meta != nil {
-			var title, preview, raw sql.NullString
+			var title, preview, raw, parentID, agentName sql.NullString
 			var depth, killed int
-			err := meta.QueryRow(d.session).Scan(&title, &preview, &raw, &depth, &killed)
-			if (err != nil && err != sql.ErrNoRows) || depth != 0 || killed != 0 {
+			err := meta.QueryRow(d.session).Scan(&title, &preview, &raw, &depth, &killed, &parentID, &agentName)
+			if (err != nil && err != sql.ErrNoRows) || depth != 0 || killed != 0 || parentID.String != "" || agentName.String != "" {
 				continue
 			}
 			d.title = messageTitle(title.String)

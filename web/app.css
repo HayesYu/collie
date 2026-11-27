@@ -1501,6 +1501,7 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   display: flex; align-items: center; gap: 8px; padding: 3px 8px; margin: 0 -8px;
   border-radius: 8px; cursor: pointer; list-style: none; color: var(--fg-3); font-size: 13px; line-height: 1.6;
 }
+.tool:not(.has-body) > summary { cursor: default; }
 .tool summary::-webkit-details-marker { display: none; }
 .tool summary:hover { background: var(--bg-2); }
 .tool summary::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--fg-3); flex: none; }
@@ -1508,10 +1509,92 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .tool.pending summary::before { background: none; box-shadow: inset 0 0 0 1.5px var(--fg-3); }
 .tool .tname { font-weight: 500; color: var(--fg-2); flex: none; }
 .tool .targ { font: 12px var(--mono); color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.tool pre {
+.tool > pre {
   margin: 4px 0 8px 13px; padding: 10px 12px; max-height: 280px; overflow: auto;
   background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px;
   font: 12px/1.5 var(--mono); color: var(--fg-2); white-space: pre-wrap; word-break: break-word;
+}
+.tool-detail {
+  margin: 4px 0 8px 13px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--bg-2); overflow: hidden;
+}
+.tool-sec + .tool-sec { border-top: 1px solid var(--line); }
+.tool-sec-h {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 12px 0; font: 500 11px/1.4 var(--sans); color: var(--fg-3);
+  letter-spacing: .01em;
+}
+.tool-sec-meta { font: 11px/1.3 var(--mono); color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.tool-pre {
+  margin: 0; padding: 5px 12px 10px; max-height: 240px; overflow: auto;
+  font: 12px/1.55 var(--mono); color: var(--fg-2); white-space: pre-wrap; word-break: break-word;
+}
+
+/* subagent invocation card: restrained monochrome disclosure */
+.tool.subagent {
+  margin: 4px 0; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-2); overflow: hidden; transition: border-color .14s ease;
+}
+.tool.subagent:hover, .tool.subagent[open] { border-color: var(--line-2); }
+.tool.subagent.err { border-color: color-mix(in srgb, var(--attn) 38%, var(--line)); }
+.tool.subagent > summary.sub-sum {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 7px; row-gap: 2px;
+  align-items: center; margin: 0; padding: 8px 11px; border-radius: 0;
+  color: var(--fg-2); font-size: 13px; line-height: 1.45;
+}
+.tool.subagent > summary.sub-sum:hover { background: var(--bg-3); }
+.tool.subagent > summary.sub-sum::before {
+  content: ""; width: 13px; height: 13px; border-radius: 0; flex: none;
+  background: var(--fg-3); box-shadow: none;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  rotate: -90deg;
+}
+.tool.subagent[open] > summary.sub-sum::before { rotate: 0deg; background: var(--fg-2); }
+.tool.subagent.err > summary.sub-sum::before { background: var(--attn); }
+.tool.subagent.pending > summary.sub-sum::before { background: var(--fg-3); box-shadow: none; }
+.tool.subagent::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+.tool.subagent:not([open])::details-content { block-size: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .tool.subagent > summary.sub-sum::before { transition: rotate .16s ease, background-color .14s ease; }
+  .tool.subagent::details-content {
+    transition: block-size .2s ease, content-visibility .2s ease allow-discrete, display .2s ease allow-discrete;
+  }
+}
+.sub-head {
+  display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap;
+}
+.sub-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--fg-3); flex: none;
+}
+.tool.subagent.pending .sub-dot { background: none; box-shadow: inset 0 0 0 1.5px var(--fg-3); }
+.tool.subagent.err .sub-dot { background: var(--attn); }
+.sub-role {
+  font-weight: 500; color: var(--fg); font-size: 13px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sub-tag {
+  font: 11px/1.35 var(--mono); color: var(--fg-3); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; flex: none;
+}
+.sub-meta {
+  font: 11.5px/1.35 var(--sans); color: var(--fg-3); flex: none;
+}
+.sub-state {
+  margin-left: auto; font: 500 11px/1.3 var(--sans); color: var(--fg-3); flex: none;
+}
+.tool.subagent.err .sub-state { color: var(--attn); }
+.sub-brief {
+  grid-column: 2; font: 12.5px/1.45 var(--sans); color: var(--fg-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.sub-body { border-top: 1px solid var(--line); background: var(--bg); }
+.tool-pre.sub-prompt {
+  font: 12.5px/1.6 var(--sans); color: var(--fg-2);
 }
 .termcard {
   margin: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--term-bg);

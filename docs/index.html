@@ -19,14 +19,14 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
 <meta property="og:url" content="https://lihuanyu0w0.github.io/collie/">
 <meta property="og:title" content="Collie — Stop Babysitting 8 AI Terminals">
 <meta property="og:description" content="Close the terminals and every agent desktop app. One pure Web UI across phone and desktop—Collie dispatches Claude Code, Codex, and Antigravity across your machines and delivers 3-line briefs with one-tap decisions.">
-<meta property="og:image" content="https://lihuanyu0w0.github.io/collie/img/hero-dark.png">
-<meta property="og:image:width" content="2880">
-<meta property="og:image:height" content="1800">
+<meta property="og:image" content="https://lihuanyu0w0.github.io/collie/img/hero-light.png">
+<meta property="og:image:width" content="1920">
+<meta property="og:image:height" content="1080">
 <meta property="og:image:alt" content="Collie workspace showing parallel Claude Code and Codex workers reporting back with a concise brief and one-tap decision buttons">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Collie — Stop Babysitting 8 AI Terminals">
 <meta name="twitter:description" content="Close the terminals and agent desktop apps. One pure Web UI across phone and desktop—leave your laptop behind.">
-<meta name="twitter:image" content="https://lihuanyu0w0.github.io/collie/img/hero-dark.png">
+<meta name="twitter:image" content="https://lihuanyu0w0.github.io/collie/img/hero-light.png">
 <meta name="twitter:image:alt" content="Collie workspace showing parallel Claude Code and Codex workers reporting back with a concise brief and one-tap decision buttons">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <style>
@@ -37,8 +37,10 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   --accent-light: #111111; --on-accent-light: #ffffff;
   --ok-light: #15803d; --attn-light: #b45309; --attn-soft-light: #fbf3e8;
   --shadow-light: 0 1px 2px rgba(0,0,0,.04), 0 16px 48px rgba(0,0,0,.08);
+  --frame-border-light: #e2e2dd;
+  --frame-shadow-light: 0 1px 2px rgba(0,0,0,.04), 0 20px 56px -8px rgba(0,0,0,.10);
   --phone-bezel-light: #18181b;
-  --phone-shadow-light: 0 0 0 1px rgba(0,0,0,.12), 0 10px 24px -6px rgba(0,0,0,.20), 0 28px 64px -12px rgba(0,0,0,.28);
+  --phone-shadow-light: 0 0 0 1px rgba(17,17,17,.14), 0 12px 28px -6px rgba(0,0,0,.24), 0 32px 68px -12px rgba(0,0,0,.34);
 
   --bg-dark: #0b0b0c; --bg-2-dark: #131315; --bg-3-dark: #1c1c1f;
   --line-dark: #232327; --line-2-dark: #323238;
@@ -46,8 +48,10 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   --accent-dark: #f2f2f0; --on-accent-dark: #0b0b0c;
   --ok-dark: #4ade80; --attn-dark: #f0a35e; --attn-soft-dark: #2a1f12;
   --shadow-dark: 0 1px 2px rgba(0,0,0,.45), 0 20px 56px rgba(0,0,0,.55);
-  --phone-bezel-dark: #222227;
-  --phone-shadow-dark: 0 0 0 1px rgba(255,255,255,.15), 0 12px 26px -6px rgba(0,0,0,.62), 0 34px 74px -12px rgba(0,0,0,.85);
+  --frame-border-dark: rgba(255,255,255,.16);
+  --frame-shadow-dark: 0 0 0 1px rgba(255,255,255,.08), 0 24px 68px rgba(0,0,0,.64);
+  --phone-bezel-dark: #202026;
+  --phone-shadow-dark: 0 0 0 1px rgba(255,255,255,.20), 0 14px 32px -6px rgba(0,0,0,.68), 0 36px 76px -12px rgba(0,0,0,.88);
 
   --bg: var(--bg-light); --bg-2: var(--bg-2-light); --bg-3: var(--bg-3-light);
   --line: var(--line-light); --line-2: var(--line-2-light);
@@ -55,6 +59,8 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   --accent: var(--accent-light); --on-accent: var(--on-accent-light);
   --ok: var(--ok-light); --attn: var(--attn-light); --attn-soft: var(--attn-soft-light);
   --shadow: var(--shadow-light);
+  --frame-border: var(--frame-border-light);
+  --frame-shadow: var(--frame-shadow-light);
   --phone-bezel: var(--phone-bezel-light);
   --phone-shadow: var(--phone-shadow-light);
 
@@ -74,6 +80,8 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --accent: var(--accent-dark); --on-accent: var(--on-accent-dark);
     --ok: var(--ok-dark); --attn: var(--attn-dark); --attn-soft: var(--attn-soft-dark);
     --shadow: var(--shadow-dark);
+    --frame-border: var(--frame-border-dark);
+    --frame-shadow: var(--frame-shadow-dark);
     --phone-bezel: var(--phone-bezel-dark);
     --phone-shadow: var(--phone-shadow-dark);
   }
@@ -93,17 +101,20 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --ok: light-dark(var(--ok-light), var(--ok-dark));
     --attn: light-dark(var(--attn-light), var(--attn-dark));
     --attn-soft: light-dark(var(--attn-soft-light), var(--attn-soft-dark));
+    --frame-border: light-dark(var(--frame-border-light), var(--frame-border-dark));
     --phone-bezel: light-dark(var(--phone-bezel-light), var(--phone-bezel-dark));
   }
 }
 :root:has(> head > meta[name="color-scheme"][content="dark"]) {
   color-scheme: dark;
   --shadow: var(--shadow-dark);
+  --frame-shadow: var(--frame-shadow-dark);
   --phone-shadow: var(--phone-shadow-dark);
 }
 :root:has(> head > meta[name="color-scheme"][content="light"]) {
   color-scheme: light;
   --shadow: var(--shadow-light);
+  --frame-shadow: var(--frame-shadow-light);
   --phone-shadow: var(--phone-shadow-light);
 }
 @supports not (color: light-dark(white, black)) {
@@ -113,6 +124,7 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --fg: var(--fg-dark); --fg-2: var(--fg-2-dark); --fg-3: var(--fg-3-dark);
     --accent: var(--accent-dark); --on-accent: var(--on-accent-dark);
     --ok: var(--ok-dark); --attn: var(--attn-dark); --attn-soft: var(--attn-soft-dark);
+    --frame-border: var(--frame-border-dark);
     --phone-bezel: var(--phone-bezel-dark);
   }
   :root:has(> head > meta[name="color-scheme"][content="light"]) {
@@ -121,6 +133,7 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --fg: var(--fg-light); --fg-2: var(--fg-2-light); --fg-3: var(--fg-3-light);
     --accent: var(--accent-light); --on-accent: var(--on-accent-light);
     --ok: var(--ok-light); --attn: var(--attn-light); --attn-soft: var(--attn-soft-light);
+    --frame-border: var(--frame-border-light);
     --phone-bezel: var(--phone-bezel-light);
   }
 }
@@ -290,54 +303,58 @@ h1 em { font-style: normal; color: var(--attn); }
 }
 .proof span::before { content: "✓ "; color: var(--ok); }
 
-/* Hero media showcase — desktop looping cinema stage + staggered break-out phone */
+/* Hero media showcase — 16:9 light desktop stage + staggered dark break-out phone */
 .stage {
   position: relative;
   margin: 44px auto 0;
   max-width: 1060px;
-  padding-inline-end: 44px;
-  padding-bottom: 36px;
+  padding-inline-end: 48px;
+  padding-bottom: 38px;
 }
 .frame {
+  color-scheme: only light;
   border-radius: 16px; overflow: hidden;
-  border: 1px solid #26262c; box-shadow: var(--shadow);
-  background: #141417;
+  border: 1px solid var(--frame-border); box-shadow: var(--frame-shadow);
+  background: var(--bg-light);
+  color: var(--fg-light);
 }
 .frame .bar {
   display: flex; align-items: center; gap: 7px;
   min-block-size: 36px; padding: 5px 12px 5px 14px;
-  border-bottom: 1px solid #222228; background: #16161a;
+  border-bottom: 1px solid var(--line-light); background: var(--bg-2-light);
 }
-.frame .bar i { width: 10px; height: 10px; border-radius: 50%; background: #32323a; flex: none; }
-.frame .bar span { margin-inline-start: 8px; font-size: 0.75rem; color: #9a9a94; font-family: var(--mono); }
+.frame .bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2-light); flex: none; }
+.frame .bar span { margin-inline-start: 8px; font-size: 0.75rem; color: var(--fg-3-light); font-family: var(--mono); }
 .media-toggle {
   margin-inline-start: auto;
   display: inline-flex; align-items: center; gap: 5px;
   min-block-size: 26px; padding: 3px 10px;
-  border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.06); color: #d6d6d0;
+  border-radius: 999px; border: 1px solid var(--line-2-light);
+  background: var(--bg-light); color: var(--fg-2-light);
   font: 0.72rem/1 var(--sans); font-weight: 500; cursor: pointer;
   transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
 .media-toggle:hover {
-  background: rgba(255,255,255,.13); border-color: rgba(255,255,255,.28); color: #ffffff;
+  background: var(--bg-3-light); border-color: var(--fg-3-light); color: var(--fg-light);
 }
-.media-toggle:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+.media-toggle:focus-visible { outline: 2px solid var(--fg-light); outline-offset: 2px; }
 .media-toggle svg { width: 11px; height: 11px; flex: none; }
 .media-toggle [hidden] { display: none; }
 @media (pointer: coarse) {
   .media-toggle { min-block-size: 34px; padding: 5px 12px; }
 }
-.stage-media { position: relative; background: #0b0b0c; }
+.stage-media { position: relative; background: var(--bg-light); }
 .stage-media img,
 .stage-media video {
-  width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top;
+  width: 100%; aspect-ratio: 16 / 9; object-fit: cover; object-position: top;
 }
 .stage-phone {
+  color-scheme: only dark;
   position: absolute; inset-inline-end: 0; inset-block-end: 0; z-index: 2;
-  width: 204px; border-radius: 32px; corner-shape: squircle;
+  width: 192px; border-radius: 32px; corner-shape: squircle;
   border: 6px solid var(--phone-bezel);
-  box-shadow: var(--phone-shadow); overflow: hidden; background: var(--bg);
+  box-shadow: var(--phone-shadow); overflow: hidden;
+  background: var(--bg-dark); color: var(--fg-dark);
 }
 @media (prefers-reduced-motion: no-preference) and (hover: hover) {
   .stage-phone { transition: transform .32s cubic-bezier(.22, 1, .36, 1); }
@@ -526,8 +543,8 @@ footer a { color: var(--fg-2); }
   .feature.flip .text { order: 0; }
   .facts { grid-template-columns: 1fr 1fr; }
   .steps { grid-template-columns: 1fr; }
-  .stage { padding-inline-end: 26px; padding-bottom: 26px; }
-  .stage-phone { width: 168px; border-width: 5px; border-radius: 26px; }
+  .stage { padding-inline-end: 28px; padding-bottom: 26px; }
+  .stage-phone { width: 146px; border-width: 5px; border-radius: 24px; }
 }
 @media (max-width: 640px) {
   .wrap { padding-inline: max(16px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)); }
@@ -606,16 +623,14 @@ footer a { color: var(--fg-2); }
           </button>
         </div>
         <div class="stage-media" id="hero-media">
-          <video id="hero-video" autoplay muted loop playsinline preload="metadata" poster="img/hero-dark.png" width="1280" height="800" aria-label="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-aria="hero_img_alt">
+          <video id="hero-video" autoplay muted loop playsinline preload="metadata" poster="img/hero-light.png" width="1920" height="1080" aria-label="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-aria="hero_img_alt">
             <source src="img/hero-demo.mp4" type="video/mp4">
-            <img class="only-light" src="img/hero-light.png" width="2880" height="1800" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
-            <img class="only-dark" src="img/hero-dark.png" width="2880" height="1800" alt="Collie workspace in dark mode: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
+            <img src="img/hero-light.png" width="1920" height="1080" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
           </video>
         </div>
       </div>
       <div class="stage-phone">
-        <img class="only-light" src="img/phone-decision-light.png" width="780" height="1688" decoding="async" alt="Mobile Collie view showing a concise report, one-tap decision buttons, and expanded pending tray" data-i18n-alt="phone_decision_alt">
-        <img class="only-dark" src="img/phone-decision-dark.png" width="780" height="1688" decoding="async" alt="Mobile Collie view in dark mode showing a concise report, one-tap decision buttons, and expanded pending tray" data-i18n-alt="phone_decision_alt">
+        <img src="img/phone-decision-dark.png" width="780" height="1688" decoding="async" alt="Mobile Collie view in dark mode showing a concise report, one-tap decision buttons, and expanded pending tray" data-i18n-alt="phone_decision_alt">
       </div>
     </div>
 

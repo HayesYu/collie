@@ -88,6 +88,7 @@ func (sp *Super) checkHandover(ctx context.Context, live map[string]liveAgent, q
 	window := sp.s.claudeWindow(sp.routerArgsLocked())
 	at := sp.rotateAtLocked()
 	paused := sp.st.Settings.Paused
+	hubUpdating := sp.hubUpdating
 	launched, asked := sp.routerLaunchAt, sp.routerAskedAt
 	sp.mu.Unlock()
 
@@ -130,7 +131,7 @@ func (sp *Super) checkHandover(ctx context.Context, live map[string]liveAgent, q
 	}
 	// Only between conversations: nothing queued, the last batch answered, and
 	// not right after a (re)start.
-	if at <= 0 || paused || !idle || queued || !asked.IsZero() || u.Pct() < at || time.Since(launched) < 5*time.Minute || sess == "" {
+	if at <= 0 || paused || hubUpdating || !idle || queued || !asked.IsZero() || u.Pct() < at || time.Since(launched) < 5*time.Minute || sess == "" {
 		return
 	}
 	prompt := fmt.Sprintf(`[collie] Handover. Your context window is %d%% full, so Collie will restart you in a fresh session as soon as you finish this. Nothing from this conversation carries over except memory/ (layout in ROUTER.md), so bring it up to date now:

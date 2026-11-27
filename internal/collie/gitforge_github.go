@@ -76,9 +76,10 @@ func (p *GitHubProvider) SecretSet(cfg IntegrationConfig) bool {
 
 func (p *GitHubProvider) ExtraView(cfg IntegrationConfig) map[string]any {
 	out := map[string]any{
-		"supports_pat": true,
-		"supports_gh":  true,
-		"auth_modes":   []string{"gh", "pat"},
+		"supports_pat":     true,
+		"supports_gh":      true,
+		"supports_comment": true,
+		"auth_modes":       []string{"gh", "pat"},
 	}
 	p.mu.RLock()
 	if p.lastLogin != "" {
@@ -240,6 +241,93 @@ func (p *GitHubProvider) doGET(ctx context.Context, tok, path, etag, lastMod str
 		return out, fmt.Errorf("GitHub API 返回 HTTP %d", resp.StatusCode)
 	}
 	return out, nil
+}
+
+func (p *GitHubProvider) doPOSTJSON(ctx context.Context, tok, path string, payload any) (ghHTTPResp, error) {
+	rawBody, err := json.Marshal(payload)
+	if err != nil {
+		return ghHTTPResp{}, err
+	}
+	url := p.apiBase() + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawBody))
+	if err != nil {
+		return ghHTTPResp{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "collie-gitforge")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.client().Do(req)
+	if err != nil {
+		return ghHTTPResp{}, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	out := ghHTTPResp{
+		Status: resp.StatusCode,
+		Body:   body,
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return out, fmt.Errorf("%w: GitHub 凭据无效或已过期（HTTP 401），请更新 PAT 或重新登录 gh", ErrAuthFailed)
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		lower := strings.ToLower(string(body))
+		if strings.Contains(lower, "rate limit") {
+			return out, errors.New("GitHub API 触发频率限制，请稍后重试")
+		}
+		return out, errors.New("GitHub 令牌缺少评论写入权限（HTTP 403），请使用具备写入权限的 gh 登录态或更新 PAT")
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return out, errors.New("目标仓库或 PR/Issue 不存在，或当前令牌无访问权限（HTTP 404）")
+	}
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return out, fmt.Errorf("GitHub 发表评论失败（HTTP %d）", resp.StatusCode)
+	}
+	return out, nil
+}
+
+// PostComment implements ForgeCommenter by posting a human-confirmed comment
+// to a GitHub Pull Request or Issue via POST /repos/{owner}/{repo}/issues/{n}/comments.
+func (p *GitHubProvider) PostComment(ctx context.Context, cfg ForgeConfig, target ForgeCommentTarget, body string) (ForgeCommentResult, error) {
+	repo := normalizeForgeRepo(target.Repo)
+	if repo == "" || !cliRepoRe.MatchString(repo) {
+		return ForgeCommentResult{}, errors.New("无效的仓库名称（需形如 owner/repo）")
+	}
+	if target.Number <= 0 {
+		return ForgeCommentResult{}, errors.New("缺少有效的 PR/Issue 编号")
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ForgeCommentResult{}, errors.New("评论内容不能为空")
+	}
+	tok, err := p.resolveToken(ctx, cfg)
+	if err != nil {
+		return ForgeCommentResult{}, err
+	}
+	path := fmt.Sprintf("/repos/%s/issues/%d/comments", repo, target.Number)
+	res, err := p.doPOSTJSON(ctx, tok, path, map[string]string{"body": body})
+	if err != nil {
+		return ForgeCommentResult{}, err
+	}
+	var parsed struct {
+		ID      int64  `json:"id"`
+		HTMLURL string `json:"html_url"`
+	}
+	_ = json.Unmarshal(res.Body, &parsed)
+	cid := ""
+	if parsed.ID > 0 {
+		cid = strconv.FormatInt(parsed.ID, 10)
+	}
+	return ForgeCommentResult{
+		Provider:  githubKind,
+		Repo:      repo,
+		Number:    target.Number,
+		CommentID: cid,
+		URL:       strings.TrimSpace(parsed.HTMLURL),
+	}, nil
 }
 
 func (p *GitHubProvider) Probe(ctx context.Context, cfg ForgeConfig) (ForgeIdentity, error) {

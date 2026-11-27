@@ -8,21 +8,22 @@ Open-source, self-hosted Super Agent for Claude Code, Codex, and Antigravity —
 
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ Live Demo (10s)</b></a> ·
+<a href="https://www.bilibili.com/video/BV1a41EziEsE/"><b>▶ Video Walkthrough (Bilibili)</b></a> ·
 <a href="https://lihuanyu0w0.github.io/collie/">Homepage</a> ·
 <a href="#quick-start">Quick Start (30s)</a> ·
 <a href="https://github.com/lihuanyu0w0/collie/releases">Releases</a> ·
 <b>English</b> | <a href="README.zh-CN.md">中文</a>
 </p>
 
-<!-- Hero showcase media slot: ready to swap to video cover link when published -->
+<!-- Hero showcase animated demo -->
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/hero-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/img/hero-light.png">
-  <img src="docs/img/hero-light.png" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision options" width="900">
-</picture>
+  <img src="docs/img/demo.gif" alt="Collie workspace demo: delegate once across machines, tap one-tap decision options, and open reply-thread drawers with synced unread markers" width="900">
 </a>
+</p>
+
+<p align="center">
+<b><a href="https://www.bilibili.com/video/BV1a41EziEsE/">▶ Watch the full 3-minute video walkthrough on Bilibili →</a></b>
 </p>
 
 Stop bouncing between terminal tabs and separate Claude, Codex, and Antigravity desktop apps. **Collie** is an open-source, self-hosted **Super Agent** that brings every coding agent across your Macs, Linux devboxes, and cloud VMs under one unified workspace—while still letting you take over any desktop or CLI session already running. Describe the goal in one chat: Collie dispatches workers in parallel, watches progress, retries stalls, and comes back with **a 3-line summary and 2–4 one-tap options**. Because Collie is **one pure Web UI** (Add to Home Screen as a PWA) with identical full capabilities on phone and desktop—delegate, read briefs, tap decisions, open thread drawers, inspect images and reports—you can **leave your laptop behind** on commutes, trips, or between meetings.

@@ -313,3 +313,137 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 		}
 	})
 }
+
+func TestInstallScriptDarwinLaunchdProcessTypeAndBootoutRetry(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("POSIX shell test")
+	}
+	scriptPath, err := filepath.Abs(filepath.Join("..", "..", "docs", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("sh", "-n", scriptPath).CombinedOutput(); err != nil {
+		t.Fatalf("sh -n docs/install.sh failed: %v\n%s", err, string(out))
+	}
+
+	tmp := t.TempDir()
+	homeDir := filepath.Join(tmp, "home")
+	binDir := filepath.Join(tmp, "bin")
+	mockDir := filepath.Join(tmp, "mock")
+	stubBin := filepath.Join(tmp, "collie-stub")
+	stateDir := filepath.Join(tmp, "state")
+	for _, d := range []string{homeDir, mockDir, stateDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(stubBin, []byte("#!/bin/sh\necho collie v0.2.87-test\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Mock uname to report Darwin/arm64 so docs/install.sh exercises the macOS launchd branch.
+	unameStub := "#!/bin/sh\ncase \"${1:-}\" in\n  -s) echo Darwin ;;\n  -m) echo arm64 ;;\n  *) echo Darwin ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(mockDir, "uname"), []byte(unameStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Mock launchctl: print reports job still present twice after bootout (async teardown),
+	// and bootstrap fails twice before succeeding on attempt 3.
+	launchctlStub := fmt.Sprintf(`#!/bin/sh
+set -eu
+state=%q
+log="${state}/calls.log"
+printf '%%s\n' "$*" >> "${log}"
+sub="${1:-}"
+case "${sub}" in
+  bootout)
+    echo 0 > "${state}/print_count"
+    exit 0
+    ;;
+  print)
+    c=$(cat "${state}/print_count" 2>/dev/null || echo 0)
+    c=$((c + 1))
+    echo "${c}" > "${state}/print_count"
+    if [ "${c}" -le 2 ]; then
+      exit 0
+    fi
+    exit 113
+    ;;
+  bootstrap)
+    c=$(cat "${state}/boot_count" 2>/dev/null || echo 0)
+    c=$((c + 1))
+    echo "${c}" > "${state}/boot_count"
+    if [ "${c}" -le 2 ]; then
+      echo "Bootstrap failed: 5: Input/output error" >&2
+      exit 5
+    fi
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`, stateDir)
+	if err := os.WriteFile(filepath.Join(mockDir, "launchctl"), []byte(launchctlStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1) Dry-run plist must use ProcessType=Interactive (not Background).
+	dryCmd := exec.Command("sh", scriptPath, "hub")
+	dryCmd.Env = []string{
+		"PATH=" + mockDir + ":" + os.Getenv("PATH"),
+		"HOME=" + homeDir,
+		"COLLIE_BIN_DIR=" + binDir,
+		"COLLIE_BINARY=" + stubBin,
+		"COLLIE_DRY_SERVICE=1",
+		"COLLIE_NO_HERDR=1",
+		"COLLIE_NO_OPEN=1",
+	}
+	dryOut, err := dryCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry darwin install.sh failed: %v\n%s", err, string(dryOut))
+	}
+	if !strings.Contains(string(dryOut), "<key>ProcessType</key><string>Interactive</string>") {
+		t.Fatalf("expected ProcessType=Interactive in plist, got:\n%s", string(dryOut))
+	}
+	if strings.Contains(string(dryOut), "<string>Background</string>") {
+		t.Fatalf("plist must not use Background ProcessType:\n%s", string(dryOut))
+	}
+
+	// 2) Full darwin service install waits for async bootout teardown via print and retries bootstrap.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	runCmd := exec.CommandContext(ctx, "sh", scriptPath, "hub")
+	runCmd.Env = []string{
+		"PATH=" + mockDir + ":" + os.Getenv("PATH"),
+		"HOME=" + homeDir,
+		"COLLIE_BIN_DIR=" + binDir,
+		"COLLIE_BINARY=" + stubBin,
+		"COLLIE_NO_HERDR=1",
+		"COLLIE_NO_OPEN=1",
+	}
+	out, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("darwin install.sh failed: %v\n%s", err, string(out))
+	}
+	callsBytes, err := os.ReadFile(filepath.Join(stateDir, "calls.log"))
+	if err != nil {
+		t.Fatalf("read launchctl calls: %v", err)
+	}
+	calls := string(callsBytes)
+	if !strings.Contains(calls, "bootout gui/") {
+		t.Fatalf("expected launchctl bootout call, got:\n%s", calls)
+	}
+	if strings.Count(calls, "print gui/") != 3 {
+		t.Fatalf("expected 3 launchctl print polls (2 alive + 1 gone), got:\n%s", calls)
+	}
+	if strings.Count(calls, "bootstrap gui/") != 3 {
+		t.Fatalf("expected 3 launchctl bootstrap calls (2 failed + 1 succeeded), got:\n%s", calls)
+	}
+	plistPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.collie.hub.plist")
+	plistBytes, err := os.ReadFile(plistPath)
+	if err != nil {
+		t.Fatalf("read generated plist: %v", err)
+	}
+	if !strings.Contains(string(plistBytes), "<key>ProcessType</key><string>Interactive</string>") {
+		t.Fatalf("generated plist missing Interactive ProcessType:\n%s", string(plistBytes))
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -268,6 +269,7 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	defer hs.Close()
 	go func() { <-ctx.Done(); sess.Close() }()
 
+	var nodeHerdrConnected atomic.Bool
 	for {
 		st, err := sess.Accept()
 		if err != nil {
@@ -282,7 +284,7 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 			}
 			switch kind {
 			case "herdr":
-				handleHerdrStream(ctx, st, sock, srv)
+				handleHerdrStream(ctx, st, sock, srv, &nodeHerdrConnected)
 			case "http":
 				select {
 				case ln.ch <- st:

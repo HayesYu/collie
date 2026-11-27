@@ -69,18 +69,53 @@ type Herdr struct {
 	runs     map[string][2]string
 	saveRuns func(map[string][2]string)
 
-	asks map[string]askCheck // pane → recent look at an "idle" screen
+	asks       map[string]askCheck // pane → recent look at an "idle" screen
+	lastListOK map[string]bool     // machine id → whether its herdr answered the latest list call
 }
 
 func newHerdr(socket, hostname, home string) *Herdr {
 	return &Herdr{
-		local:  &Machine{ID: "", Name: hostname, Home: home, Local: true, conn: &herdrConn{dial: unixDialer(socket)}},
-		remote: map[string]*Machine{},
-		names:  map[string]string{},
-		named:  map[string]string{},
-		runs:   map[string][2]string{},
-		asks:   map[string]askCheck{},
+		local:      &Machine{ID: "", Name: hostname, Home: home, Local: true, conn: &herdrConn{dial: unixDialer(socket)}},
+		remote:     map[string]*Machine{},
+		names:      map[string]string{},
+		named:      map[string]string{},
+		runs:       map[string][2]string{},
+		asks:       map[string]askCheck{},
+		lastListOK: map[string]bool{},
 	}
+}
+
+// MachineHerdrOK reports whether machine id's herdr answered its most recent
+// list call (so transient herdr restarts on one machine don't wipe its metadata).
+func (h *Herdr) MachineHerdrOK(id string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.lastListOK != nil {
+		if ok, seen := h.lastListOK[id]; seen {
+			return ok
+		}
+	}
+	if id == "" {
+		return h.local != nil && h.local.Online
+	}
+	m := h.remote[id]
+	return m != nil && m.Online
+}
+
+// AgentsWithStatus returns all agents plus the set of machine IDs whose herdr
+// answered this exact call ("" for the hub's local machine).
+func (h *Herdr) AgentsWithStatus(ctx context.Context) ([]Agent, map[string]bool, error) {
+	raw, answered, err := h.fanOutWithStatus(ctx, "agent.list")
+	if err != nil {
+		return nil, answered, err
+	}
+	var r struct {
+		Agents []Agent `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, answered, err
+	}
+	return r.Agents, answered, nil
 }
 
 type askCheck struct {
@@ -411,6 +446,11 @@ func (h *Herdr) paneOfName(ctx context.Context, name string) string {
 // fanOut runs a list call on every online machine and merges the results.
 // The hub's machine failing is reported only when nothing else answered.
 func (h *Herdr) fanOut(ctx context.Context, method string) (json.RawMessage, error) {
+	raw, _, err := h.fanOutWithStatus(ctx, method)
+	return raw, err
+}
+
+func (h *Herdr) fanOutWithStatus(ctx context.Context, method string) (json.RawMessage, map[string]bool, error) {
 	key := map[string]string{"workspace.list": "workspaces", "pane.list": "panes", "agent.list": "agents"}[method]
 	ms := h.Machines()
 	type res struct {
@@ -419,12 +459,14 @@ func (h *Herdr) fanOut(ctx context.Context, method string) (json.RawMessage, err
 		err   error
 	}
 	ch := make(chan res, len(ms))
+	attempted := make([]string, 0, len(ms))
 	n := 0
 	for _, m := range ms {
 		if !m.Local && !m.Online {
 			continue
 		}
 		n++
+		attempted = append(attempted, m.ID)
 		go func(m Machine) {
 			mc, err := h.machine(m.ID)
 			if err != nil {
@@ -448,6 +490,7 @@ func (h *Herdr) fanOut(ctx context.Context, method string) (json.RawMessage, err
 	var localErr error
 	ok := 0
 	byMachine := map[string][]json.RawMessage{}
+	answered := make(map[string]bool, len(attempted))
 	for i := 0; i < n; i++ {
 		r := <-ch
 		if r.err != nil {
@@ -457,13 +500,25 @@ func (h *Herdr) fanOut(ctx context.Context, method string) (json.RawMessage, err
 			continue
 		}
 		ok++
+		answered[r.id] = true
 		byMachine[r.id] = r.items
 	}
 	h.mu.Lock()
+	wasOnline := h.local.Online
 	h.local.Online = localErr == nil
+	if h.lastListOK == nil {
+		h.lastListOK = map[string]bool{}
+	}
+	for _, id := range attempted {
+		h.lastListOK[id] = answered[id]
+	}
+	cb := h.onChange
 	h.mu.Unlock()
+	if wasOnline != (localErr == nil) && cb != nil {
+		cb()
+	}
 	if ok == 0 && localErr != nil {
-		return nil, localErr
+		return nil, answered, localErr
 	}
 	for _, m := range ms { // stable order: hub machine first
 		merged = append(merged, byMachine[m.ID]...)
@@ -522,7 +577,8 @@ func (h *Herdr) fanOut(ctx context.Context, method string) (json.RawMessage, err
 		}
 		h.mu.Unlock()
 	}
-	return json.Marshal(map[string]any{key: merged})
+	out, err := json.Marshal(map[string]any{key: merged})
+	return out, answered, err
 }
 
 func machineOf(id string) string { _, m := split(id); return m }

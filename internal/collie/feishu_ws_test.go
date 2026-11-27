@@ -57,6 +57,7 @@ type fakeFeishuServer struct {
 	imgData   []byte
 	messages  map[string]fakeFeishuMessage
 	resources map[string]fakeFeishuResource
+	images    map[string]fakeFeishuResource
 }
 
 func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
@@ -65,6 +66,7 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 		imgData:   []byte("\x89PNG\r\n\x1a\nfake-png-bytes"),
 		messages:  map[string]fakeFeishuMessage{},
 		resources: map[string]fakeFeishuResource{},
+		images:    map[string]fakeFeishuResource{},
 	}
 	ff.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -148,9 +150,17 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 				}
 				fname := res.FileName
 				if fname == "" {
-					fname = fileKey + ".png"
+					if r.URL.Query().Get("type") == "file" {
+						fname = fileKey + ".dat"
+					} else {
+						fname = fileKey + ".png"
+					}
 				}
-				w.Header().Set("Content-Type", "image/png")
+				if r.URL.Query().Get("type") == "file" {
+					w.Header().Set("Content-Type", "application/octet-stream")
+				} else {
+					w.Header().Set("Content-Type", "image/png")
+				}
 				w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
 				_, _ = w.Write(res.Data)
 				return
@@ -158,6 +168,31 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 			w.Header().Set("Content-Type", "image/png")
 			w.Header().Set("Content-Disposition", `attachment; filename="shot.png"`)
 			_, _ = w.Write(defaultData)
+
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/open-apis/im/v1/images/"):
+			imgKey := strings.TrimPrefix(r.URL.Path, "/open-apis/im/v1/images/")
+			ff.mu.Lock()
+			res, ok := ff.images[imgKey]
+			ff.mu.Unlock()
+			if !ok {
+				w.WriteHeader(400)
+				_, _ = w.Write([]byte(`{"code":234007,"msg":"image not accessible"}`))
+				return
+			}
+			if res.Code != 0 {
+				if res.Status > 0 {
+					w.WriteHeader(res.Status)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": res.Code, "msg": res.Msg})
+				return
+			}
+			fname := res.FileName
+			if fname == "" {
+				fname = imgKey + ".png"
+			}
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
+			_, _ = w.Write(res.Data)
 
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/open-apis/im/v1/messages/"):
 			msgID := strings.TrimPrefix(r.URL.Path, "/open-apis/im/v1/messages/")
@@ -1141,15 +1176,33 @@ func TestFeishuReadCursorAckAndUnquotedReplySync(t *testing.T) {
 		t.Fatalf("LastReadEntryID after pick_opt = %q, want %q (> %q)", got, optUserEntry.ID, optCard.ID)
 	}
 
-	// 4) Unquoted Feishu text reply right after an --opt card resolves it AND gray-patches the card.
+	// 4) Unquoted Feishu text reply right after an --opt card must NOT clear
+	// pending or gray-patch the card; an explicit dismiss/option/quote resolves it.
 	optDirect, _ := sp.Reply(mainThread, "日志级别要调回 info 吗？", "", []string{"调回 info", "保持 debug"}, false)
 	optDirectMsgID := waitMapping(optDirect.ID)
-	sendP2P("evt_rc_direct_opt", "om_rc_direct_opt", "调回 info 就行")
+	sendP2P("evt_rc_direct_opt", "om_rc_direct_opt", "顺便查下今天的构建状态")
+	sp.mu.Lock()
+	pendAfterUnquoted := sp.pendingLocked(time.Now())
+	sp.mu.Unlock()
+	if len(pendAfterUnquoted) != 1 || pendAfterUnquoted[0].ID != optDirect.ID {
+		t.Fatalf("unquoted Feishu text must keep --opt card pending, got %+v", pendAfterUnquoted)
+	}
+	time.Sleep(80 * time.Millisecond)
+	ff.mu.Lock()
+	for _, c := range ff.calls {
+		if c.Method == http.MethodPatch && c.Path == "/open-apis/im/v1/messages/"+optDirectMsgID {
+			ff.mu.Unlock()
+			t.Fatalf("unquoted Feishu text must NOT gray-patch --opt card: %s", extractCardContent(c.Body))
+		}
+	}
+	ff.mu.Unlock()
+	// Dismissing optDirect resolves it and gray-patches the Feishu card cleanly.
+	sp.Dismiss(optDirect.ID)
 	patchOpt := ff.waitForCall(t, func(c fakeFeishuCall) bool {
 		return c.Method == http.MethodPatch && c.Path == "/open-apis/im/v1/messages/"+optDirectMsgID
 	})
-	if raw := extractCardContent(patchOpt.Body); !strings.Contains(raw, "已回复：调回 info 就行") || !strings.Contains(raw, `"template":"grey"`) {
-		t.Fatalf("expected unquoted Feishu reply to gray-patch --opt card, got: %s", raw)
+	if raw := extractCardContent(patchOpt.Body); !strings.Contains(raw, "已在网页端标记已处理") || !strings.Contains(raw, `"template":"grey"`) {
+		t.Fatalf("expected dismiss to gray-patch --opt card, got: %s", raw)
 	}
 
 	// 5) Unquoted Feishu text reply right after a pure --check card must NOT clear pending
@@ -2354,6 +2407,187 @@ func TestFeishuMergeForwardInboundAndQuoted(t *testing.T) {
 	gotErr := sendEvent("evt_mf_4", "om_mf_api_err", "", "merge_forward", "Merged and Forwarded Message")
 	if gotErr != "[飞书 merge_forward 消息]" {
 		t.Fatalf("api error merge_forward = %q, want %q", gotErr, "[飞书 merge_forward 消息]")
+	}
+}
+
+func TestFeishuMergeForwardResourceFallbackFilesAndSenderMapping(t *testing.T) {
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	ctx := context.Background()
+
+	origMaxFiles := feishuMergeForwardMaxFiles
+	origMaxFileBytes := feishuMaxFileBytes
+	feishuMergeForwardMaxFiles = 2
+	feishuMaxFileBytes = 64
+	t.Cleanup(func() {
+		feishuMergeForwardMaxFiles = origMaxFiles
+		feishuMaxFileBytes = origMaxFileBytes
+	})
+
+	imgFromOuter := []byte("\x89PNG\r\n\x1a\nfrom-outer-merge-forward")
+	imgFromDirectAPI := []byte("\x89PNG\r\n\x1a\nfrom-images-endpoint")
+	csvBytes := []byte("id,title\n1,hello\n2,world\n")
+	safeTraversalBytes := []byte("safe,csv\n")
+	tooBigBytes := bytes.Repeat([]byte("A"), 80)
+
+	ff.mu.Lock()
+	ff.messages["om_mf_fb"] = fakeFeishuMessage{
+		Items: []map[string]any{
+			{
+				"message_id":  "om_mf_fb",
+				"msg_type":    "merge_forward",
+				"create_time": "1732621000000",
+				"body":        map[string]any{"content": "Merged and Forwarded Message"},
+			},
+			// Owner sub-message (in AllowOpenIDs, no contact name) -> "你"
+			{
+				"message_id":       "om_fb_1",
+				"upper_message_id": "om_mf_fb",
+				"msg_type":         "text",
+				"create_time":      "1732621001000",
+				"sender":           map[string]any{"id": "ou_allowed_owner", "id_type": "open_id", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"text":"我把表发一下"}`},
+			},
+			// Unknown member 1 -> "成员 A", image hits 234003 on childID -> falls back to om_mf_fb
+			{
+				"message_id":       "om_fb_img",
+				"upper_message_id": "om_mf_fb",
+				"msg_type":         "image",
+				"create_time":      "1732621002000",
+				"sender":           map[string]any{"id": "ou_unknown_alpha_115", "id_type": "open_id", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"image_key":"img_cross_chat"}`},
+			},
+			// Unknown member 2 -> "成员 B", post image fails 234003 on both childID & om_mf_fb -> falls back to /im/v1/images/:key
+			{
+				"message_id":       "om_fb_post",
+				"upper_message_id": "om_mf_fb",
+				"msg_type":         "post",
+				"create_time":      "1732621003000",
+				"sender":           map[string]any{"id": "ou_unknown_beta_491", "id_type": "open_id", "sender_type": "user"},
+				"body": map[string]any{
+					"content": `{"zh_cn":{"title":"","content":[[{"tag":"text","text":"再看这张截图"},{"tag":"img","image_key":"img_app_owned"}]]}}`,
+				},
+			},
+			// Same unknown member 1 again -> must stably stay "成员 A"; CSV file hits 234003 on childID -> falls back to om_mf_fb
+			{
+				"message_id":       "om_fb_csv",
+				"upper_message_id": "om_mf_fb",
+				"msg_type":         "file",
+				"create_time":      "1732621004000",
+				"sender":           map[string]any{"id": "ou_unknown_alpha_115", "id_type": "open_id", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"file_key":"file_csv_200","file_name":"sample_200.csv"}`},
+			},
+			// Second file (path traversal filename + oversized) -> counts toward maxFiles=2 and fails cleanly on size limit
+			{
+				"message_id":       "om_fb_big",
+				"upper_message_id": "om_mf_fb",
+				"msg_type":         "file",
+				"create_time":      "1732621005000",
+				"sender":           map[string]any{"id": "ou_unknown_beta_491", "id_type": "open_id", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"file_key":"file_too_big","file_name":"../../huge.bin"}`},
+			},
+			// Third file -> exceeds feishuMergeForwardMaxFiles=2 -> omitted cleanly
+			{
+				"message_id":       "om_fb_omit",
+				"upper_message_id": "om_mf_fb",
+				"msg_type":         "file",
+				"create_time":      "1732621006000",
+				"sender":           map[string]any{"id": "ou_allowed_owner", "id_type": "open_id", "sender_type": "user"},
+				"body":             map[string]any{"content": `{"file_key":"file_extra","file_name":"extra.csv"}`},
+			},
+		},
+	}
+	// Image 1: childID fails 234003, outer om_mf_fb succeeds
+	ff.resources["om_fb_img/img_cross_chat"] = fakeFeishuResource{Code: 234003, Msg: "File not in msg"}
+	ff.resources["om_mf_fb/img_cross_chat"] = fakeFeishuResource{Data: imgFromOuter, FileName: "cross-chat.png"}
+
+	// Image 2: both childID and outer om_mf_fb fail 234003, /im/v1/images/img_app_owned succeeds
+	ff.resources["om_fb_post/img_app_owned"] = fakeFeishuResource{Code: 234003, Msg: "File not in msg"}
+	ff.resources["om_mf_fb/img_app_owned"] = fakeFeishuResource{Code: 234003, Msg: "File not in msg"}
+	ff.images["img_app_owned"] = fakeFeishuResource{Data: imgFromDirectAPI, FileName: "app-owned.png"}
+
+	// File 1: childID fails 234003, outer om_mf_fb succeeds
+	ff.resources["om_fb_csv/file_csv_200"] = fakeFeishuResource{Code: 234003, Msg: "File not in msg"}
+	ff.resources["om_mf_fb/file_csv_200"] = fakeFeishuResource{Data: csvBytes, FileName: "ignored-header.csv"}
+
+	// File 2: exceeds size limit (80 > 64 bytes)
+	ff.resources["om_fb_big/file_too_big"] = fakeFeishuResource{Data: tooBigBytes, FileName: "huge.bin"}
+
+	// Standalone file with traversal filename
+	ff.resources["om_standalone_file/file_trav"] = fakeFeishuResource{Data: safeTraversalBytes, FileName: "..\\..\\evil.csv"}
+	ff.mu.Unlock()
+
+	sendEv := func(evID, msgID, msgType, content string) string {
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: evID}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr(msgID),
+					ChatId:      strPtr("oc_mf_fb_chat"),
+					ChatType:    strPtr("p2p"),
+					MessageType: strPtr(msgType),
+					Content:     strPtr(content),
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive(%s): %v", evID, err)
+		}
+		return sp.st.Entries[len(sp.st.Entries)-1].Text
+	}
+
+	got := sendEv("evt_mf_fb_1", "om_mf_fb", "merge_forward", "Merged and Forwarded Message")
+	for _, want := range []string{
+		"[合并转发]",
+		"你：我把表发一下",
+		"成员 A：[图片]",
+		"成员 B：再看这张截图（含 1 张图片）",
+		"成员 A：[飞书文件：sample_200.csv]",
+		"成员 B：[飞书文件：../../huge.bin（下载失败）]",
+		"你：[飞书文件：extra.csv（超出上限已略去）]",
+		"\n\n附件：\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("merge_forward fallback output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "ou_un") || strings.Contains(got, "115") || strings.Contains(got, "491") {
+		t.Fatalf("merge_forward leaked raw/masked open_id instead of readable labels:\n%s", got)
+	}
+
+	attachPaths := extractAttachmentPaths(got)
+	if len(attachPaths) != 3 {
+		t.Fatalf("expected 3 downloaded attachments (2 images + 1 csv), got %d: %v\n%s", len(attachPaths), attachPaths, got)
+	}
+	b0, err0 := os.ReadFile(attachPaths[0])
+	b1, err1 := os.ReadFile(attachPaths[1])
+	b2, err2 := os.ReadFile(attachPaths[2])
+	if err0 != nil || !bytes.Equal(b0, imgFromOuter) {
+		t.Fatalf("outer-fallback image mismatch: err=%v bytes=%q", err0, b0)
+	}
+	if err1 != nil || !bytes.Equal(b1, imgFromDirectAPI) {
+		t.Fatalf("direct-api-fallback image mismatch: err=%v bytes=%q", err1, b1)
+	}
+	if err2 != nil || !bytes.Equal(b2, csvBytes) || !strings.HasSuffix(attachPaths[2], "-sample_200.csv") {
+		t.Fatalf("csv attachment mismatch: path=%s err=%v bytes=%q", attachPaths[2], err2, b2)
+	}
+
+	// Verify standalone inbound file download + path traversal protection.
+	gotStandalone := sendEv("evt_file_standalone", "om_standalone_file", "file", `{"file_key":"file_trav","file_name":"../../etc/report.csv"}`)
+	standalonePaths := extractAttachmentPaths(gotStandalone)
+	if len(standalonePaths) != 1 {
+		t.Fatalf("expected 1 standalone file attachment, got %v:\n%s", standalonePaths, gotStandalone)
+	}
+	wantUploadPrefix := filepath.Join(sp.dir, "uploads") + string(filepath.Separator)
+	if !strings.HasPrefix(standalonePaths[0], wantUploadPrefix) || !strings.HasSuffix(standalonePaths[0], "-report.csv") {
+		t.Fatalf("standalone file path escaped upload dir or bad name: %s", standalonePaths[0])
+	}
+	bs, err := os.ReadFile(standalonePaths[0])
+	if err != nil || !bytes.Equal(bs, safeTraversalBytes) {
+		t.Fatalf("standalone file bytes mismatch: err=%v bytes=%q", err, bs)
 	}
 }
 

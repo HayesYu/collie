@@ -1458,8 +1458,11 @@
   let serverReadCursorId = "";
   let sessionUnreadMarkerId = "";
   let unreadAnchorApplied = false;
+  let pendingUnreadAnchorOnVisible = false;
   let readSyncTimer = 0;
   let pendingReadSyncId = "";
+  let pendingReadDeferCursor = false;
+  let scrollReadTimer = 0;
   const latestEntryNum = (list) => {
     let max = 0;
     for (const e of list || []) {
@@ -1525,25 +1528,51 @@
       })
       .catch(() => {});
   }
+  function applyPendingReadCursor(entryId) {
+    const id = String(entryId || "").trim();
+    const n = entryIdNum(id);
+    if (n > entryIdNum(readCursorId)) {
+      readCursorId = id;
+      store.set(CHAT_READ_KEY, id);
+    }
+  }
+  function cancelPendingChatRead() {
+    if (readSyncTimer) { clearTimeout(readSyncTimer); readSyncTimer = 0; }
+    pendingReadSyncId = "";
+    pendingReadDeferCursor = false;
+  }
+  function clearScrollReadTimer() {
+    if (scrollReadTimer) { clearTimeout(scrollReadTimer); scrollReadTimer = 0; }
+  }
   function flushPendingChatRead(keepalive = false) {
     if (!pendingReadSyncId) return;
     clearTimeout(readSyncTimer);
     readSyncTimer = 0;
     const sendId = pendingReadSyncId;
+    const deferCursor = pendingReadDeferCursor;
     pendingReadSyncId = "";
+    pendingReadDeferCursor = false;
+    if (deferCursor) applyPendingReadCursor(sendId);
     sendChatReadNow(sendId, keepalive);
   }
   function commitChatRead(entryId, opts = {}) {
     const id = String(entryId || "").trim();
     const n = entryIdNum(id);
     if (n <= 0) return;
-    if (n > entryIdNum(readCursorId)) {
-      readCursorId = id;
-      store.set(CHAT_READ_KEY, id);
+    const deferCursor = !!opts.deferCursor && !opts.immediate;
+    if (!deferCursor) applyPendingReadCursor(id);
+    const targetId = deferCursor
+      ? (n > entryIdNum(readCursorId) ? id : readCursorId)
+      : readCursorId;
+    if (!targetId) return;
+    if (!deferCursor && entryIdNum(targetId) <= entryIdNum(serverReadCursorId)) return;
+    if (deferCursor && entryIdNum(targetId) <= entryIdNum(readCursorId) && entryIdNum(targetId) <= entryIdNum(serverReadCursorId)) return;
+    if (entryIdNum(targetId) > entryIdNum(pendingReadSyncId)) {
+      pendingReadSyncId = targetId;
+      pendingReadDeferCursor = deferCursor;
+    } else if (!deferCursor) {
+      pendingReadDeferCursor = false;
     }
-    const targetId = readCursorId;
-    if (entryIdNum(targetId) <= entryIdNum(serverReadCursorId)) return;
-    pendingReadSyncId = targetId;
     if (opts.immediate) {
       flushPendingChatRead(!!opts.keepalive);
       return;
@@ -1552,8 +1581,16 @@
     readSyncTimer = setTimeout(() => {
       readSyncTimer = 0;
       const sendId = pendingReadSyncId;
+      const shouldApply = pendingReadDeferCursor;
       pendingReadSyncId = "";
-      if (sendId) sendChatReadNow(sendId, false);
+      pendingReadDeferCursor = false;
+      if (!sendId) return;
+      if (shouldApply) {
+        applyPendingReadCursor(sendId);
+        updateSuperJump();
+        renderSide();
+      }
+      sendChatReadNow(sendId, false);
     }, opts.delay ?? CHAT_READ_DEBOUNCE_MS);
   }
   function normSup(s) {
@@ -2093,11 +2130,15 @@
     const atBottom = dist <= AT_BOTTOM_PX;
     const routeKey = routeKeyFor(v, id);
     const snap = { routeKey, atBottom, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0 };
-    if (v === "collie" && !atBottom) {
-      const anc = captureCollieAnchor(sc);
-      if (anc) {
-        snap.anchorId = anc.anchorId;
-        snap.anchorOffset = anc.anchorOffset;
+    if (v === "collie") {
+      snap.readCursorId = readCursorId || "";
+      snap.wasUnreadAnchor = !!(collieInitialAnchor?.mode === "unread" || collieInitialAnchor?.mode === "unread-auto" || activeCollieRestore?.unreadSep);
+      if (!atBottom) {
+        const anc = captureCollieAnchor(sc);
+        if (anc) {
+          snap.anchorId = anc.anchorId;
+          snap.anchorOffset = anc.anchorOffset;
+        }
       }
     }
     if (typeof idx === "number") scrollByIdx.set(idx, snap);
@@ -2225,7 +2266,7 @@
     if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1000px)").matches)) closeFilePane();
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
-    if (view === "auto" && next !== "auto") clearInterval(autoTimer);
+    if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); }
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
     if (prevView === "collie" && next !== "collie") {
       if (activeThreadRoot) {
@@ -2240,8 +2281,11 @@
     }
     if (next !== "collie") {
       endCollieUserScroll(true);
+      clearScrollReadTimer();
       cancelCollieLayoutLock();
       cancelInitialAnchor();
+      activeCollieRestore = null;
+      pendingUnreadAnchorOnVisible = false;
       pendingOpen = false;
       hideSearchPanel();
       closeCollieThreadsPop();
@@ -2270,10 +2314,21 @@
       const savedThread = !wantThread && wasExistingIdx ? threadByIdx.get(navCur) : null;
       const superEl = $("#super-thread");
       const needRebuild = !superBodyKey || (canPatchSuperDom(superEl) && !superEl?.firstElementChild);
-      if (saved && !saved.atBottom) {
+      const unreadNow = computeUnreadInfo(chatEntries(), readCursorId);
+      const curCursorN = entryIdNum(readCursorId);
+      const savedCursorN = entryIdNum(saved?.readCursorId);
+      const savedAnchorN = entryIdNum(saved?.anchorId);
+      const preferUnreadAnchor = !saved || saved.atBottom
+        || (!wasExistingIdx && unreadNow.count > 0)
+        || (saved.wasUnreadAnchor && curCursorN > 0 && savedAnchorN > 0 && savedAnchorN <= curCursorN)
+        || (savedCursorN > 0 && curCursorN > savedCursorN);
+      if (!preferUnreadAnchor) {
         unreadAnchorApplied = true;
         renderSuper({ force: needRebuild, restore: saved });
       } else {
+        scrollByRoute.delete("collie");
+        if (typeof navCur === "number") scrollByIdx.delete(navCur);
+        activeCollieRestore = null;
         unreadAnchorApplied = false;
         sessionUnreadMarkerId = "";
         renderSuper({ force: needRebuild, unreadAnchor: true });
@@ -2585,18 +2640,33 @@
     }
     return null;
   }
-  function entryPendingNow(allEntries, idx, id, pendIds = null, hasOpts = true) {
+  function inEntryReplyChain(startId, targetId, entries) {
+    if (!startId || !targetId) return false;
+    if (startId === targetId) return true;
+    const parentOf = new Map();
+    for (let i = 0; i < (entries?.length || 0); i++) {
+      const x = entries[i];
+      if (x?.id && x.re?.entry) parentOf.set(x.id, x.re.entry);
+    }
+    const reaches = (from, want) => {
+      let cur = from;
+      for (let step = 0; step < 64 && cur; step++) {
+        if (cur === want) return true;
+        cur = parentOf.get(cur) || "";
+      }
+      return false;
+    };
+    return reaches(startId, targetId) || reaches(targetId, startId);
+  }
+  function entryPendingNow(allEntries, idx, id, pendIds = null) {
     if (!id) return false;
     if (sup.hasPending) return (pendIds || new Set(activePending().map((p) => p.id))).has(id);
     if (dismissedLocal.has(id)) return false;
-    let otherCollie = false;
     for (let j = idx + 1; j < allEntries.length; j++) {
       const next = allEntries[j];
       if (next.role === "user") {
         const reId = next.re?.entry || "";
-        if (reId === id || (hasOpts && !reId && !otherCollie)) return false;
-      } else if (next.role === "collie") {
-        otherCollie = true;
+        if (reId && inEntryReplyChain(reId, id, allEntries)) return false;
       }
     }
     return true;
@@ -2744,15 +2814,11 @@
     }
     const idx = idxByEntry ? (idxByEntry.get(e) ?? -1) : allEntries.indexOf(e);
     if (idx < 0) return entryHasConfirmMarker(e);
-    const hasOpts = entryConfirmOptions(e).length > 0;
-    let otherCollie = false;
     for (let j = idx + 1; j < allEntries.length; j++) {
       const next = allEntries[j];
       if (next.role === "user") {
         const reId = next.re?.entry || "";
-        if ((id && reId === id) || (hasOpts && !reId && !otherCollie)) return false;
-      } else if (next.role === "collie") {
-        otherCollie = true;
+        if (id && reId && inEntryReplyChain(reId, id, allEntries)) return false;
       }
     }
     return true;
@@ -3191,25 +3257,71 @@
     commitChatRead(latestId, opts);
     updateSuperJump();
   }
+  function maybeAdvanceReadByScroll(sc = viewScroller("collie")) {
+    if (view !== "collie" || document.hidden || collieLayoutLock || activeThreadRoot || collieInitialAnchor) return;
+    if (!sc || sc.clientHeight <= 0 || performance.now() < programmaticScrollUntil) return;
+    const curN = entryIdNum(readCursorId);
+    if (curN <= 0) return;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    if (dist <= AT_BOTTOM_PX) {
+      maybeScheduleReadAtBottom();
+      return;
+    }
+    const unreadNow = computeUnreadInfo();
+    if (!unreadNow.count) return;
+    const box = $("#super-thread");
+    if (!box) return;
+    const msgs = box.querySelectorAll(".msg[data-id], .event[data-id]");
+    if (!msgs || !msgs.length) return;
+    const sr = sc.getBoundingClientRect();
+    const cutoff = sr.top + 24;
+    let lo = 0, hi = msgs.length - 1, passedIdx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const mr = msgs[mid].getBoundingClientRect();
+      if (mr.bottom <= cutoff) {
+        passedIdx = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (passedIdx < 0) return;
+    const all = chatEntries();
+    const byId = new Map();
+    for (let i = 0; i < all.length; i++) {
+      if (all[i]?.id) byId.set(all[i].id, all[i]);
+    }
+    let advanceId = "";
+    for (let i = passedIdx; i >= 0; i--) {
+      const id = msgs[i]?.dataset?.id || "";
+      const n = entryIdNum(id);
+      if (n <= curN) break;
+      const ent = byId.get(id);
+      if (ent && isSubstantiveUnread(ent)) {
+        advanceId = id;
+        break;
+      }
+    }
+    if (!advanceId) return;
+    commitChatRead(advanceId);
+    updateSuperJump();
+    renderSide();
+  }
+  function scheduleScrollReadCheck(delayMs = 260) {
+    clearScrollReadTimer();
+    scrollReadTimer = setTimeout(() => {
+      scrollReadTimer = 0;
+      maybeAdvanceReadByScroll();
+    }, delayMs);
+  }
 
   function optimisticallyResolved(p, list = chatEntries()) {
     const id = typeof p === "string" ? p : p?.id;
     if (!id) return false;
     if (dismissedLocal.has(id)) return true;
     if (!pendingSays.length) return false;
-    if (pendingSays.some((m) => m.re?.entry === id)) return true;
-    // Pure --check external todos do not auto-resolve on an unquoted message.
-    const hasOpts = typeof p === "object"
-      ? entryConfirmOptions(p).length > 0
-      : true;
-    if (!hasOpts) return false;
-    if (!pendingSays.some((m) => !m.re?.entry)) return false;
-    const idx = list.findIndex((e) => e.id === id);
-    if (idx < 0) return false;
-    for (let j = idx + 1; j < list.length; j++) {
-      if (list[j].role === "collie") return false;
-    }
-    return true;
+    return pendingSays.some((m) => m.re?.entry && inEntryReplyChain(m.re.entry, id, list));
   }
   function activePending() {
     const list = sup.pending || [];
@@ -3286,7 +3398,9 @@
     const barSig = `${total}:${P}:${M}:${lastPend?.id || ""}:${lastPin?.id || ""}:${sum}`;
     if (barSig !== pendingBarSig) {
       pendingBarSig = barSig;
-      const lead = P ? `<span class="pending-dot"></span>` : `<span class="pending-pin-ico">${ICON_PIN}</span>`;
+      const lead = P
+        ? `<span class="pending-dot" aria-hidden="true"></span>`
+        : `<span class="pending-dot neutral" aria-hidden="true"></span>`;
       if (total === 1) {
         const onlyId = lastPend ? lastPend.id : lastPin.id;
         const xBtn = lastPend
@@ -3792,8 +3906,10 @@
       const q = input.value.trim();
       if (q && q === searchQuery && panel.hidden) showSearchPanel();
     });
+    const searchIme = trackIME(input);
     input?.addEventListener("keydown", (e) => {
-      if (e.isComposing || e.keyCode === 229) return;
+      if (isIMEComposing(e, searchIme)) return;
+      if (isPostCompositionSafariEnter(e, searchIme)) { e.preventDefault(); return; }
       if (e.key === "ArrowDown" && searchHits.length) {
         e.preventDefault();
         if (panel.hidden) showSearchPanel();
@@ -3868,6 +3984,23 @@
     try { collieInitialAnchor.ro?.disconnect?.(); } catch {}
     collieInitialAnchor = null;
   }
+  function hasPendingUnreadImages(box, sepEl) {
+    if (!box || !sepEl || typeof box.querySelectorAll !== "function") return false;
+    const imgs = box.querySelectorAll("img");
+    if (!imgs || !imgs.length) return false;
+    const canCompare = typeof sepEl.compareDocumentPosition === "function";
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs[i];
+      if (!img) continue;
+      const hasSrc = !!img.getAttribute?.("src");
+      const pendingThumb = !hasSrc && !!img.parentElement?.classList?.contains?.("thumb") && !img.parentElement.classList.contains("broken");
+      const loadingImg = hasSrc && img.complete === false;
+      if (!pendingThumb && !loadingImg) continue;
+      if (canCompare && !(sepEl.compareDocumentPosition(img) & 4)) continue;
+      return true;
+    }
+    return false;
+  }
   function placeUnreadAnchor(scroller, sepEl) {
     const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     const sr = scroller.getBoundingClientRect();
@@ -3883,13 +4016,14 @@
       scroller.scrollTop = scroller.scrollHeight;
       return { fitsAtBottom: true, wantTop: maxTop };
     }
-    markProgrammaticScroll(140);
+    markProgrammaticScroll(240);
     scroller.scrollTop = wantTop;
     return { fitsAtBottom: false, wantTop };
   }
   function applyInitialAnchor(fromResize = false) {
     if (!collieInitialAnchor) return;
     if (view !== "collie") { cancelInitialAnchor(); return; }
+    if (document.hidden || pendingUnreadAnchorOnVisible) return;
     if (performance.now() > collieInitialAnchor.until) { cancelInitialAnchor(); return; }
     if (activeThreadRoot || collieLayoutLock || olderBusy) return;
     const box = $("#super-thread"), sc = box?.parentElement;
@@ -3903,7 +4037,7 @@
     if (collieInitialAnchor.mode === "bottom") {
       markProgrammaticScroll(120);
       sc.scrollTop = sh;
-      const snap = { routeKey: "collie", atBottom: true, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0 };
+      const snap = { routeKey: "collie", atBottom: true, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0, readCursorId: readCursorId || "", wasUnreadAnchor: false };
       if (typeof navCur === "number") scrollByIdx.set(navCur, snap);
       scrollByRoute.set("collie", snap);
       updateSuperJump();
@@ -3914,15 +4048,34 @@
     if (!sepEl) { cancelInitialAnchor(); return; }
     const placed = placeUnreadAnchor(sc, sepEl);
     if (placed.fitsAtBottom) {
-      collieInitialAnchor.mode = "bottom";
-      maybeScheduleReadAtBottom();
-    } else if (activeCollieRestore?.unreadSep) {
-      activeCollieRestore.scrollTop = placed.wantTop;
+      // Keep mode as "unread-auto" rather than locking one-way to "bottom" so
+      // late-loading images expanding below #unread-sep can flip back cleanly.
+      collieInitialAnchor.mode = "unread-auto";
+      collieInitialAnchor.atBottom = true;
+      activeCollieRestore = null;
+      const snap = { routeKey: "collie", atBottom: true, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0, readCursorId: readCursorId || "", wasUnreadAnchor: false };
+      if (typeof navCur === "number") scrollByIdx.set(navCur, snap);
+      scrollByRoute.set("collie", snap);
+      if (!hasPendingUnreadImages(box, sepEl)) {
+        maybeScheduleReadAtBottom({ deferCursor: true });
+      }
+    } else {
+      collieInitialAnchor.mode = "unread";
+      collieInitialAnchor.atBottom = false;
+      if (pendingReadDeferCursor || readSyncTimer) cancelPendingChatRead();
+      activeCollieRestore = {
+        unreadSep: true,
+        anchorId: sessionUnreadMarkerId,
+        anchorOffset: UNREAD_TOP_PAD,
+        atBottom: false,
+        scrollTop: placed.wantTop,
+        until: collieInitialAnchor.until,
+      };
+      captureViewScroll("collie", null, navCur);
     }
-    captureViewScroll("collie", null, navCur);
     updateSuperJump();
   }
-  function beginInitialAnchor(mode) {
+  function beginInitialAnchor(mode, opts = {}) {
     cancelInitialAnchor();
     const box = $("#super-thread"), sc = box?.parentElement;
     if (!box || !sc) return;
@@ -3933,8 +4086,12 @@
       try { ro.observe(box); } catch {}
       try { ro.observe(sc); } catch {}
     }
-    const timer = setTimeout(cancelInitialAnchor, INITIAL_ANCHOR_MS);
-    collieInitialAnchor = { mode, until, timer, ro, lastH: sc.scrollHeight, lastCH: sc.clientHeight };
+    const timer = setTimeout(() => {
+      const wasAutoBottom = collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom;
+      cancelInitialAnchor();
+      if (wasAutoBottom) maybeScheduleReadAtBottom({ deferCursor: true });
+    }, INITIAL_ANCHOR_MS);
+    collieInitialAnchor = { mode, atBottom: mode === "bottom" || !!opts.atBottom, until, timer, ro, lastH: sc.scrollHeight, lastCH: sc.clientHeight };
   }
 
   let superBodyKey = "", superDomGen = 0, superAsksGen = 0;
@@ -4275,11 +4432,13 @@
     const scroller = box.parentElement;
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
     const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot && collieInitialAnchor?.mode === "bottom" && performance.now() <= collieInitialAnchor.until;
+    const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
+      && (collieInitialAnchor?.mode === "bottom" || (collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom))
+      && performance.now() <= collieInitialAnchor.until;
     const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || distBefore <= AT_BOTTOM_PX);
     const jumping = flashEntry.until > Date.now();
     const shouldApplyUnreadAnchor = (wantUnreadAnchor || !unreadAnchorApplied) && !forceBottom && !holdRestore && !activeThreadRoot && view === "collie";
-    const needLiveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread";
+    const needLiveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread" && collieInitialAnchor?.mode !== "unread-auto";
     let liveAnchor = null;
     let liveAnchorCaptured = false;
     const ensureLiveAnchor = () => {
@@ -4312,7 +4471,7 @@
     setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "");
     const cx = $("#router-ctx");
     setText(cx, r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "");
-    cx.classList.toggle("warn", !!r.handover || (r.rotate_at > 0 && r.context >= r.rotate_at - 10));
+    cx.classList.toggle("warn", !!r.handover || (!!r.alive && Number(r.context) >= 75));
     const cxTitle = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
     if (cx.title !== cxTitle) cx.title = cxTitle;
     renderRouterModel(r);
@@ -4347,9 +4506,10 @@
 
     if (!isEmptyChat) {
       const unreadNow = computeUnreadInfo(allEntries, readCursorId);
+      const markerStale = !sessionUnreadMarkerId || (entryIdNum(readCursorId) > 0 && entryIdNum(sessionUnreadMarkerId) <= entryIdNum(readCursorId));
       if (shouldApplyUnreadAnchor) {
         sessionUnreadMarkerId = unreadNow.firstUnreadId;
-      } else if (!sessionUnreadMarkerId && (!atBottom || document.hidden) && unreadNow.firstUnreadId) {
+      } else if (markerStale && (!atBottom || document.hidden) && unreadNow.firstUnreadId) {
         sessionUnreadMarkerId = unreadNow.firstUnreadId;
       }
       curThreadInfo = computeReplyThreads(allEntries);
@@ -4614,32 +4774,38 @@
       }
     }
     if (shouldApplyUnreadAnchor && scroller.clientHeight > 0) {
+      clearScrollReadTimer();
       const hasEntries = chatEntries().length > 0;
       if (hasEntries) unreadAnchorApplied = true;
       const sepEl = sessionUnreadMarkerId ? $("#unread-sep", box) : null;
       const firstEl = sessionUnreadMarkerId ? findUnreadRowEl(box, sessionUnreadMarkerId) : null;
+      if (document.hidden && !forceBottom && (sessionUnreadMarkerId || computeUnreadInfo(allEntries, readCursorId).count > 0)) {
+        pendingUnreadAnchorOnVisible = true;
+        if (sepEl && firstEl) placeUnreadAnchor(scroller, sepEl);
+        updateSuperJump();
+        return;
+      }
+      pendingUnreadAnchorOnVisible = false;
       if (sepEl && firstEl) {
         const placed = placeUnreadAnchor(scroller, sepEl);
         if (placed.fitsAtBottom) {
-          beginInitialAnchor("bottom");
-          const set = scroller.scrollTop;
+          beginInitialAnchor("unread-auto", { atBottom: true });
+          if (typeof cancelAnimationFrame === "function") {
+            cancelAnimationFrame(superScrollRAF);
+            cancelAnimationFrame(collieRestoreRAF);
+          }
           if (typeof requestAnimationFrame === "function") {
-            if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
             superScrollRAF = requestAnimationFrame(() => {
-              if (collieInitialAnchor?.mode === "bottom" || scroller.scrollTop === set) {
-                markProgrammaticScroll();
-                scroller.scrollTop = scroller.scrollHeight;
-              }
-              captureViewScroll("collie", null, navCur);
-              updateSuperJump();
-              maybeScheduleReadAtBottom();
+              if (view !== "collie" || !collieInitialAnchor) return;
+              applyInitialAnchor();
             });
           } else {
             captureViewScroll("collie", null, navCur);
-            maybeScheduleReadAtBottom();
+            if (!hasPendingUnreadImages(box, sepEl)) maybeScheduleReadAtBottom({ deferCursor: true });
           }
         } else {
-          beginInitialAnchor("unread");
+          beginInitialAnchor("unread", { atBottom: false });
+          if (pendingReadDeferCursor || readSyncTimer) cancelPendingChatRead();
           activeCollieRestore = {
             unreadSep: true,
             anchorId: sessionUnreadMarkerId,
@@ -4688,11 +4854,14 @@
       updateSuperJump();
       return;
     }
-    if (!forceBottom && !holdRestore && !jumping && !olderBusy && collieInitialAnchor?.mode === "unread" && performance.now() <= collieInitialAnchor.until) {
+    if (!forceBottom && !holdRestore && !jumping && !olderBusy
+      && (collieInitialAnchor?.mode === "unread" || collieInitialAnchor?.mode === "unread-auto")
+      && performance.now() <= collieInitialAnchor.until) {
       applyInitialAnchor();
       return;
     }
     if (holdRestore && !holdRestore.atBottom) {
+      clearScrollReadTimer();
       if (typeof cancelAnimationFrame === "function") {
         cancelAnimationFrame(superScrollRAF);
         cancelAnimationFrame(collieRestoreRAF);
@@ -4703,8 +4872,8 @@
         updateSuperJump();
         return;
       }
-      activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
-      if (holdRestore.unreadSep && collieInitialAnchor?.mode === "unread") {
+      activeCollieRestore = { ...holdRestore, until: Math.max(holdRestore.until || 0, performance.now() + 340) };
+      if (holdRestore.unreadSep && (collieInitialAnchor?.mode === "unread" || collieInitialAnchor?.mode === "unread-auto")) {
         applyInitialAnchor();
         return;
       }
@@ -4721,6 +4890,17 @@
       return;
     }
     if ((atBottom && !jumping) || forceBottom) {
+      if (document.hidden && !forceBottom && (sessionUnreadMarkerId || computeUnreadInfo(allEntries, readCursorId).count > 0)) {
+        pendingUnreadAnchorOnVisible = true;
+        cancelInitialAnchor();
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+        updateSuperJump();
+        return;
+      }
+      if (forceBottom) {
+        pendingUnreadAnchorOnVisible = false;
+        clearScrollReadTimer();
+      }
       activeCollieRestore = null;
       markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
@@ -4767,6 +4947,9 @@
       }
       if (collieInitialAnchor) applyInitialAnchor();
     }, true);
+    box?.addEventListener("error", (e) => {
+      if (e.target?.tagName === "IMG" && collieInitialAnchor) applyInitialAnchor();
+    }, true);
     let superJumpScrollRAF = 0;
     const maybePrefetchOlder = () => {
       if (view !== "collie" || olderBusy || !canLoadOlder() || !sc) return;
@@ -4787,6 +4970,7 @@
         updateSuperJump();
         if (performance.now() >= programmaticScrollUntil) {
           maybeScheduleReadAtBottom();
+          scheduleScrollReadCheck(260);
           maybePrefetchOlder();
         }
       };
@@ -4802,6 +4986,7 @@
             endCollieUserScroll(false);
           }, 80);
         }
+        if (performance.now() >= programmaticScrollUntil) scheduleScrollReadCheck(120);
         maybePrefetchOlder();
       }, { passive: true });
     }
@@ -4884,13 +5069,25 @@
     bindHorizontalStrip($("#crew"));
     bindHorizontalStrip($("#td-workers"));
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) flushPendingChatRead(true);
-      else maybeScheduleReadAtBottom();
+      if (document.hidden) {
+        if (pendingReadDeferCursor) cancelPendingChatRead();
+        else flushPendingChatRead(true);
+      } else if (view === "collie" && pendingUnreadAnchorOnVisible) {
+        pendingUnreadAnchorOnVisible = false;
+        cancelInitialAnchor();
+        activeCollieRestore = null;
+        unreadAnchorApplied = false;
+        renderSuper({ unreadAnchor: true });
+      } else {
+        maybeScheduleReadAtBottom();
+      }
     });
     addEventListener("pagehide", () => flushPendingChatRead(true));
     $("#super-jump")?.addEventListener("click", async () => {
       if (!sc) return;
       const seq = ++jumpSeq;
+      clearScrollReadTimer();
+      pendingUnreadAnchorOnVisible = false;
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
@@ -5012,10 +5209,74 @@
     }
     return modelInfo[key];
   }
-  // "派到": where this message's work runs. Shows the defaults from
-  // 自动化 → 设置 (read again whenever this view opens); target holds only
-  // what was picked here, so a message never carries a stale default.
-  let target = null, targetDefault = null, _renderTargetSig = "";
+  // "派活": one-shot dispatch target override. Collapsed to a calm "派活 · 默认"
+  // capsule unless expanded or manually overridden, so Collie's memory-based
+  // routing stays clear while single-message overrides remain one click away.
+  let target = null, targetDefault = null, targetExpanded = false, _renderTargetSig = "";
+  let lastTargetEffState = { hideEff: false, eff: "", defOwn: "", modelLabel: "", machineName: "", manyMachines: false };
+  function targetOverrideFlags() {
+    const d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
+    const t = targetNow();
+    const { model, effort, d: md } = modelNow(t);
+    const machineChanged = t.machine !== d.machine;
+    const kindChanged = t.kind !== d.kind;
+    const modelChanged = (model || "") !== (md.model || "");
+    const eff = lastTargetEffState.hideEff ? "" : (effort || "");
+    const defOwn = lastTargetEffState.hideEff ? "" : (md.effort || "");
+    const effortChanged = !lastTargetEffState.hideEff && eff !== defOwn && eff !== "";
+    return {
+      any: machineChanged || kindChanged || modelChanged || effortChanged,
+      machineChanged, kindChanged, modelChanged, effortChanged,
+      t, d, model, eff,
+    };
+  }
+  function updateDispatchBar() {
+    const bar = $("#t-bar"), toggle = $("#t-toggle"), lbl = $("#t-toggle-lbl"), controls = $("#t-controls"), reset = $("#t-reset");
+    if (!bar || !toggle || !controls) return;
+    const ov = targetOverrideFlags();
+    const expanded = targetExpanded;
+    bar.classList.toggle("is-collapsed", !expanded);
+    controls.hidden = !expanded;
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.classList.toggle("is-override", ov.any);
+    if (reset) reset.hidden = !ov.any;
+
+    const d = ov.d;
+    const ms = (state.machines || []).filter((m) => !m.hub);
+    const defMachineObj = ms.find((m) => m.id === d.machine);
+    const defMachineName = defMachineObj ? defMachineObj.name : (d.machine || "本机");
+    const defKindLabel = KIND_LABEL[d.kind] || d.kind || "Claude";
+    const defModelShort = d.model ? d.model.split("/").pop() : "默认模型";
+    const defParts = [ms.length > 1 ? defMachineName : "", defKindLabel, defModelShort].filter(Boolean);
+    const fallbackDesc = `按记忆偏好优先，未命中时兜底：${defParts.join(" · ")}（点击可临时指定本次派活目标）`;
+
+    if (expanded) {
+      if (lbl) lbl.textContent = ov.any ? "本次派活" : "派活";
+      toggle.title = "收起本次派活选项";
+      toggle.setAttribute("aria-description", fallbackDesc);
+    } else if (ov.any) {
+      const chosen = [];
+      if (ov.machineChanged && lastTargetEffState.machineName) chosen.push(lastTargetEffState.machineName);
+      if (ov.kindChanged || ov.modelChanged || ov.effortChanged) chosen.push(KIND_LABEL[ov.t.kind] || ov.t.kind);
+      if (ov.modelChanged && lastTargetEffState.modelLabel) chosen.push(lastTargetEffState.modelLabel);
+      if (ov.effortChanged && ov.eff) chosen.push("思考:" + (EFFORT_LABEL[ov.eff] || ov.eff));
+      if (lbl) lbl.textContent = "本次 · " + (chosen.filter(Boolean).join(" · ") || "已指定");
+      const tip = `已临时覆盖本次派活：${chosen.filter(Boolean).join(" · ")}（点击展开调整，或点右侧恢复默认）`;
+      toggle.title = tip;
+      toggle.setAttribute("aria-description", tip);
+    } else {
+      if (lbl) lbl.textContent = "派活 · 默认";
+      toggle.title = fallbackDesc;
+      toggle.setAttribute("aria-description", fallbackDesc);
+    }
+  }
+  function resetTargetOverride() {
+    target = null;
+    targetExpanded = false;
+    _renderTargetSig = "";
+    closePick();
+    renderTarget();
+  }
   async function renderTarget(fresh) {
     if (!targetDefault || fresh) {
       _renderTargetSig = "";
@@ -5029,7 +5290,10 @@
     const t = targetNow();
     const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
     const sig = `${t.machine}|${t.kind}|${t.model ?? ""}|${t.effort ?? ""}|${targetDefault.machine}|${targetDefault.kind}|${targetDefault.model}|${targetDefault.effort}|${state.ok}|${ms.map((m) => `${m.id}:${m.name}:${m.online}:${(m.agents || []).join(",")}`).join(";")}`;
-    if (!fresh && sig === _renderTargetSig) return;
+    if (!fresh && sig === _renderTargetSig) {
+      updateDispatchBar();
+      return;
+    }
     _renderTargetSig = sig;
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
@@ -5046,6 +5310,9 @@
     syncPick(mSel); syncPick(kSel);
     mSel._pick?.classList.toggle("changed", t.machine !== targetDefault.machine);
     kSel._pick?.classList.toggle("changed", t.kind !== targetDefault.kind);
+    lastTargetEffState.machineName = ms.find((m) => m.id === t.machine)?.name || (t.machine || "本机");
+    lastTargetEffState.manyMachines = ms.length > 1;
+    updateDispatchBar();
     renderModelChips();
   }
   // The default model and effort belong to the default kind of agent; any
@@ -5082,8 +5349,26 @@
     syncPick(mSel); syncPick(eSel);
     mSel._pick?.classList.toggle("changed", model !== d.model);
     eSel._pick?.classList.toggle("changed", !hideEff && eff !== defOwn && eff !== "");
+    const pickedModelObj = list.find((m) => m.id === model);
+    lastTargetEffState.hideEff = hideEff;
+    lastTargetEffState.eff = eff;
+    lastTargetEffState.defOwn = defOwn;
+    lastTargetEffState.modelLabel = model ? (pickedModelObj?.label && pickedModelObj.label.length <= 24 ? pickedModelObj.label : short(model)) : "";
+    updateDispatchBar();
   }
   const pick = (o) => { target = { ...(target || {}), ...o }; };
+  $("#t-toggle")?.addEventListener("click", () => {
+    targetExpanded = !targetExpanded;
+    if (!targetExpanded) closePick();
+    updateDispatchBar();
+  });
+  $("#t-reset")?.addEventListener("click", () => resetTargetOverride());
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && targetExpanded && !pickOpen && !document.querySelector("dialog[open]")) {
+      targetExpanded = false;
+      updateDispatchBar();
+    }
+  });
   $("#t-machine").addEventListener("change", (e) => { pick({ machine: e.target.value }); renderTarget(); });
   $("#t-kind").addEventListener("change", (e) => { pick({ kind: e.target.value, model: undefined, effort: undefined }); renderTarget(); });
   $("#t-model").addEventListener("change", (e) => { pick({ model: e.target.value, effort: undefined }); renderModelChips(); });
@@ -5124,10 +5409,12 @@
 
   async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID(), opts = {}) {
     const scrollBottom = opts.scrollBottom !== false;
+    const shouldCommitRead = scrollBottom || !!opts.commitRead;
     const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
     const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
-    // Only what was picked here goes along; the hub fills in its current defaults.
-    const t = targetNow(), p = target || {};
+    // Only what was actively overridden goes along; otherwise the hub/Collie
+    // follows memory preferences and configured defaults.
+    const t = targetNow(), ov = targetOverrideFlags(), p = ov.any ? (target || {}) : {};
     const { model, effort } = modelNow(t);
     // Your message shows at once; the hub's copy takes its place seamlessly when it arrives.
     const mine = {
@@ -5143,10 +5430,14 @@
     };
     pendingSays.push(mine);
     if (scrollBottom) {
+      pendingUnreadAnchorOnVisible = false;
+      clearScrollReadTimer();
       cancelInitialAnchor();
       activeCollieRestore = null;
       unreadAnchorApplied = true;
       sessionUnreadMarkerId = "";
+    }
+    if (shouldCommitRead) {
       const latestBeforeSend = latestPersistedEntryId();
       if (latestBeforeSend) commitChatRead(latestBeforeSend, { immediate: false });
     }
@@ -5177,7 +5468,7 @@
     }
     // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
     mine.id = r?.entry || mine.id || "";
-    if (mine.id && scrollBottom) commitChatRead(mine.id, { immediate: true });
+    if (mine.id && shouldCommitRead) commitChatRead(mine.id, { immediate: true });
     const idx = pendingSays.indexOf(mine);
     if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
       if (mine.id) rememberPromotedPending(mine.id, mine._localId);
@@ -5207,6 +5498,8 @@
     const shouldScrollBottom = typeof opts.scrollBottom === "boolean"
       ? opts.scrollBottom
       : (!opts.inDrawer && isCollieNearBottom(sc));
+    const shouldCommitRead = shouldScrollBottom
+      || (!!opts.inDrawer && (isCollieNearBottom(sc) || computeUnreadInfo().count === 0));
     let keepSnap = null;
     if (opts.inDrawer) {
       tdForceScroll = true;
@@ -5228,6 +5521,7 @@
         undefined,
         {
           scrollBottom: shouldScrollBottom,
+          commitRead: shouldCommitRead,
           restore: keepSnap,
           onRollback: () => { pickedReplyOpts.delete(id); },
         },
@@ -5331,6 +5625,12 @@
     autoTab = normalizeAutoTab(autoTab);
     store.set("autoTab", autoTab);
     memEditing = false;
+    if (autoTab !== "memory") {
+      clearMemoryHighlights();
+      memQuery = "";
+      memPreSearchOpen = null;
+      clearMemInsUndo();
+    }
     const body = $("#auto-body");
     body._memSig = "";
     body._inboxSig = "";
@@ -5524,11 +5824,11 @@
         if (view !== "auto" || autoTab !== "memory" || memEditing) return;
         // Workers' states count too: the task cards show them.
         const sig = JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + workerStatus(w)).join();
-        if (sig !== body._memSig) {
-          const open = new Set([...body.querySelectorAll("details[open]")].map((d) => d.dataset.path || d.querySelector("summary")?.textContent));
+        memData = r;
+        if (sig !== body._memSig || !body.querySelector("#mem-content")) {
           const first = !body._memSig;
-          body._memSig = sig; body.innerHTML = memoryHTML(r);
-          if (!first) body.querySelectorAll("details").forEach((d) => d.open = open.has(d.dataset.path || d.querySelector("summary")?.textContent));
+          body._memSig = sig;
+          renderMemoryView(body, r, { preserveOpen: !first && !memQuery.trim() });
           applyAfter();
         } else if (restore) {
           restoreSimpleScroll(body, restore);
@@ -5779,12 +6079,53 @@
     });
   }
 
+  const FEISHU_ONBOARD_FALLBACK_PRESETS = {
+    owner_name: "",
+    default_name: "我的边牧 · Collie",
+    name_template: "{user}的边牧 · Collie",
+    fallback_name: "我的边牧 · Collie",
+    default_desc: "帮你放牧一群 Agent 的边牧｜盯进度、收结论、只把关键决策端给你 · https://lihuanyu0w0.github.io/collie/",
+    homepage_url: "https://lihuanyu0w0.github.io/collie/",
+    default_avatar: "cobalt",
+    limits: {
+      cn: { name_min: 2, name_max: 32, desc_max: 120 },
+      intl: { name_min: 2, name_max: 64, desc_max: 240 },
+    },
+    avatars: [
+      { id: "cobalt", label: "钴蓝领巾", color: "#1d4ed8", preview: "/avatars/cobalt.png", url: "https://lihuanyu0w0.github.io/collie/avatars/cobalt.png" },
+      { id: "terracotta", label: "赤陶领巾", color: "#c2410c", preview: "/avatars/terracotta.png", url: "https://lihuanyu0w0.github.io/collie/avatars/terracotta.png" },
+      { id: "pine", label: "松绿领巾", color: "#15803d", preview: "/avatars/pine.png", url: "https://lihuanyu0w0.github.io/collie/avatars/pine.png" },
+      { id: "plum", label: "梅紫领巾", color: "#7e22ce", preview: "/avatars/plum.png", url: "https://lihuanyu0w0.github.io/collie/avatars/plum.png" },
+    ],
+  };
+
+  function getFeishuOnboardPresets(item) {
+    const raw = item?.extra?.onboard_presets;
+    const base = FEISHU_ONBOARD_FALLBACK_PRESETS;
+    if (!raw || typeof raw !== "object") return base;
+    const avatars = Array.isArray(raw.avatars) && raw.avatars.length ? raw.avatars : base.avatars;
+    return {
+      ...base,
+      ...raw,
+      limits: {
+        cn: { ...base.limits.cn, ...(raw.limits?.cn || {}) },
+        intl: { ...base.limits.intl, ...(raw.limits?.intl || {}) },
+      },
+      avatars,
+    };
+  }
+
+  function runeCount(s) {
+    return Array.from(String(s || "")).length;
+  }
+
   function openIntModal(kind) {
     const item = (intPayload?.integrations || []).find((x) => x.kind === kind);
     if (!item || !intModal) return;
     intModalKind = kind;
     const cfg = item.config || {};
     if (kind === "feishu") {
+      const presets = getFeishuOnboardPresets(item);
       intModalDraft = {
         kind,
         configured: !!item.configured,
@@ -5799,13 +6140,23 @@
         enabled: !!item.enabled,
         health: item.health || { state: "unconfigured" },
         pairing: item.extra?.pairing || { active: false },
+        onboardPresets: presets,
         onboardMode: "create",
         onboardClientId: "",
+        onboardName: presets.owner_name ? presets.default_name : "",
+        onboardDesc: presets.default_desc || FEISHU_ONBOARD_FALLBACK_PRESETS.default_desc,
+        onboardAvatar: presets.default_avatar || "cobalt",
+        onboardPersonaOpen: false,
+        onboardNameErr: "",
+        onboardDescErr: "",
         onboardStarting: false,
         onboard: null,
         onboardDeadlineMs: 0,
         onboardDoneTitle: "",
         onboardDoneMsg: "",
+        onboardSource: "",
+        swapOpen: false,
+        swapRegion: cfg.region || "cn",
         manualOpen: false,
         testState: null,
         testMsg: "",
@@ -5937,8 +6288,21 @@
       if (res && (res.state === "waiting" || res.state === "domain_switched")) {
         intModalDraft.onboard = res;
         intModalDraft.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec) || 0) * 1000;
-        if (res.region) intModalDraft.region = res.region;
+        const isRepair = !!(intModalDraft.configured && res.mode === "existing" && res.client_id && res.client_id === intModalDraft.app_id);
+        if (intModalDraft.configured) {
+          intModalDraft.onboardSource = isRepair ? "repair" : "swap";
+          if (!isRepair) {
+            intModalDraft.swapOpen = true;
+            if (res.region) intModalDraft.swapRegion = res.region;
+          }
+        } else {
+          intModalDraft.onboardSource = "onboard";
+          if (res.region) intModalDraft.region = res.region;
+        }
         if (res.mode === "existing" || res.mode === "create") intModalDraft.onboardMode = res.mode;
+        if (res.avatar) intModalDraft.onboardAvatar = res.avatar;
+        if (res.name && res.name !== intModalDraft.onboardPresets?.name_template) intModalDraft.onboardName = res.name;
+        if (res.desc) intModalDraft.onboardDesc = res.desc;
         renderIntModal(item);
         startOnboardPoll(item);
       }
@@ -5970,7 +6334,10 @@
           const prevRegion = d.onboard?.region;
           d.onboard = res;
           d.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec) || 0) * 1000;
-          if (res.region) d.region = res.region;
+          if (res.region) {
+            if (d.onboardSource === "swap") d.swapRegion = res.region;
+            else if (!d.configured) d.region = res.region;
+          }
           if (st !== prevSt || res.region !== prevRegion) {
             renderIntModal(item);
           } else {
@@ -5981,9 +6348,22 @@
         }
         stopOnboardTimers();
         if (st === "completed") {
-          const wasExisting = res.mode === "existing" || d.configured;
+          const prevAppID = d.app_id;
+          const wasSwap = d.onboardSource === "swap" || (d.configured && (res.mode === "create" || (res.app_id && prevAppID && res.app_id !== prevAppID)));
+          const wasExisting = res.mode === "existing";
           d.onboard = null;
           d.onboardDeadlineMs = 0;
+          d.swapOpen = false;
+          d.onboardSource = "";
+          const doneTitle = wasSwap
+            ? (wasExisting ? "已更换并绑定新的飞书机器人" : "已新建并切换为新的飞书机器人")
+            : (wasExisting || d.configured ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入");
+          const doneMsg = wasSwap
+            ? "已原子替换应用凭据并重载长连接，原有安全白名单与只读监听群已自动保留；可点下方「测试连通 · 发验证卡片」校验。"
+            : "凭据已按 0600 权限安全保存并自动拉起长连接，可点下方「测试连通 · 发验证卡片」校验；若企业开启应用发布审批，待管理员通过后即可收发消息。";
+          const toastMsg = wasSwap
+            ? "已更换飞书机器人并重载长连接"
+            : (wasExisting || d.configured ? "已补齐飞书应用权限并重载长连接" : "飞书机器人已自动配置并启动长连接");
           try {
             const r = await api("/api/super/integrations");
             intPayload = r;
@@ -5993,26 +6373,27 @@
             d.secret_set = !!fresh.secret_set;
             d.enabled = !!fresh.enabled;
             d.region = fc.region || res.region || d.region;
+            d.swapRegion = d.region;
             d.app_id = fc.app_id || res.app_id || d.app_id;
             d.app_secret = "";
             d.allow_open_id = fc.allow_open_id || (Array.isArray(fc.allow_open_ids) ? fc.allow_open_ids.join(", ") : (res.open_id || d.allow_open_id));
             d.feedback_chat_ids = fc.feedback_chat_id || (Array.isArray(fc.feedback_chat_ids) ? fc.feedback_chat_ids.join(", ") : d.feedback_chat_ids);
             d.health = fresh.health || d.health;
-            d.onboardDoneTitle = wasExisting ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入";
-            d.onboardDoneMsg = "凭据已按 0600 权限安全保存并自动拉起长连接，可点下方「测试连通 · 发验证卡片」校验；若企业开启应用发布审批，待管理员通过后即可收发消息。";
+            d.onboardDoneTitle = doneTitle;
+            d.onboardDoneMsg = doneMsg;
             renderIntModal(fresh);
             $("#int-modal-body").scrollTop = 0;
-            toast(wasExisting ? "已补齐飞书应用权限并重载长连接" : "飞书机器人已自动配置并启动长连接");
+            toast(toastMsg);
             if (view === "auto" && autoTab === "integrations") loadAuto();
           } catch {
             d.configured = true;
             d.secret_set = true;
             d.enabled = true;
             if (res.app_id) d.app_id = res.app_id;
-            if (res.region) d.region = res.region;
+            if (res.region) { d.region = res.region; d.swapRegion = res.region; }
             if (res.open_id && !d.allow_open_id) d.allow_open_id = res.open_id;
-            d.onboardDoneTitle = wasExisting ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入";
-            d.onboardDoneMsg = "凭据已安全保存并自动拉起长连接，可点击下方「测试连通 · 发验证卡片」校验。";
+            d.onboardDoneTitle = doneTitle;
+            d.onboardDoneMsg = doneMsg;
             renderIntModal(item);
           }
           return;
@@ -6056,14 +6437,111 @@
         <button type="button" class="btn ghost small" id="fs-pair-cancel">取消</button>
       </div>` : "";
 
+    const presets = d.onboardPresets || getFeishuOnboardPresets(item);
+    const avatars = presets.avatars || FEISHU_ONBOARD_FALLBACK_PRESETS.avatars;
+    const activeAvatar = avatars.find((a) => a.id === d.onboardAvatar) || avatars[0];
+    const wizardRegion = isConfigured ? (d.swapRegion || d.region || "cn") : (d.region || "cn");
+    const limits = (wizardRegion === "intl" ? presets.limits?.intl : presets.limits?.cn) || { name_min: 2, name_max: 32, desc_max: 120 };
+    const safeAvatarSrc = (av) => {
+      const src = String(av?.preview || av?.url || "");
+      return /^(?:\/?avatars\/[a-z0-9_-]+\.png|https:\/\/lihuanyu0w0\.github\.io\/collie\/avatars\/[a-z0-9_-]+\.png)$/i.test(src) ? src : "";
+    };
+    const effectiveDisplayName = () => {
+      const custom = String(d.onboardName || "").trim();
+      if (custom) return custom;
+      return presets.owner_name ? (presets.default_name || presets.fallback_name) : (presets.fallback_name || "我的边牧 · Collie");
+    };
+    const effectiveDisplayDesc = () => String(d.onboardDesc || "").trim() || presets.default_desc || FEISHU_ONBOARD_FALLBACK_PRESETS.default_desc;
+    const isUsingAutoOwnerName = !String(d.onboardName || "").trim() && !presets.owner_name;
+
+    const renderPersonaBox = () => {
+      const avSrc = safeAvatarSrc(activeAvatar);
+      const nameVal = String(d.onboardName || "");
+      const descVal = String(d.onboardDesc ?? "");
+      const nameLen = runeCount(nameVal.trim());
+      const descLen = runeCount(descVal.trim());
+      return `
+        <div class="int-persona-box" aria-label="飞书机器人默认人设">
+          <div class="int-persona-head">
+            <div class="int-persona-preview">
+              ${avSrc ? `<img class="int-persona-av" id="fs-ob-av-preview" src="${esc(avSrc)}" alt="${esc(activeAvatar?.label || "边牧头像")}" width="44" height="44">` : ""}
+              <div class="int-persona-meta">
+                <div class="int-persona-name-row">
+                  <strong class="int-persona-name" id="fs-ob-name-preview">${esc(effectiveDisplayName())}</strong>
+                  ${!presets.owner_name ? `<span class="int-persona-auto-tag" id="fs-ob-auto-tag"${isUsingAutoOwnerName ? "" : " hidden"}>扫码自动填入姓名</span>` : ""}
+                </div>
+                <p class="int-persona-desc" id="fs-ob-desc-preview">${esc(effectiveDisplayDesc())}</p>
+              </div>
+            </div>
+            <button type="button" class="btn ghost small int-persona-toggle" id="fs-ob-persona-toggle" aria-expanded="${d.onboardPersonaOpen ? "true" : "false"}" aria-controls="fs-ob-persona-edit">
+              ${d.onboardPersonaOpen ? "收起" : "微调"}
+            </button>
+          </div>
+
+          <div class="int-avatar-bar">
+            <fieldset class="int-avatar-picker">
+              <legend class="sr-only">选择默认边牧头像配色</legend>
+              <div class="int-avatar-list">
+                ${avatars.map((av) => {
+                  const checked = av.id === activeAvatar?.id;
+                  const src = safeAvatarSrc(av);
+                  const shortLabel = String(av.label || av.id).replace(/领巾$/, "");
+                  return `
+                    <label class="int-avatar-opt${checked ? " is-selected" : ""}" style="--av-ring:${esc(av.color || "#1d4ed8")}">
+                      <input type="radio" class="sr-only" name="fs_ob_avatar" value="${esc(av.id)}" ${checked ? "checked" : ""}>
+                      <span class="int-avatar-thumb">
+                        ${src ? `<img src="${esc(src)}" alt="" width="30" height="30">` : ""}
+                        ${checked ? `<span class="int-avatar-check" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-6.5"/></svg></span>` : ""}
+                      </span>
+                      <span class="int-avatar-lbl">${esc(shortLabel)}</span>
+                    </label>`;
+                }).join("")}
+              </div>
+            </fieldset>
+            <button type="button" class="btn ghost small int-avatar-rand" id="fs-ob-avatar-rand" title="随机换一款领巾配色">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+              <span>随机</span>
+            </button>
+          </div>
+
+          ${d.onboardPersonaOpen ? `
+            <div class="int-persona-edit" id="fs-ob-persona-edit">
+              <div class="int-field">
+                <div class="int-field-head">
+                  <label class="int-field-label" for="fs-ob-name">机器人名字</label>
+                  <span class="int-char-cnt tnum${nameLen > limits.name_max ? " is-over" : ""}" id="fs-ob-name-cnt">${nameLen || runeCount(effectiveDisplayName())} / ${limits.name_max}</span>
+                </div>
+                <input id="fs-ob-name" name="feishu_bot_name" type="text" value="${esc(nameVal)}" maxlength="${limits.name_max}" placeholder="${esc(presets.fallback_name || "我的边牧 · Collie")}（留空则扫码自动填入你的飞书名）" aria-describedby="fs-ob-name-help${d.onboardNameErr ? " fs-ob-name-err" : ""}" ${d.onboardNameErr ? `aria-invalid="true"` : ""} autocomplete="off">
+                ${d.onboardNameErr ? `<p class="int-field-err" id="fs-ob-name-err" role="alert">${esc(d.onboardNameErr)}</p>` : ""}
+                <p class="int-field-help" id="fs-ob-name-help">默认按 <code>{user}的边牧 · Collie</code> 随扫码账号自动命名，拿不到姓名时兜底「${esc(presets.fallback_name || "我的边牧 · Collie")}」。</p>
+              </div>
+              <div class="int-field">
+                <div class="int-field-head">
+                  <label class="int-field-label" for="fs-ob-desc">机器人签名 / 简介</label>
+                  <span class="int-char-cnt tnum${descLen > limits.desc_max ? " is-over" : ""}" id="fs-ob-desc-cnt">${descLen} / ${limits.desc_max}</span>
+                </div>
+                <textarea id="fs-ob-desc" name="feishu_bot_desc" rows="2" maxlength="${limits.desc_max}" placeholder="${esc(presets.default_desc)}" aria-describedby="fs-ob-desc-help${d.onboardDescErr ? " fs-ob-desc-err" : ""}" ${d.onboardDescErr ? `aria-invalid="true"` : ""}>${esc(descVal)}</textarea>
+                ${d.onboardDescErr ? `<p class="int-field-err" id="fs-ob-desc-err" role="alert">${esc(d.onboardDescErr)}</p>` : ""}
+                <div class="int-persona-edit-foot">
+                  <p class="int-field-help" id="fs-ob-desc-help">默认附带 Collie 主页链接，${wizardRegion === "intl" ? "海外 Lark 上限 240 字" : "国内飞书上限 120 字"}。</p>
+                  <button type="button" class="btn ghost small" id="fs-ob-persona-reset">恢复默认</button>
+                </div>
+              </div>
+            </div>` : ""}
+        </div>`;
+    };
+
     const renderOnboardWaiting = () => {
       if (!isObWaiting) return "";
       const safeHref = /^https:\/\//i.test(ob.url || "") ? ob.url : "";
       const safeQR = /^(data:image\/(?:png|svg\+xml);base64,|demo-qr\.png)/i.test(ob.qr_data_url || "") ? ob.qr_data_url : "";
       const isExisting = ob.mode === "existing";
+      const waitAv = avatars.find((a) => a.id === (ob.avatar || d.onboardAvatar)) || activeAvatar;
+      const waitAvSrc = safeAvatarSrc(waitAv);
+      const waitName = (ob.name && ob.name !== presets.name_template) ? ob.name : effectiveDisplayName();
       const targetHint = isExisting
         ? (ob.client_id ? `确认页已自动定位应用 <code>${esc(ob.client_id)}</code>，点确认即可一键补齐最小 IM 权限与事件/卡片双长连接。` : "在确认页选择你的已有飞书应用并确认，将自动补齐最小 IM 权限与事件/卡片双长连接。")
-        : "用飞书 App 扫码或在浏览器打开确认页，点「创建」即可自动配好机器人、双长连接与白名单。";
+        : "用飞书 App 扫码或在浏览器打开确认页，点「创建」即可自动带入默认边牧头像、人设、双长连接与白名单。";
       const statusText = ob.state === "domain_switched"
         ? (ob.region === "intl"
           ? "检测到海外 Lark 账号，已自动切至 Lark 域等待确认（剩余 "
@@ -6071,6 +6549,11 @@
         : (isExisting ? "等待你在飞书中确认补齐（剩余 " : "等待你在飞书中确认创建（剩余 ");
       return `
         <div class="int-onboard-wait">
+          ${!isExisting && waitAvSrc ? `
+            <div class="int-onboard-persona-pill">
+              <img src="${esc(waitAvSrc)}" alt="" width="24" height="24">
+              <span>已附带默认人设：<strong>${esc(waitName)}</strong>（${esc(waitAv?.label || "")}）</span>
+            </div>` : ""}
           <div class="int-onboard-qr-row">
             ${safeQR ? `<div class="int-qr-frame"><img src="${esc(safeQR)}" alt="飞书一键确认二维码" width="144" height="144"></div>` : ""}
             <div class="int-onboard-actions">
@@ -6160,36 +6643,38 @@
         <button type="button" class="switch" id="fs-sync-sw" role="switch" aria-checked="${d.instant_chat_sync ? "true" : "false"}" aria-label="飞书对话立即同步卡片"></button>
       </div>`;
 
-    if (!isConfigured) {
-      $("#int-modal-body").innerHTML = `
-        ${st === "error" && d.health?.last_error ? `
-          <div class="int-modal-alert" role="alert">
-            <span class="sdot error" aria-hidden="true"></span>
-            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
-          </div>` : ""}
-
-        <section class="int-onboard-card" aria-label="飞书一键开通向导">
+    const isSwapObActive = isConfigured && d.onboardSource === "swap";
+    const isRepairObActive = isConfigured && d.onboardSource === "repair";
+    const renderOnboardWizard = (isSwap = false) => {
+      const showWait = isObWaiting && (!isSwap || isSwapObActive);
+      const showTerm = isObTerminalErr && (!isSwap || isSwapObActive);
+      const regAttr = isSwap ? "data-fs-swap-region" : "data-fs-region";
+      const curReg = isSwap ? wizardRegion : d.region;
+      return `
+        <section class="int-onboard-card${isSwap ? " int-swap-card" : ""}" ${isSwap ? `id="fs-swap-panel" ` : ""}aria-label="${isSwap ? "更换飞书机器人向导" : "飞书一键开通向导"}">
           <div class="int-onboard-head">
             <div class="int-onboard-title-row">
-              <span class="int-onboard-title">一键接入飞书机器人</span>
-              <span class="int-onboard-badge">推荐</span>
+              <span class="int-onboard-title">${isSwap ? "更换飞书机器人" : "一键接入飞书机器人"}</span>
+              <span class="int-onboard-badge">${isSwap ? "无缝换绑" : "推荐"}</span>
             </div>
-            <p class="int-onboard-desc">扫码或在浏览器确认，自动完成创建或绑定应用、开启机器人、配置最小消息权限、启用事件与卡片双长连接，并自动锁定你的安全白名单。</p>
+            <p class="int-onboard-desc">${isSwap
+              ? "新机器人扫码确认后才原子替换凭据并重载长连接，自动保留原有安全白名单与只读监听群；中途取消不影响当前机器人。"
+              : "扫码或在浏览器确认，自动完成创建或绑定应用、开启机器人、配置最小消息权限、启用事件与卡片双长连接，并自动锁定你的安全白名单。"}</p>
           </div>
 
-          ${isObWaiting ? renderOnboardWaiting() : `
+          ${showWait ? renderOnboardWaiting() : `
             <div class="int-onboard-opts">
               <div class="int-onboard-row">
                 <div class="int-field">
                   <span class="int-field-label">平台区域</span>
                   <div class="seg" role="group" aria-label="平台区域">
-                    <button type="button" class="${d.region === "cn" ? "on" : ""}" data-fs-region="cn">国内飞书</button>
-                    <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">海外 Lark</button>
+                    <button type="button" class="${curReg === "cn" ? "on" : ""}" ${regAttr}="cn">国内飞书</button>
+                    <button type="button" class="${curReg === "intl" ? "on" : ""}" ${regAttr}="intl">海外 Lark</button>
                   </div>
                 </div>
                 <div class="int-field">
-                  <span class="int-field-label">开通方式</span>
-                  <div class="seg" role="group" aria-label="飞书开通方式">
+                  <span class="int-field-label">${isSwap ? "换绑方式" : "开通方式"}</span>
+                  <div class="seg" role="group" aria-label="${isSwap ? "飞书换绑方式" : "飞书开通方式"}">
                     <button type="button" class="${d.onboardMode === "create" ? "on" : ""}" data-fs-ob-mode="create">新建应用</button>
                     <button type="button" class="${d.onboardMode === "existing" ? "on" : ""}" data-fs-ob-mode="existing">绑定已有应用</button>
                   </div>
@@ -6199,16 +6684,29 @@
                 <div class="int-field">
                   <label class="int-field-label" for="fs-ob-client-id">已有应用 App ID <span class="opt">可选</span></label>
                   <input id="fs-ob-client-id" value="${esc(d.onboardClientId)}" placeholder="留空可在飞书确认页直接选择已有应用，或填入 cli_…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
-                </div>` : ""}
+                </div>` : renderPersonaBox()}
               <div class="int-onboard-cta">
-                <button type="button" class="btn primary" id="fs-ob-start-btn" ${d.onboardStarting ? "disabled" : ""}>
-                  ${d.onboardStarting ? "正在生成确认码…" : (d.onboardMode === "existing" ? "一键绑定并补齐权限" : "一键开通飞书")}
+                <button type="button" class="btn primary" id="fs-ob-start-btn" ${d.onboardStarting || (isSwap && isRepairObActive && isObWaiting) ? "disabled" : ""}>
+                  ${d.onboardStarting ? "正在生成确认码…" : (isSwap
+                    ? (d.onboardMode === "existing" ? "扫码绑定并替换" : "扫码新建并替换")
+                    : (d.onboardMode === "existing" ? "一键绑定并补齐权限" : "一键开通飞书"))}
                 </button>
-                <span class="int-onboard-hint">零公网地址 · 自动配好双长连接与白名单</span>
+                <span class="int-onboard-hint">${isSwap ? "确认前原机器人持续在线 · 自动保留白名单与监听群" : "零公网地址 · 自动配好双长连接与白名单"}</span>
               </div>
-              ${renderOnboardTerminal()}
+              ${showTerm ? renderOnboardTerminal() : ""}
             </div>`}
-        </section>
+        </section>`;
+    };
+
+    if (!isConfigured) {
+      $("#int-modal-body").innerHTML = `
+        ${st === "error" && d.health?.last_error ? `
+          <div class="int-modal-alert" role="alert">
+            <span class="sdot error" aria-hidden="true"></span>
+            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+          </div>` : ""}
+
+        ${renderOnboardWizard(false)}
 
         <details class="int-manual-fold" id="fs-manual-fold" ${d.manualOpen ? "open" : ""}>
           <summary>
@@ -6253,7 +6751,13 @@
           </div>` : ""}
 
         <section class="int-sec">
-          <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+          <div class="int-sec-head">
+            <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+            <button type="button" class="btn ghost small int-swap-btn" id="fs-swap-toggle-btn" aria-expanded="${d.swapOpen ? "true" : "false"}" aria-controls="fs-swap-panel" ${d.saving ? "disabled" : ""}>
+              ${d.swapOpen ? "收起" : "更换机器人"}
+            </button>
+          </div>
+          ${d.swapOpen ? renderOnboardWizard(true) : ""}
           ${credentialsFieldsHTML(true)}
         </section>
 
@@ -6268,11 +6772,11 @@
             <div class="int-test-head">
               <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
               <button type="button" class="btn" id="fs-ob-repair-btn" ${d.onboardStarting || isObWaiting ? "disabled" : ""} title="带当前 App ID 唤起飞书确认页，一键补齐最小 IM 权限与事件/卡片双长连接">
-                ${d.onboardStarting ? "生成确认码…" : "一键补齐权限/回调"}
+                ${d.onboardStarting && isRepairObActive ? "生成确认码…" : "一键补齐权限/回调"}
               </button>
             </div>
             ${testRow()}
-            ${isObWaiting || isObTerminalErr ? `<div class="int-onboard-inline" id="fs-ob-inline">${isObWaiting ? renderOnboardWaiting() : renderOnboardTerminal()}</div>` : ""}
+            ${isRepairObActive && (isObWaiting || isObTerminalErr) ? `<div class="int-onboard-inline" id="fs-ob-inline">${isObWaiting ? renderOnboardWaiting() : renderOnboardTerminal()}</div>` : ""}
           </div>
         </section>
       `;
@@ -6308,24 +6812,61 @@
       return s;
     };
 
-    const startOnboardFlow = async (mode, clientID) => {
+    const validatePersona = (focusInvalid = false) => {
+      const nameTrim = String(d.onboardName || "").trim();
+      const descTrim = String(d.onboardDesc || "").trim();
+      let nameErr = "";
+      let descErr = "";
+      if (nameTrim) {
+        const n = runeCount(nameTrim);
+        if (n < limits.name_min) nameErr = `机器人名字至少需要 ${limits.name_min} 个字符`;
+        else if (n > limits.name_max) nameErr = `机器人名字不能超过 ${limits.name_max} 个字符`;
+      }
+      if (descTrim && runeCount(descTrim) > limits.desc_max) {
+        descErr = `机器人简介不能超过 ${limits.desc_max} 个字符`;
+      }
+      d.onboardNameErr = nameErr;
+      d.onboardDescErr = descErr;
+      if (nameErr || descErr) {
+        d.onboardPersonaOpen = true;
+        renderIntModal(item);
+        if (focusInvalid) {
+          (nameErr ? $("#fs-ob-name") : $("#fs-ob-desc"))?.focus();
+        }
+        return false;
+      }
+      return true;
+    };
+
+    const startOnboardFlow = async (mode, clientID, source = isConfigured ? "swap" : "onboard") => {
+      if (mode === "create" && !validatePersona(true)) return;
+      d.onboardSource = source;
       d.onboardStarting = true;
       d.onboardDoneMsg = "";
       d.onboardDoneTitle = "";
       d.manualOpen = false;
       renderIntModal(item);
       try {
-        const res = await api("/api/super/integrations/feishu/onboard", {
-          body: { region: d.region, mode, client_id: clientID || "" },
-        });
+        const targetRegion = source === "swap" ? (d.swapRegion || d.region || "cn") : (d.region || "cn");
+        const payload = { region: targetRegion, mode, client_id: clientID || "" };
+        if (mode === "create") {
+          const trimmedName = String(d.onboardName || "").trim();
+          const trimmedDesc = String(d.onboardDesc || "").trim();
+          if (trimmedName) payload.name = trimmedName;
+          if (trimmedDesc) payload.desc = trimmedDesc;
+          if (d.onboardAvatar) payload.avatar = d.onboardAvatar;
+        }
+        const res = await api("/api/super/integrations/feishu/onboard", { body: payload });
         if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
         d.onboardStarting = false;
         d.onboard = res;
         d.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec ?? res.expire_in) || 600) * 1000;
         renderIntModal(item);
         startOnboardPoll(item);
-        if (isConfigured) {
+        if (source === "repair") {
           $("#fs-ob-inline")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } else if (source === "swap") {
+          $("#fs-swap-panel")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
         }
       } catch (err) {
         if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
@@ -6336,10 +6877,53 @@
       }
     };
 
+    const cancelActiveOnboard = async () => {
+      stopOnboardTimers();
+      try {
+        await api("/api/super/integrations/feishu/onboard", { method: "DELETE" });
+      } catch {}
+      if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+      d.onboard = null;
+      d.onboardDeadlineMs = 0;
+      d.onboardSource = "";
+    };
+
+    $("#fs-swap-toggle-btn")?.addEventListener("click", async () => {
+      if (d.swapOpen) {
+        if (d.onboardSource === "swap" && isObWaiting) {
+          await cancelActiveOnboard();
+          if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+        } else if (d.onboardSource === "swap" && isObTerminalErr) {
+          d.onboard = null;
+          d.onboardSource = "";
+        }
+        d.swapOpen = false;
+        renderIntModal(item);
+      } else {
+        d.swapOpen = true;
+        d.swapRegion = d.region || "cn";
+        d.onboardDoneMsg = "";
+        d.onboardDoneTitle = "";
+        d.onboardNameErr = "";
+        d.onboardDescErr = "";
+        renderIntModal(item);
+      }
+    });
+
     intModal.querySelectorAll("[data-fs-region]").forEach((b) => {
       b.addEventListener("click", () => {
         if ($("#fs-manual-fold")) d.manualOpen = !!$("#fs-manual-fold").open;
         d.region = b.dataset.fsRegion;
+        d.onboardNameErr = "";
+        d.onboardDescErr = "";
+        renderIntModal(item);
+      });
+    });
+    intModal.querySelectorAll("[data-fs-swap-region]").forEach((b) => {
+      b.addEventListener("click", () => {
+        d.swapRegion = b.dataset.fsSwapRegion;
+        d.onboardNameErr = "";
+        d.onboardDescErr = "";
         renderIntModal(item);
       });
     });
@@ -6351,27 +6935,103 @@
         renderIntModal(item);
       });
     });
+    $("#fs-ob-persona-toggle")?.addEventListener("click", () => {
+      d.onboardPersonaOpen = !d.onboardPersonaOpen;
+      renderIntModal(item);
+      if (d.onboardPersonaOpen) $("#fs-ob-name")?.focus();
+    });
+    intModal.querySelectorAll('input[name="fs_ob_avatar"]').forEach((inp) => {
+      inp.addEventListener("change", () => {
+        if (!inp.checked) return;
+        d.onboardAvatar = inp.value;
+        renderIntModal(item);
+      });
+    });
+    $("#fs-ob-avatar-rand")?.addEventListener("click", () => {
+      const others = avatars.filter((a) => a.id !== d.onboardAvatar);
+      const pool = others.length ? others : avatars;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      if (pick) {
+        d.onboardAvatar = pick.id;
+        renderIntModal(item);
+      }
+    });
+    $("#fs-ob-name")?.addEventListener("input", (ev) => {
+      d.onboardName = ev.target.value;
+      const preview = $("#fs-ob-name-preview");
+      if (preview) preview.textContent = effectiveDisplayName();
+      const autoTag = $("#fs-ob-auto-tag");
+      if (autoTag) autoTag.hidden = !!d.onboardName.trim();
+      const cnt = $("#fs-ob-name-cnt");
+      const n = runeCount(d.onboardName.trim());
+      if (cnt) {
+        cnt.textContent = `${n || runeCount(effectiveDisplayName())} / ${limits.name_max}`;
+        cnt.classList.toggle("is-over", n > limits.name_max);
+      }
+      if (d.onboardNameErr && (!n || (n >= limits.name_min && n <= limits.name_max))) {
+        d.onboardNameErr = "";
+        ev.target.removeAttribute("aria-invalid");
+        $("#fs-ob-name-err")?.remove();
+      }
+    });
+    $("#fs-ob-name")?.addEventListener("blur", () => {
+      const n = runeCount(String(d.onboardName || "").trim());
+      const prevErr = d.onboardNameErr;
+      d.onboardNameErr = n > 0 && n < limits.name_min
+        ? `机器人名字至少需要 ${limits.name_min} 个字符`
+        : n > limits.name_max
+          ? `机器人名字不能超过 ${limits.name_max} 个字符`
+          : "";
+      if (d.onboardNameErr !== prevErr) renderIntModal(item);
+    });
+    $("#fs-ob-desc")?.addEventListener("input", (ev) => {
+      d.onboardDesc = ev.target.value;
+      const preview = $("#fs-ob-desc-preview");
+      if (preview) preview.textContent = effectiveDisplayDesc();
+      const cnt = $("#fs-ob-desc-cnt");
+      const n = runeCount(d.onboardDesc.trim());
+      if (cnt) {
+        cnt.textContent = `${n} / ${limits.desc_max}`;
+        cnt.classList.toggle("is-over", n > limits.desc_max);
+      }
+      if (d.onboardDescErr && n <= limits.desc_max) {
+        d.onboardDescErr = "";
+        ev.target.removeAttribute("aria-invalid");
+        $("#fs-ob-desc-err")?.remove();
+      }
+    });
+    $("#fs-ob-desc")?.addEventListener("blur", () => {
+      const n = runeCount(String(d.onboardDesc || "").trim());
+      const prevErr = d.onboardDescErr;
+      d.onboardDescErr = n > limits.desc_max ? `机器人简介不能超过 ${limits.desc_max} 个字符` : "";
+      if (d.onboardDescErr !== prevErr) renderIntModal(item);
+    });
+    $("#fs-ob-persona-reset")?.addEventListener("click", () => {
+      d.onboardName = presets.owner_name ? presets.default_name : "";
+      d.onboardDesc = presets.default_desc || FEISHU_ONBOARD_FALLBACK_PRESETS.default_desc;
+      d.onboardAvatar = presets.default_avatar || "cobalt";
+      d.onboardNameErr = "";
+      d.onboardDescErr = "";
+      renderIntModal(item);
+    });
     $("#fs-ob-client-id")?.addEventListener("input", (ev) => { d.onboardClientId = ev.target.value; });
     $("#fs-ob-start-btn")?.addEventListener("click", () => {
       const cid = d.onboardMode === "existing" ? d.onboardClientId.trim() : "";
-      startOnboardFlow(d.onboardMode, cid);
+      startOnboardFlow(d.onboardMode, cid, isConfigured ? "swap" : "onboard");
     });
     $("#fs-ob-repair-btn")?.addEventListener("click", () => {
-      startOnboardFlow("existing", d.app_id.trim());
+      d.swapOpen = false;
+      startOnboardFlow("existing", d.app_id.trim(), "repair");
     });
     $("#fs-ob-retry-btn")?.addEventListener("click", () => {
-      const mode = isConfigured ? "existing" : (d.onboard?.mode || d.onboardMode || "create");
-      const cid = isConfigured ? d.app_id.trim() : (mode === "existing" ? (d.onboard?.client_id || d.onboardClientId.trim()) : "");
-      startOnboardFlow(mode, cid);
+      const src = isConfigured ? (d.onboardSource || (d.swapOpen ? "swap" : "repair")) : "onboard";
+      const mode = src === "repair" ? "existing" : (d.onboard?.mode || d.onboardMode || "create");
+      const cid = src === "repair" ? d.app_id.trim() : (mode === "existing" ? (d.onboard?.client_id || d.onboardClientId.trim()) : "");
+      startOnboardFlow(mode, cid, src);
     });
     $("#fs-ob-cancel-btn")?.addEventListener("click", async () => {
-      stopOnboardTimers();
-      try {
-        await api("/api/super/integrations/feishu/onboard", { method: "DELETE" });
-      } catch {}
+      await cancelActiveOnboard();
       if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
-      d.onboard = null;
-      d.onboardDeadlineMs = 0;
       renderIntModal(item);
     });
     $("#fs-manual-fold")?.addEventListener("toggle", (ev) => {
@@ -6711,8 +7371,14 @@
       $("#gf-repo-input")?.focus();
     };
     $("#gf-add-repo")?.addEventListener("click", addRepo);
-    $("#gf-repo-input")?.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); addRepo(); }
+    const gfRepoInput = $("#gf-repo-input");
+    const gfRepoIme = trackIME(gfRepoInput);
+    gfRepoInput?.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      if (isIMEComposing(ev, gfRepoIme)) return;
+      if (isPostCompositionSafariEnter(ev, gfRepoIme)) { ev.preventDefault(); return; }
+      ev.preventDefault();
+      addRepo();
     });
     intModal.querySelectorAll("[data-gf-rm-repo]").forEach((b) => {
       b.addEventListener("click", () => {
@@ -6826,6 +7492,12 @@
 
   // ───────────────────────────── memory: what Collie keeps between sessions
   let memEditing = false;
+  let memData = null;
+  let memQuery = "";
+  let memPreSearchOpen = null;
+  let memDreamExpanded = false;
+  let memInsUndo = null;
+  const MEM_SEARCH_HL = "mem-search";
   const kb = (n) => (n / 1024).toFixed(1) + " KB";
   const kbNum = (n) => (n / 1024).toFixed(1);
   const kbCap = (n) => (n % 1024 === 0 ? String(n / 1024) : (n / 1024).toFixed(1)) + " KB";
@@ -6834,8 +7506,405 @@
     const hm = d.toTimeString().slice(0, 5);
     return d.toDateString() === today ? "今天 " + hm : d.toDateString() === tmr ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   };
-  function memoryHTML(r) {
+
+  function clearMemoryHighlights() {
+    try {
+      if (typeof CSS !== "undefined" && CSS.highlights) CSS.highlights.delete(MEM_SEARCH_HL);
+    } catch {}
+  }
+  function clearMemInsUndo() {
+    if (memInsUndo?.timer) clearTimeout(memInsUndo.timer);
+    memInsUndo = null;
+  }
+  function memQueryTerms(q) {
+    return String(q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+  function countTermHits(haystackLower, terms) {
+    let total = 0;
+    for (const term of terms) {
+      let pos = haystackLower.indexOf(term);
+      while (pos !== -1) {
+        total++;
+        pos = haystackLower.indexOf(term, pos + term.length);
+      }
+    }
+    return total;
+  }
+  function matchMemoryItem(title, path, text, terms) {
+    if (!terms.length) return { matched: true, hits: 0, titleHit: false, bodyHit: false };
+    const titleLower = String(title || "").toLowerCase();
+    const pathLower = String(path || "").toLowerCase();
+    const bodyLower = String(text || "").toLowerCase();
+    const combined = titleLower + "\n" + pathLower + "\n" + bodyLower;
+    for (const term of terms) {
+      if (!combined.includes(term)) return { matched: false, hits: 0, titleHit: false, bodyHit: false };
+    }
+    const titleHits = countTermHits(titleLower, terms) + (pathLower !== titleLower ? countTermHits(pathLower, terms) : 0);
+    const bodyHits = countTermHits(bodyLower, terms);
+    return {
+      matched: true,
+      hits: Math.max(1, titleHits + bodyHits),
+      titleHit: titleHits > 0,
+      bodyHit: bodyHits > 0,
+    };
+  }
+  function mergeTextRanges(ranges) {
+    if (ranges.length <= 1) return ranges;
+    ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+    const out = [ranges[0]];
+    for (let i = 1; i < ranges.length; i++) {
+      const prev = out[out.length - 1], cur = ranges[i];
+      if (cur[0] <= prev[1]) prev[1] = Math.max(prev[1], cur[1]);
+      else out.push(cur);
+    }
+    return out;
+  }
+  function findTermRanges(str, terms) {
+    const low = String(str || "").toLowerCase();
+    const ranges = [];
+    for (const term of terms) {
+      if (!term) continue;
+      let pos = low.indexOf(term);
+      while (pos !== -1) {
+        ranges.push([pos, pos + term.length]);
+        pos = low.indexOf(term, pos + term.length);
+      }
+    }
+    return mergeTextRanges(ranges);
+  }
+  function highlightEscapedText(str, terms) {
+    const raw = String(str || "");
+    if (!terms.length || !raw) return esc(raw);
+    const ranges = findTermRanges(raw, terms);
+    if (!ranges.length) return esc(raw);
+    let out = "", last = 0;
+    for (const [s, e] of ranges) {
+      out += esc(raw.slice(last, s)) + `<mark class="mem-hl">${esc(raw.slice(s, e))}</mark>`;
+      last = e;
+    }
+    return out + esc(raw.slice(last));
+  }
+  function buildMemorySnippet(text, terms) {
+    if (!terms.length) return "";
+    const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+    let bestLine = "", bestScore = 0;
+    for (const rawLine of lines) {
+      const clean = rawLine.replace(/^\s*(?:[#>*\-+]|\d+[.)])\s+/, "").replace(/`|\*\*|__/g, "").trim();
+      if (!clean) continue;
+      const low = clean.toLowerCase();
+      let distinct = 0, total = 0;
+      for (const term of terms) {
+        let p = low.indexOf(term);
+        if (p !== -1) {
+          distinct++;
+          while (p !== -1) { total++; p = low.indexOf(term, p + term.length); }
+        }
+      }
+      if (distinct > 0) {
+        const score = distinct * 100 + Math.min(total, 20);
+        if (score > bestScore) { bestScore = score; bestLine = clean; }
+      }
+    }
+    if (!bestLine) return "";
+    const ranges = findTermRanges(bestLine, terms);
+    const maxLen = 110;
+    let slice = bestLine;
+    if (bestLine.length > maxLen && ranges.length) {
+      const first = ranges[0][0];
+      const start = Math.max(0, first - 28);
+      const end = Math.min(bestLine.length, start + maxLen);
+      slice = (start > 0 ? "…" : "") + bestLine.slice(start, end) + (end < bestLine.length ? "…" : "");
+    } else if (bestLine.length > maxLen) {
+      slice = bestLine.slice(0, maxLen) + "…";
+    }
+    return highlightEscapedText(slice, terms);
+  }
+  function applyMemoryHighlights(root, terms) {
+    clearMemoryHighlights();
+    if (!root || !terms.length) return;
+    if (typeof document.createTreeWalker !== "function" || typeof NodeFilter === "undefined") return;
+    const targets = root.querySelectorAll?.(".mem-body, .mem-ins-list, .mem-dream-sum") || [];
+    const useCustom = typeof CSS !== "undefined" && !!CSS.highlights && typeof Highlight === "function" && typeof Range === "function";
+    const cssRanges = [];
+    const MAX_RANGES = 500;
+    for (const el of targets) {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const p = n.parentElement;
+        if (!p || p.closest?.("form.mem-edit, textarea, button, mark.mem-hl, .mem-ins-acts, .mem-ins-tag, .katex-mathml")) continue;
+        if (n.nodeValue && n.nodeValue.trim()) nodes.push(n);
+      }
+      for (const textNode of nodes) {
+        const ranges = findTermRanges(textNode.nodeValue, terms);
+        if (!ranges.length) continue;
+        if (useCustom) {
+          for (const [s, e] of ranges) {
+            if (cssRanges.length >= MAX_RANGES) break;
+            const r = new Range();
+            r.setStart(textNode, s);
+            r.setEnd(textNode, e);
+            cssRanges.push(r);
+          }
+        } else {
+          const frag = document.createDocumentFragment();
+          const val = textNode.nodeValue;
+          let last = 0;
+          for (const [s, e] of ranges) {
+            if (s > last) frag.append(val.slice(last, s));
+            const mark = document.createElement("mark");
+            mark.className = "mem-hl";
+            mark.textContent = val.slice(s, e);
+            frag.append(mark);
+            last = e;
+          }
+          if (last < val.length) frag.append(val.slice(last));
+          textNode.replaceWith(frag);
+        }
+      }
+    }
+    if (useCustom && cssRanges.length) {
+      try { CSS.highlights.set(MEM_SEARCH_HL, new Highlight(...cssRanges)); } catch {}
+    }
+  }
+
+  // Parse instructions.md list items without altering file format:
+  // ordinary items = explicit rules from the human; items tagged (inferred) = inferred by Collie.
+  const INS_INF_PREFIX = /^(?:\*\*|__|`|\s)*[(（\[]\s*inferred\s*[)）\]](?:\*\*|__|`)?\s*[:：\-—–]?\s*/i;
+  const INS_INF_SUFFIX = /\s*(?:\*\*|__|`)?[(（\[]\s*inferred\s*[)）\]](?:\*\*|__|`)?\s*([。.;；]?)$/i;
+  function stripInferredMarker(text) {
+    const s = String(text || "");
+    if (INS_INF_PREFIX.test(s)) {
+      return { inferred: true, clean: s.replace(INS_INF_PREFIX, "").trim() };
+    }
+    const m = INS_INF_SUFFIX.exec(s);
+    if (m) {
+      const punct = m[1] || "";
+      const head = s.slice(0, m.index).trimEnd();
+      return { inferred: true, clean: (head + (punct && !/[。.;；]$/.test(head) ? punct : "")).trim() };
+    }
+    return { inferred: false, clean: s.trim() };
+  }
+  function parseInstructions(src) {
+    const raw = String(src || "").replace(/\r\n?/g, "\n");
+    const lines = raw.split("\n");
+    const explicit = [];
+    const inferred = [];
+    const extraBlocks = [];
+    let inFence = false;
+    let curSection = "";
+    let sectionIsInferred = false;
+    let curProse = [];
+    const flushProse = () => {
+      const joined = curProse.join("\n").trim();
+      if (joined) extraBlocks.push(joined);
+      curProse = [];
+    };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (/^```/.test(trimmed)) {
+        inFence = !inFence;
+        curProse.push(line);
+        continue;
+      }
+      if (inFence) {
+        curProse.push(line);
+        continue;
+      }
+      if (!trimmed) {
+        flushProse();
+        continue;
+      }
+      if (/^#\s+/.test(trimmed)) {
+        flushProse();
+        continue;
+      }
+      const hm = /^#{2,6}\s+(.*)$/.exec(trimmed);
+      if (hm) {
+        flushProse();
+        curSection = hm[1].trim();
+        sectionIsInferred = /\binferred\b|推断/i.test(curSection);
+        continue;
+      }
+      const lm = /^(\s{0,1})([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+      if (lm) {
+        flushProse();
+        const baseIndent = lm[1].length;
+        const headRaw = lm[3];
+        const subLines = [];
+        let endLine = i;
+        for (let j = i + 1; j < lines.length; j++) {
+          const next = lines[j];
+          if (!next.trim()) {
+            let k = j + 1;
+            while (k < lines.length && !lines[k].trim()) k++;
+            if (k < lines.length && /^\s{2,}/.test(lines[k]) && !/^#{1,6}\s/.test(lines[k].trim())) {
+              subLines.push("");
+              continue;
+            }
+            break;
+          }
+          const nextIndent = next.match(/^(\s*)/)[1].length;
+          if (nextIndent > baseIndent && !/^#{1,6}\s/.test(next.trim())) {
+            subLines.push(next);
+            endLine = j;
+          } else {
+            break;
+          }
+        }
+        const parsed = stripInferredMarker(headRaw);
+        const isInf = parsed.inferred || sectionIsInferred;
+        const cleanHead = parsed.clean || headRaw.trim();
+        const bodyMd = subLines.length
+          ? cleanHead + "\n" + subLines.map((sl) => sl.replace(/^\s{2}/, "")).join("\n")
+          : cleanHead;
+        const item = {
+          startLine: i,
+          endLine,
+          inferred: isInf,
+          section: curSection,
+          text: cleanHead,
+          md: bodyMd,
+          raw: lines.slice(i, endLine + 1).join("\n"),
+        };
+        if (isInf) inferred.push(item);
+        else explicit.push(item);
+        i = endLine;
+        continue;
+      }
+      curProse.push(line);
+    }
+    flushProse();
+    return { explicit, inferred, extraBlocks, total: explicit.length + inferred.length };
+  }
+  function removeInstructionLines(src, startLine, endLine) {
+    const raw = String(src || "").replace(/\r\n?/g, "\n");
+    const lines = raw.split("\n");
+    const s = Number(startLine);
+    const e = Number(endLine);
+    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s >= lines.length || e < s) return raw;
+    const clampedEnd = Math.min(lines.length - 1, e);
+    const next = [...lines.slice(0, s), ...lines.slice(clampedEnd + 1)];
+    const collapsed = [];
+    let blankRun = 0;
+    for (const l of next) {
+      if (!l.trim()) {
+        blankRun++;
+        if (blankRun <= 1) collapsed.push(l);
+      } else {
+        blankRun = 0;
+        collapsed.push(l);
+      }
+    }
+    const out = collapsed.join("\n").replace(/\n+$/, "");
+    return out ? out + "\n" : "";
+  }
+  function lineRangeOffsets(src, startLine, endLine) {
+    const raw = String(src || "").replace(/\r\n?/g, "\n");
+    const lines = raw.split("\n");
+    let offset = 0, start = 0, end = raw.length;
+    for (let i = 0; i < lines.length; i++) {
+      if (i === startLine) start = offset;
+      const lineEnd = offset + lines[i].length;
+      if (i === endLine) { end = lineEnd; break; }
+      offset = lineEnd + 1;
+    }
+    return { start, end };
+  }
+
+  function formatDreamStamp(name) {
+    const base = String(name || "").replace(/\.md$/i, "");
+    const m = /^(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})$/.exec(base);
+    return m ? `${m[1]} ${m[2]}:${m[3]}` : base;
+  }
+  function extractDreamSummary(dream) {
+    if (!dream || !dream.text) return null;
+    const lines = String(dream.text).replace(/\r\n?/g, "\n").split("\n");
+    let headline = "";
+    const points = [];
+    const extraProse = [];
+    let meaningfulLines = 0;
+    let inFence = false;
+    for (const raw of lines) {
+      const t = raw.trim();
+      if (/^```/.test(t)) { inFence = !inFence; continue; }
+      if (inFence || !t || /^#{1,6}\s+/.test(t) || /^[-*_]{3,}$/.test(t)) continue;
+      meaningfulLines++;
+      const bulletM = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(t);
+      if (bulletM) {
+        const clean = bulletM[1].replace(/^>\s*/, "").trim();
+        if (!clean) continue;
+        if (!headline && points.length === 0) headline = clean;
+        else if (points.length < 3) points.push(clean);
+        continue;
+      }
+      const prose = t.replace(/^>\s*/, "").trim();
+      if (!prose) continue;
+      if (!headline) headline = prose;
+      else if (extraProse.length < 2) extraProse.push(prose);
+    }
+    const items = points.length ? points : extraProse;
+    if (!headline && !items.length) return null;
+    const shownCount = (headline ? 1 : 0) + items.length;
+    return {
+      name: dream.name,
+      stamp: formatDreamStamp(dream.name),
+      headline,
+      points: items.slice(0, 3),
+      hasMore: meaningfulLines > shownCount || /```|^#{1,6}\s/m.test(dream.text) || dream.text.length > 260,
+    };
+  }
+
+  function instructionsPreviewHTML(f, terms) {
+    const parsed = parseInstructions(f.text);
+    const undoBar = memInsUndo ? `<div class="mem-ins-undo" role="status">
+        <span class="mem-ins-undo-msg">已移除「${esc(memInsUndo.label)}」</span>
+        <button type="button" class="mem-ins-btn" data-act="mem-ins-undo">撤销</button>
+      </div>` : "";
+    if (!parsed.total) {
+      if (parsed.extraBlocks.length) return undoBar + md(f.text);
+      return `${undoBar}<div class="mem-ins-empty muted">还没有长期约定。聊天里直接告诉 Collie「以后都……」，它会记在这里；也可以点下方「编辑」直接写。</div>`;
+    }
+    const renderItem = (item) => {
+      const itemHit = terms.length > 0 && matchMemoryItem("", "", item.raw, terms).matched;
+      const secTag = item.section && !/\binferred\b|推断/i.test(item.section)
+        ? `<span class="mem-ins-sec">${esc(item.section)}</span>`
+        : "";
+      return `<li class="mem-ins-item${item.inferred ? " is-inferred" : ""}${itemHit ? " is-match" : ""}" data-line="${item.startLine}" data-end-line="${item.endLine}">
+        ${item.inferred ? `<span class="mem-ins-tag">推断</span>` : `<span class="mem-ins-bullet" aria-hidden="true"></span>`}
+        <div class="mem-ins-main">
+          <div class="mem-ins-text">${md(item.md)}</div>
+          ${secTag}
+        </div>
+        <div class="mem-ins-acts">
+          <button type="button" class="mem-ins-btn" data-act="mem-ins-edit" data-line="${item.startLine}" data-end-line="${item.endLine}" title="在原文中定位编辑">编辑</button>
+          ${item.inferred ? `<button type="button" class="mem-ins-btn is-del" data-act="mem-ins-del" data-line="${item.startLine}" data-end-line="${item.endLine}" title="删除这条推断习惯并保存">删掉</button>` : ""}
+        </div>
+      </li>`;
+    };
+    const explicitBlock = parsed.explicit.length ? `<section class="mem-ins-group" data-ins-group="explicit">
+        <div class="mem-ins-gh"><span>你亲口说的<span class="mem-ins-gh-cnt">${parsed.explicit.length}</span></span></div>
+        <ul class="mem-ins-list">${parsed.explicit.map(renderItem).join("")}</ul>
+      </section>` : "";
+    const inferredBlock = parsed.inferred.length ? `<section class="mem-ins-group" data-ins-group="inferred">
+        <div class="mem-ins-gh">
+          <span>Collie 从对话中推断的<span class="mem-ins-gh-cnt">${parsed.inferred.length}</span></span>
+          <span class="mem-ins-gh-note">原文标有 <code>(inferred)</code> · 猜错可一键删掉或编辑</span>
+        </div>
+        <ul class="mem-ins-list">${parsed.inferred.map(renderItem).join("")}</ul>
+      </section>` : "";
+    const extraBlock = parsed.extraBlocks.length
+      ? `<div class="mem-ins-extra">${md(parsed.extraBlocks.join("\n\n"))}</div>`
+      : "";
+    return `<div class="mem-ins-wrap">${undoBar}${explicitBlock}${inferredBlock}${extraBlock}</div>`;
+  }
+
+  function renderMemoryHTML(r, query = "") {
     const files = r.files || [];
+    const dreams = r.dreams || [];
+    const terms = memQueryTerms(query);
+    const searching = terms.length > 0;
     const by = (f) => files.filter(f);
     const dream = r.dreaming ? `<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。`
       : `上次做梦：${r.last_dream ? dayTime(r.last_dream) : "还没有"}　·　下次：${r.next_dream ? dayTime(r.next_dream) + "（当天有新对话才会做）" : "已关闭"}`;
@@ -6853,19 +7922,52 @@
         return `<a ${href ? `href="${href}"` : ""} title="${esc((KIND_LABEL[w.kind] || w.kind) + " · " + (STATUS_LABEL[st] || st))}"><span class="dot ${esc(st)}"></span>${esc(w.name)}</a>`;
       }).join("")}</span>`;
     };
-    const card = (f, o = {}) => {
+    let matchedFiles = 0;
+    let totalHits = 0;
+    const card = (f, o = {}, hit = null) => {
       const edit = !f.legacy && o.edit !== false;
-      const sub = o.sub ?? firstLine(f.text, "");
-      return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
-          <span class="mem-name">${esc(o.label || f.name)}</span><span class="grow mem-sub">${esc(sub)}</span><span class="muted mem-size">${kb(f.size)}</span></summary>
-        <div class="mem-body msg assistant" data-view>${md(f.text)}</div>
-        ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
+      const label = o.label || f.name;
+      const subText = o.sub ?? firstLine(f.text, "");
+      const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(f.text, terms) : "";
+      const subHtml = snipHtml ? snipHtml : esc(subText);
+      const labelHtml = searching ? highlightEscapedText(label, terms) : esc(label);
+      const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
+      const bodyHtml = o.customBody ? o.customBody(f) : md(f.text);
+      const isOpen = searching ? true : !!o.open;
+      return `<details class="mem-fold" ${isOpen ? "open" : ""} data-path="${esc(f.name)}" data-mem-key="file:${esc(f.name)}"><summary>
+          <span class="mem-name">${labelHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span><span class="mem-meta-r">${hitBadge}<span class="muted mem-size">${kb(f.size)}</span></span></summary>
+        <div class="mem-body msg assistant" data-view>${bodyHtml}</div>
+        ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button type="button" class="btn small" data-act="mem-edit">编辑</button></div>
         <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
           <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div></form>` : ""}
       </details>`;
     };
-    const group = (title, note, list, o = {}) => list.length || o.always ? `<h4 class="mem-h">${title}<span class="muted">${note}</span></h4>
-      <div class="card">${list.length ? list.map((f, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {})).join("") : `<div class="empty-row">${o.empty || "空"}</div>`}</div>` : "";
+    const filterFiles = (list, labelOf) => {
+      if (!searching) return list.map((f) => ({ f, hit: null }));
+      const out = [];
+      for (const f of list) {
+        const lbl = labelOf ? labelOf(f) : f.name;
+        const hit = matchMemoryItem(lbl, f.name, f.text, terms);
+        if (hit.matched) {
+          matchedFiles++;
+          totalHits += hit.hits;
+          out.push({ f, hit });
+        }
+      }
+      return out;
+    };
+    const group = (title, note, list, o = {}) => {
+      const labelOf = (f, i) => {
+        const cfg = typeof o.card === "function" ? o.card(f, i) : o.card || {};
+        return cfg.label || f.name;
+      };
+      const items = filterFiles(list, labelOf);
+      if (searching && !items.length) return "";
+      if (!items.length && !o.always) return "";
+      const noteText = searching ? `命中 ${items.length} 项` : note;
+      return `<h4 class="mem-h">${title}<span class="muted">${noteText}</span></h4>
+      <div class="card">${items.length ? items.map(({ f, hit }, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {}, hit)).join("") : `<div class="empty-row">${o.empty || "空"}</div>`}</div>`;
+    };
     const ins = by((f) => f.name === "instructions.md");
     const tasks = by((f) => /^tasks\/[^/]+\.md$/.test(f.name));
     const notes = by((f) => f.name.startsWith("notes/")).sort((a, b) => (a.name === "notes/index.md" ? -1 : b.name === "notes/index.md" ? 1 : a.name.localeCompare(b.name)));
@@ -6876,24 +7978,200 @@
     const upFront = r.up_front ?? Math.max(0, (r.loaded || 0) - msgBytes);
     const budget = r.budget || (10 << 10);
     const over = upFront > budget;
-    return `<div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
-        <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
-        <div class="mem-load">
-          <div class="mem-load-row">
-            <span class="mem-load-main" id="mem-front-label">前置记忆 <b class="${over ? "warn" : ""}">${kbNum(upFront)}</b> / ${kbCap(budget)}${over ? `<span class="mem-warn-note">超出预算，做梦时会精简</span>` : ""}</span>
-            <span class="mem-load-msg">近期消息 <b>${kb(msgBytes)}</b><span class="muted"> · 自动记录</span></span>
+
+    // Top Dream Status Card + Latest Dream Summary
+    let statusCard = "";
+    if (!searching) {
+      const latestDream = dreams[0] || null;
+      const latestSum = latestDream ? extractDreamSummary(latestDream) : null;
+      const dreamSumHtml = latestSum ? `<div class="mem-dream-sum" data-dream-name="${esc(latestDream.name)}">
+          <div class="mem-dream-sum-head">
+            <span class="mem-dream-sum-title">最近做梦摘要<span class="mem-dream-sum-stamp">${esc(latestSum.stamp)}</span></span>
+            <button type="button" class="mem-dream-toggle" data-act="dream-sum-toggle" aria-expanded="${memDreamExpanded ? "true" : "false"}" aria-controls="mem-dream-full">
+              <span>${memDreamExpanded ? "收起日志" : "查看完整日志"}</span>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg>
+            </button>
           </div>
-          <progress class="mem-meter${over ? " warn" : ""}" max="${budget}" value="${Math.min(upFront, budget)}" aria-labelledby="mem-front-label"></progress>
-          <div class="mem-load-sub muted">仅指令、笔记索引与进行中任务计入 ${kbCap(budget)} 预算；<code>messages.md</code> 由 hub 自动维护，不占预算</div>
-        </div></div>
-      ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
-      ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "没有进行中的任务" })}
-      ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
-      ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
-      ${group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
-      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow mem-sub">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
-      ${done.length ? `<details class="mem-done" data-path="tasks/done/"><summary class="mem-h">已完成<span class="muted">${done.length} 件 · 做完或放弃的任务，不再先读</span></summary>
-        <div class="card">${done.map((f) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true })).join("")}</div></details>` : ""}`;
+          ${memDreamExpanded
+            ? `<div id="mem-dream-full" class="mem-dream-full msg assistant">${md(latestDream.text)}</div>`
+            : `<div id="mem-dream-full" class="mem-dream-brief">
+                ${latestSum.headline ? `<div class="mem-dream-lead">${md(latestSum.headline)}</div>` : ""}
+                ${latestSum.points.length ? `<ul class="mem-dream-pts">${latestSum.points.map((pt) => `<li>${md(pt)}</li>`).join("")}</ul>` : ""}
+              </div>`}
+        </div>` : "";
+      statusCard = `<div class="card mem-status-card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
+          <button type="button" class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
+          ${dreamSumHtml}
+          <div class="mem-load">
+            <div class="mem-load-row">
+              <span class="mem-load-main" id="mem-front-label">前置记忆 <b class="${over ? "warn" : ""}">${kbNum(upFront)}</b> / ${kbCap(budget)}${over ? `<span class="mem-warn-note">超出预算，做梦时会精简</span>` : ""}</span>
+              <span class="mem-load-msg">近期消息 <b>${kb(msgBytes)}</b><span class="muted"> · 自动记录</span></span>
+            </div>
+            <progress class="mem-meter${over ? " warn" : ""}" max="${budget}" value="${Math.min(upFront, budget)}" aria-labelledby="mem-front-label"></progress>
+            <div class="mem-load-sub muted">仅你的约定、笔记索引与进行中的事计入 ${kbCap(budget)} 预算；<code>messages.md</code> 由 hub 自动维护，不占预算</div>
+          </div></div>`;
+    }
+
+    // Dream journal archive
+    const dreamItems = searching
+      ? dreams.map((d) => {
+          const title = formatDreamStamp(d.name);
+          const hit = matchMemoryItem(title, "dreams/" + d.name, d.text, terms);
+          if (!hit.matched) return null;
+          matchedFiles++;
+          totalHits += hit.hits;
+          return { d, title, hit };
+        }).filter(Boolean)
+      : dreams.map((d) => ({ d, title: formatDreamStamp(d.name), hit: null }));
+    const dreamSection = dreamItems.length ? `<h4 class="mem-h">做梦日志<span class="muted">${searching ? `命中 ${dreamItems.length} 篇` : `${dreams.length} 篇 · 夜间回顾与跨会话整理`}</span></h4>
+      <div class="card">${dreamItems.map(({ d, title, hit }) => {
+        const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(d.text, terms) : "";
+        const subHtml = snipHtml || esc(firstLine(d.text, d.name));
+        const nameHtml = searching ? highlightEscapedText(title, terms) : esc(title);
+        const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
+        return `<details class="mem-fold" ${searching ? "open" : ""} data-mem-key="dream:${esc(d.name)}"><summary><span class="muted mem-name">${nameHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span>${hitBadge ? `<span class="mem-meta-r">${hitBadge}</span>` : ""}</summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`;
+      }).join("")}</div>` : "";
+
+    // Completed tasks (已结束)
+    const doneItems = filterFiles(done, (f) => f.name.replace(/^tasks\/done\//, ""));
+    const doneSection = doneItems.length ? `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">已结束<span class="muted">${searching ? `命中 ${doneItems.length} / ${done.length} 件` : `${done.length} 件 · 做完或放弃的事，不再先读`}</span></summary>
+        <div class="card">${doneItems.map(({ f, hit }) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>` : "";
+
+    const bodySections = [
+      legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : "",
+      group("进行中的事", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: !searching, empty: "没有进行中的事" }),
+      group("你的约定", "每次都读 · 长期要求和偏好", ins, {
+        card: {
+          open: true,
+          label: "instructions.md",
+          sub: "",
+          customBody: (f) => instructionsPreviewHTML(f, terms),
+        },
+        always: !searching,
+        empty: "还没有",
+      }),
+      group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) }),
+      group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } }),
+      dreamSection,
+      doneSection,
+    ].filter(Boolean).join("");
+
+    const emptySearch = searching && matchedFiles === 0 ? `<div class="card mem-empty">
+        <svg class="mem-empty-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <div class="mem-empty-title">未找到包含「${esc(query.trim())}」的记忆</div>
+        <div class="mem-empty-sub">试试换个关键词，可按标题、文件路径或正文检索约定、任务、笔记、已结束事项和做梦日志。</div>
+        <button type="button" class="btn small" data-act="mem-search-clear">清空搜索</button>
+      </div>` : "";
+
+    return {
+      html: statusCard + (emptySearch || bodySections),
+      matchedFiles,
+      totalHits,
+      searching,
+    };
+  }
+  function memoryHTML(r, query = "") {
+    return renderMemoryHTML(r, query).html;
+  }
+
+  function snapshotOpenMemoryKeys(root) {
+    const out = new Set();
+    if (!root) return out;
+    for (const d of root.querySelectorAll?.("details[open]") || []) {
+      const k = d.dataset?.memKey || d.dataset?.path || d.querySelector?.("summary")?.textContent;
+      if (k) out.add(k);
+    }
+    return out;
+  }
+  function restoreOpenMemoryKeys(root, openSet) {
+    if (!root || !openSet) return;
+    for (const d of root.querySelectorAll?.("details") || []) {
+      const k = d.dataset?.memKey || d.dataset?.path || d.querySelector?.("summary")?.textContent;
+      if (k) d.open = openSet.has(k);
+    }
+  }
+  function ensureMemoryShell(body) {
+    let wrap = body.querySelector?.(".mem-search-wrap");
+    let content = body.querySelector?.("#mem-content");
+    if (!wrap || !content) {
+      body.innerHTML = `<div class="mem-search-wrap" role="search">
+          <label for="mem-search-input" class="visually-hidden">搜索记忆</label>
+          <svg class="mem-search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="mem-search-input" class="mem-search-input" type="search" placeholder="搜索约定、任务、笔记、做梦日志…" autocomplete="off" spellcheck="false" value="${esc(memQuery)}">
+          <span id="mem-search-meta" class="mem-search-meta" aria-live="polite" hidden></span>
+          <button type="button" id="mem-search-clear" class="mem-search-clear" data-act="mem-search-clear" aria-label="清空搜索" title="清空搜索"${memQuery ? "" : " hidden"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div id="mem-content"></div>`;
+      wrap = body.querySelector?.(".mem-search-wrap");
+      content = body.querySelector?.("#mem-content");
+      const inp = wrap?.querySelector?.("#mem-search-input");
+      if (inp) {
+        const ime = trackIME(inp);
+        inp.addEventListener("input", () => setMemoryQuery(inp.value));
+        inp.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            if (isIMEComposing(ev, ime) || isPostCompositionSafariEnter(ev, ime)) return;
+            ev.preventDefault();
+          } else if (ev.key === "Escape") {
+            if (isIMEComposing(ev, ime)) return;
+            if (memQuery) {
+              ev.preventDefault();
+              setMemoryQuery("", { syncInput: true, focus: true });
+            } else {
+              inp.blur?.();
+            }
+          }
+        });
+      }
+    }
+    return { wrap, content };
+  }
+  function renderMemoryView(body, r, opts = {}) {
+    if (!body || !r) return;
+    const { wrap, content } = ensureMemoryShell(body);
+    if (!content) return;
+    const prevOpen = opts.preserveOpen ? snapshotOpenMemoryKeys(content) : null;
+    const res = renderMemoryHTML(r, memQuery);
+    content.innerHTML = res.html;
+    const meta = wrap?.querySelector?.("#mem-search-meta");
+    if (meta) {
+      if (res.searching) {
+        meta.textContent = res.matchedFiles ? `${res.matchedFiles} 项 · ${res.totalHits} 处` : "0 项";
+        meta.hidden = false;
+      } else {
+        meta.textContent = "";
+        meta.hidden = true;
+      }
+    }
+    const clearBtn = wrap?.querySelector?.("#mem-search-clear");
+    if (clearBtn) clearBtn.hidden = !memQuery;
+    if (opts.restorePreSearch && memPreSearchOpen && !res.searching) {
+      restoreOpenMemoryKeys(content, memPreSearchOpen);
+      memPreSearchOpen = null;
+    } else if (prevOpen && !res.searching) {
+      restoreOpenMemoryKeys(content, prevOpen);
+    }
+    applyMemoryHighlights(content, memQueryTerms(memQuery));
+  }
+  function setMemoryQuery(q, { syncInput = false, focus = false } = {}) {
+    const body = $("#auto-body");
+    const content = body?.querySelector?.("#mem-content");
+    const wasSearching = !!memQuery.trim();
+    const next = String(q ?? "");
+    const nowSearching = !!next.trim();
+    if (!wasSearching && nowSearching && content) {
+      memPreSearchOpen = snapshotOpenMemoryKeys(content);
+    }
+    memQuery = next;
+    const inp = body?.querySelector?.("#mem-search-input");
+    if (inp && syncInput && inp.value !== memQuery) inp.value = memQuery;
+    if (inp && focus) inp.focus?.();
+    if (memData && body) {
+      renderMemoryView(body, memData, {
+        preserveOpen: !wasSearching && !nowSearching,
+        restorePreSearch: wasSearching && !nowSearching,
+      });
+    }
   }
 
   function inboxHTML(ts, ths = []) {
@@ -7365,9 +8643,11 @@
         if (name === "idle_stop_minutes" && (!el.value.trim() || Number(el.value) < 0)) el.value = "0";
         saver.flush();
       });
+      const elIme = trackIME(el);
       el.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
-          if (e.isComposing || e.keyCode === 229) return;
+          if (isIMEComposing(e, elIme)) return;
+          if (isPostCompositionSafariEnter(e, elIme)) { e.preventDefault(); return; }
           e.preventDefault();
           saver.flush();
         }
@@ -7414,7 +8694,7 @@
       </section>
 
       <section class="card set-sec">
-        <header><h4>派活默认</h4><p>派发任务的默认配置，对话中可随时口头指定。</p></header>
+        <header><h4>派活默认</h4><p>默认兜底配置；想按任务分模型（如写文档用某模型），对话里告诉 Collie 一次即会长期记住。</p></header>
         <div class="set-grid three">
           <label>Agent<select name="worker_kind" data-title="派活默认用">${workerKindOpts(s.worker_kind)}</select></label>
           ${modelPick("worker", s.worker_kind, s.worker_model, s.worker_effort)}
@@ -7473,6 +8753,7 @@
       if (f.classList.contains("mem-edit")) {
         await api("/api/super/memory", { body: { path: f.closest("[data-path]").dataset.path, text: f.text.value } });
         memEditing = false;
+        $("#auto-body")._memSig = "";
         toast("已保存");
         loadAuto();
       } else if (f.id === "settings-form") {
@@ -7589,9 +8870,94 @@
       } catch (err) { toast(err.message, "attn"); }
       return;
     }
+    if (t.dataset.act === "mem-search-clear") {
+      setMemoryQuery("", { syncInput: true, focus: true });
+      return;
+    }
+    if (t.dataset.act === "dream-sum-toggle") {
+      memDreamExpanded = !memDreamExpanded;
+      if (memData) renderMemoryView($("#auto-body"), memData, { preserveOpen: true });
+      return;
+    }
+    if (t.dataset.act === "mem-ins-edit") {
+      const box = t.closest("[data-path]");
+      if (!box) return;
+      clearMemInsUndo();
+      box.open = true;
+      memEditing = true;
+      box.querySelector(".mem-edit").hidden = false;
+      box.querySelector("[data-view]").hidden = true;
+      box.querySelector(".mem-tools").hidden = true;
+      const ta = box.querySelector("textarea");
+      if (ta) {
+        const sLine = Number(t.dataset.line);
+        const eLine = Number(t.dataset.endLine ?? t.dataset.line);
+        ta.focus();
+        if (Number.isInteger(sLine) && sLine >= 0) {
+          const { start, end } = lineRangeOffsets(ta.value, sLine, Number.isInteger(eLine) ? eLine : sLine);
+          ta.setSelectionRange?.(start, end);
+          const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 21;
+          ta.scrollTop = Math.max(0, (sLine - 3) * lineH);
+        }
+      }
+      return;
+    }
+    if (t.dataset.act === "mem-ins-del") {
+      const box = t.closest("[data-path]");
+      const path = box?.dataset.path || "instructions.md";
+      const file = (memData?.files || []).find((x) => x.name === path);
+      if (!file) return;
+      const sLine = Number(t.dataset.line);
+      const eLine = Number(t.dataset.endLine ?? t.dataset.line);
+      const prevText = file.text || "";
+      const nextText = removeInstructionLines(prevText, sLine, eLine);
+      if (nextText === prevText) return;
+      const rowText = (t.closest(".mem-ins-item")?.querySelector(".mem-ins-text")?.textContent || "").trim();
+      const label = rowText.length > 26 ? rowText.slice(0, 26) + "…" : (rowText || "该条推断");
+      t.disabled = true;
+      try {
+        await api("/api/super/memory", { body: { path, text: nextText } });
+        clearMemInsUndo();
+        memInsUndo = {
+          prevText,
+          label,
+          timer: setTimeout(() => {
+            memInsUndo = null;
+            if (view === "auto" && autoTab === "memory" && !memEditing && memData) {
+              renderMemoryView($("#auto-body"), memData, { preserveOpen: true });
+            }
+          }, 12000),
+        };
+        file.text = nextText;
+        $("#auto-body")._memSig = "";
+        toast("已删掉并保存");
+        await loadAuto();
+      } catch (err) {
+        t.disabled = false;
+        toast(err.message, "attn");
+      }
+      return;
+    }
+    if (t.dataset.act === "mem-ins-undo") {
+      if (!memInsUndo) return;
+      const prevText = memInsUndo.prevText;
+      t.disabled = true;
+      try {
+        await api("/api/super/memory", { body: { path: "instructions.md", text: prevText } });
+        clearMemInsUndo();
+        $("#auto-body")._memSig = "";
+        toast("已恢复");
+        await loadAuto();
+      } catch (err) {
+        t.disabled = false;
+        toast(err.message, "attn");
+      }
+      return;
+    }
     if (t.dataset.act === "mem-edit" || t.dataset.act === "mem-cancel") {
       const box = t.closest("[data-path]");
       memEditing = t.dataset.act === "mem-edit";
+      if (memEditing) clearMemInsUndo();
       box.querySelector(".mem-edit").hidden = !memEditing;
       box.querySelector("[data-view]").hidden = memEditing;
       box.querySelector(".mem-tools").hidden = memEditing;
@@ -8340,8 +9706,19 @@
   });
 
   // ───────────────────────────── preferences (per device, in localStorage)
+  const ACCENTS = [
+    ["amber", "暖琥珀"],
+    ["cobalt", "钴蓝"],
+    ["pine", "松绿"],
+    ["ink", "纯黑白"],
+  ];
+  const VALID_ACCENTS = new Set(ACCENTS.map(([v]) => v));
   const prefs = {
     theme: () => store.get("theme", "system"),
+    accent: () => {
+      const v = store.get("accent", "amber");
+      return VALID_ACCENTS.has(v) ? v : "amber";
+    },
     text: () => store.get("text", "normal"),
     sendKey: () => store.get("sendKey", "enter"),
     notify: () => store.get("notify", true),
@@ -8350,22 +9727,30 @@
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
   function applyLook() {
     const root = document.documentElement;
-    const t = prefs.theme(), x = prefs.text();
+    const t = prefs.theme(), a = prefs.accent(), x = prefs.text();
     if (t === "system") delete root.dataset.theme; else root.dataset.theme = t;
+    if (a === "amber") delete root.dataset.accent; else root.dataset.accent = a;
     if (x === "normal") delete root.dataset.text; else root.dataset.text = x;
+    const cs = $('meta[name="color-scheme"]');
+    if (cs) cs.content = t === "light" || t === "dark" ? t : "light dark";
     const dark = t === "dark" || (t === "system" && darkMQ.matches);
     $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#0b0b0c" : "#ffffff"; });
     dispatchEvent(new Event("collie:theme"));
   }
   darkMQ.addEventListener("change", applyLook);
   addEventListener("storage", (ev) => {
-    if (!ev.key || ev.key === "collie.theme" || ev.key === "collie.text") applyLook();
+    if (!ev.key || ev.key === "collie.theme" || ev.key === "collie.accent" || ev.key === "collie.text") {
+      applyLook();
+      if (view === "prefs") renderPrefs();
+    }
   });
   applyLook();
 
   function renderPrefs(restore = null) {
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
+    const accentPick = (cur) => `<div class="accent-pick" role="radiogroup" aria-label="点睛色" data-pref="accent">${ACCENTS.map(([v, label]) =>
+      `<button type="button" class="accent-opt${v === cur ? " on" : ""}" role="radio" aria-checked="${v === cur}" tabindex="${v === cur ? "0" : "-1"}" data-v="${v}"><span class="accent-dot ${v}" aria-hidden="true"></span><span>${label}</span></button>`).join("")}</div>`;
     const sw = (key, on, disabled = false) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"${disabled ? " disabled" : ""}></button>`;
     const row = (title, sub, ctl, warn = false) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small${warn ? ' class="pref-hint-warn"' : ""}>${sub}</small>` : ""}</div>${ctl}</div>`;
     const env = notifyEnvState();
@@ -8376,6 +9761,7 @@
     $("#prefs-body").innerHTML = `<div class="prefs">
       <div class="card"><div class="card-h">外观</div>
         ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
+        ${row("点睛色", "仅用于未读、待处理圆点与告警等少数提醒", accentPick(prefs.accent()))}
         ${row("对话文字", "", seg("text", prefs.text(), [["small", "小"], ["normal", "标准"], ["large", "大"]]))}
       </div>
       <div class="card"><div class="card-h">对话</div>
@@ -8396,7 +9782,7 @@
   $("#prefs-body").addEventListener("click", async (e) => {
     const link = e.target.closest("a[data-auto-tab]");
     if (link) autoTab = link.dataset.autoTab;
-    const b = e.target.closest(".seg[data-pref] button, button.switch[data-pref]");
+    const b = e.target.closest(".seg[data-pref] button, .accent-pick[data-pref] button, button.switch[data-pref]");
     if (!b || b.disabled) return;
     if (b.classList.contains("switch")) {
       const key = b.dataset.pref, on = b.getAttribute("aria-checked") !== "true";
@@ -8422,10 +9808,29 @@
     } else {
       const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
       if (key === "mode2") setMode(v); else store.set(key, v);
-      if (key === "theme" || key === "text") applyLook();
+      if (key === "theme" || key === "accent" || key === "text") applyLook();
       if (key === "sendKey") syncThreadComposerHint();
     }
     renderPrefs();
+  });
+  $("#prefs-body").addEventListener("keydown", (e) => {
+    const group = e.target.closest('.accent-pick[role="radiogroup"]');
+    if (!group) return;
+    const opts = [...group.querySelectorAll('button[role="radio"]')];
+    const idx = opts.indexOf(e.target.closest('button[role="radio"]'));
+    if (idx < 0 || !opts.length) return;
+    let next = -1;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % opts.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + opts.length) % opts.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = opts.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    const v = opts[next].dataset.v;
+    store.set("accent", v);
+    applyLook();
+    renderPrefs();
+    $(`.accent-pick[data-pref="accent"] button[data-v="${CSS.escape(v)}"]`, $("#prefs-body"))?.focus();
   });
 
   // ───────────────────────────── devices
@@ -10538,7 +11943,7 @@
       for (const el of document.querySelectorAll(".thumb[data-img] img")) {
         if (el.parentElement.dataset.img === p) { el.src = u; el.parentElement.classList.remove("broken"); }
       }
-    } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
+    } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
   }
   // Under each Collie message, on hover: copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
   const ICON_COPY = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
@@ -12614,7 +14019,9 @@
       tdComposerCtrl = bindComposer(tdComposer, tdInput, async (text, ctx) => {
         tdForceScroll = true;
         tdAutoStickUntil = performance.now() + 1200;
-        await sendSuper(text, ctx.targetRe, false, undefined, { scrollBottom: false });
+        const mainSc = view === "collie" ? viewScroller("collie") : null;
+        const commitRead = isCollieNearBottom(mainSc) || computeUnreadInfo().count === 0;
+        await sendSuper(text, ctx.targetRe, false, undefined, { scrollBottom: false, commitRead });
         if (tdBodyEl) requestAnimationFrame(() => { tdBodyEl.scrollTop = tdBodyEl.scrollHeight; });
       }, () => targetNow().machine, {
         sendBtn: tdSendBtn,
@@ -13780,6 +15187,35 @@
       + (rest.length ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>` : "");
   }
 
+  // Safari on macOS fires compositionend before the confirming Enter keydown
+  // (WebKit bug 165004), so event.isComposing is already false. Track
+  // compositionend event.timeStamp and swallow plain Enter within 30ms
+  // (Math.abs also handles Safari's inverted timestamp ordering).
+  function trackIME(el) {
+    if (!el) return null;
+    if (el._imeTracker) return el._imeTracker;
+    const tracker = { composing: false, lastCompositionEndAt: null };
+    el._imeTracker = tracker;
+    el.addEventListener("compositionstart", () => { tracker.composing = true; });
+    el.addEventListener("compositionend", (ev) => {
+      tracker.composing = false;
+      tracker.lastCompositionEndAt = (typeof ev?.timeStamp === "number" && ev.timeStamp > 0)
+        ? ev.timeStamp
+        : performance.now();
+    });
+    el.addEventListener("blur", () => { tracker.composing = false; });
+    return tracker;
+  }
+  function isIMEComposing(e, tracker) {
+    return !!(e?.isComposing || e?.key === "Process" || e?.keyCode === 229 || tracker?.composing);
+  }
+  function isPostCompositionSafariEnter(e, tracker) {
+    if (!tracker || tracker.lastCompositionEndAt === null) return false;
+    if (e?.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return false;
+    const ts = (typeof e.timeStamp === "number" && e.timeStamp > 0) ? e.timeStamp : performance.now();
+    return Math.abs(ts - tracker.lastCompositionEndAt) <= 30;
+  }
+
   function bindComposer(form, input, send, machine, opts = {}) {
     if (!form || !input) return null;
     const growFn = opts.grow || grow;
@@ -13798,9 +15234,15 @@
         },
       });
     }
+    const ime = trackIME(input);
     input.addEventListener("input", () => { growFn(input); syncBtn(); });
     input.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      if (e.key !== "Enter" || e.shiftKey) return;
+      if (isIMEComposing(e, ime)) return;
+      if (isPostCompositionSafariEnter(e, ime)) {
+        e.preventDefault();
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       // "mod": Enter makes a new line and ⌘/Ctrl+Enter sends.
       if (prefs.sendKey() === "mod" ? mod : !mod) {

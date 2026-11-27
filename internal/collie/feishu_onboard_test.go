@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -19,6 +21,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	collieWeb "github.com/lihuanyu0w0/collie/web"
 )
 
 func decodeAddonsParam(t *testing.T, raw string) map[string]any {
@@ -123,6 +128,8 @@ func setupOnboardHarness(t *testing.T, cnHandler, larkHandler http.HandlerFunc) 
 			return nil
 		}
 	}
+	emptyOwner := ""
+	sp.feishuOnboard.ownerNameOverride = &emptyOwner
 
 	mux := http.NewServeMux()
 	s.superRoutes(mux)
@@ -274,6 +281,19 @@ func TestFeishuOnboardCreateSuccessAndZeroSecretLeak(t *testing.T) {
 	}
 	if u.Query().Get("name") != feishuOnboardDefaultName {
 		t.Fatalf("name=%q, want %q", u.Query().Get("name"), feishuOnboardDefaultName)
+	}
+	if gotDesc := u.Query().Get("desc"); gotDesc != feishuOnboardDefaultDesc || !strings.Contains(gotDesc, collieHomepageURL) {
+		t.Fatalf("desc=%q, want default desc containing %q", gotDesc, collieHomepageURL)
+	}
+	if utf8.RuneCountInString(feishuOnboardDefaultDesc) > feishuOnboardCNMaxDescRunes {
+		t.Fatalf("default desc exceeds CN 120-char limit: %d", utf8.RuneCountInString(feishuOnboardDefaultDesc))
+	}
+	gotAvatars := u.Query()["avatar"]
+	if len(gotAvatars) != 4 || !strings.HasSuffix(gotAvatars[0], "/avatars/cobalt.png") {
+		t.Fatalf("avatar query=%v, want 4 presets starting with cobalt.png", gotAvatars)
+	}
+	if startView.Avatar != "cobalt" || startView.Name != feishuOnboardDefaultName || startView.Desc != feishuOnboardDefaultDesc {
+		t.Fatalf("startView persona mismatch: name=%q desc=%q avatar=%q", startView.Name, startView.Desc, startView.Avatar)
 	}
 
 	// Verify PNG QR Data URL.
@@ -440,6 +460,123 @@ func TestFeishuOnboardExistingAppModesAndConfigMerge(t *testing.T) {
 	}
 	if sp.secrets.GetKey(feishuKind, "app_secret") != existingSecret {
 		t.Fatalf("updated secret not persisted")
+	}
+}
+
+func TestFeishuOnboardAtomicSwapPreservesAllowlistAndFeedbackChats(t *testing.T) {
+	const (
+		oldAppID  = "cli_old_bot_001"
+		oldSecret = "sec_old_bot_secret_001"
+		oldOwner  = "ou_old_bot_owner_001"
+		fbChatID  = "oc_feedback_keep_001"
+		newAppID  = "cli_new_bot_002"
+		newSecret = "sec_new_bot_secret_002"
+		newOwner  = "ou_new_bot_owner_002"
+	)
+
+	var mode atomic.Int32 // 0 = pending, 1 = denied, 2 = complete
+	s, sp, mux := setupOnboardHarness(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			w.Header().Set("Content-Type", "application/json")
+			if r.Form.Get("action") == "begin" {
+				_, _ = w.Write([]byte(`{"device_code":"dev_swap","user_code":"SWAP-01","verification_uri_complete":"https://open.feishu.cn/page/launcher?user_code=SWAP-01","expires_in":600,"interval":1}`))
+				return
+			}
+			switch mode.Load() {
+			case 0:
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+			case 1:
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"access_denied"}`))
+			default:
+				_, _ = w.Write([]byte(`{"client_id":"` + newAppID + `","client_secret":"` + newSecret + `","user_info":{"open_id":"` + newOwner + `","tenant_brand":"feishu"}}`))
+			}
+		},
+		nil,
+	)
+
+	// Pre-populate configured Bot A with allowlist, feedback chat, and preferences.
+	preCfg, _ := json.Marshal(FeishuConfig{
+		Region:           "cn",
+		AppID:            oldAppID,
+		AllowOpenIDs:     []string{oldOwner},
+		FeedbackChatIDs:  []string{fbChatID},
+		GroupMentionOnly: true,
+		InstantChatSync:  false,
+	})
+	en := true
+	if _, err := sp.integrations.Save(feishuKind, SaveRequest{
+		Enabled: &en,
+		Config:  preCfg,
+		Secrets: map[string]string{"app_id": oldAppID, "app_secret": oldSecret},
+	}); err != nil {
+		t.Fatalf("pre-save bot A: %v", err)
+	}
+
+	assertBotAIntact := func(stage string) {
+		t.Helper()
+		snap := sp.integrations.ConfigSnapshot(feishuKind)
+		fc := parseFeishuConfig(snap.Config)
+		if !snap.Enabled || fc.AppID != oldAppID || fc.Region != "cn" || sp.secrets.GetKey(feishuKind, "app_secret") != oldSecret {
+			t.Fatalf("%s mutated original bot A credentials: enabled=%v fc=%+v", stage, snap.Enabled, fc)
+		}
+		if !slices.Equal(fc.AllowOpenIDs, []string{oldOwner}) || !slices.Equal(fc.FeedbackChatIDs, []string{fbChatID}) {
+			t.Fatalf("%s mutated allowlist/feedback: allow=%v fb=%v", stage, fc.AllowOpenIDs, fc.FeedbackChatIDs)
+		}
+	}
+
+	// 1) Start swap and cancel midway -> Bot A must remain untouched.
+	mode.Store(0)
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create","avatar":"pine"}`, s.token))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("start swap 1: %d %s", rec1.Code, rec1.Body.String())
+	}
+	assertBotAIntact("while swap waiting")
+	delRec := httptest.NewRecorder()
+	mux.ServeHTTP(delRec, authedReq(http.MethodDelete, "/api/super/integrations/feishu/onboard", "", s.token))
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("cancel swap: %d", delRec.Code)
+	}
+	assertBotAIntact("after swap cancel")
+
+	// 2) Start swap and get denied -> Bot A must remain untouched.
+	mode.Store(1)
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create"}`, s.token))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("start swap 2: %d", rec2.Code)
+	}
+	waitOnboardState(t, sp.feishuOnboard, feishuOnboardStateDenied)
+	assertBotAIntact("after swap denied")
+
+	// 3) Start swap and confirm -> atomically replaces app_id/app_secret while
+	//    preserving allow_open_ids (new owner first) and feedback_chat_ids.
+	mode.Store(2)
+	rec3 := httptest.NewRecorder()
+	mux.ServeHTTP(rec3, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create","avatar":"terracotta"}`, s.token))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("start swap 3: %d", rec3.Code)
+	}
+	done := waitOnboardState(t, sp.feishuOnboard, feishuOnboardStateCompleted)
+	if done.AppID != newAppID || done.OpenID != newOwner {
+		t.Fatalf("unexpected swap completion view: %+v", done)
+	}
+	snap := sp.integrations.ConfigSnapshot(feishuKind)
+	fc := parseFeishuConfig(snap.Config)
+	if !snap.Enabled || fc.AppID != newAppID || sp.secrets.GetKey(feishuKind, "app_secret") != newSecret {
+		t.Fatalf("swap did not atomically apply new credentials: enabled=%v fc=%+v", snap.Enabled, fc)
+	}
+	if !slices.Equal(fc.AllowOpenIDs, []string{newOwner, oldOwner}) {
+		t.Fatalf("swap allow_open_ids = %v, want [%s %s]", fc.AllowOpenIDs, newOwner, oldOwner)
+	}
+	if !slices.Equal(fc.FeedbackChatIDs, []string{fbChatID}) {
+		t.Fatalf("swap feedback_chat_ids = %v, want [%s]", fc.FeedbackChatIDs, fbChatID)
+	}
+	if !fc.GroupMentionOnly || fc.InstantChatSync {
+		t.Fatalf("swap overwrote boolean prefs: %+v", fc)
 	}
 }
 
@@ -711,4 +848,211 @@ func TestFeishuOnboardDeniedExpiredAndCancel(t *testing.T) {
 			t.Fatalf("state after DELETE=%q, want idle", st)
 		}
 	})
+}
+
+func TestFeishuOnboardPersonaPresetsAndValidation(t *testing.T) {
+	// 1. Default desc contains homepage URL and respects Feishu CN 120-char limit cleanly.
+	if !strings.Contains(feishuOnboardDefaultDesc, "https://lihuanyu0w0.github.io/collie/") {
+		t.Fatalf("default desc must contain homepage URL: %q", feishuOnboardDefaultDesc)
+	}
+	if n := utf8.RuneCountInString(feishuOnboardDefaultDesc); n > feishuOnboardCNMaxDescRunes {
+		t.Fatalf("default desc rune count=%d > %d", n, feishuOnboardCNMaxDescRunes)
+	}
+
+	// 2. Owner name resolution & fallback rules.
+	if got := formatFeishuOwnerBotName("Alex", feishuOnboardCNMaxNameRunes); got != "Alex的边牧 · Collie" {
+		t.Fatalf("owner name -> %q", got)
+	}
+	if got := formatFeishuOwnerBotName("", feishuOnboardCNMaxNameRunes); got != "我的边牧 · Collie" {
+		t.Fatalf("empty owner -> %q", got)
+	}
+	if got := formatFeishuOwnerBotName("ou_123456", feishuOnboardCNMaxNameRunes); got != "我的边牧 · Collie" {
+		t.Fatalf("open_id owner -> %q", got)
+	}
+	if got := formatFeishuOwnerBotName("alice@example.com", feishuOnboardCNMaxNameRunes); got != "我的边牧 · Collie" {
+		t.Fatalf("email owner -> %q", got)
+	}
+	longOwner := strings.Repeat("很长的名字", 10)
+	if got := formatFeishuOwnerBotName(longOwner, feishuOnboardCNMaxNameRunes); utf8.RuneCountInString(got) > feishuOnboardCNMaxNameRunes || !strings.HasSuffix(got, feishuOnboardNameSuffix) {
+		t.Fatalf("long owner truncation failed: %q (runes=%d)", got, utf8.RuneCountInString(got))
+	}
+
+	// 3. Embedded 4 preset avatar PNG assets exist and are valid PNGs.
+	for _, av := range feishuOnboardAvatarPresets {
+		rel := strings.TrimPrefix(av.Preview, "/")
+		b, err := collieWeb.FS.ReadFile(rel)
+		if err != nil {
+			t.Fatalf("embedded avatar %s missing: %v", rel, err)
+		}
+		if len(b) < 8 || !bytes.Equal(b[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+			t.Fatalf("embedded avatar %s is not a valid PNG", rel)
+		}
+	}
+
+	// 4. End-to-end HTTP checks for owner default, custom persona, avatar ordering, and CN/Intl limits.
+	s, sp, mux := setupOnboardHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Form.Get("action") == "begin" {
+			_, _ = w.Write([]byte(`{
+				"device_code": "dev_persona_1",
+				"user_code": "PERS-0001",
+				"verification_uri_complete": "https://open.feishu.cn/page/launcher?user_code=PERS-0001",
+				"expires_in": 600,
+				"interval": 5
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+	}, func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Form.Get("action") == "begin" {
+			_, _ = w.Write([]byte(`{
+				"device_code": "dev_persona_intl",
+				"user_code": "INTL-0001",
+				"verification_uri_complete": "https://open.larksuite.com/page/launcher?user_code=INTL-0001",
+				"expires_in": 600,
+				"interval": 5
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+	})
+
+	// ExtraView exposes onboard_presets with 4 avatars and homepage URL.
+	iv, ok := sp.integrations.View(feishuKind)
+	if !ok {
+		t.Fatalf("feishu integration missing")
+	}
+	presets, _ := iv.Extra["onboard_presets"].(map[string]any)
+	if presets == nil || presets["fallback_name"] != "我的边牧 · Collie" || presets["default_desc"] != feishuOnboardDefaultDesc {
+		t.Fatalf("unexpected onboard_presets: %+v", presets)
+	}
+
+	// Known owner name resolves automatically into launch URL when request name is omitted.
+	owner := "小明"
+	sp.feishuOnboard.ownerNameOverride = &owner
+	recOwner := httptest.NewRecorder()
+	mux.ServeHTTP(recOwner, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create","avatar":"terracotta"}`, s.token))
+	if recOwner.Code != http.StatusOK {
+		t.Fatalf("owner onboard status=%d body=%s", recOwner.Code, recOwner.Body.String())
+	}
+	var vOwner FeishuOnboardView
+	_ = json.Unmarshal(recOwner.Body.Bytes(), &vOwner)
+	uOwner := assertMinimalCollieAddons(t, vOwner.URL)
+	if uOwner.Query().Get("name") != "小明的边牧 · Collie" {
+		t.Fatalf("owner resolved name=%q, want 小明的边牧 · Collie", uOwner.Query().Get("name"))
+	}
+	avs := uOwner.Query()["avatar"]
+	if len(avs) != 4 || !strings.HasSuffix(avs[0], "/avatars/terracotta.png") {
+		t.Fatalf("avatar order=%v, want terracotta first among 4 presets", avs)
+	}
+
+	// Custom name/desc/avatar overrides work cleanly.
+	recCustom := httptest.NewRecorder()
+	mux.ServeHTTP(recCustom, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create","name":"阿白的边牧","desc":"团队协查边牧 · https://lihuanyu0w0.github.io/collie/","avatar":"pine"}`, s.token))
+	if recCustom.Code != http.StatusOK {
+		t.Fatalf("custom onboard status=%d body=%s", recCustom.Code, recCustom.Body.String())
+	}
+	var vCustom FeishuOnboardView
+	_ = json.Unmarshal(recCustom.Body.Bytes(), &vCustom)
+	uCustom, _ := url.Parse(vCustom.URL)
+	if uCustom.Query().Get("name") != "阿白的边牧" || !strings.HasSuffix(uCustom.Query()["avatar"][0], "/avatars/pine.png") {
+		t.Fatalf("custom persona url mismatch: %s", vCustom.URL)
+	}
+
+	// Validation rejections (400) for short name, >32 CN name, >120 CN desc, and invalid avatar.
+	for _, tc := range []struct {
+		label string
+		body  string
+	}{
+		{"short_name", `{"region":"cn","mode":"create","name":"牧"}`},
+		{"cn_name_over_32", `{"region":"cn","mode":"create","name":"` + strings.Repeat("牧", 33) + `"}`},
+		{"cn_desc_over_120", `{"region":"cn","mode":"create","desc":"` + strings.Repeat("简", 121) + `"}`},
+		{"bad_avatar", `{"region":"cn","mode":"create","avatar":"neon"}`},
+		{"intl_desc_over_240", `{"region":"intl","mode":"create","desc":"` + strings.Repeat("a", 241) + `"}`},
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", tc.body, s.token))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status=%d, want 400 (body=%s)", tc.label, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Intl accepts longer name (40) & desc (150) within Lark's 64/240 bounds.
+	recIntl := httptest.NewRecorder()
+	mux.ServeHTTP(recIntl, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"intl","mode":"create","name":"`+strings.Repeat("a", 40)+`","desc":"`+strings.Repeat("b", 150)+`","avatar":"plum"}`, s.token))
+	if recIntl.Code != http.StatusOK {
+		t.Fatalf("intl longer persona status=%d body=%s", recIntl.Code, recIntl.Body.String())
+	}
+}
+
+func TestFeishuOnboardPersonaJSContract(t *testing.T) {
+	nodeBin, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	root := filepath.Join("..", "..")
+	jsTest := `
+const fs = require("fs");
+const path = require("path");
+const root = process.argv[1];
+const appJs = fs.readFileSync(path.join(root, "web/app.js"), "utf8");
+const appCss = fs.readFileSync(path.join(root, "web/app.css"), "utf8");
+const demoJs = fs.readFileSync(path.join(root, "scripts/demo/demo.js"), "utf8");
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// 1. Default persona fallback presets in web/app.js match Go backend & homepage requirement.
+assert(appJs.includes("FEISHU_ONBOARD_FALLBACK_PRESETS"), "missing FEISHU_ONBOARD_FALLBACK_PRESETS");
+assert(appJs.includes("https://lihuanyu0w0.github.io/collie/"), "missing homepage URL in web/app.js");
+assert(appJs.includes("我的边牧 · Collie"), "missing fallback bot name");
+assert(appJs.includes("{user}的边牧 · Collie"), "missing {user} template");
+for (const id of ["cobalt", "terracotta", "pine", "plum"]) {
+  assert(appJs.includes('id: "' + id + '"'), "missing avatar preset " + id + " in web/app.js");
+  assert(demoJs.includes('id: "' + id + '"'), "missing avatar preset " + id + " in demo.js");
+  assert(fs.existsSync(path.join(root, "web/avatars", id + ".png")), "missing web/avatars/" + id + ".png");
+  assert(fs.existsSync(path.join(root, "docs/avatars", id + ".png")), "missing docs/avatars/" + id + ".png");
+}
+
+// 2. Interactive controls & accessibility contract in web/app.js + web/app.css.
+for (const marker of [
+  'name="fs_ob_avatar"',
+  'id="fs-ob-avatar-rand"',
+  'id="fs-ob-persona-toggle"',
+  'id="fs-ob-persona-edit"',
+  'id="fs-ob-name"',
+  'id="fs-ob-desc"',
+  'id="fs-ob-persona-reset"',
+  'aria-controls="fs-ob-persona-edit"',
+  'aria-invalid="true"',
+  'if (trimmedName) payload.name = trimmedName',
+  'if (trimmedDesc) payload.desc = trimmedDesc',
+  'if (d.onboardAvatar) payload.avatar = d.onboardAvatar',
+]) {
+  assert(appJs.includes(marker), "web/app.js missing contract marker: " + marker);
+}
+for (const cssSel of [".int-persona-box", ".int-avatar-picker", ".int-avatar-opt.is-selected", "@media (forced-colors: active)"]) {
+  assert(appCss.includes(cssSel), "web/app.css missing selector: " + cssSel);
+}
+
+// 3. Extract FEISHU_ONBOARD_FALLBACK_PRESETS and verify CN desc length <= 120 runes.
+const m = appJs.match(/const FEISHU_ONBOARD_FALLBACK_PRESETS = (\{[\s\S]*?\n  \});/);
+assert(m, "could not parse FEISHU_ONBOARD_FALLBACK_PRESETS");
+const presets = new Function("return " + m[1])();
+assert(presets.avatars.length === 4, "expected 4 avatar presets, got " + presets.avatars.length);
+assert(Array.from(presets.default_desc).length <= presets.limits.cn.desc_max, "default_desc exceeds CN limit");
+assert(presets.default_desc.includes("https://lihuanyu0w0.github.io/collie/"), "default_desc missing homepage link");
+console.log("feishu-persona-js-contract OK (desc runes=" + Array.from(presets.default_desc).length + ")");
+`
+	cmd := exec.Command(nodeBin, "-e", jsTest, root)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("JS contract failed: %v\n%s", err, string(out))
+	}
 }

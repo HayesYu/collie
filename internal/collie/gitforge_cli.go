@@ -50,8 +50,19 @@ type CLIProviderSpec struct {
 	ReposCmd          *CLIReposSpec     `json:"repos_cmd,omitempty"`
 	PollCmd           []string          `json:"poll_cmd,omitempty"`
 	SampleCmd         []string          `json:"sample_cmd,omitempty"`
+	CommentCmd        *CLICommentSpec   `json:"comment_cmd,omitempty"`
 	Sources           []CLISourceSpec   `json:"sources,omitempty"`
 	Env               map[string]string `json:"env,omitempty"`
+}
+
+// CLICommentSpec optionally configures how a local CLI provider posts a
+// human-confirmed comment back to a PR/MR or Issue. Supported template vars:
+// {{repo}}, {{number}}, {{mr}}, {{pr}}, {{kind}}, {{body}}, {{user}}.
+type CLICommentSpec struct {
+	Cmd       []string `json:"cmd"`
+	StdinBody bool     `json:"stdin_body,omitempty"`
+	IDPath    string   `json:"id_path,omitempty"`
+	URLPath   string   `json:"url_path,omitempty"`
 }
 
 type CLIProbeSpec struct {
@@ -262,11 +273,12 @@ func (p *CLIProvider) ExtraView(_ IntegrationConfig) map[string]any {
 		displayPath = "~" + displayPath[len(home):]
 	}
 	out := map[string]any{
-		"supports_pat":  false,
-		"supports_gh":   false,
-		"provider_type": "cli",
-		"cli_label":     cliLabel,
-		"provider_path": displayPath,
+		"supports_pat":     false,
+		"supports_gh":      false,
+		"supports_comment": p.spec.CommentCmd != nil && len(p.spec.CommentCmd.Cmd) > 0,
+		"provider_type":    "cli",
+		"cli_label":        cliLabel,
+		"provider_path":    displayPath,
 	}
 	p.mu.RLock()
 	if p.lastUser != "" {
@@ -279,6 +291,10 @@ func (p *CLIProvider) ExtraView(_ IntegrationConfig) map[string]any {
 // ---------------------------------------------------------------- subprocess execution
 
 func (p *CLIProvider) runCmd(ctx context.Context, argv []string) ([]byte, error) {
+	return p.runCmdWithInput(ctx, argv, nil)
+}
+
+func (p *CLIProvider) runCmdWithInput(ctx context.Context, argv []string, stdin []byte) ([]byte, error) {
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, errors.New("empty command")
 	}
@@ -301,6 +317,9 @@ func (p *CLIProvider) runCmd(ctx context.Context, argv []string) ([]byte, error)
 			env = append(env, k+"="+v)
 		}
 		cmd.Env = env
+	}
+	if len(stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(stdin)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -326,6 +345,98 @@ func (p *CLIProvider) runCmd(ctx context.Context, argv []string) ([]byte, error)
 		return nil, fmt.Errorf("CLI 执行失败：%v", err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// PostComment implements ForgeCommenter by running the provider's declarative
+// comment_cmd template after explicit human confirmation.
+func (p *CLIProvider) PostComment(ctx context.Context, _ ForgeConfig, target ForgeCommentTarget, body string) (ForgeCommentResult, error) {
+	if p.spec.CommentCmd == nil || len(p.spec.CommentCmd.Cmd) == 0 {
+		displayPath := p.sourcePath
+		if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(displayPath, home+string(os.PathSeparator)) {
+			displayPath = "~" + displayPath[len(home):]
+		}
+		return ForgeCommentResult{}, fmt.Errorf("插件 %s 未配置 comment_cmd，无法自动回评（请在 %s 中补充 comment_cmd）", p.spec.Name, displayPath)
+	}
+	repo := normalizeForgeRepo(target.Repo)
+	if repo == "" || !cliRepoRe.MatchString(repo) {
+		return ForgeCommentResult{}, errors.New("无效的仓库名称（需形如 owner/repo）")
+	}
+	if target.Number <= 0 {
+		return ForgeCommentResult{}, errors.New("缺少有效的 PR/MR 编号")
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ForgeCommentResult{}, errors.New("评论内容不能为空")
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(target.Kind))
+	if kind == "" {
+		kind = strings.ToLower(p.TermPR())
+	}
+	p.mu.RLock()
+	selfUser := p.lastUser
+	p.mu.RUnlock()
+
+	numStr := strconv.Itoa(target.Number)
+	vars := map[string]string{
+		"repo":   repo,
+		"number": numStr,
+		"mr":     numStr,
+		"pr":     numStr,
+		"kind":   kind,
+		"user":   selfUser,
+	}
+	var stdin []byte
+	if p.spec.CommentCmd.StdinBody {
+		stdin = []byte(body)
+	} else {
+		vars["body"] = body
+	}
+	argv := renderArgTemplate(p.spec.CommentCmd.Cmd, vars)
+	raw, err := p.runCmdWithInput(ctx, argv, stdin)
+	if err != nil {
+		return ForgeCommentResult{}, err
+	}
+
+	res := ForgeCommentResult{
+		Provider: p.spec.Kind,
+		Repo:     repo,
+		Number:   target.Number,
+	}
+	var doc any
+	if json.Unmarshal(bytes.TrimSpace(raw), &doc) == nil && doc != nil {
+		if authFailed, ok := jsonPath(doc, "auth_failed").(bool); ok && authFailed {
+			return ForgeCommentResult{}, fmt.Errorf("%w: %s 登录态已失效，请重新登录本机 CLI", ErrAuthFailed, p.spec.Name)
+		}
+		if st := strings.ToLower(anyString(jsonPath(doc, "status"))); st == "error" || st == "failed" {
+			errTxt := anyString(jsonPath(doc, "error"))
+			if p.isAuthErrorText(errTxt) {
+				return ForgeCommentResult{}, fmt.Errorf("%w: %s 登录态已失效", ErrAuthFailed, p.spec.Name)
+			}
+			return ForgeCommentResult{}, fmt.Errorf("回评命令返回错误：%s", clip(errTxt, 160))
+		}
+		idPaths := []string{p.spec.CommentCmd.IDPath, "id", "data.id", "data.Id", "comment_id"}
+		for _, path := range idPaths {
+			if path == "" {
+				continue
+			}
+			if v := strings.TrimSpace(anyString(jsonPath(doc, path))); v != "" {
+				res.CommentID = v
+				break
+			}
+		}
+		urlPaths := []string{p.spec.CommentCmd.URLPath, "html_url", "url", "data.html_url", "data.url", "data.URL"}
+		for _, path := range urlPaths {
+			if path == "" {
+				continue
+			}
+			if v := strings.TrimSpace(anyString(jsonPath(doc, path))); v != "" {
+				res.URL = v
+				break
+			}
+		}
+	}
+	return res, nil
 }
 
 func (p *CLIProvider) isAuthErrorText(txt string) bool {

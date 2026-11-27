@@ -2,6 +2,7 @@ package collie
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -19,9 +20,16 @@ import (
 // up in a fresh session.
 
 const (
-	dreamName  = "collie-dream"
-	dreamLabel = "collie · dream"
+	dreamName             = "collie-dream"
+	dreamLabel            = "collie · dream"
+	activeDreamKVKey      = "active_dream"
+	lastDreamOutcomeKVKey = "last_dream_outcome"
 )
+
+type activeDreamMarker struct {
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason,omitempty"`
+}
 
 type dreamRun struct {
 	at        time.Time
@@ -40,6 +48,9 @@ func (sp *Super) dreaming() bool {
 }
 
 func (sp *Super) lastDream() time.Time {
+	if sp.db == nil {
+		return time.Time{}
+	}
 	var raw string
 	if sp.db.QueryRow(`SELECT v FROM kv WHERE k='last_dream'`).Scan(&raw) == nil {
 		if t, err := time.Parse(time.RFC3339, raw); err == nil {
@@ -50,7 +61,109 @@ func (sp *Super) lastDream() time.Time {
 }
 
 func (sp *Super) setLastDream(t time.Time) {
+	if sp.db == nil {
+		return
+	}
 	sp.db.Exec(`INSERT INTO kv(k,v) VALUES('last_dream',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, t.Format(time.RFC3339))
+}
+
+func (sp *Super) setLastDreamOutcome(outcome string) {
+	if sp.db == nil || outcome == "" {
+		return
+	}
+	sp.db.Exec(`INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, lastDreamOutcomeKVKey, outcome)
+}
+
+func (sp *Super) setActiveDream(at time.Time, reason string) {
+	if sp.db == nil {
+		return
+	}
+	b, err := json.Marshal(activeDreamMarker{At: at, Reason: reason})
+	if err != nil {
+		return
+	}
+	sp.db.Exec(`INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, activeDreamKVKey, string(b))
+}
+
+func (sp *Super) clearActiveDream() {
+	if sp.db == nil {
+		return
+	}
+	sp.db.Exec(`DELETE FROM kv WHERE k=?`, activeDreamKVKey)
+}
+
+func (sp *Super) loadActiveDream() (activeDreamMarker, bool) {
+	if sp.db == nil {
+		return activeDreamMarker{}, false
+	}
+	var raw string
+	if sp.db.QueryRow(`SELECT v FROM kv WHERE k=?`, activeDreamKVKey).Scan(&raw) != nil || strings.TrimSpace(raw) == "" {
+		return activeDreamMarker{}, false
+	}
+	var m activeDreamMarker
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return activeDreamMarker{}, true
+	}
+	return m, true
+}
+
+// recoverActiveDream cleans up any orphan dream workspace left behind if the
+// hub restarted mid-dream, clears the SQLite active_dream marker, and advances
+// the nightly watermark so a crashed nightly run cannot spin in a loop.
+func (sp *Super) recoverActiveDream(ctx context.Context) {
+	marker, ok := sp.loadActiveDream()
+	if !ok {
+		sp.mu.Lock()
+		sp.activeDreamPending = false
+		sp.mu.Unlock()
+		return
+	}
+	sp.mu.Lock()
+	if sp.dream != nil {
+		sp.activeDreamPending = false
+		sp.mu.Unlock()
+		return
+	}
+	sp.mu.Unlock()
+
+	closed := 0
+	if sp.s != nil && sp.s.herdr != nil {
+		wss, err := sp.s.herdr.Workspaces(ctx)
+		if err != nil {
+			// Keep the marker until herdr responds so orphan workspaces are not leaked.
+			sp.mu.Lock()
+			sp.activeDreamPending = true
+			sp.mu.Unlock()
+			return
+		}
+		for _, ws := range wss {
+			if _, m := split(ws.ID); ws.Label == dreamLabel && m == "" {
+				if sp.s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": ws.ID}, nil) == nil {
+					closed++
+				}
+			}
+		}
+	}
+
+	sp.clearActiveDream()
+	if marker.Reason == "nightly" {
+		wm := time.Now()
+		if !marker.At.IsZero() && time.Since(marker.At) > 3*time.Hour {
+			wm = marker.At
+		}
+		if sp.lastDream().Before(wm) {
+			sp.setLastDream(wm)
+		}
+	}
+	sp.setLastDreamOutcome("recovered")
+	sp.mu.Lock()
+	sp.activeDreamPending = false
+	if closed > 0 {
+		sp.routerLaunchAt = time.Time{}
+		sp.addEntryLocked("event", mainThread, "Hub 重启后已自动清理上次未完成的整理记忆工作区", "", "info")
+	}
+	sp.mu.Unlock()
+	log.Printf("dream: recovered active_dream marker after hub restart (closed=%d, reason=%s)", closed, marker.Reason)
 }
 
 // dreamAtLocked parses the nightly time ("04:00" by default; "off" disables).
@@ -101,7 +214,11 @@ func (sp *Super) somethingHappenedLocked(t time.Time) bool {
 func (sp *Super) checkDream(ctx context.Context, live map[string]liveAgent, queued bool) {
 	sp.mu.Lock()
 	d := sp.dream
+	pendingRecovery := sp.activeDreamPending
 	sp.mu.Unlock()
+	if pendingRecovery && d == nil {
+		sp.recoverActiveDream(ctx)
+	}
 	if d != nil {
 		sp.driveDream(ctx, d, live)
 		return
@@ -113,7 +230,7 @@ func (sp *Super) checkDream(ctx context.Context, live map[string]liveAgent, queu
 	}
 	a, alive := live[routerName]
 	sp.mu.Lock()
-	busy := sp.handover != nil || sp.st.Settings.Paused || queued || !sp.routerAskedAt.IsZero() ||
+	busy := sp.handover != nil || sp.hubUpdating || sp.st.Settings.Paused || queued || !sp.routerAskedAt.IsZero() ||
 		(alive && a.Status != "idle" && a.Status != "done")
 	happened := sp.somethingHappenedLocked(sp.lastDream())
 	sp.mu.Unlock()
@@ -122,6 +239,7 @@ func (sp *Super) checkDream(ctx context.Context, live map[string]liveAgent, queu
 	}
 	if !happened {
 		sp.setLastDream(now) // a quiet day: nothing to dream about
+		sp.setLastDreamOutcome("skipped")
 		return
 	}
 	sp.StartDream(ctx, "nightly")
@@ -130,6 +248,10 @@ func (sp *Super) checkDream(ctx context.Context, live map[string]liveAgent, queu
 // StartDream puts Collie to sleep and starts the dream session.
 func (sp *Super) StartDream(ctx context.Context, reason string) error {
 	sp.mu.Lock()
+	if sp.hubUpdating {
+		sp.mu.Unlock()
+		return errors.New("Hub 正在更新重启，请稍后再整理记忆")
+	}
 	if sp.dream != nil || sp.handover != nil {
 		sp.mu.Unlock()
 		return errors.New("Collie 正在整理记忆")
@@ -140,12 +262,20 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 	at := sp.dream.at
 	entry := sp.addEntryLocked("event", mainThread, "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", "", "info")
 	sp.mu.Unlock()
+	sp.setActiveDream(at, reason)
 
 	go func() {
 		bg, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		fail := func(err error) {
 			log.Printf("dream: %v", err)
+			sp.closeWorkspaces(context.Background(), dreamLabel)
+			sp.clearActiveDream()
+			if reason == "nightly" {
+				// Always advance nightly watermark on failure to avoid a 2-minute retry spin.
+				sp.setLastDream(time.Now())
+			}
+			sp.setLastDreamOutcome("failed")
 			sp.mu.Lock()
 			sp.dream = nil
 			sp.addEntryLocked("event", mainThread, "整理记忆没能开始："+err.Error(), "", "error")
@@ -261,11 +391,19 @@ func (sp *Super) driveDream(ctx context.Context, d *dreamRun, live map[string]li
 
 func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
 	sp.closeWorkspaces(ctx, dreamLabel)
+	sp.clearActiveDream()
 	summary, skills, fixes := "", "", ""
 	if ok {
 		sp.setLastDream(time.Now())
+		sp.setLastDreamOutcome("ok")
 		journal := filepath.Join(sp.routerDir(), "dreams", journalName(d.at)+".md")
 		summary, skills, fixes = dreamSummary(journal), dreamLine(journal, dreamSkillsPrefix), dreamLine(journal, dreamFixPrefix)
+	} else {
+		if d != nil && d.reason == "nightly" {
+			// Advance nightly watermark on failure too so the 3-hour window does not spin every 2 minutes.
+			sp.setLastDream(time.Now())
+		}
+		sp.setLastDreamOutcome("failed")
 	}
 	sp.mu.Lock()
 	sp.dream = nil

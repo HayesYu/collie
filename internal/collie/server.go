@@ -211,6 +211,9 @@ var webBuildOnce struct {
 
 // webBuild fingerprints the web app's files.
 func (s *Server) webBuild() string {
+	if s.web == nil {
+		return ""
+	}
 	webBuildOnce.Do(func() {
 		h := sha256.New()
 		for _, p := range []string{"index.html", "app.js", "app.css"} {
@@ -385,9 +388,13 @@ func (s *Server) state(ctx context.Context) PaneState {
 	for _, p := range panes { // shells too: an agent may not show as one yet
 		alive[p.ID] = true
 	}
-	online := map[string]bool{"": true}
+	online := map[string]bool{"": s.herdr.MachineHerdrOK("")}
 	for _, m := range machines {
-		online[m.ID] = m.Local || m.Online
+		if m.Local {
+			online[m.ID] = s.herdr.MachineHerdrOK("")
+		} else {
+			online[m.ID] = m.Online && s.herdr.MachineHerdrOK(m.ID)
+		}
 	}
 	s.herdr.pruneRuns(alive, func(m string) bool { return online[m] })
 	sort.SliceStable(st.Agents, less(st.Agents))

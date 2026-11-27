@@ -628,9 +628,9 @@ func parseClaudeStartRPC(line []byte) (id string, params herdrStartAgentParams, 
 	return req.ID, params, true
 }
 
-func handleHerdrStream(ctx context.Context, st net.Conn, sock string, srv *Server) {
+func handleHerdrStream(ctx context.Context, st net.Conn, sock string, srv *Server, connected *atomic.Bool) {
 	if srv == nil || claudeSGLauncher() == "" {
-		pipeHerdrStream(st, sock, nil, nil)
+		pipeHerdrStream(ctx, st, sock, nil, nil, connected)
 		return
 	}
 	br := bufio.NewReaderSize(st, 256*1024)
@@ -678,11 +678,13 @@ func handleHerdrStream(ctx context.Context, st net.Conn, sock string, srv *Serve
 		_, _ = st.Write(append(b, '\n'))
 		return
 	}
-	pipeHerdrStream(st, sock, line, br)
+	pipeHerdrStream(ctx, st, sock, line, br, connected)
 }
 
-func pipeHerdrStream(st net.Conn, sock string, firstLine []byte, br *bufio.Reader) {
-	h, err := dialHerdr(context.Background(), sock)
+func pipeHerdrStream(ctx context.Context, st net.Conn, sock string, firstLine []byte, br *bufio.Reader, connected *atomic.Bool) {
+	dctx, dcancel := context.WithTimeout(ctx, 12*time.Second)
+	h, err := dialHerdrWithState(dctx, sock, connected)
+	dcancel()
 	if err != nil {
 		log.Printf("herdr: %v", err)
 		st.Close()

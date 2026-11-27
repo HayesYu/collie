@@ -46,28 +46,32 @@ type Super struct {
 	rereadTrig      *Trigger // the pending "re-read ROUTER.md", if any
 	routerLaunchAt  time.Time
 	routerFresh     bool
+	routerWasAlive  bool      // router was observed alive; guides immediate recovery after herdr restart
+	herdrWasDown    bool      // local herdr was unreachable on a prior tick
 	routerAskedAt   time.Time // last delivery to the router not yet followed by a reply or check
 	routerAskedChat bool      // whether the active router turn includes a human chat trigger
 	routerRetries   int       // turns in a row that ended on an API error, each retried
 	routerNudged    bool      // the watchdog interrupted this turn once already
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
-	routerRun    *[2]string
-	routerLaunch *routerLaunchConfig
-	handover     *handover            // set while the router writes its memory before a fresh session
-	dream        *dreamRun            // set while Collie sleeps and a dream session tidies its memory
-	lastTrust    map[string]time.Time // pane → when its trust dialog was last answered
-	lastAnswer   map[string]time.Time // pane → when a dialog there was just answered
-	lastScreen   map[string]screenMark
-	transcripts  map[string]*transcript
-	noAgent      map[string]time.Time  // worker → since when its pane has had no agent in it
-	idleSince    map[string]time.Time  // worker → since when it has sat idle (done with its turn)
-	pinnedCache  map[string]*Entry     // older pinned entries resolved from SQLite
-	sayDedup     map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
-	notifyBuf    []notice
-	notifyAt     time.Time
-	seenAt       time.Time // when a page of Collie was last open in front of you
-	seenURL      string    // where that page was, for the link in a notification
+	routerRun          *[2]string
+	routerLaunch       *routerLaunchConfig
+	handover           *handover            // set while the router writes its memory before a fresh session
+	dream              *dreamRun            // set while Collie sleeps and a dream session tidies its memory
+	activeDreamPending bool                 // persisted active_dream marker waiting for restart cleanup
+	hubUpdating        bool                 // set while Hub self-update has reserved an idle restart window
+	lastTrust          map[string]time.Time // pane → when its trust dialog was last answered
+	lastAnswer         map[string]time.Time // pane → when a dialog there was just answered
+	lastScreen         map[string]screenMark
+	transcripts        map[string]*transcript
+	noAgent            map[string]time.Time  // worker → since when its pane has had no agent in it
+	idleSince          map[string]time.Time  // worker → since when it has sat idle (done with its turn)
+	pinnedCache        map[string]*Entry     // older pinned entries resolved from SQLite
+	sayDedup           map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
+	notifyBuf          []notice
+	notifyAt           time.Time
+	seenAt             time.Time // when a page of Collie was last open in front of you
+	seenURL            string    // where that page was, for the link in a notification
 
 	secrets       *SecretStore
 	integrations  *IntegrationManager
@@ -116,6 +120,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 	if sp.st, err = initState(db, s.home, s.detectInitialSettings); err != nil {
 		return nil, err
 	}
+	_, sp.activeDreamPending = sp.loadActiveDream()
 	sec, err := openSecretStore(dir)
 	if err != nil {
 		return nil, err
@@ -433,6 +438,7 @@ func (sp *Super) Run(ctx context.Context) {
 	if err := sp.writeRouterFiles(); err != nil {
 		log.Printf("router files: %v", err)
 	}
+	sp.recoverActiveDream(ctx)
 	if sp.integrations != nil {
 		sp.integrations.Start(ctx)
 	}
@@ -491,12 +497,17 @@ func sessionID(kind, value string) string {
 }
 
 func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
+	live, _, ok := sp.liveAgentsWithStatus(ctx)
+	return live, ok
+}
+
+func (sp *Super) liveAgentsWithStatus(ctx context.Context) (map[string]liveAgent, map[string]bool, bool) {
 	if sp.s == nil || sp.s.herdr == nil {
-		return nil, false
+		return nil, nil, false
 	}
-	list, err := sp.s.herdr.Agents(ctx)
+	list, answered, err := sp.s.herdr.AgentsWithStatus(ctx)
 	if err != nil {
-		return nil, false
+		return nil, answered, false
 	}
 	m := map[string]liveAgent{}
 	var byMachine map[string]map[string]paneSession
@@ -531,28 +542,45 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 			m[*a.Name] = la
 		}
 	}
-	return m, true
+	return m, answered, true
 }
 
 func (sp *Super) tick(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
-	live, ok := sp.liveAgents(ctx)
+	live, answered, ok := sp.liveAgentsWithStatus(ctx)
 	if !ok {
+		sp.mu.Lock()
+		sp.herdrWasDown = true
+		sp.mu.Unlock()
 		return // herdr unavailable; keep everything queued
 	}
 	now := time.Now()
+	localOK := answered[""]
 
 	type finished struct {
 		w       *Worker
 		blocked bool
 	}
 	var fin []finished
-	var dead []*Worker // the agent never started, or quit, leaving a shell
+	var dead []*Worker         // the agent never started, or quit, leaving a shell
+	var trustWorkers []*Worker // bypass-mode workers sitting on a blocked screen (may be folder trust)
 	deliveries := map[string][]*Trigger{}
+	var blockedRouterPane string
+	var wakeRouterAfterHerdr bool
 
 	sp.mu.Lock()
 	paused := sp.st.Settings.Paused
+	askPermissions := sp.st.Settings.AskPermissions
+	herdrRecovered := false
+	if !localOK {
+		sp.herdrWasDown = true
+	} else if sp.herdrWasDown {
+		sp.herdrWasDown = false
+		sp.routerLaunchAt = time.Time{} // allow immediate router recovery after herdr restarts
+		herdrRecovered = true
+		log.Printf("super: local herdr reconnected")
+	}
 	// 1. Timers → triggers.
 	for _, t := range sp.st.Timers {
 		if t.Enabled && !t.NextRun.After(now) {
@@ -564,12 +592,24 @@ func (sp *Super) tick(parent context.Context) {
 	}
 	// 2. Worker lifecycle → triggers for the router.
 	for _, w := range sp.st.Workers {
+		wMachine := w.Machine
+		if wMachine == "" && w.PaneID != "" {
+			wMachine = machineOf(w.PaneID)
+		}
+		if !answered[wMachine] {
+			// That machine's herdr is restarting or unreachable right now:
+			// leave worker state and queued triggers intact until it answers again.
+			continue
+		}
 		if w.Ended {
 			// herdr restored its pane (a herdr restart or update): it's back.
-			if a, ok := live[w.Name]; ok && w.Status == "gone" && w.PaneID != "" && a.Pane == w.PaneID {
-				w.Ended, w.Status = false, a.Status
+			if a, ok := live[w.Name]; ok && w.Status == "gone" && w.PaneID != "" && (a.Pane == w.PaneID || machineOf(a.Pane) == wMachine) {
+				w.Ended, w.Status, w.PaneID = false, a.Status, a.Pane
 				sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf("worker %s is back: herdr restored its pane (status %s).", w.Name, a.Status), "", "", w.Name)
 				sp.addEntryLocked("event", w.Thread, w.Name+" 回来了（herdr 恢复了它的窗格）", w.Name, "info")
+				if a.Status == "blocked" && !askPermissions {
+					trustWorkers = append(trustWorkers, w)
+				}
 				sp.changed()
 			}
 			continue
@@ -624,6 +664,12 @@ func (sp *Super) tick(parent context.Context) {
 					fin = append(fin, finished{w, false})
 				}
 			}
+		} else if a.Status == "blocked" && !askPermissions {
+			// A worker that started or recovered directly in "blocked" (e.g.
+			// agent_not_ready on folder trust or herdr pane restore) did not
+			// transition status; still check folder trust proactively.
+			w.PaneID = a.Pane
+			trustWorkers = append(trustWorkers, w)
 		}
 	}
 	// 3. Route queued triggers to sessions: subscribed workers first (fast path), router otherwise.
@@ -649,9 +695,30 @@ func (sp *Super) tick(parent context.Context) {
 			deliveries[target] = append(deliveries[target], t)
 		}
 	}
-	routerAlive := false
-	_, routerAlive = live[routerName]
+	ra, routerAlive := live[routerName]
+	if routerAlive {
+		sp.routerWasAlive = true
+		if ra.Status == "blocked" {
+			blockedRouterPane = ra.Pane
+		}
+	} else if localOK && herdrRecovered && sp.routerWasAlive {
+		wakeRouterAfterHerdr = true
+	}
 	sp.mu.Unlock()
+
+	// Proactively auto-trust router's own directory and bypass-mode workers'
+	// own folders without waiting for a new human message or manual approval.
+	if blockedRouterPane != "" {
+		sp.trustOwnDir(ctx, blockedRouterPane)
+	}
+	for _, w := range trustWorkers {
+		if sp.answerTrust(ctx, w.PaneID, w.Cwd) {
+			sp.mu.Lock()
+			sp.noteAnsweredLocked(w)
+			sp.mu.Unlock()
+			log.Printf("worker %s: trusted its folder %s", w.Name, w.Cwd)
+		}
+	}
 
 	// Worker completion summaries need file/screen IO: do it outside the lock.
 	for _, f := range fin {
@@ -665,16 +732,33 @@ func (sp *Super) tick(parent context.Context) {
 		return
 	}
 
+	if wakeRouterAfterHerdr && !sp.handingOver() && !sp.dreaming() && !sp.isHubUpdating() {
+		sp.ensureRouter(ctx)
+	}
+
 	// 4. Deliver batches to free sessions.
 	for target, list := range deliveries {
-		if target == routerName && (sp.handingOver() || sp.dreaming()) {
-			continue // events wait for the fresh session
+		if target == routerName && (!localOK || sp.handingOver() || sp.dreaming() || sp.isHubUpdating()) {
+			continue // events wait for local herdr recovery, fresh session, or hub restart
 		}
 		a, alive := live[target]
 		if !alive {
 			if target == routerName {
 				sp.ensureRouter(ctx)
 			} else {
+				sp.mu.Lock()
+				w := sp.st.Workers[target]
+				wMachine := ""
+				if w != nil {
+					wMachine = w.Machine
+					if wMachine == "" && w.PaneID != "" {
+						wMachine = machineOf(w.PaneID)
+					}
+				}
+				sp.mu.Unlock()
+				if w != nil && !answered[wMachine] {
+					continue // worker's machine herdr is mid-restart; keep queued
+				}
 				sp.rerouteToRouter(target, list)
 			}
 			continue
@@ -1049,6 +1133,13 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 		defer sp.mu.Unlock()
 		var he *HerdrError
 		if err != nil && !(errors.As(err, &he) && he.Code == "agent_not_ready") {
+			if isHerdrUnavailableErr(err) {
+				// Transient herdr restart: retry soon instead of burning the full 45s cooldown.
+				sp.routerLaunchAt = time.Now().Add(-40 * time.Second)
+				sp.herdrWasDown = true
+				log.Printf("router launch deferred while herdr unavailable: %v", err)
+				return
+			}
 			msg := "Collie 启动失败：" + err.Error()
 			if strings.Contains(err.Error(), "没装") {
 				msg += "。装上它，或在 自动化 → 设置 → Collie 自己 里换一个 agent"
@@ -1057,6 +1148,7 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 			return
 		}
 		sp.routerFresh = true
+		sp.routerWasAlive = true
 		sp.addEntryLocked("event", mainThread, "Collie 已唤醒（"+kind+"）", routerName, "info")
 	}()
 }
@@ -2233,16 +2325,37 @@ func (sp *Super) dismiss(id string, syncExternal bool) {
 	}
 }
 
+// inReplyChain reports whether startID reaches targetID by following Quote
+// parent pointers (with a cycle-safe hop cap).
+func inReplyChain(startID, targetID string, parentOf map[string]string) bool {
+	if startID == "" || targetID == "" {
+		return false
+	}
+	cur := startID
+	for step := 0; step < 64 && cur != ""; step++ {
+		if cur == targetID {
+			return true
+		}
+		cur = parentOf[cur]
+	}
+	return false
+}
+
 // pendingLocked computes unanswered --opt and --check Collie messages in chat:main.
-// An item resolves when:
+// An item resolves ONLY on explicit action:
 //  1. the human tapped「已处理」or × (/api/super/dismiss),
-//  2. the human tapped one of its options or quoted it (re.entry == e.id),
-//  3. for --opt messages only: the human sent a plain unquoted message right after
-//     it with no other role=="collie" reply in between (system/worker events do not
-//     interrupt). Pure --check external todos stay pending across unrelated unquoted
-//     messages so follow-up chatter never silently clears them.
+//  2. the human tapped one of its options or explicitly replied on its reply
+//     chain (re.entry points to e.id or an ancestor/descendant on the same chain).
+//
+// Plain unquoted new topics never auto-clear unanswered --opt or --check cards.
 func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 	es := sp.st.Entries
+	parentOf := make(map[string]string, len(es))
+	for _, x := range es {
+		if x.ID != "" && x.Re != nil && x.Re.Entry != "" {
+			parentOf[x.ID] = x.Re.Entry
+		}
+	}
 	var out []PendingItem
 	for i, e := range es {
 		if e.Role != "collie" || (e.Thread != "" && e.Thread != mainThread) || (len(e.Options) == 0 && !e.Check) || e.ID == "" {
@@ -2258,26 +2371,18 @@ func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 		if len(opts) == 0 && !e.Check {
 			continue
 		}
-		hasOpts := len(opts) > 0
-		resolved, otherCollie := false, false
+		resolved := false
 		for j := i + 1; j < len(es); j++ {
 			next := es[j]
 			if next.Thread != "" && next.Thread != mainThread {
 				continue
 			}
-			switch next.Role {
-			case "user":
-				reID := ""
-				if next.Re != nil {
-					reID = next.Re.Entry
-				}
-				if reID == e.ID || (hasOpts && reID == "" && !otherCollie) {
-					resolved = true
-				}
-			case "collie":
-				otherCollie = true
+			if next.Role != "user" || next.Re == nil || next.Re.Entry == "" {
+				continue
 			}
-			if resolved {
+			reID := next.Re.Entry
+			if inReplyChain(reID, e.ID, parentOf) || inReplyChain(e.ID, reID, parentOf) {
+				resolved = true
 				break
 			}
 		}

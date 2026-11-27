@@ -273,7 +273,7 @@ func TestHandleHerdrStream(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			handleHerdrStream(context.Background(), server, sock, srv)
+			handleHerdrStream(context.Background(), server, sock, srv, nil)
 		}()
 		_ = client.SetDeadline(time.Now().Add(5 * time.Second))
 		if _, err := client.Write([]byte(reqLine + "\n")); err != nil {

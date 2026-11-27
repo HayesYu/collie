@@ -34,6 +34,8 @@ func saveUpdateHooks(t *testing.T) {
 	origTimeout := selfUpdateTimeout
 	origFwdTimeout := selfUpdateForwardTimeout
 	origRelayTimeout := selfUpdateRelayTimeout
+	origHubIdleWait := hubUpdateIdleWait
+	origHubIdlePoll := hubUpdateIdlePoll
 	origMaxRelaySize := maxRelayBinarySize
 	origRelayTTL := relayCacheTTL
 	origRelayMax := relayCacheMaxEntries
@@ -66,6 +68,8 @@ func saveUpdateHooks(t *testing.T) {
 		selfUpdateTimeout = origTimeout
 		selfUpdateForwardTimeout = origFwdTimeout
 		selfUpdateRelayTimeout = origRelayTimeout
+		hubUpdateIdleWait = origHubIdleWait
+		hubUpdateIdlePoll = origHubIdlePoll
 		maxRelayBinarySize = origMaxRelaySize
 		relayCacheTTL = origRelayTTL
 		relayCacheMaxEntries = origRelayMax
@@ -1195,4 +1199,139 @@ func TestHubRelayChecksumRejectionAndOldNodeDegradation(t *testing.T) {
 	if ghHits.Load() != ghHitsBefore {
 		t.Fatalf("non-relayable error should not hit GitHub (before=%d after=%d)", ghHitsBefore, ghHits.Load())
 	}
+}
+
+func TestSelfUpdateHubIdleGuard(t *testing.T) {
+	saveUpdateHooks(t)
+	hubUpdateIdleWait = 80 * time.Millisecond
+	hubUpdateIdlePoll = 10 * time.Millisecond
+
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "collie")
+	oldScript := "#!/bin/sh\necho collie v0.2.86\n"
+	if err := os.WriteFile(exe, []byte(oldScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	newTag := "v0.2.87"
+	newScript := "#!/bin/sh\necho collie " + newTag + "\n"
+	sum := sha256.Sum256([]byte(newScript))
+	goodSum := hex.EncodeToString(sum[:])
+	asset := "collie-" + runtime.GOOS + "-" + runtime.GOARCH
+
+	var failDownload atomic.Bool
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			w.Header().Set("Location", ts.URL+"/releases/tag/"+newTag)
+			w.WriteHeader(http.StatusFound)
+		case "/releases/download/" + newTag + "/checksums.txt":
+			fmt.Fprintf(w, "%s  %s\n", goodSum, asset)
+		case "/releases/download/" + newTag + "/" + asset:
+			if failDownload.Load() {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(newScript))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	restarted := make(chan string, 2)
+	version = "v0.2.86"
+	releaseRepoURL = ts.URL
+	executablePath = func() (string, error) { return exe, nil }
+	execUpdated = func(p string) { restarted <- p }
+
+	sp := &Super{
+		st:   &State{Settings: Settings{}},
+		subs: map[chan struct{}]bool{},
+	}
+	srv := &Server{sup: sp}
+	sp.s = srv
+
+	// 1) Active Dream blocks Hub restart with HTTP 409.
+	sp.mu.Lock()
+	sp.dream = &dreamRun{at: time.Now(), started: true, reason: "nightly"}
+	sp.mu.Unlock()
+	recDream := httptest.NewRecorder()
+	srv.selfUpdate(recDream, httptest.NewRequest("POST", "/api/update", nil))
+	if recDream.Code != 409 || !strings.Contains(recDream.Body.String(), "做梦") {
+		t.Fatalf("dream guard status=%d body=%s, want 409 with 做梦", recDream.Code, recDream.Body.String())
+	}
+	sp.mu.Lock()
+	sp.dream = nil
+	sp.mu.Unlock()
+
+	// 2) Active Handover blocks Hub restart with HTTP 409.
+	sp.mu.Lock()
+	sp.handover = &handover{at: time.Now()}
+	sp.mu.Unlock()
+	recHandover := httptest.NewRecorder()
+	srv.selfUpdate(recHandover, httptest.NewRequest("POST", "/api/update", nil))
+	if recHandover.Code != 409 || !strings.Contains(recHandover.Body.String(), "交接") {
+		t.Fatalf("handover guard status=%d body=%s, want 409 with 交接", recHandover.Code, recHandover.Body.String())
+	}
+	sp.mu.Lock()
+	sp.handover = nil
+	sp.mu.Unlock()
+
+	// 3) Active Router turn that stays busy past hubUpdateIdleWait returns 409.
+	sp.mu.Lock()
+	sp.routerAskedAt = time.Now()
+	sp.mu.Unlock()
+	recBusy := httptest.NewRecorder()
+	srv.selfUpdate(recBusy, httptest.NewRequest("POST", "/api/update", nil))
+	if recBusy.Code != 409 || !strings.Contains(recBusy.Body.String(), "当前轮次") {
+		t.Fatalf("router busy guard status=%d body=%s, want 409", recBusy.Code, recBusy.Body.String())
+	}
+
+	// 4) Failed download after acquiring hubUpdating must cleanly release hubUpdating.
+	sp.mu.Lock()
+	sp.routerAskedAt = time.Time{}
+	sp.mu.Unlock()
+	failDownload.Store(true)
+	updateMaxAttempts = 1
+	recFail := httptest.NewRecorder()
+	srv.selfUpdate(recFail, httptest.NewRequest("POST", "/api/update", nil))
+	if recFail.Code != 502 {
+		t.Fatalf("failed download status=%d body=%s, want 502", recFail.Code, recFail.Body.String())
+	}
+	if sp.isHubUpdating() {
+		t.Fatal("hubUpdating should be released after failed download")
+	}
+
+	// 5) Active Router turn finishing within hubUpdateIdleWait succeeds and keeps hubUpdating locked during restart.
+	failDownload.Store(false)
+	sp.mu.Lock()
+	sp.routerAskedAt = time.Now()
+	sp.mu.Unlock()
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		sp.mu.Lock()
+		sp.routerAskedAt = time.Time{}
+		sp.mu.Unlock()
+	}()
+	recOK := httptest.NewRecorder()
+	srv.selfUpdate(recOK, httptest.NewRequest("POST", "/api/update", nil))
+	if recOK.Code != 200 {
+		t.Fatalf("expected 200 after router became idle within short wait, got %d: %s", recOK.Code, recOK.Body.String())
+	}
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected execUpdated to be invoked")
+	}
+	if !sp.isHubUpdating() {
+		t.Fatal("hubUpdating should stay true once restart is scheduled")
+	}
+	if err := sp.StartDream(context.Background(), "manual"); err == nil || !strings.Contains(err.Error(), "更新重启") {
+		t.Fatalf("StartDream while hubUpdating = %v, want rejection mentioning 更新重启", err)
+	}
+	sp.mu.Lock()
+	sp.hubUpdating = false
+	sp.mu.Unlock()
 }

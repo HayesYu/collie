@@ -59,7 +59,7 @@ func serve() {
 	token := flag.String("token", os.Getenv("COLLIE_TOKEN"), "access token (default: generated and stored in ~/.collie/token)")
 	publicURL := flag.String("url", os.Getenv("COLLIE_URL"), "address phones and computers should use, e.g. http://10.0.0.5:7788 (default: detected LAN addresses)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: collie [serve] [flags]          run the hub\n       collie node --hub <addr> --code <c>   join this computer to a hub\n       collie pair [--computer]              new pairing code\n       collie memory export|import …         export or import router memory (.zip)\n       collie reply|say|spawn|send|report|subscribe|stop|show|list|timer|hook …\n\n")
+		fmt.Fprintf(os.Stderr, "usage: collie [serve] [flags]          run the hub\n       collie node --hub <addr> --code <c>   join this computer to a hub\n       collie pair [--computer]              new pairing code\n       collie memory export|import …         export or import router memory (.zip)\n       collie reply|say|spawn|send|report|subscribe|stop|show|list|timer|hook|feishu|forge …\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

@@ -4,6 +4,42 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.2.88 (2026-11-27)
+
+### Highlights
+
+- **Feishu One-Click Bot Default Persona & 4 Circular Border Collie Avatars**:
+  - Updated one-click Feishu/Lark bot creation defaults (`internal/collie/feishu_onboard.go`, `web/app.js`, `web/app.css`) with default naming (`{user}的边牧 · Collie`, falling back to `我的边牧 · Collie` when owner name is unavailable), homepage-linked description (`帮你放牧一群 Agent 的边牧｜盯进度、收结论、只把关键决策端给你 · https://lihuanyu0w0.github.io/collie/`, 74 chars — cleanly within Feishu CN's 120-char and Lark Intl's 240-char limits), and 4 high-contrast circular Border Collie neckerchief avatars (`cobalt`, `terracotta`, `pine`, `plum`) bundled locally (`web/avatars/`) and on GitHub Pages (`docs/avatars/`) for CORS-safe launcher upload.
+  - Added an inline persona preview card, 4-swatch radio picker + randomize button, and collapsible name/description customization with live character counters in the Feishu onboarding wizard.
+- **Team Light Collaboration (Route A) Confirmation-Gated Outbound Closure**:
+  - **Feishu Read-Only Feedback Group Controlled Reply**: Feedback group events (`[群只读反馈 · …]`) now carry original `message_id` and confirmation-only reply instructions; added `POST /api/super/integrations/feishu/reply` and `collie feishu reply --chat <chat_id> --reply-to <message_id> --confirm "<text>"` strictly enforcing `confirm: true`, `feedback_chat_ids` allowlist membership, mandatory `reply_to_message_id`, and cross-chat validation, sending plain-text quote replies with zero private Hub links.
+  - **GitForge (`GitHub` & pluggable CLI providers) Controlled PR/MR Comment**: Added optional `ForgeCommenter` interface (`GitHubProvider.PostComment`, declarative `CLIProvider` `comment_cmd` with optional `stdin_body`), `POST /api/super/integrations/{kind}/comment`, and `collie forge comment --thread <provider>:<owner>/<repo>#<num> --confirm "<text>"` strictly gated on explicit human confirmation (`confirm: true`), plus updated `ROUTER.md` and `advise` event guardrails.
+
+### Client / API Changes
+
+- **Updated endpoint `POST /api/super/integrations/feishu/onboard`**:
+  - Accepts optional persona fields in `create` mode: `name` (2–32 chars CN / 2–64 chars Intl), `desc` (≤120 chars CN / ≤240 chars Intl; defaults to Collie description with homepage link), and `avatar` (`"cobalt"` | `"terracotta"` | `"pine"` | `"plum"`, default `"cobalt"`). Out-of-range values return HTTP `400`.
+  - Response (`FeishuOnboardView`, also returned by `GET /api/super/integrations/feishu/onboard`) now includes optional `name`, `desc`, and `avatar` echo fields.
+- **Extended `GET /api/super/integrations` (`feishu.extra`)**:
+  - Added `feishu.extra.onboard_presets` (`owner_name`, `default_name`, `name_template`, `fallback_name`, `default_desc`, `homepage_url`, `default_avatar`, `limits.cn`, `limits.intl`, `avatars[]`).
+  - Added `supports_comment` boolean in GitForge `extra` (`true` for GitHub; reflects presence of `comment_cmd` for CLI providers).
+- **New static embedded assets**:
+  - Served at `/avatars/{cobalt,terracotta,pine,plum}.png` (and published at `https://lihuanyu0w0.github.io/collie/avatars/{cobalt,terracotta,pine,plum}.png`).
+- **New endpoint `POST /api/super/integrations/feishu/reply`**:
+  - Body: `{"chat_id": "oc_...", "reply_to_message_id": "om_...", "text": "...", "confirm": true}`.
+  - Requires `confirm: true`, configured `feedback_chat_ids` membership, and non-empty `reply_to_message_id`; returns `200 {"ok": true, "kind": "feishu", "chat_id": "...", "reply_to_message_id": "...", "message_id": "..."}`.
+- **New endpoint `POST /api/super/integrations/{kind}/comment`**:
+  - Body: `{"thread": "<provider>:<owner>/<repo>#<num>", "repo": "...", "number": 1, "kind": "pr|mr|issue", "body": "...", "confirm": true}` (`thread` or `repo`+`number`).
+  - Requires `confirm: true`; returns `200 {"ok": true, "provider": "...", "repo": "...", "number": 1, "comment_id": "...", "url": "..."}`.
+- **New CLI commands**:
+  - `collie feishu reply --chat <chat_id> --reply-to <message_id> --confirm <text|->`
+  - `collie forge comment --thread <provider>:<owner>/<repo>#<num> [--provider/--repo/--number/--kind] --confirm <text|->`
+- **Pluggable CLI provider manifest (`~/.collie/providers/*.json`)**:
+  - Added optional `comment_cmd` object (`cmd`, `stdin_body`, `id_path`, `url_path`) supporting `{{repo}}`, `{{number}}`, `{{mr}}`, `{{pr}}`, `{{kind}}`, `{{body}}`, `{{user}}`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.87 (2026-11-27)
 
 ### Highlights

@@ -133,6 +133,29 @@ type ForgeProvider interface {
 	Sample(ctx context.Context, cfg ForgeConfig, limit int) ([]ForgeItem, error)
 }
 
+// ForgeCommentTarget identifies a PR/MR or Issue on a GitForge provider for a
+// human-confirmed comment.
+type ForgeCommentTarget struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Kind   string `json:"kind,omitempty"` // optional: "pr" | "mr" | "issue"
+}
+
+// ForgeCommentResult describes a posted comment returned by ForgeCommenter.
+type ForgeCommentResult struct {
+	Provider  string `json:"provider"`
+	Repo      string `json:"repo"`
+	Number    int    `json:"number"`
+	CommentID string `json:"comment_id,omitempty"`
+	URL       string `json:"url,omitempty"`
+}
+
+// ForgeCommenter is optionally implemented by ForgeProvider implementations
+// that support posting a human-confirmed comment back to a PR/MR or Issue.
+type ForgeCommenter interface {
+	PostComment(ctx context.Context, cfg ForgeConfig, target ForgeCommentTarget, body string) (ForgeCommentResult, error)
+}
+
 type ForgeConfig struct {
 	Repos         []string          `json:"repos,omitempty"`
 	WatchMentions bool              `json:"watch_mentions"`

@@ -188,16 +188,18 @@ type FeishuAdapter struct {
 	botOpenID    string
 	botName      string
 
-	lastInbound    feishuRoute
-	lastP2P        feishuRoute
-	lastFeedbackAt time.Time
-	origins        map[string]feishuRoute // entry_id -> originating Feishu chat/message
-	originOrder    []string
-	msgEntries     map[string]string // inbound Feishu message_id -> Collie entry_id
-	msgEntryOrder  []string
-	sentCards      map[string]string // outbound Feishu message_id -> clean text (fallback for quoted Card 2.0)
-	sentCardOrder  []string
-	senderNames    map[string]feishuSenderCache
+	lastInbound      feishuRoute
+	lastP2P          feishuRoute
+	lastFeedbackAt   time.Time
+	origins          map[string]feishuRoute // entry_id -> originating Feishu chat/message
+	originOrder      []string
+	msgEntries       map[string]string // inbound Feishu message_id -> Collie entry_id
+	msgEntryOrder    []string
+	sentCards        map[string]string // outbound Feishu message_id -> clean text (fallback for quoted Card 2.0)
+	sentCardOrder    []string
+	feedbackMsgChats map[string]string // inbound feedback message_id -> feedback chat_id (cross-chat guard)
+	feedbackMsgOrder []string
+	senderNames      map[string]feishuSenderCache
 
 	pairUntil    time.Time
 	pairCaptured string
@@ -205,12 +207,13 @@ type FeishuAdapter struct {
 
 func newFeishuAdapter(sp *Super, mgr *IntegrationManager) *FeishuAdapter {
 	return &FeishuAdapter{
-		sp:          sp,
-		mgr:         mgr,
-		origins:     map[string]feishuRoute{},
-		msgEntries:  map[string]string{},
-		sentCards:   map[string]string{},
-		senderNames: map[string]feishuSenderCache{},
+		sp:               sp,
+		mgr:              mgr,
+		origins:          map[string]feishuRoute{},
+		msgEntries:       map[string]string{},
+		sentCards:        map[string]string{},
+		feedbackMsgChats: map[string]string{},
+		senderNames:      map[string]feishuSenderCache{},
 	}
 }
 
@@ -281,6 +284,22 @@ func (f *FeishuAdapter) Health() IntegrationHealth {
 	return IntegrationHealth{State: HealthUnconfigured}
 }
 
+func (f *FeishuAdapter) ownerDisplayName() string {
+	f.mu.RLock()
+	cfg := f.activeCfg
+	var cached string
+	if len(cfg.AllowOpenIDs) > 0 && f.senderNames != nil {
+		if ent, ok := f.senderNames[cfg.AllowOpenIDs[0]]; ok && strings.TrimSpace(ent.name) != "" {
+			cached = ent.name
+		}
+	}
+	f.mu.RUnlock()
+	if name := sanitizeFeishuOwnerName(cached); name != "" {
+		return name
+	}
+	return sanitizeFeishuOwnerName(lark.cachedWho())
+}
+
 func (f *FeishuAdapter) ExtraView() map[string]any {
 	now := time.Now()
 	f.mu.RLock()
@@ -297,7 +316,10 @@ func (f *FeishuAdapter) ExtraView() map[string]any {
 	if captured != "" {
 		p["captured_open_id"] = captured
 	}
-	out := map[string]any{"pairing": p}
+	out := map[string]any{
+		"pairing":         p,
+		"onboard_presets": feishuOnboardPresetsView(f.ownerDisplayName()),
+	}
 	if botName != "" {
 		out["bot_name"] = botName
 	}
@@ -625,14 +647,20 @@ func (f *FeishuAdapter) resolveSenderLabel(ctx context.Context, client *larksdk.
 	return masked, masked
 }
 
-func formatFeishuGroupFeedback(senderLabel, chatID, text string) string {
+func formatFeishuGroupFeedback(senderLabel, chatID, messageID, text string) string {
 	var b strings.Builder
 	b.WriteString(feishuGroupFeedbackTag)
 	fmt.Fprintf(&b, "\n发送者：%s", senderLabel)
 	if chatID != "" {
 		fmt.Fprintf(&b, "\n群 ID：%s", chatID)
 	}
+	if messageID != "" {
+		fmt.Fprintf(&b, "\n消息 ID：%s", messageID)
+	}
 	fmt.Fprintf(&b, "\n反馈内容：\n%s", strings.TrimSpace(text))
+	if chatID != "" && messageID != "" {
+		fmt.Fprintf(&b, "\n\n[受控回群指引：仅私下通过 collie reply 汇报调研结论、附上建议回群草稿及 --opt 确认按钮；仅在主人明确确认后，才可调用 collie feishu reply --chat %s --reply-to %s --confirm \"<确认后的草稿>\" 原地回群]", chatID, messageID)
+	}
 	return b.String()
 }
 
@@ -737,13 +765,14 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 		}
 		senderLabel, senderFrom := f.resolveSenderLabel(ctx, client, senderOpenID)
 		f.recordFeedbackEvent(time.Now())
+		f.recordFeedbackMessage(messageID, chatID)
 		if sink != nil {
 			if _, err := sink.EmitEvent(ctx, ExternalEvent{
 				Source:   feishuKind,
 				DedupKey: eventID,
 				Thread:   mainThread,
 				From:     senderFrom,
-				Text:     formatFeishuGroupFeedback(senderLabel, chatID, text),
+				Text:     formatFeishuGroupFeedback(senderLabel, chatID, messageID, text),
 				Ref:      chatID,
 				Action:   "respond",
 				Target:   routerName,
@@ -2501,6 +2530,120 @@ func (f *FeishuAdapter) recordFeedbackEvent(at time.Time) {
 	if at.After(f.lastFeedbackAt) {
 		f.lastFeedbackAt = at
 	}
+}
+
+func (f *FeishuAdapter) recordFeedbackMessage(messageID, chatID string) {
+	messageID = strings.TrimSpace(messageID)
+	chatID = strings.TrimSpace(chatID)
+	if messageID == "" || chatID == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.feedbackMsgChats == nil {
+		f.feedbackMsgChats = map[string]string{}
+	}
+	if _, exists := f.feedbackMsgChats[messageID]; !exists {
+		f.feedbackMsgOrder = append(f.feedbackMsgOrder, messageID)
+		if len(f.feedbackMsgOrder) > feishuMaxTrackedOrigins {
+			drop := f.feedbackMsgOrder[0]
+			f.feedbackMsgOrder = f.feedbackMsgOrder[1:]
+			delete(f.feedbackMsgChats, drop)
+		}
+	}
+	f.feedbackMsgChats[messageID] = chatID
+}
+
+var feishuSafeIDRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{3,128}$`)
+
+// ReplyFeedbackGroup posts a human-confirmed quote-reply back to a configured
+// read-only feedback group message. It strictly enforces:
+//  1. chat_id must be in the configured feedback_chat_ids allowlist;
+//  2. reply_to_message_id is mandatory (prevents unsolicited group broadcasts);
+//  3. if reply_to_message_id was observed in another chat, reject cross-chat mixup;
+//  4. sends a clean plain-text quote-reply (never exposes private Hub jump links
+//     or interactive buttons, and never mutates lastInbound / lastP2P routing).
+func (f *FeishuAdapter) ReplyFeedbackGroup(ctx context.Context, chatID, replyToMessageID, text string) (OutboundReceipt, error) {
+	chatID = strings.TrimSpace(chatID)
+	replyToMessageID = strings.TrimSpace(replyToMessageID)
+	text = strings.TrimSpace(text)
+
+	if !feishuSafeIDRe.MatchString(chatID) {
+		return OutboundReceipt{}, errors.New("缺少有效的飞书群 ID（chat_id）")
+	}
+	if !feishuSafeIDRe.MatchString(replyToMessageID) {
+		return OutboundReceipt{}, errors.New("缺少有效的原消息 ID（reply_to_message_id），受控回群必须显式引用原消息")
+	}
+	if text == "" {
+		return OutboundReceipt{}, errors.New("回复内容不能为空")
+	}
+	if len([]rune(text)) > 4000 {
+		return OutboundReceipt{}, errors.New("回复内容不能超过 4000 字")
+	}
+
+	client, cfg, err := f.sdkClientForOutbound()
+	if err != nil {
+		return OutboundReceipt{}, err
+	}
+	// Reload latest persisted feedback_chat_ids from IntegrationManager if available
+	// so config edits take effect even when WS is reconnecting.
+	if f.mgr != nil {
+		snap := f.mgr.ConfigSnapshot(feishuKind)
+		if !snap.Enabled {
+			return OutboundReceipt{}, errors.New("飞书接入当前未启用")
+		}
+		latestCfg := parseFeishuConfig(snap.Config)
+		if len(latestCfg.FeedbackChatIDs) > 0 || len(cfg.FeedbackChatIDs) == 0 {
+			cfg.FeedbackChatIDs = latestCfg.FeedbackChatIDs
+		}
+	}
+	if !f.isFeedbackChat(cfg, chatID) {
+		return OutboundReceipt{}, errors.New("目标群未配置在只读反馈群（feedback_chat_ids）中，已拒绝外发")
+	}
+
+	f.mu.RLock()
+	recordedChat := f.feedbackMsgChats[replyToMessageID]
+	f.mu.RUnlock()
+	if recordedChat != "" && recordedChat != chatID {
+		return OutboundReceipt{}, errors.New("目标消息 ID 与指定群 ID 不匹配，已拒绝外发")
+	}
+
+	contentBytes, err := json.Marshal(map[string]string{"text": text})
+	if err != nil {
+		return OutboundReceipt{}, err
+	}
+	sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req := larkim.NewReplyMessageReqBuilder().
+		MessageId(replyToMessageID).
+		Body(larkim.NewReplyMessageReqBodyBuilder().
+			MsgType("text").
+			Content(string(contentBytes)).
+			Build()).
+		Build()
+	resp, err := client.Im.V1.Message.Reply(sctx, req)
+	if err != nil {
+		return OutboundReceipt{}, err
+	}
+	if !resp.Success() {
+		return OutboundReceipt{}, fmt.Errorf("feishu feedback reply failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	sentID := ""
+	if resp.Data != nil && resp.Data.MessageId != nil {
+		sentID = strings.TrimSpace(*resp.Data.MessageId)
+	}
+	if sentID != "" {
+		f.recordSentCard(sentID, text)
+	}
+	if f.mgr != nil {
+		f.mgr.recordActivity(feishuKind)
+	}
+	log.Printf("feishu-ws: confirmed feedback reply sent chat=%s reply_to=%s msg=%s", maskIdentifier(chatID), maskIdentifier(replyToMessageID), maskIdentifier(sentID))
+	return OutboundReceipt{
+		Kind:       feishuKind,
+		ChatID:     chatID,
+		ExternalID: sentID,
+	}, nil
 }
 
 func (f *FeishuAdapter) bindEntryOrigin(entryID string, r feishuRoute) {

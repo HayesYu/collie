@@ -41,6 +41,14 @@ func (l *larkTarget) get(fresh bool) (bin, openID, who, problem string) {
 	return l.bin, l.openID, l.who, l.err
 }
 
+// cachedWho returns the last cached lark-cli display name without spawning a
+// subprocess or blocking HTTP handlers.
+func (l *larkTarget) cachedWho() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.TrimSpace(l.who)
+}
+
 func larkLookup() (bin, openID, who, problem string) {
 	home, _ := os.UserHomeDir()
 	if bin = findBin("lark-cli", home); bin == "" {

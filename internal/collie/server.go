@@ -210,6 +210,9 @@ var webBuildOnce struct {
 
 // webBuild fingerprints the web app's files.
 func (s *Server) webBuild() string {
+	if s.web == nil {
+		return ""
+	}
 	webBuildOnce.Do(func() {
 		h := sha256.New()
 		for _, p := range []string{"index.html", "app.js", "app.css"} {

@@ -158,7 +158,29 @@
       last_active_at: ago(3),
       today_count: 6,
     },
-    extra: { pairing: { active: false }, bot_name: "Collie" },
+    extra: {
+      pairing: { active: false },
+      bot_name: "Alex的边牧 · Collie",
+      onboard_presets: {
+        owner_name: "Alex",
+        default_name: "Alex的边牧 · Collie",
+        name_template: "{user}的边牧 · Collie",
+        fallback_name: "我的边牧 · Collie",
+        default_desc: "帮你放牧一群 Agent 的边牧｜盯进度、收结论、只把关键决策端给你 · https://lihuanyu0w0.github.io/collie/",
+        homepage_url: "https://lihuanyu0w0.github.io/collie/",
+        default_avatar: "cobalt",
+        limits: {
+          cn: { name_min: 2, name_max: 32, desc_max: 120 },
+          intl: { name_min: 2, name_max: 64, desc_max: 240 },
+        },
+        avatars: [
+          { id: "cobalt", label: "钴蓝领巾", color: "#1d4ed8", preview: "avatars/cobalt.png", url: "https://lihuanyu0w0.github.io/collie/avatars/cobalt.png" },
+          { id: "terracotta", label: "赤陶领巾", color: "#c2410c", preview: "avatars/terracotta.png", url: "https://lihuanyu0w0.github.io/collie/avatars/terracotta.png" },
+          { id: "pine", label: "松绿领巾", color: "#15803d", preview: "avatars/pine.png", url: "https://lihuanyu0w0.github.io/collie/avatars/pine.png" },
+          { id: "plum", label: "梅紫领巾", color: "#7e22ce", preview: "avatars/plum.png", url: "https://lihuanyu0w0.github.io/collie/avatars/plum.png" },
+        ],
+      },
+    },
   };
   let demoFeishuOnboard = null;
   const demoGitHub = {
@@ -720,15 +742,27 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
         const mode = body.mode === "existing" ? "existing" : "create";
         const clientId = mode === "existing" ? String(body.client_id || "").trim() : "";
         const host = region === "intl" ? "open.larksuite.com" : "open.feishu.cn";
+        const presets = demoFeishu.extra.onboard_presets;
+        const avatarId = presets.avatars.some((a) => a.id === body.avatar) ? body.avatar : presets.default_avatar;
+        const botName = mode === "create" ? (String(body.name || "").trim() || presets.default_name) : "";
+        const botDesc = mode === "create" ? (String(body.desc || "").trim() || presets.default_desc) : "";
         const qp = new URLSearchParams({ user_code: "DEMO-2026", from: "sdk", tp: "sdk", source: "go-sdk/collie" });
-        if (mode === "create") qp.set("createOnly", "true");
-        else if (clientId) qp.set("clientID", clientId);
+        if (mode === "create") {
+          qp.set("createOnly", "true");
+          qp.set("name", botName);
+          qp.set("desc", botDesc);
+          const ordered = [presets.avatars.find((a) => a.id === avatarId), ...presets.avatars.filter((a) => a.id !== avatarId)].filter(Boolean);
+          for (const av of ordered) qp.append("avatar", av.url);
+        } else if (clientId) {
+          qp.set("clientID", clientId);
+        }
         demoFeishuOnboard = {
           session_id: "demo-ob-" + (++seq),
           state: "waiting",
           mode,
           region,
           client_id: clientId,
+          ...(mode === "create" ? { name: botName, desc: botDesc, avatar: avatarId } : {}),
           url: `https://${host}/page/launcher?${qp.toString()}`,
           user_code: "DEMO-2026",
           qr_data_url: "demo-qr.png",

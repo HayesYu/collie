@@ -62,6 +62,8 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/integrations/feishu/onboard", s.superFeishuOnboardStart)
 	api("GET /api/super/integrations/feishu/onboard", s.superFeishuOnboardStatus)
 	api("DELETE /api/super/integrations/feishu/onboard", s.superFeishuOnboardCancel)
+	api("POST /api/super/integrations/feishu/reply", s.superFeishuReply)
+	api("POST /api/super/integrations/{kind}/comment", s.superForgeComment)
 	api("POST /api/super/notify/test", s.superTestNotify)
 	mux.HandleFunc("POST /hooks/{source}", s.webhook)
 }
@@ -1223,6 +1225,134 @@ func (s *Server) superFeishuOnboardCancel(w http.ResponseWriter, r *http.Request
 	}
 	s.sup.feishuOnboard.Cancel()
 	writeJSON(w, 200, map[string]any{"ok": true, "state": feishuOnboardStateIdle})
+}
+
+func (s *Server) superFeishuReply(w http.ResponseWriter, r *http.Request) {
+	if s.sup == nil || s.sup.feishu == nil {
+		writeJSON(w, 503, map[string]any{"error": "feishu integration not available"})
+		return
+	}
+	var body struct {
+		ChatID           string `json:"chat_id"`
+		ReplyToMessageID string `json:"reply_to_message_id"`
+		Text             string `json:"text"`
+		Confirm          bool   `json:"confirm"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !body.Confirm {
+		writeJSON(w, 400, map[string]any{"error": "必须先获主人明确确认并传入 confirm: true 才能向飞书群回复"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	receipt, err := s.sup.feishu.ReplyFeedbackGroup(ctx, body.ChatID, body.ReplyToMessageID, body.Text)
+	if err != nil {
+		msg := err.Error()
+		if s.sup.integrations != nil {
+			msg = s.sup.integrations.redact(msg)
+		}
+		status := http.StatusBadRequest
+		if strings.Contains(msg, "feishu feedback reply failed") {
+			status = http.StatusBadGateway
+		}
+		writeJSON(w, status, map[string]any{"error": msg})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":                  true,
+		"kind":                feishuKind,
+		"chat_id":             receipt.ChatID,
+		"reply_to_message_id": strings.TrimSpace(body.ReplyToMessageID),
+		"message_id":          receipt.ExternalID,
+	})
+}
+
+func (s *Server) superForgeComment(w http.ResponseWriter, r *http.Request) {
+	if s.sup == nil || s.sup.integrations == nil {
+		writeJSON(w, 503, map[string]any{"error": "integrations manager not ready"})
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
+	var req struct {
+		Thread  string `json:"thread"`
+		Repo    string `json:"repo"`
+		Number  int    `json:"number"`
+		Kind    string `json:"kind"`
+		Body    string `json:"body"`
+		Text    string `json:"text"`
+		Confirm bool   `json:"confirm"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if !req.Confirm {
+		writeJSON(w, 400, map[string]any{"error": "必须先获主人明确确认并传入 confirm: true 才能在远端发表评论"})
+		return
+	}
+	repo := strings.TrimSpace(req.Repo)
+	number := req.Number
+	if strings.TrimSpace(req.Thread) != "" {
+		prov, trRepo, trNum, ok := parseForgeThread(req.Thread)
+		if !ok {
+			writeJSON(w, 400, map[string]any{"error": "无效的 thread 格式，应为 <provider>:<owner>/<repo>#<number>"})
+			return
+		}
+		if prov != kind {
+			writeJSON(w, 400, map[string]any{"error": fmt.Sprintf("thread 所属平台 %q 与目标接入 %q 不一致", prov, kind)})
+			return
+		}
+		if repo != "" && normalizeForgeRepo(repo) != trRepo {
+			writeJSON(w, 400, map[string]any{"error": "repo 与 thread 中的仓库不一致"})
+			return
+		}
+		if number > 0 && number != trNum {
+			writeJSON(w, 400, map[string]any{"error": "number 与 thread 中的编号不一致"})
+			return
+		}
+		repo = trRepo
+		number = trNum
+	}
+	commentBody := strings.TrimSpace(req.Body)
+	if commentBody == "" {
+		commentBody = strings.TrimSpace(req.Text)
+	}
+	if commentBody == "" {
+		writeJSON(w, 400, map[string]any{"error": "评论内容不能为空"})
+		return
+	}
+
+	adapter := s.sup.integrations.Adapter(kind)
+	if adapter == nil {
+		writeJSON(w, 404, map[string]any{"error": fmt.Sprintf("未找到代码托管接入：%s", kind)})
+		return
+	}
+	ga, ok := adapter.(*GitForgeAdapter)
+	if !ok {
+		writeJSON(w, 400, map[string]any{"error": fmt.Sprintf("接入 %s 不支持发表代码托管评论", kind)})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	res, err := ga.PostComment(ctx, ForgeCommentTarget{
+		Repo:   repo,
+		Number: number,
+		Kind:   strings.TrimSpace(req.Kind),
+	}, commentBody)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":         true,
+		"provider":   res.Provider,
+		"repo":       res.Repo,
+		"number":     res.Number,
+		"comment_id": res.CommentID,
+		"url":        res.URL,
+	})
 }
 
 func (s *Server) superTestNotify(w http.ResponseWriter, r *http.Request) {

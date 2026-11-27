@@ -9,6 +9,7 @@ import (
 	"log"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -648,6 +649,77 @@ func (g *GitForgeAdapter) threadID(it ForgeItem) string {
 	return fmt.Sprintf("%s:%s", g.Kind(), repo)
 }
 
+// parseForgeThread parses a stable code-hosting thread identifier such as
+// "github:owner/repo#42" or "myforge:group/sub/repo!18" into provider, repo,
+// and PR/MR/Issue number.
+func parseForgeThread(raw string) (provider, repo string, number int, ok bool) {
+	s := strings.TrimSpace(raw)
+	colon := strings.IndexByte(s, ':')
+	if colon <= 0 || colon >= len(s)-1 {
+		return "", "", 0, false
+	}
+	provider = strings.ToLower(strings.TrimSpace(s[:colon]))
+	if !cliKindRe.MatchString(provider) {
+		return "", "", 0, false
+	}
+	rest := strings.TrimSpace(s[colon+1:])
+	sep := strings.LastIndexAny(rest, "#!")
+	if sep <= 0 || sep >= len(rest)-1 {
+		return "", "", 0, false
+	}
+	repo = normalizeForgeRepo(rest[:sep])
+	if repo == "" || !cliRepoRe.MatchString(repo) {
+		return "", "", 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(rest[sep+1:]))
+	if err != nil || n <= 0 {
+		return "", "", 0, false
+	}
+	return provider, repo, n, true
+}
+
+// PostComment executes a human-confirmed PR/MR/Issue comment via the underlying
+// ForgeProvider (when it implements ForgeCommenter). Never called automatically.
+func (g *GitForgeAdapter) PostComment(ctx context.Context, target ForgeCommentTarget, body string) (ForgeCommentResult, error) {
+	commenter, ok := g.provider.(ForgeCommenter)
+	if !ok {
+		return ForgeCommentResult{}, fmt.Errorf("%s 暂不支持自动回评", g.Meta().Name)
+	}
+	if g.mgr == nil {
+		return ForgeCommentResult{}, errors.New("integrations manager not ready")
+	}
+	cfg := g.mgr.ConfigSnapshot(g.Kind())
+	if !g.IsConfigured(cfg) {
+		return ForgeCommentResult{}, fmt.Errorf("%s 尚未完成配置", g.Meta().Name)
+	}
+	fc := g.parseConfig(cfg.Config, cfg.Secrets)
+	repo := normalizeForgeRepo(target.Repo)
+	if repo == "" || !cliRepoRe.MatchString(repo) {
+		return ForgeCommentResult{}, errors.New("无效的仓库名称（需形如 owner/repo）")
+	}
+	if target.Number <= 0 {
+		return ForgeCommentResult{}, fmt.Errorf("缺少有效的 %s 编号", g.termPR())
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ForgeCommentResult{}, errors.New("评论内容不能为空")
+	}
+	if len(body) > 65536 {
+		return ForgeCommentResult{}, errors.New("评论内容过长（不能超过 64KB）")
+	}
+	target.Repo = repo
+	if strings.TrimSpace(target.Kind) == "" {
+		target.Kind = strings.ToLower(g.termPR())
+	}
+	res, err := commenter.PostComment(ctx, fc, target, body)
+	if err != nil {
+		return ForgeCommentResult{}, errors.New(g.mgr.redact(cleanAuthError(err)))
+	}
+	g.mgr.recordActivity(g.Kind())
+	log.Printf("gitforge %s: confirmed comment posted repo=%s #%d id=%s", g.Kind(), repo, target.Number, res.CommentID)
+	return res, nil
+}
+
 func (g *GitForgeAdapter) activeSubscribers(thread string) []string {
 	if g.sp == nil || thread == "" {
 		return nil
@@ -800,7 +872,7 @@ func (g *GitForgeAdapter) emitItem(ctx context.Context, fc ForgeConfig, it Forge
 			})
 		}
 		// No active subscribed worker: degrade cleanly to advise mode.
-		guardrail := fmt.Sprintf("\n\n[处理模式：未找到订阅 %s 的在线 Agent，自动降级为只读调研建议 · 严禁未经人类确认擅自评论、审批、关闭或合并；仅做只读调研后通过 collie reply 汇报结论并附带 --opt 拍板选项]", thread)
+		guardrail := fmt.Sprintf("\n\n[处理模式：未找到订阅 %s 的在线 Agent，自动降级为只读调研建议 · 严禁未经人类确认擅自评论、审批、关闭或合并；仅做只读调研后通过 collie reply 汇报结论，如需回评请附上评论草稿与 --opt 确认按钮，仅在主人明确确认后调用 collie forge comment --thread %s --confirm \"<确认后的评论>\" 原地发表]", thread, thread)
 		return sink.EmitEvent(ctx, ExternalEvent{
 			Source:   g.Kind(),
 			DedupKey: dedup,
@@ -813,7 +885,7 @@ func (g *GitForgeAdapter) emitItem(ctx context.Context, fc ForgeConfig, it Forge
 		})
 
 	default: // advise
-		guardrail := fmt.Sprintf("\n\n[处理模式：自动调研出建议 · 严禁未经人类确认擅自在远端发表评论、审批、关闭或合并；仅做只读调研（看 diff / 评论 / 失败日志）后通过 collie reply 汇报结论并附带 --opt 拍板选项；稳定线程：%s]", thread)
+		guardrail := fmt.Sprintf("\n\n[处理模式：自动调研出建议 · 严禁未经人类确认擅自在远端发表评论、审批、关闭或合并；仅做只读调研（看 diff / 评论 / 失败日志）后通过 collie reply 汇报结论，如需回评请附上评论草稿与 --opt 确认按钮，仅在主人明确确认后调用 collie forge comment --thread %s --confirm \"<确认后的评论>\" 原地发表；稳定线程：%s]", thread, thread)
 		return sink.EmitEvent(ctx, ExternalEvent{
 			Source:   g.Kind(),
 			DedupKey: dedup,

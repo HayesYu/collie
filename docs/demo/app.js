@@ -5983,12 +5983,53 @@
     });
   }
 
+  const FEISHU_ONBOARD_FALLBACK_PRESETS = {
+    owner_name: "",
+    default_name: "我的边牧 · Collie",
+    name_template: "{user}的边牧 · Collie",
+    fallback_name: "我的边牧 · Collie",
+    default_desc: "帮你放牧一群 Agent 的边牧｜盯进度、收结论、只把关键决策端给你 · https://lihuanyu0w0.github.io/collie/",
+    homepage_url: "https://lihuanyu0w0.github.io/collie/",
+    default_avatar: "cobalt",
+    limits: {
+      cn: { name_min: 2, name_max: 32, desc_max: 120 },
+      intl: { name_min: 2, name_max: 64, desc_max: 240 },
+    },
+    avatars: [
+      { id: "cobalt", label: "钴蓝领巾", color: "#1d4ed8", preview: "avatars/cobalt.png", url: "https://lihuanyu0w0.github.io/collie/avatars/cobalt.png" },
+      { id: "terracotta", label: "赤陶领巾", color: "#c2410c", preview: "avatars/terracotta.png", url: "https://lihuanyu0w0.github.io/collie/avatars/terracotta.png" },
+      { id: "pine", label: "松绿领巾", color: "#15803d", preview: "avatars/pine.png", url: "https://lihuanyu0w0.github.io/collie/avatars/pine.png" },
+      { id: "plum", label: "梅紫领巾", color: "#7e22ce", preview: "avatars/plum.png", url: "https://lihuanyu0w0.github.io/collie/avatars/plum.png" },
+    ],
+  };
+
+  function getFeishuOnboardPresets(item) {
+    const raw = item?.extra?.onboard_presets;
+    const base = FEISHU_ONBOARD_FALLBACK_PRESETS;
+    if (!raw || typeof raw !== "object") return base;
+    const avatars = Array.isArray(raw.avatars) && raw.avatars.length ? raw.avatars : base.avatars;
+    return {
+      ...base,
+      ...raw,
+      limits: {
+        cn: { ...base.limits.cn, ...(raw.limits?.cn || {}) },
+        intl: { ...base.limits.intl, ...(raw.limits?.intl || {}) },
+      },
+      avatars,
+    };
+  }
+
+  function runeCount(s) {
+    return Array.from(String(s || "")).length;
+  }
+
   function openIntModal(kind) {
     const item = (intPayload?.integrations || []).find((x) => x.kind === kind);
     if (!item || !intModal) return;
     intModalKind = kind;
     const cfg = item.config || {};
     if (kind === "feishu") {
+      const presets = getFeishuOnboardPresets(item);
       intModalDraft = {
         kind,
         configured: !!item.configured,
@@ -6003,8 +6044,15 @@
         enabled: !!item.enabled,
         health: item.health || { state: "unconfigured" },
         pairing: item.extra?.pairing || { active: false },
+        onboardPresets: presets,
         onboardMode: "create",
         onboardClientId: "",
+        onboardName: presets.owner_name ? presets.default_name : "",
+        onboardDesc: presets.default_desc || FEISHU_ONBOARD_FALLBACK_PRESETS.default_desc,
+        onboardAvatar: presets.default_avatar || "cobalt",
+        onboardPersonaOpen: false,
+        onboardNameErr: "",
+        onboardDescErr: "",
         onboardStarting: false,
         onboard: null,
         onboardDeadlineMs: 0,
@@ -6143,6 +6191,9 @@
         intModalDraft.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec) || 0) * 1000;
         if (res.region) intModalDraft.region = res.region;
         if (res.mode === "existing" || res.mode === "create") intModalDraft.onboardMode = res.mode;
+        if (res.avatar) intModalDraft.onboardAvatar = res.avatar;
+        if (res.name && res.name !== intModalDraft.onboardPresets?.name_template) intModalDraft.onboardName = res.name;
+        if (res.desc) intModalDraft.onboardDesc = res.desc;
         renderIntModal(item);
         startOnboardPoll(item);
       }
@@ -6260,14 +6311,110 @@
         <button type="button" class="btn ghost small" id="fs-pair-cancel">取消</button>
       </div>` : "";
 
+    const presets = d.onboardPresets || getFeishuOnboardPresets(item);
+    const avatars = presets.avatars || FEISHU_ONBOARD_FALLBACK_PRESETS.avatars;
+    const activeAvatar = avatars.find((a) => a.id === d.onboardAvatar) || avatars[0];
+    const limits = (d.region === "intl" ? presets.limits?.intl : presets.limits?.cn) || { name_min: 2, name_max: 32, desc_max: 120 };
+    const safeAvatarSrc = (av) => {
+      const src = String(av?.preview || av?.url || "");
+      return /^(?:\/?avatars\/[a-z0-9_-]+\.png|https:\/\/lihuanyu0w0\.github\.io\/collie\/avatars\/[a-z0-9_-]+\.png)$/i.test(src) ? src : "";
+    };
+    const effectiveDisplayName = () => {
+      const custom = String(d.onboardName || "").trim();
+      if (custom) return custom;
+      return presets.owner_name ? (presets.default_name || presets.fallback_name) : (presets.fallback_name || "我的边牧 · Collie");
+    };
+    const effectiveDisplayDesc = () => String(d.onboardDesc || "").trim() || presets.default_desc || FEISHU_ONBOARD_FALLBACK_PRESETS.default_desc;
+    const isUsingAutoOwnerName = !String(d.onboardName || "").trim() && !presets.owner_name;
+
+    const renderPersonaBox = () => {
+      const avSrc = safeAvatarSrc(activeAvatar);
+      const nameVal = String(d.onboardName || "");
+      const descVal = String(d.onboardDesc ?? "");
+      const nameLen = runeCount(nameVal.trim());
+      const descLen = runeCount(descVal.trim());
+      return `
+        <div class="int-persona-box" aria-label="飞书机器人默认人设">
+          <div class="int-persona-head">
+            <div class="int-persona-preview">
+              ${avSrc ? `<img class="int-persona-av" id="fs-ob-av-preview" src="${esc(avSrc)}" alt="${esc(activeAvatar?.label || "边牧头像")}" width="44" height="44">` : ""}
+              <div class="int-persona-meta">
+                <div class="int-persona-name-row">
+                  <strong class="int-persona-name" id="fs-ob-name-preview">${esc(effectiveDisplayName())}</strong>
+                  ${!presets.owner_name ? `<span class="int-persona-auto-tag" id="fs-ob-auto-tag"${isUsingAutoOwnerName ? "" : " hidden"}>扫码自动填入姓名</span>` : ""}
+                </div>
+                <p class="int-persona-desc" id="fs-ob-desc-preview">${esc(effectiveDisplayDesc())}</p>
+              </div>
+            </div>
+            <button type="button" class="btn ghost small int-persona-toggle" id="fs-ob-persona-toggle" aria-expanded="${d.onboardPersonaOpen ? "true" : "false"}" aria-controls="fs-ob-persona-edit">
+              ${d.onboardPersonaOpen ? "收起" : "微调"}
+            </button>
+          </div>
+
+          <div class="int-avatar-bar">
+            <fieldset class="int-avatar-picker">
+              <legend class="sr-only">选择默认边牧头像配色</legend>
+              <div class="int-avatar-list">
+                ${avatars.map((av) => {
+                  const checked = av.id === activeAvatar?.id;
+                  const src = safeAvatarSrc(av);
+                  const shortLabel = String(av.label || av.id).replace(/领巾$/, "");
+                  return `
+                    <label class="int-avatar-opt${checked ? " is-selected" : ""}" style="--av-ring:${esc(av.color || "#1d4ed8")}">
+                      <input type="radio" class="sr-only" name="fs_ob_avatar" value="${esc(av.id)}" ${checked ? "checked" : ""}>
+                      <span class="int-avatar-thumb">
+                        ${src ? `<img src="${esc(src)}" alt="" width="30" height="30">` : ""}
+                        ${checked ? `<span class="int-avatar-check" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-6.5"/></svg></span>` : ""}
+                      </span>
+                      <span class="int-avatar-lbl">${esc(shortLabel)}</span>
+                    </label>`;
+                }).join("")}
+              </div>
+            </fieldset>
+            <button type="button" class="btn ghost small int-avatar-rand" id="fs-ob-avatar-rand" title="随机换一款领巾配色">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+              <span>随机</span>
+            </button>
+          </div>
+
+          ${d.onboardPersonaOpen ? `
+            <div class="int-persona-edit" id="fs-ob-persona-edit">
+              <div class="int-field">
+                <div class="int-field-head">
+                  <label class="int-field-label" for="fs-ob-name">机器人名字</label>
+                  <span class="int-char-cnt tnum${nameLen > limits.name_max ? " is-over" : ""}" id="fs-ob-name-cnt">${nameLen || runeCount(effectiveDisplayName())} / ${limits.name_max}</span>
+                </div>
+                <input id="fs-ob-name" name="feishu_bot_name" type="text" value="${esc(nameVal)}" maxlength="${limits.name_max}" placeholder="${esc(presets.fallback_name || "我的边牧 · Collie")}（留空则扫码自动填入你的飞书名）" aria-describedby="fs-ob-name-help${d.onboardNameErr ? " fs-ob-name-err" : ""}" ${d.onboardNameErr ? `aria-invalid="true"` : ""} autocomplete="off">
+                ${d.onboardNameErr ? `<p class="int-field-err" id="fs-ob-name-err" role="alert">${esc(d.onboardNameErr)}</p>` : ""}
+                <p class="int-field-help" id="fs-ob-name-help">默认按 <code>{user}的边牧 · Collie</code> 随扫码账号自动命名，拿不到姓名时兜底「${esc(presets.fallback_name || "我的边牧 · Collie")}」。</p>
+              </div>
+              <div class="int-field">
+                <div class="int-field-head">
+                  <label class="int-field-label" for="fs-ob-desc">机器人签名 / 简介</label>
+                  <span class="int-char-cnt tnum${descLen > limits.desc_max ? " is-over" : ""}" id="fs-ob-desc-cnt">${descLen} / ${limits.desc_max}</span>
+                </div>
+                <textarea id="fs-ob-desc" name="feishu_bot_desc" rows="2" maxlength="${limits.desc_max}" placeholder="${esc(presets.default_desc)}" aria-describedby="fs-ob-desc-help${d.onboardDescErr ? " fs-ob-desc-err" : ""}" ${d.onboardDescErr ? `aria-invalid="true"` : ""}>${esc(descVal)}</textarea>
+                ${d.onboardDescErr ? `<p class="int-field-err" id="fs-ob-desc-err" role="alert">${esc(d.onboardDescErr)}</p>` : ""}
+                <div class="int-persona-edit-foot">
+                  <p class="int-field-help" id="fs-ob-desc-help">默认附带 Collie 主页链接，${d.region === "intl" ? "海外 Lark 上限 240 字" : "国内飞书上限 120 字"}。</p>
+                  <button type="button" class="btn ghost small" id="fs-ob-persona-reset">恢复默认</button>
+                </div>
+              </div>
+            </div>` : ""}
+        </div>`;
+    };
+
     const renderOnboardWaiting = () => {
       if (!isObWaiting) return "";
       const safeHref = /^https:\/\//i.test(ob.url || "") ? ob.url : "";
       const safeQR = /^(data:image\/(?:png|svg\+xml);base64,|demo-qr\.png)/i.test(ob.qr_data_url || "") ? ob.qr_data_url : "";
       const isExisting = ob.mode === "existing";
+      const waitAv = avatars.find((a) => a.id === (ob.avatar || d.onboardAvatar)) || activeAvatar;
+      const waitAvSrc = safeAvatarSrc(waitAv);
+      const waitName = (ob.name && ob.name !== presets.name_template) ? ob.name : effectiveDisplayName();
       const targetHint = isExisting
         ? (ob.client_id ? `确认页已自动定位应用 <code>${esc(ob.client_id)}</code>，点确认即可一键补齐最小 IM 权限与事件/卡片双长连接。` : "在确认页选择你的已有飞书应用并确认，将自动补齐最小 IM 权限与事件/卡片双长连接。")
-        : "用飞书 App 扫码或在浏览器打开确认页，点「创建」即可自动配好机器人、双长连接与白名单。";
+        : "用飞书 App 扫码或在浏览器打开确认页，点「创建」即可自动带入默认边牧头像、人设、双长连接与白名单。";
       const statusText = ob.state === "domain_switched"
         ? (ob.region === "intl"
           ? "检测到海外 Lark 账号，已自动切至 Lark 域等待确认（剩余 "
@@ -6275,6 +6422,11 @@
         : (isExisting ? "等待你在飞书中确认补齐（剩余 " : "等待你在飞书中确认创建（剩余 ");
       return `
         <div class="int-onboard-wait">
+          ${!isExisting && waitAvSrc ? `
+            <div class="int-onboard-persona-pill">
+              <img src="${esc(waitAvSrc)}" alt="" width="24" height="24">
+              <span>已附带默认人设：<strong>${esc(waitName)}</strong>（${esc(waitAv?.label || "")}）</span>
+            </div>` : ""}
           <div class="int-onboard-qr-row">
             ${safeQR ? `<div class="int-qr-frame"><img src="${esc(safeQR)}" alt="飞书一键确认二维码" width="144" height="144"></div>` : ""}
             <div class="int-onboard-actions">
@@ -6403,7 +6555,7 @@
                 <div class="int-field">
                   <label class="int-field-label" for="fs-ob-client-id">已有应用 App ID <span class="opt">可选</span></label>
                   <input id="fs-ob-client-id" value="${esc(d.onboardClientId)}" placeholder="留空可在飞书确认页直接选择已有应用，或填入 cli_…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
-                </div>` : ""}
+                </div>` : renderPersonaBox()}
               <div class="int-onboard-cta">
                 <button type="button" class="btn primary" id="fs-ob-start-btn" ${d.onboardStarting ? "disabled" : ""}>
                   ${d.onboardStarting ? "正在生成确认码…" : (d.onboardMode === "existing" ? "一键绑定并补齐权限" : "一键开通飞书")}
@@ -6512,16 +6664,49 @@
       return s;
     };
 
+    const validatePersona = (focusInvalid = false) => {
+      const nameTrim = String(d.onboardName || "").trim();
+      const descTrim = String(d.onboardDesc || "").trim();
+      let nameErr = "";
+      let descErr = "";
+      if (nameTrim) {
+        const n = runeCount(nameTrim);
+        if (n < limits.name_min) nameErr = `机器人名字至少需要 ${limits.name_min} 个字符`;
+        else if (n > limits.name_max) nameErr = `机器人名字不能超过 ${limits.name_max} 个字符`;
+      }
+      if (descTrim && runeCount(descTrim) > limits.desc_max) {
+        descErr = `机器人简介不能超过 ${limits.desc_max} 个字符`;
+      }
+      d.onboardNameErr = nameErr;
+      d.onboardDescErr = descErr;
+      if (nameErr || descErr) {
+        d.onboardPersonaOpen = true;
+        renderIntModal(item);
+        if (focusInvalid) {
+          (nameErr ? $("#fs-ob-name") : $("#fs-ob-desc"))?.focus();
+        }
+        return false;
+      }
+      return true;
+    };
+
     const startOnboardFlow = async (mode, clientID) => {
+      if (mode === "create" && !validatePersona(true)) return;
       d.onboardStarting = true;
       d.onboardDoneMsg = "";
       d.onboardDoneTitle = "";
       d.manualOpen = false;
       renderIntModal(item);
       try {
-        const res = await api("/api/super/integrations/feishu/onboard", {
-          body: { region: d.region, mode, client_id: clientID || "" },
-        });
+        const payload = { region: d.region, mode, client_id: clientID || "" };
+        if (mode === "create") {
+          const trimmedName = String(d.onboardName || "").trim();
+          const trimmedDesc = String(d.onboardDesc || "").trim();
+          if (trimmedName) payload.name = trimmedName;
+          if (trimmedDesc) payload.desc = trimmedDesc;
+          if (d.onboardAvatar) payload.avatar = d.onboardAvatar;
+        }
+        const res = await api("/api/super/integrations/feishu/onboard", { body: payload });
         if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
         d.onboardStarting = false;
         d.onboard = res;
@@ -6544,6 +6729,8 @@
       b.addEventListener("click", () => {
         if ($("#fs-manual-fold")) d.manualOpen = !!$("#fs-manual-fold").open;
         d.region = b.dataset.fsRegion;
+        d.onboardNameErr = "";
+        d.onboardDescErr = "";
         renderIntModal(item);
       });
     });
@@ -6554,6 +6741,85 @@
         if (isObTerminalErr) d.onboard = null;
         renderIntModal(item);
       });
+    });
+    $("#fs-ob-persona-toggle")?.addEventListener("click", () => {
+      d.onboardPersonaOpen = !d.onboardPersonaOpen;
+      renderIntModal(item);
+      if (d.onboardPersonaOpen) $("#fs-ob-name")?.focus();
+    });
+    intModal.querySelectorAll('input[name="fs_ob_avatar"]').forEach((inp) => {
+      inp.addEventListener("change", () => {
+        if (!inp.checked) return;
+        d.onboardAvatar = inp.value;
+        renderIntModal(item);
+      });
+    });
+    $("#fs-ob-avatar-rand")?.addEventListener("click", () => {
+      const others = avatars.filter((a) => a.id !== d.onboardAvatar);
+      const pool = others.length ? others : avatars;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      if (pick) {
+        d.onboardAvatar = pick.id;
+        renderIntModal(item);
+      }
+    });
+    $("#fs-ob-name")?.addEventListener("input", (ev) => {
+      d.onboardName = ev.target.value;
+      const preview = $("#fs-ob-name-preview");
+      if (preview) preview.textContent = effectiveDisplayName();
+      const autoTag = $("#fs-ob-auto-tag");
+      if (autoTag) autoTag.hidden = !!d.onboardName.trim();
+      const cnt = $("#fs-ob-name-cnt");
+      const n = runeCount(d.onboardName.trim());
+      if (cnt) {
+        cnt.textContent = `${n || runeCount(effectiveDisplayName())} / ${limits.name_max}`;
+        cnt.classList.toggle("is-over", n > limits.name_max);
+      }
+      if (d.onboardNameErr && (!n || (n >= limits.name_min && n <= limits.name_max))) {
+        d.onboardNameErr = "";
+        ev.target.removeAttribute("aria-invalid");
+        $("#fs-ob-name-err")?.remove();
+      }
+    });
+    $("#fs-ob-name")?.addEventListener("blur", () => {
+      const n = runeCount(String(d.onboardName || "").trim());
+      const prevErr = d.onboardNameErr;
+      d.onboardNameErr = n > 0 && n < limits.name_min
+        ? `机器人名字至少需要 ${limits.name_min} 个字符`
+        : n > limits.name_max
+          ? `机器人名字不能超过 ${limits.name_max} 个字符`
+          : "";
+      if (d.onboardNameErr !== prevErr) renderIntModal(item);
+    });
+    $("#fs-ob-desc")?.addEventListener("input", (ev) => {
+      d.onboardDesc = ev.target.value;
+      const preview = $("#fs-ob-desc-preview");
+      if (preview) preview.textContent = effectiveDisplayDesc();
+      const cnt = $("#fs-ob-desc-cnt");
+      const n = runeCount(d.onboardDesc.trim());
+      if (cnt) {
+        cnt.textContent = `${n} / ${limits.desc_max}`;
+        cnt.classList.toggle("is-over", n > limits.desc_max);
+      }
+      if (d.onboardDescErr && n <= limits.desc_max) {
+        d.onboardDescErr = "";
+        ev.target.removeAttribute("aria-invalid");
+        $("#fs-ob-desc-err")?.remove();
+      }
+    });
+    $("#fs-ob-desc")?.addEventListener("blur", () => {
+      const n = runeCount(String(d.onboardDesc || "").trim());
+      const prevErr = d.onboardDescErr;
+      d.onboardDescErr = n > limits.desc_max ? `机器人简介不能超过 ${limits.desc_max} 个字符` : "";
+      if (d.onboardDescErr !== prevErr) renderIntModal(item);
+    });
+    $("#fs-ob-persona-reset")?.addEventListener("click", () => {
+      d.onboardName = presets.owner_name ? presets.default_name : "";
+      d.onboardDesc = presets.default_desc || FEISHU_ONBOARD_FALLBACK_PRESETS.default_desc;
+      d.onboardAvatar = presets.default_avatar || "cobalt";
+      d.onboardNameErr = "";
+      d.onboardDescErr = "";
+      renderIntModal(item);
     });
     $("#fs-ob-client-id")?.addEventListener("input", (ev) => { d.onboardClientId = ev.target.value; });
     $("#fs-ob-start-btn")?.addEventListener("click", () => {

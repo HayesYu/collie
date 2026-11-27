@@ -121,7 +121,6 @@ for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#compo
 }
 getEl("#re-draft")._qs[".re-t"] = makeEl("#re-draft .re-t");
 getEl("#re-draft")._qs["button"] = makeEl("#re-draft button");
-getEl("#collie-threads-pop").hidden = true;
 getEl("#super-search").hidden = true;
 getEl("#collie-menu").hidden = true;
 
@@ -180,47 +179,45 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { sup, syncNotebookVisibility, renderNotebook, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, getNotesExpanded: () => notesExpanded, syncCollieTopScrolled, syncCrewCompact, renderEntryArtifacts, replyOptsMarkup, setReply, getReplyTo: () => replyTo, reconcileStaleReplyTo, openThreadDrawer, route };\n})();"
+  "  globalThis.__test = { sup, syncNotebookVisibility, renderNotebook, setDockTab, getDockTab: () => dockTab, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, syncCollieTopScrolled, syncCrewCompact, renderEntryArtifacts, replyOptsMarkup, setReply, getReplyTo: () => replyTo, reconcileStaleReplyTo, openThreadDrawer, route };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
 
-// 2a) Mutual exclusion: opening threads popover, search, or more menu yields floating notebook while keeping slot stable; closing restores it
+// 2a) Unified dock tabs & mutual exclusion: switching tabs keeps dock visible; opening search or more menu yields floating dock while keeping slot stable; closing restores it
 T.setView("collie");
 T.setNotebookData({ date: "2026-11-27", tasks: [{ id: "t1", title: "任务 A", note: "进展", tone: "active" }], artifacts: [], timers: [] });
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").hidden, false, "notebook visible initially on wide desktop");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "dock visible initially on wide desktop");
 assert.equal(getEl("#v-collie").classList.contains("has-notes"), true);
-assert.equal(doc.body.classList.contains("collie-has-notes"), true, "body.collie-has-notes must sync with notebook slot");
+assert.equal(doc.body.classList.contains("collie-has-notes"), true, "body.collie-has-notes must sync with dock slot");
 
-// Open threads popover -> notebook hides, has-notes slot stays stable
-getEl("#collie-threads-btn").dispatch("click");
-assert.equal(getEl("#collie-threads-pop").hidden, false);
-assert.equal(getEl("#notes-pane").hidden, true, "threads popover must hide floating notebook");
-assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot must stay stable when transient popover opens");
-// Close threads popover -> notebook restores
-getEl("#collie-threads-btn").dispatch("click");
-assert.equal(getEl("#collie-threads-pop").hidden, true);
-assert.equal(getEl("#notes-pane").hidden, false, "closing threads popover must restore floating notebook");
+// Switch to 话题线 tab inside unified dock -> stays open without shifting slot
+T.setDockTab("threads");
+assert.equal(T.getDockTab(), "threads");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "switching to threads tab keeps unified dock visible");
+assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot stays stable across tab switch");
+T.setDockTab("notes");
 
-// Open search -> notebook hides; close search -> notebook restores
+// Open search -> dock hides; close search -> dock restores
 getEl("#super-search-btn").dispatch("click");
 assert.equal(getEl("#super-search").hidden, false);
-assert.equal(getEl("#notes-pane").hidden, true, "opening search must hide floating notebook");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening search must hide floating dock");
+assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot must stay stable when transient popover opens");
 getEl("#super-search-close").dispatch("click");
 assert.equal(getEl("#super-search").hidden, true);
-assert.equal(getEl("#notes-pane").hidden, false, "closing search must restore floating notebook");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "closing search must restore floating dock");
 
-// Open collie-menu -> notebook hides; Escape closes menu -> notebook restores
+// Open collie-menu -> dock hides; Escape closes menu -> dock restores
 const menuOpener = makeEl("menu-opener");
 menuOpener.dataset.menu = "collie-menu";
 menuOpener.closest = (sel) => (sel === "[data-menu]" ? menuOpener : null);
 doc.dispatch("click", { target: menuOpener });
 assert.equal(getEl("#collie-menu").hidden, false);
-assert.equal(getEl("#notes-pane").hidden, true, "opening more menu must hide floating notebook");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening more menu must hide floating dock");
 doc.dispatch("keydown", { key: "Escape" });
 assert.equal(getEl("#collie-menu").hidden, true);
-assert.equal(getEl("#notes-pane").hidden, false, "Escape closing more menu must restore floating notebook");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape closing more menu must restore floating dock");
 
 // 2b) Top-bar 1px hairline appears only when scrollTop > 4
 const sc = getEl("#super-thread").parentElement;

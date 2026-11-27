@@ -4,7 +4,7 @@
 
 <p align="center"><sub>养一只边牧，放牧一群 Agent</sub><br>
 <b>别再守着 8 个 AI 终端，把活交给 Collie 盯到底</b><br>
-开源自托管 Super Agent · Claude Code · Codex · Antigravity — 做完只端上 3 行结论和一键决策选项。</p>
+开源自托管 Super Agent · Antigravity (Gemini) · Claude Code · Codex · Cursor — 做完只端上 3 行结论和一键决策选项。</p>
 
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ 10 秒在线体验</b></a> ·
@@ -26,7 +26,9 @@
 <b><a href="https://www.bilibili.com/video/BV1a41EziEsE/">▶ 点击观看 3 分钟完整介绍视频（B 站）→</a></b>
 </p>
 
-不用再在七八个终端窗口，以及 Claude、Codex、Antigravity 各自的桌面端 App 之间来回切窗口了。**Collie** 是一个开源自托管的 **Super Agent**，用一个统一工作台把所有电脑上的 Agent 全部收编（同时依然保留随时接管本机已有桌面/CLI 会话的能力）：在对话里说清目标，它帮你并行派活、盯进度、遇错自愈、定时巡检，**做完只把 3 行结论和 2–4 个一键决策选项端到你面前**。因为 Collie 只有一套**纯 Web UI**（手机加到主屏幕即 PWA），手机和电脑是完全一致的完整体验——发需求、看结论、点选项、翻话题抽屉、看图片和报告，**通勤、外出、开会根本不用背电脑**。
+> **单开 Antigravity 是单兵，套上 Collie 才是你的 Gemini 专武**——把多终端并行、长任务盯盘和手机指挥全接管（同样原生支持 Claude Code、Codex 与 Cursor）。
+
+不用再在七八个终端窗口，以及 Antigravity、Claude、Codex、Cursor 各自的桌面端 App 之间来回切窗口了。**Collie** 是一个开源自托管的 **Super Agent**，用一个统一工作台把所有电脑上的 Agent 全部收编（同时依然保留随时接管本机已有桌面/CLI 会话的能力）：在对话里说清目标，它帮你并行派活、盯进度、遇错自愈、定时巡检，**做完只把 3 行结论和 2–4 个一键决策选项端到你面前**。因为 Collie 只有一套**纯 Web UI**（手机加到主屏幕即 PWA），手机和电脑是完全一致的完整体验——发需求、看结论、点选项、翻话题抽屉、看图片和报告，**通勤、外出、开会根本不用背电脑**。
 
 > Collie 是一只边牧（border collie）：[herdr](https://herdr.dev) 让终端稳稳跑着，Collie 帮你放牧一群 Agent。
 

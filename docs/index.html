@@ -296,7 +296,15 @@ h1 em { font-style: normal; color: var(--attn); }
   line-height: 1.66; color: var(--fg-2);
   margin: 0 auto; max-width: 700px;
 }
-.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 26px; }
+.hero-callout {
+  margin: 18px auto 0; max-width: 760px;
+  padding: 10px 18px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg-2);
+  font-size: 0.875rem; line-height: 1.58; color: var(--fg-2);
+  text-wrap: pretty;
+}
+.hero-callout strong { color: var(--fg); font-weight: 600; }
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
 .proof {
   display: flex; gap: 6px 16px; justify-content: center; flex-wrap: wrap;
   margin-top: 20px; font-size: 0.8125rem; color: var(--fg-3);
@@ -594,7 +602,8 @@ footer a { color: var(--fg-2); }
   <div class="wrap hero">
     <div class="eyebrow"><i aria-hidden="true"></i><span data-i18n="hero_eyebrow">One border collie to herd your coding agents</span></div>
     <h1 id="content" tabindex="-1" data-i18n-html="hero_h1">Stop babysitting 8 AI terminals.<br>Hand work to <em>Collie</em>.</h1>
-    <p class="lede" data-i18n="hero_lede">Open-source, self-hosted super-agent. Close your terminals and agent desktop apps—Collie dispatches Claude Code, Codex, and Antigravity across machines, retries stalls, and returns 3-line briefs with one-tap options. One pure Web UI on phone and desktop, so you can leave your laptop behind.</p>
+    <p class="lede" data-i18n="hero_lede">Open-source, self-hosted super-agent. Close your terminals and agent desktop apps—Collie dispatches Antigravity, Claude Code, Codex, and Cursor across machines, retries stalls, and returns 3-line briefs with one-tap options. One pure Web UI on phone and desktop, so you can leave your laptop behind.</p>
+    <p class="hero-callout" data-i18n-html="hero_gemini"><strong>Solo Antigravity is one agent. Paired with Collie, it becomes your dedicated Gemini command deck</strong> — multi-terminal herding, long-running follow-through, and mobile control (alongside Claude Code, Codex, and Cursor).</p>
     <div class="cta">
       <a class="btn primary" href="demo/">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg><span data-i18n="cta_demo">Try Live Demo (10s)</span></a>
@@ -603,9 +612,10 @@ footer a { color: var(--fg-2); }
         <svg class="ic-play" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M10.2 8.7v6.6l5.4-3.3z" fill="currentColor"/></svg><span data-i18n="cta_video">Watch 3-min video (Bilibili)</span><svg class="ic-ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"/></svg></a>
     </div>
     <div class="proof">
+      <span>Antigravity · Gemini</span>
       <span>Claude Code</span>
       <span>Codex</span>
-      <span>Antigravity</span>
+      <span>Cursor</span>
       <span>macOS · Linux · WSL2</span>
       <span data-i18n="proof_web">Pure Web UI · PWA</span>
       <span data-i18n="proof_ports">Zero open ports</span>
@@ -862,7 +872,8 @@ const COPY = {
     theme_to_light: "Switch to light theme",
     hero_eyebrow: "One border collie to herd your coding agents",
     hero_h1: "Stop babysitting 8 AI terminals.<br>Hand work to <em>Collie</em>.",
-    hero_lede: "Open-source, self-hosted super-agent. Close your terminals and agent desktop apps—Collie dispatches Claude Code, Codex, and Antigravity across machines, retries stalls, and returns 3-line briefs with one-tap options. One pure Web UI on phone and desktop, so you can leave your laptop behind.",
+    hero_lede: "Open-source, self-hosted super-agent. Close your terminals and agent desktop apps—Collie dispatches Antigravity, Claude Code, Codex, and Cursor across machines, retries stalls, and returns 3-line briefs with one-tap options. One pure Web UI on phone and desktop, so you can leave your laptop behind.",
+    hero_gemini: "<strong>Solo Antigravity is one agent. Paired with Collie, it becomes your dedicated Gemini command deck</strong> — multi-terminal herding, long-running follow-through, and mobile control (alongside Claude Code, Codex, and Cursor).",
     cta_demo: "Try Live Demo (10s)",
     cta_install: "Install in 30s",
     cta_video: "Watch 3-min video (Bilibili)",
@@ -980,7 +991,8 @@ const COPY = {
     theme_to_light: "切换到浅色主题",
     hero_eyebrow: "养一只边牧，放牧一群 Agent",
     hero_h1: "别再守着 8 个 AI 终端，<br>把活交给 <em>Collie</em> 盯到底",
-    hero_lede: "开源自托管 Super Agent。不用再在终端和各种 Agent 桌面端 App 间来回切——把活交给 Collie，它并行调动各台电脑上的 Claude Code、Codex 与 Antigravity，自己盯进度、遇错自愈；做完只端上 3 行结论和一键选项，纯 Web UI 手机电脑一致，出门都不用背电脑。",
+    hero_lede: "开源自托管 Super Agent。不用再在终端和各种 Agent 桌面端 App 间来回切——把活交给 Collie，它并行调动各台电脑上的 Antigravity、Claude Code、Codex 与 Cursor，自己盯进度、遇错自愈；做完只端上 3 行结论和一键选项，纯 Web UI 手机电脑一致，出门都不用背电脑。",
+    hero_gemini: "<strong>单开 Antigravity 是单兵，套上 Collie 才是你的 Gemini 专武</strong>——把多终端并行、长任务盯盘和手机指挥全接管（同样原生支持 Claude Code、Codex 与 Cursor）。",
     cta_demo: "10 秒在线体验",
     cta_install: "30 秒一行装好",
     cta_video: "看 3 分钟介绍视频（B 站）",

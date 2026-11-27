@@ -1129,10 +1129,59 @@
   let liveUpdateRAF = 0;
   let liveComposeTimer = 0;
   const LIVE_SIDE = 1, LIVE_PENDING_BARS = 2, LIVE_SUPER = 4, LIVE_UPDATE_ENTRY = 8, LIVE_HEAD = 16;
+  let _lastAnimBg = null, _lastAnimIdle = null;
+  let _scrollAnimPaused = false, _scrollAnimTimer = 0;
+  function hasActiveWork() {
+    const rs = sup.router?.status;
+    if (rs === "working" || rs === "starting" || rs === "waiting" || rs === "dreaming") return true;
+    for (const w of sup.workers || []) {
+      if (w && !w.ended && workerBusy(w)) return true;
+    }
+    for (const a of state.agents || []) {
+      if (a && (a.status === "working" || a.status === "starting" || a.status === "waiting")) return true;
+    }
+    return false;
+  }
+  function syncAnimPowerState() {
+    const root = document.documentElement;
+    if (!root?.classList) return;
+    const bg = !!document.hidden;
+    const idle = !hasActiveWork();
+    if (bg !== _lastAnimBg) {
+      _lastAnimBg = bg;
+      root.classList.toggle("is-bg", bg);
+    }
+    if (idle !== _lastAnimIdle) {
+      _lastAnimIdle = idle;
+      root.classList.toggle("is-idle", idle);
+    }
+  }
+  function setScrollAnimPaused(paused) {
+    const want = !!paused;
+    if (want === _scrollAnimPaused) return;
+    _scrollAnimPaused = want;
+    $(".side")?.classList?.toggle("is-scroll-paused", want);
+    $("#crew")?.classList?.toggle("is-scroll-paused", want);
+    $("#super-working")?.classList?.toggle("is-scroll-paused", want);
+  }
+  function clearCollieScrollAnimPause() {
+    if (_scrollAnimTimer) { clearTimeout(_scrollAnimTimer); _scrollAnimTimer = 0; }
+    setScrollAnimPaused(false);
+  }
+  function noteCollieScrollAnimPause() {
+    if (view !== "collie" || document.hidden || performance.now() < programmaticScrollUntil) return;
+    setScrollAnimPaused(true);
+    if (_scrollAnimTimer) clearTimeout(_scrollAnimTimer);
+    _scrollAnimTimer = setTimeout(() => {
+      _scrollAnimTimer = 0;
+      setScrollAnimPaused(false);
+    }, 160);
+  }
   function endCollieUserScroll(dropDeferred = false) {
     if (collieScrollEndTimer) { clearTimeout(collieScrollEndTimer); collieScrollEndTimer = 0; }
     if (collieScrollCapTimer) { clearTimeout(collieScrollCapTimer); collieScrollCapTimer = 0; }
     collieScrolling = false;
+    clearCollieScrollAnimPause();
     if (dropDeferred) {
       deferredScrollMask = 0;
       return;
@@ -1287,8 +1336,11 @@
     liveEv = ev;
   }
   document.addEventListener("visibilitychange", () => {
+    syncAnimPowerState();
+    if (document.hidden) clearCollieScrollAnimPause();
     if (!document.hidden && $("#login").hidden && liveEv?.readyState === EventSource.CLOSED) connect();
   });
+  syncAnimPowerState();
 
   // A finished agent you have open here has been seen: the hub then shows
   // it as idle everywhere (herdr itself only counts its own terminal).
@@ -1762,6 +1814,7 @@
     $("#nav-auto").classList.toggle("active", view === "auto");
     $("#nav-devices").classList.toggle("active", view === "devices");
     $("#nav-prefs").classList.toggle("active", view === "prefs");
+    syncAnimPowerState();
   }
 
   // ───────────────────────────── routing & scroll restoration
@@ -2291,7 +2344,6 @@
       if (superSearchOpen) closeSuperSearchFn?.(false);
       else hideSearchPanel();
       closeCollieMenus();
-      closeCollieThreadsPop({ sync: false });
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
       syncNotebookVisibility();
     }
@@ -2763,14 +2815,15 @@
       if (res) {
         const isDismissed = res.state === "dismissed";
         const isCustom = res.state === "custom";
-        const lbl = isDismissed ? "已划掉" : isCustom ? "已补充：" : "已选：";
-        const val = isDismissed ? "暂不处理" : (res.text || "");
+        const lbl = isDismissed ? "已划掉" : isCustom ? "已回复" : "已选：";
+        const val = isDismissed ? "暂不处理" : isCustom ? "" : (res.text || "");
         const atStr = res.at ? hhmm(res.at) : "";
         const origHtml = optList.map((o) => {
           const hit = !isDismissed && !isCustom && o === res.text;
           return `<span class="rr-orig-opt${hit ? " is-picked" : ""}">${hit ? "✓ " : ""}${esc(o)}</span>`;
         }).join("");
-        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span><span class="rr-val">${esc(val)}</span>${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div>${isCustom && res.text ? `<div class="rr-custom-note">你的附言：${esc(res.text)}</div>` : ""}</div></details>`;
+        const valHtml = val ? `<span class="rr-val">${esc(val)}</span>` : "";
+        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span>${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
       }
       return "";
     }
@@ -3142,6 +3195,36 @@
     }
     const fp = `${workers.length}:${agents.length}:${hs.length}:${h >>> 0}`;
     _wsFpCache = { wRef: workers, wLen: workers.length, aRef: agents, aLen: agents.length, hRef: hs, hLen: hs.length, fp };
+    return fp;
+  }
+  let _stWfpCache = { wRef: null, wLen: -1, aRef: null, aLen: -1, hRef: null, hLen: -1, fp: "" };
+  function superThreadWorkerFingerprint() {
+    const workers = sup.workers || [], agents = state.agents || [], hs = hist || [];
+    if (_stWfpCache.wRef === workers && _stWfpCache.wLen === workers.length &&
+      _stWfpCache.aRef === agents && _stWfpCache.aLen === agents.length &&
+      _stWfpCache.hRef === hs && _stWfpCache.hLen === hs.length) {
+      return _stWfpCache.fp;
+    }
+    let h = 2166136261;
+    for (let i = 0; i < workers.length; i++) {
+      const w = workers[i];
+      if (!w) continue;
+      const flags = (workerBusy(w) ? 1 : 0) | (!w.ended && workerStatus(w) === "blocked" ? 2 : 0) | (w.ended ? 4 : 0);
+      h = fnvHashStr(h, w.name || "");
+      h = fnvHashStr(h, w.pane_id || "");
+      h = Math.imul(h ^ flags, 16777619);
+    }
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      if (!a) continue;
+      h = fnvHashStr(h, a.name || "");
+      h = fnvHashStr(h, a.pane_id || "");
+      h = Math.imul(h ^ (a.status === "blocked" ? 3 : 1), 16777619);
+    }
+    const lastH = hs.length ? (hs[0]?.id || hs[hs.length - 1]?.id || "") : "";
+    h = fnvHashStr(h, lastH);
+    const fp = `${workers.length}:${agents.length}:${hs.length}:${h >>> 0}`;
+    _stWfpCache = { wRef: workers, wLen: workers.length, aRef: agents, aLen: agents.length, hRef: hs, hLen: hs.length, fp };
     return fp;
   }
   // Group user/collie messages connected by `re.entry` into natural reply threads,
@@ -3900,14 +3983,13 @@
 
   // ───────────────────────────── Collie conversation search
   let searchTimer = 0, searchAbort = null, searchSeq = 0;
-  let thPopOpen = false, superSearchOpen = false, collieMenuOpen = false, closeSuperSearchFn = null;
-  const hasTopRightOverlay = () => !!(thPopOpen || superSearchOpen || collieMenuOpen);
+  let superSearchOpen = false, collieMenuOpen = false, closeSuperSearchFn = null;
+  const hasTopRightOverlay = () => !!(superSearchOpen || collieMenuOpen);
   function closeCollieMenus() {
     collieMenuOpen = false;
     $$(".menu").forEach((m) => { m.hidden = true; });
   }
   function closeAllColliePopovers() {
-    closeCollieThreadsPop({ sync: false });
     closeCollieMenus();
     if (superSearchOpen) closeSuperSearchFn?.(false);
   }
@@ -4026,7 +4108,6 @@
     const openSuperSearch = (selectExisting = false) => {
       if (!wrap || !input || !btn) return;
       const wasHidden = wrap.hidden;
-      closeCollieThreadsPop({ sync: false });
       closeCollieMenus();
       superSearchOpen = true;
       wrap.hidden = false;
@@ -4737,7 +4818,7 @@
       openInlineDecisionId || "",
       !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "",
       pinList.map((p) => p.id).join(","),
-      workerStateFingerprint(),
+      superThreadWorkerFingerprint(),
       superAsksGen,
     ].join("|");
 
@@ -5205,6 +5286,7 @@
     };
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
+      noteCollieScrollAnimPause();
       if (superJumpScrollRAF) return;
       const run = () => {
         superJumpScrollRAF = 0;
@@ -5236,6 +5318,7 @@
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
+      noteCollieScrollAnimPause();
       if (e.deltaY < 0 && superJumpHiding) { jumpSeq++; superJumpHiding = false; updateSuperJump(); }
     }, { passive: true });
     sc?.addEventListener("touchstart", () => {
@@ -5289,20 +5372,21 @@
         el.scrollLeft += delta;
       }, { passive: false });
       const syncFade = () => {
-        if (supportsScrollFade) return;
-        const maxScroll = el.scrollWidth - el.clientWidth;
+        const maxScroll = (el.scrollWidth || 0) - (el.clientWidth || 0);
         const overflow = maxScroll > 1;
+        el.classList.toggle("is-overflow", overflow);
+        if (supportsScrollFade) return;
         el.classList.toggle("more-start", overflow && el.scrollLeft > 1);
         el.classList.toggle("more-end", overflow && el.scrollLeft < maxScroll - 1);
       };
       el._syncScrollFade = syncFade;
-      if (!supportsScrollFade) {
+      {
         let raf = 0;
         const schedule = () => {
           if (raf) return;
           raf = requestAnimationFrame(() => { raf = 0; syncFade(); });
         };
-        el.addEventListener("scroll", schedule, { passive: true });
+        if (!supportsScrollFade) el.addEventListener("scroll", schedule, { passive: true });
         if (typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(el);
         else addEventListener("resize", schedule, { passive: true });
         syncFade();
@@ -8308,6 +8392,62 @@
     return `<div class="mem-ins-wrap">${undoBar}${explicitBlock}${inferredBlock}${extraBlock}</div>`;
   }
 
+  const DONE_WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  function resolveDoneDate(f) {
+    if (f?.mod) {
+      const d = new Date(f.mod);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    const m = String(f?.name || "").match(/(20\d{2})[-_]?(\d{2})[-_]?(\d{2})/);
+    if (m) {
+      const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    return null;
+  }
+  function bucketDoneMemoryItems(items, nowDate = new Date()) {
+    const now = nowDate instanceof Date && !Number.isNaN(nowDate.getTime()) ? nowDate : new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const nowY = now.getFullYear();
+    const nowM = now.getMonth();
+    const map = new Map();
+    const list = [];
+    for (const item of items || []) {
+      const f = item?.f || item;
+      const d = resolveDoneDate(f);
+      let key = "done:unknown", label = "更早", kind = "month";
+      if (d) {
+        const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
+        const itemDay = new Date(y, m, day);
+        const diffDays = Math.round((todayStart - itemDay) / 86400000);
+        if (diffDays < 7) {
+          kind = "day";
+          key = `done:day:${y}-${pad2(m + 1)}-${pad2(day)}`;
+          if (diffDays <= 0) label = "今天";
+          else if (diffDays === 1) label = "昨天";
+          else label = `${pad2(m + 1)}-${pad2(day)} ${DONE_WEEKDAYS[d.getDay()]}`;
+        } else if (y === nowY && m === nowM) {
+          kind = "week";
+          const weekIdx = Math.floor((day - 1) / 7) + 1;
+          key = `done:week:${y}-${pad2(m + 1)}-w${weekIdx}`;
+          label = `${m + 1} 月第 ${weekIdx} 周`;
+        } else {
+          kind = "month";
+          key = `done:month:${y}-${pad2(m + 1)}`;
+          label = `${y} 年 ${m + 1} 月`;
+        }
+      }
+      let bucket = map.get(key);
+      if (!bucket) {
+        bucket = { key, label, kind, items: [] };
+        map.set(key, bucket);
+        list.push(bucket);
+      }
+      bucket.items.push(item);
+    }
+    return list;
+  }
+
   function renderMemoryHTML(r, query = "") {
     const files = r.files || [];
     const dreams = r.dreams || [];
@@ -8433,10 +8573,14 @@
         return `<details class="mem-fold" ${searching ? "open" : ""} data-mem-key="dream:${esc(d.name)}"><summary><span class="muted mem-name">${nameHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span>${hitBadge ? `<span class="mem-meta-r">${hitBadge}</span>` : ""}</summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`;
       }).join("")}</div>` : "";
 
-    // Completed tasks (已结束)
+    // Completed tasks (已结束) — progressive time buckets: near 7d by day, earlier this month by week, older by month
     const doneItems = filterFiles(done, (f) => f.name.replace(/^tasks\/done\//, ""));
+    const doneBuckets = bucketDoneMemoryItems(doneItems);
     const doneSection = doneItems.length ? `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">已结束<span class="muted">${searching ? `命中 ${doneItems.length} / ${done.length} 件` : `${done.length} 件 · 做完或放弃的事，不再先读`}</span></summary>
-        <div class="card">${doneItems.map(({ f, hit }) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>` : "";
+        <div class="mem-done-buckets">${doneBuckets.map((b, bi) => {
+          const openBucket = searching || (bi === 0 && b.kind === "day");
+          return `<details class="mem-done-bucket" ${openBucket ? "open" : ""} data-mem-key="${esc(b.key)}" data-done-bucket="${esc(b.kind)}"><summary><span class="mem-done-bname">${esc(b.label)}</span><span class="mem-done-bcnt">${b.items.length} 件</span></summary><div class="mem-done-blist">${b.items.map(({ f, hit }) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>`;
+        }).join("")}</div></details>` : "";
 
     const bodySections = [
       legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : "",
@@ -13340,37 +13484,58 @@
     fvWidenBtn.setAttribute("aria-label", lbl);
   }
   function showFilePane() {
-    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: view === "collie" });
+    const appEl = $("#app");
+    const hadFile = !!appEl?.classList?.contains("has-file");
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false });
     clearTimeout(paneTimer);
     const baseW = fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || Math.min(innerWidth * 0.45, 580), fileMax()), 380);
     setFileW(baseW);
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
     if (fileScrim) fileScrim.hidden = false;
-    $("#app").classList.add("has-file");
+    appEl?.classList?.add("has-file");
     syncFileWidenUI();
     syncNotebookVisibility();
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: !hadFile && innerWidth > 1000, duration: 500 });
+    }
   }
   function closeFilePane() {
-    $("#app").classList.remove("has-file");
+    const appEl = $("#app");
+    const hadFile = !!appEl?.classList?.contains("has-file");
+    const wasOpen = hadFile || (!!pane && !pane.hidden);
+    const sc = wasOpen && view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    appEl?.classList?.remove("has-file");
     fileSeq++;
     clearTimeout(paneTimer);
+    syncFileWidenUI();
+    syncNotebookVisibility();
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: hadFile && innerWidth > 1000, duration: 500 });
+    }
     paneTimer = setTimeout(() => {
       pane.hidden = true;
       if (fileScrim) fileScrim.hidden = true;
       if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
-      if (view === "collie") renderSuper();
+      if (view === "collie") {
+        const useRestore = lockSnap && collieLayoutLock?.snap === lockSnap ? { restore: lockSnap, once: true } : undefined;
+        renderSuper(useRestore);
+      }
     }, 340);
-    syncFileWidenUI();
-    syncNotebookVisibility();
   }
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
   $("#fv-handle")?.addEventListener("click", () => closeFilePane());
   fileScrim?.addEventListener("click", () => closeFilePane());
   fvWidenBtn?.addEventListener("click", () => {
     if (innerWidth <= 1000 || pane?.hidden) return;
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     fileWide = !fileWide;
     setFileW(fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || 540, fileMax()), 380));
     syncFileWidenUI();
+    if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pane.hidden && !document.querySelector("dialog[open]")) closeFilePane(); });
   $("#fv-grip")?.addEventListener("pointerdown", (e) => {
@@ -13378,37 +13543,101 @@
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
     document.body.classList.add("dragging");
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const dragSnap = sc ? captureColliePos(sc) : null;
     const max = fileMax();
-    const move = (ev) => { fileWide = false; setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360)); syncFileWidenUI(); };
+    const move = (ev) => {
+      fileWide = false;
+      setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360));
+      syncFileWidenUI();
+      if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
+    };
     const up = () => {
       grip.removeEventListener("pointermove", move);
       document.body.classList.remove("dragging");
       store.set("fileW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--file-w")) || 520);
+      if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
     };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up, { once: true });
   });
 
-  // ───────────────────────────── Floating White-Paper「小本本」(compact + one-click expand)
+  // ───────────────────────────── Unified Right Floating Dock「小本本 | 话题线」(single-state card + compositor motion)
   const NOTES_WIDE_MIN = 1360;
-  const NOTES_COMPACT_TASKS = 3;
-  const NOTES_COMPACT_FILES = 2;
-  const NOTES_COMPACT_TIMERS = 1;
   const notesPane = $("#notes-pane");
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
+  const dockTriggerDot = $("#dock-trigger-dot");
+  const dkTablist = $("#dk-tablist");
+  const dkTabNotes = $("#dk-tab-notes");
+  const dkTabThreads = $("#dk-tab-threads");
+  const dkPanelNotes = $("#dk-panel-notes");
+  const dkPanelThreads = $("#dk-panel-threads");
+  const dkThDot = $("#dk-th-dot");
+  const dkThCnt = $("#dk-th-cnt");
   let notebookData = null;
   let notebookFetching = false;
   let notebookRefreshTimer = 0;
   let notebookLastRefreshSig = "";
   let notesUserClosed = !!store.get("notesClosed", false);
   let notesOpen = false;
-  let notesExpanded = false;
   let notesManualOverlay = false;
+  let dockTab = store.get("dockTab", "notes") === "threads" ? "threads" : "notes";
+  let dockPendingThreads = 0;
   let _lastCollieTopH = 0;
   let _lastNotebookRenderKey = "";
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
+  function syncDockTriggerBadge() {
+    if (!dockTriggerDot) return;
+    const showDot = dockPendingThreads > 0 && !notesOpen;
+    dockTriggerDot.hidden = !showDot;
+  }
+  function setDockTab(nextTab, opts = {}) {
+    const target = nextTab === "threads" ? "threads" : "notes";
+    const changed = target !== dockTab;
+    const prevIdx = dockTab === "threads" ? 1 : 0;
+    const nextIdx = target === "threads" ? 1 : 0;
+    dockTab = target;
+    if (opts.persist !== false) store.set("dockTab", dockTab);
+    const tabs = [
+      [dkTabNotes, "notes"],
+      [dkTabThreads, "threads"],
+    ];
+    for (const [tb, key] of tabs) {
+      if (!tb) continue;
+      const sel = key === dockTab;
+      tb.setAttribute("aria-selected", sel ? "true" : "false");
+      tb.tabIndex = sel ? 0 : -1;
+      if (typeof tb.toggleAttribute === "function") tb.toggleAttribute("focusgroupstart", sel);
+    }
+    const panels = [
+      [dkPanelNotes, dockTab === "notes"],
+      [dkPanelThreads, dockTab === "threads"],
+    ];
+    for (const [panel, active] of panels) {
+      if (!panel) continue;
+      if (active) {
+        panel.hidden = false;
+        if (changed && opts.animate !== false) {
+          panel.style?.setProperty?.("--dk-dir", nextIdx > prevIdx ? "6px" : "-6px");
+          panel.classList?.remove("is-entering");
+          void panel.offsetWidth;
+          panel.classList?.add("is-entering");
+        }
+      } else {
+        panel.classList?.remove("is-entering");
+        panel.hidden = "until-found";
+      }
+    }
+    if (dockTab === "notes" && notesOpen) {
+      renderNotebook();
+      if (!notebookData) loadNotebook(false);
+    } else if (dockTab === "threads" && notesOpen) {
+      const entries = chatEntries();
+      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
+    }
+  }
   function syncCollieTopHeight(measuredH) {
     if (!notesPane) return;
     let h = typeof measuredH === "number" && measuredH > 0 ? Math.round(measuredH) : 0;
@@ -13455,29 +13684,20 @@
   function renderNotebook() {
     if (!notesPane) return;
     const data = notebookData || { date: "", tasks: [], artifacts: [], timers: [] };
-    const showFull = notesExpanded || !isWideNotesViewport();
     const allTasks = Array.isArray(data.tasks) ? data.tasks : [];
     const allFiles = Array.isArray(data.artifacts) ? data.artifacts : [];
     const allTimers = Array.isArray(data.timers) ? data.timers : [];
-    const renderKey = `${showFull ? 1 : 0}|${data.date || ""}|${JSON.stringify(allTasks)}|${JSON.stringify(allFiles)}|${JSON.stringify(allTimers)}`;
+    const renderKey = `${data.date || ""}|${JSON.stringify(allTasks)}|${JSON.stringify(allFiles)}|${JSON.stringify(allTimers)}`;
     if (renderKey === _lastNotebookRenderKey) return;
     _lastNotebookRenderKey = renderKey;
     const dateEl = $("#np-date");
     if (dateEl) dateEl.textContent = formatNotebookDate(data.date);
-    notesPane.classList.toggle("is-expanded", !!showFull);
 
-    // 1. 进行中
-    const shownTasks = showFull ? allTasks : allTasks.slice(0, NOTES_COMPACT_TASKS);
-    const taskMoreEl = $("#np-tasks-more");
-    if (taskMoreEl) {
-      const rem = allTasks.length - shownTasks.length;
-      taskMoreEl.hidden = showFull || rem <= 0;
-      if (rem > 0) { taskMoreEl.textContent = `+${rem}`; taskMoreEl.title = `展开查看全部 ${allTasks.length} 项`; }
-    }
+    // 1. 进行中 (single-state clean card showing all active tasks)
     const tasksListEl = $("#np-tasks-list");
     if (tasksListEl) {
-      tasksListEl.innerHTML = shownTasks.length
-        ? shownTasks.map((tk) => {
+      tasksListEl.innerHTML = allTasks.length
+        ? allTasks.map((tk) => {
             const dotCls = tk.tone === "attn" ? "is-attn" : tk.tone === "idle" ? "is-idle" : "";
             const noteHtml = tk.note ? `<span class="np-item-note">${esc(tk.note)}</span>` : "";
             return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span>${noteHtml}</button></li>`;
@@ -13486,17 +13706,10 @@
     }
 
     // 2. 今日产物
-    const shownFiles = showFull ? allFiles : allFiles.slice(0, NOTES_COMPACT_FILES);
-    const filesMoreEl = $("#np-files-more");
-    if (filesMoreEl) {
-      const rem = allFiles.length - shownFiles.length;
-      filesMoreEl.hidden = showFull || rem <= 0;
-      if (rem > 0) { filesMoreEl.textContent = `+${rem}`; filesMoreEl.title = `展开查看全部 ${allFiles.length} 个产物`; }
-    }
     const filesListEl = $("#np-files-list");
     if (filesListEl) {
-      filesListEl.innerHTML = shownFiles.length
-        ? shownFiles.map((f) => {
+      filesListEl.innerHTML = allFiles.length
+        ? allFiles.map((f) => {
             const ext = String(f.ext || "").toLowerCase();
             const isHtml = ext === "html" || ext === "htm";
             const atStr = f.at ? hhmm(f.at) : "";
@@ -13507,17 +13720,10 @@
     }
 
     // 3. 下一条定时
-    const shownTimers = showFull ? allTimers : allTimers.slice(0, NOTES_COMPACT_TIMERS);
-    const timersMoreEl = $("#np-timers-more");
-    if (timersMoreEl) {
-      const rem = allTimers.length - shownTimers.length;
-      timersMoreEl.hidden = showFull || rem <= 0;
-      if (rem > 0) { timersMoreEl.textContent = `+${rem}`; timersMoreEl.title = `展开查看全部 ${allTimers.length} 条定时`; }
-    }
     const timersListEl = $("#np-timers-list");
     if (timersListEl) {
-      timersListEl.innerHTML = shownTimers.length
-        ? shownTimers.map((tm) => {
+      timersListEl.innerHTML = allTimers.length
+        ? allTimers.map((tm) => {
             const clk = formatNotebookTimerClock(tm.next_run);
             const freq = formatNotebookTimerFreq(tm.spec);
             return `<li class="np-timer" title="${esc((clk ? clk + " " : "") + tm.text)}"><span class="np-timer-at">${esc(clk)}</span><span class="np-timer-txt">${esc(tm.text)}${freq ? `<span class="np-timer-freq">${esc(freq)}</span>` : ""}</span></li>`;
@@ -13549,15 +13755,17 @@
     notesOpen = wantOpen;
     col.classList.toggle("has-notes", keepSlot);
     document.body?.classList?.toggle("collie-has-notes", keepSlot);
-    notesPane.hidden = !wantOpen;
+    notesPane.classList.toggle("is-hidden", !wantOpen);
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
-    if (notesScrim) notesScrim.hidden = !(wantOpen && !isWideNotesViewport());
+    if ("inert" in notesPane) notesPane.inert = !wantOpen;
     if (notesBtn) {
       notesBtn.classList.toggle("on", wantOpen);
       notesBtn.setAttribute("aria-pressed", wantOpen ? "true" : "false");
     }
+    syncDockTriggerBadge();
     if (wantOpen) {
       syncCollieTopHeight();
+      setDockTab(dockTab, { animate: false, persist: false });
       renderNotebook();
     }
   }
@@ -13586,6 +13794,34 @@
       if (view === "collie" && notesOpen) loadNotebook(false);
     }, 2500);
   }
+  dkTablist?.addEventListener("click", (ev) => {
+    const tab = ev.target.closest?.("[data-dk-tab]");
+    if (!tab) return;
+    ev.stopPropagation();
+    setDockTab(tab.dataset.dkTab);
+  });
+  dkTablist?.addEventListener("keydown", (ev) => {
+    const tabs = [dkTabNotes, dkTabThreads].filter(Boolean);
+    if (!tabs.length) return;
+    const cur = tabs.findIndex((t) => t.getAttribute?.("aria-selected") === "true");
+    let next = -1;
+    if (ev.key === "ArrowRight") next = (cur + 1) % tabs.length;
+    else if (ev.key === "ArrowLeft") next = (cur - 1 + tabs.length) % tabs.length;
+    else if (ev.key === "Home") next = 0;
+    else if (ev.key === "End") next = tabs.length - 1;
+    if (next < 0) return;
+    ev.preventDefault();
+    setDockTab(tabs[next].dataset.dkTab);
+    tabs[next].focus?.();
+  });
+  dkPanelNotes?.addEventListener("beforematch", () => {
+    if (dockTab !== "notes") setDockTab("notes", { animate: false });
+  });
+  dkPanelThreads?.addEventListener("beforematch", () => {
+    if (dockTab !== "threads") setDockTab("threads", { animate: false });
+  });
+  setDockTab(dockTab, { animate: false, persist: false });
+
   notesBtn?.addEventListener("click", () => {
     if (view !== "collie") return;
     if (notesOpen) {
@@ -13621,11 +13857,10 @@
     syncNotebookVisibility();
   };
   $("#np-close")?.addEventListener("click", hideNotebookFromCard);
-  $("#np-back")?.addEventListener("click", hideNotebookFromCard);
   $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("#np-close, #np-back, #np-handle")) return;
+    if (ev.target.closest("#np-close, #np-handle")) return;
     const fBtn = ev.target.closest("[data-np-file]");
     if (fBtn) {
       ev.preventDefault();
@@ -13654,30 +13889,12 @@
         store.set("autoTab", "memory");
         location.hash = "#/auto";
       }
-      return;
     }
-    if (!isWideNotesViewport()) return;
-    if (ev.target.closest("[data-np-expand]")) {
-      ev.preventDefault();
-      notesExpanded = true;
-      renderNotebook();
-      return;
-    }
-    const sel = window.getSelection?.();
-    if (sel && !sel.isCollapsed && typeof notesPane.contains === "function" && notesPane.contains(sel.anchorNode)) return;
-    ev.preventDefault();
-    notesExpanded = !notesExpanded;
-    renderNotebook();
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && notesOpen && !document.querySelector("dialog[open]")) {
-      if (!isWideNotesViewport()) {
-        notesManualOverlay = false;
-        syncNotebookVisibility();
-      } else if (notesExpanded) {
-        notesExpanded = false;
-        renderNotebook();
-      }
+    if (ev.key === "Escape" && notesOpen && !isWideNotesViewport() && !document.querySelector("dialog[open]")) {
+      notesManualOverlay = false;
+      syncNotebookVisibility();
     }
   });
   if (typeof ResizeObserver === "function") {
@@ -13695,10 +13912,6 @@
   });
 
   // ───────────────────────────── natural reply-chain thread drawer
-  const thPopWrap = $("#collie-threads-wrap");
-  const thHeadBtn = $("#collie-threads-btn");
-  const thHeadCnt = $("#collie-threads-cnt");
-  const thPop = $("#collie-threads-pop");
   const thPopTabs = $("#collie-threads-tabs");
   const thPopCntAll = $("#collie-threads-cnt-all");
   const thPopCntActive = $("#collie-threads-cnt-active");
@@ -13765,20 +13978,10 @@
         }
       }
     }
-    if (thPopWrap && !opts.skipMenu) {
+    if (thPopList && !opts.skipMenu) {
       const entries = chatEntries();
       renderCollieThreadsMenu(threadInfo || computeReplyThreads(entries), entries);
     }
-  }
-  function closeCollieThreadsPop(opts = {}) {
-    const wasOpen = thPopOpen || (!!thPop && !thPop.hidden);
-    thPopOpen = false;
-    if (thPop) {
-      thPop.hidden = true;
-      thPop.style.top = "";
-    }
-    thHeadBtn?.setAttribute("aria-expanded", "false");
-    if (wasOpen && opts.sync !== false) syncNotebookVisibility();
   }
   function setCollieThreadsFilter(nextFilter) {
     const f = nextFilter === "active" ? "active" : "all";
@@ -13790,7 +13993,7 @@
   let _thMenuRowsCache = { key: "", allRows: [], activeRows: [] };
   let _thPopInputSig = "";
   function renderCollieThreadsMenu(threadInfo, allEntries) {
-    if (!thPopWrap || !thHeadBtn || !thHeadCnt || !thPop || !thPopList) return;
+    if (!thPopList) return;
     const entries = allEntries || chatEntries();
     const info = threadInfo || computeReplyThreads(entries);
     const pendList = activePending();
@@ -13834,15 +14037,16 @@
       activeRows = allRows.filter((r) => r.inProgress);
       _thMenuRowsCache = { key: rowsKey, allRows, activeRows };
     }
-    if (!allRows.length) {
-      thPopWrap.hidden = true;
-      closeCollieThreadsPop();
-      thPopSig = "";
-      return;
+    const pendingRowsCount = allRows.filter((r) => r.pending).length;
+    dockPendingThreads = pendingRowsCount;
+    syncDockTriggerBadge();
+    if (dkThDot) dkThDot.hidden = pendingRowsCount === 0;
+    if (dkTabThreads) dkTabThreads.classList.toggle("has-unread", pendingRowsCount > 0);
+    if (dkThCnt) {
+      const badgeNum = pendingRowsCount > 0 ? pendingRowsCount : allRows.length;
+      dkThCnt.hidden = badgeNum === 0;
+      setText(dkThCnt, badgeNum > 0 ? String(badgeNum) : "");
     }
-    thPopWrap.hidden = false;
-    setText(thHeadCnt, String(allRows.length));
-    thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
     if (thPopCntAll) setText(thPopCntAll, String(allRows.length));
     if (thPopCntActive) setText(thPopCntActive, String(activeRows.length));
     if (thPopTabs) {
@@ -13857,6 +14061,7 @@
     if (thPopSub) {
       setText(thPopSub, filtered.length > shown.length
         ? `前 ${shown.length} / ${filtered.length} 条`
+        : pendingRowsCount > 0 ? `${pendingRowsCount} 条待处理`
         : filtered.length > 0 ? "按最近活跃" : "");
     }
     const sig = JSON.stringify([
@@ -13881,7 +14086,7 @@
     if (sig === thPopSig) return;
     thPopSig = sig;
     if (!shown.length) {
-      thPopList.innerHTML = `<div class="th-pop-empty" role="status">当前没有进行中的话题</div>`;
+      thPopList.innerHTML = `<div class="th-pop-empty" role="status">${thPopFilter === "active" ? "当前没有进行中的话题" : "暂无多轮话题线"}</div>`;
       return;
     }
     thPopList.innerHTML = shown.map(({ th, pending, activeWorkers, hasBlockedWorker, inProgress }) => {
@@ -13912,45 +14117,13 @@
     e.stopPropagation();
     setCollieThreadsFilter(tab.dataset.thFilter);
   });
-  thHeadBtn?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (!thPop) return;
-    const willOpen = !thPopOpen;
-    closeCollieMenus();
-    if (willOpen) {
-      if (superSearchOpen) closeSuperSearchFn?.(false);
-      const entries = chatEntries();
-      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
-      if (narrow()) {
-        const hr = $("#v-collie .d-head")?.getBoundingClientRect?.();
-        thPop.style.top = hr && hr.bottom > 0 ? Math.round(hr.bottom + 6) + "px" : "";
-      } else {
-        thPop.style.top = "";
-      }
-      thPopOpen = true;
-      thPop.hidden = false;
-      thHeadBtn.setAttribute("aria-expanded", "true");
-      syncNotebookVisibility();
-    } else {
-      closeCollieThreadsPop();
-    }
-  });
   thPopList?.addEventListener("click", (e) => {
     const item = e.target.closest("[data-th-pick]");
     if (!item) return;
     const rootId = item.dataset.thPick;
     const latestId = item.dataset.thLatest || "";
-    closeCollieThreadsPop();
+    if (!isWideNotesViewport()) notesManualOverlay = false;
     if (rootId) openThreadDrawer(rootId, latestId, latestId);
-  });
-  document.addEventListener("click", (e) => {
-    if (thPopOpen && !e.target.closest("#collie-threads-wrap")) closeCollieThreadsPop();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && thPopOpen) {
-      closeCollieThreadsPop();
-      thHeadBtn?.focus({ preventScroll: true });
-    }
   });
 
   const tdDrawer = $("#thread-drawer");
@@ -16353,7 +16526,6 @@
     if (opener) {
       const m = $("#" + opener.dataset.menu);
       const willOpen = opener.dataset.menu === "collie-menu" ? !collieMenuOpen : !!m?.hidden;
-      closeCollieThreadsPop({ sync: false });
       if (opener.dataset.menu === "collie-menu" && willOpen && superSearchOpen) {
         closeSuperSearchFn?.(false);
       }

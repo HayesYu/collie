@@ -90,22 +90,21 @@ const htmlSrc = fs.readFileSync("web/index.html", "utf8");
 const cssSrc = fs.readFileSync("web/app.css", "utf8");
 const appSrc = fs.readFileSync("web/app.js", "utf8");
 
-// 1) Header notebook icon is a folded-corner notepad, not split-sidebar rect+divider
+// 1) Header dock trigger uses crisp panel-right linear SVG (rounded rect + single clean right vertical line, zero microwave dots)
 const notesBtnMatch = htmlSrc.match(/id="open-notes-btn"[\s\S]*?<\/button>/);
 assert.ok(notesBtnMatch, "expected #open-notes-btn in index.html");
-assert.ok(!notesBtnMatch[0].includes('M14.5 4v16'), "header notebook icon must not use split-sidebar divider");
-assert.ok(notesBtnMatch[0].includes('M14.5 20v-4.5') && notesBtnMatch[0].includes('M8 9h8'), "header notebook icon must use folded-corner lined note SVG");
+assert.ok(notesBtnMatch[0].includes('width="17" height="16"') && notesBtnMatch[0].includes('M15 4v16'), "header dock icon must use clean panel-right linear SVG");
+assert.ok(!notesBtnMatch[0].includes('<circle'), "header dock icon must not contain redundant microwave-style dots");
 
-// 2) Minimal notebook header keeps only the close icon (no redundant expand pill button)
-assert.ok(!htmlSrc.includes('id="np-expand"') && htmlSrc.includes('id="np-close"'), "notebook header must omit redundant expand pill and keep clean close button");
+// 2) Minimal dock header keeps dual tabs + single close icon (no redundant expand pill button)
+assert.ok(!htmlSrc.includes('id="np-expand"') && htmlSrc.includes('id="np-close"') && htmlSrc.includes('id="dk-tablist"'), "dock header must omit expand pill and keep dual tabs + close button");
 
-// 3) Fixed width (no horizontal width jump), centered in right empty channel, 0px chat shift on expand, restrained max-height min(48vh, 420px)
-assert.ok(cssSrc.includes("--notes-w: 248px"), "notebook must use fixed 248px width");
-assert.ok(!cssSrc.includes("--notes-w-exp"), "expanded notebook must not change width via --notes-w-exp");
-assert.ok(!cssSrc.includes("#v-collie.has-notes.notes-expanded"), "expanding notebook must never alter main chat column padding/reserve");
-assert.ok(cssSrc.includes("max-height: min(48vh, 420px)"), "expanded notebook must cap height to min(48vh, 420px)");
-assert.ok(cssSrc.includes("(100% - var(--np-col-right) - var(--notes-w)) * 0.55"), "notebook must center optically in the right empty channel");
-assert.ok(cssSrc.includes(".notepane { cursor: pointer; }"), "desktop notebook card must show pointer cursor for click-to-toggle");
+// 3) Fixed width (no horizontal width jump), centered in right empty channel, 0px chat shift, restrained max-height min(62vh, 520px)
+assert.ok(cssSrc.includes("--notes-w: 248px"), "dock must use fixed 248px width");
+assert.ok(!cssSrc.includes("--notes-w-exp"), "dock must not change width via --notes-w-exp");
+assert.ok(!cssSrc.includes("#v-collie.has-notes.notes-expanded"), "dock must never alter main chat column padding/reserve via expand state");
+assert.ok(cssSrc.includes("max-height: min(62vh, 520px)"), "single-state dock must cap height to min(62vh, 520px)");
+assert.ok(cssSrc.includes("(100% - var(--np-col-right) - var(--notes-w)) * 0.55"), "dock must center optically in the right empty channel");
 assert.ok(!cssSrc.includes(".np-expand-btn"), "redundant .np-expand-btn CSS must be removed");
 
 // 4) Runtime VM check: compact body click expands, artifact click stays preview, expand button toggles 展开/收起
@@ -217,7 +216,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { syncNotebookVisibility, renderNotebook, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, getNotesExpanded: () => notesExpanded };\n})();"
+  "  globalThis.__test = { syncNotebookVisibility, renderNotebook, setDockTab, getDockTab: () => dockTab, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; } };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -225,16 +224,22 @@ const T = ctx.__test;
 T.setView("collie");
 T.setNotebookData({ date: "2026-11-27", tasks: [{ id: "t1", title: "任务 A", note: "进展 A", tone: "active" }], artifacts: [], timers: [] });
 T.syncNotebookVisibility();
-assert.equal(T.getNotesExpanded(), false);
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(T.getDockTab(), "notes");
 
-// Clicking blank space / header in compact mode expands the card
+// Single-state card: clicking blank area stays open and does not toggle expand/collapse
 const blankTarget = makeEl("blank");
 getEl("#notes-pane").dispatch("click", { target: blankTarget });
-assert.equal(T.getNotesExpanded(), true, "clicking blank area on compact notebook must expand it");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "clicking blank area on single-state dock must keep it open");
+assert.equal(T.getDockTab(), "notes");
 
-// Clicking blank space / header again toggles back to compact
-getEl("#notes-pane").dispatch("click", { target: blankTarget });
-assert.equal(T.getNotesExpanded(), false, "clicking blank area on expanded notebook must collapse back to compact");
+// Dual-tab switching between 小本本 and 话题线
+T.setDockTab("threads");
+assert.equal(T.getDockTab(), "threads");
+assert.equal(getEl("#dk-tab-threads").getAttribute("aria-selected"), "true");
+assert.equal(getEl("#dk-tab-notes").getAttribute("aria-selected"), "false");
+T.setDockTab("notes");
+assert.equal(T.getDockTab(), "notes");
 `
 	cmd := exec.Command("node", "-e", script)
 	cmd.Dir = filepath.Join("..", "..")

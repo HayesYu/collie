@@ -423,7 +423,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { parseDelimitedTable, renderDelimitedStage, HTML_SANDBOX_ATTR, CSV_PAGE_SIZE, CSV_MAX_PARSE_ROWS, replyOptsMarkup, renderEntryArtifacts, handleQuickOptionClick, submitInlineDecision, renderNotebook, syncNotebookVisibility, setNotebookData: (d) => { notebookData = d; }, setNotesExpanded: (v) => { notesExpanded = !!v; }, setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, getPendingSays: () => pendingSays };\n})();"
+  "  globalThis.__test = { parseDelimitedTable, renderDelimitedStage, HTML_SANDBOX_ATTR, CSV_PAGE_SIZE, CSV_MAX_PARSE_ROWS, replyOptsMarkup, renderEntryArtifacts, handleQuickOptionClick, submitInlineDecision, renderNotebook, syncNotebookVisibility, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, getPendingSays: () => pendingSays };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -470,7 +470,7 @@ T.renderDelimitedStage("fv", curCsv, fvBody, "");
 assert.ok(!fvBody.classList.contains("is-csv"), "raw mode must remove .is-csv");
 assert.ok(fvBody.innerHTML.includes("/api/r1,1,99.9"), "raw mode must display exact raw CSV text");
 
-// 2d) Floating notebook: compact caps (3 tasks, 2 files, 1 timer + "+N") vs expanded, and <1360px yield
+// 2d) Unified floating dock (v0.2.95 single-state card): renders all items cleanly without expand toggle, and <1360px / drawer auto-yield
 T.setView("collie");
 T.setNotebookData({
   date: "2026-11-27",
@@ -491,39 +491,27 @@ T.setNotebookData({
   ],
 });
 ctx.innerWidth = 1440;
-T.setNotesExpanded(false);
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").hidden, false, "notebook must default open at >= 1360px");
-assert.equal(getEl("#np-tasks-more").textContent, "+1");
-assert.equal(getEl("#np-files-more").textContent, "+1");
-assert.equal(getEl("#np-timers-more").textContent, "+1");
-assert.ok(!getEl("#np-tasks-list").innerHTML.includes("任务 4"), "compact mode must cap tasks at 3");
-assert.ok(!getEl("#np-files-list").innerHTML.includes("笔记 C"), "compact mode must cap artifacts at 2");
-assert.ok(!getEl("#np-timers-list").innerHTML.includes("定时 2"), "compact mode must cap timers at 1");
-
-// Expanded shows all items
-T.setNotesExpanded(true);
-T.renderNotebook();
-assert.ok(getEl("#np-tasks-list").innerHTML.includes("任务 4"), "expanded mode must show all tasks");
-assert.ok(getEl("#np-files-list").innerHTML.includes("笔记 C"), "expanded mode must show all artifacts");
-assert.ok(getEl("#np-timers-list").innerHTML.includes("定时 2"), "expanded mode must show all timers");
-assert.equal(getEl("#np-tasks-more").hidden, true);
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "dock must default open at >= 1360px");
+assert.ok(getEl("#np-tasks-list").innerHTML.includes("任务 4"), "single-state dock must show all tasks without expand mode");
+assert.ok(getEl("#np-files-list").innerHTML.includes("笔记 C"), "single-state dock must show all artifacts");
+assert.ok(getEl("#np-timers-list").innerHTML.includes("定时 2"), "single-state dock must show all timers");
 
 // Auto-yield at 1280px (< 1360px)
 ctx.innerWidth = 1280;
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").hidden, true, "notebook must auto-yield at < 1360px");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "dock must auto-yield at < 1360px");
 
 // Auto-yield when file drawer opens at 1440px, restore on close
 ctx.innerWidth = 1440;
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").hidden, false);
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 getEl("#app").classList.add("has-file");
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").hidden, true, "notebook must yield when file drawer opens");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "dock must yield when file drawer opens");
 getEl("#app").classList.remove("has-file");
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").hidden, false, "notebook must restore when file drawer closes");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "dock must restore when file drawer closes");
 
 // 2e) Decision card: pure option click sends pick=true without creating user bubble; renders collapsible receipt
 (async () => {

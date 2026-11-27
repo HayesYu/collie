@@ -1354,6 +1354,14 @@
   bindCompositionGuard($("#super-input"));
   bindCompositionGuard($("#td-input"));
 
+  function setConnDotState(online) {
+    const isOn = !!online;
+    for (const el of [$("#conn"), $("#rail-conn")]) {
+      if (!el?.classList) continue;
+      el.classList.toggle("on", isOn);
+      el.classList.toggle("off", !isOn);
+    }
+  }
   function connect() {
     const ev = new EventSource("/api/events");
     let lastSuperRaw = "", lastStateRaw = "";
@@ -1392,9 +1400,9 @@
       state = next;
       scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
     });
-    ev.onopen = () => $("#conn").className = "conn on";
+    ev.onopen = () => setConnDotState(true);
     ev.onerror = async () => {
-      $("#conn").className = "conn off";
+      setConnDotState(false);
       try { await api("/api/session"); } catch {}
       if (!$("#login").hidden) return;
       // A restart can answer with an error status, which closes the stream
@@ -2306,14 +2314,20 @@
   // O(1)-ish click-frame sidebar active sync: toggles only active classes + unread badge
   // without rebuilding #live-list/#recent-list/#attention/#shells innerHTML on route changes.
   function syncSideActive(opts = {}) {
-    $("#nav-collie")?.classList.toggle("active", view === "collie");
-    $("#nav-auto")?.classList.toggle("active", view === "auto");
-    $("#nav-devices")?.classList.toggle("active", view === "devices");
-    $("#nav-prefs")?.classList.toggle("active", view === "prefs");
-    $("#rail-collie")?.classList.toggle("active", view === "collie");
-    $("#rail-auto")?.classList.toggle("active", view === "auto");
-    $("#rail-devices")?.classList.toggle("active", view === "devices");
-    $("#rail-prefs")?.classList.toggle("active", view === "prefs");
+    const syncNavAct = (el, on) => {
+      if (!el) return;
+      el.classList.toggle("active", on);
+      if (on) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
+    };
+    syncNavAct($("#nav-collie"), view === "collie");
+    syncNavAct($("#nav-auto"), view === "auto");
+    syncNavAct($("#nav-devices"), view === "devices");
+    syncNavAct($("#nav-prefs"), view === "prefs");
+    syncNavAct($("#rail-collie"), view === "collie");
+    syncNavAct($("#rail-auto"), view === "auto");
+    syncNavAct($("#rail-devices"), view === "devices");
+    syncNavAct($("#rail-prefs"), view === "prefs");
     const wantHref = view === "pane" && current
       ? "#/p/" + encodeURIComponent(current)
       : view === "ext" && extCur
@@ -2384,19 +2398,12 @@
     $("#shell-group").hidden = state.shells.length === 0;
 
     const online = machines.filter((m) => m.local ? state.ok : m.online).length;
-    const connEl = $("#conn");
-    if (connEl) {
-      const connCls = connEl.classList?.contains("sf-conn-dot")
-        ? ("conn sf-conn-dot " + (online ? "on" : "off"))
-        : ("conn " + (online ? "on" : "off"));
-      if (connEl.className !== connCls) connEl.className = connCls;
-    }
-    const railConn = $("#rail-conn");
-    if (railConn) {
-      const rcCls = "sr-conn-dot " + (online ? "on" : "off");
-      if (railConn.className !== rcCls) railConn.className = rcCls;
-    }
-    const devStatus = !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
+    setConnDotState(online > 0);
+    const devStatus = !online
+      ? "herdr 不可用"
+      : multi
+        ? `${online}/${machines.length} 台电脑在线`
+        : (state.agents.length ? `本机在线 · ${state.agents.length} 个 agent` : "本机在线");
     setText($("#herdr-status"), devStatus);
     if (!state.ok && state.error && $("#herdr-status")) $("#herdr-status").title = state.error;
     const devTip = !state.ok && state.error ? `设备与连接 · ${state.error}` : `设备与连接 · ${devStatus}`;
@@ -3072,6 +3079,7 @@
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
       if (activeWorkerKey) closeWorkerDrawer({ immediate: true });
     }
+    if (next !== "pane" || id !== current) disarmInterrupt("detail");
     view = next; current = next === "ext" ? null : id;
     liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
     const nextKey = routeKeyFor(next, id);
@@ -15233,7 +15241,10 @@
   // ───────────────────────────── one agent: header
   function renderHead() {
     const v = find(current);
-    if (!v) return;
+    if (!v) {
+      if (view === "pane" && current) clearDetailLive();
+      return;
+    }
     markSeen(v);
     const wLabel = agentLabelOf(v);
     const hasAlias = !!(v.is_agent && v.name && v.name !== ROUTER && wLabel && wLabel !== v.name);
@@ -15516,7 +15527,7 @@
       else drawLog(f.text, pendingRestore);
       pendingRestore = null;
     });
-    stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
+    stream.addEventListener("gone", () => { clearDetailLive(); $("#gone").hidden = false; closeStream(); });
   }
   function closeStream() {
     paneOpenSeq++;
@@ -15759,11 +15770,15 @@
 
   // ───────────────────────────── one agent: conversation
   let showRaw = false;
+  function clearDetailLive() {
+    lastLive = null;
+    const box = $("#live");
+    if (box) { box.hidden = true; box.innerHTML = ""; box._html = ""; }
+    $("#thread")?.classList?.remove("asking");
+  }
   function resetChat() {
     $("#thread").innerHTML = "";
-    $("#thread").classList.remove("asking");
-    $("#live").hidden = true;
-    $("#live").innerHTML = "";
+    clearDetailLive();
     $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; $("#thread")._restore = null; showRaw = false;
   }
   function openChat(id, restore = null) {
@@ -15780,7 +15795,7 @@
     stream.addEventListener("messages", (e) => alive() && drawThread(JSON.parse(e.data))); // an older computer
     stream.addEventListener("log", (e) => alive() && drawFallback(JSON.parse(e.data).text));
     stream.addEventListener("live", (e) => alive() && drawLive(JSON.parse(e.data)));
-    stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
+    stream.addEventListener("gone", () => { clearDetailLive(); $("#gone").hidden = false; closeStream(); });
   }
   // Threads on a .viewer.chatbg scroll the viewer around them.
   const scroller = (el) => el.closest(".viewer.chatbg") || el;
@@ -18269,15 +18284,26 @@
   let wdTaskNote = "";
   let wdMode = store.get("wdMode", "chat");
   let wdComposerOpen = false;
+  let wdWasLive = false;
+  let wdLastLiveTitle = "";
+  let wdLastLivePaneId = "";
   let workerWide = drawerWide;
   let _lastWorkerW = 0;
   let _lastDrawerW = 460;
 
   const SIDE_RAIL_W = 54;
+  const expandedSideW = () => Math.max(268, Math.min(300, 108 + innerWidth * 0.16));
+  const isDesktopDrawerViewport = () => {
+    if (innerWidth <= THREAD_DESKTOP_MIN) return false;
+    if (typeof matchMedia === "function" && matchMedia("(min-width: 1px)").matches) {
+      return matchMedia("(min-width: 1181px)").matches;
+    }
+    return true;
+  };
   const currentSideW = () => {
     if (innerWidth <= 760) return 0;
     if (innerWidth > 1000 && $("#app")?.classList?.contains("side-collapsed")) return SIDE_RAIL_W;
-    return $(".side")?.offsetWidth || (innerWidth <= 1100 ? 268 : 300);
+    return $(".side")?.offsetWidth || expandedSideW();
   };
   const isAnyRightDrawerOpen = () => {
     const appEl = $("#app");
@@ -18335,7 +18361,7 @@
     const hasT = appEl.classList.contains("has-thread");
     const hasW = appEl.classList.contains("has-worker");
     appEl.classList.toggle("has-drawer", hasF || hasT || hasW);
-    const wide = innerWidth > THREAD_DESKTOP_MIN && (
+    const wide = isDesktopDrawerViewport() && (
       (hasT && threadWide) || (hasF && fileWide) || (hasW && workerWide)
     );
     appEl.classList.toggle("drawer-wide", wide);
@@ -18350,6 +18376,10 @@
     const innerW = Math.max(240, mainW - gutter);
     const effColW = Math.min(colW, Math.max(240, innerW - 40));
     return { innerW, effColW, padLeft: (mainW - effColW) / 2 };
+  }
+  function composerMetrics(mainW, colW) {
+    const effCompW = Math.min(colW + 24, Math.max(240, mainW - 24));
+    return { effCompW, padLeft: (mainW - effCompW) / 2 };
   }
 
   // Exact cubic-bezier(0.22, 1, 0.36, 1) solver so JS rAF glides match CSS side-card / drawer curves 1:1.
@@ -18384,28 +18414,38 @@
   function captureCollieVisualShift(wasAnyDrawer, prevOpenW = 0) {
     if (_drawerGlideState) {
       const st = _drawerGlideState;
-      const off = st.basePadLeft != null ? (st.basePadLeft + st.curChatX) : st.curChatX;
+      const thread = st.basePadLeft != null ? (st.basePadLeft + st.curChatX) : st.curChatX;
+      const comp = st.baseCompPadLeft != null ? (st.baseCompPadLeft + st.curCompX) : (st.curCompX ?? thread);
       finishDrawerGlide(true);
-      return off;
+      return { thread, comp };
     }
     if (wasAnyDrawer) {
       const sc = view === "collie" ? viewScroller("collie") : null;
       const canvas = Math.max(480, innerWidth - currentSideW());
       const gutter = scrollerGutterW(sc);
-      const fromM = threadMetrics(Math.max(320, canvas - (prevOpenW || _lastDrawerW || 0)), currentColW(), gutter);
-      const fullM = threadMetrics(canvas, currentColW(), gutter);
-      return fromM.padLeft - fullM.padLeft;
+      const colW = currentColW();
+      const openMainW = Math.max(320, canvas - (prevOpenW || _lastDrawerW || 0));
+      const fromM = threadMetrics(openMainW, colW, gutter);
+      const fullM = threadMetrics(canvas, colW, gutter);
+      const fromC = composerMetrics(openMainW, colW);
+      const fullC = composerMetrics(canvas, colW);
+      return { thread: fromM.padLeft - fullM.padLeft, comp: fromC.padLeft - fullC.padLeft };
     }
-    return _collieShiftCur || 0;
+    const cur = _collieShiftCur || 0;
+    return { thread: cur, comp: cur };
   }
-  // Unified 60 FPS lockstep GPU glide for desktop right-drawer open / close / widen / narrow (#t12980).
-  // Zero mid-animation reflow, exact gutter-aware threadMetrics alignment (0.00px Frame-0 / Frame-N jump).
+  // Unified 60 FPS lockstep GPU glide for desktop right-drawer open / close / widen / narrow (#t12980, #t13467).
+  // Separate gutter-aware threadMetrics vs gutter-free composerMetrics + frame-0 column cap on tight viewports
+  // guarantee 0.00px Frame-0 / Frame-N jump and 0 overlap frames across tablets and desktops alike.
   function runDesktopDrawerGlide(cfg = {}) {
     const { kind, drawerEl, fromW = 0, toW = 0, startOffset = 0, targetShift = 0, onDone = null } = cfg;
     const appEl = $("#app");
+    const colEl = $("#v-collie");
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced || innerWidth <= THREAD_DESKTOP_MIN || typeof requestAnimationFrame !== "function" || !appEl) {
+    if (reduced || !isDesktopDrawerViewport() || typeof requestAnimationFrame !== "function" || !appEl) {
       finishDrawerGlide(true);
+      clearCollieShiftInline();
+      _collieShiftCur = kind === "close" ? targetShift : 0;
       if (onDone) onDone();
       return false;
     }
@@ -18420,15 +18460,35 @@
     const gutter = scrollerGutterW(sc);
     const colW = currentColW();
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
-    const chatEls = view === "collie"
-      ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
+    const threadEls = view === "collie"
+      ? [$("#super-thread"), $("#super-working")].filter((e) => e?.style)
       : [];
+    const compEl = view === "collie" && $("#super-composer")?.style ? $("#super-composer") : null;
     const headActsEl = view === "collie" ? $("#v-collie .d-head-acts") : null;
-    let chatFrom = 0, chatTo = 0, drawerFrom = 0, drawerTo = 0;
+    const startThreadOff = (startOffset && typeof startOffset === "object") ? (startOffset.thread || 0) : (typeof startOffset === "number" ? startOffset : 0);
+    const startCompOff = (startOffset && typeof startOffset === "object") ? (startOffset.comp ?? startThreadOff) : startThreadOff;
+    const hasExplicitStart = (startOffset && typeof startOffset === "object") || typeof startOffset === "number";
+    let chatFrom = 0, chatTo = 0, compFrom = 0, compTo = 0, drawerFrom = 0, drawerTo = 0;
     let stageCls = "";
     let fadeDrawer = false;
     let moveDrawer = false;
     let basePadLeft = null;
+    let baseCompPadLeft = null;
+    let useColCap = false;
+    const applyColCap = (capColW, capCompW) => {
+      if (!colEl?.style || view !== "collie") return;
+      useColCap = true;
+      colEl.style.setProperty("--drawer-col-cap", (Math.round(capColW * 100) / 100) + "px");
+      colEl.style.setProperty("--drawer-comp-w", (Math.round(capCompW * 100) / 100) + "px");
+      colEl.classList.add("has-drawer-col-cap");
+    };
+    const clearColCap = () => {
+      if (!useColCap || !colEl?.style) return;
+      useColCap = false;
+      colEl.classList.remove("has-drawer-col-cap");
+      colEl.style.removeProperty("--drawer-col-cap");
+      colEl.style.removeProperty("--drawer-comp-w");
+    };
     if (kind === "open") {
       stageCls = "is-drawer-opening";
       moveDrawer = true;
@@ -18436,11 +18496,31 @@
       appEl.classList.add(stageCls);
       if (drawerEl?.style) drawerEl.style.width = Math.round(toW) + "px";
       if (view === "collie") syncCollieTopThreadClearance(toW);
-      const startM = threadMetrics(canvas, colW, gutter);
-      const targetM = threadMetrics(Math.max(320, canvas - toW), colW, gutter);
-      basePadLeft = 0;
-      chatFrom = startOffset;
-      chatTo = targetM.padLeft - startM.padLeft;
+      const targetMainW = Math.max(320, canvas - toW);
+      const startT = threadMetrics(canvas, colW, gutter);
+      const targetT = threadMetrics(targetMainW, colW, gutter);
+      const startC = composerMetrics(canvas, colW);
+      const targetC = composerMetrics(targetMainW, colW);
+      const needCap = targetT.effColW < startT.effColW - 0.5 || targetC.effCompW < startC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(targetT.effColW, targetC.effCompW);
+        const capT = threadMetrics(canvas, targetT.effColW, gutter);
+        const capCPadLeft = (canvas - targetC.effCompW) / 2;
+        basePadLeft = capT.padLeft - startT.padLeft;
+        baseCompPadLeft = capCPadLeft - startC.padLeft;
+        chatFrom = (startT.padLeft + startThreadOff) - capT.padLeft;
+        chatTo = targetT.padLeft - capT.padLeft;
+        compFrom = (startC.padLeft + startCompOff) - capCPadLeft;
+        compTo = targetC.padLeft - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = 0;
+        baseCompPadLeft = 0;
+        chatFrom = startThreadOff;
+        chatTo = targetT.padLeft - startT.padLeft;
+        compFrom = startCompOff;
+        compTo = targetC.padLeft - startC.padLeft;
+      }
       drawerFrom = toW;
       drawerTo = 0;
     } else if (kind === "widen") {
@@ -18452,12 +18532,34 @@
       appEl.classList.add(stageCls);
       if (drawerEl?.style) drawerEl.style.width = Math.round(toW) + "px";
       if (view === "collie") syncCollieTopThreadClearance(deltaW);
-      const startM = threadMetrics(Math.max(320, canvas - fromW), colW, gutter);
-      const targetM = threadMetrics(Math.max(320, canvas - toW), colW, gutter);
-      const fullM = threadMetrics(canvas, colW, gutter);
-      basePadLeft = startM.padLeft - fullM.padLeft;
-      chatFrom = 0;
-      chatTo = targetM.padLeft - startM.padLeft;
+      const stageMainW = Math.max(320, canvas - fromW);
+      const targetMainW = Math.max(320, canvas - toW);
+      const fullT = threadMetrics(canvas, colW, gutter);
+      const startT = threadMetrics(stageMainW, colW, gutter);
+      const targetT = threadMetrics(targetMainW, colW, gutter);
+      const fullC = composerMetrics(canvas, colW);
+      const startC = composerMetrics(stageMainW, colW);
+      const targetC = composerMetrics(targetMainW, colW);
+      const needCap = targetT.effColW < startT.effColW - 0.5 || targetC.effCompW < startC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(targetT.effColW, targetC.effCompW);
+        const capT = threadMetrics(stageMainW, targetT.effColW, gutter);
+        const capCPadLeft = (stageMainW - targetC.effCompW) / 2;
+        basePadLeft = capT.padLeft - fullT.padLeft;
+        baseCompPadLeft = capCPadLeft - fullC.padLeft;
+        chatFrom = startT.padLeft - capT.padLeft;
+        chatTo = targetT.padLeft - capT.padLeft;
+        compFrom = startC.padLeft - capCPadLeft;
+        compTo = targetC.padLeft - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = startT.padLeft - fullT.padLeft;
+        baseCompPadLeft = startC.padLeft - fullC.padLeft;
+        chatFrom = 0;
+        chatTo = targetT.padLeft - startT.padLeft;
+        compFrom = 0;
+        compTo = targetC.padLeft - startC.padLeft;
+      }
       drawerFrom = deltaW;
       drawerTo = 0;
     } else if (kind === "narrow") {
@@ -18467,22 +18569,66 @@
       moveDrawer = true;
       appEl.classList.add(stageCls);
       if (drawerEl?.style) drawerEl.style.width = Math.round(fromW) + "px";
-      const startM = threadMetrics(Math.max(320, canvas - fromW), colW, gutter);
-      const targetM = threadMetrics(Math.max(320, canvas - toW), colW, gutter);
-      const fullM = threadMetrics(canvas, colW, gutter);
-      basePadLeft = targetM.padLeft - fullM.padLeft;
-      chatFrom = startM.padLeft - targetM.padLeft;
-      chatTo = 0;
+      const startMainW = Math.max(320, canvas - fromW);
+      const targetMainW = Math.max(320, canvas - toW);
+      const fullT = threadMetrics(canvas, colW, gutter);
+      const startT = threadMetrics(startMainW, colW, gutter);
+      const targetT = threadMetrics(targetMainW, colW, gutter);
+      const fullC = composerMetrics(canvas, colW);
+      const startC = composerMetrics(startMainW, colW);
+      const targetC = composerMetrics(targetMainW, colW);
+      const needCap = startT.effColW < targetT.effColW - 0.5 || startC.effCompW < targetC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(startT.effColW, startC.effCompW);
+        const capT = threadMetrics(targetMainW, startT.effColW, gutter);
+        const capCPadLeft = (targetMainW - startC.effCompW) / 2;
+        basePadLeft = capT.padLeft - fullT.padLeft;
+        baseCompPadLeft = capCPadLeft - fullC.padLeft;
+        chatFrom = startT.padLeft - capT.padLeft;
+        chatTo = targetT.padLeft - capT.padLeft;
+        compFrom = startC.padLeft - capCPadLeft;
+        compTo = targetC.padLeft - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = targetT.padLeft - fullT.padLeft;
+        baseCompPadLeft = targetC.padLeft - fullC.padLeft;
+        chatFrom = startT.padLeft - targetT.padLeft;
+        chatTo = 0;
+        compFrom = startC.padLeft - targetC.padLeft;
+        compTo = 0;
+      }
       drawerFrom = 0;
       drawerTo = deltaW;
     } else if (kind === "close") {
       fadeDrawer = true;
       moveDrawer = true;
-      const startM = threadMetrics(Math.max(320, canvas - fromW), colW, gutter);
-      const targetM = threadMetrics(canvas, colW, gutter);
-      basePadLeft = 0;
-      chatFrom = typeof startOffset === "number" ? startOffset : (startM.padLeft - targetM.padLeft);
-      chatTo = targetShift;
+      const startMainW = Math.max(320, canvas - fromW);
+      const startT = threadMetrics(startMainW, colW, gutter);
+      const targetT = threadMetrics(canvas, colW, gutter);
+      const startC = composerMetrics(startMainW, colW);
+      const targetC = composerMetrics(canvas, colW);
+      const effStartT = hasExplicitStart ? startThreadOff : (startT.padLeft - targetT.padLeft);
+      const effStartC = hasExplicitStart ? startCompOff : (startC.padLeft - targetC.padLeft);
+      const needCap = startT.effColW < targetT.effColW - 0.5 || startC.effCompW < targetC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(startT.effColW, startC.effCompW);
+        const capT = threadMetrics(canvas, startT.effColW, gutter);
+        const capCPadLeft = (canvas - startC.effCompW) / 2;
+        basePadLeft = capT.padLeft - targetT.padLeft;
+        baseCompPadLeft = capCPadLeft - targetC.padLeft;
+        chatFrom = (targetT.padLeft + effStartT) - capT.padLeft;
+        chatTo = (targetT.padLeft + targetShift) - capT.padLeft;
+        compFrom = (targetC.padLeft + effStartC) - capCPadLeft;
+        compTo = (targetC.padLeft + targetShift) - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = 0;
+        baseCompPadLeft = 0;
+        chatFrom = effStartT;
+        chatTo = targetShift;
+        compFrom = effStartC;
+        compTo = targetShift;
+      }
       drawerFrom = 0;
       drawerTo = Math.max(0, fromW);
     } else {
@@ -18492,14 +18638,22 @@
 
     const dur = 240;
     let t0 = 0;
-    const state = { kind, drawerEl, fromW, toW, curChatX: chatFrom, curDrawerX: drawerFrom, targetW: toW, basePadLeft };
+    const state = {
+      kind, drawerEl, fromW, toW,
+      curChatX: chatFrom, curCompX: compFrom, curDrawerX: drawerFrom,
+      targetW: toW, basePadLeft, baseCompPadLeft,
+    };
     _drawerGlideState = state;
-    const applyFrame = (cx, dx, op) => {
+    const applyFrame = (cx, cpx, dx, op) => {
       state.curChatX = cx;
+      state.curCompX = cpx;
       state.curDrawerX = dx;
-      if (chatEls.length) {
+      if (threadEls.length) {
         const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
-        for (const el of chatEls) el.style.transform = ctr;
+        for (const el of threadEls) el.style.transform = ctr;
+      }
+      if (compEl) {
+        compEl.style.transform = `translate3d(${cpx.toFixed(2)}px, 0, 0)`;
       }
       if (headActsEl?.style) {
         if (stageCls === "is-drawer-opening") headActsEl.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`;
@@ -18512,6 +18666,7 @@
       }
     };
     _drawerGlideCleanup = (snap) => {
+      clearColCap();
       if (stageCls) {
         appEl.classList.remove(stageCls);
         appEl.style.removeProperty("--drawer-stage-w");
@@ -18523,7 +18678,8 @@
         if (stageCls) drawerEl.style.width = "";
         if (fadeDrawer || kind === "open") drawerEl.style.opacity = "";
       }
-      for (const el of chatEls) el.style.transform = "";
+      for (const el of threadEls) el.style.transform = "";
+      if (compEl) compEl.style.transform = "";
       _collieShiftCur = kind === "close" ? targetShift : 0;
       if (snap && onDone) onDone();
       if (view === "collie" && sc && lockSnap) {
@@ -18533,7 +18689,7 @@
       if (activeWorkerKey && curWdMode() === "screen") fitWdTerm();
     };
 
-    applyFrame(chatFrom, drawerFrom, 1);
+    applyFrame(chatFrom, compFrom, drawerFrom, 1);
     let sync = true;
     const step = (now) => {
       if (sync) {
@@ -18544,13 +18700,14 @@
       const p = Math.min(1, Math.max(0, (now - t0) / dur));
       const e = easeOutSilk(p);
       const cx = chatFrom + (chatTo - chatFrom) * e;
+      const cpx = compFrom + (compTo - compFrom) * e;
       const dx = drawerFrom + (drawerTo - drawerFrom) * e;
       const op = fadeDrawer ? Math.max(0.08, 1 - 0.85 * e) : (kind === "open" ? Math.min(1, 0.9 + 0.1 * e) : 1);
       if (p >= 1) {
         finishDrawerGlide(true);
         return;
       }
-      applyFrame(cx, dx, op);
+      applyFrame(cx, cpx, dx, op);
       _drawerGlideRAF = requestAnimationFrame(step);
     };
     _drawerGlideRAF = requestAnimationFrame(step);
@@ -18572,7 +18729,7 @@
     el.style.opacity = "";
   };
   const playDrawerTransition = (el, wasDrawerOpen) => {
-    if (!el || innerWidth <= THREAD_DESKTOP_MIN) return;
+    if (!el || !isDesktopDrawerViewport()) return;
     resetDrawerMotion(el);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduced) return;
@@ -18600,7 +18757,7 @@
   let paneTimer = 0;
   function syncFileWidenUI() {
     if (!fvWidenBtn) return;
-    const on = !!(drawerWide && innerWidth > THREAD_DESKTOP_MIN && !pane?.hidden);
+    const on = !!(drawerWide && isDesktopDrawerViewport() && !pane?.hidden);
     fvWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
     const lbl = on ? "还原宽度" : "拓宽抽屉";
     fvWidenBtn.title = lbl;
@@ -18619,14 +18776,20 @@
     if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
     clearTimeout(paneTimer);
     resetDrawerMotion(pane);
+    const desktopMode = isDesktopDrawerViewport();
     const baseW = unifiedDrawerW();
-    setFileW(baseW);
+    if (desktopMode) {
+      setFileW(baseW);
+    } else {
+      if (pane?.style) pane.style.width = "";
+      clearCollieShiftInline();
+    }
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
     pane.setAttribute("aria-hidden", "false");
     if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = false; }
     appEl?.classList?.add("has-file");
     syncFileWidenUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadFile && innerWidth > THREAD_DESKTOP_MIN });
+    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadFile && desktopMode });
     if (!hadFile) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift });
@@ -18654,7 +18817,7 @@
     fileSeq++;
     clearTimeout(paneTimer);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadFile && innerWidth > THREAD_DESKTOP_MIN && pane && !pane.hidden;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadFile && isDesktopDrawerViewport() && pane && !pane.hidden;
     if (desktopCloseAnim) {
       resetDrawerMotion(pane);
       pane.style.setProperty("--drawer-close-w", closingW + "px");
@@ -18668,13 +18831,20 @@
     if (lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
+    let userScrolled = false;
+    const onUserScroll = () => { if (!isProgrammaticScroll()) userScrolled = true; };
+    if (sc && lockSnap) sc.addEventListener("scroll", onUserScroll, { passive: true });
     const hideNow = () => {
+      if (sc) sc.removeEventListener("scroll", onUserScroll);
       resetDrawerMotion(pane);
-      if (pane) pane.hidden = true;
+      if (pane) {
+        pane.hidden = true;
+        if (pane.style) pane.style.width = "";
+      }
       if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = true; }
       if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
       if (!switching && view === "collie") {
-        const useRestore = lockSnap && collieLayoutLock?.snap === lockSnap ? { restore: lockSnap, once: true } : undefined;
+        const useRestore = lockSnap && !userScrolled ? { restore: lockSnap, once: true } : undefined;
         renderSuper(useRestore);
       }
     };
@@ -18692,7 +18862,7 @@
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
   fileScrim?.addEventListener("click", () => closeFilePane());
   fvWidenBtn?.addEventListener("click", () => {
-    if (innerWidth <= THREAD_DESKTOP_MIN || pane?.hidden) return;
+    if (!isDesktopDrawerViewport() || pane?.hidden) return;
     finishDrawerGlide(true);
     const prevW = _lastFileW || _lastDrawerW || drawerDefaultW();
     const sc = view === "collie" ? viewScroller("collie") : null;
@@ -18712,7 +18882,7 @@
     closeFilePane();
   });
   $("#fv-grip")?.addEventListener("pointerdown", (e) => {
-    if (innerWidth <= THREAD_DESKTOP_MIN) return;
+    if (!isDesktopDrawerViewport()) return;
     e.preventDefault();
     finishDrawerGlide(true);
     const grip = e.currentTarget;
@@ -18844,16 +19014,14 @@
     finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     const canGlide = !opts.immediate && !reduced && innerWidth > 1000 && typeof requestAnimationFrame === "function" && !!sideEl;
-    const sideW = innerWidth <= 1100 ? 268 : 300;
-    const drawerW = (isAnyRightDrawerOpen() && innerWidth > THREAD_DESKTOP_MIN) ? (_lastDrawerW || drawerDefaultW()) : 0;
+    const sideW = expandedSideW();
+    const drawerW = (isAnyRightDrawerOpen() && isDesktopDrawerViewport()) ? (_lastDrawerW || drawerDefaultW()) : 0;
     const hasNotes = view === "collie" && !drawerW && isWideNotesViewport() && !!col?.classList?.contains("has-notes");
     const sc = view === "collie" ? viewScroller("collie") : null;
     const gutter = scrollerGutterW(sc);
     const colW = currentColW();
     const lockSnap = canGlide && sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const prevNotesShift = hasNotes ? computeCollieShiftPx(280) : 0;
-    const notesBeforeLeft = canGlide && hasNotes && notesPane && typeof notesPane.getBoundingClientRect === "function"
-      ? notesPane.getBoundingClientRect().left : null;
 
     appEl.classList.toggle("side-collapsed", want);
     document.body?.classList?.toggle("side-collapsed", want);
@@ -18866,16 +19034,17 @@
           if (crewEl) { syncCrewCompact(crewEl); crewEl._syncScrollFade?.(); }
         }
       }
-      if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
+      if (pane && !pane.hidden && isDesktopDrawerViewport()) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
       if (activeThreadRoot) applyThreadWidth();
       if (activeWorkerKey) applyWorkerWidth();
       if (hasNotes) _collieShiftCur = nextNotesShift;
       return;
     }
 
-    const chatEls = view === "collie"
-      ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
+    const threadEls = view === "collie"
+      ? [$("#super-thread"), $("#super-working")].filter((e) => e?.style)
       : [];
+    const compEl = view === "collie" && $("#super-composer")?.style ? $("#super-composer") : null;
     const activeViewEl = $(".view:not([hidden]):not(.is-parked)") || col;
     const headPushEls = [
       activeViewEl?.querySelector?.(".d-head .d-title"),
@@ -18889,8 +19058,7 @@
     }
 
     const deltaW = Math.max(0, sideW - SIDE_RAIL_W);
-    let sideFrom = 0, sideTo = 0, chatFrom = 0, chatTo = 0;
-    let notesFrom = 0, notesTo = 0;
+    let sideFrom = 0, sideTo = 0, chatFrom = 0, chatTo = 0, compFrom = 0, compTo = 0;
     let isOpening = false;
     sideEl.style.setProperty("--side-anim-w", sideW + "px");
     if (want) {
@@ -18898,34 +19066,37 @@
       sideEl.classList.add("is-side-closing");
       sideFrom = 0;
       sideTo = -deltaW;
-      const fromM = threadMetrics(Math.max(320, innerWidth - sideW - drawerW), colW, gutter);
-      const toM = threadMetrics(Math.max(320, innerWidth - SIDE_RAIL_W - drawerW), colW, gutter);
+      const fromMainW = Math.max(320, innerWidth - sideW - drawerW);
+      const toMainW = Math.max(320, innerWidth - SIDE_RAIL_W - drawerW);
+      const fromM = threadMetrics(fromMainW, colW, gutter);
+      const toM = threadMetrics(toMainW, colW, gutter);
+      const fromC = composerMetrics(fromMainW, colW);
+      const toC = composerMetrics(toMainW, colW);
       chatFrom = (sideW + fromM.padLeft + prevNotesShift) - (SIDE_RAIL_W + toM.padLeft);
       chatTo = nextNotesShift;
-      if (notesBeforeLeft != null && notesPane && typeof notesPane.getBoundingClientRect === "function") {
-        const notesAfterLeft = notesPane.getBoundingClientRect().left;
-        notesFrom = notesBeforeLeft - notesAfterLeft;
-        notesTo = 0;
-      }
+      compFrom = (sideW + fromC.padLeft + prevNotesShift) - (SIDE_RAIL_W + toC.padLeft);
+      compTo = nextNotesShift;
     } else {
       // Expanding left sidebar (54px rail -> sideW): stage Column 1 at 54px, zero Frame-0 reflow (#t12980, #t12984)
       isOpening = true;
       appEl.classList.add("is-side-opening");
       sideFrom = -deltaW;
       sideTo = 0;
-      const fromM = threadMetrics(Math.max(320, innerWidth - SIDE_RAIL_W - drawerW), colW, gutter);
-      const toM = threadMetrics(Math.max(320, innerWidth - sideW - drawerW), colW, gutter);
+      const fromMainW = Math.max(320, innerWidth - SIDE_RAIL_W - drawerW);
+      const toMainW = Math.max(320, innerWidth - sideW - drawerW);
+      const fromM = threadMetrics(fromMainW, colW, gutter);
+      const toM = threadMetrics(toMainW, colW, gutter);
+      const fromC = composerMetrics(fromMainW, colW);
+      const toC = composerMetrics(toMainW, colW);
       chatFrom = prevNotesShift;
       chatTo = (sideW + toM.padLeft + nextNotesShift) - (SIDE_RAIL_W + fromM.padLeft);
-      if (hasNotes && notesPane) {
-        notesFrom = 0;
-        notesTo = (toM.padLeft + nextNotesShift + sideW) - (fromM.padLeft + prevNotesShift + SIDE_RAIL_W);
-      }
+      compFrom = prevNotesShift;
+      compTo = (sideW + toC.padLeft + nextNotesShift) - (SIDE_RAIL_W + fromC.padLeft);
     }
 
     const dur = 240;
     let t0 = 0;
-    const applyFrame = (sx, cx, nx, prog) => {
+    const applyFrame = (sx, cx, cpx, prog) => {
       const counterX = (-sx).toFixed(2);
       sideEl.style.transform = `translate3d(${sx.toFixed(2)}px, 0, 0)`;
       if (sideFullEl?.style) {
@@ -18943,14 +19114,11 @@
         const htr = `translate3d(${headOffset.toFixed(2)}px, 0, 0)`;
         for (const el of headPushEls) el.style.transform = htr;
       }
-      if (chatEls.length) {
+      if (threadEls.length) {
         const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
-        for (const el of chatEls) el.style.transform = ctr;
+        for (const el of threadEls) el.style.transform = ctr;
       }
-      if (hasNotes && notesPane?.style && (Math.abs(notesFrom) > 0.5 || Math.abs(notesTo) > 0.5)) {
-        notesPane.style.transition = "none";
-        notesPane.style.transform = `translate3d(${nx.toFixed(2)}px, 0, 0)`;
-      }
+      if (compEl) compEl.style.transform = `translate3d(${cpx.toFixed(2)}px, 0, 0)`;
     };
     _sideGlideCleanup = () => {
       sideEl.classList.remove("is-side-closing");
@@ -18960,8 +19128,8 @@
       if (sideRailEl?.style) { sideRailEl.style.transform = ""; sideRailEl.style.opacity = ""; }
       for (const el of headPushEls) el.style.transform = "";
       if (isOpening) appEl.classList.remove("is-side-opening");
-      if (notesPane?.style) { notesPane.style.transform = ""; notesPane.style.transition = ""; }
-      for (const el of chatEls) el.style.transform = "";
+      for (const el of threadEls) el.style.transform = "";
+      if (compEl) compEl.style.transform = "";
       _collieShiftCur = hasNotes ? nextNotesShift : 0;
       if (view === "collie") {
         syncCollieTopHeight();
@@ -18971,11 +19139,11 @@
         }
         if (sc && lockSnap) { applyColliePos(sc, lockSnap); updateSuperJump(); }
       }
-      if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
+      if (pane && !pane.hidden && isDesktopDrawerViewport()) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
       if (activeThreadRoot) applyThreadWidth();
       if (activeWorkerKey) { applyWorkerWidth(); if (curWdMode() === "screen") fitWdTerm(); }
     };
-    applyFrame(sideFrom, chatFrom, notesFrom, 0);
+    applyFrame(sideFrom, chatFrom, compFrom, 0);
     let sync = true;
     const step = (now) => {
       if (sync) { finishSideGlide(true); return; }
@@ -18986,7 +19154,7 @@
       applyFrame(
         sideFrom + (sideTo - sideFrom) * e,
         chatFrom + (chatTo - chatFrom) * e,
-        notesFrom + (notesTo - notesFrom) * e,
+        compFrom + (compTo - compFrom) * e,
         e,
       );
       _sideGlideRAF = requestAnimationFrame(step);
@@ -19170,7 +19338,15 @@
     if (!h) {
       const topEl = $("#v-collie .collie-top");
       if (!topEl) return;
-      h = Math.round(topEl.offsetHeight || 98);
+      h = Math.round(topEl.offsetHeight || 60);
+    }
+    // Wide desktop (>= 1360px): #crew is bounded to the left of #notes-pane, so excluding
+    // #crew's height from --collie-top-h ensures toggling the left sidebar never shifts
+    // #notes-pane vertically when #crew appears or disappears (dy = 0).
+    if (isWideNotesViewport()) {
+      const crewEl = $("#crew");
+      const crewH = crewEl && typeof crewEl.offsetHeight === "number" ? Math.round(crewEl.offsetHeight) : 0;
+      if (crewH > 0 && h > crewH) h -= crewH;
     }
     if (h === _lastCollieTopH) return;
     _lastCollieTopH = h;
@@ -19659,12 +19835,20 @@
     }).observe(collieTopEl);
   }
   window.addEventListener("resize", () => {
+    finishDrawerGlide(true);
+    finishSideGlide(true);
     if (view === "collie") {
       clearCollieShiftInline();
       syncCollieTopHeight();
       syncNotebookVisibility({ immediate: true });
     }
-    if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) {
+    const desktopMode = isDesktopDrawerViewport();
+    if (!desktopMode) {
+      if (pane?.style) pane.style.width = "";
+      if (tdDrawer?.style) tdDrawer.style.width = "";
+      if (wdDrawer?.style) wdDrawer.style.width = "";
+    }
+    if (pane && !pane.hidden && desktopMode) {
       setFileW(unifiedDrawerW());
       syncFileWidenUI();
     } else if (pane && !pane.hidden) {
@@ -19927,8 +20111,8 @@
   const threadDragMax = () => drawerDragMaxW();
   let threadWide = drawerWide;
   function syncThreadWideUI() {
-    const activeWide = !!(activeThreadRoot && drawerWide && innerWidth > THREAD_DESKTOP_MIN);
-    $("#app")?.classList.toggle("thread-wide", activeWide);
+    const activeWide = !!(activeThreadRoot && drawerWide && isDesktopDrawerViewport());
+    $("#app")?.classList?.toggle("thread-wide", activeWide);
     syncAppDrawerClasses();
     if (tdWidenBtn) {
       tdWidenBtn.setAttribute("aria-pressed", activeWide ? "true" : "false");
@@ -19938,7 +20122,8 @@
     }
   }
   function applyThreadWidth() {
-    if (innerWidth <= THREAD_DESKTOP_MIN) {
+    if (!isDesktopDrawerViewport()) {
+      if (tdDrawer?.style) tdDrawer.style.width = "";
       syncThreadWideUI();
       return;
     }
@@ -21178,7 +21363,7 @@
   const workerWideW = () => drawerWideW();
   function syncWorkerWidenUI() {
     if (!wdWidenBtn) return;
-    const on = !!(activeWorkerKey && drawerWide && innerWidth > THREAD_DESKTOP_MIN);
+    const on = !!(activeWorkerKey && drawerWide && isDesktopDrawerViewport());
     wdWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
     const lbl = on ? "还原宽度" : "拓宽抽屉";
     wdWidenBtn.title = lbl;
@@ -21186,7 +21371,8 @@
     syncAppDrawerClasses();
   }
   function applyWorkerWidth() {
-    if (innerWidth <= THREAD_DESKTOP_MIN) {
+    if (!isDesktopDrawerViewport()) {
+      if (wdDrawer?.style) wdDrawer.style.width = "";
       syncWorkerWidenUI();
       return;
     }
@@ -21260,7 +21446,10 @@
         if (bm === "chat") b.hidden = isWdShell();
       });
     }
-    if (wdInterruptBtn) wdInterruptBtn.hidden = !isLive;
+    if (wdInterruptBtn) {
+      wdInterruptBtn.hidden = !isLive;
+      if (!isLive) disarmInterrupt("worker");
+    }
     if (wdBarEl) wdBarEl.hidden = !showDevTabs;
   }
   function syncDevModeUI() {
@@ -21447,7 +21636,32 @@
       }
     });
   }
+  function clearWdLive(paneId = wdPaneId) {
+    wdLastLive = null;
+    if (paneId) wdLiveCache.delete(paneId);
+    if (wdLastLivePaneId) wdLiveCache.delete(wdLastLivePaneId);
+    if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
+    wdThreadEl?.classList?.remove("asking");
+  }
+  function handleWdLiveEnded(fallbackTitle = "") {
+    if (!activeWorkerKey) return false;
+    const endedPane = wdPaneId || wdLastLivePaneId;
+    clearWdLive(endedPane);
+    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (!wdWasLive) return false;
+    const doneTitle = String(fallbackTitle || wdLastLiveTitle || wdTitleEl?.textContent || wdWorkerName || "任务").trim();
+    wdWasLive = false;
+    wdLastLiveTitle = "";
+    wdLastLivePaneId = "";
+    closeWorkerDrawer();
+    toast(`${doneTitle} 已完成`);
+    return true;
+  }
   function drawWdLive(l) {
+    if (!activeWorkerKey || !wdPaneId || !find(wdPaneId)) {
+      clearWdLive(wdPaneId);
+      return;
+    }
     wdLastLive = l;
     if (wdPaneId) {
       if (l && (l.tail || l.approval)) wdLiveCache.set(wdPaneId, l);
@@ -21507,9 +21721,21 @@
     const kind = liveAgent?.kind || supW?.kind || past?.kind || "";
     const status = liveAgent?.status || (supW?.ended ? (supW.status === "failed" ? "failed" : "gone") : supW?.status) || "gone";
     const isLive = !!liveAgent;
+    const workerLbl = (liveAgent ? agentLabelOf(liveAgent) : "") || workerLabelOf(supW);
+    const dispTitle = workerLbl || name || wdTaskTitle || (liveAgent ? title(liveAgent) : "进行中任务");
+    if (isLive) {
+      wdWasLive = true;
+      wdLastLiveTitle = dispTitle;
+      wdLastLivePaneId = liveAgent.pane_id || wdPaneId || "";
+    } else {
+      clearWdLive(wdPaneId || wdLastLivePaneId);
+      if (wdGoneEl) wdGoneEl.hidden = true;
+      if (wdWasLive) {
+        handleWdLiveEnded(dispTitle);
+        return;
+      }
+    }
     if (wdTitleEl) {
-      const workerLbl = (liveAgent ? agentLabelOf(liveAgent) : "") || workerLabelOf(supW);
-      const dispTitle = workerLbl || name || wdTaskTitle || (liveAgent ? title(liveAgent) : "进行中任务");
       const fullTip = workerLbl && name && workerLbl !== name ? `${workerLbl} (${name})` : dispTitle;
       wdTitleEl.textContent = dispTitle;
       wdTitleEl.title = fullTip;
@@ -21569,7 +21795,7 @@
         wdSummaryTextEl.title = noteText;
       }
     }
-    if (wdGoneEl) wdGoneEl.hidden = isLive || !wdPaneId;
+    if (wdGoneEl) wdGoneEl.hidden = true;
     applyWdModeUI();
     syncWorkerComposerUI();
   }
@@ -21581,8 +21807,7 @@
     wdSkelTimer = 0;
     if (!past) {
       resetWdChatStateOnly();
-      if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
-      wdThreadEl.classList.remove("asking");
+      clearWdLive(wdPaneId);
       const rep = supW?.last_report || supW?.task || "";
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
@@ -21592,8 +21817,7 @@
     const cacheKey = "h:" + past.id;
     const cached = threadCache.get(cacheKey);
     resetWdChatStateOnly();
-    if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
-    wdThreadEl.classList.remove("asking");
+    clearWdLive(wdPaneId);
     if (cached) {
       drawThread(cached, wdThreadEl, "这个任务会话没有消息记录。");
       wdThreadEl._fresh = true;
@@ -21689,9 +21913,11 @@
       wdStream.addEventListener("live", (e) => alive() && drawWdLive(JSON.parse(e.data)));
       wdStream.addEventListener("gone", () => {
         clearSkel();
-        if (wdGoneEl) wdGoneEl.hidden = false;
+        clearWdLive(id);
         closeWorkerDrawerStream();
-        syncWorkerDrawerMeta();
+        if (!handleWdLiveEnded(wdTitleEl?.textContent || wdWorkerName)) {
+          syncWorkerDrawerMeta();
+        }
       });
       return;
     }
@@ -21714,11 +21940,67 @@
       }
     });
     wdStream.addEventListener("gone", () => {
-      if (wdGoneEl) wdGoneEl.hidden = false;
+      clearWdLive(id);
       closeWorkerDrawerStream();
-      syncWorkerDrawerMeta();
+      if (!handleWdLiveEnded(wdTitleEl?.textContent || wdWorkerName)) {
+        syncWorkerDrawerMeta();
+      }
     });
   }
+  const INTERRUPT_ARM_MS = 3000;
+  const interruptArms = new Map(); // scope ("worker" | "detail") -> { btn, targetId, timer, defaultTitle, defaultAria, defaultText }
+  function disarmInterrupt(scope) {
+    if (!scope) {
+      for (const k of [...interruptArms.keys()]) disarmInterrupt(k);
+      return;
+    }
+    const st = interruptArms.get(scope);
+    if (!st) return;
+    clearTimeout(st.timer);
+    interruptArms.delete(scope);
+    if (st.btn) {
+      st.btn.classList.remove("is-armed");
+      st.btn.removeAttribute("data-armed");
+      if (st.defaultTitle !== undefined) st.btn.title = st.defaultTitle;
+      if (st.defaultAria !== undefined) st.btn.setAttribute("aria-label", st.defaultAria);
+      if (st.defaultText !== undefined) st.btn.textContent = st.defaultText;
+    }
+  }
+  function isInterruptArmed(scope, targetId) {
+    const st = interruptArms.get(scope);
+    return !!(st && st.targetId && st.targetId === targetId);
+  }
+  function triggerArmedInterrupt(scope, btn, targetId, sendFn, opts = {}) {
+    if (!targetId || !btn) return false;
+    const cur = interruptArms.get(scope);
+    if (cur && cur.targetId === targetId) {
+      disarmInterrupt(scope);
+      sendFn();
+      toast("已发送中断 (Ctrl-C)");
+      return true;
+    }
+    disarmInterrupt(scope);
+    const defaultTitle = btn.title || "发送 Ctrl-C 中断当前执行";
+    const defaultAria = btn.getAttribute("aria-label") || "";
+    const defaultText = opts.replaceText ? btn.textContent : undefined;
+    btn.classList.add("is-armed");
+    btn.setAttribute("data-armed", "true");
+    btn.title = "再点一次确认中断";
+    if (defaultAria) btn.setAttribute("aria-label", "再点一次确认中断");
+    if (opts.replaceText) btn.textContent = "再点一次确认中断";
+    const timer = setTimeout(() => disarmInterrupt(scope), INTERRUPT_ARM_MS);
+    interruptArms.set(scope, {
+      btn,
+      targetId,
+      timer,
+      defaultTitle,
+      defaultAria: defaultAria || undefined,
+      defaultText,
+    });
+    toast("再点一次确认中断（3 秒内有效）", "attn");
+    return false;
+  }
+
   function openWorkerDrawer(opts = {}) {
     if (!wdDrawer) return;
     const worker = String(opts.worker || "").trim();
@@ -21748,6 +22030,7 @@
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
     clearTimeout(wdHideTimer);
     if (!hadWorker) resetDrawerMotion(wdDrawer);
+    if (switchedTarget) disarmInterrupt("worker");
     activeWorkerKey = nextKey;
     wdWorkerName = worker;
     wdPaneId = paneHint || (worker ? paneOf(worker) || "" : "");
@@ -21755,6 +22038,11 @@
     wdFromThread = opts.fromThreadRoot || "";
     wdTaskTitle = opts.title || "";
     wdTaskNote = opts.note || "";
+    const initCtx = resolveWorkerContext();
+    wdWasLive = !!initCtx.liveAgent;
+    wdLastLivePaneId = initCtx.livePaneId || wdPaneId || "";
+    wdLastLiveTitle = "";
+    if (wdGoneEl) wdGoneEl.hidden = true;
     if (wantMode) wdMode = wantMode;
     // Default read-only peek mode: never keep bottom composer permanently open on open/switch (#t12601).
     wdComposerOpen = false;
@@ -21769,7 +22057,7 @@
     wdDrawer.setAttribute("aria-hidden", "false");
     appEl.classList.add("has-worker");
     syncWorkerWidenUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && innerWidth > THREAD_DESKTOP_MIN });
+    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && isDesktopDrawerViewport() });
     if (!hadWorker) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
@@ -21800,9 +22088,16 @@
     const startOffset = !switching && hadWorker ? captureCollieVisualShift(true, closingW) : 0;
     if (switching) finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && innerWidth > THREAD_DESKTOP_MIN && !wdDrawer.hidden;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && isDesktopDrawerViewport() && !wdDrawer.hidden;
 
+    disarmInterrupt("worker");
     wdSeq++;
+    const prevWdPane = wdPaneId || wdLastLivePaneId;
+    wdWasLive = false;
+    wdLastLiveTitle = "";
+    wdLastLivePaneId = "";
+    clearWdLive(prevWdPane);
+    if (wdGoneEl) wdGoneEl.hidden = true;
     closeWorkerDrawerStream();
     activeWorkerKey = null;
     wdPaneId = "";
@@ -21892,7 +22187,10 @@
       if (rootId) openThreadDrawer(rootId, "", "");
     });
     wdInterruptBtn?.addEventListener("click", () => {
-      if (wdPaneId) sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+      if (!wdPaneId) return;
+      triggerArmedInterrupt("worker", wdInterruptBtn, wdPaneId, () => {
+        sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+      });
     });
     wdInterjectBtn?.addEventListener("click", () => {
       if (!wdPaneId) return;
@@ -23419,8 +23717,15 @@
   // ───────────────────────────── menus
   document.addEventListener("click", (e) => {
     const opener = e.target.closest("[data-menu]");
+    const clickedMoreInterrupt = !!e.target.closest?.('#more-menu [data-act="interrupt"]');
+    const armingMoreInterrupt = !!(clickedMoreInterrupt && current && !isInterruptArmed("detail", current));
     const prevCollieMenuOpen = collieMenuOpen;
-    $$(".menu").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
+    $$(".menu").forEach((m) => {
+      if ((!opener || m.id !== opener.dataset.menu) && !(armingMoreInterrupt && m.id === "more-menu")) {
+        m.hidden = true;
+      }
+    });
+    if (!clickedMoreInterrupt && $("#more-menu")?.hidden) disarmInterrupt("detail");
     if (opener) {
       const m = $("#" + opener.dataset.menu);
       const willOpen = opener.dataset.menu === "collie-menu" ? !collieMenuOpen : !!m?.hidden;
@@ -23429,6 +23734,7 @@
         closeSuperSearchFn?.(false);
       }
       if (m) m.hidden = !willOpen;
+      if (m?.id === "more-menu" && m.hidden) disarmInterrupt("detail");
       collieMenuOpen = opener.dataset.menu === "collie-menu" ? willOpen : false;
     } else {
       collieMenuOpen = false;
@@ -23436,9 +23742,16 @@
     if (prevCollieMenuOpen !== collieMenuOpen) syncNotebookVisibility();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && collieMenuOpen) {
-      closeCollieMenus();
-      syncNotebookVisibility();
+    if (e.key === "Escape") {
+      if (collieMenuOpen) {
+        closeCollieMenus();
+        syncNotebookVisibility();
+      }
+      const moreMenu = $("#more-menu");
+      if (moreMenu && !moreMenu.hidden) {
+        moreMenu.hidden = true;
+        disarmInterrupt("detail");
+      }
     }
   });
 
@@ -23448,7 +23761,13 @@
     if (!act) return;
     const v = find(current);
     try {
-      if (act === "interrupt") sendKeys(["ctrl+c"]);
+      if (act === "interrupt") {
+        const sent = triggerArmedInterrupt("detail", btn, current, () => sendKeys(["ctrl+c"]), { replaceText: true });
+        if (!sent) {
+          const m = btn.closest?.(".menu");
+          if (m) m.hidden = false;
+        }
+      }
       if (act === "copy" && v) { await copy(v.pane_id); toast("已复制 " + v.pane_id); }
       if (act === "shell-here" && v) {
         const r = await api("/api/agents", { body: { kind: "shell", cwd: v.cwd, machine: v.machine || "" } });

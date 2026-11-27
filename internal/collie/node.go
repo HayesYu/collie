@@ -221,6 +221,9 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	req.Header.Set("X-Collie-Home", home)
 	req.Header.Set("X-Collie-OS", runtime.GOOS+"/"+runtime.GOARCH)
 	req.Header.Set("X-Collie-Bin", bin)
+	if claudeSGLauncher() != "" {
+		req.Header.Set("X-Collie-Claude-Bin", claudeSGContainerCollie)
+	}
 	req.Header.Set("X-Collie-Version", version)
 	req.Header.Set("X-Collie-Relay-Update", "1")
 	req.Header.Set("X-Collie-Agents", agentsHeader(localAgents(home, true)))

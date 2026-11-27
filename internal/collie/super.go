@@ -1293,12 +1293,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		bin := sp.bin
-		if !m.Local && m.Bin != "" {
-			bin = m.Bin
-		} else if !m.Local {
-			bin = "collie"
-		}
+		bin := workerCollieBin(sp.bin, m, kind)
 		// codex's resume is a subcommand: it goes first, the flags after it.
 		args := append(resumeArgs(kinds[kind], resume), wargs...)
 		if kinds[kind] == "claude" {
@@ -1439,6 +1434,27 @@ func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, router
 		}
 	}
 	sp.watchRouter(ctx, live, stall)
+}
+
+// workerCollieBin is the collie command a worker of kind on machine m is
+// told to run: the hub's own binary here, the node's there, and for claude
+// under claude-sg the relay shim on the container's PATH.
+func workerCollieBin(hubBin string, m *Machine, kind string) string {
+	if kinds[kind] == "claude" {
+		if m.ClaudeBin != "" {
+			return m.ClaudeBin
+		}
+		if m.Local && claudeSGLauncher() != "" {
+			return claudeSGContainerCollie
+		}
+	}
+	switch {
+	case m.Local:
+		return hubBin
+	case m.Bin != "":
+		return m.Bin
+	}
+	return "collie"
 }
 
 // reapIdle stops workers that have been idle longer than the idle-stop

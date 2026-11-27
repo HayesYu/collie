@@ -293,10 +293,16 @@ func runClaudeSGBridge(args []string) {
 		defer close(watchDone)
 		watchClaudeSGEvents(doneCh, evFile, stateDir, herdrSock, paneID, collieBin, cfg, &seq)
 	}()
+	cliDone := make(chan struct{})
+	go func() {
+		defer close(cliDone)
+		watchClaudeSGCLI(doneCh, claudeSGCLIDir(stateDir, paneID), collieBin, os.Environ())
+	}()
 
 	waitErr := cmd.Wait()
 	close(doneCh)
 	<-watchDone
+	<-cliDone
 	if evFile != "" {
 		_ = os.Remove(evFile)
 	}

@@ -21,6 +21,7 @@ import (
 )
 
 func TestCleanWorkerLabel(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{
@@ -42,6 +43,7 @@ func TestCleanWorkerLabel(t *testing.T) {
 }
 
 func TestParseSpawnLabelFlag(t *testing.T) {
+	t.Parallel()
 	body, err := parseSpawn(
 		[]string{"--name", "fix-pagination", "--label", "  修分页单测  ", "修复分页边界条件"},
 		nil,
@@ -88,6 +90,7 @@ func TestParseSpawnLabelFlag(t *testing.T) {
 }
 
 func TestSQLiteWorkerLabelMigrationAndRoundTrip(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "legacy-herd.db")
 
 	// Seed a legacy v0.3.4 database whose workers table lacks the `label` column.
@@ -188,6 +191,7 @@ CREATE TABLE timers   (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 }
 
 func TestWorkerLabelSpawnResumeStateListShowAndRouterDoc(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	workDir := filepath.Join(dir, "repo")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -533,6 +537,7 @@ func TestWorkerLabelSpawnResumeStateListShowAndRouterDoc(t *testing.T) {
 }
 
 func TestWebWorkerLabelUIContracts(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}

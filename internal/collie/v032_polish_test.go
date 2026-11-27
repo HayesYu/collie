@@ -7,6 +7,7 @@ import (
 )
 
 func TestPeerModeLabelHumanCopy(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"advise":  "先帮我查清，草稿给我审",
 		"notify":  "只留个便签，不自动回复",
@@ -21,6 +22,7 @@ func TestPeerModeLabelHumanCopy(t *testing.T) {
 }
 
 func TestWebV032PolishRuntimeContracts(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}

@@ -41,6 +41,7 @@ func TestInstallScriptPortHelper(t *testing.T) {
 }
 
 func TestInstallScriptContainerFallback(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux no-systemd container fallback test")
 	}
@@ -56,11 +57,29 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	realSleep, err := exec.LookPath("sleep")
+	if err != nil {
+		realSleep = "/bin/sleep"
+	}
 
 	writeStub := func(t *testing.T, path string) {
 		t.Helper()
 		body := fmt.Sprintf("#!/bin/sh\nif [ \"${1:-}\" = \"version\" ]; then echo 'collie v0.2.82-test'; exit 0; fi\nexec %q -test.run=^TestInstallScriptPortHelper$\n", testBin)
 		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeMockHerdr := func(t *testing.T, dir string) {
+		t.Helper()
+		body := "#!/bin/sh\nif [ \"${1:-}\" = \"status\" ]; then echo 'status: running'; fi\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(dir, "herdr"), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeShortSleep := func(t *testing.T, dir string) {
+		t.Helper()
+		body := fmt.Sprintf("#!/bin/sh\nexec %q 0.05\n", realSleep)
+		if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,6 +137,7 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 	}
 
 	t.Run("systemctl_timeout_prevents_hang", func(t *testing.T) {
+		t.Parallel()
 		if _, err := exec.LookPath("timeout"); err != nil {
 			t.Skip("timeout command not available")
 		}
@@ -132,8 +152,11 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 			}
 		}
 		writeStub(t, stubBin)
-		// Simulate a container where `systemctl --user show-environment` hangs on D-Bus.
-		if err := os.WriteFile(filepath.Join(mockDir, "systemctl"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		writeMockHerdr(t, mockDir)
+		writeShortSleep(t, mockDir)
+		// Simulate a container where `systemctl --user show-environment` hangs on D-Bus
+		// using the real sleep binary so `timeout 3` is genuinely exercised.
+		if err := os.WriteFile(filepath.Join(mockDir, "systemctl"), []byte(fmt.Sprintf("#!/bin/sh\nexec %q 30\n", realSleep)), 0o755); err != nil {
 			t.Fatal(err)
 		}
 
@@ -168,6 +191,7 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 	})
 
 	t.Run("reinstall_kills_sigstopped_old_pid_and_rebinds_port", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		homeDir := filepath.Join(tmp, "home")
 		binDir := filepath.Join(tmp, "bin")
@@ -179,6 +203,8 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 			}
 		}
 		writeStub(t, stubBin)
+		writeMockHerdr(t, mockDir)
+		writeShortSleep(t, mockDir)
 		if err := os.WriteFile(filepath.Join(mockDir, "systemctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -260,6 +286,7 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 	})
 
 	t.Run("fallback_without_setsid", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		homeDir := filepath.Join(tmp, "home")
 		binDir := filepath.Join(tmp, "bin")
@@ -272,8 +299,8 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 		}
 		writeStub(t, stubBin)
 
-		// Build a PATH directory with all standard commands except setsid and systemctl.
-		seen := map[string]bool{"setsid": true, "systemctl": true}
+		// Build a PATH directory with all standard commands except setsid, systemctl, and host herdr.
+		seen := map[string]bool{"setsid": true, "systemctl": true, "herdr": true, "sleep": true}
 		for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 			entries, err := os.ReadDir(dir)
 			if err != nil {
@@ -288,6 +315,7 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 				_ = os.Symlink(filepath.Join(dir, name), filepath.Join(cleanPathDir, name))
 			}
 		}
+		writeShortSleep(t, cleanPathDir)
 
 		listenAddr := reservePort(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -315,6 +343,7 @@ func TestInstallScriptContainerFallback(t *testing.T) {
 }
 
 func TestInstallScriptDarwinLaunchdProcessTypeAndBootoutRetry(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("POSIX shell test")
 	}
@@ -383,6 +412,12 @@ case "${sub}" in
 esac
 `, stateDir)
 	if err := os.WriteFile(filepath.Join(mockDir, "launchctl"), []byte(launchctlStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mockDir, "herdr"), []byte("#!/bin/sh\nif [ \"${1:-}\" = \"status\" ]; then echo 'status: running'; fi\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mockDir, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

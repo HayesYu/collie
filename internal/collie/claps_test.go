@@ -19,6 +19,7 @@ import (
 )
 
 func TestEntryClapsLosslessMigrationAndAPI(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "herd.db")
 
@@ -299,6 +300,7 @@ func TestEntryClapsLosslessMigrationAndAPI(t *testing.T) {
 }
 
 func TestClapEntryRaceFreeWithSuperStateMarshal(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -340,6 +342,7 @@ func TestClapEntryRaceFreeWithSuperStateMarshal(t *testing.T) {
 }
 
 func TestDreamInputIncludesClapsSignal(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -381,6 +384,7 @@ func TestDreamInputIncludesClapsSignal(t *testing.T) {
 }
 
 func TestWebClapsContractsAndDebounce(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}
@@ -517,6 +521,46 @@ class FakeES {
   close() {}
 }
 
+let nowMs = Date.now();
+const RealDate = Date;
+class FakeDate extends RealDate {
+  constructor(...args) {
+    if (args.length === 0) super(nowMs);
+    else super(...args);
+  }
+  static now() { return nowMs; }
+}
+let nextTimerId = 1;
+const fakeTimers = new Map();
+function fakeSetTimeout(fn, ms = 0, ...args) {
+  const id = nextTimerId++;
+  fakeTimers.set(id, { id, at: nowMs + Math.max(0, Number(ms) || 0), fn, args });
+  return id;
+}
+function fakeClearTimeout(id) { fakeTimers.delete(id); }
+async function flushMicrotasks() {
+  for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r));
+}
+async function wait(ms) {
+  const target = nowMs + Math.max(0, Number(ms) || 0);
+  await flushMicrotasks();
+  while (true) {
+    let earliest = null;
+    for (const t of fakeTimers.values()) {
+      if (t.at <= target && (!earliest || t.at < earliest.at || (t.at === earliest.at && t.id < earliest.id))) {
+        earliest = t;
+      }
+    }
+    if (!earliest) break;
+    fakeTimers.delete(earliest.id);
+    nowMs = earliest.at;
+    if (typeof earliest.fn === "function") earliest.fn(...earliest.args);
+    await flushMicrotasks();
+  }
+  nowMs = target;
+  await flushMicrotasks();
+}
+
 const ctx = {
   window: null, document, location: { hash: "#/collie", search: "", pathname: "/", origin: "http://127.0.0.1:7788", href: "http://127.0.0.1:7788/#/collie" },
   history: { state: {}, replaceState() {}, pushState() {}, back() {} },
@@ -535,10 +579,10 @@ const ctx = {
   IntersectionObserver: class { observe() {} disconnect() {} },
   Notification: class { static permission = "default"; static async requestPermission() { return "default"; } },
   EventSource: FakeES,
-  URL, URLSearchParams, Map, Set, WeakMap, Date, Math, JSON, Number, String, Boolean, Array, Object, Promise, Error, RegExp,
-  setTimeout, clearTimeout, setInterval: () => 1, clearInterval: () => {}, queueMicrotask,
-  requestAnimationFrame: (fn) => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout,
-  performance: { now: () => Date.now() },
+  URL, URLSearchParams, Map, Set, WeakMap, Date: FakeDate, Math, JSON, Number, String, Boolean, Array, Object, Promise, Error, RegExp,
+  setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, setInterval: () => 1, clearInterval: () => {}, queueMicrotask,
+  requestAnimationFrame: (fn) => fakeSetTimeout(fn, 0), cancelAnimationFrame: fakeClearTimeout,
+  performance: { now: () => nowMs },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   getComputedStyle: () => ({ getPropertyValue: () => "" }),
   getSelection: () => ({ isCollapsed: true, toString: () => "" }),
@@ -601,14 +645,14 @@ vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
   fetchCalls.length = 0;
   for (let i = 0; i < 4; i++) {
     dispatchDoc("click", { target: btn });
-    await new Promise((r) => setTimeout(r, 40));
+    await wait(40);
   }
   // Optimistic DOM count immediately reflects 2 + 4 = 6 before debounce fires!
   assert.equal(num.textContent, "6", "optimistic count updates immediately to 6");
   assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/clap").length, 0, "rapid clicks debounced before 350ms");
 
   // Wait past 350ms debounce window: MUST aggregate into ONE API call with delta=4!
-  await new Promise((r) => setTimeout(r, 420));
+  await wait(420);
   const clapCalls = fetchCalls.filter((c) => c.url === "/api/chat/clap");
   assert.equal(clapCalls.length, 1, "4 rapid clicks aggregate into exactly 1 POST /api/chat/clap");
   assert.deepStrictEqual(clapCalls[0].body, { entry_id: "e10", delta: 4 }, "debounced payload sends aggregated delta=4");
@@ -619,7 +663,7 @@ vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
   assert.equal(ctxEv.defaultPrevented, true, "contextmenu prevented on clapped button");
   assert.equal(num.textContent, "", "count cleared to empty string when reset to 0");
   assert.equal(sayEl.classList.contains("has-claps"), false, "has-claps removed on reset");
-  await new Promise((r) => setTimeout(r, 40));
+  await wait(40);
   const allClapCalls = fetchCalls.filter((c) => c.url === "/api/chat/clap");
   assert.equal(allClapCalls.length, 2, "reset sends immediate POST /api/chat/clap");
   assert.deepStrictEqual(allClapCalls[1].body, { entry_id: "e10", reset: true }, "reset payload uses reset: true");
@@ -627,18 +671,18 @@ vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
   // Long-press (520ms) also resets claps cleanly, and immediate re-clapping after pointerup is never swallowed!
   dispatchDoc("click", { target: btn });
   dispatchDoc("click", { target: btn });
-  await new Promise((r) => setTimeout(r, 420));
+  await wait(420);
   assert.equal(serverClaps, 2, "clapped twice to 2 before long-press");
   dispatchDoc("pointerdown", { target: btn, button: 0, clientX: 100, clientY: 100 });
-  await new Promise((r) => setTimeout(r, 580));
+  await wait(580);
   dispatchDoc("pointerup", { target: btn });
   assert.equal(num.textContent, "", "long-press resets count to empty");
   assert.equal(serverClaps, 0, "long-press persisted reset to 0");
   // Wait 180ms after pointerup (past the 120ms trailing click suppression window) and re-clap twice.
-  await new Promise((r) => setTimeout(r, 180));
+  await wait(180);
   dispatchDoc("click", { target: btn });
   dispatchDoc("click", { target: btn });
-  await new Promise((r) => setTimeout(r, 420));
+  await wait(420);
   assert.equal(num.textContent, "2", "re-clapping twice after long-press reset counts both clicks");
   assert.equal(serverClaps, 2, "re-clapping after long-press persisted 2");
 

@@ -398,7 +398,7 @@ func (s *Server) locateExternal(e *External, p *proc) {
 			}
 			f := filepath.Join(brain, id, ".system_generated", "logs", "transcript.jsonl")
 			fi, err := os.Stat(f)
-			if err != nil || fi.ModTime().Before(since) || fi.ModTime().Before(bestAt) {
+			if err != nil || fi.ModTime().Before(since) || fi.ModTime().Before(bestAt) || agyTranscriptMeta(f).subagent {
 				continue
 			}
 			e.Session, e.path, e.format, bestAt = id, f, "agy", fi.ModTime()

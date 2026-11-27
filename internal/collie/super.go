@@ -42,6 +42,7 @@ type Super struct {
 	memMeta       map[string]memMetaEntry
 	memGen        atomic.Uint64
 	st            *State
+	saved         *flushCache
 	dirty         bool
 	deletedTimers []string
 	subs          map[chan struct{}]bool
@@ -102,6 +103,10 @@ const (
 )
 const mainThread = "chat:main"
 
+var detectInitialSettingsFn = func(s *Server, home string) Settings {
+	return s.detectInitialSettings(home)
+}
+
 func newSuper(s *Server, dir string) (*Super, error) {
 	bin, _ := os.Executable()
 	if r, err := filepath.EvalSymlinks(bin); err == nil {
@@ -122,7 +127,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 		return nil, err
 	}
 	sp.db = db
-	if sp.st, err = initState(db, s.home, s.detectInitialSettings); err != nil {
+	if sp.st, err = initState(db, s.home, func(home string) Settings { return detectInitialSettingsFn(s, home) }); err != nil {
 		return nil, err
 	}
 	_, sp.activeDreamPending = sp.loadActiveDream()
@@ -169,11 +174,15 @@ func (sp *Super) flush() {
 	if !sp.dirty {
 		return
 	}
-	if err := saveState(sp.db, sp.st, sp.deletedTimers); err != nil {
+	if sp.saved == nil {
+		sp.saved = newFlushCache()
+	}
+	if err := saveStateCached(sp.db, sp.st, sp.deletedTimers, sp.saved); err != nil {
 		log.Printf("save state: %v", err)
 		return
 	}
 	sp.st.trim() // history beyond the working set stays in SQLite
+	sp.saved.prune(sp.st)
 	sp.dirty, sp.deletedTimers = false, nil
 }
 

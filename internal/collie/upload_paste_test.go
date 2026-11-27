@@ -8,6 +8,7 @@ import (
 )
 
 func TestWebPasteUploadRetryAndToast(t *testing.T) {
+	t.Parallel()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")

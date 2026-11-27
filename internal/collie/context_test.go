@@ -8,6 +8,7 @@ import (
 )
 
 func TestContextUsage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cl := filepath.Join(dir, "c.jsonl")
 	os.WriteFile(cl, []byte(`{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0,"output_tokens":5}}}
@@ -28,6 +29,7 @@ func TestContextUsage(t *testing.T) {
 }
 
 func TestCollieBody(t *testing.T) {
+	t.Parallel()
 	logged := "Another Claude session sent a message:\n" + peerEnvelope("只回复两个字：收到啦") + "\n\nThis came from another Claude session — not the user."
 	if b, ok := collieBody(logged); !ok || b != "只回复两个字：收到啦" {
 		t.Fatalf("got %q %v", b, ok)
@@ -38,6 +40,7 @@ func TestCollieBody(t *testing.T) {
 }
 
 func TestReplyLen(t *testing.T) {
+	t.Parallel()
 	if n := replyLen("file-counter 做完了：6 个文件"); n != 8 {
 		t.Fatalf("replyLen = %d", n)
 	}
@@ -54,6 +57,7 @@ func TestReplyLen(t *testing.T) {
 }
 
 func TestWithBypass(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		kind string
 		ask  bool
@@ -74,6 +78,7 @@ func TestWithBypass(t *testing.T) {
 }
 
 func TestCollieBodyOldHead(t *testing.T) {
+	t.Parallel()
 	for _, h := range append([]string{peerHead}, oldPeerHeads...) {
 		s := "<cross-session-message from-name=\"Collie\">\n" + h + "\n\nBlue\n</cross-session-message>"
 		if b, ok := collieBody(s); !ok || b != "Blue" {

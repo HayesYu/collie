@@ -7,6 +7,7 @@ import (
 )
 
 func TestInboxExpandAndMobileFooterContractsJS(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")
@@ -44,7 +45,7 @@ assert.match(footBlock[1], /id="nav-prefs"/, "side-foot keeps prefs gear link");
 const mobileBlock = css.match(/@media \(max-width:\s*760px\)\s*\{\s*\.side-head #new-btn[\s\S]*?\n\}/);
 assert.ok(mobileBlock, "mobile media query must style .side-foot and .side-prefs-btn");
 assert.match(mobileBlock[0], /\.side-prefs-btn\s*\{[\s\S]*?width:\s*44px;\s*height:\s*44px;/, "mobile prefs gear must keep 44px touch target");
-assert.match(mobileBlock[0], /a\.foot-status\s*\{[\s\S]*?width:\s*fit-content;[\s\S]*?min-block-size:\s*44px;/, "mobile foot-status must hug text width with 44px touch height");
+assert.match(mobileBlock[0], /a\.foot-status\s*\{[\s\S]*?flex:\s*1 1 0%;[\s\S]*?min-block-size:\s*44px;/, "mobile foot-status must fill left horizontal space with 44px touch height");
 assert.match(mobileBlock[0], /env\(safe-area-inset-bottom\)/, "mobile side-foot must preserve iOS safe-area bottom spacing");
 assert.doesNotMatch(mobileBlock[0], /\.side-foot \.side-prefs-btn\s*\{\s*display:\s*none;/, "mobile side-foot must not hide prefs gear");
 
@@ -217,8 +218,8 @@ let mockThreads = [];
 const autoBody = getEl("#auto-body");
 autoBody.clientHeight = 500;
 autoBody._rect = { top: 0, bottom: 500, left: 0, right: 600, width: 600, height: 500 };
-autoBody._qs[".inbox-subs-fold[open]"] = null;
-autoBody._qs[".inbox-subs-fold"] = null;
+autoBody._qs["#inbox-routes-panel"] = null;
+autoBody._qs['[data-inbox-sentinel="more"]'] = null;
 
 class FakeES {
   constructor() { this.readyState = 1; this.ls = {}; }

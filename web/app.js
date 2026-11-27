@@ -1354,6 +1354,14 @@
   bindCompositionGuard($("#super-input"));
   bindCompositionGuard($("#td-input"));
 
+  function setConnDotState(online) {
+    const isOn = !!online;
+    for (const el of [$("#conn"), $("#rail-conn")]) {
+      if (!el?.classList) continue;
+      el.classList.toggle("on", isOn);
+      el.classList.toggle("off", !isOn);
+    }
+  }
   function connect() {
     const ev = new EventSource("/api/events");
     let lastSuperRaw = "", lastStateRaw = "";
@@ -1392,9 +1400,9 @@
       state = next;
       scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
     });
-    ev.onopen = () => $("#conn").className = "conn on";
+    ev.onopen = () => setConnDotState(true);
     ev.onerror = async () => {
-      $("#conn").className = "conn off";
+      setConnDotState(false);
       try { await api("/api/session"); } catch {}
       if (!$("#login").hidden) return;
       // A restart can answer with an error status, which closes the stream
@@ -1605,7 +1613,12 @@
       if (pageInBackground() && canBrowserNotify()) {
         try {
           const n = new Notification("Collie", { body: msg, icon: "/icon.svg", tag: a.pane_id });
-          n.onclick = () => { try { focus(); } catch {} location.hash = "#/p/" + encodeURIComponent(a.pane_id); };
+          n.onclick = () => {
+            try { focus(); } catch {}
+            location.hash = (isCollieOwned(a) && a.name !== ROUTER)
+              ? "#/w/" + encodeURIComponent(a.name)
+              : "#/p/" + encodeURIComponent(a.pane_id);
+          };
         } catch {}
       }
     }
@@ -2357,20 +2370,26 @@
   // O(1)-ish click-frame sidebar active sync: toggles only active classes + unread badge
   // without rebuilding #live-list/#recent-list/#attention/#shells innerHTML on route changes.
   function syncSideActive(opts = {}) {
-    $("#nav-collie")?.classList.toggle("active", view === "collie");
-    $("#nav-auto")?.classList.toggle("active", view === "auto");
-    $("#nav-devices")?.classList.toggle("active", view === "devices");
-    $("#nav-prefs")?.classList.toggle("active", view === "prefs");
-    $("#rail-collie")?.classList.toggle("active", view === "collie");
-    $("#rail-auto")?.classList.toggle("active", view === "auto");
-    $("#rail-devices")?.classList.toggle("active", view === "devices");
-    $("#rail-prefs")?.classList.toggle("active", view === "prefs");
+    const syncNavAct = (el, on) => {
+      if (!el) return;
+      el.classList.toggle("active", on);
+      if (on) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
+    };
+    syncNavAct($("#nav-collie"), view === "collie");
+    syncNavAct($("#nav-auto"), view === "auto");
+    syncNavAct($("#nav-devices"), view === "devices");
+    syncNavAct($("#nav-prefs"), view === "prefs");
+    syncNavAct($("#rail-collie"), view === "collie");
+    syncNavAct($("#rail-auto"), view === "auto");
+    syncNavAct($("#rail-devices"), view === "devices");
+    syncNavAct($("#rail-prefs"), view === "prefs");
     const wantHref = view === "pane" && current
       ? "#/p/" + encodeURIComponent(current)
       : view === "ext" && extCur
         ? (extCur.startsWith("h:") ? "#/h/" + encodeURIComponent(extCur.slice(2)) : "#/x/" + encodeURIComponent(extCur))
         : "";
-    const wantWorker = view === "collie" && activeWorkerKey ? activeWorkerKey : "";
+    const wantWorker = activeWorkerKey && view !== "pane" && view !== "ext" ? activeWorkerKey : "";
     let foundTarget = !wantHref;
     const sideEl = $(".side");
     if (sideEl && typeof sideEl.querySelectorAll === "function") {
@@ -2435,19 +2454,12 @@
     $("#shell-group").hidden = state.shells.length === 0;
 
     const online = machines.filter((m) => m.local ? state.ok : m.online).length;
-    const connEl = $("#conn");
-    if (connEl) {
-      const connCls = connEl.classList?.contains("sf-conn-dot")
-        ? ("conn sf-conn-dot " + (online ? "on" : "off"))
-        : ("conn " + (online ? "on" : "off"));
-      if (connEl.className !== connCls) connEl.className = connCls;
-    }
-    const railConn = $("#rail-conn");
-    if (railConn) {
-      const rcCls = "sr-conn-dot " + (online ? "on" : "off");
-      if (railConn.className !== rcCls) railConn.className = rcCls;
-    }
-    const devStatus = !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
+    setConnDotState(online > 0);
+    const devStatus = !online
+      ? "herdr 不可用"
+      : multi
+        ? `${online}/${machines.length} 台电脑在线`
+        : (state.agents.length ? `本机在线 · ${state.agents.length} 个 agent` : "本机在线");
     setText($("#herdr-status"), devStatus);
     if (!state.ok && state.error && $("#herdr-status")) $("#herdr-status").title = state.error;
     const devTip = !state.ok && state.error ? `设备与连接 · ${state.error}` : `设备与连接 · ${devStatus}`;
@@ -3045,20 +3057,14 @@
     let h = location.hash;
     let next = null, id = null;
     if (h.startsWith("#/w/")) {
-      const wName = decodeURIComponent(h.slice(4));
+      const wName = decodeURIComponent(h.slice(4)).trim();
       const livePane = wName ? paneOf(wName) : "";
       const pastH = !livePane && wName ? (workerHist(wName, 0) || getHistIndex().byName.get(wName)?.[0]?.h || null) : null;
-      if (innerWidth > 1000 && wName) {
-        next = "collie";
-        h = "#/collie";
-        replaceHash(h);
-        queueMicrotask(() => { if (view === "collie") openWorkerDrawer({ worker: wName, paneId: livePane || "", histId: pastH?.id || "" }); });
-      } else if (livePane) {
-        next = "pane"; id = livePane;
-      } else if (pastH?.id) {
-        next = "ext"; id = "h:" + pastH.id;
-      } else {
-        next = "collie";
+      next = "collie";
+      h = "#/collie";
+      replaceHash(h);
+      if (wName) {
+        pendingOpenWorker = { worker: wName, paneId: livePane || "", histId: pastH?.id || "" };
       }
     } else if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
     else if (h.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(h.slice(4)); }
@@ -3082,15 +3088,29 @@
       else next = h.slice(2);
     }
     if (next && next !== "file") store.set("last", h);
-    if (next === view && id === (next === "ext" ? extCur : current)) return;
+    if (next === view && id === (next === "ext" ? extCur : current)) {
+      if (next === "collie" && pendingOpenWorker) {
+        const wantWorker = pendingOpenWorker;
+        pendingOpenWorker = null;
+        openWorkerDrawer(wantWorker);
+      } else if (next === "collie" && pendingOpenThread?.rootId) {
+        const wantThread = pendingOpenThread;
+        pendingOpenThread = null;
+        openThreadDrawer(wantThread.rootId, wantThread.focusId || "", wantThread.focusId || wantThread.rootId);
+      }
+      return;
+    }
     // Snapshot the departing view right before its DOM is hidden/parked.
     if (prevView && performance.now() >= programmaticScrollUntil) {
       captureViewScroll(prevView, prevId, prevIdx);
     }
     if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1180px)").matches)) closeFilePane({ immediate: next === "file" });
+    if (activeWorkerKey && (next !== prevView || id !== prevId) && !(next === "collie" && pendingOpenWorker)) {
+      closeWorkerDrawer({ immediate: true });
+    }
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
-    if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); }
+    if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); disconnectInboxObserver(); }
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
     if (prevView === "collie" && next !== "collie") {
       if (replyTo && isSuperComposerEmpty()) setReply(null);
@@ -3123,6 +3143,7 @@
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
       if (activeWorkerKey) closeWorkerDrawer({ immediate: true });
     }
+    if (next !== "pane" || id !== current) disarmInterrupt("detail");
     view = next; current = next === "ext" ? null : id;
     liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
     const nextKey = routeKeyFor(next, id);
@@ -3150,6 +3171,8 @@
     }
     if (next === "collie") {
       if (_lastCollieTopH <= 0) syncCollieTopHeight();
+      const wantWorker = pendingOpenWorker;
+      pendingOpenWorker = null;
       const wantThread = pendingOpenThread;
       pendingOpenThread = null;
       const savedThread = !wantThread && wasExistingIdx ? threadByIdx.get(navCur) : null;
@@ -3204,7 +3227,9 @@
         renderTarget(true);
         loadNotebook(false);
       }
-      if (wantThread?.rootId) {
+      if (wantWorker) {
+        openWorkerDrawer(wantWorker);
+      } else if (wantThread?.rootId) {
         openThreadDrawer(wantThread.rootId, wantThread.focusId || "", wantThread.focusId || wantThread.rootId);
       } else if (savedThread?.rootId) {
         openThreadDrawer(savedThread.rootId, "", savedThread.anchorId || savedThread.rootId, {
@@ -3358,6 +3383,7 @@
   let activeThreadAnchor = "";
   let drawerReplyTarget = null;
   let pendingOpenThread = null;
+  let pendingOpenWorker = null;
   let tdLastSig = "";
   let tdLastCount = 0;
   let tdForceScroll = false;
@@ -4294,8 +4320,8 @@
   // Quick-reply options picked while scrolled above the bottom: entryId -> { text, sending }.
   const pickedReplyOpts = new Map();
   const ICON_X = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
-  const ICON_PIN = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-body" d="M9.5 3.5h5v5l3 3v2h-11v-2l3-3z"/><path d="M8.5 3.5h7M12 13.5v7"/></svg>`;
-  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
+  const ICON_PIN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="pin-body" d="M15 4.5l-4 4-4 1.5-1.5 1.5 7 7 1.5-1.5 1.5-4 4-4z"/><path d="M14.5 4l5.5 5.5M9 15l-4.5 4.5"/></svg>`;
+  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", activePinId = "", lastPinTopId = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
   const SUPER_JUMP_DIST = 120;
 
   const SMART_SCROLL_GLIDE_PX = 180;
@@ -4533,6 +4559,7 @@
       wrap.classList.remove("open", "pin-only");
       listEl.hidden = true;
       pendingBarSig = pendingListSig = "";
+      activePinId = lastPinTopId = "";
       updateSuperJump();
       return;
     }
@@ -4540,36 +4567,51 @@
     wrap.classList.toggle("open", pendingOpen);
     wrap.classList.toggle("pin-only", pend.length === 0);
     const P = pend.length, M = pinsAll.length;
-    const lastPend = P ? pend[P - 1] : null, lastPin = M ? pinsAll[M - 1] : null;
-    const sum = lastPend ? lastPend.summary : pinDisplaySummary(lastPin);
-    const label = P && M ? (total === 1 ? "待处理 · 钉住" : `待处理 (${P}) · 钉住 (${M})`)
-      : P ? (total === 1 ? "待处理" : `待处理 (${P})`)
-      : (total === 1 ? "已钉住" : `已钉住 (${M})`);
-    const barSig = `${total}:${P}:${M}:${lastPend?.id || ""}:${lastPin?.id || ""}:${sum}`;
+    const lastPend = P ? pend[P - 1] : null;
+    const latestPin = M ? pinsAll[M - 1] : null;
+    const latestPinId = latestPin?.id || "";
+    if (latestPinId && latestPinId !== lastPinTopId) {
+      activePinId = latestPinId;
+      lastPinTopId = latestPinId;
+    } else if (!latestPinId) {
+      activePinId = lastPinTopId = "";
+    }
+    const shownPin = (activePinId && pinsAll.find((p) => p.id === activePinId)) || latestPin;
+    if (shownPin && shownPin.id !== activePinId) activePinId = shownPin.id;
+    const activeItem = lastPend || shownPin;
+    const sum = lastPend ? lastPend.summary : pinDisplaySummary(shownPin);
+    const activeBothPin = !!(lastPend && pinIds.has(lastPend.id));
+    const barSig = `${total}:${P}:${M}:${activeItem?.id || ""}:${activeBothPin ? 1 : 0}:${sum}`;
     if (barSig !== pendingBarSig) {
       pendingBarSig = barSig;
       const lead = P
-        ? `<span class="pending-dot" aria-hidden="true"></span>`
-        : `<span class="pending-dot neutral" aria-hidden="true"></span>`;
+        ? `<span class="pending-dot" aria-hidden="true"></span>${activeBothPin ? `<span class="pending-both-pin" title="已钉住" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-label">待处理</span><span class="pending-sep" aria-hidden="true">·</span>`
+        : `<span class="pending-pin-ico" aria-hidden="true">${ICON_PIN}</span><span class="visually-hidden">已钉住：</span>`;
+      const mainBtn = `<button type="button" class="pending-main" data-goto-pending="${esc(activeItem.id)}" title="${esc(sum)}">${lead}<span class="pending-sum">${esc(sum)}</span></button>`;
       if (total === 1) {
-        const onlyId = lastPend ? lastPend.id : lastPin.id;
         const xBtn = lastPend
-          ? `<button type="button" class="pending-x" data-dismiss="${esc(onlyId)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>`
-          : `<button type="button" class="pending-x" data-unpin="${esc(onlyId)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>`;
-        bar.innerHTML = `<button type="button" class="pending-main" data-goto-pending="${esc(onlyId)}" title="${esc(sum)}">
-            ${lead}<span class="pending-label">${esc(label)}</span><span class="pending-sep">·</span><span class="pending-sum">${esc(sum)}</span>
-          </button>${xBtn}`;
+          ? `<button type="button" class="pending-x" data-dismiss="${esc(activeItem.id)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>`
+          : `<button type="button" class="pending-x" data-unpin="${esc(activeItem.id)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>`;
+        bar.innerHTML = `${mainBtn}${xBtn}`;
       } else {
-        bar.innerHTML = `<button type="button" class="pending-main" data-toggle-pending aria-expanded="${pendingOpen}" title="${esc(sum)}">
-            ${lead}<span class="pending-label">${esc(label)}</span><span class="pending-sep">·</span><span class="pending-sum">${esc(sum)}</span>
-            <svg class="pending-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14l5-5 5 5"/></svg>
-          </button>`;
+        const moreTitle = P && M
+          ? `查看全部 ${P} 条待处理与 ${M} 条已钉住消息`
+          : P
+            ? `查看全部 ${P} 条待处理消息`
+            : `查看全部 ${M} 条已钉住消息`;
+        const moreAria = P && M
+          ? `展开全部 ${P} 条待处理与 ${M} 条已钉住消息`
+          : P
+            ? `展开全部 ${P} 条待处理消息`
+            : `展开全部 ${M} 条已钉住消息`;
+        bar.innerHTML = `${mainBtn}<button type="button" class="pending-more" data-toggle-pending aria-expanded="${pendingOpen}" aria-controls="pending-list" title="${esc(moreTitle)}" aria-label="${esc(moreAria)}"><span class="pending-count">${total}</span><svg class="pending-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14l5-5 5 5"/></svg></button>`;
       }
     } else {
       bar.querySelector("[data-toggle-pending]")?.setAttribute("aria-expanded", String(pendingOpen));
     }
     if (total >= 2 && pendingOpen) {
       const listSig = JSON.stringify([
+        P ? "" : (shownPin?.id || ""),
         pend.map((p) => [p.id, p.summary, p.at, pinIds.has(p.id) ? 1 : 0]),
         pinsOnly.map((p) => [p.id, p.summary, p.at, p.role]),
       ]);
@@ -4577,18 +4619,20 @@
         pendingListSig = listSig;
         const pendRows = [...pend].reverse().map((p) => `<div class="pending-item">
           <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(p.summary)}">
-            <span class="pending-dot"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="已钉住">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+            <span class="pending-dot" aria-hidden="true"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="已钉住" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
           </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>
         </div>`);
         const pinRows = [...pinsOnly].reverse().map((p) => {
           const ps = pinDisplaySummary(p);
-          return `<div class="pending-item is-pin">
-          <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(ps)}">
-            <span class="pending-pin-ico">${ICON_PIN}</span><span class="pending-sum">${esc(ps)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+          const isCur = !P && shownPin && p.id === shownPin.id;
+          return `<div class="pending-item is-pin${isCur ? " is-active" : ""}">
+          <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" data-pick-pin="${esc(p.id)}" title="${esc(ps)}">
+            <span class="pending-pin-ico" aria-hidden="true">${ICON_PIN}</span><span class="pending-sum">${esc(ps)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
           </button><button type="button" class="pending-x" data-unpin="${esc(p.id)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>
         </div>`;
         });
-        listEl.innerHTML = [...pendRows, ...pinRows].join("");
+        const sep = pendRows.length && pinRows.length ? `<div class="pending-list-sep" role="separator"></div>` : "";
+        listEl.innerHTML = `${pendRows.join("")}${sep}${pinRows.join("")}`;
       }
       listEl.hidden = false;
     } else {
@@ -6738,17 +6782,22 @@
     </div>`;
   }
 
-  function openWorkerFromLink(a, ev, fromThreadRoot = "") {
+  function openWorkerFromLink(a, ev, fromThreadRoot = "", opts = {}) {
     if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return false;
-    if (view !== "collie" || innerWidth <= 1000) return false;
+    if (!opts.allowAnyView && view !== "collie") return false;
     if (a.id === "wd-popout" || a.closest?.("#worker-drawer")) return false;
+    const href = a.getAttribute?.("href") || "";
     const directWorker = String(a.dataset?.openWorker || a.dataset?.worker || "").trim();
     if (directWorker && directWorker !== ROUTER) {
+      const paneId = String(a.dataset?.paneId || "").trim()
+        || (href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)).trim() : "")
+        || paneOf(directWorker) || "";
+      const histId = String(a.dataset?.histId || "").trim()
+        || (href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "");
       ev.preventDefault();
-      openWorkerDrawer({ worker: directWorker, paneId: paneOf(directWorker) || "", fromThreadRoot });
+      openWorkerDrawer({ worker: directWorker, paneId, histId, fromThreadRoot });
       return true;
     }
-    const href = a.getAttribute?.("href") || "";
     if (a.classList?.contains("event")) {
       const ref = String(a.dataset?.ref || "").trim();
       if (ref && ref !== ROUTER && !ref.startsWith("h:") && !ref.startsWith("peer-req:")) {
@@ -6781,7 +6830,7 @@
       const histId = decodeURIComponent(href.slice(4)).trim();
       const hRec = histId ? hist.find((x) => x.id === histId) : null;
       const wName = String(a.dataset?.ref || hRec?.name || "").trim();
-      if (wName && wName !== ROUTER && !wName.startsWith("h:") && (getWorkerLookup().byName.has(wName) || a.classList?.contains("event"))) {
+      if (wName && wName !== ROUTER && !wName.startsWith("h:") && (getWorkerLookup().byName.has(wName) || a.classList?.contains("event") || a.closest?.(".mem-crew"))) {
         ev.preventDefault();
         openWorkerDrawer({ worker: wName, histId, fromThreadRoot });
         return true;
@@ -6797,7 +6846,7 @@
       openPeerModal("list");
       return;
     }
-    const wkLink = e.target.closest('a[data-open-worker], a.event[href], a.need[href], .ask-head a[href], a[href^="#/w/"], a[href^="#/p/"]');
+    const wkLink = e.target.closest('a[data-open-worker], a.event[href], a.need[href], .ask-head a[href], a[href^="#/w/"], a[href^="#/p/"], a[href^="#/h/"]');
     if (wkLink && openWorkerFromLink(wkLink, e, "")) return;
     const idea = e.target.closest("[data-idea]")?.dataset.idea;
     if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); }
@@ -7362,13 +7411,22 @@
     if (unpin) { ev.preventDefault(); ev.stopPropagation(); togglePin(unpin.dataset.unpin, false); return; }
     if (ev.target.closest("[data-toggle-pending]")) { ev.preventDefault(); pendingOpen = !pendingOpen; renderPendingBar(); return; }
     const go = ev.target.closest("[data-goto-pending]");
-    if (go) { ev.preventDefault(); jumpToEntry(go.dataset.gotoPending); }
+    if (go) {
+      ev.preventDefault();
+      if (go.dataset.pickPin) activePinId = go.dataset.pickPin;
+      jumpToEntry(go.dataset.gotoPending);
+    }
   });
   document.addEventListener("click", (ev) => {
     if (pendingOpen && !ev.composedPath().includes($("#pending-wrap"))) { pendingOpen = false; renderPendingBar(); }
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && pendingOpen && !document.querySelector("dialog[open]")) { pendingOpen = false; renderPendingBar(); }
+    if (ev.key === "Escape" && pendingOpen && !document.querySelector("dialog[open]")) {
+      const returnFocus = $("#pending-list")?.contains?.(document.activeElement);
+      pendingOpen = false;
+      renderPendingBar();
+      if (returnFocus) $("#pending-bar")?.querySelector?.("[data-toggle-pending]")?.focus?.();
+    }
   });
 
   bindComposer($("#super-composer"), $("#super-input"), async (text, re) => {
@@ -7386,6 +7444,7 @@
   }
   let autoTab = normalizeAutoTab(store.get("autoTab", "memory"));
   let inboxThread = "";
+  let inboxRoutesOpen = false;
   const inboxExpanded = new Set();
   let inboxLoadSeq = 0;
   let autoTimer;
@@ -7400,11 +7459,31 @@
   let peerScanRAF = 0;
   let pendingPeerInvite = "";
   const PEER_JOIN_BASE = "https://lihuanyu0w0.github.io/collie/join/#";
-  const PEER_MODE_TEXT = {
-    advise: "先帮我查清，草稿给我审",
-    notify: "只留个便签，不自动回复",
-    propose: "查完给方案，批准再干活",
-  };
+  const PEER_MODES = [
+    {
+      id: "advise",
+      label: "先查清，草稿给我审",
+      short: "查清审草稿",
+      rec: "推荐",
+      desc: "只读查证并拟好回复，你确认才发送",
+    },
+    {
+      id: "notify",
+      label: "只留便签，不自动回复",
+      short: "只留便签",
+      rec: "",
+      desc: "仅在聊天里记一条提醒，不自动查证",
+    },
+    {
+      id: "propose",
+      label: "查完给方案，批准再干活",
+      short: "查完给方案",
+      rec: "",
+      desc: "先评估并提议方案，动手和回复都等你拍板",
+    },
+  ];
+  const peerModeInfo = (id) => PEER_MODES.find((m) => m.id === id) || PEER_MODES[0];
+  const PEER_MODE_TEXT = Object.fromEntries(PEER_MODES.map((m) => [m.id, m.label]));
   const INT_STATUS_TEXT = {
     connected: "已连通",
     connecting: "连接中",
@@ -7448,7 +7527,13 @@
 
   let autoOpenRAF = 0;
   let autoLoadSeq = 0;
-  let inboxRenderLimit = 40;
+  const INBOX_PAGE_SIZE = 40;
+  let inboxRenderLimit = INBOX_PAGE_SIZE;
+  let inboxObserver = null;
+  let inboxObserverGen = 0;
+  let inboxLoadingMore = false;
+  let inboxLoadMoreRAF = 0;
+  let inboxScrollFallbackCleanup = null;
   const autoCache = {
     memory: null,
     timers: null,       // { timers, activeCount, endedCount, endedHasMore, endedList, endedLoaded }
@@ -7561,6 +7646,7 @@
       body.innerHTML = inboxHTML(c.triggers, c.threads);
       syncInboxOverflow(body);
       if (restore) restoreSimpleScroll(body, restore);
+      setupInboxInfiniteScroll(body);
       return true;
     }
     if (tab === "integrations" && autoCache.integrations) {
@@ -7601,6 +7687,9 @@
       memSearchRemote = null;
       clearMemInsUndo();
     }
+    if (autoTab !== "inbox") {
+      disconnectInboxObserver();
+    }
     const body = $("#auto-body");
     const sameTabCached = body._renderedTab === autoTab && !!body._tabRendered;
     $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
@@ -7612,6 +7701,7 @@
     if (sameTabCached) {
       applyAutoBodyMode(body, autoTab);
       if (restore) restoreSimpleScroll(body, restore);
+      if (autoTab === "inbox") setupInboxInfiniteScroll(body);
       if (typeof requestAnimationFrame === "function") {
         autoOpenRAF = requestAnimationFrame(() => {
           autoOpenRAF = 0;
@@ -7711,10 +7801,8 @@
     if (lbl) lbl.textContent = expanded ? "收起" : "展开";
     return expandable;
   }
-  function syncInboxOverflow(root = $("#auto-body")) {
-    if (!root) return;
-    const rows = [...root.querySelectorAll(".inbox-row")];
-    if (!rows.length) return;
+  function syncInboxRows(rows) {
+    if (!rows || !rows.length) return;
     // Two-phase read-then-write batching prevents O(N) forced synchronous layout thrashing.
     const measured = [];
     for (const row of rows) {
@@ -7734,6 +7822,162 @@
       m.btn.setAttribute("aria-label", `${m.expanded ? "收起" : "展开"} #${m.id}`);
       const lbl = m.btn.querySelector(".inbox-toggle-lbl");
       if (lbl) lbl.textContent = m.expanded ? "收起" : "展开";
+    }
+  }
+  function syncInboxOverflow(root = $("#auto-body")) {
+    if (!root) return;
+    syncInboxRows([...root.querySelectorAll(".inbox-row")]);
+  }
+  function filteredInboxTriggers(ts) {
+    const list = Array.isArray(ts) ? ts : [];
+    return inboxThread ? list.filter((t) => t.thread === inboxThread) : list;
+  }
+  function disconnectInboxObserver() {
+    inboxObserverGen++;
+    inboxLoadingMore = false;
+    if (inboxLoadMoreRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(inboxLoadMoreRAF);
+      inboxLoadMoreRAF = 0;
+    }
+    if (inboxObserver) {
+      try { inboxObserver.disconnect(); } catch {}
+      inboxObserver = null;
+    }
+    if (inboxScrollFallbackCleanup) {
+      try { inboxScrollFallbackCleanup(); } catch {}
+      inboxScrollFallbackCleanup = null;
+    }
+  }
+  function loadMoreInboxRows(body = $("#auto-body")) {
+    if (inboxLoadingMore) return false;
+    if (!body || view !== "auto" || autoTab !== "inbox" || !autoCache.inbox) return false;
+    const shown = filteredInboxTriggers(autoCache.inbox.triggers);
+    if (inboxRenderLimit >= shown.length) {
+      disconnectInboxObserver();
+      return false;
+    }
+    const gen = inboxObserverGen;
+    inboxLoadingMore = true;
+    const foot = body.querySelector?.("#inbox-feed-foot");
+    if (inboxObserver && foot && typeof inboxObserver.unobserve === "function") {
+      try { inboxObserver.unobserve(foot); } catch {}
+    }
+    const commit = () => {
+      inboxLoadMoreRAF = 0;
+      if (gen !== inboxObserverGen || view !== "auto" || autoTab !== "inbox" || !autoCache.inbox) {
+        inboxLoadingMore = false;
+        return;
+      }
+      const curShown = filteredInboxTriggers(autoCache.inbox.triggers);
+      const prevLimit = Math.min(inboxRenderLimit, curShown.length);
+      const nextLimit = Math.min(curShown.length, prevLimit + INBOX_PAGE_SIZE);
+      if (nextLimit <= prevLimit) {
+        inboxLoadingMore = false;
+        disconnectInboxObserver();
+        return;
+      }
+      inboxRenderLimit = nextLimit;
+      const batch = curShown.slice(prevLimit, nextLimit);
+      const ul = body.querySelector?.("#inbox-list");
+      if (ul && typeof ul.insertAdjacentHTML === "function" && batch.length) {
+        const beforeCount = ul.children ? ul.children.length : 0;
+        ul.insertAdjacentHTML("beforeend", batch.map(inboxRowHTML).join(""));
+        const added = ul.children ? [...ul.children].slice(beforeCount) : [];
+        if (added.length) syncInboxRows(added);
+        else syncInboxOverflow(body);
+      } else {
+        const prevTop = body.scrollTop;
+        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
+        syncInboxOverflow(body);
+        markProgrammaticScroll();
+        body.scrollTop = prevTop;
+      }
+      body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
+      const curFoot = body.querySelector?.("#inbox-feed-foot");
+      const remaining = Math.max(0, curShown.length - inboxRenderLimit);
+      if (curFoot) {
+        if (remaining > 0) {
+          curFoot.setAttribute?.("data-inbox-sentinel", "more");
+          curFoot.dataset.inboxSentinel = "more";
+          curFoot.classList.remove("is-done");
+          const st = curFoot.querySelector?.(".inbox-feed-status");
+          if (st) st.textContent = "正在加载更多…";
+        } else {
+          curFoot.removeAttribute?.("data-inbox-sentinel");
+          delete curFoot.dataset.inboxSentinel;
+          curFoot.classList.add("is-done");
+          const st = curFoot.querySelector?.(".inbox-feed-status");
+          if (st) st.textContent = `已显示全部 ${curShown.length} 条`;
+        }
+      }
+      inboxLoadingMore = false;
+      if (remaining > 0) {
+        if (inboxObserver && curFoot && typeof inboxObserver.observe === "function") {
+          try { inboxObserver.observe(curFoot); } catch {}
+        } else {
+          setupInboxInfiniteScroll(body);
+        }
+      } else {
+        disconnectInboxObserver();
+      }
+    };
+    if (typeof requestAnimationFrame === "function") {
+      inboxLoadMoreRAF = requestAnimationFrame(commit);
+    } else {
+      commit();
+    }
+    return true;
+  }
+  function setupInboxInfiniteScroll(body = $("#auto-body")) {
+    disconnectInboxObserver();
+    if (!body || view !== "auto" || autoTab !== "inbox") return;
+    const sentinel = body.querySelector?.('[data-inbox-sentinel="more"]');
+    if (!sentinel) return;
+    const gen = inboxObserverGen;
+    if (typeof IntersectionObserver === "function") {
+      inboxObserver = new IntersectionObserver((entries) => {
+        if (gen !== inboxObserverGen) return;
+        if (entries.some((e) => e.isIntersecting)) {
+          loadMoreInboxRows(body);
+        }
+      }, {
+        root: body,
+        rootMargin: "0px 0px 240px 0px",
+        threshold: 0,
+      });
+      inboxObserver.observe(sentinel);
+    } else if (typeof body.addEventListener === "function") {
+      const onScroll = () => {
+        if (gen !== inboxObserverGen || inboxLoadingMore) return;
+        if (body.scrollHeight - body.scrollTop - body.clientHeight <= 240) {
+          loadMoreInboxRows(body);
+        }
+      };
+      body.addEventListener("scroll", onScroll, { passive: true });
+      inboxScrollFallbackCleanup = () => body.removeEventListener("scroll", onScroll);
+      onScroll();
+    }
+  }
+  function selectInboxThread(nextThread) {
+    inboxThread = String(nextThread || "");
+    inboxRenderLimit = INBOX_PAGE_SIZE;
+    if (inboxThread) inboxRoutesOpen = false;
+    const body = $("#auto-body");
+    if (!body) return;
+    disconnectInboxObserver();
+    body._inboxRendered = false;
+    if (autoCache.inbox) {
+      body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
+      body._inboxRendered = true;
+      body._renderedTab = "inbox";
+      body._tabRendered = true;
+      body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
+      syncInboxOverflow(body);
+      markProgrammaticScroll();
+      body.scrollTop = 0;
+      setupInboxInfiniteScroll(body);
+    } else {
+      loadAuto();
     }
   }
   function toggleInboxRow(row, id, { animate = true } = {}) {
@@ -7858,24 +8102,28 @@
         }
         // Preserve active user text selection during background refreshes.
         if (!restore && sameInbox && hasSelectionInside(body)) return;
-        const subsOpen = sameInbox && !!body.querySelector(".inbox-subs-fold[open]");
         const focusToggleId = sameInbox && document.activeElement && body.contains(document.activeElement)
           ? document.activeElement.closest?.("[data-inbox-toggle]")?.dataset?.inboxToggle || ""
           : "";
+        const focusRoutesBtn = sameInbox && document.activeElement && body.contains(document.activeElement)
+          && !!document.activeElement.closest?.('[data-act="inbox-routes-toggle"]');
         const anchor = !restore && sameInbox ? captureInboxScrollAnchor(body) : null;
+        disconnectInboxObserver();
         applyAutoBodyMode(body, "inbox");
         body._inboxSig = sig;
         body._inboxRendered = true;
         body._renderedTab = "inbox";
         body._tabRendered = true;
         body.innerHTML = inboxHTML(triggers, threads);
-        if (subsOpen) { const d = body.querySelector(".inbox-subs-fold"); if (d) d.open = true; }
         syncInboxOverflow(body);
         if (restore) restoreSimpleScroll(body, restore);
         else restoreInboxScrollAnchor(body, anchor);
+        setupInboxInfiniteScroll(body);
         if (focusToggleId) {
           const btn = [...body.querySelectorAll("[data-inbox-toggle]")].find((el) => el.dataset.inboxToggle === focusToggleId);
           if (btn && !btn.hidden) btn.focus?.({ preventScroll: true });
+        } else if (focusRoutesBtn) {
+          body.querySelector?.('[data-act="inbox-routes-toggle"]')?.focus?.({ preventScroll: true });
         }
         return;
       } else if (targetTab === "memory") {
@@ -8117,8 +8365,8 @@
             <span class="peer-ov-sub">${peerList.length} 位 · 内网 / Tailscale 直连</span>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button type="button" class="btn small" data-peer-open="list">管理权限</button>
-            <button type="button" class="btn primary small" data-peer-open="add">名片 / 扫码添加</button>
+            <button type="button" class="btn small" data-peer-open="friends">管理权限</button>
+            <button type="button" class="btn primary small" data-peer-open="card">我的名片</button>
           </div>
         </div>
         <ul class="peer-ov-list">${peerList.slice().sort((a, b) => (a.status === "pending_incoming" ? -1 : 0) - (b.status === "pending_incoming" ? -1 : 0)).map((p) => {
@@ -8279,8 +8527,33 @@
       intModalDraft.scanning = false;
     }
   }
+  let peerCopyBtnTimer = 0;
+  let peerPopAnchorEl = null;
+  let peerPopOpenMeta = { pop: null, trigger: null, fromPointer: false };
+  const isPeerPopOpen = (pop) => !!(pop && (pop.matches?.(":popover-open") || pop.classList?.contains(":popover-open")));
+  const anyPeerPopOpen = () => isPeerPopOpen($("#peer-mode-popover")) || isPeerPopOpen($("#peer-action-popover"));
+  function clearPeerPopAnchor() {
+    if (peerPopAnchorEl) {
+      try { peerPopAnchorEl.style.removeProperty("anchor-name"); } catch {}
+      peerPopAnchorEl.setAttribute?.("aria-expanded", "false");
+      peerPopAnchorEl = null;
+    }
+  }
+  function hidePeerPopovers() {
+    for (const id of ["#peer-mode-popover", "#peer-action-popover"]) {
+      const pop = $(id);
+      if (isPeerPopOpen(pop)) {
+        try { pop.hidePopover(); } catch {}
+      }
+    }
+    clearPeerPopAnchor();
+    peerPopOpenMeta = { pop: null, trigger: null, fromPointer: false };
+  }
   function stopPeerModalResources() {
     stopPeerCameraScan();
+    hidePeerPopovers();
+    clearTimeout(peerCopyBtnTimer);
+    peerCopyBtnTimer = 0;
   }
 
   const intModal = $("#int-modal");
@@ -8312,10 +8585,15 @@
         const r = intModal.getBoundingClientRect();
         return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
       };
-      intModal.addEventListener("pointerdown", (ev) => { pressedOutside = ev.target === intModal && outside(ev); });
-      intModal.addEventListener("pointerup", (ev) => { if (pressedOutside && outside(ev)) closeIntModal("cancel"); pressedOutside = false; });
+      intModal.addEventListener("pointerdown", (ev) => { pressedOutside = !anyPeerPopOpen() && ev.target === intModal && outside(ev); });
+      intModal.addEventListener("pointerup", (ev) => { if (pressedOutside && !anyPeerPopOpen() && outside(ev)) closeIntModal("cancel"); pressedOutside = false; });
     }
     intModal.addEventListener("cancel", (ev) => {
+      if (anyPeerPopOpen()) {
+        ev.preventDefault();
+        hidePeerPopovers();
+        return;
+      }
       if (!supportsTopLayerExit()) {
         ev.preventDefault();
         closeIntModal("cancel");
@@ -9569,7 +9847,7 @@
           </label>
           <label class="int-mode-opt">
             <input type="radio" name="gf_mode" value="agent" ${d.handle_mode === "agent" ? "checked" : ""}>
-            <span><b>交给已订阅该 ${esc(pr)} 的 Agent 直接处理</b><small>若已有在线 Agent 订阅该 ${esc(pr)} 线程则直接投递继续修；否则自动转交 Collie 先调研。</small></span>
+            <span><b>交给已订阅该 ${esc(pr)} 的 Agent 直接处理</b><small>若已有在线 Agent 订阅该 ${esc(pr)} 来源则直接投递继续修；否则自动转交 Collie 先调研。</small></span>
           </label>
         </div>
       </section>
@@ -9916,6 +10194,7 @@
       }
       if (nextSig !== prevSig) {
         patchPeerHeaderAndList();
+        patchPeerQRCard();
       }
     } catch {}
   }
@@ -9947,13 +10226,16 @@
       const qrSrc = qrTarget ? `/api/qr?text=${encodeURIComponent(qrTarget)}` : "";
       if (qrSrc) await preloadPeerQRImage(qrSrc);
       if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
-      if (reset) d.invitesByMode = {};
+      if (reset) {
+        d.invitesByMode = {};
+        d.resetConfirm = false;
+      }
       d.invitesByMode[cacheKey] = inv;
       d.invite = inv;
       d.inviteLoading = false;
       d.inviteErr = "";
       patchPeerQRCard();
-      if (reset) toast("已重置名片密钥，旧二维码与旧链接已立即失效");
+      if (reset) toast("已重置名片密钥，旧链接已失效");
     } catch (err) {
       if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
       d.inviteLoading = false;
@@ -9971,8 +10253,12 @@
     }
     const list = Array.isArray(data?.peers) ? data.peers : [];
     const hasPendingIn = list.some((x) => x.status === "pending_incoming");
-    const tab = initialTab === "add" ? "add" : initialTab === "list" ? "list" : ((hasPendingIn || list.length > 0) ? "list" : "add");
-    const addSub = opts.sub === "scan" ? "scan" : "gen";
+    let tab;
+    if (initialTab === "friends" || initialTab === "list") tab = "friends";
+    else if (initialTab === "card") tab = "card";
+    else if (initialTab === "add") tab = opts.sub === "gen" ? "card" : "add";
+    else tab = (hasPendingIn || list.length > 0) ? "friends" : "card";
+
     const pasteRaw = String(opts.inviteRaw || "").trim();
     let pairName = "";
     if (pasteRaw) {
@@ -9986,16 +10272,17 @@
       data,
       _dataSig: peerDataSig(data),
       _mounted: false,
-      tab,
-      addSub, // gen | scan
+      tab, // friends | card | add
       genMode: "advise",
       hubNameInput: data?.hub_name || "",
       editingHubName: false,
+      savingHubName: false,
       invite: null,
       invitesByMode: {},
       inviteSeq: 0,
       inviteLoading: false,
       inviteErr: "",
+      resetConfirm: false,
       pasteRaw,
       fromInviteLink: !!pasteRaw,
       pairName,
@@ -10006,13 +10293,16 @@
       scanNote: "",
       approveModes: {}, // peerId -> selected mode before clicking Approve
       pingState: {}, // peerId -> {busy, ok, msg}
+      showAddrIds: {}, // peerId -> bool
       confirmRevokeId: "",
       busyPeerId: "",
+      activeModeTarget: null, // { kind: "default" | "add" | "approve" | "peer", peerId?, triggerEl }
+      activeActionPeerId: "",
     };
     renderPeerModal();
     if (!intModal.open) intModal.showModal();
     $("#int-modal-body").scrollTop = 0;
-    if (tab === "add" && addSub === "gen") ensurePeerInvite(false);
+    if (tab === "card") ensurePeerInvite(false);
     // Refresh live peers data in the background in case another device changed it.
     refreshPeerModalData();
   }
@@ -10023,18 +10313,18 @@
     stopPeerCameraScan();
     const isSecure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
     if (!isSecure) {
-      d.scanNote = "当前通过局域网 HTTP 访问，浏览器安全策略限制直接调用摄像头；请点击「从相册/截图识别」或用手机系统相机扫码后粘贴下方邀请码。";
-      renderPeerModal();
+      d.scanNote = "当前通过局域网 HTTP 访问，浏览器安全策略限制直接调用摄像头；请点击「识别图片」或用手机系统相机扫码后粘贴下方邀请码。";
+      patchPeerScanPanel();
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      d.scanNote = "当前设备或浏览器未提供摄像头访问接口，请改用「从相册/截图识别」或直接粘贴邀请码。";
-      renderPeerModal();
+      d.scanNote = "当前设备或浏览器未提供摄像头访问接口，请改用「识别图片」或直接粘贴邀请码。";
+      patchPeerScanPanel();
       return;
     }
     if (typeof window.BarcodeDetector !== "function") {
       d.scanNote = "当前浏览器暂不支持原生二维码实时解码（BarcodeDetector）；请用系统相机扫描名片二维码后粘贴邀请码，或更换 Chrome/Edge。";
-      renderPeerModal();
+      patchPeerScanPanel();
       return;
     }
     let detector;
@@ -10043,14 +10333,14 @@
         ? await window.BarcodeDetector.getSupportedFormats()
         : ["qr_code"];
       if (Array.isArray(fmts) && fmts.length && !fmts.includes("qr_code")) {
-        d.scanNote = "当前系统不支持 qr_code 原生解码，请直接粘贴同事发来的邀请码。";
-        renderPeerModal();
+        d.scanNote = "当前系统不支持 qr_code 原生解码，请直接粘贴好友发来的邀请码。";
+        patchPeerScanPanel();
         return;
       }
       detector = new window.BarcodeDetector({ formats: ["qr_code"] });
     } catch {
       d.scanNote = "原生扫码引擎初始化失败，请上传二维码图片或直接粘贴邀请码。";
-      renderPeerModal();
+      patchPeerScanPanel();
       return;
     }
     try {
@@ -10065,7 +10355,7 @@
       peerScanStream = stream;
       d.scanning = true;
       d.scanNote = "";
-      renderPeerModal();
+      patchPeerScanPanel();
       const video = $("#peer-scan-video");
       if (!video) { stopPeerCameraScan(); return; }
       video.srcObject = stream;
@@ -10083,12 +10373,13 @@
               if (isCanonicalPeerInvite(extracted)) {
                 stopPeerCameraScan();
                 d.pasteRaw = extracted;
+                d.fromInviteLink = true;
                 d.scanNote = "";
                 const parsed = parsePeerInviteClient(extracted, d.data?.hub_id);
                 if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
                   d.pairName = parsed.payload.hub_name;
                 }
-                renderPeerModal();
+                patchPeerScanPanel();
                 toast("已扫码识别好友边牧名片");
                 return;
               }
@@ -10102,13 +10393,13 @@
       stopPeerCameraScan();
       const name = err?.name || "";
       if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-        d.scanNote = "未授予摄像头权限，已优雅降级：可上传二维码截图或直接粘贴邀请码。";
+        d.scanNote = "未授予摄像头权限，可上传二维码截图或直接粘贴邀请码。";
       } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-        d.scanNote = "未检测到可用摄像头（桌面端常见），请直接粘贴同事的邀请码或上传二维码截图。";
+        d.scanNote = "未检测到可用摄像头，请直接粘贴好友的邀请链接或识别图片。";
       } else {
-        d.scanNote = `无法打开摄像头（${err?.message || name || "设备受限"}），请直接上传二维码图片或粘贴邀请码。`;
+        d.scanNote = `无法打开摄像头（${err?.message || name || "设备受限"}），请识别图片或粘贴邀请码。`;
       }
-      renderPeerModal();
+      patchPeerScanPanel();
     }
   }
 
@@ -10116,8 +10407,8 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !file) return;
     if (typeof window.BarcodeDetector !== "function") {
-      d.scanNote = "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请码文本。";
-      renderPeerModal();
+      d.scanNote = "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或名片码。";
+      patchPeerScanPanel();
       $("#peer-paste-input")?.focus();
       return;
     }
@@ -10132,156 +10423,467 @@
           .find((v) => isCanonicalPeerInvite(v));
         if (!hit) {
           d.scanNote = "未在图片中识别到有效的 Collie 好友名片二维码，请确认图片清晰或直接粘贴分享链接。";
-          renderPeerModal();
+          patchPeerScanPanel();
           return;
         }
         d.pasteRaw = hit;
+        d.fromInviteLink = true;
         d.scanNote = "";
         const parsed = parsePeerInviteClient(hit, d.data?.hub_id);
         if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
           d.pairName = parsed.payload.hub_name;
         }
-        renderPeerModal();
+        patchPeerScanPanel();
         toast("已从图片识别好友边牧名片");
       } finally {
         bmp.close?.();
       }
     } catch (err) {
       d.scanNote = `图片识别失败（${err?.message || "不支持该格式"}），请直接粘贴邀请码。`;
-      renderPeerModal();
+      patchPeerScanPanel();
     }
   }
 
-  function peerModeRadiosHTML(groupName, current, attr) {
-    return [
-      ["advise", "先帮我查清，草稿给我审", "推荐", "本地只读查证并拟好回复，你点确认才发给对方"],
-      ["notify", "只留个便签，不自动回复", "", "只在聊天里记一条提醒，不自动查也不消耗额度"],
-      ["propose", "查完给方案，批准再干活", "", "先评估并提议派人处理，动手和回复都等你拍板"],
-    ].map(([val, lbl, rec, desc]) => `
-      <label class="int-mode-opt">
-        <input type="radio" name="${esc(groupName)}" value="${val}" ${current === val ? "checked" : ""} ${attr}>
-        <span><b>${esc(lbl)}${rec ? `<span class="rec">${rec}</span>` : ""}</b><small>${esc(desc)}</small></span>
-      </label>`).join("");
+  // ─── Custom Collie Minimal Popover Menus (Viewport-Aware + Full-Width Trigger Sync) ───
+  const supportsPeerNativeAnchor = () =>
+    typeof CSS !== "undefined" &&
+    typeof CSS.supports === "function" &&
+    CSS.supports("position-area: block-end") &&
+    CSS.supports("width: anchor-size(width)");
+
+  const supportsFocusGroup = () =>
+    typeof HTMLElement !== "undefined" && "focusGroup" in HTMLElement.prototype;
+
+  function positionPeerPopoverFallback(pop, triggerEl, matchWidth, alignStart) {
+    if (!pop || !triggerEl) return;
+    const tr = triggerEl.getBoundingClientRect();
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 860;
+    const margin = 10;
+    const gap = 5;
+    if (matchWidth) {
+      const w = Math.min(Math.round(tr.width), vw - margin * 2);
+      pop.style.width = `${w}px`;
+      pop.style.minWidth = `${w}px`;
+      pop.style.maxWidth = `${w}px`;
+    } else {
+      pop.style.removeProperty("width");
+      pop.style.removeProperty("min-width");
+      pop.style.removeProperty("max-width");
+    }
+    const pr = pop.getBoundingClientRect();
+    const pw = pr.width || (matchWidth ? tr.width : (pop.classList.contains("is-narrow") ? 180 : 272));
+    const ph = pr.height || 180;
+    let left = (matchWidth || alignStart) ? tr.left : (tr.right - pw);
+    left = Math.max(margin, Math.min(left, vw - pw - margin));
+    let top = tr.bottom + gap;
+    if (top + ph > vh - margin && tr.top - gap - ph >= margin) {
+      top = tr.top - ph - gap;
+    }
+    top = Math.max(margin, Math.min(top, vh - ph - margin));
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top)}px`;
+  }
+
+  function clearPeerPopoverInlinePos(pop) {
+    if (!pop) return;
+    for (const k of ["left", "top", "width", "min-width", "max-width"]) {
+      try { pop.style.removeProperty(k); } catch {}
+    }
+  }
+
+  function isPeerTriggerFullWidth(triggerEl) {
+    if (!triggerEl) return false;
+    const parent = triggerEl.parentElement;
+    const tw = triggerEl.offsetWidth || triggerEl.getBoundingClientRect?.().width || 0;
+    const pw = parent ? (parent.clientWidth || parent.getBoundingClientRect?.().width || 0) : 0;
+    if (tw >= 230 && pw > 0 && tw >= pw - 28) return true;
+    if ((window.innerWidth || 1280) <= 600 && !triggerEl.classList?.contains("is-quiet") && tw >= 220) return true;
+    return false;
+  }
+
+  function openPeerPopover(pop, triggerEl, { fromPointer = false } = {}) {
+    if (!pop || !triggerEl) return;
+    // Close any other open peer popover first.
+    for (const id of ["#peer-mode-popover", "#peer-action-popover"]) {
+      const other = $(id);
+      if (other && other !== pop && isPeerPopOpen(other)) {
+        try { other.hidePopover(); } catch {}
+      }
+    }
+    clearPeerPopAnchor();
+
+    const isNarrow = pop.classList.contains("is-narrow");
+    const matchWidth = !isNarrow && isPeerTriggerFullWidth(triggerEl);
+    let alignStart = false;
+    if (!matchWidth && !isNarrow && intModal) {
+      const tr = triggerEl.getBoundingClientRect();
+      const mr = intModal.getBoundingClientRect();
+      if (mr.width > 0 && (tr.left + tr.width / 2) < (mr.left + mr.width / 2)) {
+        alignStart = true;
+      }
+    }
+    pop.classList.toggle("is-match-width", matchWidth);
+    pop.classList.toggle("is-align-start", alignStart);
+
+    try { triggerEl.style.setProperty("anchor-name", "--pm-anchor"); } catch {}
+    triggerEl.setAttribute("aria-expanded", "true");
+    peerPopAnchorEl = triggerEl;
+    peerPopOpenMeta = { pop, trigger: triggerEl, fromPointer };
+
+    try { pop.showPopover({ source: triggerEl }); }
+    catch { try { pop.showPopover(); } catch {} }
+
+    if (supportsPeerNativeAnchor()) {
+      clearPeerPopoverInlinePos(pop);
+    } else {
+      positionPeerPopoverFallback(pop, triggerEl, matchWidth, alignStart);
+    }
+
+    if (!fromPointer) {
+      const first = pop.querySelector(".pm-pop-item.is-selected, button:not(:disabled)");
+      first?.focus({ preventScroll: true });
+    }
+  }
+
+  let peerPopGlobalBound = false;
+  function bindPeerPopoverGlobals() {
+    if (peerPopGlobalBound) return;
+    peerPopGlobalBound = true;
+    for (const id of ["#peer-mode-popover", "#peer-action-popover"]) {
+      const pop = $(id);
+      if (!pop) continue;
+      pop.addEventListener("toggle", (ev) => {
+        if (ev.newState !== "closed") return;
+        const meta = peerPopOpenMeta;
+        if (meta.pop !== pop) return;
+        const trig = meta.trigger;
+        const fromPointer = meta.fromPointer;
+        clearPeerPopAnchor();
+        peerPopOpenMeta = { pop: null, trigger: null, fromPointer: false };
+        if (trig && trig.isConnected && intModal?.open && intModalKind === "peers") {
+          const focusInside = pop.contains(document.activeElement);
+          if (focusInside || !fromPointer) {
+            try { trig.focus(fromPointer ? { preventScroll: true, focusVisible: false } : { preventScroll: true }); }
+            catch { try { trig.focus(); } catch {} }
+          }
+        }
+      });
+      pop.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const trig = peerPopOpenMeta.trigger;
+          try { pop.hidePopover(); } catch {}
+          if (trig?.isConnected) {
+            try { trig.focus({ preventScroll: true }); } catch {}
+          }
+          return;
+        }
+        if (ev.key === "Tab") {
+          try { pop.hidePopover(); } catch {}
+          return;
+        }
+        if (!supportsFocusGroup() && ["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key)) {
+          const items = [...pop.querySelectorAll(".pm-pop-list > button:not(:disabled)")];
+          if (!items.length) return;
+          const cur = items.indexOf(document.activeElement);
+          const next = ev.key === "Home" ? 0
+            : ev.key === "End" ? items.length - 1
+            : cur < 0 ? 0
+            : (cur + (ev.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          items[next]?.focus({ preventScroll: true });
+        }
+      });
+    }
+  }
+
+  function populatePeerModePopover(tgt) {
+    const d = intModalDraft;
+    const pop = $("#peer-mode-popover");
+    if (!d || !pop || !tgt) return;
+    let cur = d.genMode || "advise";
+    if (tgt.kind === "add") cur = d.pairMode || "advise";
+    else if (tgt.kind === "approve") {
+      const p = (d.data?.peers || []).find((x) => x.id === tgt.peerId);
+      cur = d.approveModes[tgt.peerId] || p?.mode || "advise";
+    } else if (tgt.kind === "peer") {
+      const p = (d.data?.peers || []).find((x) => x.id === tgt.peerId);
+      cur = p?.mode || "advise";
+    }
+    const roleMenu = supportsFocusGroup() ? "" : ' role="menu"';
+    const roleItem = supportsFocusGroup() ? "" : ' role="menuitemradio"';
+    pop.innerHTML = `<div class="pm-pop-list" focusgroup="menu nomemory"${roleMenu}>${PEER_MODES.map((m) => `
+      <button type="button" class="pm-pop-item${m.id === cur ? " is-selected" : ""}"${roleItem} aria-checked="${m.id === cur}" data-pm-pick-mode="${m.id}">
+        <div class="pm-pop-item-body">
+          <div class="pm-pop-item-title">
+            <span>${esc(m.label)}</span>
+            ${m.rec ? `<span class="pm-pop-rec">${esc(m.rec)}</span>` : ""}
+          </div>
+          <div class="pm-pop-item-desc">${esc(m.desc)}</div>
+        </div>
+        <svg class="pm-pop-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+      </button>`).join("")}</div>`;
+
+    pop.querySelectorAll("[data-pm-pick-mode]").forEach((item) => {
+      item.addEventListener("click", async () => {
+        const next = item.dataset.pmPickMode;
+        const fromPointer = item._ptr || false;
+        peerPopOpenMeta.fromPointer = fromPointer;
+        try { pop.hidePopover(); } catch {}
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+
+        if (tgt.kind === "default") {
+          if (d.genMode === next) return;
+          d.genMode = next;
+          patchPeerQRCard();
+          await ensurePeerInvite(false);
+          toast(`默认接待方式已设为「${peerModeInfo(next).short}」`);
+        } else if (tgt.kind === "add") {
+          d.pairMode = next;
+          patchPeerScanPanel();
+        } else if (tgt.kind === "approve") {
+          d.approveModes[tgt.peerId] = next;
+          patchPeerHeaderAndList();
+        } else if (tgt.kind === "peer") {
+          const p = (d.data?.peers || []).find((x) => x.id === tgt.peerId);
+          if (!p || p.mode === next) return;
+          d.busyPeerId = p.id;
+          patchPeerHeaderAndList();
+          try {
+            await api(`/api/super/peers/${encodeURIComponent(p.id)}`, { method: "PATCH", body: { mode: next } });
+            const pr = await api("/api/super/peers");
+            peersPayload = pr;
+            if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+            d.data = pr;
+            d._dataSig = peerDataSig(pr);
+            d.busyPeerId = "";
+            patchPeerHeaderAndList();
+            toast(`已调整「${p.name}」为${peerModeInfo(next).short}`);
+            if (view === "auto" && autoTab === "integrations") loadAuto();
+          } catch (err) {
+            if (intModalDraft === d) {
+              d.busyPeerId = "";
+              patchPeerHeaderAndList();
+            }
+            toast(err.message, "attn");
+          }
+        }
+      });
+      item.addEventListener("pointerdown", () => { item._ptr = true; });
+    });
+  }
+
+  function populatePeerActionPopover(peerId) {
+    const d = intModalDraft;
+    const pop = $("#peer-action-popover");
+    const p = (d?.data?.peers || []).find((x) => x.id === peerId);
+    if (!d || !pop || !p) return;
+    const showAddr = !!d.showAddrIds[p.id];
+    const pingBusy = !!d.pingState[p.id]?.busy;
+    const isRevoked = p.status === "revoked_by_peer";
+    const roleMenu = supportsFocusGroup() ? "" : ' role="menu"';
+    const roleItem = supportsFocusGroup() ? "" : ' role="menuitem"';
+    pop.innerHTML = `<div class="pm-pop-list" focusgroup="menu nomemory"${roleMenu}>
+      ${!isRevoked ? `<button type="button" class="pm-pop-act"${roleItem} data-pm-act="ping" ${pingBusy ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14 0M8.5 16.05a6 6 0 0 1 7 0"/><circle cx="12" cy="19.5" r=".8" fill="currentColor" stroke="none"/></svg>
+        <span>${pingBusy ? "探测中…" : "测试连通"}</span>
+      </button>` : ""}
+      <button type="button" class="pm-pop-act"${roleItem} data-pm-act="addr">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>${showAddr ? "隐藏连接详情" : "查看连接详情"}</span>
+      </button>
+      <hr class="pm-pop-div">
+      <button type="button" class="pm-pop-act is-danger"${roleItem} data-pm-act="revoke">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg>
+        <span>移除 / 拉黑</span>
+      </button>
+    </div>`;
+
+    pop.querySelectorAll("[data-pm-act]").forEach((btn) => {
+      btn.addEventListener("pointerdown", () => { btn._ptr = true; });
+      btn.addEventListener("click", async () => {
+        const act = btn.dataset.pmAct;
+        peerPopOpenMeta.fromPointer = !!btn._ptr;
+        try { pop.hidePopover(); } catch {}
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        if (act === "ping") {
+          d.pingState[p.id] = { busy: true, ok: false, msg: "探测中…" };
+          patchPeerHeaderAndList();
+          try {
+            const res = await api(`/api/super/peers/${encodeURIComponent(p.id)}/ping`, { method: "POST" });
+            const latTxt = Number(res.latency_ms) > 0 ? `${res.latency_ms}ms` : "<1ms";
+            d.pingState[p.id] = res.ok
+              ? { busy: false, ok: true, msg: `已连通 · ${latTxt}${res.paused ? "（对方暂停）" : ""}` }
+              : { busy: false, ok: false, msg: res.error || "连接失败" };
+            if (res.ok) {
+              const pr = await api("/api/super/peers").catch(() => null);
+              if (pr && intModalDraft === d) { peersPayload = pr; d.data = pr; d._dataSig = peerDataSig(pr); }
+            }
+            if (intModalDraft === d) patchPeerHeaderAndList();
+          } catch (err) {
+            if (intModalDraft === d) {
+              d.pingState[p.id] = { busy: false, ok: false, msg: err.message };
+              patchPeerHeaderAndList();
+            }
+          }
+        } else if (act === "addr") {
+          d.showAddrIds[p.id] = !d.showAddrIds[p.id];
+          patchPeerHeaderAndList();
+        } else if (act === "revoke") {
+          d.confirmRevokeId = d.confirmRevokeId === p.id ? "" : p.id;
+          patchPeerHeaderAndList();
+        }
+      });
+    });
+  }
+
+  function bindPeerPopoverTrigger(triggerEl, popId, onBeforeOpen) {
+    if (!triggerEl) return;
+    let wasOpenOnDown = false;
+    triggerEl.addEventListener("pointerdown", () => {
+      const pop = $(popId);
+      wasOpenOnDown = isPeerPopOpen(pop) && peerPopAnchorEl === triggerEl;
+    });
+    triggerEl.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const pop = $(popId);
+      if (!pop) return;
+      if (wasOpenOnDown || (isPeerPopOpen(pop) && peerPopAnchorEl === triggerEl)) {
+        wasOpenOnDown = false;
+        try { pop.hidePopover(); } catch {}
+        return;
+      }
+      wasOpenOnDown = false;
+      const fromPointer = ev.detail !== 0;
+      onBeforeOpen();
+      openPeerPopover(pop, triggerEl, { fromPointer });
+    });
+    triggerEl.addEventListener("keydown", (ev) => {
+      if (ev.key !== "ArrowDown") return;
+      ev.preventDefault();
+      const pop = $(popId);
+      if (!pop) return;
+      onBeforeOpen();
+      openPeerPopover(pop, triggerEl, { fromPointer: false });
+    });
   }
 
   function syncPeerModalTabs() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const tList = $("#peer-tab-list"), tAdd = $("#peer-tab-add");
-    if (tList) {
-      const on = d.tab === "list";
-      tList.setAttribute("aria-selected", String(on));
-      tList.tabIndex = on ? 0 : -1;
-      tList.toggleAttribute?.("focusgroupstart", on);
+    for (const [id, key] of [
+      ["#peer-tab-friends", "friends"],
+      ["#peer-tab-card", "card"],
+      ["#peer-tab-add", "add"],
+    ]) {
+      const el = $(id);
+      if (!el) continue;
+      const on = d.tab === key;
+      el.setAttribute("aria-selected", String(on));
+      el.tabIndex = on ? 0 : -1;
+      el.toggleAttribute?.("focusgroupstart", on);
     }
-    if (tAdd) {
-      const on = d.tab === "add";
-      tAdd.setAttribute("aria-selected", String(on));
-      tAdd.tabIndex = on ? 0 : -1;
-      tAdd.toggleAttribute?.("focusgroupstart", on);
-    }
-    const pList = $("#peer-panel-list"), pAdd = $("#peer-panel-add");
-    if (pList) pList.hidden = d.tab !== "list";
+    const pFriends = $("#peer-panel-friends");
+    const pCard = $("#peer-panel-card");
+    const pAdd = $("#peer-panel-add");
+    if (pFriends) pFriends.hidden = d.tab !== "friends";
+    if (pCard) pCard.hidden = d.tab !== "card";
     if (pAdd) pAdd.hidden = d.tab !== "add";
-
-    for (const btn of intModal.querySelectorAll("[data-peer-add-sub]")) {
-      const on = btn.dataset.peerAddSub === d.addSub;
-      btn.classList.toggle("on", on);
-      btn.setAttribute("aria-pressed", String(on));
-    }
-    const sGen = $("#peer-sub-gen"), sScan = $("#peer-sub-scan");
-    if (sGen) sGen.hidden = d.addSub !== "gen";
-    if (sScan) sScan.hidden = d.addSub !== "scan";
   }
 
   function patchPeerQRCard() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const card = $("#peer-qr-card");
-    if (!card) return;
-    const data = d.data || { hub_name: "我的边牧" };
+    const data = d.data || { hub_id: "", hub_name: "我的边牧", addrs: [] };
     const inv = d.invite;
+    const plate = $("#peer-qr-plate");
     const qrTarget = peerInviteJoinURL(inv) || inv?.invite_code || "";
     const qrSrc = qrTarget ? `/api/qr?text=${encodeURIComponent(qrTarget)}` : "";
 
-    if (inv && qrSrc) {
-      card.classList.toggle("is-refreshing", !!d.inviteLoading);
-      let imgEl = $("#peer-qr-img", card);
-      if (!imgEl) {
-        card.innerHTML = `
-          <div class="peer-qr-top">
-            <div class="int-qr-frame"><img id="peer-qr-img" width="156" height="156" alt="好友边牧名片二维码" src="${qrSrc}"></div>
-            <div class="peer-qr-meta">
-              <div class="peer-qr-title">
-                <span id="peer-qr-hub-name">${esc(inv.hub_name || data.hub_name || "我的边牧")}</span>
-                <span class="peer-qr-badge">长期有效 · 需通过后接通</span>
-              </div>
-              <p class="peer-qr-hint">微信 / 飞书 / 系统相机扫码，或点击分享链接即可发起好友申请；须你点「通过」才正式接通。</p>
-              <div class="peer-qr-addrs" id="peer-qr-addrs">直连地址：${esc((inv.addrs || []).join(" · "))}</div>
-              <div class="peer-qr-btns">
-                <button type="button" class="btn primary small" id="peer-copy-invite">一键复制邀请链接</button>
-                <button type="button" class="btn small" id="peer-invite-regen" title="重置名片密钥，旧二维码与旧链接立即失效（不影响已配对好友）">重置名片</button>
-              </div>
-            </div>
-          </div>
-          <div class="int-code-line">
-            <span id="peer-qr-code-text" title="${esc(inv.invite_code)}">${esc(inv.invite_code)}</span>
-            <button type="button" class="btn ghost small" id="peer-qr-code-copy" data-copy="${esc(inv.invite_code)}">复制</button>
-          </div>`;
-        $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(true));
-        $("#peer-copy-invite", card)?.addEventListener("click", async () => {
-          if (!d.invite?.invite_code) return;
-          const share = peerShareText(d.invite, d.data?.hub_name || "我的边牧");
-          const ok = await copyText(share);
-          if (ok) toast("已复制好友名片分享链接（对方点开即可申请，需你通过）");
-          else toast("复制失败，请手动复制下方邀请码", "attn");
-        });
-      } else {
-        if (imgEl.getAttribute("src") !== qrSrc) imgEl.setAttribute("src", qrSrc);
-        setText($("#peer-qr-hub-name", card), inv.hub_name || data.hub_name || "我的边牧");
-        setText($("#peer-qr-addrs", card), `直连地址：${(inv.addrs || []).join(" · ")}`);
-        const codeEl = $("#peer-qr-code-text", card);
-        if (codeEl) {
-          setText(codeEl, inv.invite_code);
-          codeEl.title = inv.invite_code;
+    if (plate) {
+      if (inv && qrSrc) {
+        plate.classList.toggle("is-pulse", !!d.inviteLoading);
+        let imgEl = $("#peer-qr-img", plate);
+        if (!imgEl) {
+          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="好友边牧名片二维码" src="${qrSrc}">`;
+        } else if (imgEl.getAttribute("src") !== qrSrc) {
+          imgEl.setAttribute("src", qrSrc);
         }
-        const cpBtn = $("#peer-qr-code-copy", card);
-        if (cpBtn) cpBtn.dataset.copy = inv.invite_code;
+      } else {
+        plate.classList.remove("is-pulse");
+        if (d.inviteLoading) {
+          plate.innerHTML = `<span class="int-spinner" aria-label="正在加载二维码"></span>`;
+        } else {
+          plate.innerHTML = `<div class="pm-qr-fallback"><span>${d.inviteErr ? "加载失败" : "等待加载"}</span><button type="button" class="btn xs" id="peer-invite-retry">重试</button></div>`;
+          $("#peer-invite-retry", plate)?.addEventListener("click", () => ensurePeerInvite(false));
+        }
       }
-      const regenBtn = $("#peer-invite-regen", card);
-      if (regenBtn) regenBtn.disabled = !!d.inviteLoading;
-      return;
     }
 
-    card.classList.remove("is-refreshing");
-    if (d.inviteLoading) {
-      card.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2)"><span class="int-spinner" aria-hidden="true"></span><span>正在加载边牧个人名片二维码…</span></div>`;
-    } else if (d.inviteErr) {
-      card.innerHTML = `<div class="int-onboard-err"><span class="int-onboard-err-txt">${esc(d.inviteErr)}</span><button type="button" class="btn small" id="peer-invite-regen">重试</button></div>`;
-      $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(false));
-    } else {
-      card.innerHTML = `<button type="button" class="btn primary small" id="peer-invite-regen">加载边牧名片与二维码</button>`;
-      $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(false));
+    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || "我的边牧";
+    setText($("#peer-hub-name-text"), displayName);
+    if (!d.editingHubName) {
+      const inp = $("#peer-hub-name");
+      if (inp && inp.value !== displayName) inp.value = displayName;
     }
+
+    const errEl = $("#peer-card-err");
+    if (errEl) {
+      errEl.hidden = !d.inviteErr;
+      setText(errEl, d.inviteErr || "");
+    }
+
+    const copyBtn = $("#peer-copy-invite");
+    if (copyBtn) copyBtn.disabled = !inv?.invite_code;
+
+    setText($("#peer-default-mode-label"), peerModeInfo(d.genMode).label);
+
+    const addrsList = (inv?.addrs?.length ? inv.addrs : data.addrs) || [];
+    const addrsText = addrsList.length ? addrsList.map((a) => String(a).replace(/^https?:\/\//, "")).join(" · ") : "-";
+    const addrsEl = $("#peer-adv-addrs");
+    if (addrsEl) {
+      setText(addrsEl, addrsText);
+      addrsEl.title = addrsList.join(" · ");
+    }
+    const codeEl = $("#peer-adv-code");
+    if (codeEl) {
+      setText(codeEl, inv?.invite_code || (d.inviteLoading ? "加载中…" : "-"));
+      codeEl.title = inv?.invite_code || "";
+    }
+    setText($("#peer-adv-hub-id"), inv?.hub_id || data.hub_id || "-");
+
+    const resetAsk = $("#peer-reset-ask");
+    const resetDo = $("#peer-reset-do");
+    const resetConfirm = $("#peer-reset-confirm");
+    if (resetAsk) resetAsk.disabled = !!d.inviteLoading;
+    if (resetDo) resetDo.disabled = !!d.inviteLoading;
+    if (resetConfirm) resetConfirm.hidden = !d.resetConfirm;
   }
 
   function patchPeerScanPanel() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
     const data = d.data || { hub_id: "" };
-    const camBtn = $("#peer-scan-cam");
-    const stopBtn = $("#peer-scan-stop");
-    if (camBtn) camBtn.hidden = !!d.scanning;
-    if (stopBtn) stopBtn.hidden = !d.scanning;
+    setText($("#peer-scan-toggle-lbl"), d.scanning ? "停止扫码" : "扫码");
     const stageSlot = $("#peer-scan-stage-slot");
     if (stageSlot) {
       if (d.scanning) {
         if (!$("#peer-scan-video", stageSlot)) {
-          stageSlot.innerHTML = `<div class="peer-scan-stage">
+          stageSlot.innerHTML = `<div class="pm-scan-stage">
             <video id="peer-scan-video" autoplay playsinline muted></video>
-            <div class="peer-scan-frame" aria-hidden="true"></div>
-            <span class="peer-scan-tip">将镜头对准好友的边牧名片二维码</span>
+            <div class="pm-scan-reticle" aria-hidden="true"></div>
+            <div class="pm-scan-bar">
+              <span>将镜头对准好友的名片二维码</span>
+              <button type="button" id="peer-scan-stop-inline">停止</button>
+            </div>
           </div>`;
+          $("#peer-scan-stop-inline", stageSlot)?.addEventListener("click", () => {
+            stopPeerCameraScan();
+            patchPeerScanPanel();
+          });
         }
         stageSlot.hidden = false;
       } else {
@@ -10295,49 +10897,66 @@
       setText(noteSlot, d.scanNote || "");
     }
     const pasteEl = $("#peer-paste-input");
-    if (pasteEl && pasteEl.value !== d.pasteRaw) pasteEl.value = d.pasteRaw;
+    if (pasteEl) {
+      if (pasteEl.value !== d.pasteRaw) pasteEl.value = d.pasteRaw;
+      pasteEl.classList.toggle("has-code", String(d.pasteRaw || "").trim().length > 0);
+    }
     const nameEl = $("#peer-pair-name");
     if (nameEl && nameEl.value !== d.pairName) nameEl.value = d.pairName;
+    setText($("#peer-add-mode-label"), peerModeInfo(d.pairMode).label);
 
     const parsed = parsePeerInviteClient(d.pasteRaw, data.hub_id);
-    const compactLinkConfirm = !!(d.fromInviteLink && parsed?.ok && !d.scanning);
-    $("#peer-sub-scan")?.classList.toggle("is-link-confirm", compactLinkConfirm);
-    const scanActionsEl = $("#peer-scan-actions");
-    const pasteFieldEl = $("#peer-paste-field");
-    if (scanActionsEl) scanActionsEl.hidden = compactLinkConfirm;
-    if (pasteFieldEl) pasteFieldEl.hidden = compactLinkConfirm;
+    const compactConfirmed = !!(parsed?.ok && !d.scanning);
+    const inputWrap = $("#peer-add-input-wrap");
+    if (inputWrap) inputWrap.hidden = compactConfirmed;
+
     const parsedSlot = $("#peer-scan-parsed-slot");
     if (parsedSlot) {
       if (!parsed) {
         parsedSlot.hidden = true;
+        parsedSlot.classList.remove("is-err");
         parsedSlot.innerHTML = "";
-      } else {
+      } else if (parsed.ok) {
         parsedSlot.hidden = false;
-        parsedSlot.innerHTML = parsed.ok
-          ? `<div class="peer-parsed">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                <div>识别到好友边牧：<b>${esc(parsed.payload.hub_name || parsed.payload.hub_id)}</b></div>
-                ${compactLinkConfirm ? `<button type="button" class="btn ghost small" id="peer-link-show-manual" style="padding:2px 8px;min-height:24px;font-size:11.5px">更换 / 扫码</button>` : ""}
-              </div>
-              <div class="mono" style="font-size:11.5px">${esc((parsed.payload.addrs || []).join(" · "))}</div>
-            </div>`
-          : `<div class="peer-parsed is-err" role="alert">${esc(parsed.error)}</div>`;
-        $("#peer-link-show-manual", parsedSlot)?.addEventListener("click", () => {
+        parsedSlot.classList.remove("is-err");
+        parsedSlot.innerHTML = `
+          <div class="pm-parsed-left">
+            <span class="pm-sdot ok" aria-hidden="true"></span>
+            <div>
+              <div class="pm-parsed-title">已识别「${esc(parsed.payload.hub_name || parsed.payload.hub_id)}」的名片</div>
+              <div class="pm-parsed-sub">点下方按钮即可向对方发送好友申请</div>
+            </div>
+          </div>
+          <button type="button" class="btn ghost xs" id="peer-clear-parsed-btn">更换 / 扫码</button>`;
+        $("#peer-clear-parsed-btn", parsedSlot)?.addEventListener("click", () => {
+          d.pasteRaw = "";
+          d.pairName = "";
           d.fromInviteLink = false;
+          d.pairErr = "";
           patchPeerScanPanel();
           $("#peer-paste-input")?.focus();
         });
+      } else {
+        parsedSlot.hidden = false;
+        parsedSlot.classList.add("is-err");
+        parsedSlot.innerHTML = `
+          <div class="pm-parsed-left">
+            <span class="pm-sdot attn" aria-hidden="true"></span>
+            <div class="pm-parsed-sub">${esc(parsed.error)}</div>
+          </div>`;
       }
     }
     const errSlot = $("#peer-pair-err-slot");
     if (errSlot) {
       errSlot.hidden = !d.pairErr;
-      setText(errSlot, d.pairErr || "");
+      errSlot.innerHTML = d.pairErr
+        ? `<div class="pm-parsed-left"><span class="pm-sdot attn" aria-hidden="true"></span><div class="pm-parsed-sub">${esc(d.pairErr)}</div></div>`
+        : "";
     }
     const submitBtn = $("#peer-pair-submit");
     if (submitBtn) {
       submitBtn.disabled = !(!d.pairing && !!parsed?.ok);
-      setText(submitBtn, d.pairing ? "正在发送好友申请…" : "发送好友申请");
+      setText(submitBtn, d.pairing ? "正在发送申请…" : "发送好友申请");
     }
   }
 
@@ -10350,142 +10969,187 @@
     const outgoing = peers.filter((p) => p.status === "pending_outgoing");
     const paired = peers.filter((p) => p.status !== "pending_incoming" && p.status !== "pending_outgoing");
     const blocklist = Array.isArray(data.blocklist) ? data.blocklist : [];
-    const info = peerCardSummary(data);
 
-    setHTML($("#int-modal-state"), `<span class="sdot ${esc(info.state)}" aria-hidden="true"></span><span>${esc(info.stateLbl)}</span>`);
-    setText($("#peer-tab-list-cnt"), String(peers.length));
-    const tabBadge = $("#peer-tab-pending-badge");
-    if (tabBadge) {
-      tabBadge.hidden = incoming.length === 0;
-      setText(tabBadge, String(incoming.length));
+    // Tab badge rules: show restrained amber badge when incoming > 0; hide total count at 0 or when pending badge is visible.
+    const countEl = $("#peer-tab-friends-cnt");
+    const badgeEl = $("#peer-tab-pending-badge");
+    if (countEl) {
+      setText(countEl, String(peers.length));
+      countEl.hidden = peers.length === 0 || incoming.length > 0;
     }
-    setText($("#peer-foot-hub-id"), data.hub_id || "-");
+    if (badgeEl) {
+      setText(badgeEl, String(incoming.length));
+      badgeEl.hidden = incoming.length === 0;
+    }
 
     const slot = $("#peer-list-slot");
     if (!slot) return;
+
+    const blocklistHTML = blocklist.length ? `
+      <details class="pm-fold" style="margin-top:6px">
+        <summary>已拉黑 (${blocklist.length})</summary>
+        <div class="pm-adv-box">
+          ${blocklist.map((b) => `
+            <div class="pm-adv-row">
+              <span style="font-size:12.5px;color:var(--pm-fg-2)">${esc(b.name || b.hub_id)} <span class="mono" style="font-size:11px;color:var(--pm-fg-3)">${esc(b.hub_id)}</span></span>
+              <button type="button" class="btn ghost xs" data-peer-unblock="${esc(b.hub_id)}">解除</button>
+            </div>`).join("")}
+        </div>
+      </details>` : "";
+
+    if (!peers.length) {
+      slot.innerHTML = `
+        <div class="pm-empty-state">
+          <div class="pm-empty-glyph" aria-hidden="true">${INT_ICONS.peers}</div>
+          <h3>还没有好友边牧</h3>
+          <p>把你的名片分享给信任的伙伴，或粘贴对方发来的邀请链接。对方仅能向收件箱发消息，无法触碰你的终端与文件。</p>
+          <div class="pm-empty-acts">
+            <button type="button" class="btn primary sm" data-peer-jump-tab="card">查看我的名片</button>
+            <button type="button" class="btn sm" data-peer-jump-tab="add">添加好友</button>
+          </div>
+        </div>
+        ${blocklistHTML}`;
+      bindPeerListEvents(slot);
+      return;
+    }
+
     const incomingHTML = incoming.length ? `
-      <section class="peer-req-sec" aria-label="待审批好友申请">
-        <div class="peer-req-sec-head">
-          <span>待审批好友申请（${incoming.length}）</span>
-          <span style="font-weight:400;color:var(--fg-3)">通过前对方零收发权限</span>
+      <section class="pm-req-group" aria-label="待审批好友申请">
+        <div class="pm-sec-eyebrow is-attn">
+          <span>待你审批 · ${incoming.length}</span>
+          <span class="pm-sec-eyebrow-note">通过前零收发权限</span>
         </div>
         ${incoming.map((p) => {
           const busy = d.busyPeerId === p.id;
           const selMode = d.approveModes[p.id] || p.mode || "advise";
-          return `<article class="peer-card is-pending-in">
-            <div class="peer-card-top">
-              <div class="peer-card-ident">
-                <div class="peer-card-name">
-                  <span class="sdot paused" aria-hidden="true"></span>
-                  <span>${esc(p.name)}</span>
-                  <span class="peer-status-pill is-pending">待你审批</span>
-                </div>
-                <div class="peer-card-sub">
-                  ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
-                  <span class="mono">${esc(p.hub_id)}</span>
+          const metaNote = p.created_at ? `请求添加好友 · ${ago(p.created_at)}` : "请求添加好友";
+          return `<article class="pm-req-card">
+            <div class="pm-req-top">
+              <div class="pm-peer-ident">
+                <span class="pm-sdot attn" aria-hidden="true"></span>
+                <div class="pm-peer-name-col">
+                  <div class="pm-peer-name">${esc(p.name)}</div>
+                  <div class="pm-peer-meta"><span>${esc(metaNote)}</span></div>
                 </div>
               </div>
+              <button type="button" class="pm-pick" aria-expanded="false" data-peer-mode-target="approve" data-peer-id="${esc(p.id)}" ${busy ? "disabled" : ""}>
+                <span class="pm-pick-txt">${esc(peerModeInfo(selMode).label)}</span>
+                <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
             </div>
-            <div class="int-mode-list">
-              ${peerModeRadiosHTML("peer_approve_mode_" + p.id, selMode, `data-peer-approve-mode="${esc(p.id)}" ${busy ? "disabled" : ""}`)}
-            </div>
-            <div class="peer-card-acts">
-              <button type="button" class="btn primary small" data-peer-approve="${esc(p.id)}" ${busy ? "disabled" : ""}>${busy ? "处理中…" : "通过"}</button>
-              <button type="button" class="btn small" data-peer-reject="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝</button>
+            <div class="pm-req-acts">
+              <button type="button" class="btn primary sm" data-peer-approve="${esc(p.id)}" ${busy ? "disabled" : ""}>${busy ? "处理中…" : "通过"}</button>
+              <button type="button" class="btn sm" data-peer-reject="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝</button>
               <span class="spacer"></span>
-              <button type="button" class="btn ghost small peer-danger" data-peer-reject-block="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝并拉黑</button>
+              <button type="button" class="btn ghost xs pm-danger" data-peer-reject-block="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝并拉黑</button>
             </div>
           </article>`;
         }).join("")}
       </section>` : "";
 
-    const outgoingHTML = outgoing.length ? outgoing.map((p) => {
+    const rowsHTML = [...paired, ...outgoing].map((p) => {
       const busy = d.busyPeerId === p.id;
-      return `<article class="peer-card is-pending-out">
-        <div class="peer-card-top">
-          <div class="peer-card-ident">
-            <div class="peer-card-name">
-              <span class="sdot connecting" aria-hidden="true"></span>
-              <span>${esc(p.name)}</span>
-              <span class="peer-status-pill is-wait">已发送好友申请，等待对方通过</span>
+      if (p.status === "pending_outgoing") {
+        return `<div class="pm-friend-row">
+          <div class="pm-friend-main is-single-act">
+            <div class="pm-peer-ident">
+              <span class="pm-sdot wait" aria-hidden="true"></span>
+              <div class="pm-peer-name-col">
+                <div class="pm-peer-name">${esc(p.name)}</div>
+                <div class="pm-peer-meta"><span>已发申请，等待对方通过</span></div>
+              </div>
             </div>
-            <div class="peer-card-sub">
-              ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
-              <span>对方点「通过」后将自动切换为在线直连</span>
+            <div class="pm-friend-controls">
+              <button type="button" class="btn ghost xs" data-peer-cancel="${esc(p.id)}" ${busy ? "disabled" : ""}>撤回</button>
+            </div>
+          </div>
+        </div>`;
+      }
+
+      const isPaused = p.status === "paused";
+      const isRevoked = p.status === "revoked_by_peer";
+      const globalOff = data.enabled === false;
+      const dotCls = isRevoked || (p.status === "active" && globalOff) ? "muted" : isPaused ? "attn" : "ok";
+      const statusText = isRevoked
+        ? "对方已解除 / 拒绝"
+        : isPaused
+          ? "已暂停接收"
+          : globalOff
+            ? "总开关已暂停"
+            : `今日 ${Number(p.today_count) || 0} 条${p.last_ok_at ? ` · ${ago(p.last_ok_at)}` : ""}`;
+      const ping = d.pingState[p.id];
+      const showAddr = !!d.showAddrIds[p.id];
+      const confirming = d.confirmRevokeId === p.id;
+      const mInfo = peerModeInfo(p.mode || "advise");
+      const cleanAddr = String(p.primary_addr || "").replace(/^https?:\/\//, "");
+      const addrSummary = [cleanAddr, p.id ? `@${p.id}` : "", p.hub_id || ""].filter(Boolean).join(" · ");
+
+      return `<div class="pm-friend-row${isPaused || isRevoked ? " is-paused" : ""}">
+        <div class="pm-friend-main">
+          <div class="pm-peer-ident">
+            <span class="pm-sdot ${dotCls}" aria-hidden="true"></span>
+            <div class="pm-peer-name-col">
+              <div class="pm-peer-name">${esc(p.name)}</div>
+              <div class="pm-peer-meta tnum">
+                <span>${esc(statusText)}</span>
+                ${ping?.msg ? `<span class="${ping.busy ? "" : ping.ok ? "pm-ping-ok" : "pm-ping-err"}" role="status">· ${esc(ping.msg)}</span>` : ""}
+              </div>
+            </div>
+          </div>
+          <div class="pm-friend-controls">
+            ${!isRevoked ? `<button type="button" class="pm-pick is-quiet" aria-expanded="false" data-peer-mode-target="peer" data-peer-id="${esc(p.id)}" title="调整接待方式" ${busy ? "disabled" : ""}>
+              <span class="pm-pick-txt pm-lbl-desktop">${esc(mInfo.short)}</span>
+              <span class="pm-pick-txt pm-lbl-mobile">${esc(mInfo.label)}</span>
+              <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>` : ""}
+            <div class="pm-friend-ctrl-tail">
+              ${!isRevoked ? `<button type="button" class="switch" role="switch" aria-checked="${!isPaused ? "true" : "false"}" aria-label="${isPaused ? "恢复接收" : "暂停接收"} ${esc(p.name)}" data-peer-pause="${esc(p.id)}" title="${isPaused ? "点击恢复接收" : "点击暂停接收"}" ${busy ? "disabled" : ""}></button>` : ""}
+              <button type="button" class="icon-btn" aria-expanded="false" data-peer-more="${esc(p.id)}" aria-label="更多操作 ${esc(p.name)}" title="更多操作" ${busy ? "disabled" : ""}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>
+              </button>
             </div>
           </div>
         </div>
-        <div class="peer-card-acts">
-          <span class="spacer"></span>
-          <button type="button" class="btn ghost small" data-peer-cancel="${esc(p.id)}" ${busy ? "disabled" : ""}>撤回申请</button>
-        </div>
-      </article>`;
-    }).join("") : "";
+        ${showAddr ? `<div class="pm-addr-drawer">
+          <span>${esc(addrSummary || "-")}</span>
+          <button type="button" class="btn ghost xs" data-peer-hide-addr="${esc(p.id)}">收起</button>
+        </div>` : ""}
+        ${confirming ? `<div class="pm-inline-confirm" role="alert">
+          <span>断开与 <strong>${esc(p.name)}</strong> 的连接？</span>
+          <div class="pm-inline-confirm-btns">
+            <button type="button" class="btn ghost xs" data-peer-cancel-revoke>取消</button>
+            <button type="button" class="btn pm-danger xs" data-peer-do-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>仅移除</button>
+            <button type="button" class="btn pm-danger xs" data-peer-do-block="${esc(p.id)}" ${busy ? "disabled" : ""}>移除并拉黑</button>
+          </div>
+        </div>` : ""}
+      </div>`;
+    }).join("");
 
     slot.innerHTML = `
       ${incomingHTML}
-      <div class="peer-guard">
+      ${rowsHTML ? `<div class="pm-friend-list">${rowsHTML}</div>` : ""}
+      ${blocklistHTML}
+      <div class="pm-privacy-foot">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
-        <span>好友仅能往收件箱发消息，<strong>无法碰你的终端、文件、记忆，也不能直接派活</strong>；随时可一键暂停、移除或拉黑。</span>
-      </div>
-      ${outgoingHTML}
-      ${!peers.length ? `
-        <div class="peer-empty">
-          <p>还没有配对的好友边牧。把你的长期有效边牧名片链接发给同内网 / Tailscale 的同事，或扫码/粘贴对方的名片即可发起好友申请。</p>
-          <button type="button" class="btn primary small" id="peer-go-add-btn">分享我的边牧名片 / 添加好友</button>
-        </div>` : paired.map((p) => {
-          const isPaused = p.status === "paused";
-          const isRevoked = p.status === "revoked_by_peer";
-          const stDot = p.status === "active" ? (data.enabled !== false ? "connected" : "disabled") : isPaused ? "paused" : "disabled";
-          const stText = p.status === "active" ? (data.enabled !== false ? "活跃" : "总开关已暂停") : isPaused ? "已暂停" : "对方已解除 / 拒绝";
-          const ping = d.pingState[p.id];
-          const confirming = d.confirmRevokeId === p.id;
-          const busy = d.busyPeerId === p.id;
-          return `<article class="peer-card${isPaused || isRevoked ? " is-paused" : ""}">
-            <div class="peer-card-top">
-              <div class="peer-card-ident">
-                <div class="peer-card-name">
-                  <span class="sdot ${stDot}" aria-hidden="true"></span>
-                  <span>${esc(p.name)}</span>
-                  <span class="peer-id-pill">@${esc(p.id)}</span>
-                </div>
-                <div class="peer-card-sub">
-                  <span>${esc(stText)}</span>
-                  ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
-                  <span>今日 ${Number(p.today_count) || 0} 条</span>
-                  ${p.last_ok_at ? `<span>最近连通 ${esc(ago(p.last_ok_at))}</span>` : ""}
-                </div>
-              </div>
-              ${!isRevoked ? `<button type="button" class="switch" role="switch" aria-checked="${!isPaused ? "true" : "false"}" aria-label="${isPaused ? "恢复接收" : "暂停接收"} ${esc(p.name)}" data-peer-pause="${esc(p.id)}" ${busy ? "disabled" : ""}></button>` : ""}
-            </div>
-            <div class="int-mode-list">
-              ${peerModeRadiosHTML("peer_mode_" + p.id, p.mode || "advise", `data-peer-mode="${esc(p.id)}" ${busy || isRevoked ? "disabled" : ""}`)}
-            </div>
-            <div class="peer-card-acts">
-              <button type="button" class="btn small" data-peer-ping="${esc(p.id)}" ${ping?.busy || busy ? "disabled" : ""}>${ping?.busy ? "探测中…" : "测连通"}</button>
-              ${ping?.msg ? `<span class="peer-ping-msg ${ping.ok ? "ok" : "err"}" role="status">${esc(ping.msg)}</span>` : ""}
-              <span class="spacer"></span>
-              <button type="button" class="btn ghost small peer-danger" data-peer-ask-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>移除 / 拉黑</button>
-            </div>
-            ${confirming ? `<div class="peer-confirm-row" role="alert">
-              <span>立即吊销令牌并断开 <strong>${esc(p.name)}</strong>？</span>
-              <div class="peer-confirm-btns">
-                <button type="button" class="btn small" data-peer-cancel-revoke>取消</button>
-                <button type="button" class="btn small peer-danger" data-peer-do-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>仅移除</button>
-                <button type="button" class="btn small peer-danger" data-peer-do-block="${esc(p.id)}" ${busy ? "disabled" : ""}>移除并拉黑</button>
-              </div>
-            </div>` : ""}
-          </article>`;
-        }).join("")}
-      ${blocklist.length ? `<div class="peer-block-sec">
-        <h3 class="int-sec-title">已拉黑的 Hub（${blocklist.length}）</h3>
-        ${blocklist.map((b) => `<div class="peer-block-row">
-          <span><strong>${esc(b.name || b.hub_id)}</strong> <span class="mono muted">${esc(b.hub_id)}</span></span>
-          <button type="button" class="btn ghost small" data-peer-unblock="${esc(b.hub_id)}">解除拉黑</button>
-        </div>`).join("")}
-      </div>` : ""}`;
+        <span>好友仅能向收件箱发消息，无法访问本机终端、文件与记忆</span>
+      </div>`;
 
     bindPeerListEvents(slot);
+  }
+
+  function switchPeerTab(next) {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers") return;
+    if (next !== "friends" && next !== "card" && next !== "add") return;
+    hidePeerPopovers();
+    stopPeerCameraScan();
+    d.tab = next;
+    d.pairErr = "";
+    syncPeerModalTabs();
+    $("#int-modal-body").scrollTop = 0;
+    if (next === "friends") patchPeerHeaderAndList();
+    else if (next === "card") { patchPeerQRCard(); ensurePeerInvite(false); }
+    else if (next === "add") patchPeerScanPanel();
   }
 
   function renderPeerModal() {
@@ -10493,90 +11157,175 @@
     if (!d || intModalKind !== "peers" || !intModal) return;
     const data = d.data || { hub_id: "", hub_name: "我的边牧", enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
+    const pendingInCnt = peers.filter((x) => x.status === "pending_incoming").length;
+
+    bindPeerPopoverGlobals();
 
     if (!d._mounted) {
       d._mounted = true;
       $("#int-modal-icon").innerHTML = INT_ICONS.peers;
-      $("#int-modal-title").textContent = "好友边牧 · 受控收件箱";
-      $("#int-modal-sub").textContent = "内网 / Tailscale 直连 · 令牌仅存本机";
+      $("#int-modal-title").textContent = "好友边牧";
+      $("#int-modal-sub").textContent = "";
+      $("#int-modal-state").innerHTML = "";
 
       const tabsEl = $("#int-modal-tabs");
       if (tabsEl) {
         tabsEl.hidden = false;
         tabsEl.setAttribute("role", "tablist");
         tabsEl.setAttribute("focusgroup", "tablist nomemory");
-        tabsEl.setAttribute("aria-label", "好友边牧管理页签");
-        const pendingInCnt = peers.filter((x) => x.status === "pending_incoming").length;
+        tabsEl.setAttribute("aria-label", "好友边牧视图");
         tabsEl.innerHTML = `
-          <button type="button" role="tab" id="peer-tab-list" aria-selected="${d.tab === "list"}" ${d.tab === "list" ? "focusgroupstart" : ""} data-peer-tab="list">已配对好友 (<span id="peer-tab-list-cnt">${peers.length}</span>)<span class="peer-tab-badge" id="peer-tab-pending-badge" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span></button>
-          <button type="button" role="tab" id="peer-tab-add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""} data-peer-tab="add">扫码 / 添加好友</button>`;
+          <button type="button" role="tab" id="peer-tab-friends" data-peer-tab="friends" aria-selected="${d.tab === "friends"}" ${d.tab === "friends" ? "focusgroupstart" : ""}>
+            <span>好友</span>
+            <span class="pm-tab-count" id="peer-tab-friends-cnt" ${peers.length === 0 || pendingInCnt > 0 ? "hidden" : ""}>${peers.length}</span>
+            <span class="pm-tab-pending-pill" id="peer-tab-pending-badge" title="待审批申请" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span>
+          </button>
+          <button type="button" role="tab" id="peer-tab-card" data-peer-tab="card" aria-selected="${d.tab === "card"}" ${d.tab === "card" ? "focusgroupstart" : ""}>
+            <span>我的名片</span>
+          </button>
+          <button type="button" role="tab" id="peer-tab-add" data-peer-tab="add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""}>
+            <span>添加好友</span>
+          </button>`;
       }
 
       $("#int-modal-body").innerHTML = `
-        <div class="peer-panel" id="peer-panel-list" role="tabpanel" aria-labelledby="peer-tab-list" ${d.tab === "list" ? "" : "hidden"}>
-          <div class="peer-panel-inner" id="peer-list-slot"></div>
+        <div class="pm-panel" id="peer-panel-friends" role="tabpanel" aria-labelledby="peer-tab-friends" ${d.tab === "friends" ? "" : "hidden"}>
+          <div class="pm-panel-pad" id="peer-list-slot"></div>
         </div>
-        <div class="peer-panel" id="peer-panel-add" role="tabpanel" aria-labelledby="peer-tab-add" ${d.tab === "add" ? "" : "hidden"}>
-          <div class="peer-panel-inner">
-            <div class="seg" role="group" aria-label="添加好友方式">
-              <button type="button" class="${d.addSub === "gen" ? "on" : ""}" data-peer-add-sub="gen" aria-pressed="${d.addSub === "gen"}">我的边牧名片</button>
-              <button type="button" class="${d.addSub === "scan" ? "on" : ""}" data-peer-add-sub="scan" aria-pressed="${d.addSub === "scan"}">扫码 / 粘贴加好友</button>
+        <div class="pm-panel" id="peer-panel-card" role="tabpanel" aria-labelledby="peer-tab-card" ${d.tab === "card" ? "" : "hidden"}>
+          <div class="pm-panel-pad">
+            <section class="pm-card-hero" aria-label="我的边牧名片">
+              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="边牧名片二维码"></div>
+              <div class="pm-card-info">
+                <div class="pm-inline-name-row">
+                  <button type="button" class="pm-inline-name-btn" id="peer-name-display-btn" title="点击修改名片昵称">
+                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || "我的边牧")}</span>
+                    <svg class="pm-inline-name-pencil" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  </button>
+                  <form class="pm-inline-name-editor" id="peer-name-editor-form" hidden>
+                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="名片昵称" placeholder="输入边牧昵称" value="${esc(d.hubNameInput)}">
+                    <button type="submit" class="icon-btn" id="peer-hub-name-save" aria-label="保存昵称" title="保存 (Enter)">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+                    </button>
+                  </form>
+                </div>
+                <p class="pm-card-desc">扫码或点链接发起申请，经你同意后接通。</p>
+                <p class="pm-card-err" id="peer-card-err" role="alert" hidden></p>
+                <div class="pm-card-cta-row">
+                  <button type="button" class="btn primary" id="peer-copy-invite" disabled>
+                    <svg id="peer-copy-invite-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    <span id="peer-copy-invite-lbl">复制邀请链接</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <div class="pm-setting-row first">
+              <div class="pm-setting-copy">
+                <div class="pm-setting-label">新好友默认接待</div>
+                <div class="pm-setting-sub">对方来信时边牧的默认处理方式</div>
+              </div>
+              <button type="button" class="pm-pick" id="peer-default-mode-btn" aria-expanded="false" data-peer-mode-target="default">
+                <span class="pm-pick-txt" id="peer-default-mode-label">${esc(peerModeInfo(d.genMode).label)}</span>
+                <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
             </div>
-            <div class="int-sec" id="peer-sub-gen" ${d.addSub === "gen" ? "" : "hidden"}>
-              <div class="peer-qr-card" id="peer-qr-card"></div>
-              <div class="int-field">
-                <div class="int-field-label"><span>我的边牧名片昵称</span><span class="opt">展示给好友</span></div>
-                <div class="int-input-row">
-                  <input id="peer-hub-name" type="text" maxlength="40" value="${esc(d.hubNameInput)}" placeholder="例如：Alex的边牧">
-                  <button type="button" class="btn small" id="peer-hub-name-save">保存并刷新名片</button>
+
+            <details class="pm-fold" id="peer-adv-details">
+              <summary>连接与高级详情</summary>
+              <div class="pm-adv-box">
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">直连地址</span>
+                  <div class="pm-adv-v">
+                    <span class="pm-adv-code" id="peer-adv-addrs">-</span>
+                    <button type="button" class="btn ghost xs" id="peer-adv-copy-addrs">复制</button>
+                  </div>
+                </div>
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">名片码</span>
+                  <div class="pm-adv-v">
+                    <span class="pm-adv-code" id="peer-adv-code">-</span>
+                    <button type="button" class="btn ghost xs" id="peer-adv-copy-code">复制</button>
+                  </div>
+                </div>
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">本机标识</span>
+                  <div class="pm-adv-v">
+                    <span class="pm-adv-code" id="peer-adv-hub-id">${esc(data.hub_id || "-")}</span>
+                  </div>
+                </div>
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">名片密钥</span>
+                  <div class="pm-adv-v">
+                    <button type="button" class="btn xs" id="peer-reset-ask">重置名片</button>
+                  </div>
+                </div>
+                <div class="pm-reset-confirm" id="peer-reset-confirm" hidden>
+                  <span>旧二维码与链接将立即失效，不影响已配对好友。</span>
+                  <div class="pm-inline-confirm-btns">
+                    <button type="button" class="btn ghost xs" id="peer-reset-cancel">取消</button>
+                    <button type="button" class="btn pm-danger xs" id="peer-reset-do">确认重置</button>
+                  </div>
                 </div>
               </div>
-              <div class="int-field">
-                <div class="int-field-label"><span>新好友默认接待方式</span></div>
-                <div class="int-mode-list">
-                  ${peerModeRadiosHTML("peer_gen_mode", d.genMode, 'data-peer-gen-mode')}
+            </details>
+          </div>
+        </div>
+        <div class="pm-panel" id="peer-panel-add" role="tabpanel" aria-labelledby="peer-tab-add" ${d.tab === "add" ? "" : "hidden"}>
+          <div class="pm-panel-pad">
+            <div class="pm-add-block">
+              <div id="peer-add-input-wrap">
+                <div class="pm-field-head">
+                  <label class="pm-field-label" for="peer-paste-input">邀请链接或名片码</label>
+                  <div class="pm-scan-inline">
+                    <button type="button" class="pm-scan-link" id="peer-scan-toggle">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></svg>
+                      <span id="peer-scan-toggle-lbl">扫码</span>
+                    </button>
+                    <button type="button" class="pm-scan-link" id="peer-scan-img-btn">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 15-4.5-4.5a1.5 1.5 0 0 0-2.1 0L6 19"/></svg>
+                      <span>识别图片</span>
+                    </button>
+                    <input id="peer-scan-file" type="file" accept="image/*" class="visually-hidden">
+                  </div>
+                </div>
+                <div id="peer-scan-stage-slot" hidden></div>
+                <div class="pm-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
+                <textarea id="peer-paste-input" class="pm-paste-area" rows="2" spellcheck="false" placeholder="粘贴好友分享的邀请链接、整段文案或名片码">${esc(d.pasteRaw)}</textarea>
+              </div>
+
+              <div class="pm-parsed-card" id="peer-scan-parsed-slot" hidden></div>
+              <div class="pm-parsed-card is-err" id="peer-pair-err-slot" role="alert" hidden></div>
+
+              <div>
+                <div class="pm-setting-row" style="padding-top:4px">
+                  <div class="pm-setting-copy">
+                    <label class="pm-setting-label" for="peer-pair-name">备注名</label>
+                    <div class="pm-setting-sub">可选，留空自动使用对方昵称</div>
+                  </div>
+                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="例如：周远的边牧">
+                </div>
+                <div class="pm-setting-row last">
+                  <div class="pm-setting-copy">
+                    <div class="pm-setting-label">对他的接待方式</div>
+                    <div class="pm-setting-sub">配对通过后生效，随时可调整</div>
+                  </div>
+                  <button type="button" class="pm-pick" id="peer-add-mode-btn" aria-expanded="false" data-peer-mode-target="add">
+                    <span class="pm-pick-txt" id="peer-add-mode-label">${esc(peerModeInfo(d.pairMode).label)}</span>
+                    <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
                 </div>
               </div>
-            </div>
-            <div class="int-sec" id="peer-sub-scan" ${d.addSub === "scan" ? "" : "hidden"}>
-              <div class="peer-scan-actions" id="peer-scan-actions">
-                <button type="button" class="btn primary small" id="peer-scan-cam">摄像头扫码加好友</button>
-                <button type="button" class="btn small" id="peer-scan-stop" hidden>停止摄像头扫码</button>
-                <button type="button" class="btn small" id="peer-scan-img-btn">从相册 / 截图识别</button>
-                <input id="peer-scan-file" type="file" accept="image/*" capture="environment" hidden>
-              </div>
-              <div id="peer-scan-stage-slot" hidden></div>
-              <div class="peer-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
-              <div class="int-field" id="peer-paste-field">
-                <div class="int-field-label"><span>或直接粘贴好友分享链接 / 邀请码</span></div>
-                <textarea id="peer-paste-input" class="mono" rows="3" style="word-break:break-all;font-size:12px" placeholder="粘贴整段分享文案、https://lihuanyu0w0.github.io/collie/join/#... 或 collie-peer://v1/..." spellcheck="false">${esc(d.pasteRaw)}</textarea>
-                <p class="int-field-help">支持整段分享文案、/join/# 链接或邀请码；发出申请后须对方点「通过」才正式接通，连接凭据仅保存在各自本机。</p>
-              </div>
-              <div id="peer-scan-parsed-slot" hidden></div>
-              <div class="peer-parsed is-err" id="peer-pair-err-slot" role="alert" hidden></div>
-              <div class="int-field">
-                <div class="int-field-label"><span>给对方的备注名</span><span class="opt">可选</span></div>
-                <input id="peer-pair-name" type="text" maxlength="40" value="${esc(d.pairName)}" placeholder="留空自动使用对方名片昵称">
-              </div>
-              <div class="int-field">
-                <div class="int-field-label"><span>我对这位好友的接待方式</span></div>
-                <div class="int-mode-list">
-                  ${peerModeRadiosHTML("peer_pair_mode", d.pairMode, 'data-peer-pair-mode')}
-                </div>
-              </div>
-              <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:2px">
+
+              <div class="pm-add-foot">
+                <span class="pm-add-foot-note">须对方点「通过」才正式接通</span>
                 <button type="button" class="btn primary" id="peer-pair-submit" disabled>发送好友申请</button>
               </div>
             </div>
           </div>
         </div>`;
 
-      $("#int-modal-foot").innerHTML = `
-        <span class="peer-foot-id">本机 Hub：<span class="mono" id="peer-foot-hub-id">${esc(data.hub_id || "-")}</span></span>
-        <div class="int-sheet-foot-right">
-          <button type="button" class="btn small" id="peer-modal-done">完成</button>
-        </div>`;
-
+      $("#int-modal-foot").innerHTML = "";
       bindPeerModalStaticEvents();
     }
 
@@ -10590,77 +11339,176 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers") return;
 
-    $("#peer-modal-done")?.addEventListener("click", () => closeIntModal("done"));
-
+    // Single-level 3-tab switching + keyboard arrows
     const tabs = [...intModal.querySelectorAll("[data-peer-tab]")];
     tabs.forEach((btn, idx) => {
       btn.addEventListener("click", () => {
         const next = btn.dataset.peerTab;
         if (next === d.tab) return;
-        stopPeerCameraScan();
-        d.tab = next;
-        syncPeerModalTabs();
-        patchPeerScanPanel();
-        $("#int-modal-body").scrollTop = 0;
-        if (next === "add" && d.addSub === "gen") ensurePeerInvite(false);
+        switchPeerTab(next);
       });
       btn.addEventListener("keydown", (ev) => {
-        if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight" && ev.key !== "Home" && ev.key !== "End") return;
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
         ev.preventDefault();
-        const nextIdx = ev.key === "Home" ? 0 : ev.key === "End" ? tabs.length - 1 : (idx + (ev.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        const nextIdx = ev.key === "Home" ? 0
+          : ev.key === "End" ? tabs.length - 1
+          : (idx + (ev.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
         const target = tabs[nextIdx];
         if (!target) return;
-        stopPeerCameraScan();
-        d.tab = target.dataset.peerTab;
-        syncPeerModalTabs();
-        patchPeerScanPanel();
+        switchPeerTab(target.dataset.peerTab);
         target.focus();
-        if (d.tab === "add" && d.addSub === "gen") ensurePeerInvite(false);
       });
     });
 
-    intModal.querySelectorAll("[data-peer-add-sub]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const sub = btn.dataset.peerAddSub;
-        if (sub === d.addSub) return;
-        stopPeerCameraScan();
-        d.addSub = sub;
-        d.pairErr = "";
-        syncPeerModalTabs();
-        patchPeerScanPanel();
-        if (sub === "gen") ensurePeerInvite(false);
-      });
-    });
-
-    $("#peer-hub-name")?.addEventListener("focus", () => { d.editingHubName = true; });
-    $("#peer-hub-name")?.addEventListener("input", (ev) => { d.hubNameInput = ev.target.value; });
-    $("#peer-hub-name-save")?.addEventListener("click", async () => {
-      const name = String(d.hubNameInput || "").trim();
-      if (!name) { toast("昵称不能为空", "attn"); return; }
+    // Inline nickname editing (click -> input -> Enter / blur auto-save, Esc cancel)
+    let nameBlurTimer = 0;
+    const openNameEditor = () => {
+      const dispBtn = $("#peer-name-display-btn");
+      const form = $("#peer-name-editor-form");
+      const inp = $("#peer-hub-name");
+      if (!dispBtn || !form || !inp) return;
+      d.editingHubName = true;
+      dispBtn.hidden = true;
+      form.hidden = false;
+      inp.value = d.data?.hub_name || d.hubNameInput || "";
+      inp.focus();
+      inp.select?.();
+    };
+    const commitNameEditor = async (save) => {
+      clearTimeout(nameBlurTimer);
+      nameBlurTimer = 0;
+      const form = $("#peer-name-editor-form");
+      const dispBtn = $("#peer-name-display-btn");
+      const inp = $("#peer-hub-name");
+      if (!form || form.hidden || d.savingHubName) return;
+      const curName = String(d.data?.hub_name || "").trim();
+      const next = String(inp?.value || "").trim();
+      form.hidden = true;
+      if (dispBtn) dispBtn.hidden = false;
+      d.editingHubName = false;
+      if (!save || !next || next === curName) {
+        if (inp) inp.value = curName;
+        return;
+      }
+      d.savingHubName = true;
+      d.hubNameInput = next;
+      setText($("#peer-hub-name-text"), next);
       try {
-        await api("/api/super/peers/settings", { body: { hub_name: name } });
-        d.editingHubName = false;
+        await api("/api/super/peers/settings", { body: { hub_name: next } });
         const pr = await api("/api/super/peers");
         peersPayload = pr;
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
         d.data = pr;
         d._dataSig = peerDataSig(pr);
-        d.hubNameInput = pr.hub_name || name;
+        d.hubNameInput = pr.hub_name || next;
         d.invitesByMode = {};
-        toast("已更新本机名片昵称");
+        d.savingHubName = false;
         await ensurePeerInvite(false);
-      } catch (err) { toast(err.message, "attn"); }
+        toast("已更新名片昵称并刷新二维码");
+      } catch (err) {
+        d.savingHubName = false;
+        if (intModalDraft === d) patchPeerQRCard();
+        toast(err.message, "attn");
+      }
+    };
+
+    const nameInput = $("#peer-hub-name");
+    const nameIme = trackIME(nameInput);
+    $("#peer-name-display-btn")?.addEventListener("click", openNameEditor);
+    $("#peer-name-editor-form")?.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      if (isIMEComposing(ev, nameIme)) return;
+      commitNameEditor(true);
+    });
+    $("#peer-hub-name-save")?.addEventListener("mousedown", (ev) => {
+      // Prevent blur from firing before submit button click.
+      ev.preventDefault();
+    });
+    nameInput?.addEventListener("input", (ev) => { d.hubNameInput = ev.target.value; });
+    nameInput?.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        commitNameEditor(false);
+        $("#peer-name-display-btn")?.focus();
+        return;
+      }
+      if (ev.key === "Enter" && (isIMEComposing(ev, nameIme) || isPostCompositionSafariEnter(ev, nameIme))) {
+        ev.preventDefault();
+      }
+    });
+    nameInput?.addEventListener("blur", () => {
+      clearTimeout(nameBlurTimer);
+      nameBlurTimer = setTimeout(() => { commitNameEditor(true); }, 80);
     });
 
-    intModal.querySelectorAll("[data-peer-gen-mode]").forEach((r) => {
-      r.addEventListener("change", () => {
-        if (!r.checked) return;
-        d.genMode = r.value;
-        ensurePeerInvite(false);
-      });
+    // Primary CTA: copy invite link
+    $("#peer-copy-invite")?.addEventListener("click", async () => {
+      if (!d.invite?.invite_code) return;
+      const share = peerShareText(d.invite, d.data?.hub_name || "我的边牧");
+      const ok = await copyText(share);
+      if (!ok) {
+        toast("复制失败，请展开下方高级详情手动复制名片码", "attn");
+        return;
+      }
+      toast("已复制邀请链接，发给好友即可申请");
+      const lbl = $("#peer-copy-invite-lbl");
+      const ico = $("#peer-copy-invite-ico");
+      if (lbl) setText(lbl, "已复制链接");
+      if (ico) ico.innerHTML = `<path d="M5 13l4 4L19 7"/>`;
+      clearTimeout(peerCopyBtnTimer);
+      peerCopyBtnTimer = setTimeout(() => {
+        if (!intModal?.open || intModalKind !== "peers") return;
+        const l = $("#peer-copy-invite-lbl");
+        const i = $("#peer-copy-invite-ico");
+        if (l) setText(l, "复制邀请链接");
+        if (i) i.innerHTML = `<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>`;
+      }, 1800);
     });
 
-    $("#peer-scan-cam")?.addEventListener("click", () => startPeerCameraScan());
-    $("#peer-scan-stop")?.addEventListener("click", () => { stopPeerCameraScan(); patchPeerScanPanel(); });
+    // Advanced details copy & two-step reset card confirmation
+    $("#peer-adv-copy-addrs")?.addEventListener("click", async () => {
+      const addrs = (d.invite?.addrs?.length ? d.invite.addrs : d.data?.addrs) || [];
+      if (!addrs.length) return;
+      const ok = await copyText(addrs.map((a) => String(a).replace(/^https?:\/\//, "")).join(" · "));
+      toast(ok ? "已复制直连地址" : "复制失败", ok ? undefined : "attn");
+    });
+    $("#peer-adv-copy-code")?.addEventListener("click", async () => {
+      if (!d.invite?.invite_code) return;
+      const ok = await copyText(d.invite.invite_code);
+      toast(ok ? "已复制名片码" : "复制失败", ok ? undefined : "attn");
+    });
+    $("#peer-reset-ask")?.addEventListener("click", () => {
+      d.resetConfirm = true;
+      patchPeerQRCard();
+    });
+    $("#peer-reset-cancel")?.addEventListener("click", () => {
+      d.resetConfirm = false;
+      patchPeerQRCard();
+    });
+    $("#peer-reset-do")?.addEventListener("click", () => {
+      ensurePeerInvite(true);
+    });
+
+    // Default reception & Add Friend reception custom popover triggers
+    bindPeerPopoverTrigger($("#peer-default-mode-btn"), "#peer-mode-popover", () => {
+      d.activeModeTarget = { kind: "default", triggerEl: $("#peer-default-mode-btn") };
+      populatePeerModePopover(d.activeModeTarget);
+    });
+    bindPeerPopoverTrigger($("#peer-add-mode-btn"), "#peer-mode-popover", () => {
+      d.activeModeTarget = { kind: "add", triggerEl: $("#peer-add-mode-btn") };
+      populatePeerModePopover(d.activeModeTarget);
+    });
+
+    // Add Friend scan / image decode / paste / submit
+    $("#peer-scan-toggle")?.addEventListener("click", () => {
+      if (d.scanning) {
+        stopPeerCameraScan();
+        patchPeerScanPanel();
+      } else {
+        startPeerCameraScan();
+      }
+    });
     $("#peer-scan-img-btn")?.addEventListener("click", () => $("#peer-scan-file")?.click());
     $("#peer-scan-file")?.addEventListener("change", (ev) => {
       const f = ev.target.files?.[0];
@@ -10679,9 +11527,6 @@
       patchPeerScanPanel();
     });
     $("#peer-pair-name")?.addEventListener("input", (ev) => { d.pairName = ev.target.value; });
-    intModal.querySelectorAll("[data-peer-pair-mode]").forEach((r) => {
-      r.addEventListener("change", () => { d.pairMode = r.value; });
-    });
 
     $("#peer-pair-submit")?.addEventListener("click", async () => {
       const parsed = parsePeerInviteClient(d.pasteRaw, d.data?.hub_id);
@@ -10701,13 +11546,12 @@
         d.pairing = false;
         d.pasteRaw = "";
         d.pairName = "";
-        d.tab = "list";
-        syncPeerModalTabs();
-        patchPeerHeaderAndList();
+        d.fromInviteLink = false;
+        switchPeerTab("friends");
         patchPeerScanPanel();
         toast(res.pending
-          ? `已向 ${res.peer?.name || "好友边牧"} 发送好友申请，等待对方通过`
-          : `已与 ${res.peer?.name || "好友边牧"} 完成双向直连配对`);
+          ? `已向「${res.peer?.name || "好友边牧"}」发送好友申请`
+          : `已与「${res.peer?.name || "好友边牧"}」完成双向直连配对`);
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
@@ -10722,17 +11566,32 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !slot) return;
 
-    $("#peer-go-add-btn", slot)?.addEventListener("click", () => {
-      d.tab = "add";
-      d.addSub = "gen";
-      syncPeerModalTabs();
-      ensurePeerInvite(false);
+    slot.querySelectorAll("[data-peer-jump-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => switchPeerTab(btn.dataset.peerJumpTab));
     });
 
-    slot.querySelectorAll("[data-peer-approve-mode]").forEach((r) => {
-      r.addEventListener("change", () => {
-        if (!r.checked) return;
-        d.approveModes[r.dataset.peerApproveMode] = r.value;
+    slot.querySelectorAll("[data-peer-mode-target]").forEach((btn) => {
+      bindPeerPopoverTrigger(btn, "#peer-mode-popover", () => {
+        d.activeModeTarget = {
+          kind: btn.dataset.peerModeTarget,
+          peerId: btn.dataset.peerId,
+          triggerEl: btn,
+        };
+        populatePeerModePopover(d.activeModeTarget);
+      });
+    });
+
+    slot.querySelectorAll("[data-peer-more]").forEach((btn) => {
+      bindPeerPopoverTrigger(btn, "#peer-action-popover", () => {
+        d.activeActionPeerId = btn.dataset.peerMore;
+        populatePeerActionPopover(d.activeActionPeerId);
+      });
+    });
+
+    slot.querySelectorAll("[data-peer-hide-addr]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        delete d.showAddrIds[btn.dataset.peerHideAddr];
+        patchPeerHeaderAndList();
       });
     });
 
@@ -10749,16 +11608,16 @@
           });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           delete d.approveModes[pid];
           d.busyPeerId = "";
           patchPeerHeaderAndList();
-          toast(`已通过 ${res.peer?.name || "好友边牧"} 的申请，双方已直连`);
+          toast(`已通过「${res.peer?.name || "好友边牧"}」的申请`);
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
+          if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
           toast(err.message, "attn");
         }
       });
@@ -10774,16 +11633,16 @@
         });
         const pr = await api("/api/super/peers");
         peersPayload = pr;
+        if (intModalDraft !== d) return;
         d.data = pr;
         d._dataSig = peerDataSig(pr);
         delete d.approveModes[pid];
         d.busyPeerId = "";
         patchPeerHeaderAndList();
-        toast(block ? "已拒绝好友申请并拉黑该 Hub" : "已拒绝该好友申请");
+        toast(block ? "已拒绝申请并拉黑该边牧" : "已拒绝该好友申请");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
-        d.busyPeerId = "";
-        patchPeerHeaderAndList();
+        if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
         toast(err.message, "attn");
       }
     };
@@ -10799,6 +11658,7 @@
           await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "DELETE" });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           d.busyPeerId = "";
@@ -10806,8 +11666,7 @@
           toast("已撤回好友申请");
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
+          if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
           toast(err.message, "attn");
         }
       });
@@ -10824,6 +11683,7 @@
           await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "PATCH", body: { status: nextStatus } });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           d.busyPeerId = "";
@@ -10831,67 +11691,12 @@
           toast(nextStatus === "paused" ? "已暂停接收该好友来信" : "已恢复接收该好友来信");
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
+          if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
           toast(err.message, "attn");
         }
       });
     });
 
-    slot.querySelectorAll("[data-peer-mode]").forEach((r) => {
-      r.addEventListener("change", async () => {
-        const pid = r.dataset.peerMode;
-        const nextMode = r.value;
-        d.busyPeerId = pid;
-        patchPeerHeaderAndList();
-        try {
-          await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "PATCH", body: { mode: nextMode } });
-          const pr = await api("/api/super/peers");
-          peersPayload = pr;
-          d.data = pr;
-          d._dataSig = peerDataSig(pr);
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
-          toast(`已切换接待方式：${PEER_MODE_TEXT[nextMode] || nextMode}`);
-          if (view === "auto" && autoTab === "integrations") loadAuto();
-        } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
-          toast(err.message, "attn");
-        }
-      });
-    });
-
-    slot.querySelectorAll("[data-peer-ping]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const pid = btn.dataset.peerPing;
-        d.pingState[pid] = { busy: true, ok: false, msg: "" };
-        patchPeerHeaderAndList();
-        try {
-          const res = await api(`/api/super/peers/${encodeURIComponent(pid)}/ping`, { method: "POST" });
-          const latTxt = Number(res.latency_ms) > 0 ? `${res.latency_ms}ms` : "<1ms";
-          d.pingState[pid] = res.ok
-            ? { busy: false, ok: true, msg: `连通 · ${latTxt}${res.paused ? "（对方总开关暂停）" : ""}` }
-            : { busy: false, ok: false, msg: res.error || "连接失败" };
-          if (res.ok) {
-            const pr = await api("/api/super/peers").catch(() => null);
-            if (pr) { peersPayload = pr; d.data = pr; d._dataSig = peerDataSig(pr); }
-          }
-          patchPeerHeaderAndList();
-        } catch (err) {
-          d.pingState[pid] = { busy: false, ok: false, msg: err.message };
-          patchPeerHeaderAndList();
-        }
-      });
-    });
-
-    slot.querySelectorAll("[data-peer-ask-revoke]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const pid = btn.dataset.peerAskRevoke;
-        d.confirmRevokeId = d.confirmRevokeId === pid ? "" : pid;
-        patchPeerHeaderAndList();
-      });
-    });
     slot.querySelector("[data-peer-cancel-revoke]")?.addEventListener("click", () => {
       d.confirmRevokeId = "";
       patchPeerHeaderAndList();
@@ -10904,16 +11709,16 @@
         await api(`/api/super/peers/${encodeURIComponent(pid)}${block ? "?block=1" : ""}`, { method: "DELETE" });
         const pr = await api("/api/super/peers");
         peersPayload = pr;
+        if (intModalDraft !== d) return;
         d.data = pr;
         d._dataSig = peerDataSig(pr);
         d.confirmRevokeId = "";
         d.busyPeerId = "";
         patchPeerHeaderAndList();
-        toast(block ? "已立即吊销令牌并拉黑该 Hub" : "已立即吊销令牌并移除好友");
+        toast(block ? "已移除并拉黑该好友" : "已移除该好友");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
-        d.busyPeerId = "";
-        patchPeerHeaderAndList();
+        if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
         toast(err.message, "attn");
       }
     };
@@ -10927,10 +11732,11 @@
           await api(`/api/super/peers/blocklist/${encodeURIComponent(hid)}`, { method: "DELETE" });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           patchPeerHeaderAndList();
-          toast("已从黑名单移除");
+          toast("已解除拉黑");
         } catch (err) { toast(err.message, "attn"); }
       });
     });
@@ -11476,11 +12282,11 @@
     if (!matched.length) return "";
     return `<span class="mem-crew">${matched.map((w) => {
       const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
-      const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+      const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : `#/w/${encodeURIComponent(w.name)}`;
       const st = workerStatus(w);
       const disp = workerDisplayName(w);
       const tip = [w.name, KIND_LABEL[w.kind] || w.kind, STATUS_LABEL[st] || st].filter(Boolean).join(" · ");
-      return `<a ${href ? `href="${href}"` : ""} title="${esc(tip)}"><span class="dot ${esc(st)}"></span>${esc(disp)}</a>`;
+      return `<a href="${href}" data-open-worker="${esc(w.name)}"${pane ? ` data-pane-id="${esc(pane)}"` : ""}${past ? ` data-hist-id="${esc(past.id)}"` : ""} title="${esc(tip)}"><span class="dot ${esc(st)}"></span>${esc(disp)}</a>`;
     }).join("")}</span>`;
   }
 
@@ -12020,17 +12826,32 @@
     });
   }
 
+  function inboxRowHTML(t) {
+    const id = String(t.id ?? "");
+    const expanded = inboxExpanded.has(id);
+    const textId = inboxTextId(id);
+    return `<li class="row inbox-row${expanded ? " is-expanded is-expandable" : ""}" data-inbox-id="${esc(id)}">
+        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
+        <div class="inbox-main"><div class="meta"><b>#${esc(id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
+        <div class="text inbox-text" id="${esc(textId)}">${esc(t.text)}</div>
+        <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${expanded ? "收起" : "展开"} #${esc(id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${expanded ? "收起" : "展开"}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
+        <span class="right">${when(t.at)}</span></li>`;
+  }
+
   function inboxHTML(ts, ths = []) {
     const multiThread = ths.length > 1;
-    if (!multiThread || (inboxThread && !ths.some((th) => th.id === inboxThread))) inboxThread = "";
-    const shown = inboxThread ? ts.filter((t) => t.thread === inboxThread) : ts;
+    if (!multiThread || (inboxThread && !ths.some((th) => th.id === inboxThread))) {
+      inboxThread = "";
+    }
+    if (!multiThread) inboxRoutesOpen = false;
+    const shown = filteredInboxTriggers(ts);
     const activeWorkers = (sup.workers || []).filter((w) => !w.ended).map((w) => w.name);
     let threadBar = "";
     if (multiThread) {
       const selTh = inboxThread ? ths.find((th) => th.id === inboxThread) : null;
       const subsChips = (th) => {
         if (!th) return "";
-        if (th.id === "chat:main") return `<span class="muted">→ Collie（主线程）</span>`;
+        if (th.id === "chat:main") return `<div class="inbox-subs"><span class="muted">→ Collie（主会话）</span></div>`;
         const subs = th.subscribers || [];
         const pills = subs.length
           ? subs.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")
@@ -12041,33 +12862,32 @@
           : "";
         return `<div class="inbox-subs"><span>订阅：</span>${pills}${adder}</div>`;
       };
-      const allSubsFold = !selTh ? `<details class="inbox-subs-fold"><summary>线程与订阅管理（${ths.length} 条线程）</summary>
-        <div class="card"><ul class="rows">${ths.map((th) => `<li class="row">
+      const routesToggle = !selTh
+        ? `<button type="button" class="inbox-routes-btn${inboxRoutesOpen ? " is-open" : ""}" data-act="inbox-routes-toggle" aria-expanded="${inboxRoutesOpen ? "true" : "false"}" aria-controls="inbox-routes-panel"><span>订阅路由</span><svg class="inbox-routes-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button>`
+        : "";
+      const routesPanel = !selTh
+        ? `<div class="inbox-routes-panel" id="inbox-routes-panel"${inboxRoutesOpen ? "" : " hidden"}><div class="card inbox-routes-card"><ul class="rows">${ths.map((th) => `<li class="row inbox-route-row">
           <span class="badge">${th.triggers?.length || 0}</span>
-          <div><div class="meta"><b>${esc(th.id)}</b>${th.id === "chat:main" ? "<span>→ Collie（主线程）</span>" : th.subscribers?.length ? `<span class="inbox-subs">${th.subscribers.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")}</span>` : "<span>→ Collie</span>"}</div></div>
-          <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div></details>` : "";
+          <div class="inbox-route-main"><div class="meta"><button type="button" class="inbox-route-id" data-inbox-pick-thread="${esc(th.id)}" title="筛选该来源">${esc(th.id)}</button>${th.id === "chat:main" ? `<span class="muted">→ Collie（主会话）</span>` : th.subscribers?.length ? `<span class="inbox-subs">${th.subscribers.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")}</span>` : `<span class="muted">→ Collie</span>`}</div></div>
+          <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div></div>`
+        : "";
       threadBar = `<div class="inbox-bar">
-        <label class="inbox-filter">线程<select id="inbox-thread-filter" data-pick="compact" data-title="按线程筛选">
-          <option value="" ${!inboxThread ? "selected" : ""}>全部线程（${ths.length}）</option>
-          ${ths.map((th) => `<option value="${esc(th.id)}" data-sub="${esc((th.subscribers?.length ? "订阅：" + th.subscribers.join(", ") : "→ Collie") + " · " + (th.triggers?.length || 0) + " 条")}" ${inboxThread === th.id ? "selected" : ""}>${esc(th.id)}</option>`).join("")}
+        <label class="inbox-filter"><span class="inbox-filter-lbl">事件来源</span><select id="inbox-thread-filter" data-pick="compact" data-title="按事件来源筛选">
+          <option value="" ${!inboxThread ? "selected" : ""}>全部来源（${ths.length}）</option>
+          ${ths.map((th) => `<option value="${esc(th.id)}" data-sub="${esc((th.subscribers?.length ? "订阅：" + th.subscribers.join(", ") : th.id === "chat:main" ? "→ Collie（主会话）" : "→ Collie") + " · " + (th.triggers?.length || 0) + " 条")}" ${inboxThread === th.id ? "selected" : ""}>${esc(th.id)}</option>`).join("")}
         </select></label>
-        ${selTh ? subsChips(selTh) : ""}
-      </div>${allSubsFold}`;
+        ${selTh ? subsChips(selTh) : routesToggle}
+      </div>${routesPanel}`;
     }
     const visible = shown.slice(0, inboxRenderLimit);
     const moreCount = Math.max(0, shown.length - visible.length);
+    const feedFoot = shown.length > 0
+      ? (moreCount > 0
+        ? `<div class="inbox-feed-foot" id="inbox-feed-foot" data-inbox-sentinel="more" role="status" aria-live="polite"><span class="inbox-feed-status">正在加载更多…</span></div>`
+        : `<div class="inbox-feed-foot is-done" id="inbox-feed-foot"><span class="inbox-feed-status">已显示全部 ${shown.length} 条</span></div>`)
+      : "";
     return `${threadBar}
-      <div class="card"><ul class="rows">${visible.length ? visible.map((t) => {
-        const id = String(t.id ?? "");
-        const expanded = inboxExpanded.has(id);
-        const textId = inboxTextId(id);
-        return `<li class="row inbox-row${expanded ? " is-expanded is-expandable" : ""}" data-inbox-id="${esc(id)}">
-        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
-        <div class="inbox-main"><div class="meta"><b>#${esc(id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
-        <div class="text inbox-text" id="${esc(textId)}">${esc(t.text)}</div>
-        <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${expanded ? "收起" : "展开"} #${esc(id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${expanded ? "收起" : "展开"}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
-        <span class="right">${when(t.at)}</span></li>`;
-      }).join("") : `<li class="empty-row">${inboxThread ? "这条线程里还没有事件" : "收件箱是空的"}</li>`}</ul></div>${moreCount > 0 ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="inbox-more">加载更早 ${Math.min(40, moreCount)} 条（已显示 ${visible.length} / ${shown.length} 条）</button></div>` : ""}`;
+      <div class="card"><ul class="rows" id="inbox-list">${visible.length ? visible.map(inboxRowHTML).join("") : `<li class="empty-row">${inboxThread ? "该来源里还没有事件" : "收件箱是空的"}</li>`}</ul></div>${feedFoot}`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -12702,20 +13522,7 @@
 
   $("#auto-body").addEventListener("change", async (e) => {
     if (e.target.id === "inbox-thread-filter") {
-      inboxThread = e.target.value;
-      inboxRenderLimit = 40;
-      $("#auto-body")._inboxRendered = false;
-      if (autoCache.inbox) {
-        const body = $("#auto-body");
-        body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
-        body._inboxRendered = true;
-        body._renderedTab = "inbox";
-        body._tabRendered = true;
-        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
-        syncInboxOverflow(body);
-      } else {
-        loadAuto();
-      }
+      selectInboxThread(e.target.value);
       return;
     }
     if (e.target.id === "inbox-sub-add") {
@@ -12731,6 +13538,8 @@
   });
 
   $("#auto-body").addEventListener("click", async (e) => {
+    const wkLink = e.target.closest('.mem-crew a, a[data-open-worker], a[href^="#/w/"], a[href^="#/p/"], a[href^="#/h/"]');
+    if (wkLink && openWorkerFromLink(wkLink, e, "", { allowAnyView: true })) return;
     const inboxBtn = e.target.closest("button[data-inbox-toggle]");
     if (inboxBtn) {
       const row = inboxBtn.closest(".inbox-row");
@@ -12844,19 +13653,16 @@
       if (box) loadMoreEndedTimers(box, { reset: false });
       return;
     }
-    if (t.dataset.act === "inbox-more") {
-      inboxRenderLimit += 40;
-      const body = $("#auto-body");
-      if (autoCache.inbox && body) {
-        const prevTop = body.scrollTop;
-        body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
-        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
-        syncInboxOverflow(body);
-        markProgrammaticScroll();
-        body.scrollTop = prevTop;
-      } else {
-        loadAuto();
-      }
+    if (t.dataset.act === "inbox-routes-toggle") {
+      inboxRoutesOpen = !inboxRoutesOpen;
+      t.classList.toggle("is-open", inboxRoutesOpen);
+      t.setAttribute("aria-expanded", inboxRoutesOpen ? "true" : "false");
+      const panel = $("#auto-body")?.querySelector?.("#inbox-routes-panel");
+      if (panel) panel.hidden = !inboxRoutesOpen;
+      return;
+    }
+    if (t.dataset.inboxPickThread) {
+      selectInboxThread(t.dataset.inboxPickThread);
       return;
     }
     if (t.dataset.act === "mem-search-clear") {
@@ -13328,6 +14134,10 @@
       renderHist();
     }
     if (changed && view === "collie") renderSuper();
+    if (changed && activeWorkerKey && !wdPaneId) {
+      syncWorkerDrawerMeta();
+      if (!wdThreadEl?._msgs && resolveWorkerContext().past) openWorkerDrawerStream({ preserve: true });
+    }
     if (view === "ext" && extCur?.startsWith("h:")) renderHistHead(extCur.slice(2));
   }
   const ago = (t) => {
@@ -13653,9 +14463,9 @@
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
     if (ev.target.closest(".item-th-btn")) return;
     const item = ev.target.closest("a.item[data-side-worker]");
-    if (!item || view !== "collie" || innerWidth <= 1000) return;
+    if (!item) return;
     ev.preventDefault();
-    openWorkerDrawer({ worker: item.dataset.sideWorker, paneId: item.dataset.paneId || "" });
+    openWorkerFromAnywhere({ worker: item.dataset.sideWorker, paneId: item.dataset.paneId || "" });
   };
   $("#live-list").addEventListener("click", (ev) => {
     if (ev.target.closest("[data-act=live-more]")) {
@@ -13672,16 +14482,12 @@
   $("#rail-live")?.addEventListener("click", (ev) => {
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
     const a = ev.target.closest("a.sr-agent[data-rail-pane]");
-    if (!a || innerWidth <= 1000) return;
+    if (!a) return;
     const worker = a.dataset.railWorker || "";
     const paneId = a.dataset.railPane || "";
     if (!worker && !paneId) return;
     ev.preventDefault();
-    if (view !== "collie") {
-      location.hash = "#/collie";
-      if (view !== "collie") route();
-    }
-    openWorkerDrawer({ worker, paneId });
+    openWorkerFromAnywhere({ worker, paneId });
   });
   $("#rail-new-btn")?.addEventListener("click", () => openLauncher());
   $("#rail-peers")?.addEventListener("click", () => openPeerModal("auto"));
@@ -14544,7 +15350,10 @@
   // ───────────────────────────── one agent: header
   function renderHead() {
     const v = find(current);
-    if (!v) return;
+    if (!v) {
+      if (view === "pane" && current) clearDetailLive();
+      return;
+    }
     markSeen(v);
     const wLabel = agentLabelOf(v);
     const hasAlias = !!(v.is_agent && v.name && v.name !== ROUTER && wLabel && wLabel !== v.name);
@@ -14827,7 +15636,7 @@
       else drawLog(f.text, pendingRestore);
       pendingRestore = null;
     });
-    stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
+    stream.addEventListener("gone", () => { clearDetailLive(); $("#gone").hidden = false; closeStream(); });
   }
   function closeStream() {
     paneOpenSeq++;
@@ -15070,11 +15879,15 @@
 
   // ───────────────────────────── one agent: conversation
   let showRaw = false;
+  function clearDetailLive() {
+    lastLive = null;
+    const box = $("#live");
+    if (box) { box.hidden = true; box.innerHTML = ""; box._html = ""; }
+    $("#thread")?.classList?.remove("asking");
+  }
   function resetChat() {
     $("#thread").innerHTML = "";
-    $("#thread").classList.remove("asking");
-    $("#live").hidden = true;
-    $("#live").innerHTML = "";
+    clearDetailLive();
     $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; $("#thread")._restore = null; showRaw = false;
   }
   function openChat(id, restore = null) {
@@ -15091,7 +15904,7 @@
     stream.addEventListener("messages", (e) => alive() && drawThread(JSON.parse(e.data))); // an older computer
     stream.addEventListener("log", (e) => alive() && drawFallback(JSON.parse(e.data).text));
     stream.addEventListener("live", (e) => alive() && drawLive(JSON.parse(e.data)));
-    stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
+    stream.addEventListener("gone", () => { clearDetailLive(); $("#gone").hidden = false; closeStream(); });
   }
   // Threads on a .viewer.chatbg scroll the viewer around them.
   const scroller = (el) => el.closest(".viewer.chatbg") || el;
@@ -15204,6 +16017,193 @@
     input.value = b.dataset.text;
     form.requestSubmit();
   });
+  const SUBAGENT_TOOL_RE = /^(?:invoke_subagent|agent|task|spawn_agent)$/i;
+  const UUID_FULL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const SUBAGENT_ID_RE = /"(?:conversationId|agentId|conversation_id|agent_id)"\s*:\s*"([^"]+)"/;
+  const LONG_TOOL_KEY_RE = /^(?:prompt|message|brief|systemprompt|system_prompt|description|content|replacement|target|script|text|body)$/i;
+
+  function unwrapToolVal(v) {
+    if (typeof v !== "string") return v;
+    const s = v.trim();
+    if (s.length >= 2 && ((s[0] === '"' && s[s.length - 1] === '"') || (s[0] === "{" && s[s.length - 1] === "}") || (s[0] === "[" && s[s.length - 1] === "]"))) {
+      try { return JSON.parse(s); } catch {}
+    }
+    return v;
+  }
+  function parseToolJSON(raw) {
+    if (typeof raw !== "string") return null;
+    const s = raw.trim();
+    if (!s.startsWith("{") || !s.endsWith("}")) return null;
+    try {
+      const obj = JSON.parse(s);
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+      const out = {};
+      for (const [k, v] of Object.entries(obj)) out[k] = unwrapToolVal(v);
+      return out;
+    } catch { return null; }
+  }
+  function toolArg(obj, keys) {
+    for (const k of keys) if (k in obj && obj[k] != null) return obj[k];
+    for (const k of keys) {
+      const lk = k.toLowerCase();
+      for (const [mk, mv] of Object.entries(obj)) if (mk.toLowerCase() === lk && mv != null) return mv;
+    }
+    return null;
+  }
+  function toolScalar(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v.trim();
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    if (Array.isArray(v)) return v.map(toolScalar).filter(Boolean).join(", ");
+    return "";
+  }
+  function firstToolLine(s) {
+    for (const raw of String(s || "").replace(/\r\n/g, "\n").split("\n")) {
+      const l = raw.trim().replace(/^[#>*•\-]+\s*/, "").replace(/\s+/g, " ").trim();
+      if (l) return l;
+    }
+    return "";
+  }
+  function shortToolRef(s) {
+    const t = String(s || "").trim();
+    return UUID_FULL_RE.test(t) ? t.slice(0, 8) : t;
+  }
+  function formatToolParams(obj) {
+    const keys = Object.keys(obj).filter((k) => k.toLowerCase() !== "toolsummary").sort((a, b) => {
+      const la = LONG_TOOL_KEY_RE.test(a), lb = LONG_TOOL_KEY_RE.test(b);
+      return la !== lb ? (la ? 1 : -1) : a.toLowerCase().localeCompare(b.toLowerCase());
+    });
+    const parts = [];
+    for (const k of keys) {
+      const v = obj[k];
+      if (v == null) continue;
+      let text = "", multi = false;
+      if (typeof v === "string") {
+        text = v.trim();
+        multi = text.includes("\n") || text.length > 100;
+      } else if (typeof v === "number" || typeof v === "boolean") {
+        text = String(v);
+      } else {
+        try { text = JSON.stringify(v, null, 2); multi = text.includes("\n"); } catch {}
+      }
+      if (!text) continue;
+      parts.push(multi ? `${parts.length ? "\n" : ""}${k}:\n${text}` : `${k}: ${text}`);
+    }
+    return parts.join("\n");
+  }
+  function summarizeToolObj(name, obj) {
+    const low = String(name || "").toLowerCase();
+    const str = (...ks) => toolScalar(toolArg(obj, ks));
+    if (low === "generate_image") {
+      const img = str("ImageName", "image_name", "name");
+      const ratio = str("AspectRatio", "aspect_ratio");
+      const pr = firstToolLine(str("Prompt", "prompt"));
+      const head = img && ratio ? `${img} (${ratio})` : (img || ratio);
+      return [head, pr].filter(Boolean).join(" · ");
+    }
+    if (low === "send_message") {
+      const rcpt = shortToolRef(str("Recipient", "recipient", "to", "target"));
+      const body = firstToolLine(str("Message", "message", "content", "text"));
+      return [rcpt ? `→ ${rcpt}` : "", body].filter(Boolean).join(" · ");
+    }
+    for (const k of ["command", "cmd", "CommandLine", "file_path", "path", "Path", "AbsolutePath", "TargetFile", "pattern", "query", "url", "toolSummary", "description", "title", "summary", "message", "prompt", "brief", "text", "task", "action", "name"]) {
+      const v = firstToolLine(str(k));
+      if (v) return v;
+    }
+    const pairs = [];
+    for (const [k, v] of Object.entries(obj)) {
+      if (k.toLowerCase() === "toolsummary") continue;
+      const sv = shortToolRef(firstToolLine(toolScalar(v)));
+      if (!sv) continue;
+      pairs.push(`${k}: ${sv.length > 60 ? sv.slice(0, 60) + " …" : sv}`);
+      if (pairs.length >= 3) break;
+    }
+    return pairs.join(" · ");
+  }
+  function extractSubagentId(text) {
+    const m = SUBAGENT_ID_RE.exec(String(text || ""));
+    return m ? m[1] : "";
+  }
+  function normalizeToolView(t) {
+    const name = String(t.name || "");
+    const rawIn = String(t.input || "");
+    const out = String(t.output || "");
+    let sub = t.subagent || null;
+    let summary = rawIn;
+    let detail = String(t.detail || "");
+    if (!sub) {
+      const parsed = parseToolJSON(rawIn);
+      if (parsed) {
+        const isSwarmAdd = /^swarm$/i.test(name) && /^add$/i.test(toolScalar(toolArg(parsed, ["action"])));
+        if (SUBAGENT_TOOL_RE.test(name) || isSwarmAdd) {
+          const model = toolScalar(toolArg(parsed, ["Model", "model"]));
+          sub = {
+            type: isSwarmAdd ? "swarm" : toolScalar(toolArg(parsed, ["TypeName", "type_name", "subagent_type", "agent_type", "type"])),
+            role: toolScalar(toolArg(parsed, ["Role", "role", "description", "nickname", "name"])),
+            prompt: toolScalar(toolArg(parsed, ["Prompt", "prompt", "brief", "message"])),
+            model: /^inherit$/i.test(model) ? "" : model,
+          };
+          summary = firstToolLine(sub.prompt) || [sub.role, sub.type].filter(Boolean).join(" · ");
+        } else {
+          summary = summarizeToolObj(name, parsed) || rawIn;
+          if (!detail) detail = formatToolParams(parsed);
+        }
+      } else if (SUBAGENT_TOOL_RE.test(name)) {
+        sub = { type: "", role: "", prompt: "" };
+      }
+    }
+    if (sub) {
+      const role = String(sub.role || "").trim();
+      const type = String(sub.type || "").trim();
+      const title = role || type || name || "subagent";
+      const typeTag = type && type !== title ? type : "";
+      const modelTag = sub.model && !/^inherit$/i.test(sub.model) ? String(sub.model).trim() : "";
+      const prompt = String(sub.prompt || "").trim();
+      let brief = firstToolLine(summary || prompt);
+      if (brief === title) brief = "";
+      const subId = String(sub.id || "").trim() || extractSubagentId(out);
+      return { isSubagent: true, title, typeTag, modelTag, brief, prompt, output: out, subId, error: !!t.error };
+    }
+    return { isSubagent: false, name, summary, detail, output: out, error: !!t.error };
+  }
+  function renderToolItem(t, k, open) {
+    const v = normalizeToolView(t);
+    const cls = v.error ? "err" : (v.output ? "" : "pending");
+    const isOpen = open.has(String(k));
+    if (v.isSubagent) {
+      const hasBody = !!(v.prompt || v.output);
+      const stateLabel = v.error ? "出错" : (!v.output ? "运行中" : "");
+      const body = hasBody
+        ? `<div class="sub-body">`
+          + (v.prompt ? `<div class="tool-sec"><div class="tool-sec-h"><span>任务指令</span></div><pre class="tool-pre sub-prompt">${esc(v.prompt)}</pre></div>` : "")
+          + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>返回结果</span>${v.subId ? `<span class="tool-sec-meta">${esc(v.subId.slice(0, 8))}</span>` : ""}</div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
+          + `</div>`
+        : "";
+      return `<details class="tool subagent ${cls}${hasBody ? " has-body" : ""}" data-i="${k}"${isOpen ? " open" : ""}>`
+        + `<summary class="sub-sum">`
+        + `<span class="sub-head"><span class="sub-dot" aria-hidden="true"></span><span class="sub-role">${esc(v.title)}</span>`
+        + (v.typeTag ? `<span class="sub-tag">${esc(v.typeTag)}</span>` : "")
+        + (v.modelTag ? `<span class="sub-meta">${esc(v.modelTag)}</span>` : "")
+        + (stateLabel ? `<span class="sub-state">${esc(stateLabel)}</span>` : "")
+        + `</span>`
+        + (v.brief ? `<span class="sub-brief">${esc(v.brief)}</span>` : "")
+        + `</summary>${body}</details>`;
+    }
+    const hasBody = !!(v.detail || v.output);
+    let body = "";
+    if (v.detail) {
+      body = `<div class="tool-detail">`
+        + `<div class="tool-sec"><div class="tool-sec-h"><span>参数</span></div><pre class="tool-pre">${esc(v.detail)}</pre></div>`
+        + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>输出</span></div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
+        + `</div>`;
+    } else if (v.output) {
+      body = `<pre>${esc(v.output)}</pre>`;
+    }
+    return `<details class="tool ${cls}${hasBody ? " has-body" : ""}" data-i="${k}"${isOpen ? " open" : ""}>`
+      + `<summary><span class="tname">${esc(v.name)}</span><span class="targ">${esc(v.summary)}</span></summary>`
+      + body + `</details>`;
+  }
+
   function drawThread(msgs, el = $("#thread"), empty = "还没有对话。发一条消息开始吧。") {
     const rest = el._restore;
     // Just opened: start at the latest message, unless restoring a scroll position.
@@ -15222,19 +16222,14 @@
         const start = i;
         while (i < msgs.length && msgs[i].kind === "tool") i++;
         const run = msgs.slice(start, i);
-        const row = (t, k) => {
-          const cls = t.error ? "err" : (t.output ? "" : "pending");
-          return `<details class="tool ${cls}" data-i="${k}" ${open.has(String(k)) ? "open" : ""}>`
-            + `<summary><span class="tname">${esc(t.name)}</span><span class="targ">${esc(t.input)}</span></summary>`
-            + (t.output ? `<pre>${esc(t.output)}</pre>` : "") + `</details>`;
-        };
+        const row = (t, k) => renderToolItem(t, k, open);
         if (run.length <= 3 || !prefs.fold()) {
           html += `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
           cut();
           continue;
         }
         const key = "run" + start;
-        const names = [...new Set(run.map((t) => t.name))].slice(0, 4).join("、");
+        const names = [...new Set(run.map((t) => (t.subagent?.type || t.subagent?.role || t.name)))].slice(0, 4).join("、");
         const errs = run.filter((t) => t.error).length;
         html += `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>
           <summary><span class="n">${run.length} 个步骤</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${errs} 个出错</b>` : ""}</span></summary>
@@ -17398,15 +18393,26 @@
   let wdTaskNote = "";
   let wdMode = store.get("wdMode", "chat");
   let wdComposerOpen = false;
+  let wdWasLive = false;
+  let wdLastLiveTitle = "";
+  let wdLastLivePaneId = "";
   let workerWide = drawerWide;
   let _lastWorkerW = 0;
   let _lastDrawerW = 460;
 
   const SIDE_RAIL_W = 54;
+  const expandedSideW = () => Math.max(268, Math.min(300, 108 + innerWidth * 0.16));
+  const isDesktopDrawerViewport = () => {
+    if (innerWidth <= THREAD_DESKTOP_MIN) return false;
+    if (typeof matchMedia === "function" && matchMedia("(min-width: 1px)").matches) {
+      return matchMedia("(min-width: 1181px)").matches;
+    }
+    return true;
+  };
   const currentSideW = () => {
     if (innerWidth <= 760) return 0;
     if (innerWidth > 1000 && $("#app")?.classList?.contains("side-collapsed")) return SIDE_RAIL_W;
-    return $(".side")?.offsetWidth || (innerWidth <= 1100 ? 268 : 300);
+    return $(".side")?.offsetWidth || expandedSideW();
   };
   const isAnyRightDrawerOpen = () => {
     const appEl = $("#app");
@@ -17464,7 +18470,7 @@
     const hasT = appEl.classList.contains("has-thread");
     const hasW = appEl.classList.contains("has-worker");
     appEl.classList.toggle("has-drawer", hasF || hasT || hasW);
-    const wide = innerWidth > THREAD_DESKTOP_MIN && (
+    const wide = isDesktopDrawerViewport() && (
       (hasT && threadWide) || (hasF && fileWide) || (hasW && workerWide)
     );
     appEl.classList.toggle("drawer-wide", wide);
@@ -17479,6 +18485,10 @@
     const innerW = Math.max(240, mainW - gutter);
     const effColW = Math.min(colW, Math.max(240, innerW - 40));
     return { innerW, effColW, padLeft: (mainW - effColW) / 2 };
+  }
+  function composerMetrics(mainW, colW) {
+    const effCompW = Math.min(colW + 24, Math.max(240, mainW - 24));
+    return { effCompW, padLeft: (mainW - effCompW) / 2 };
   }
 
   // Exact cubic-bezier(0.22, 1, 0.36, 1) solver so JS rAF glides match CSS side-card / drawer curves 1:1.
@@ -17513,28 +18523,38 @@
   function captureCollieVisualShift(wasAnyDrawer, prevOpenW = 0) {
     if (_drawerGlideState) {
       const st = _drawerGlideState;
-      const off = st.basePadLeft != null ? (st.basePadLeft + st.curChatX) : st.curChatX;
+      const thread = st.basePadLeft != null ? (st.basePadLeft + st.curChatX) : st.curChatX;
+      const comp = st.baseCompPadLeft != null ? (st.baseCompPadLeft + st.curCompX) : (st.curCompX ?? thread);
       finishDrawerGlide(true);
-      return off;
+      return { thread, comp };
     }
     if (wasAnyDrawer) {
       const sc = view === "collie" ? viewScroller("collie") : null;
       const canvas = Math.max(480, innerWidth - currentSideW());
       const gutter = scrollerGutterW(sc);
-      const fromM = threadMetrics(Math.max(320, canvas - (prevOpenW || _lastDrawerW || 0)), currentColW(), gutter);
-      const fullM = threadMetrics(canvas, currentColW(), gutter);
-      return fromM.padLeft - fullM.padLeft;
+      const colW = currentColW();
+      const openMainW = Math.max(320, canvas - (prevOpenW || _lastDrawerW || 0));
+      const fromM = threadMetrics(openMainW, colW, gutter);
+      const fullM = threadMetrics(canvas, colW, gutter);
+      const fromC = composerMetrics(openMainW, colW);
+      const fullC = composerMetrics(canvas, colW);
+      return { thread: fromM.padLeft - fullM.padLeft, comp: fromC.padLeft - fullC.padLeft };
     }
-    return _collieShiftCur || 0;
+    const cur = _collieShiftCur || 0;
+    return { thread: cur, comp: cur };
   }
-  // Unified 60 FPS lockstep GPU glide for desktop right-drawer open / close / widen / narrow (#t12980).
-  // Zero mid-animation reflow, exact gutter-aware threadMetrics alignment (0.00px Frame-0 / Frame-N jump).
+  // Unified 60 FPS lockstep GPU glide for desktop right-drawer open / close / widen / narrow (#t12980, #t13467).
+  // Separate gutter-aware threadMetrics vs gutter-free composerMetrics + frame-0 column cap on tight viewports
+  // guarantee 0.00px Frame-0 / Frame-N jump and 0 overlap frames across tablets and desktops alike.
   function runDesktopDrawerGlide(cfg = {}) {
     const { kind, drawerEl, fromW = 0, toW = 0, startOffset = 0, targetShift = 0, onDone = null } = cfg;
     const appEl = $("#app");
+    const colEl = $("#v-collie");
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced || innerWidth <= THREAD_DESKTOP_MIN || typeof requestAnimationFrame !== "function" || !appEl) {
+    if (reduced || !isDesktopDrawerViewport() || typeof requestAnimationFrame !== "function" || !appEl) {
       finishDrawerGlide(true);
+      clearCollieShiftInline();
+      _collieShiftCur = kind === "close" ? targetShift : 0;
       if (onDone) onDone();
       return false;
     }
@@ -17549,15 +18569,35 @@
     const gutter = scrollerGutterW(sc);
     const colW = currentColW();
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
-    const chatEls = view === "collie"
-      ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
+    const threadEls = view === "collie"
+      ? [$("#super-thread"), $("#super-working")].filter((e) => e?.style)
       : [];
+    const compEl = view === "collie" && $("#super-composer")?.style ? $("#super-composer") : null;
     const headActsEl = view === "collie" ? $("#v-collie .d-head-acts") : null;
-    let chatFrom = 0, chatTo = 0, drawerFrom = 0, drawerTo = 0;
+    const startThreadOff = (startOffset && typeof startOffset === "object") ? (startOffset.thread || 0) : (typeof startOffset === "number" ? startOffset : 0);
+    const startCompOff = (startOffset && typeof startOffset === "object") ? (startOffset.comp ?? startThreadOff) : startThreadOff;
+    const hasExplicitStart = (startOffset && typeof startOffset === "object") || typeof startOffset === "number";
+    let chatFrom = 0, chatTo = 0, compFrom = 0, compTo = 0, drawerFrom = 0, drawerTo = 0;
     let stageCls = "";
     let fadeDrawer = false;
     let moveDrawer = false;
     let basePadLeft = null;
+    let baseCompPadLeft = null;
+    let useColCap = false;
+    const applyColCap = (capColW, capCompW) => {
+      if (!colEl?.style || view !== "collie") return;
+      useColCap = true;
+      colEl.style.setProperty("--drawer-col-cap", (Math.round(capColW * 100) / 100) + "px");
+      colEl.style.setProperty("--drawer-comp-w", (Math.round(capCompW * 100) / 100) + "px");
+      colEl.classList.add("has-drawer-col-cap");
+    };
+    const clearColCap = () => {
+      if (!useColCap || !colEl?.style) return;
+      useColCap = false;
+      colEl.classList.remove("has-drawer-col-cap");
+      colEl.style.removeProperty("--drawer-col-cap");
+      colEl.style.removeProperty("--drawer-comp-w");
+    };
     if (kind === "open") {
       stageCls = "is-drawer-opening";
       moveDrawer = true;
@@ -17565,11 +18605,31 @@
       appEl.classList.add(stageCls);
       if (drawerEl?.style) drawerEl.style.width = Math.round(toW) + "px";
       if (view === "collie") syncCollieTopThreadClearance(toW);
-      const startM = threadMetrics(canvas, colW, gutter);
-      const targetM = threadMetrics(Math.max(320, canvas - toW), colW, gutter);
-      basePadLeft = 0;
-      chatFrom = startOffset;
-      chatTo = targetM.padLeft - startM.padLeft;
+      const targetMainW = Math.max(320, canvas - toW);
+      const startT = threadMetrics(canvas, colW, gutter);
+      const targetT = threadMetrics(targetMainW, colW, gutter);
+      const startC = composerMetrics(canvas, colW);
+      const targetC = composerMetrics(targetMainW, colW);
+      const needCap = targetT.effColW < startT.effColW - 0.5 || targetC.effCompW < startC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(targetT.effColW, targetC.effCompW);
+        const capT = threadMetrics(canvas, targetT.effColW, gutter);
+        const capCPadLeft = (canvas - targetC.effCompW) / 2;
+        basePadLeft = capT.padLeft - startT.padLeft;
+        baseCompPadLeft = capCPadLeft - startC.padLeft;
+        chatFrom = (startT.padLeft + startThreadOff) - capT.padLeft;
+        chatTo = targetT.padLeft - capT.padLeft;
+        compFrom = (startC.padLeft + startCompOff) - capCPadLeft;
+        compTo = targetC.padLeft - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = 0;
+        baseCompPadLeft = 0;
+        chatFrom = startThreadOff;
+        chatTo = targetT.padLeft - startT.padLeft;
+        compFrom = startCompOff;
+        compTo = targetC.padLeft - startC.padLeft;
+      }
       drawerFrom = toW;
       drawerTo = 0;
     } else if (kind === "widen") {
@@ -17581,12 +18641,34 @@
       appEl.classList.add(stageCls);
       if (drawerEl?.style) drawerEl.style.width = Math.round(toW) + "px";
       if (view === "collie") syncCollieTopThreadClearance(deltaW);
-      const startM = threadMetrics(Math.max(320, canvas - fromW), colW, gutter);
-      const targetM = threadMetrics(Math.max(320, canvas - toW), colW, gutter);
-      const fullM = threadMetrics(canvas, colW, gutter);
-      basePadLeft = startM.padLeft - fullM.padLeft;
-      chatFrom = 0;
-      chatTo = targetM.padLeft - startM.padLeft;
+      const stageMainW = Math.max(320, canvas - fromW);
+      const targetMainW = Math.max(320, canvas - toW);
+      const fullT = threadMetrics(canvas, colW, gutter);
+      const startT = threadMetrics(stageMainW, colW, gutter);
+      const targetT = threadMetrics(targetMainW, colW, gutter);
+      const fullC = composerMetrics(canvas, colW);
+      const startC = composerMetrics(stageMainW, colW);
+      const targetC = composerMetrics(targetMainW, colW);
+      const needCap = targetT.effColW < startT.effColW - 0.5 || targetC.effCompW < startC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(targetT.effColW, targetC.effCompW);
+        const capT = threadMetrics(stageMainW, targetT.effColW, gutter);
+        const capCPadLeft = (stageMainW - targetC.effCompW) / 2;
+        basePadLeft = capT.padLeft - fullT.padLeft;
+        baseCompPadLeft = capCPadLeft - fullC.padLeft;
+        chatFrom = startT.padLeft - capT.padLeft;
+        chatTo = targetT.padLeft - capT.padLeft;
+        compFrom = startC.padLeft - capCPadLeft;
+        compTo = targetC.padLeft - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = startT.padLeft - fullT.padLeft;
+        baseCompPadLeft = startC.padLeft - fullC.padLeft;
+        chatFrom = 0;
+        chatTo = targetT.padLeft - startT.padLeft;
+        compFrom = 0;
+        compTo = targetC.padLeft - startC.padLeft;
+      }
       drawerFrom = deltaW;
       drawerTo = 0;
     } else if (kind === "narrow") {
@@ -17596,22 +18678,66 @@
       moveDrawer = true;
       appEl.classList.add(stageCls);
       if (drawerEl?.style) drawerEl.style.width = Math.round(fromW) + "px";
-      const startM = threadMetrics(Math.max(320, canvas - fromW), colW, gutter);
-      const targetM = threadMetrics(Math.max(320, canvas - toW), colW, gutter);
-      const fullM = threadMetrics(canvas, colW, gutter);
-      basePadLeft = targetM.padLeft - fullM.padLeft;
-      chatFrom = startM.padLeft - targetM.padLeft;
-      chatTo = 0;
+      const startMainW = Math.max(320, canvas - fromW);
+      const targetMainW = Math.max(320, canvas - toW);
+      const fullT = threadMetrics(canvas, colW, gutter);
+      const startT = threadMetrics(startMainW, colW, gutter);
+      const targetT = threadMetrics(targetMainW, colW, gutter);
+      const fullC = composerMetrics(canvas, colW);
+      const startC = composerMetrics(startMainW, colW);
+      const targetC = composerMetrics(targetMainW, colW);
+      const needCap = startT.effColW < targetT.effColW - 0.5 || startC.effCompW < targetC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(startT.effColW, startC.effCompW);
+        const capT = threadMetrics(targetMainW, startT.effColW, gutter);
+        const capCPadLeft = (targetMainW - startC.effCompW) / 2;
+        basePadLeft = capT.padLeft - fullT.padLeft;
+        baseCompPadLeft = capCPadLeft - fullC.padLeft;
+        chatFrom = startT.padLeft - capT.padLeft;
+        chatTo = targetT.padLeft - capT.padLeft;
+        compFrom = startC.padLeft - capCPadLeft;
+        compTo = targetC.padLeft - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = targetT.padLeft - fullT.padLeft;
+        baseCompPadLeft = targetC.padLeft - fullC.padLeft;
+        chatFrom = startT.padLeft - targetT.padLeft;
+        chatTo = 0;
+        compFrom = startC.padLeft - targetC.padLeft;
+        compTo = 0;
+      }
       drawerFrom = 0;
       drawerTo = deltaW;
     } else if (kind === "close") {
       fadeDrawer = true;
       moveDrawer = true;
-      const startM = threadMetrics(Math.max(320, canvas - fromW), colW, gutter);
-      const targetM = threadMetrics(canvas, colW, gutter);
-      basePadLeft = 0;
-      chatFrom = typeof startOffset === "number" ? startOffset : (startM.padLeft - targetM.padLeft);
-      chatTo = targetShift;
+      const startMainW = Math.max(320, canvas - fromW);
+      const startT = threadMetrics(startMainW, colW, gutter);
+      const targetT = threadMetrics(canvas, colW, gutter);
+      const startC = composerMetrics(startMainW, colW);
+      const targetC = composerMetrics(canvas, colW);
+      const effStartT = hasExplicitStart ? startThreadOff : (startT.padLeft - targetT.padLeft);
+      const effStartC = hasExplicitStart ? startCompOff : (startC.padLeft - targetC.padLeft);
+      const needCap = startT.effColW < targetT.effColW - 0.5 || startC.effCompW < targetC.effCompW - 0.5;
+      if (needCap) {
+        applyColCap(startT.effColW, startC.effCompW);
+        const capT = threadMetrics(canvas, startT.effColW, gutter);
+        const capCPadLeft = (canvas - startC.effCompW) / 2;
+        basePadLeft = capT.padLeft - targetT.padLeft;
+        baseCompPadLeft = capCPadLeft - targetC.padLeft;
+        chatFrom = (targetT.padLeft + effStartT) - capT.padLeft;
+        chatTo = (targetT.padLeft + targetShift) - capT.padLeft;
+        compFrom = (targetC.padLeft + effStartC) - capCPadLeft;
+        compTo = (targetC.padLeft + targetShift) - capCPadLeft;
+        if (view === "collie" && sc && lockSnap) applyColliePos(sc, lockSnap);
+      } else {
+        basePadLeft = 0;
+        baseCompPadLeft = 0;
+        chatFrom = effStartT;
+        chatTo = targetShift;
+        compFrom = effStartC;
+        compTo = targetShift;
+      }
       drawerFrom = 0;
       drawerTo = Math.max(0, fromW);
     } else {
@@ -17621,14 +18747,22 @@
 
     const dur = 240;
     let t0 = 0;
-    const state = { kind, drawerEl, fromW, toW, curChatX: chatFrom, curDrawerX: drawerFrom, targetW: toW, basePadLeft };
+    const state = {
+      kind, drawerEl, fromW, toW,
+      curChatX: chatFrom, curCompX: compFrom, curDrawerX: drawerFrom,
+      targetW: toW, basePadLeft, baseCompPadLeft,
+    };
     _drawerGlideState = state;
-    const applyFrame = (cx, dx, op) => {
+    const applyFrame = (cx, cpx, dx, op) => {
       state.curChatX = cx;
+      state.curCompX = cpx;
       state.curDrawerX = dx;
-      if (chatEls.length) {
+      if (threadEls.length) {
         const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
-        for (const el of chatEls) el.style.transform = ctr;
+        for (const el of threadEls) el.style.transform = ctr;
+      }
+      if (compEl) {
+        compEl.style.transform = `translate3d(${cpx.toFixed(2)}px, 0, 0)`;
       }
       if (headActsEl?.style) {
         if (stageCls === "is-drawer-opening") headActsEl.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`;
@@ -17641,6 +18775,7 @@
       }
     };
     _drawerGlideCleanup = (snap) => {
+      clearColCap();
       if (stageCls) {
         appEl.classList.remove(stageCls);
         appEl.style.removeProperty("--drawer-stage-w");
@@ -17652,7 +18787,8 @@
         if (stageCls) drawerEl.style.width = "";
         if (fadeDrawer || kind === "open") drawerEl.style.opacity = "";
       }
-      for (const el of chatEls) el.style.transform = "";
+      for (const el of threadEls) el.style.transform = "";
+      if (compEl) compEl.style.transform = "";
       _collieShiftCur = kind === "close" ? targetShift : 0;
       if (snap && onDone) onDone();
       if (view === "collie" && sc && lockSnap) {
@@ -17662,7 +18798,7 @@
       if (activeWorkerKey && curWdMode() === "screen") fitWdTerm();
     };
 
-    applyFrame(chatFrom, drawerFrom, 1);
+    applyFrame(chatFrom, compFrom, drawerFrom, 1);
     let sync = true;
     const step = (now) => {
       if (sync) {
@@ -17673,13 +18809,14 @@
       const p = Math.min(1, Math.max(0, (now - t0) / dur));
       const e = easeOutSilk(p);
       const cx = chatFrom + (chatTo - chatFrom) * e;
+      const cpx = compFrom + (compTo - compFrom) * e;
       const dx = drawerFrom + (drawerTo - drawerFrom) * e;
       const op = fadeDrawer ? Math.max(0.08, 1 - 0.85 * e) : (kind === "open" ? Math.min(1, 0.9 + 0.1 * e) : 1);
       if (p >= 1) {
         finishDrawerGlide(true);
         return;
       }
-      applyFrame(cx, dx, op);
+      applyFrame(cx, cpx, dx, op);
       _drawerGlideRAF = requestAnimationFrame(step);
     };
     _drawerGlideRAF = requestAnimationFrame(step);
@@ -17701,7 +18838,7 @@
     el.style.opacity = "";
   };
   const playDrawerTransition = (el, wasDrawerOpen) => {
-    if (!el || innerWidth <= THREAD_DESKTOP_MIN) return;
+    if (!el || !isDesktopDrawerViewport()) return;
     resetDrawerMotion(el);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduced) return;
@@ -17729,7 +18866,7 @@
   let paneTimer = 0;
   function syncFileWidenUI() {
     if (!fvWidenBtn) return;
-    const on = !!(drawerWide && innerWidth > THREAD_DESKTOP_MIN && !pane?.hidden);
+    const on = !!(drawerWide && isDesktopDrawerViewport() && !pane?.hidden);
     fvWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
     const lbl = on ? "还原宽度" : "拓宽抽屉";
     fvWidenBtn.title = lbl;
@@ -17748,14 +18885,20 @@
     if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
     clearTimeout(paneTimer);
     resetDrawerMotion(pane);
+    const desktopMode = isDesktopDrawerViewport();
     const baseW = unifiedDrawerW();
-    setFileW(baseW);
+    if (desktopMode) {
+      setFileW(baseW);
+    } else {
+      if (pane?.style) pane.style.width = "";
+      clearCollieShiftInline();
+    }
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
     pane.setAttribute("aria-hidden", "false");
     if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = false; }
     appEl?.classList?.add("has-file");
     syncFileWidenUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadFile && innerWidth > THREAD_DESKTOP_MIN });
+    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadFile && desktopMode });
     if (!hadFile) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift });
@@ -17783,7 +18926,7 @@
     fileSeq++;
     clearTimeout(paneTimer);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadFile && innerWidth > THREAD_DESKTOP_MIN && pane && !pane.hidden;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadFile && isDesktopDrawerViewport() && pane && !pane.hidden;
     if (desktopCloseAnim) {
       resetDrawerMotion(pane);
       pane.style.setProperty("--drawer-close-w", closingW + "px");
@@ -17797,13 +18940,20 @@
     if (lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
+    let userScrolled = false;
+    const onUserScroll = () => { if (!isProgrammaticScroll()) userScrolled = true; };
+    if (sc && lockSnap) sc.addEventListener("scroll", onUserScroll, { passive: true });
     const hideNow = () => {
+      if (sc) sc.removeEventListener("scroll", onUserScroll);
       resetDrawerMotion(pane);
-      if (pane) pane.hidden = true;
+      if (pane) {
+        pane.hidden = true;
+        if (pane.style) pane.style.width = "";
+      }
       if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = true; }
       if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
       if (!switching && view === "collie") {
-        const useRestore = lockSnap && collieLayoutLock?.snap === lockSnap ? { restore: lockSnap, once: true } : undefined;
+        const useRestore = lockSnap && !userScrolled ? { restore: lockSnap, once: true } : undefined;
         renderSuper(useRestore);
       }
     };
@@ -17821,7 +18971,7 @@
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
   fileScrim?.addEventListener("click", () => closeFilePane());
   fvWidenBtn?.addEventListener("click", () => {
-    if (innerWidth <= THREAD_DESKTOP_MIN || pane?.hidden) return;
+    if (!isDesktopDrawerViewport() || pane?.hidden) return;
     finishDrawerGlide(true);
     const prevW = _lastFileW || _lastDrawerW || drawerDefaultW();
     const sc = view === "collie" ? viewScroller("collie") : null;
@@ -17841,7 +18991,7 @@
     closeFilePane();
   });
   $("#fv-grip")?.addEventListener("pointerdown", (e) => {
-    if (innerWidth <= THREAD_DESKTOP_MIN) return;
+    if (!isDesktopDrawerViewport()) return;
     e.preventDefault();
     finishDrawerGlide(true);
     const grip = e.currentTarget;
@@ -17973,16 +19123,14 @@
     finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     const canGlide = !opts.immediate && !reduced && innerWidth > 1000 && typeof requestAnimationFrame === "function" && !!sideEl;
-    const sideW = innerWidth <= 1100 ? 268 : 300;
-    const drawerW = (isAnyRightDrawerOpen() && innerWidth > THREAD_DESKTOP_MIN) ? (_lastDrawerW || drawerDefaultW()) : 0;
+    const sideW = expandedSideW();
+    const drawerW = (isAnyRightDrawerOpen() && isDesktopDrawerViewport()) ? (_lastDrawerW || drawerDefaultW()) : 0;
     const hasNotes = view === "collie" && !drawerW && isWideNotesViewport() && !!col?.classList?.contains("has-notes");
     const sc = view === "collie" ? viewScroller("collie") : null;
     const gutter = scrollerGutterW(sc);
     const colW = currentColW();
     const lockSnap = canGlide && sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const prevNotesShift = hasNotes ? computeCollieShiftPx(280) : 0;
-    const notesBeforeLeft = canGlide && hasNotes && notesPane && typeof notesPane.getBoundingClientRect === "function"
-      ? notesPane.getBoundingClientRect().left : null;
 
     appEl.classList.toggle("side-collapsed", want);
     document.body?.classList?.toggle("side-collapsed", want);
@@ -17995,16 +19143,17 @@
           if (crewEl) { syncCrewCompact(crewEl); crewEl._syncScrollFade?.(); }
         }
       }
-      if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
+      if (pane && !pane.hidden && isDesktopDrawerViewport()) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
       if (activeThreadRoot) applyThreadWidth();
       if (activeWorkerKey) applyWorkerWidth();
       if (hasNotes) _collieShiftCur = nextNotesShift;
       return;
     }
 
-    const chatEls = view === "collie"
-      ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
+    const threadEls = view === "collie"
+      ? [$("#super-thread"), $("#super-working")].filter((e) => e?.style)
       : [];
+    const compEl = view === "collie" && $("#super-composer")?.style ? $("#super-composer") : null;
     const activeViewEl = $(".view:not([hidden]):not(.is-parked)") || col;
     const headPushEls = [
       activeViewEl?.querySelector?.(".d-head .d-title"),
@@ -18018,8 +19167,7 @@
     }
 
     const deltaW = Math.max(0, sideW - SIDE_RAIL_W);
-    let sideFrom = 0, sideTo = 0, chatFrom = 0, chatTo = 0;
-    let notesFrom = 0, notesTo = 0;
+    let sideFrom = 0, sideTo = 0, chatFrom = 0, chatTo = 0, compFrom = 0, compTo = 0;
     let isOpening = false;
     sideEl.style.setProperty("--side-anim-w", sideW + "px");
     if (want) {
@@ -18027,34 +19175,37 @@
       sideEl.classList.add("is-side-closing");
       sideFrom = 0;
       sideTo = -deltaW;
-      const fromM = threadMetrics(Math.max(320, innerWidth - sideW - drawerW), colW, gutter);
-      const toM = threadMetrics(Math.max(320, innerWidth - SIDE_RAIL_W - drawerW), colW, gutter);
+      const fromMainW = Math.max(320, innerWidth - sideW - drawerW);
+      const toMainW = Math.max(320, innerWidth - SIDE_RAIL_W - drawerW);
+      const fromM = threadMetrics(fromMainW, colW, gutter);
+      const toM = threadMetrics(toMainW, colW, gutter);
+      const fromC = composerMetrics(fromMainW, colW);
+      const toC = composerMetrics(toMainW, colW);
       chatFrom = (sideW + fromM.padLeft + prevNotesShift) - (SIDE_RAIL_W + toM.padLeft);
       chatTo = nextNotesShift;
-      if (notesBeforeLeft != null && notesPane && typeof notesPane.getBoundingClientRect === "function") {
-        const notesAfterLeft = notesPane.getBoundingClientRect().left;
-        notesFrom = notesBeforeLeft - notesAfterLeft;
-        notesTo = 0;
-      }
+      compFrom = (sideW + fromC.padLeft + prevNotesShift) - (SIDE_RAIL_W + toC.padLeft);
+      compTo = nextNotesShift;
     } else {
       // Expanding left sidebar (54px rail -> sideW): stage Column 1 at 54px, zero Frame-0 reflow (#t12980, #t12984)
       isOpening = true;
       appEl.classList.add("is-side-opening");
       sideFrom = -deltaW;
       sideTo = 0;
-      const fromM = threadMetrics(Math.max(320, innerWidth - SIDE_RAIL_W - drawerW), colW, gutter);
-      const toM = threadMetrics(Math.max(320, innerWidth - sideW - drawerW), colW, gutter);
+      const fromMainW = Math.max(320, innerWidth - SIDE_RAIL_W - drawerW);
+      const toMainW = Math.max(320, innerWidth - sideW - drawerW);
+      const fromM = threadMetrics(fromMainW, colW, gutter);
+      const toM = threadMetrics(toMainW, colW, gutter);
+      const fromC = composerMetrics(fromMainW, colW);
+      const toC = composerMetrics(toMainW, colW);
       chatFrom = prevNotesShift;
       chatTo = (sideW + toM.padLeft + nextNotesShift) - (SIDE_RAIL_W + fromM.padLeft);
-      if (hasNotes && notesPane) {
-        notesFrom = 0;
-        notesTo = (toM.padLeft + nextNotesShift + sideW) - (fromM.padLeft + prevNotesShift + SIDE_RAIL_W);
-      }
+      compFrom = prevNotesShift;
+      compTo = (sideW + toC.padLeft + nextNotesShift) - (SIDE_RAIL_W + fromC.padLeft);
     }
 
     const dur = 240;
     let t0 = 0;
-    const applyFrame = (sx, cx, nx, prog) => {
+    const applyFrame = (sx, cx, cpx, prog) => {
       const counterX = (-sx).toFixed(2);
       sideEl.style.transform = `translate3d(${sx.toFixed(2)}px, 0, 0)`;
       if (sideFullEl?.style) {
@@ -18072,14 +19223,11 @@
         const htr = `translate3d(${headOffset.toFixed(2)}px, 0, 0)`;
         for (const el of headPushEls) el.style.transform = htr;
       }
-      if (chatEls.length) {
+      if (threadEls.length) {
         const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
-        for (const el of chatEls) el.style.transform = ctr;
+        for (const el of threadEls) el.style.transform = ctr;
       }
-      if (hasNotes && notesPane?.style && (Math.abs(notesFrom) > 0.5 || Math.abs(notesTo) > 0.5)) {
-        notesPane.style.transition = "none";
-        notesPane.style.transform = `translate3d(${nx.toFixed(2)}px, 0, 0)`;
-      }
+      if (compEl) compEl.style.transform = `translate3d(${cpx.toFixed(2)}px, 0, 0)`;
     };
     _sideGlideCleanup = () => {
       sideEl.classList.remove("is-side-closing");
@@ -18089,8 +19237,8 @@
       if (sideRailEl?.style) { sideRailEl.style.transform = ""; sideRailEl.style.opacity = ""; }
       for (const el of headPushEls) el.style.transform = "";
       if (isOpening) appEl.classList.remove("is-side-opening");
-      if (notesPane?.style) { notesPane.style.transform = ""; notesPane.style.transition = ""; }
-      for (const el of chatEls) el.style.transform = "";
+      for (const el of threadEls) el.style.transform = "";
+      if (compEl) compEl.style.transform = "";
       _collieShiftCur = hasNotes ? nextNotesShift : 0;
       if (view === "collie") {
         syncCollieTopHeight();
@@ -18100,11 +19248,11 @@
         }
         if (sc && lockSnap) { applyColliePos(sc, lockSnap); updateSuperJump(); }
       }
-      if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
+      if (pane && !pane.hidden && isDesktopDrawerViewport()) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
       if (activeThreadRoot) applyThreadWidth();
       if (activeWorkerKey) { applyWorkerWidth(); if (curWdMode() === "screen") fitWdTerm(); }
     };
-    applyFrame(sideFrom, chatFrom, notesFrom, 0);
+    applyFrame(sideFrom, chatFrom, compFrom, 0);
     let sync = true;
     const step = (now) => {
       if (sync) { finishSideGlide(true); return; }
@@ -18115,7 +19263,7 @@
       applyFrame(
         sideFrom + (sideTo - sideFrom) * e,
         chatFrom + (chatTo - chatFrom) * e,
-        notesFrom + (notesTo - notesFrom) * e,
+        compFrom + (compTo - compFrom) * e,
         e,
       );
       _sideGlideRAF = requestAnimationFrame(step);
@@ -18299,7 +19447,15 @@
     if (!h) {
       const topEl = $("#v-collie .collie-top");
       if (!topEl) return;
-      h = Math.round(topEl.offsetHeight || 98);
+      h = Math.round(topEl.offsetHeight || 60);
+    }
+    // Wide desktop (>= 1360px): #crew is bounded to the left of #notes-pane, so excluding
+    // #crew's height from --collie-top-h ensures toggling the left sidebar never shifts
+    // #notes-pane vertically when #crew appears or disappears (dy = 0).
+    if (isWideNotesViewport()) {
+      const crewEl = $("#crew");
+      const crewH = crewEl && typeof crewEl.offsetHeight === "number" ? Math.round(crewEl.offsetHeight) : 0;
+      if (crewH > 0 && h > crewH) h -= crewH;
     }
     if (h === _lastCollieTopH) return;
     _lastCollieTopH = h;
@@ -18788,12 +19944,20 @@
     }).observe(collieTopEl);
   }
   window.addEventListener("resize", () => {
+    finishDrawerGlide(true);
+    finishSideGlide(true);
     if (view === "collie") {
       clearCollieShiftInline();
       syncCollieTopHeight();
       syncNotebookVisibility({ immediate: true });
     }
-    if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) {
+    const desktopMode = isDesktopDrawerViewport();
+    if (!desktopMode) {
+      if (pane?.style) pane.style.width = "";
+      if (tdDrawer?.style) tdDrawer.style.width = "";
+      if (wdDrawer?.style) wdDrawer.style.width = "";
+    }
+    if (pane && !pane.hidden && desktopMode) {
       setFileW(unifiedDrawerW());
       syncFileWidenUI();
     } else if (pane && !pane.hidden) {
@@ -18815,8 +19979,12 @@
       return;
     }
     pendingOpenThread = { rootId, focusId };
-    if (location.hash === "#/collie") route();
-    else location.hash = "#/collie";
+    if (location.hash === "#/collie") {
+      route();
+    } else {
+      location.hash = "#/collie";
+      if (view !== "collie") route();
+    }
   }
 
   let _lastMarkedGen = -1, _lastMarkedRoot = null, _lastSideMarkedKey = "";
@@ -19056,8 +20224,8 @@
   const threadDragMax = () => drawerDragMaxW();
   let threadWide = drawerWide;
   function syncThreadWideUI() {
-    const activeWide = !!(activeThreadRoot && drawerWide && innerWidth > THREAD_DESKTOP_MIN);
-    $("#app")?.classList.toggle("thread-wide", activeWide);
+    const activeWide = !!(activeThreadRoot && drawerWide && isDesktopDrawerViewport());
+    $("#app")?.classList?.toggle("thread-wide", activeWide);
     syncAppDrawerClasses();
     if (tdWidenBtn) {
       tdWidenBtn.setAttribute("aria-pressed", activeWide ? "true" : "false");
@@ -19067,7 +20235,8 @@
     }
   }
   function applyThreadWidth() {
-    if (innerWidth <= THREAD_DESKTOP_MIN) {
+    if (!isDesktopDrawerViewport()) {
+      if (tdDrawer?.style) tdDrawer.style.width = "";
       syncThreadWideUI();
       return;
     }
@@ -20072,7 +21241,10 @@
       if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       if (view !== "collie") return;
       e.preventDefault();
-      openWorkerDrawer({ worker: a.dataset.tdWorker, fromThreadRoot: activeThreadRoot || "" });
+      const href = a.getAttribute?.("href") || "";
+      const paneId = href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)).trim() : "";
+      const histId = href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "";
+      openWorkerDrawer({ worker: a.dataset.tdWorker, paneId, histId, fromThreadRoot: activeThreadRoot || "" });
     });
     tdLocateRootBtn?.addEventListener("click", () => {
       const info = computeReplyThreads(chatEntries());
@@ -20307,7 +21479,7 @@
   const workerWideW = () => drawerWideW();
   function syncWorkerWidenUI() {
     if (!wdWidenBtn) return;
-    const on = !!(activeWorkerKey && drawerWide && innerWidth > THREAD_DESKTOP_MIN);
+    const on = !!(activeWorkerKey && drawerWide && isDesktopDrawerViewport());
     wdWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
     const lbl = on ? "还原宽度" : "拓宽抽屉";
     wdWidenBtn.title = lbl;
@@ -20315,7 +21487,8 @@
     syncAppDrawerClasses();
   }
   function applyWorkerWidth() {
-    if (innerWidth <= THREAD_DESKTOP_MIN) {
+    if (!isDesktopDrawerViewport()) {
+      if (wdDrawer?.style) wdDrawer.style.width = "";
       syncWorkerWidenUI();
       return;
     }
@@ -20389,7 +21562,10 @@
         if (bm === "chat") b.hidden = isWdShell();
       });
     }
-    if (wdInterruptBtn) wdInterruptBtn.hidden = !isLive;
+    if (wdInterruptBtn) {
+      wdInterruptBtn.hidden = !isLive;
+      if (!isLive) disarmInterrupt("worker");
+    }
     if (wdBarEl) wdBarEl.hidden = !showDevTabs;
   }
   function syncDevModeUI() {
@@ -20576,7 +21752,32 @@
       }
     });
   }
+  function clearWdLive(paneId = wdPaneId) {
+    wdLastLive = null;
+    if (paneId) wdLiveCache.delete(paneId);
+    if (wdLastLivePaneId) wdLiveCache.delete(wdLastLivePaneId);
+    if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
+    wdThreadEl?.classList?.remove("asking");
+  }
+  function handleWdLiveEnded(fallbackTitle = "") {
+    if (!activeWorkerKey) return false;
+    const endedPane = wdPaneId || wdLastLivePaneId;
+    clearWdLive(endedPane);
+    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (!wdWasLive) return false;
+    const doneTitle = String(fallbackTitle || wdLastLiveTitle || wdTitleEl?.textContent || wdWorkerName || "任务").trim();
+    wdWasLive = false;
+    wdLastLiveTitle = "";
+    wdLastLivePaneId = "";
+    closeWorkerDrawer();
+    toast(`${doneTitle} 已完成`);
+    return true;
+  }
   function drawWdLive(l) {
+    if (!activeWorkerKey || !wdPaneId || !find(wdPaneId)) {
+      clearWdLive(wdPaneId);
+      return;
+    }
     wdLastLive = l;
     if (wdPaneId) {
       if (l && (l.tail || l.approval)) wdLiveCache.set(wdPaneId, l);
@@ -20636,9 +21837,21 @@
     const kind = liveAgent?.kind || supW?.kind || past?.kind || "";
     const status = liveAgent?.status || (supW?.ended ? (supW.status === "failed" ? "failed" : "gone") : supW?.status) || "gone";
     const isLive = !!liveAgent;
+    const workerLbl = (liveAgent ? agentLabelOf(liveAgent) : "") || workerLabelOf(supW);
+    const dispTitle = workerLbl || name || wdTaskTitle || (liveAgent ? title(liveAgent) : "进行中任务");
+    if (isLive) {
+      wdWasLive = true;
+      wdLastLiveTitle = dispTitle;
+      wdLastLivePaneId = liveAgent.pane_id || wdPaneId || "";
+    } else {
+      clearWdLive(wdPaneId || wdLastLivePaneId);
+      if (wdGoneEl) wdGoneEl.hidden = true;
+      if (wdWasLive) {
+        handleWdLiveEnded(dispTitle);
+        return;
+      }
+    }
     if (wdTitleEl) {
-      const workerLbl = (liveAgent ? agentLabelOf(liveAgent) : "") || workerLabelOf(supW);
-      const dispTitle = workerLbl || name || wdTaskTitle || (liveAgent ? title(liveAgent) : "进行中任务");
       const fullTip = workerLbl && name && workerLbl !== name ? `${workerLbl} (${name})` : dispTitle;
       wdTitleEl.textContent = dispTitle;
       wdTitleEl.title = fullTip;
@@ -20698,7 +21911,7 @@
         wdSummaryTextEl.title = noteText;
       }
     }
-    if (wdGoneEl) wdGoneEl.hidden = isLive || !wdPaneId;
+    if (wdGoneEl) wdGoneEl.hidden = true;
     applyWdModeUI();
     syncWorkerComposerUI();
   }
@@ -20710,8 +21923,7 @@
     wdSkelTimer = 0;
     if (!past) {
       resetWdChatStateOnly();
-      if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
-      wdThreadEl.classList.remove("asking");
+      clearWdLive(wdPaneId);
       const rep = supW?.last_report || supW?.task || "";
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
@@ -20721,8 +21933,7 @@
     const cacheKey = "h:" + past.id;
     const cached = threadCache.get(cacheKey);
     resetWdChatStateOnly();
-    if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
-    wdThreadEl.classList.remove("asking");
+    clearWdLive(wdPaneId);
     if (cached) {
       drawThread(cached, wdThreadEl, "这个任务会话没有消息记录。");
       wdThreadEl._fresh = true;
@@ -20818,9 +22029,11 @@
       wdStream.addEventListener("live", (e) => alive() && drawWdLive(JSON.parse(e.data)));
       wdStream.addEventListener("gone", () => {
         clearSkel();
-        if (wdGoneEl) wdGoneEl.hidden = false;
+        clearWdLive(id);
         closeWorkerDrawerStream();
-        syncWorkerDrawerMeta();
+        if (!handleWdLiveEnded(wdTitleEl?.textContent || wdWorkerName)) {
+          syncWorkerDrawerMeta();
+        }
       });
       return;
     }
@@ -20843,19 +22056,93 @@
       }
     });
     wdStream.addEventListener("gone", () => {
-      if (wdGoneEl) wdGoneEl.hidden = false;
+      clearWdLive(id);
       closeWorkerDrawerStream();
-      syncWorkerDrawerMeta();
+      if (!handleWdLiveEnded(wdTitleEl?.textContent || wdWorkerName)) {
+        syncWorkerDrawerMeta();
+      }
     });
+  }
+  const INTERRUPT_ARM_MS = 3000;
+  const interruptArms = new Map(); // scope ("worker" | "detail") -> { btn, targetId, timer, defaultTitle, defaultAria, defaultText }
+  function disarmInterrupt(scope) {
+    if (!scope) {
+      for (const k of [...interruptArms.keys()]) disarmInterrupt(k);
+      return;
+    }
+    const st = interruptArms.get(scope);
+    if (!st) return;
+    clearTimeout(st.timer);
+    interruptArms.delete(scope);
+    if (st.btn) {
+      st.btn.classList.remove("is-armed");
+      st.btn.removeAttribute("data-armed");
+      if (st.defaultTitle !== undefined) st.btn.title = st.defaultTitle;
+      if (st.defaultAria !== undefined) st.btn.setAttribute("aria-label", st.defaultAria);
+      if (st.defaultText !== undefined) st.btn.textContent = st.defaultText;
+    }
+  }
+  function isInterruptArmed(scope, targetId) {
+    const st = interruptArms.get(scope);
+    return !!(st && st.targetId && st.targetId === targetId);
+  }
+  function triggerArmedInterrupt(scope, btn, targetId, sendFn, opts = {}) {
+    if (!targetId || !btn) return false;
+    const cur = interruptArms.get(scope);
+    if (cur && cur.targetId === targetId) {
+      disarmInterrupt(scope);
+      sendFn();
+      toast("已发送中断 (Ctrl-C)");
+      return true;
+    }
+    disarmInterrupt(scope);
+    const defaultTitle = btn.title || "发送 Ctrl-C 中断当前执行";
+    const defaultAria = btn.getAttribute("aria-label") || "";
+    const defaultText = opts.replaceText ? btn.textContent : undefined;
+    btn.classList.add("is-armed");
+    btn.setAttribute("data-armed", "true");
+    btn.title = "再点一次确认中断";
+    if (defaultAria) btn.setAttribute("aria-label", "再点一次确认中断");
+    if (opts.replaceText) btn.textContent = "再点一次确认中断";
+    const timer = setTimeout(() => disarmInterrupt(scope), INTERRUPT_ARM_MS);
+    interruptArms.set(scope, {
+      btn,
+      targetId,
+      timer,
+      defaultTitle,
+      defaultAria: defaultAria || undefined,
+      defaultText,
+    });
+    toast("再点一次确认中断（3 秒内有效）", "attn");
+    return false;
+  }
+
+  function openWorkerFromAnywhere(opts = {}) {
+    const worker = String(opts.worker || "").trim();
+    const paneId = String(opts.paneId || "").trim();
+    const histId = String(opts.histId || "").trim();
+    if (!worker && !paneId && !histId) return;
+    if (view === "collie") {
+      openWorkerDrawer({ ...opts, worker, paneId, histId });
+      return;
+    }
+    pendingOpenWorker = { ...opts, worker, paneId, histId };
+    if (location.hash === "#/collie") {
+      route();
+    } else {
+      location.hash = "#/collie";
+      if (view !== "collie") route();
+    }
   }
   function openWorkerDrawer(opts = {}) {
     if (!wdDrawer) return;
     const worker = String(opts.worker || "").trim();
     const paneHint = String(opts.paneId || "").trim();
-    if (!worker && !paneHint) return;
+    const histHint = String(opts.histId || "").trim();
+    if (!worker && !paneHint && !histHint) return;
     const appEl = $("#app");
     const hadWorker = !!appEl.classList.contains("has-worker");
-    const nextKey = worker || paneHint;
+    const nextKey = worker || paneHint || (histHint ? "h:" + histHint : "");
     const switchedTarget = activeWorkerKey !== nextKey;
     const wantMode = opts.mode && ["chat", "screen", "log"].includes(opts.mode) ? opts.mode : "";
     const modeChanged = !!(wantMode && wantMode !== wdMode);
@@ -20869,21 +22156,39 @@
       return;
     }
     const wasAnyDrawer = isAnyRightDrawerOpen();
+    const closingNotesOverlay = !isWideNotesViewport() && notesOpen;
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
     const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
     const sc = view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc && !hadWorker ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    closePick();
+    closeDirPick(false);
+    if (collieMenuOpen) closeCollieMenus();
+    if (pendingOpen) { pendingOpen = false; renderPendingBar(); }
+    if (superSearchOpen) closeSuperSearchFn?.(false);
     if (appEl.classList.contains("has-file")) closeFilePane({ immediate: true, switching: true });
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
+    if (innerWidth <= THREAD_DESKTOP_MIN) {
+      const ae = document.activeElement;
+      if (ae && (!wdDrawer.contains?.(ae) || (switchedTarget && wdComposerOpen && ae === wdInputEl)) && typeof ae.blur === "function") {
+        ae.blur();
+      }
+    }
     clearTimeout(wdHideTimer);
     if (!hadWorker) resetDrawerMotion(wdDrawer);
+    if (switchedTarget) disarmInterrupt("worker");
     activeWorkerKey = nextKey;
     wdWorkerName = worker;
     wdPaneId = paneHint || (worker ? paneOf(worker) || "" : "");
-    wdHistId = opts.histId || "";
+    wdHistId = histHint;
     wdFromThread = opts.fromThreadRoot || "";
     wdTaskTitle = opts.title || "";
     wdTaskNote = opts.note || "";
+    const initCtx = resolveWorkerContext();
+    wdWasLive = !!initCtx.liveAgent;
+    wdLastLivePaneId = initCtx.livePaneId || wdPaneId || "";
+    wdLastLiveTitle = "";
+    if (wdGoneEl) wdGoneEl.hidden = true;
     if (wantMode) wdMode = wantMode;
     // Default read-only peek mode: never keep bottom composer permanently open on open/switch (#t12601).
     wdComposerOpen = false;
@@ -20891,14 +22196,22 @@
     if (wdInputEl) wdInputEl.value = "";
     wdSummaryEl?.classList?.remove("is-expanded");
 
+    if (closingNotesOverlay) {
+      sidePaneOverlay = "";
+      syncNotebookVisibility({ immediate: true });
+    }
     applyWorkerWidth();
     const nextW = _lastWorkerW || _lastDrawerW || 480;
+    const handoffScrim = (wasAnyDrawer || closingNotesOverlay) && innerWidth <= THREAD_DESKTOP_MIN;
+    if (wdScrim && !handoffScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
     if (wdDrawer.hidden) { wdDrawer.hidden = false; wdDrawer.offsetWidth; }
-    if (wdScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
     wdDrawer.setAttribute("aria-hidden", "false");
     appEl.classList.add("has-worker");
+    if (wdScrim && handoffScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
     syncWorkerWidenUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && innerWidth > THREAD_DESKTOP_MIN });
+    if (!closingNotesOverlay) {
+      syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && isDesktopDrawerViewport() });
+    }
     if (!hadWorker) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
@@ -20929,9 +22242,18 @@
     const startOffset = !switching && hadWorker ? captureCollieVisualShift(true, closingW) : 0;
     if (switching) finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && innerWidth > THREAD_DESKTOP_MIN && !wdDrawer.hidden;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && isDesktopDrawerViewport() && !wdDrawer.hidden;
 
+    disarmInterrupt("worker");
+    const ae = document.activeElement;
+    if (ae && wdDrawer.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     wdSeq++;
+    const prevWdPane = wdPaneId || wdLastLivePaneId;
+    wdWasLive = false;
+    wdLastLiveTitle = "";
+    wdLastLivePaneId = "";
+    clearWdLive(prevWdPane);
+    if (wdGoneEl) wdGoneEl.hidden = true;
     closeWorkerDrawerStream();
     activeWorkerKey = null;
     wdPaneId = "";
@@ -21018,16 +22340,23 @@
     });
     wdThreadBtn?.addEventListener("click", () => {
       const rootId = wdThreadBtn.dataset.wdThread || "";
-      if (rootId) openThreadDrawer(rootId, "", "");
+      if (rootId) openThreadFromAnywhere(rootId, "");
     });
     wdInterruptBtn?.addEventListener("click", () => {
-      if (wdPaneId) sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+      if (!wdPaneId) return;
+      triggerArmedInterrupt("worker", wdInterruptBtn, wdPaneId, () => {
+        sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+      });
     });
     wdInterjectBtn?.addEventListener("click", () => {
       if (!wdPaneId) return;
+      const wasAtBottom = wdThreadEl && nearBottom(wdThreadEl);
       wdComposerOpen = true;
       syncWorkerComposerUI();
       syncWorkerSendBtn();
+      if (wasAtBottom && wdThreadEl && typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => { if (wdThreadEl) wdThreadEl.scrollTop = wdThreadEl.scrollHeight; });
+      }
       wdInputEl?.focus({ preventScroll: true });
     });
     wdCollapseBtn?.addEventListener("click", () => {
@@ -22548,8 +23877,15 @@
   // ───────────────────────────── menus
   document.addEventListener("click", (e) => {
     const opener = e.target.closest("[data-menu]");
+    const clickedMoreInterrupt = !!e.target.closest?.('#more-menu [data-act="interrupt"]');
+    const armingMoreInterrupt = !!(clickedMoreInterrupt && current && !isInterruptArmed("detail", current));
     const prevCollieMenuOpen = collieMenuOpen;
-    $$(".menu").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
+    $$(".menu").forEach((m) => {
+      if ((!opener || m.id !== opener.dataset.menu) && !(armingMoreInterrupt && m.id === "more-menu")) {
+        m.hidden = true;
+      }
+    });
+    if (!clickedMoreInterrupt && $("#more-menu")?.hidden) disarmInterrupt("detail");
     if (opener) {
       const m = $("#" + opener.dataset.menu);
       const willOpen = opener.dataset.menu === "collie-menu" ? !collieMenuOpen : !!m?.hidden;
@@ -22558,6 +23894,7 @@
         closeSuperSearchFn?.(false);
       }
       if (m) m.hidden = !willOpen;
+      if (m?.id === "more-menu" && m.hidden) disarmInterrupt("detail");
       collieMenuOpen = opener.dataset.menu === "collie-menu" ? willOpen : false;
     } else {
       collieMenuOpen = false;
@@ -22565,9 +23902,16 @@
     if (prevCollieMenuOpen !== collieMenuOpen) syncNotebookVisibility();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && collieMenuOpen) {
-      closeCollieMenus();
-      syncNotebookVisibility();
+    if (e.key === "Escape") {
+      if (collieMenuOpen) {
+        closeCollieMenus();
+        syncNotebookVisibility();
+      }
+      const moreMenu = $("#more-menu");
+      if (moreMenu && !moreMenu.hidden) {
+        moreMenu.hidden = true;
+        disarmInterrupt("detail");
+      }
     }
   });
 
@@ -22577,7 +23921,13 @@
     if (!act) return;
     const v = find(current);
     try {
-      if (act === "interrupt") sendKeys(["ctrl+c"]);
+      if (act === "interrupt") {
+        const sent = triggerArmedInterrupt("detail", btn, current, () => sendKeys(["ctrl+c"]), { replaceText: true });
+        if (!sent) {
+          const m = btn.closest?.(".menu");
+          if (m) m.hidden = false;
+        }
+      }
       if (act === "copy" && v) { await copy(v.pane_id); toast("已复制 " + v.pane_id); }
       if (act === "shell-here" && v) {
         const r = await api("/api/agents", { body: { kind: "shell", cwd: v.cwd, machine: v.machine || "" } });
@@ -22782,11 +24132,13 @@
     if (vhChanged) {
       // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
       const screenPinned = curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
-      const pinned = [...document.querySelectorAll(".viewer, #log, #td-body")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
+      const wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
+      const pinned = [...document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
       lastVH = nextVH;
       root.setProperty("--vh", nextVH);
       pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
       if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
+      if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
     }
     if (nextVTop !== lastVTop) {
       lastVTop = nextVTop;

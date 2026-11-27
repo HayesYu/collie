@@ -174,6 +174,20 @@ func (h *Herdr) Remember(pane, name string) {
 	h.mu.Unlock()
 }
 
+// Name returns the agent or worker name Collie recorded for pane, if any.
+func (h *Herdr) Name(pane string) string {
+	if h == nil || pane == "" {
+		return ""
+	}
+	local, _ := split(pane)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if n := h.named[pane]; n != "" {
+		return n
+	}
+	return h.named[local]
+}
+
 // LoadRuns restores the recorded launch models and sets how to persist them.
 func (h *Herdr) LoadRuns(m map[string][2]string, save func(map[string][2]string)) {
 	h.mu.Lock()

@@ -167,6 +167,7 @@ func waitOnboardState(t *testing.T, ob *feishuOnboarder, want string) FeishuOnbo
 }
 
 func TestFeishuOnboardParseExpireIn(t *testing.T) {
+	t.Parallel()
 	if got := parseBeginExpireIn(&feishuOnboardBeginResp{ExpiresIn: 3600}); got != 3600 {
 		t.Fatalf("expires_in=3600 -> got %d, want 3600", got)
 	}
@@ -356,6 +357,7 @@ func TestFeishuOnboardCreateSuccessAndZeroSecretLeak(t *testing.T) {
 }
 
 func TestFeishuOnboardExistingAppModesAndConfigMerge(t *testing.T) {
+	t.Parallel()
 	const existingID = "cli_existing_bot_42"
 	const existingSecret = "sec_existing_patched_777"
 
@@ -464,6 +466,7 @@ func TestFeishuOnboardExistingAppModesAndConfigMerge(t *testing.T) {
 }
 
 func TestFeishuOnboardAtomicSwapPreservesAllowlistAndFeedbackChats(t *testing.T) {
+	t.Parallel()
 	const (
 		oldAppID  = "cli_old_bot_001"
 		oldSecret = "sec_old_bot_secret_001"
@@ -581,6 +584,7 @@ func TestFeishuOnboardAtomicSwapPreservesAllowlistAndFeedbackChats(t *testing.T)
 }
 
 func TestFeishuOnboardCrossBrandSwitchToLark(t *testing.T) {
+	t.Parallel()
 	var cnPolls, larkPolls atomic.Int32
 	var sawSwitched atomic.Bool
 
@@ -651,6 +655,7 @@ func TestFeishuOnboardCrossBrandSwitchToLark(t *testing.T) {
 }
 
 func TestFeishuOnboardSlowDownAndNetworkRetry(t *testing.T) {
+	t.Parallel()
 	var pollStep atomic.Int32
 	var waitsMu sync.Mutex
 	var waits []time.Duration
@@ -735,6 +740,7 @@ func TestFeishuOnboardSlowDownAndNetworkRetry(t *testing.T) {
 }
 
 func TestFeishuOnboardDeniedExpiredAndCancel(t *testing.T) {
+	t.Parallel()
 	t.Run("access_denied", func(t *testing.T) {
 		s, sp, mux := setupOnboardHarness(t, func(w http.ResponseWriter, r *http.Request) {
 			_ = r.ParseForm()
@@ -851,6 +857,7 @@ func TestFeishuOnboardDeniedExpiredAndCancel(t *testing.T) {
 }
 
 func TestFeishuOnboardPersonaPresetsAndValidation(t *testing.T) {
+	t.Parallel()
 	// 1. Default desc contains homepage URL and respects Feishu CN 120-char limit cleanly.
 	if !strings.Contains(feishuOnboardDefaultDesc, "https://lihuanyu0w0.github.io/collie/") {
 		t.Fatalf("default desc must contain homepage URL: %q", feishuOnboardDefaultDesc)
@@ -991,6 +998,7 @@ func TestFeishuOnboardPersonaPresetsAndValidation(t *testing.T) {
 }
 
 func TestFeishuOnboardPersonaJSContract(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")

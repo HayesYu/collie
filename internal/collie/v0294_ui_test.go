@@ -7,6 +7,7 @@ import (
 )
 
 func TestWebV0294UIPolishAndReplyToGuard(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}
@@ -45,7 +46,7 @@ assert.ok(cssSrc.includes(".reply-receipt[open] > .rr-body { animation: rr-open 
 
 // 1f) Notebook removes #np-expand pill, centers in right empty channel, isolates repaint, avoids body:has() & dynamic --notes-reserve
 assert.ok(!htmlSrc.includes('id="np-expand"'), "notebook must not render #np-expand button");
-assert.ok(cssSrc.includes("(100% - var(--np-col-right) - var(--notes-w)) * 0.55"), "notebook must center optically in the right channel");
+assert.ok(cssSrc.includes("(var(--np-ref-right-space) - var(--notes-w)) * 0.45") && cssSrc.includes("right: var(--notes-right"), "notebook must center optically in the right channel anchored to viewport right");
 assert.ok(!cssSrc.includes("body:has(#v-collie.has-notes)"), "top-level body:has(#v-collie.has-notes) selector must be removed");
 assert.ok(cssSrc.includes("body.collie-has-notes .toasts"), "toasts offset must use lightweight body.collie-has-notes class");
 assert.ok(cssSrc.includes("contain: layout style paint;"), ".notepane must isolate internal repaints via contain: layout style paint");

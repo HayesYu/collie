@@ -16,6 +16,7 @@ import (
 )
 
 func TestSuperSayClientMsgIDAndRouterTurnKind(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -129,6 +130,7 @@ func TestSuperSayClientMsgIDAndRouterTurnKind(t *testing.T) {
 }
 
 func TestTypingIncrementalDomQuoteBusyAndWidenJS(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")
@@ -627,11 +629,50 @@ const okJSON = (data) => ({
 let rafQueue = [];
 let nextRafId = 1;
 let immediateRAF = true;
+let nowMs = Date.now();
+const RealDate = Date;
+class FakeDate extends RealDate {
+  constructor(...args) {
+    if (args.length === 0) super(nowMs);
+    else super(...args);
+  }
+  static now() { return nowMs; }
+}
+let nextTimerId = 1;
+const fakeTimers = new Map();
+function fakeSetTimeout(fn, ms = 0, ...args) {
+  const id = nextTimerId++;
+  fakeTimers.set(id, { id, at: nowMs + Math.max(0, Number(ms) || 0), fn, args });
+  return id;
+}
+function fakeClearTimeout(id) { fakeTimers.delete(id); }
+async function flushMicrotasks() {
+  for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r));
+}
+async function wait(ms) {
+  const target = nowMs + Math.max(0, Number(ms) || 0);
+  await flushMicrotasks();
+  while (true) {
+    let earliest = null;
+    for (const t of fakeTimers.values()) {
+      if (t.at <= target && (!earliest || t.at < earliest.at || (t.at === earliest.at && t.id < earliest.id))) {
+        earliest = t;
+      }
+    }
+    if (!earliest) break;
+    fakeTimers.delete(earliest.id);
+    nowMs = earliest.at;
+    if (typeof earliest.fn === "function") earliest.fn(...earliest.args);
+    await flushMicrotasks();
+  }
+  nowMs = target;
+  await flushMicrotasks();
+}
 
 const ctx = vm.createContext({
-  console, setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {}, URL, URLSearchParams,
+  console, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, setInterval: () => 0, clearInterval() {}, URL, URLSearchParams,
   Blob, Uint8Array, TextEncoder, atob, AbortController, Event,
-  Map, Set, Date, Math, JSON, RegExp, Array, Object, Promise, Error, Number, String, Boolean,
+  Map, Set, Date: FakeDate, Math, JSON, RegExp, Array, Object, Promise, Error, Number, String, Boolean,
   MutationObserver: class { observe() {} disconnect() {} },
   ResizeObserver: class { observe() {} disconnect() {} },
   HTMLDialogElement: { prototype: {} },
@@ -656,7 +697,7 @@ const ctx = vm.createContext({
     return id;
   },
   cancelAnimationFrame: (id) => { rafQueue = rafQueue.filter((x) => x.id !== id); },
-  performance: { now: () => Date.now() },
+  performance: { now: () => nowMs },
   innerWidth: 1440,
   innerHeight: 900,
   addEventListener(type, fn) {
@@ -711,7 +752,6 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "boot marker present");
 vm.runInContext(appSrc.replace(marker, hook + "\n" + marker), ctx);
 
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const mkEntry = (n, role, text, extra = {}) => ({
   id: "e" + n,
   role,

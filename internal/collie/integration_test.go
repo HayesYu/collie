@@ -54,6 +54,7 @@ func (f *fakeIntegration) ValidateSave(raw json.RawMessage) (json.RawMessage, er
 }
 
 func TestIntegrationPersistentDedupAcrossRestart(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "herd.db")
 	db, err := openDB(dbPath)
@@ -242,6 +243,7 @@ func TestIntegrationBackoffAndAuthCircuitBreaker(t *testing.T) {
 }
 
 func TestIntegrationSinglePointHotReload(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, _ := openDB(filepath.Join(dir, "herd.db"))
 	defer db.Close()
@@ -282,6 +284,7 @@ func TestIntegrationSinglePointHotReload(t *testing.T) {
 }
 
 func TestIntegrationRateLimitAntiStorm(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, _ := openDB(filepath.Join(dir, "herd.db"))
 	defer db.Close()

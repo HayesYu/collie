@@ -7,6 +7,7 @@ import (
 )
 
 func TestWebV0310FlickerSmoothnessAndSidebarContracts(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}
@@ -34,16 +35,32 @@ assert.ok(cssSrc.includes(".brand-toggle:hover .bt-ico") && cssSrc.includes(".br
 assert.ok(!cssSrc.includes(".app.side-collapsed .side-rail {\n    display: flex;\n    animation: np-mode-enter"), "collapsed .side-rail must NOT replay delayed np-mode-enter after collapse");
 assert.ok(cssSrc.includes(".side.is-side-closing .side-rail") && cssSrc.includes(".app.is-side-opening > .side .side-rail"), "left rail stays dual-mounted during collapse/expand glide");
 
-// 1c) Unified 4-icon sidebar footer matching collapsed rail 1:1 (#t12994)
+// 1c) v0.3.11 Sidebar & 54px Rail polish:
+//     - Expanded .side-nav places 自动化 card directly under 和 Collie 对话
+//     - Expanded .side-foot places wide left device status (flex: 1) + right peers/prefs icon buttons
+//     - 54px Rail .sr-top order: expand toggle -> 主会话 (#rail-collie + unread dot) -> + -> 自动化
+//     - 54px Rail .sr-foot order: 设备 (#rail-devices + 6px bottom-right cutout badge) -> 好友边牧 -> 偏好设置
+//     - #notes-pane anchors to viewport right via --notes-right (independent of --side-w) & excludes #crew height on >=1360px
+const sideNavBlock = htmlSrc.match(/<nav class="side-nav"[^>]*>([\s\S]*?)<\/nav>/);
+assert.ok(sideNavBlock, ".side-nav must exist");
+const sideNavIds = [...sideNavBlock[1].matchAll(/id="(nav-collie|nav-auto)"/g)].map((m) => m[1]);
+assert.deepEqual(sideNavIds, ["nav-collie", "nav-auto"], "expanded .side-nav must keep 和 Collie 对话 followed by 自动化");
 const footBlock = htmlSrc.match(/<footer class="side-foot">([\s\S]*?)<\/footer>/);
+const railTopBlock = htmlSrc.match(/<div class="sr-top">([\s\S]*?)<\/div>/);
 const railFootBlock = htmlSrc.match(/<div class="sr-foot">([\s\S]*?)<\/div>\s*<\/nav>/);
-assert.ok(footBlock && railFootBlock, "both expanded side-foot and collapsed sr-foot must exist");
-const footIds = [...footBlock[1].matchAll(/id="nav-(auto|peers|devices|prefs)"/g)].map((m) => m[1]);
-const railIds = [...railFootBlock[1].matchAll(/id="rail-(auto|peers|devices|prefs)"/g)].map((m) => m[1]);
-assert.deepEqual(footIds, ["auto", "peers", "devices", "prefs"], "expanded footer 4-icon order must be auto, peers, devices, prefs");
-assert.deepEqual(railIds, footIds, "collapsed rail footer must match expanded footer 1:1");
-const sideNavBlock = htmlSrc.match(/<nav class="side-nav"[\s\S]*?<\/nav>/);
-assert.ok(sideNavBlock && !sideNavBlock[0].includes('id="nav-auto"'), "redundant 自动化 text row must be removed from .side-nav");
+assert.ok(footBlock && railTopBlock && railFootBlock, "expanded side-foot and collapsed sr-top / sr-foot must exist");
+assert.ok(!footBlock[1].includes('id="nav-auto"'), "expanded side-foot must not contain 自动化");
+const footIds = [...footBlock[1].matchAll(/id="nav-(devices|peers|prefs)"/g)].map((m) => m[1]);
+assert.deepEqual(footIds, ["devices", "peers", "prefs"], "expanded footer order must be left devices status + right peers, prefs");
+const railTopIds = [...railTopBlock[1].matchAll(/id="(side-expand-btn|rail-collie|rail-new-btn|rail-auto)"/g)].map((m) => m[1]);
+assert.deepEqual(railTopIds, ["side-expand-btn", "rail-collie", "rail-new-btn", "rail-auto"], "54px rail top nav order must be expand toggle, main chat, new, automation");
+assert.ok(railTopBlock[1].includes('id="rail-collie" href="#/collie"') && railTopBlock[1].includes('id="rail-collie-dot"'), "54px rail #rail-collie links to #/collie and carries unread dot");
+const railFootIds = [...railFootBlock[1].matchAll(/id="rail-(devices|peers|prefs)"/g)].map((m) => m[1]);
+assert.deepEqual(railFootIds, ["devices", "peers", "prefs"], "54px rail footer order must be devices, peers, prefs");
+assert.match(cssSrc, /\.sr-conn-dot\s*\{[\s\S]*?position:\s*absolute;\s*right:\s*6px;\s*bottom:\s*6px;[\s\S]*?width:\s*6px;\s*height:\s*6px;[\s\S]*?box-shadow:\s*0 0 0 1\.5px var\(--bg-2\);/, "rail device online dot must be a 6px bottom-right cutout micro-badge");
+assert.ok(!appSrc.includes('$("#conn").className ='), "connect() must never overwrite #conn className and strip positioning classes");
+assert.match(cssSrc, /\.notepane\s*\{[\s\S]*?left:\s*auto;\s*right:\s*var\(--notes-right/, ".notepane must anchor from right via viewport-only --notes-right");
+assert.match(cssSrc, /#v-collie\.has-notes #crew\s*\{[\s\S]*?margin-right:\s*calc\(var\(--notes-right\) \+ var\(--notes-w\) \+ 16px\);/, "#crew must stop clear of #notes-pane on >=1360px");
 
 // 1d) Smooth GPU drawer narrow glide + containment + graceful notebook handoff (#t12980, #t13038)
 assert.ok(cssSrc.includes(".app.has-drawer.is-drawer-narrowing"), "narrowing drawer from wide to default width must use GPU staging class");
@@ -70,6 +87,16 @@ assert.ok(appSrc.includes("clapActBtn(e.id, claps)") && cssSrc.includes("#v-coll
 assert.ok(!cssSrc.includes("is-scroll-paused") && !appSrc.includes("is-scroll-paused"), "scroll-pause class must not freeze working spinner rings");
 assert.ok(cssSrc.includes("html.is-bg .dot::after") && appSrc.includes('root.classList.toggle("is-bg", bg)'), "background-tab animation pause stays intact");
 
+// 1j) Ctrl-C interrupt buttons require 3s double-click confirmation (#t13368)
+assert.ok(htmlSrc.includes('id="wd-interrupt"') && htmlSrc.includes('class="sd-arm-lbl"'), "#wd-interrupt must include armed confirmation label");
+assert.ok(cssSrc.includes(".sd-act-btn.is-stop.is-armed") && cssSrc.includes(".menu button.is-armed"), "armed red danger styles must exist for both drawer and terminal menu interrupt buttons");
+assert.ok(appSrc.includes("const INTERRUPT_ARM_MS = 3000;") && appSrc.includes("function triggerArmedInterrupt("), "3s double-click interrupt confirmation controller must exist");
+
+// 1k) Tablet HTML drawer coordinate stability (#t13467): minmax(0, 1fr) prevents column blowout on <=1180px & <=760px, iframe clamps width
+assert.ok(cssSrc.includes(".app.has-worker { grid-template-columns: var(--side-w) minmax(0, 1fr); }"), "tablet <=1180px overlay must use minmax(0, 1fr) instead of bare 1fr");
+assert.ok(cssSrc.includes(".fv-html-sandbox { width: 100%; height: 100%; flex: 1; min-width: 0; max-width: 100%;"), "HTML sandbox iframe must clamp min-width/max-width inside flex column");
+assert.ok(appSrc.includes("function composerMetrics(") && appSrc.includes("const isDesktopDrawerViewport ="), "composerMetrics and matchMedia-synced isDesktopDrawerViewport must exist");
+
 // ─── 2. Runtime VM Tests ───
 function makeClassList() {
   const set = new Set();
@@ -89,6 +116,7 @@ function makeEl(id = "", tagName = "DIV") {
     get innerHTML() { return _innerHTML; },
     set innerHTML(v) { _innerHTML = String(v); el._innerHTMLWrites++; },
     get childElementCount() { return el.children.length || (_innerHTML ? 1 : 0); },
+    get firstElementChild() { return el.children[0] || null; },
     _innerHTMLWrites: 0,
     hidden: false, disabled: false, checked: false, open: false, inert: false, tabIndex: 0,
     className: "", title: "", href: "", src: "", complete: false, naturalWidth: 0,
@@ -165,6 +193,9 @@ const sideExpandBtn = getEl("#side-expand-btn");
 
 let rafQueue = [];
 let nowMs = 1000;
+let timerSeq = 1;
+const activeTimers = new Map();
+const fetchCalls = [];
 const docListeners = new Map();
 const storage = new Map();
 const doc = {
@@ -176,7 +207,7 @@ const doc = {
   createDocumentFragment: () => makeEl("frag", "FRAGMENT"),
   getElementById: (id) => getEl("#" + id),
   querySelector: (sel) => (sel === "dialog[open]" ? null : getEl(sel)),
-  querySelectorAll: (sel) => (sel === "[data-toggle-side]" ? [sideToggleBtn, sideExpandBtn] : []),
+  querySelectorAll: (sel) => (sel === "[data-toggle-side]" ? [sideToggleBtn, sideExpandBtn] : sel === ".menu" ? [getEl("#collie-menu"), getEl("#more-menu")] : []),
   addEventListener(type, fn) { if (!docListeners.has(type)) docListeners.set(type, []); docListeners.get(type).push(fn); },
   removeEventListener() {},
   dispatch(type, ev = {}) {
@@ -185,9 +216,13 @@ const doc = {
     return e;
   },
 };
+const esInstances = [];
+const winListeners = new Map();
 const ctx = {
   console, Math, Date, JSON, Set, Map, RegExp, Error, Promise, URL, URLSearchParams, Object, Array, Number, String, Boolean,
-  setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}, queueMicrotask,
+  setTimeout: (fn, ms = 0) => { const id = timerSeq++; activeTimers.set(id, { id, fn, at: nowMs + (Number(ms) || 0) }); return id; },
+  clearTimeout: (id) => { activeTimers.delete(id); },
+  setInterval: () => 1, clearInterval() {}, queueMicrotask,
   requestAnimationFrame: (fn) => { const id = rafQueue.length + 1; rafQueue.push({ id, fn, cancelled: false }); return id; },
   cancelAnimationFrame: (id) => { const r = rafQueue.find((x) => x.id === id); if (r) r.cancelled = true; },
   document: doc,
@@ -206,14 +241,21 @@ const ctx = {
   ResizeObserver: class { observe() {} disconnect() {} },
   MutationObserver: class { observe() {} disconnect() {} },
   IntersectionObserver: class { observe() {} disconnect() {} },
-  EventSource: class { addEventListener() {} close() {} },
+  EventSource: class {
+    constructor(url) { this.url = String(url || ""); this._l = new Map(); this.closed = false; esInstances.push(this); }
+    addEventListener(t, fn) { if (!this._l.has(t)) this._l.set(t, []); this._l.get(t).push(fn); }
+    dispatch(t, ev = {}) { for (const fn of [...(this._l.get(t) || [])]) fn(ev); }
+    close() { this.closed = true; }
+  },
   Notification: class { static permission = "default"; static async requestPermission() { return "default"; } },
   localStorage: { getItem: (k) => (storage.has(k) ? storage.get(k) : null), setItem: (k, v) => storage.set(k, String(v)), removeItem: (k) => storage.delete(k) },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   getComputedStyle: (el) => ({ getPropertyValue: (k) => el?.style?.getPropertyValue?.(k) || "" }),
   getSelection: () => ({ isCollapsed: true, toString: () => "" }),
-  addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
-  fetch: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, turns: [] }) }),
+  addEventListener(t, fn) { if (!winListeners.has(t)) winListeners.set(t, []); winListeners.get(t).push(fn); },
+  removeEventListener(t, fn) { const l = winListeners.get(t); if (!l) return; const i = l.indexOf(fn); if (i >= 0) l.splice(i, 1); },
+  dispatchEvent(ev) { for (const fn of [...(winListeners.get(ev?.type) || [])]) fn(ev); },
+  fetch: async (url, init = {}) => { fetchCalls.push({ url: String(url), method: init.method || "GET", body: init.body || "" }); return { ok: true, status: 200, json: async () => ({ ok: true, turns: [] }) }; },
 };
 ctx.window = ctx;
 ctx.globalThis = ctx;
@@ -224,11 +266,20 @@ function stepRaf(dtMs) {
     if (!r.cancelled) r.fn(nowMs);
   }
 }
+function advanceTimers(dtMs) {
+  nowMs += dtMs;
+  for (const [id, t] of [...activeTimers.entries()]) {
+    if (t.at <= nowMs) {
+      activeTimers.delete(id);
+      t.fn();
+    }
+  }
+}
 
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, setNotebookData: (d) => { notebookData = d; }, setFvCur: (c) => { fvCur = c; }, threadMetrics, isLayoutGliding, runDesktopDrawerGlide, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, openThreadDrawer, closeThreadDrawer, syncNotebookVisibility, applyThumbSrc, watchImgDecode, decodedThumbs, md, resolveInlineWorker, openWorkerFromLink, openExternalLinkInStandalone, invokeCopy, getActiveWorkerKey: () => activeWorkerKey };\n})();"
+  "  globalThis.__test = { setView: (v) => { view = v; }, setCurrent: (c) => { current = c; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, setNotebookData: (d) => { notebookData = d; }, setFvCur: (c) => { fvCur = c; }, route, setConnDotState, syncSideActive, syncCollieTopHeight, renderSide, disarmInterrupt, isInterruptArmed, threadMetrics, composerMetrics, isDesktopDrawerViewport, isLayoutGliding, runDesktopDrawerGlide, showFilePane, closeFilePane, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, drawWdLive, syncWorkerDrawerMeta, wdLiveCache, drawLive, renderHead, clearDetailLive, openThreadDrawer, closeThreadDrawer, syncNotebookVisibility, applyThumbSrc, watchImgDecode, decodedThumbs, md, resolveInlineWorker, openWorkerFromLink, openExternalLinkInStandalone, invokeCopy, getActiveWorkerKey: () => activeWorkerKey };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -248,6 +299,7 @@ T.setState({
     { pane_id: "p-w1", name: "fix-alpha", label: "任务甲", kind: "claude", status: "working", is_agent: true, cwd: "/tmp/a" },
     { pane_id: "p-w2", name: "fix-beta", label: "任务乙", kind: "codex", status: "working", is_agent: true, cwd: "/tmp/b" },
   ],
+  shells: [],
   machines: [],
 });
 T.setSup({
@@ -489,6 +541,319 @@ assert.equal(getEl("#open-notes-btn").tabIndex, 0);
   await new Promise((r) => queueMicrotask(r));
   assert.equal(copiedExt, extUrl, "blocked standalone window.open falls back to copying URL");
   ctx.navigator.standalone = false;
+
+  // 2k) v0.3.11 sidebar/rail/notes contracts:
+  //     - setConnDotState preserves base classes on #conn & #rail-conn
+  //     - #rail-collie tracks active + aria-current="page" across routes
+  //     - setSideCollapsed never writes inline transform/transition onto #notes-pane
+  //     - syncCollieTopHeight excludes #crew height on wide desktop (>= 1360px) so dy = 0
+  getEl("#conn").classList.add("conn");
+  getEl("#rail-conn").classList.add("sr-conn-dot");
+  T.setConnDotState(true);
+  assert.equal(getEl("#conn").classList.contains("conn"), true);
+  assert.equal(getEl("#conn").classList.contains("on"), true);
+  assert.equal(getEl("#conn").classList.contains("off"), false);
+  assert.equal(getEl("#rail-conn").classList.contains("sr-conn-dot"), true);
+  assert.equal(getEl("#rail-conn").classList.contains("on"), true);
+  T.setConnDotState(false);
+  assert.equal(getEl("#rail-conn").classList.contains("sr-conn-dot"), true, "offline toggle must preserve .sr-conn-dot positioning class");
+  assert.equal(getEl("#rail-conn").classList.contains("off"), true);
+
+  T.setView("prefs");
+  T.syncSideActive({ skipBadge: true });
+  assert.equal(getEl("#rail-collie").classList.contains("active"), false);
+  assert.equal(getEl("#rail-prefs").classList.contains("active"), true);
+  assert.equal(getEl("#rail-prefs").getAttribute("aria-current"), "page");
+  T.setView("collie");
+  T.syncSideActive({ skipBadge: true });
+  assert.equal(getEl("#rail-collie").classList.contains("active"), true);
+  assert.equal(getEl("#rail-collie").getAttribute("aria-current"), "page");
+  assert.equal(getEl("#rail-prefs").getAttribute("aria-current"), "");
+
+  getEl("#v-collie").classList.add("has-notes");
+  getEl("#notes-pane").style.transform = "";
+  getEl("#notes-pane").style.transition = "";
+  getEl("#v-collie .collie-top").offsetHeight = 60;
+  getEl("#crew").offsetHeight = 0;
+  T.syncCollieTopHeight();
+  assert.equal(getEl("#notes-pane").style.getPropertyValue("--collie-top-h"), "60px");
+  // Collapsing reveals #crew (38px) -> .collie-top becomes 98px, but --collie-top-h MUST stay 60px on >= 1360px!
+  T.setSideCollapsed(true);
+  assert.equal(getEl("#notes-pane").style.transform, "", "collapse frame 0 must not write inline transform on #notes-pane");
+  getEl("#v-collie .collie-top").offsetHeight = 98;
+  getEl("#crew").offsetHeight = 38;
+  stepRaf(16);
+  assert.equal(getEl("#notes-pane").style.transform, "", "collapse mid-glide must not move #notes-pane");
+  stepRaf(260);
+  assert.equal(getEl("#notes-pane").style.getPropertyValue("--collie-top-h"), "60px", "collapsing sidebar and revealing #crew must keep --collie-top-h fixed at 60px (dy=0)");
+  // Expanding hides #crew again -> --collie-top-h stays 60px and #notes-pane transform stays untouched
+  T.setSideCollapsed(false);
+  assert.equal(getEl("#notes-pane").style.transform, "", "expand frame 0 must not write inline transform on #notes-pane");
+  getEl("#v-collie .collie-top").offsetHeight = 60;
+  getEl("#crew").offsetHeight = 0;
+  stepRaf(16);
+  assert.equal(getEl("#notes-pane").style.transform, "", "expand mid-glide must not move #notes-pane");
+  stepRaf(260);
+  assert.equal(getEl("#notes-pane").style.getPropertyValue("--collie-top-h"), "60px", "expanding sidebar must keep --collie-top-h fixed at 60px (dy=0)");
+
+  // 2l) Ctrl-C interrupt 3s double-click confirmation for #wd-interrupt and #more-menu [data-act="interrupt"] (#t13368)
+  const keyCalls = () => fetchCalls.filter((c) => c.url.includes("/keys"));
+  const wdInt = getEl("#wd-interrupt");
+  wdInt.title = "发送 Ctrl-C 中断当前执行";
+  wdInt.setAttribute("aria-label", "中断当前执行");
+  T.openWorkerDrawer({ worker: "fix-alpha", immediate: true });
+  fetchCalls.length = 0;
+
+  // First click arms only — zero keys sent
+  wdInt.dispatch("click");
+  assert.equal(keyCalls().length, 0, "first click on #wd-interrupt must NOT send ctrl+c");
+  assert.equal(wdInt.classList.contains("is-armed"), true, "first click enters armed highlight state");
+  assert.equal(wdInt.title, "再点一次确认中断");
+  assert.equal(wdInt.getAttribute("aria-label"), "再点一次确认中断");
+
+  // Wait > 3s -> auto-disarms with zero keys sent
+  advanceTimers(3100);
+  assert.equal(wdInt.classList.contains("is-armed"), false, "3s timeout auto-disarms #wd-interrupt");
+  assert.equal(wdInt.title, "发送 Ctrl-C 中断当前执行");
+  assert.equal(wdInt.getAttribute("aria-label"), "中断当前执行");
+  assert.equal(keyCalls().length, 0, "timeout must not send ctrl+c");
+
+  // Arm then switch worker -> auto-disarms with zero keys sent
+  wdInt.dispatch("click");
+  assert.equal(wdInt.classList.contains("is-armed"), true);
+  T.openWorkerDrawer({ worker: "fix-beta", immediate: true });
+  assert.equal(wdInt.classList.contains("is-armed"), false, "switching worker must auto-disarm #wd-interrupt");
+  assert.equal(keyCalls().length, 0);
+
+  // Arm then close drawer -> auto-disarms with zero keys sent
+  wdInt.dispatch("click");
+  assert.equal(wdInt.classList.contains("is-armed"), true);
+  T.closeWorkerDrawer({ immediate: true });
+  assert.equal(wdInt.classList.contains("is-armed"), false, "closing worker drawer must auto-disarm #wd-interrupt");
+  assert.equal(keyCalls().length, 0);
+
+  // Re-open worker, click twice within 3s -> sends ["ctrl+c"] and disarms cleanly
+  T.openWorkerDrawer({ worker: "fix-alpha", immediate: true });
+  wdInt.dispatch("click");
+  assert.equal(wdInt.classList.contains("is-armed"), true);
+  assert.equal(keyCalls().length, 0);
+  advanceTimers(1200);
+  wdInt.dispatch("click");
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.equal(wdInt.classList.contains("is-armed"), false, "second click disarms #wd-interrupt");
+  assert.equal(wdInt.title, "发送 Ctrl-C 中断当前执行");
+  assert.equal(keyCalls().length, 1, "second click within 3s sends ctrl+c");
+  assert.ok(keyCalls()[0].url.includes("/api/panes/p-w1/keys") && keyCalls()[0].body.includes('"ctrl+c"'));
+  T.closeWorkerDrawer({ immediate: true });
+
+  // Full-screen terminal #more-menu [data-act="interrupt"] double-click confirmation
+  fetchCalls.length = 0;
+  T.setView("pane");
+  T.setCurrent("p-w1");
+  const moreMenu = getEl("#more-menu");
+  moreMenu.id = "more-menu";
+  moreMenu.hidden = false;
+  const menuIntBtn = makeEl("menu-int", "BUTTON");
+  menuIntBtn.dataset.act = "interrupt";
+  menuIntBtn.textContent = "中断 (Ctrl-C)";
+  menuIntBtn.title = "发送 Ctrl-C 中断当前执行";
+  menuIntBtn.closest = (sel) => {
+    if (sel.includes("data-act")) return menuIntBtn;
+    if (sel === ".menu") return moreMenu;
+    return null;
+  };
+  doc.dispatch("click", { target: menuIntBtn });
+  assert.equal(keyCalls().length, 0, "first click on menu interrupt must NOT send ctrl+c");
+  assert.equal(menuIntBtn.classList.contains("is-armed"), true);
+  assert.equal(menuIntBtn.textContent, "再点一次确认中断");
+  assert.equal(moreMenu.hidden, false, "first click keeps #more-menu open for immediate second click");
+
+  // Timeout disarms menu button without sending
+  advanceTimers(3100);
+  assert.equal(menuIntBtn.classList.contains("is-armed"), false);
+  assert.equal(menuIntBtn.textContent, "中断 (Ctrl-C)");
+  assert.equal(keyCalls().length, 0);
+
+  // Switching pane via route() disarms menu button without sending
+  doc.dispatch("click", { target: menuIntBtn });
+  assert.equal(menuIntBtn.classList.contains("is-armed"), true);
+  ctx.location.hash = "#/p/p-w2";
+  T.route();
+  assert.equal(menuIntBtn.classList.contains("is-armed"), false, "switching pane must auto-disarm menu interrupt");
+  assert.equal(menuIntBtn.textContent, "中断 (Ctrl-C)");
+  assert.equal(keyCalls().length, 0);
+
+  // Two clicks within 3s on new pane sends ["ctrl+c"] and closes menu
+  moreMenu.hidden = false;
+  doc.dispatch("click", { target: menuIntBtn });
+  assert.equal(menuIntBtn.classList.contains("is-armed"), true);
+  assert.equal(moreMenu.hidden, false);
+  advanceTimers(900);
+  doc.dispatch("click", { target: menuIntBtn });
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.equal(menuIntBtn.classList.contains("is-armed"), false);
+  assert.equal(menuIntBtn.textContent, "中断 (Ctrl-C)");
+  assert.equal(moreMenu.hidden, true, "second click closes #more-menu after sending");
+  assert.equal(keyCalls().length, 1, "second click within 3s sends ctrl+c on active pane");
+  assert.ok(keyCalls()[0].url.includes("/api/panes/p-w2/keys") && keyCalls()[0].body.includes('"ctrl+c"'));
+
+  // 2m) Tablet HTML drawer coordinate stability (#t13467):
+  //     - Separate composerMetrics (no scrollbar gutter) vs threadMetrics (with gutter) eliminates 4-6px composer end-jump
+  //     - Wide tablet (>=1181px, e.g. iPad Pro 11" 1194x834) applies frame-0 has-drawer-col-cap for 0px overlap & 0px end-jump
+  //     - Tablet overlay (<=1180px, e.g. 820x1180 / 1024x768 / 1180x820) leaves zero inline width/transform on main chat & drawer
+  //     - Rotating across 1180px while open finishes glide and clears inline drawer width & chat transforms
+  T.setView("collie");
+  const compClosed = T.composerMetrics(895, 780);
+  const compOpen = T.composerMetrics(455, 780);
+  assert.equal(compClosed.effCompW, 804);
+  assert.equal(compClosed.padLeft, 45.5);
+  assert.equal(compOpen.effCompW, 431);
+  assert.equal(compOpen.padLeft, 12);
+
+  // iPad Pro 11" landscape (1194x834, 299px sidebar, 440px HTML drawer -> 455px main)
+  ctx.innerWidth = 1194;
+  ctx.innerHeight = 834;
+  getEl(".side").offsetWidth = 299;
+  const colEl = getEl("#v-collie");
+  const thEl = getEl("#super-thread");
+  const compEl = getEl("#super-composer");
+  thEl.parentElement.offsetWidth = 895;
+  thEl.parentElement.clientWidth = 875;
+  T.showFilePane();
+  assert.equal(getEl("#app").classList.contains("is-drawer-opening"), true, "wide tablet >=1181px starts staged glide");
+  assert.equal(colEl.classList.contains("has-drawer-col-cap"), true, "tight wide tablet caps column width on frame 0 so content never slides under incoming HTML drawer");
+  assert.equal(colEl.style.getPropertyValue("--drawer-col-cap"), "395px");
+  assert.equal(colEl.style.getPropertyValue("--drawer-comp-w"), "431px");
+  assert.notEqual(thEl.style.transform, compEl.style.transform, "thread (guttered) and composer (gutter-free) must apply distinct exact translate3d offsets");
+  stepRaf(16);
+  stepRaf(260);
+  assert.equal(colEl.classList.contains("has-drawer-col-cap"), false, "frame N removes has-drawer-col-cap atomically");
+  assert.equal(thEl.style.transform, "", "frame N clears thread inline transform");
+  assert.equal(compEl.style.transform, "", "frame N clears composer inline transform");
+
+  // Rotate while open from 1194x834 -> 820x1180 (crosses 1180px into tablet overlay)
+  ctx.innerWidth = 820;
+  ctx.innerHeight = 1180;
+  getEl(".side").offsetWidth = 268;
+  ctx.dispatchEvent({ type: "resize" });
+  assert.equal(getEl("#file-view").style.width, "", "rotating across 1180px clears desktop inline width on #file-view");
+  assert.equal(thEl.style.transform, "");
+  assert.equal(compEl.style.transform, "");
+  T.closeFilePane({ immediate: true });
+
+  // Open HTML drawer directly on tablet overlay (1180x820): zero inline transforms, zero inline width, zero desktop glide
+  ctx.innerWidth = 1180;
+  ctx.innerHeight = 820;
+  getEl(".side").offsetWidth = 297;
+  T.showFilePane();
+  assert.equal(getEl("#app").classList.contains("has-file"), true);
+  assert.equal(getEl("#app").classList.contains("is-drawer-opening"), false, "tablet <=1180px must stay pure overlay without desktop glide");
+  assert.equal(colEl.classList.contains("has-drawer-col-cap"), false);
+  assert.equal(getEl("#file-view").style.width, "", "tablet <=1180px must not stamp desktop width onto #file-view");
+  assert.equal(thEl.style.transform, "");
+  assert.equal(compEl.style.transform, "");
+  T.closeFilePane({ immediate: true });
+  ctx.innerWidth = 1440;
+  ctx.innerHeight = 900;
+  getEl(".side").offsetWidth = 300;
+
+  // 2n) Worker ended auto-close + remove redundant #wd-gone banner + clear #wd-live & full-screen #live (#t13522, #t13532)
+  const toastTexts = () => getEl("#toasts").children.map((c) => c.dataset?.msg || c.children?.[0]?.textContent || c.textContent || "");
+  const clearToasts = () => { getEl("#toasts").children.length = 0; };
+  T.setView("collie");
+  T.setState({
+    agents: [
+      { pane_id: "p-w1", name: "fix-alpha", label: "任务甲", kind: "claude", status: "working", is_agent: true, cwd: "/tmp/a" },
+      { pane_id: "p-w2", name: "fix-beta", label: "任务乙", kind: "codex", status: "working", is_agent: true, cwd: "/tmp/b" },
+    ],
+    shells: [],
+    machines: [],
+  });
+  T.setSup({
+    router: { status: "idle", alive: true },
+    workers: [
+      { name: "fix-alpha", label: "任务甲", pane_id: "p-w1", status: "working", task: "推进甲", ended: false },
+      { name: "fix-beta", label: "任务乙", pane_id: "p-w2", status: "working", task: "推进乙", ended: false },
+      { name: "done-gamma", label: "已完成丙", pane_id: "", status: "done", task: "历史任务", last_report: "已收尾", ended: true },
+    ],
+    entries: [],
+  });
+
+  // Case 1: Watching live worker -> agent finishes via state update -> clears #wd-live & cache, hides #wd-gone, auto-closes drawer, shows toast
+  clearToasts();
+  T.openWorkerDrawer({ worker: "fix-alpha", immediate: true });
+  T.drawWdLive({ status: "working", tail: "running tests...", meta: "2s" });
+  assert.equal(getEl("#wd-live").hidden, false, "live worker shows #wd-live spinner while active");
+  assert.equal(T.wdLiveCache.has("p-w1"), true, "wdLiveCache caches active spinner while live");
+  assert.equal(getEl("#wd-gone").hidden, true, "#wd-gone stays hidden while live");
+
+  T.setState({
+    agents: [
+      { pane_id: "p-w2", name: "fix-beta", label: "任务乙", kind: "codex", status: "working", is_agent: true, cwd: "/tmp/b" },
+    ],
+    shells: [],
+    machines: [],
+  });
+  T.setSup({
+    router: { status: "idle", alive: true },
+    workers: [
+      { name: "fix-alpha", label: "任务甲", pane_id: "p-w1", status: "done", task: "推进甲", ended: true },
+      { name: "fix-beta", label: "任务乙", pane_id: "p-w2", status: "working", task: "推进乙", ended: false },
+      { name: "done-gamma", label: "已完成丙", pane_id: "", status: "done", task: "历史任务", last_report: "已收尾", ended: true },
+    ],
+    entries: [],
+  });
+  T.syncWorkerDrawerMeta();
+  assert.equal(getEl("#wd-live").hidden, true, "ended worker must hide #wd-live immediately");
+  assert.equal(getEl("#wd-live").innerHTML, "", "ended worker must clear #wd-live innerHTML");
+  assert.equal(T.wdLiveCache.has("p-w1"), false, "ended worker must clear wdLiveCache");
+  assert.equal(getEl("#wd-gone").hidden, true, "#wd-gone orange banner must never appear in drawer");
+  assert.equal(T.getActiveWorkerKey(), null, "live->ended worker auto-closes drawer");
+  assert.equal(getEl("#app").classList.contains("has-worker"), false, "auto-close removes .has-worker");
+  assert.ok(toastTexts().some((t) => t.includes("任务甲 已完成")), "auto-close shows subtle completion toast");
+  // Repeated sync must not duplicate toast
+  const toastCountAfterClose = getEl("#toasts").children.length;
+  T.syncWorkerDrawerMeta();
+  assert.equal(getEl("#toasts").children.length, toastCountAfterClose, "subsequent meta sync must not duplicate completion toast");
+
+  // Case 2: Watching live worker -> SSE "gone" fires before state removes agent -> clears spinner, closes drawer, shows toast
+  clearToasts();
+  esInstances.length = 0;
+  T.openWorkerDrawer({ worker: "fix-beta", immediate: true });
+  T.drawWdLive({ status: "working", tail: "compiling...", meta: "4s" });
+  assert.equal(getEl("#wd-live").hidden, false);
+  const betaEs = esInstances[esInstances.length - 1];
+  assert.ok(betaEs, "live worker opens EventSource stream");
+  betaEs.dispatch("gone");
+  assert.equal(getEl("#wd-live").hidden, true, "SSE gone clears #wd-live immediately");
+  assert.equal(getEl("#wd-live").innerHTML, "");
+  assert.equal(T.wdLiveCache.has("p-w2"), false);
+  assert.equal(getEl("#wd-gone").hidden, true, "SSE gone must not show redundant #wd-gone banner");
+  assert.equal(T.getActiveWorkerKey(), null, "SSE gone auto-closes watched live drawer");
+  assert.ok(toastTexts().some((t) => t.includes("任务乙 已完成")), "SSE gone shows completion toast");
+
+  // Case 3: Opening an already-ended historical worker stays open quietly without #wd-gone banner, spinner, or toast
+  clearToasts();
+  T.openWorkerDrawer({ worker: "done-gamma", immediate: true });
+  assert.equal(T.getActiveWorkerKey(), "done-gamma", "opening ended historical worker keeps drawer open");
+  assert.equal(getEl("#app").classList.contains("has-worker"), true);
+  assert.equal(getEl("#wd-gone").hidden, true, "historical ended worker must hide redundant #wd-gone banner");
+  assert.equal(getEl("#wd-live").hidden, true, "historical ended worker must not show #wd-live spinner");
+  assert.equal(getEl("#wd-live").innerHTML, "");
+  assert.equal(getEl("#wd-peek-note").textContent, "任务已结束 · 只读记录", "calm read-only footer stays visible");
+  assert.equal(getEl("#toasts").children.length, 0, "opening historical worker must not fire completion toast");
+  T.closeWorkerDrawer({ immediate: true });
+
+  // Case 4: Full-screen pane (#live) clears spinner when session ends (renderHead missing agent & SSE gone)
+  T.setView("pane");
+  T.setCurrent("p-w2");
+  T.drawLive({ status: "working", tail: "building...", meta: "3s" });
+  assert.equal(getEl("#live").hidden, false);
+  T.setState({ agents: [], shells: [], machines: [] });
+  T.renderHead();
+  assert.equal(getEl("#live").hidden, true, "full-screen #live must hide when pane leaves state.agents");
+  assert.equal(getEl("#live").innerHTML, "", "full-screen #live must clear innerHTML when ended");
+  assert.equal(getEl("#live")._html, "", "full-screen #live must reset _html cache");
 
   console.log("ALL_V0310_FLICKER_SMOOTHNESS_TESTS_OK");
 })().catch((e) => { console.error(e); process.exit(1); });

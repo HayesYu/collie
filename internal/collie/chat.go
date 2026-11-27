@@ -4,15 +4,28 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// SubagentCall carries structured metadata for a subagent invocation tool call
+// (Antigravity invoke_subagent/swarm, Claude Agent/Task, Codex spawn_agent).
+type SubagentCall struct {
+	Type   string `json:"type,omitempty"`
+	Role   string `json:"role,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
+	Model  string `json:"model,omitempty"`
+	ID     string `json:"id,omitempty"`
+}
 
 // Message is one entry of the conversation view that wraps an agent terminal.
 type Message struct {
@@ -22,11 +35,13 @@ type Message struct {
 	// ask: the agent's question to the human (Claude's AskUserQuestion, or
 	// the Claude app's end-of-turn box); Options are its answers' labels,
 	// Output the answer once given, Input a recap that came with it.
-	Options []string `json:"options,omitempty"`
-	Input   string   `json:"input,omitempty"`
-	Output  string   `json:"output,omitempty"`
-	Error   bool     `json:"error,omitempty"`
-	at      int64    // where in the log its line starts
+	Options  []string      `json:"options,omitempty"`
+	Input    string        `json:"input,omitempty"`
+	Detail   string        `json:"detail,omitempty"`
+	Output   string        `json:"output,omitempty"`
+	Error    bool          `json:"error,omitempty"`
+	Subagent *SubagentCall `json:"subagent,omitempty"`
+	at       int64         // where in the log its line starts
 }
 
 // transcript incrementally parses an agent's JSONL session log.
@@ -49,6 +64,7 @@ const (
 	maxMessages = 60 // what a viewer gets first; older ones load on demand
 	maxOutput   = 1600
 	maxInput    = 400
+	maxDetail   = 2400
 )
 
 func newTranscript(path, format string) *transcript {
@@ -207,7 +223,7 @@ func earlierMessages(path, format string, before int64, want int) ([]*Message, i
 		return nil, 0
 	}
 	end := min(fi.Size(), before+1<<20)
-	for win := int64(4 << 20); ; win *= 4 {
+	for win := int64(512 << 10); ; win *= 4 {
 		t := newTranscript(path, format)
 		if start := before - win; start > 0 {
 			t.offset, t.partial = start, true
@@ -262,35 +278,527 @@ func noise(s string) bool {
 		strings.HasPrefix(s, "Caveat: ")
 }
 
-func toolSummary(name string, raw json.RawMessage) string {
+var (
+	subagentIDRe = regexp.MustCompile(`"(?:conversationId|agentId|conversation_id|agent_id)"\s*:\s*"([^"]+)"`)
+	uuidPrefixRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+)
+
+// unwrapArgValue decodes Antigravity's JSON-encoded string parameter values
+// (e.g. "\"ls -la\"" → "ls -la", "[{...}]" → []any{...}).
+func unwrapArgValue(v any) any {
+	s, ok := v.(string)
+	if !ok || len(s) < 2 {
+		return v
+	}
+	trimmed := strings.TrimSpace(s)
+	if len(trimmed) < 2 {
+		return v
+	}
+	if trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"' {
+		var inner string
+		if json.Unmarshal([]byte(trimmed), &inner) == nil {
+			return inner
+		}
+	}
+	if (trimmed[0] == '[' && trimmed[len(trimmed)-1] == ']') || (trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}') {
+		var inner any
+		if json.Unmarshal([]byte(trimmed), &inner) == nil {
+			return inner
+		}
+	}
+	return v
+}
+
+func parseToolArgs(raw json.RawMessage) (map[string]any, string) {
+	if len(raw) == 0 {
+		return nil, ""
+	}
 	var m map[string]any
 	if json.Unmarshal(raw, &m) != nil {
 		var s string
-		if json.Unmarshal(raw, &s) == nil && json.Unmarshal([]byte(s), &m) != nil {
-			return clip(s, maxInput)
+		if json.Unmarshal(raw, &s) == nil {
+			if json.Unmarshal([]byte(s), &m) != nil {
+				return nil, strings.TrimSpace(s)
+			}
+		} else {
+			return nil, ""
 		}
 	}
-	for _, k := range []string{"command", "cmd", "CommandLine", "file_path", "path", "Path", "AbsolutePath", "TargetFile", "pattern", "Query", "query", "url", "Url", "description", "prompt"} {
-		switch v := m[k].(type) {
-		case string:
-			// agy encodes argument values as JSON strings ("\"ls -la\"").
-			var inner string
-			if json.Unmarshal([]byte(v), &inner) == nil {
-				v = inner
+	if m == nil {
+		return nil, ""
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = unwrapArgValue(v)
+	}
+	return out, ""
+}
+
+func lookupArg(m map[string]any, keys ...string) (any, bool) {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			return v, true
+		}
+	}
+	for _, k := range keys {
+		for mk, mv := range m {
+			if strings.EqualFold(mk, k) {
+				return mv, true
 			}
-			return clip(v, maxInput)
-		case []any:
-			parts := make([]string, 0, len(v))
-			for _, p := range v {
-				if s, ok := p.(string); ok {
-					parts = append(parts, s)
+		}
+	}
+	return nil, false
+}
+
+func scalarString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case float64:
+		if x == float64(int64(x)) {
+			return strconv.FormatInt(int64(x), 10)
+		}
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(x)
+	case []any:
+		parts := make([]string, 0, len(x))
+		for _, p := range x {
+			if s := scalarString(p); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	return ""
+}
+
+func argString(m map[string]any, keys ...string) string {
+	v, ok := lookupArg(m, keys...)
+	if !ok {
+		return ""
+	}
+	return scalarString(v)
+}
+
+func shortRef(s string) string {
+	s = strings.TrimSpace(s)
+	if uuidPrefixRe.MatchString(s) {
+		return s[:8]
+	}
+	return s
+}
+
+func firstMeaningfulLine(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	for _, l := range strings.Split(s, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		l = strings.TrimLeft(l, "#>-*• ")
+		l = strings.TrimSpace(l)
+		if l != "" {
+			return oneLine(l)
+		}
+	}
+	return ""
+}
+
+func joinNonEmpty(sep string, parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, sep)
+}
+
+func isLongParamKey(k string) bool {
+	switch strings.ToLower(k) {
+	case "prompt", "message", "brief", "systemprompt", "system_prompt", "description", "content", "replacement", "target", "script", "text", "body":
+		return true
+	}
+	return false
+}
+
+// formatToolDetail renders structured tool parameters as clean readable lines
+// (scalar metadata first, multi-line prose fields last) instead of raw escaped JSON.
+func formatToolDetail(m map[string]any) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if strings.EqualFold(k, "toolSummary") {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		li, lj := isLongParamKey(keys[i]), isLongParamKey(keys[j])
+		if li != lj {
+			return !li
+		}
+		return strings.ToLower(keys[i]) < strings.ToLower(keys[j])
+	})
+	var b strings.Builder
+	for _, k := range keys {
+		v := m[k]
+		if v == nil {
+			continue
+		}
+		var val string
+		var multiline bool
+		switch x := v.(type) {
+		case string:
+			val = strings.TrimSpace(x)
+			multiline = strings.Contains(val, "\n") || len(val) > 100
+		case float64, bool:
+			val = scalarString(x)
+		default:
+			if jb, err := json.MarshalIndent(x, "", "  "); err == nil {
+				val = string(jb)
+				multiline = strings.Contains(val, "\n")
+			}
+		}
+		if val == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			if multiline {
+				b.WriteString("\n\n")
+			} else {
+				b.WriteString("\n")
+			}
+		}
+		if multiline {
+			b.WriteString(k)
+			b.WriteString(":\n")
+			b.WriteString(val)
+		} else {
+			b.WriteString(k)
+			b.WriteString(": ")
+			b.WriteString(val)
+		}
+		if b.Len() >= maxDetail {
+			break
+		}
+	}
+	return clip(b.String(), maxDetail)
+}
+
+func subagentOf(name string, m map[string]any) (*SubagentCall, string) {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	var typ, role, prompt, model string
+	switch lower {
+	case "invoke_subagent":
+		typ = argString(m, "TypeName", "type_name", "subagent_type", "type")
+		role = argString(m, "Role", "role", "description", "name")
+		prompt = argString(m, "Prompt", "prompt", "message", "brief")
+		model = argString(m, "Model", "model")
+	case "agent", "task":
+		typ = argString(m, "subagent_type", "TypeName", "type")
+		role = argString(m, "description", "name", "Role", "role")
+		prompt = argString(m, "prompt", "Prompt", "message")
+		model = argString(m, "model", "Model")
+	case "spawn_agent":
+		typ = argString(m, "agent_type", "subagent_type", "type")
+		role = argString(m, "nickname", "role", "name", "description")
+		prompt = argString(m, "message", "prompt", "Prompt")
+		model = argString(m, "model")
+	case "swarm":
+		if !strings.EqualFold(argString(m, "action"), "add") {
+			return nil, ""
+		}
+		typ = "swarm"
+		role = argString(m, "name")
+		prompt = argString(m, "brief", "prompt")
+		model = argString(m, "model")
+	default:
+		return nil, ""
+	}
+	if strings.EqualFold(model, "inherit") {
+		model = ""
+	}
+	if typ == "" && role == "" && prompt == "" {
+		return nil, ""
+	}
+	sub := &SubagentCall{
+		Type:   clip(typ, 64),
+		Role:   clip(role, 120),
+		Prompt: clip(prompt, maxDetail),
+		Model:  clip(model, 64),
+	}
+	summary := firstMeaningfulLine(prompt)
+	if summary == "" {
+		summary = joinNonEmpty(" · ", role, typ)
+	}
+	return sub, clip(summary, 180)
+}
+
+func formatStepsSummary(m map[string]any) (string, string) {
+	rawSteps, ok := lookupArg(m, "steps")
+	if !ok {
+		return "", ""
+	}
+	arr, ok := rawSteps.([]any)
+	if !ok || len(arr) == 0 {
+		return "", ""
+	}
+	done := 0
+	active := ""
+	var lines []string
+	for _, item := range arr {
+		step, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		title := argString(step, "title")
+		st := strings.ToLower(argString(step, "status"))
+		mark := "[ ]"
+		switch st {
+		case "done", "completed":
+			done++
+			mark = "[x]"
+		case "in_progress", "running":
+			mark = "[>]"
+			if active == "" {
+				active = title
+			}
+		case "skipped":
+			mark = "[-]"
+		case "failed", "error":
+			mark = "[!]"
+		}
+		if title != "" {
+			lines = append(lines, mark+" "+title)
+		}
+	}
+	if len(lines) == 0 {
+		return "", ""
+	}
+	head := fmt.Sprintf("%d/%d", done, len(lines))
+	if active != "" {
+		head += " · " + active
+	} else if done == len(lines) {
+		head += " · 全部完成"
+	}
+	return clip(head, maxInput), clip(strings.Join(lines, "\n"), maxDetail)
+}
+
+func buildToolMessage(name string, raw json.RawMessage) *Message {
+	msg := &Message{Kind: "tool", Name: name}
+	m, plain := parseToolArgs(raw)
+	if m == nil {
+		msg.Input = clip(plain, maxInput)
+		return msg
+	}
+	if sub, summary := subagentOf(name, m); sub != nil {
+		msg.Input = summary
+		msg.Subagent = sub
+		return msg
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(name))
+	switch lower {
+	case "generate_image":
+		imgName := argString(m, "ImageName", "image_name", "name")
+		ratio := argString(m, "AspectRatio", "aspect_ratio")
+		prompt := firstMeaningfulLine(argString(m, "Prompt", "prompt"))
+		head := imgName
+		if ratio != "" {
+			if head != "" {
+				head += " (" + ratio + ")"
+			} else {
+				head = ratio
+			}
+		}
+		msg.Input = clip(joinNonEmpty(" · ", head, prompt), maxInput)
+		msg.Detail = formatToolDetail(m)
+		return msg
+	case "send_message":
+		rcpt := shortRef(argString(m, "Recipient", "recipient", "to", "target"))
+		body := firstMeaningfulLine(argString(m, "Message", "message", "content", "text"))
+		if rcpt != "" {
+			rcpt = "→ " + rcpt
+		}
+		msg.Input = clip(joinNonEmpty(" · ", rcpt, body), maxInput)
+		msg.Detail = formatToolDetail(m)
+		return msg
+	case "define_subagent":
+		n := argString(m, "Name", "name")
+		desc := firstMeaningfulLine(argString(m, "Description", "description"))
+		msg.Input = clip(joinNonEmpty(" · ", n, desc), maxInput)
+		msg.Detail = formatToolDetail(m)
+		return msg
+	case "manage_subagents":
+		act := argString(m, "Action", "action")
+		var ids []string
+		if rawIDs, ok := lookupArg(m, "ConversationIds", "conversation_ids", "ids"); ok {
+			if arr, ok := rawIDs.([]any); ok {
+				for _, x := range arr {
+					if s := shortRef(scalarString(x)); s != "" {
+						ids = append(ids, s)
+					}
 				}
 			}
-			return clip(strings.Join(parts, " "), maxInput)
+		}
+		msg.Input = clip(joinNonEmpty(" · ", act, strings.Join(ids, ", ")), maxInput)
+		if len(m) > 1 {
+			msg.Detail = formatToolDetail(m)
+		}
+		return msg
+	case "manage_task":
+		act := argString(m, "Action", "action")
+		tid := shortRef(argString(m, "TaskId", "task_id"))
+		inp := firstMeaningfulLine(argString(m, "Input", "input"))
+		msg.Input = clip(joinNonEmpty(" · ", act, tid, inp), maxInput)
+		if inp != "" || len(m) > 2 {
+			msg.Detail = formatToolDetail(m)
+		}
+		return msg
+	case "schedule":
+		cron := argString(m, "CronExpression", "cron_expression")
+		dur := argString(m, "DurationSeconds", "duration_seconds")
+		prompt := firstMeaningfulLine(argString(m, "Prompt", "prompt"))
+		when := cron
+		if when == "" && dur != "" {
+			when = "in " + dur + "s"
+		}
+		msg.Input = clip(joinNonEmpty(" · ", when, prompt), maxInput)
+		msg.Detail = formatToolDetail(m)
+		return msg
+	case "update_steps":
+		if sum, det := formatStepsSummary(m); sum != "" {
+			msg.Input = sum
+			msg.Detail = det
+			return msg
+		}
+	case "ask_question":
+		if rawQs, ok := lookupArg(m, "questions"); ok {
+			if arr, ok := rawQs.([]any); ok && len(arr) > 0 {
+				if q0, ok := arr[0].(map[string]any); ok {
+					if q := firstMeaningfulLine(argString(q0, "question")); q != "" {
+						msg.Input = clip(q, maxInput)
+						msg.Detail = formatToolDetail(m)
+						return msg
+					}
+				}
+			}
+		}
+	case "search_web":
+		q := argString(m, "query", "Query")
+		dom := argString(m, "domain", "Domain")
+		if dom != "" && q != "" {
+			q += " (" + dom + ")"
+		}
+		if q != "" {
+			msg.Input = clip(q, maxInput)
+			return msg
+		}
+	case "swarm":
+		act := argString(m, "action")
+		nm := argString(m, "name", "title")
+		mod := argString(m, "model")
+		msg.Input = clip(joinNonEmpty(" · ", act, nm, mod), maxInput)
+		if len(m) > 2 || argString(m, "brief") != "" {
+			msg.Detail = formatToolDetail(m)
+		}
+		return msg
+	}
+
+	// Tier 1: concrete command / path / search target / URL.
+	for _, k := range []string{"command", "cmd", "CommandLine", "file_path", "path", "Path", "AbsolutePath", "TargetFile", "pattern", "Query", "query", "url", "Url"} {
+		v, ok := m[k]
+		if !ok {
+			continue
+		}
+		var s string
+		switch x := v.(type) {
+		case string:
+			s = strings.TrimSpace(x)
+		case []any:
+			parts := make([]string, 0, len(x))
+			for _, p := range x {
+				if ps, ok := p.(string); ok {
+					parts = append(parts, ps)
+				}
+			}
+			s = strings.Join(parts, " ")
+		}
+		if s == "" {
+			continue
+		}
+		msg.Input = clip(s, maxInput)
+		if (k == "command" || k == "cmd" || k == "CommandLine") && (len(s) > maxInput || strings.Contains(s, "\n")) {
+			msg.Detail = clip(s, maxDetail)
+		}
+		return msg
+	}
+
+	// Tier 2: human-readable descriptive parameter (case-insensitive).
+	for _, k := range []string{"toolSummary", "description", "title", "summary", "message", "prompt", "brief", "text", "task", "question", "action", "name"} {
+		if v := argString(m, k); v != "" {
+			msg.Input = clip(firstMeaningfulLine(v), maxInput)
+			if len(m) > 1 || strings.Contains(v, "\n") || len(v) > maxInput {
+				msg.Detail = formatToolDetail(m)
+			}
+			return msg
 		}
 	}
-	b, _ := json.Marshal(m)
-	return clip(string(b), maxInput)
+
+	// Fallback: synthesize a compact key: value preview instead of dumping raw JSON.
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if strings.EqualFold(k, "toolSummary") {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		li, lj := isLongParamKey(keys[i]), isLongParamKey(keys[j])
+		if li != lj {
+			return !li
+		}
+		return strings.ToLower(keys[i]) < strings.ToLower(keys[j])
+	})
+	var parts []string
+	for _, k := range keys {
+		val := shortRef(firstMeaningfulLine(scalarString(m[k])))
+		if val == "" {
+			continue
+		}
+		parts = append(parts, k+": "+clip(val, 60))
+		if len(parts) >= 3 {
+			break
+		}
+	}
+	if len(parts) > 0 {
+		msg.Input = clip(strings.Join(parts, " · "), maxInput)
+		msg.Detail = formatToolDetail(m)
+		return msg
+	}
+	msg.Detail = formatToolDetail(m)
+	return msg
+}
+
+func attachToolOutput(m *Message, output string, isErr bool) {
+	if m == nil {
+		return
+	}
+	m.Output = clip(output, maxOutput)
+	m.Error = isErr
+	if m.Subagent != nil && m.Subagent.ID == "" {
+		if match := subagentIDRe.FindStringSubmatch(output); match != nil {
+			m.Subagent.ID = match[1]
+		}
+	}
+}
+
+func toolSummary(name string, raw json.RawMessage) string {
+	return buildToolMessage(name, raw).Input
 }
 
 // textOf flattens string-or-blocks content into plain text.
@@ -407,8 +915,7 @@ func (t *transcript) claudeLine(line []byte) bool {
 			switch b.Type {
 			case "tool_result":
 				if m := t.tools[b.ToolUseID]; m != nil {
-					m.Output = clip(textOf(b.Content), maxOutput)
-					m.Error = b.IsError
+					attachToolOutput(m, textOf(b.Content), b.IsError)
 					changed = true
 				}
 			case "text":
@@ -457,7 +964,7 @@ func (t *transcript) claudeLine(line []byte) bool {
 					changed = true
 					continue
 				}
-				m := &Message{Kind: "tool", Name: b.Name, Input: toolSummary(b.Name, b.Input)}
+				m := buildToolMessage(b.Name, b.Input)
 				t.tools[b.ID] = m
 				t.add(m)
 				changed = true
@@ -514,16 +1021,17 @@ func (t *transcript) codexLine(line []byte) bool {
 		if len(args) == 0 {
 			args = p.Input
 		}
-		m := &Message{Kind: "tool", Name: p.Name, Input: toolSummary(p.Name, args)}
-		if m.Name == "" {
-			m.Name = "shell"
+		toolName := p.Name
+		if toolName == "" {
+			toolName = "shell"
 		}
+		m := buildToolMessage(toolName, args)
 		t.tools[p.CallID] = m
 		t.add(m)
 		return true
 	case "function_call_output", "custom_tool_call_output":
 		if m := t.tools[p.CallID]; m != nil {
-			m.Output = clip(textOf(p.Output), maxOutput)
+			attachToolOutput(m, textOf(p.Output), false)
 			return true
 		}
 	}
@@ -566,7 +1074,7 @@ func (t *transcript) agyLine(line []byte) bool {
 			changed = true
 		}
 		for _, c := range e.ToolCalls {
-			m := &Message{Kind: "tool", Name: c.Name, Input: agyToolSummary(c.Args)}
+			m := buildToolMessage(c.Name, c.Args)
 			t.add(m)
 			t.pending = append(t.pending, m)
 			changed = true
@@ -578,8 +1086,8 @@ func (t *transcript) agyLine(line []byte) bool {
 		}
 		m := t.pending[0]
 		t.pending = t.pending[1:]
-		m.Output = clip(agyOutput(e.Content), maxOutput)
-		m.Error = strings.Contains(e.Content, "exited with code") && !strings.Contains(e.Content, "exited with code 0")
+		isErr := strings.Contains(e.Content, "exited with code") && !strings.Contains(e.Content, "exited with code 0")
+		attachToolOutput(m, agyOutput(e.Content), isErr)
 		return true
 	case "ERROR_MESSAGE":
 		if strings.TrimSpace(e.Content) == "" {
@@ -592,20 +1100,7 @@ func (t *transcript) agyLine(line []byte) bool {
 }
 
 func agyToolSummary(raw json.RawMessage) string {
-	var m map[string]string
-	if json.Unmarshal(raw, &m) == nil {
-		if s, ok := m["toolSummary"]; ok {
-			var inner string
-			if json.Unmarshal([]byte(s), &inner) == nil && inner != "" {
-				// prefer the concrete command/path, fall back to the summary
-				if c := toolSummary("", raw); c != "" && !strings.HasPrefix(c, "{") {
-					return c
-				}
-				return clip(inner, maxInput)
-			}
-		}
-	}
-	return toolSummary("", raw)
+	return buildToolMessage("", raw).Input
 }
 
 // agyOutput drops agy's timing preamble from a tool result.

@@ -12,6 +12,7 @@ import (
 )
 
 func TestSecretStorePermissionsAndRedact(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	ss, err := openSecretStore(dir)
 	if err != nil {
@@ -79,6 +80,7 @@ func TestSecretStorePermissionsAndRedact(t *testing.T) {
 }
 
 func TestIntegrationsAPINeverLeaksSecrets(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	s := &Server{token: "tok-test", home: dir}
 	sp, err := newSuper(s, dir)

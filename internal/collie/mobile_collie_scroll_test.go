@@ -8,6 +8,7 @@ import (
 )
 
 func TestMobileCollieUpwardScrollRegressionJS(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")

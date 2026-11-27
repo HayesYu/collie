@@ -18,6 +18,7 @@ import (
 )
 
 func TestListDirsLocalFilteringHiddenLimitsAndRecent(t *testing.T) {
+	t.Parallel()
 	realHome := t.TempDir()
 	// Simulate a symlinked $HOME (e.g. /home/u -> /data00/home/u).
 	linkRoot := t.TempDir()
@@ -168,6 +169,7 @@ func TestListDirsLocalFilteringHiddenLimitsAndRecent(t *testing.T) {
 }
 
 func TestListDirsRemoteNodeOnlineLegacyAndOffline(t *testing.T) {
+	t.Parallel()
 	hubHome := t.TempDir()
 	nodeHome := t.TempDir()
 	for _, rel := range []string{"agent-workspace/mac-app", "Desktop", ".ssh"} {
@@ -298,6 +300,7 @@ func TestListDirsRemoteNodeOnlineLegacyAndOffline(t *testing.T) {
 }
 
 func TestRouterPendingTracksAllLaunchSettings(t *testing.T) {
+	t.Parallel()
 	dbDir := t.TempDir()
 	db, err := openDB(filepath.Join(dbDir, "herd.db"))
 	if err != nil {
@@ -411,6 +414,7 @@ func TestRouterPendingTracksAllLaunchSettings(t *testing.T) {
 }
 
 func TestWebDirPickerAutoSaveAndFooterContracts(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed; skipping JS unit tests")
@@ -431,17 +435,23 @@ const appJs = fs.readFileSync(path.join(root, "web/app.js"), "utf8");
 assert.match(html, /id="collie-pending-bar"/, "main chat must have #collie-pending-bar");
 assert.match(html, /id="l-cwd"/, "launcher must keep #l-cwd input");
 assert.doesNotMatch(html, /id="dir-up"/, "legacy launcher #dir-up should be replaced by unified picker");
+const sideNavMatch = html.match(/<nav class="side-nav"[^>]*>([\s\S]*?)<\/nav>/);
+assert.ok(sideNavMatch, "side-nav must exist");
+const sideNavOrder = [...sideNavMatch[1].matchAll(/id="(nav-collie|nav-auto)"/g)].map((m) => m[1]);
+assert.deepEqual(sideNavOrder, ["nav-collie", "nav-auto"], "side-nav must place 自动化 card directly under 和 Collie 对话");
 const footMatch = html.match(/<footer class="side-foot">([\s\S]*?)<\/footer>/);
 assert.ok(footMatch, "side-foot must exist");
 const foot = footMatch[1];
 assert.match(foot, /id="update-all-btn"/, "side-foot keeps update capsule");
-assert.match(foot, /class="sf-bar"/, "side-foot uses unified 4-icon .sf-bar matching collapsed rail");
-const footOrder = [...foot.matchAll(/id="(nav-auto|nav-peers|nav-devices|nav-prefs)"/g)].map((m) => m[1]);
-assert.deepEqual(footOrder, ["nav-auto", "nav-peers", "nav-devices", "nav-prefs"], "side-foot keeps exact 4-icon order matching rail");
+assert.match(foot, /class="sf-row"/, "side-foot uses left-status + right-actions .sf-row");
+const footOrder = [...foot.matchAll(/id="(nav-devices|nav-peers|nav-prefs)"/g)].map((m) => m[1]);
+assert.deepEqual(footOrder, ["nav-devices", "nav-peers", "nav-prefs"], "side-foot keeps devices status on left and peers + prefs icons on right");
+assert.doesNotMatch(foot, /id="nav-auto"/, "自动化 must live in .side-nav, not .side-foot");
 assert.doesNotMatch(foot, /id="logout"/, "logout must be moved out of side-foot");
 
-// 2. CSS contracts: green update capsule, unified 4-icon footer & amber restart bar.
-assert.match(css, /\.sf-bar\s*\{[\s\S]*?display:\s*flex;/, "unified .sf-bar flex layout must exist");
+// 2. CSS contracts: green update capsule, left-flex device status + right icons & amber restart bar.
+assert.match(css, /\.sf-row\s*\{[\s\S]*?display:\s*flex;/, ".sf-row flex layout must exist");
+assert.match(css, /a\.foot-status\s*\{[\s\S]*?flex:\s*1 1 0%;[\s\S]*?min-width:\s*0;/, "expanded footer device status must expand horizontally on the left");
 assert.match(css, /\.update-pill\s*\{[\s\S]*?color:\s*var\(--ok\);/, "update pill must use green var(--ok)");
 assert.match(css, /\.router-pending-bar\s*\{/, "router-pending-bar styles must exist");
 
@@ -460,7 +470,7 @@ const tabsMatch = html.match(/<div class="tabs" id="auto-tabs">([\s\S]*?)<\/div>
 assert.ok(tabsMatch, "auto-tabs must exist");
 const tabKeys = [...tabsMatch[1].matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
 assert.deepEqual(tabKeys, ["memory", "timers", "inbox", "integrations", "settings"], "auto-tabs must contain memory, timers, inbox, integrations, settings");
-assert.match(foot, /id="nav-auto"[^>]*title="自动化 · 接入与定时"/, "side-foot #nav-auto keeps tooltip 自动化 · 接入与定时");
+assert.match(sideNavMatch[1], /id="nav-auto"[^>]*title="自动化 · 接入与定时"/, "side-nav #nav-auto keeps tooltip 自动化 · 接入与定时");
 assert.doesNotMatch(appJs, /id="settings-hooks-fold"/, "hooks UI must not be rendered in settings");
 assert.match(appJs, /id="inbox-thread-filter"/, "multi-thread filter must live in inbox");
 

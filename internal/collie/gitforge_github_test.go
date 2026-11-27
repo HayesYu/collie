@@ -14,6 +14,7 @@ import (
 )
 
 func TestGitHubProviderConditionalPollAnd304(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var notifReqs int
 	var gotIfNoneMatch, gotIfModSince string
@@ -173,6 +174,7 @@ func TestGitHubProviderConditionalPollAnd304(t *testing.T) {
 }
 
 func TestGitHubProviderPATSecretStore0600AndAuthCircuitBreak(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))

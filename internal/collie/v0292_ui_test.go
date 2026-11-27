@@ -10,6 +10,7 @@ import (
 )
 
 func TestSuperSayPickSilentReceiptAndQuote(t *testing.T) {
+	t.Parallel()
 	sp, db, call := newPendingTestEnv(t)
 
 	// 1) Collie emits an --opt decision card with --file attachment.
@@ -189,6 +190,7 @@ func TestSuperSayPickSilentReceiptAndQuote(t *testing.T) {
 }
 
 func TestSuperNotebookAPI(t *testing.T) {
+	t.Parallel()
 	sp, _, call := newPendingTestEnv(t)
 
 	// Seed memory/tasks/*.md
@@ -279,6 +281,7 @@ func TestSuperNotebookAPI(t *testing.T) {
 }
 
 func TestWebV0292UIContractsAndBehavior(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}

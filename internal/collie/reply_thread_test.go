@@ -14,6 +14,7 @@ import (
 )
 
 func TestSuperSayQuoteUserAndCollieEntries(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -183,6 +184,7 @@ func TestSuperSayQuoteUserAndCollieEntries(t *testing.T) {
 }
 
 func TestReplyThreadSettingsAndNotificationsJS(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")
@@ -640,9 +642,9 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(!appCss.includes(".item .sub { font-family: var(--mono); }"), "sidebar subtitles use unified sans font");
   assert.ok(!/\.kind\s*\{[^}]*--mono/.test(appCss), "header .kind badge uses unified sans font");
   assert.ok(!/\.chip \.k\s*\{[^}]*--mono/.test(appCss), "crew strip .chip .k uses unified sans font");
-  const idxMax1000HasThread = appCss.lastIndexOf(".app.has-thread { grid-template-columns: var(--side-w) 1fr; }");
-  const idxMax760HasThread = appCss.lastIndexOf(".app.has-thread { grid-template-columns: 1fr; }");
-  assert.ok(idxMax1000HasThread > 0 && idxMax760HasThread > idxMax1000HasThread, "mobile 760px has-thread 1fr rule must override 1000px side-w rule");
+  const idxMax1000HasThread = appCss.lastIndexOf(".app.has-thread { grid-template-columns: var(--side-w) minmax(0, 1fr); }");
+  const idxMax760HasThread = appCss.lastIndexOf(".app.has-thread { grid-template-columns: minmax(0, 1fr); }");
+  assert.ok(idxMax1000HasThread > 0 && idxMax760HasThread > idxMax1000HasThread, "mobile 760px has-thread minmax(0, 1fr) rule must override tablet side-w rule");
 
   // ─── 3. Missing-root auto-fetch via /api/super/earlier ───
   const partialEntries = [

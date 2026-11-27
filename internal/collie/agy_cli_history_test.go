@@ -122,6 +122,7 @@ func TestAgyCLIHistory(t *testing.T) {
 }
 
 func TestAgyCLIWorkspace(t *testing.T) {
+	t.Parallel()
 	for raw, want := range map[string]string{
 		"/work":    "/work",
 		"file:///": "/",

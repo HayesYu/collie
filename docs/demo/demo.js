@@ -11,8 +11,8 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.3.9", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.3.9", agents: ["claude", "codex"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.3.11", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.3.11", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -286,7 +286,7 @@
   let routerStatus = "idle";
 
   // Conversations, by pane. Tool steps read as one quiet line in the app.
-  const tool = (name, input, output, error) => ({ kind: "tool", name, input, output, error });
+  const tool = (name, input, output, error, extra) => ({ kind: "tool", name, input, output, error, ...(extra || {}) });
   const chats = {
     "w2:p1@macbook": [
       { kind: "user", text: "[image:~/.collie/images/0d3a9e5c71b2f4e8a6c1.png]\n首页加一个暗色模式：跟随系统，右上角可以手动切换，记住用户的选择。参考这张图的配色。" },
@@ -311,8 +311,18 @@
     ],
     "w4:p1": [
       { kind: "user", text: "migrations/ 里有不少重复和废弃的脚本，整理一下，保证从空库能一路升到最新。" },
-      tool("Bash", "ls migrations | wc -l", "41"),
-      tool("Bash", "make db-reset && make migrate", "ok: 41 migrations applied"),
+      tool("invoke_subagent", "扫描 migrations/ 目录下所有 SQL 脚本，找出重复加索引和未执行过的回滚文件。", 'Created the following subagent:\n{\n  "conversationId": "a84f2c19-9012-4e7b-b3d1-0123456789ab",\n  "subagentDescriptor": {\n    "typeName": "research",\n    "role": "Migration Auditor"\n  }\n}', false, {
+        subagent: {
+          type: "research",
+          role: "Migration Auditor",
+          prompt: "扫描 migrations/ 目录下所有 SQL 脚本，找出重复加索引和未执行过的回滚文件。\n\n输出：\n1. 可合并的重复索引脚本分组\n2. 从未上线过的废弃回滚脚本\n3. 合并后的依赖顺序校验建议",
+          id: "a84f2c19-9012-4e7b-b3d1-0123456789ab",
+        },
+      }),
+      tool("update_steps", "3/3 · 全部完成", "OK", false, {
+        detail: "[x] 扫描并分组重复索引脚本\n[x] 清理废弃回滚文件并验证空库迁移\n[x] 补充 migrations/README.md 规范",
+      }),
+      tool("Bash", "make db-reset && make migrate", "ok: 33 migrations applied"),
       tool("Edit", "migrations/README.md", "+18"),
       { kind: "assistant", text: "整理完了：\n\n- 合并了 6 个只加索引的小脚本，删掉 3 个从没在生产跑过的回滚脚本\n- 从空库升级到最新验证通过（41 → 33 个文件）\n- `migrations/README.md` 写了命名规则和怎么加新脚本" },
     ],
@@ -382,9 +392,33 @@
     { id: "t33", source: "github", thread: "github:alex/shop-api#58", from: "octo-dev", action: "candidate", status: "delivered", text: "issue_comment: 分页最后一页有重复数据，能看一下吗？@collie", at: ago(40), targets: ["collie"] },
     { id: "t34", source: "timer", thread: "chat:main", from: "", action: "respond", status: "delivered", text: "每天 9 点：检查各个任务的进展，有卡住的告诉我", at: ago(60 * 3), targets: ["collie"] },
   ];
+  const demoOlderSpecs = [
+    { source: "github", thread: "github:alex/shop-web#112", from: "maya", action: "candidate", status: "delivered", text: "review_comment: 首页骨架屏在窄屏下高度略抖动，建议固定卡片最小高度" },
+    { source: "worker", thread: "chat:main", from: "fix-flaky-test", action: "respond", status: "delivered", text: "report from fix-flaky-test: 已定位订单列表分页排序缺少 id 兜底，正在补充回归单测" },
+    { source: "github", thread: "github:alex/shop-api#54", from: "ci-bot", action: "notify", status: "delivered", text: "check_run: integration-tests 通过（耗时 3m 42s，0 flaky）" },
+    { source: "timer", thread: "chat:main", from: "", action: "respond", status: "delivered", text: "每 2 小时巡检：检查进行中分支测试状态与阻塞项" },
+    { source: "github", thread: "github:alex/shop-api#58", from: "octo-dev", action: "candidate", status: "delivered", text: "pull_request_review: 新增游标排序测试覆盖边界页，LGTM" },
+    { source: "chat", thread: "chat:main", from: "you", action: "respond", status: "delivered", text: "把昨天合并的迁移脚本顺手整理一下，确认回滚路径干净" },
+  ];
+  for (let i = 0; i < 56; i++) {
+    const sp = demoOlderSpecs[i % demoOlderSpecs.length];
+    triggers.push({
+      id: "t" + (35 + i),
+      source: sp.source,
+      thread: sp.thread,
+      from: sp.from,
+      action: sp.action,
+      status: sp.status,
+      text: `${sp.text}（记录 #${i + 1}）`,
+      at: ago(60 * (4 + i)),
+      targets: ["collie"],
+    });
+  }
   const threads = [
     { id: "chat:main", triggers: triggers.filter((t) => t.thread === "chat:main"), subscribers: [], last_at: ago(6) },
-    { id: "github:alex/shop-api#58", triggers: [triggers[2]], subscribers: ["codex-1"], last_at: ago(40) },
+    { id: "github:alex/shop-api#58", triggers: triggers.filter((t) => t.thread === "github:alex/shop-api#58"), subscribers: ["codex-1"], last_at: ago(40) },
+    { id: "github:alex/shop-web#112", triggers: triggers.filter((t) => t.thread === "github:alex/shop-web#112"), subscribers: ["claude-2"], last_at: ago(60 * 4) },
+    { id: "github:alex/shop-api#54", triggers: triggers.filter((t) => t.thread === "github:alex/shop-api#54"), subscribers: [], last_at: ago(60 * 6) },
   ];
   const timers = [
     { id: "tm1", spec: "weekdays 09:00", text: "检查各个任务的进展，有卡住的告诉我", target: "", enabled: true, next_run: later(60 * 18), owner: "you" },
@@ -951,7 +985,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
         hub_id: demoPeerHubID,
         hub_name: demoPeerHubName,
         enabled: demoPeersEnabled,
-        addrs: ["http://192.168.1.20:7788"],
+        addrs: ["http://192.168.1.20:7788", "http://100.64.0.18:7788"],
         peers: demoPeers,
         blocklist: demoPeerBlocklist,
         blocked_count: demoPeerBlocklist.length,
@@ -967,18 +1001,35 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/super/peers/invite" && method === "POST") {
       const mode = body.mode || "advise";
       if (body.reset) demoPeerCardCode = "DEMO" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 12);
-      const compact = { h: demoPeerHubID, n: demoPeerHubName, a: ["192.168.1.20:7788"], t: demoPeerCardCode };
+      const compact = { h: demoPeerHubID, n: demoPeerHubName, a: ["192.168.1.20:7788", "100.64.0.18:7788"], t: demoPeerCardCode };
       const bytes = new TextEncoder().encode(JSON.stringify(compact));
       let bin = "";
       bytes.forEach((b) => { bin += String.fromCharCode(b); });
       const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
       const inv = "collie-peer://v2/" + b64;
       const joinUrl = "https://lihuanyu0w0.github.io/collie/join/#2." + b64;
-      return json({ invite_code: inv, join_url: joinUrl, code: compact.t, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: ["http://192.168.1.20:7788"], permanent: true });
+      return json({ invite_code: inv, join_url: joinUrl, code: compact.t, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: ["http://192.168.1.20:7788", "http://100.64.0.18:7788"], permanent: true });
     }
     if (p === "/api/super/peers/pair" && method === "POST") {
       const id = "peer-" + (demoPeers.length + 1);
-      const np = { id, hub_id: "hub_demo_" + (demoPeers.length + 1), name: body.name || "新好友的边牧", addrs: ["http://192.168.1.88:7788"], primary_addr: "http://192.168.1.88:7788", mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      let parsedName = "";
+      let parsedHubId = "hub_demo_" + (demoPeers.length + 1);
+      let parsedAddr = "http://192.168.1.88:7788";
+      try {
+        const raw = String(body.invite_code || "");
+        const m = raw.match(/collie-peer:\/\/v2\/([A-Za-z0-9_-]+)/);
+        if (m) {
+          const b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+          const bin = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const obj = JSON.parse(new TextDecoder().decode(bytes));
+          if (obj.n) parsedName = obj.n;
+          if (obj.h) parsedHubId = obj.h;
+          if (Array.isArray(obj.a) && obj.a[0]) parsedAddr = obj.a[0].includes("://") ? obj.a[0] : "http://" + obj.a[0];
+        }
+      } catch {}
+      const np = { id, hub_id: parsedHubId, name: body.name || parsedName || "新好友的边牧", addrs: [parsedAddr], primary_addr: parsedAddr, mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       demoPeers.push(np);
       pushAll();
       return json({ ok: true, pending: true, peer: np });
@@ -1008,7 +1059,9 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     const peerPingM = /^\/api\/super\/peers\/([^/]+)\/ping$/.exec(p);
     if (peerPingM && method === "POST") {
-      return json({ ok: true, peer_id: decodeURIComponent(peerPingM[1]), addr: "http://192.168.1.42:7788", latency_ms: 12, remote_name: "Sam的边牧", remote_version: "v0.2.95", protocol_ver: 1 });
+      const pid = decodeURIComponent(peerPingM[1]);
+      const target = demoPeers.find((x) => x.id === pid);
+      return json({ ok: true, peer_id: pid, addr: target?.primary_addr || "http://192.168.1.42:7788", latency_ms: 12, remote_name: target?.name || "Sam的边牧", remote_version: "v0.3.11", protocol_ver: 1 });
     }
     const peerBlockDelM = /^\/api\/super\/peers\/blocklist\/([^/]+)$/.exec(p);
     if (peerBlockDelM && method === "DELETE") {
@@ -1180,7 +1233,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
     if (p === "/api/version") return json({
-      version: "v0.3.9", latest: "v0.3.9", outdated: null,
+      version: "v0.3.11", latest: "v0.3.11", outdated: null,
       machines: machines.map((x) => ({ id: x.id, name: x.name, version: x.version, local: !!x.local, online: !!x.online, outdated: false })),
     });
     if (p === "/api/local-app") return json({ url: "" });
@@ -1302,11 +1355,11 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.3.9", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.3.11", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.3.9", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.3.9",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.3.11", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.3.11",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

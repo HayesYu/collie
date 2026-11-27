@@ -13,6 +13,7 @@ import (
 )
 
 func TestReadFileAsHTMLSandboxLimitsAndNodeForwarding(t *testing.T) {
+	t.Parallel()
 	hubHome := t.TempDir()
 	nodeHome := t.TempDir()
 
@@ -194,6 +195,7 @@ func TestReadFileAsHTMLSandboxLimitsAndNodeForwarding(t *testing.T) {
 }
 
 func TestReadFileDownloadFullUntruncatedAndCrossMachine(t *testing.T) {
+	t.Parallel()
 	hubHome := t.TempDir()
 	nodeHome := t.TempDir()
 
@@ -341,6 +343,7 @@ func TestReadFileDownloadFullUntruncatedAndCrossMachine(t *testing.T) {
 }
 
 func TestAttachmentDispositionSanitizesQuotesAndCRLF(t *testing.T) {
+	t.Parallel()
 	got := attachmentDisposition("/tmp/bad\"name\r\n;x.txt")
 	if strings.ContainsAny(got, "\r\n") || strings.Count(got, `"`) != 2 {
 		t.Fatalf("unsafe Content-Disposition = %q", got)

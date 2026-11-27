@@ -20,6 +20,7 @@ import (
 )
 
 func TestCursorEnv(t *testing.T) {
+	t.Parallel()
 	base := []string{
 		"PATH=/usr/bin",
 		"NO_OPEN_BROWSER=0",
@@ -42,6 +43,7 @@ func TestCursorEnv(t *testing.T) {
 }
 
 func TestCursorBridgeArgsAndACPArgs(t *testing.T) {
+	t.Parallel()
 	t.Run("bypass passes --force and --approve-mcps before acp without --yolo", func(t *testing.T) {
 		cfg, err := parseCursorBridgeArgs([]string{"--force", "--model", "auto", "--effort", "high"})
 		if err != nil {
@@ -86,6 +88,7 @@ func TestCursorBridgeArgsAndACPArgs(t *testing.T) {
 }
 
 func TestPickPermissionOptionsAndAskQuestion(t *testing.T) {
+	t.Parallel()
 	cursorOpts := []acpPermOption{
 		{OptionID: "allow-once", Name: "Allow once", Kind: "allow_once"},
 		{OptionID: "allow-always", Name: "Allow always", Kind: "allow_always"},
@@ -227,6 +230,7 @@ for raw in sys.stdin:
 }
 
 func TestCursorBridgeEndToEndWithFakeACP(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	fakeSock := filepath.Join(tmp, "herdr.sock")
 
@@ -675,6 +679,7 @@ for raw in sys.stdin:
 }
 
 func TestSuperSaveSettingsCursorWorkerOnlyAndParameterizedModel(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {

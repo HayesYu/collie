@@ -365,23 +365,133 @@ func loadStateWithMeta(db *sql.DB, home string) (*State, bool, error) {
 	return st, hasSettings, nil
 }
 
+// flushCache remembers the last JSON payload persisted to SQLite for each row
+// in a Super's working set so frequent flushes only upsert rows that changed.
+type flushCache struct {
+	kv       map[string]string
+	triggers map[string]string
+	threads  map[string]string
+	workers  map[string]string
+	entries  map[string]string
+	timers   map[string]string
+}
+
+func newFlushCache() *flushCache {
+	return &flushCache{
+		kv:       map[string]string{},
+		triggers: map[string]string{},
+		threads:  map[string]string{},
+		workers:  map[string]string{},
+		entries:  map[string]string{},
+		timers:   map[string]string{},
+	}
+}
+
+func (c *flushCache) prune(st *State) {
+	if c == nil || st == nil {
+		return
+	}
+	if len(c.triggers) > len(st.Triggers) {
+		keep := make(map[string]string, len(st.Triggers))
+		for _, t := range st.Triggers {
+			if raw, ok := c.triggers[t.ID]; ok {
+				keep[t.ID] = raw
+			}
+		}
+		c.triggers = keep
+	}
+	if len(c.threads) > len(st.Threads) {
+		keep := make(map[string]string, len(st.Threads))
+		for id := range st.Threads {
+			if raw, ok := c.threads[id]; ok {
+				keep[id] = raw
+			}
+		}
+		c.threads = keep
+	}
+	if len(c.workers) > len(st.Workers) {
+		keep := make(map[string]string, len(st.Workers))
+		for name := range st.Workers {
+			if raw, ok := c.workers[name]; ok {
+				keep[name] = raw
+			}
+		}
+		c.workers = keep
+	}
+	if len(c.entries) > len(st.Entries) {
+		keep := make(map[string]string, len(st.Entries))
+		for _, e := range st.Entries {
+			if raw, ok := c.entries[e.ID]; ok {
+				keep[e.ID] = raw
+			}
+		}
+		c.entries = keep
+	}
+	if len(c.timers) > len(st.Timers) {
+		keep := make(map[string]string, len(st.Timers))
+		for _, t := range st.Timers {
+			if raw, ok := c.timers[t.ID]; ok {
+				keep[t.ID] = raw
+			}
+		}
+		c.timers = keep
+	}
+}
+
 // saveState upserts the in-memory working set in one transaction.
 func saveState(db *sql.DB, st *State, deletedTimers []string) error {
+	return saveStateCached(db, st, deletedTimers, nil)
+}
+
+func saveStateCached(db *sql.DB, st *State, deletedTimers []string, cache *flushCache) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	put := func(q string, args ...any) {
-		if err == nil {
-			_, err = tx.Exec(q, args...)
-		}
-	}
 	js := func(v any) string { b, _ := json.Marshal(v); return string(b) }
 
-	put(`INSERT INTO kv(k,v) VALUES('seq',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.Itoa(st.Seq))
-	put(`INSERT INTO kv(k,v) VALUES('settings',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Settings))
-	put(`INSERT INTO kv(k,v) VALUES('policies',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Policies))
+	var nextKV, nextTriggers, nextThreads, nextWorkers, nextEntries, nextTimers map[string]string
+	if cache != nil {
+		nextKV = map[string]string{}
+		nextTriggers = map[string]string{}
+		nextThreads = map[string]string{}
+		nextWorkers = map[string]string{}
+		nextEntries = map[string]string{}
+		nextTimers = map[string]string{}
+	}
+
+	var kvStmt, trigStmt, threadStmt, workerStmt, entryStmt, timerStmt, delTimerStmt *sql.Stmt
+	closeStmts := func() {
+		for _, s := range []*sql.Stmt{kvStmt, trigStmt, threadStmt, workerStmt, entryStmt, timerStmt, delTimerStmt} {
+			if s != nil {
+				_ = s.Close()
+			}
+		}
+	}
+	defer closeStmts()
+
+	putKV := func(k, v string) {
+		if err != nil {
+			return
+		}
+		if cache != nil && cache.kv[k] == v {
+			return
+		}
+		if kvStmt == nil {
+			kvStmt, err = tx.Prepare(`INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`)
+			if err != nil {
+				return
+			}
+		}
+		if _, err = kvStmt.Exec(k, v); err == nil && nextKV != nil {
+			nextKV[k] = v
+		}
+	}
+
+	putKV("seq", strconv.Itoa(st.Seq))
+	putKV("settings", js(st.Settings))
+	putKV("policies", js(st.Policies))
 	dismissed := make([]string, 0, len(st.Dismissed))
 	for id, on := range st.Dismissed {
 		if on && id != "" {
@@ -395,7 +505,7 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 		}
 		return dismissed[i] < dismissed[j]
 	})
-	put(`INSERT INTO kv(k,v) VALUES('dismissed',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(dismissed))
+	putKV("dismissed", js(dismissed))
 	pinned := st.Pinned
 	if pinned == nil {
 		pinned = []string{}
@@ -403,35 +513,149 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 	if len(pinned) > maxPinned {
 		pinned = pinned[len(pinned)-maxPinned:]
 	}
-	put(`INSERT INTO kv(k,v) VALUES('pinned',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(pinned))
-	put(`INSERT INTO kv(k,v) VALUES('last_read_entry_id',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, st.LastReadEntryID)
+	putKV("pinned", js(pinned))
+	putKV("last_read_entry_id", st.LastReadEntryID)
+
 	for _, t := range st.Triggers {
-		put(`INSERT INTO triggers(id,n,at,status,source,thread,data) VALUES(?,?,?,?,?,?,?)
-		     ON CONFLICT(id) DO UPDATE SET status=excluded.status, data=excluded.data`,
-			t.ID, idNum(t.ID), t.At.Unix(), t.Status, t.Source, t.Thread, js(t))
+		if err != nil {
+			break
+		}
+		raw := js(t)
+		if cache != nil && cache.triggers[t.ID] == raw {
+			continue
+		}
+		if trigStmt == nil {
+			trigStmt, err = tx.Prepare(`INSERT INTO triggers(id,n,at,status,source,thread,data) VALUES(?,?,?,?,?,?,?)
+		     ON CONFLICT(id) DO UPDATE SET status=excluded.status, data=excluded.data`)
+			if err != nil {
+				break
+			}
+		}
+		if _, err = trigStmt.Exec(t.ID, idNum(t.ID), t.At.Unix(), t.Status, t.Source, t.Thread, raw); err == nil && nextTriggers != nil {
+			nextTriggers[t.ID] = raw
+		}
 	}
+
 	for _, th := range st.Threads {
-		put(`INSERT INTO threads(id,last_at,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET last_at=excluded.last_at, data=excluded.data`,
-			th.ID, th.LastAt.Unix(), js(th))
+		if err != nil {
+			break
+		}
+		raw := js(th)
+		if cache != nil && cache.threads[th.ID] == raw {
+			continue
+		}
+		if threadStmt == nil {
+			threadStmt, err = tx.Prepare(`INSERT INTO threads(id,last_at,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET last_at=excluded.last_at, data=excluded.data`)
+			if err != nil {
+				break
+			}
+		}
+		if _, err = threadStmt.Exec(th.ID, th.LastAt.Unix(), raw); err == nil && nextThreads != nil {
+			nextThreads[th.ID] = raw
+		}
 	}
+
 	for _, w := range st.Workers {
-		put(`INSERT INTO workers(name,created_at,label,data) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET label=excluded.label, data=excluded.data`,
-			w.Name, w.CreatedAt.Unix(), w.Label, js(w))
+		if err != nil {
+			break
+		}
+		raw := js(w)
+		if cache != nil && cache.workers[w.Name] == raw {
+			continue
+		}
+		if workerStmt == nil {
+			workerStmt, err = tx.Prepare(`INSERT INTO workers(name,created_at,label,data) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET label=excluded.label, data=excluded.data`)
+			if err != nil {
+				break
+			}
+		}
+		if _, err = workerStmt.Exec(w.Name, w.CreatedAt.Unix(), w.Label, raw); err == nil && nextWorkers != nil {
+			nextWorkers[w.Name] = raw
+		}
 	}
+
 	for _, e := range st.Entries {
-		put(`INSERT INTO entries(id,n,at,thread,data,claps) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data, claps=excluded.claps`,
-			e.ID, idNum(e.ID), e.At.Unix(), e.Thread, js(e), clampClaps(e.Claps))
+		if err != nil {
+			break
+		}
+		raw := js(e)
+		if cache != nil && cache.entries[e.ID] == raw {
+			continue
+		}
+		if entryStmt == nil {
+			entryStmt, err = tx.Prepare(`INSERT INTO entries(id,n,at,thread,data,claps) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data, claps=excluded.claps`)
+			if err != nil {
+				break
+			}
+		}
+		if _, err = entryStmt.Exec(e.ID, idNum(e.ID), e.At.Unix(), e.Thread, raw, clampClaps(e.Claps)); err == nil && nextEntries != nil {
+			nextEntries[e.ID] = raw
+		}
 	}
+
 	for _, t := range st.Timers {
-		put(`INSERT INTO timers(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, t.ID, js(t))
+		if err != nil {
+			break
+		}
+		raw := js(t)
+		if cache != nil && cache.timers[t.ID] == raw {
+			continue
+		}
+		if timerStmt == nil {
+			timerStmt, err = tx.Prepare(`INSERT INTO timers(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`)
+			if err != nil {
+				break
+			}
+		}
+		if _, err = timerStmt.Exec(t.ID, raw); err == nil && nextTimers != nil {
+			nextTimers[t.ID] = raw
+		}
 	}
+
 	for _, id := range deletedTimers {
-		put(`DELETE FROM timers WHERE id=?`, id)
+		if err != nil {
+			break
+		}
+		if delTimerStmt == nil {
+			delTimerStmt, err = tx.Prepare(`DELETE FROM timers WHERE id=?`)
+			if err != nil {
+				break
+			}
+		}
+		_, err = delTimerStmt.Exec(id)
 	}
+	closeStmts()
+	kvStmt, trigStmt, threadStmt, workerStmt, entryStmt, timerStmt, delTimerStmt = nil, nil, nil, nil, nil, nil, nil
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if cache != nil {
+		for k, v := range nextKV {
+			cache.kv[k] = v
+		}
+		for k, v := range nextTriggers {
+			cache.triggers[k] = v
+		}
+		for k, v := range nextThreads {
+			cache.threads[k] = v
+		}
+		for k, v := range nextWorkers {
+			cache.workers[k] = v
+		}
+		for k, v := range nextEntries {
+			cache.entries[k] = v
+		}
+		for k, v := range nextTimers {
+			cache.timers[k] = v
+		}
+		for _, id := range deletedTimers {
+			delete(cache.timers, id)
+		}
+	}
+	return nil
 }
 
 // threadHistory reads older triggers of a thread straight from the DB, for

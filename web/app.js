@@ -3039,7 +3039,7 @@
     if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1180px)").matches)) closeFilePane({ immediate: next === "file" });
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
-    if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); }
+    if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); disconnectInboxObserver(); }
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
     if (prevView === "collie" && next !== "collie") {
       if (replyTo && isSuperComposerEmpty()) setReply(null);
@@ -7335,6 +7335,7 @@
   }
   let autoTab = normalizeAutoTab(store.get("autoTab", "memory"));
   let inboxThread = "";
+  let inboxRoutesOpen = false;
   const inboxExpanded = new Set();
   let inboxLoadSeq = 0;
   let autoTimer;
@@ -7397,7 +7398,13 @@
 
   let autoOpenRAF = 0;
   let autoLoadSeq = 0;
-  let inboxRenderLimit = 40;
+  const INBOX_PAGE_SIZE = 40;
+  let inboxRenderLimit = INBOX_PAGE_SIZE;
+  let inboxObserver = null;
+  let inboxObserverGen = 0;
+  let inboxLoadingMore = false;
+  let inboxLoadMoreRAF = 0;
+  let inboxScrollFallbackCleanup = null;
   const autoCache = {
     memory: null,
     timers: null,       // { timers, activeCount, endedCount, endedHasMore, endedList, endedLoaded }
@@ -7510,6 +7517,7 @@
       body.innerHTML = inboxHTML(c.triggers, c.threads);
       syncInboxOverflow(body);
       if (restore) restoreSimpleScroll(body, restore);
+      setupInboxInfiniteScroll(body);
       return true;
     }
     if (tab === "integrations" && autoCache.integrations) {
@@ -7550,6 +7558,9 @@
       memSearchRemote = null;
       clearMemInsUndo();
     }
+    if (autoTab !== "inbox") {
+      disconnectInboxObserver();
+    }
     const body = $("#auto-body");
     const sameTabCached = body._renderedTab === autoTab && !!body._tabRendered;
     $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
@@ -7561,6 +7572,7 @@
     if (sameTabCached) {
       applyAutoBodyMode(body, autoTab);
       if (restore) restoreSimpleScroll(body, restore);
+      if (autoTab === "inbox") setupInboxInfiniteScroll(body);
       if (typeof requestAnimationFrame === "function") {
         autoOpenRAF = requestAnimationFrame(() => {
           autoOpenRAF = 0;
@@ -7660,10 +7672,8 @@
     if (lbl) lbl.textContent = expanded ? "收起" : "展开";
     return expandable;
   }
-  function syncInboxOverflow(root = $("#auto-body")) {
-    if (!root) return;
-    const rows = [...root.querySelectorAll(".inbox-row")];
-    if (!rows.length) return;
+  function syncInboxRows(rows) {
+    if (!rows || !rows.length) return;
     // Two-phase read-then-write batching prevents O(N) forced synchronous layout thrashing.
     const measured = [];
     for (const row of rows) {
@@ -7683,6 +7693,162 @@
       m.btn.setAttribute("aria-label", `${m.expanded ? "收起" : "展开"} #${m.id}`);
       const lbl = m.btn.querySelector(".inbox-toggle-lbl");
       if (lbl) lbl.textContent = m.expanded ? "收起" : "展开";
+    }
+  }
+  function syncInboxOverflow(root = $("#auto-body")) {
+    if (!root) return;
+    syncInboxRows([...root.querySelectorAll(".inbox-row")]);
+  }
+  function filteredInboxTriggers(ts) {
+    const list = Array.isArray(ts) ? ts : [];
+    return inboxThread ? list.filter((t) => t.thread === inboxThread) : list;
+  }
+  function disconnectInboxObserver() {
+    inboxObserverGen++;
+    inboxLoadingMore = false;
+    if (inboxLoadMoreRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(inboxLoadMoreRAF);
+      inboxLoadMoreRAF = 0;
+    }
+    if (inboxObserver) {
+      try { inboxObserver.disconnect(); } catch {}
+      inboxObserver = null;
+    }
+    if (inboxScrollFallbackCleanup) {
+      try { inboxScrollFallbackCleanup(); } catch {}
+      inboxScrollFallbackCleanup = null;
+    }
+  }
+  function loadMoreInboxRows(body = $("#auto-body")) {
+    if (inboxLoadingMore) return false;
+    if (!body || view !== "auto" || autoTab !== "inbox" || !autoCache.inbox) return false;
+    const shown = filteredInboxTriggers(autoCache.inbox.triggers);
+    if (inboxRenderLimit >= shown.length) {
+      disconnectInboxObserver();
+      return false;
+    }
+    const gen = inboxObserverGen;
+    inboxLoadingMore = true;
+    const foot = body.querySelector?.("#inbox-feed-foot");
+    if (inboxObserver && foot && typeof inboxObserver.unobserve === "function") {
+      try { inboxObserver.unobserve(foot); } catch {}
+    }
+    const commit = () => {
+      inboxLoadMoreRAF = 0;
+      if (gen !== inboxObserverGen || view !== "auto" || autoTab !== "inbox" || !autoCache.inbox) {
+        inboxLoadingMore = false;
+        return;
+      }
+      const curShown = filteredInboxTriggers(autoCache.inbox.triggers);
+      const prevLimit = Math.min(inboxRenderLimit, curShown.length);
+      const nextLimit = Math.min(curShown.length, prevLimit + INBOX_PAGE_SIZE);
+      if (nextLimit <= prevLimit) {
+        inboxLoadingMore = false;
+        disconnectInboxObserver();
+        return;
+      }
+      inboxRenderLimit = nextLimit;
+      const batch = curShown.slice(prevLimit, nextLimit);
+      const ul = body.querySelector?.("#inbox-list");
+      if (ul && typeof ul.insertAdjacentHTML === "function" && batch.length) {
+        const beforeCount = ul.children ? ul.children.length : 0;
+        ul.insertAdjacentHTML("beforeend", batch.map(inboxRowHTML).join(""));
+        const added = ul.children ? [...ul.children].slice(beforeCount) : [];
+        if (added.length) syncInboxRows(added);
+        else syncInboxOverflow(body);
+      } else {
+        const prevTop = body.scrollTop;
+        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
+        syncInboxOverflow(body);
+        markProgrammaticScroll();
+        body.scrollTop = prevTop;
+      }
+      body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
+      const curFoot = body.querySelector?.("#inbox-feed-foot");
+      const remaining = Math.max(0, curShown.length - inboxRenderLimit);
+      if (curFoot) {
+        if (remaining > 0) {
+          curFoot.setAttribute?.("data-inbox-sentinel", "more");
+          curFoot.dataset.inboxSentinel = "more";
+          curFoot.classList.remove("is-done");
+          const st = curFoot.querySelector?.(".inbox-feed-status");
+          if (st) st.textContent = "正在加载更多…";
+        } else {
+          curFoot.removeAttribute?.("data-inbox-sentinel");
+          delete curFoot.dataset.inboxSentinel;
+          curFoot.classList.add("is-done");
+          const st = curFoot.querySelector?.(".inbox-feed-status");
+          if (st) st.textContent = `已显示全部 ${curShown.length} 条`;
+        }
+      }
+      inboxLoadingMore = false;
+      if (remaining > 0) {
+        if (inboxObserver && curFoot && typeof inboxObserver.observe === "function") {
+          try { inboxObserver.observe(curFoot); } catch {}
+        } else {
+          setupInboxInfiniteScroll(body);
+        }
+      } else {
+        disconnectInboxObserver();
+      }
+    };
+    if (typeof requestAnimationFrame === "function") {
+      inboxLoadMoreRAF = requestAnimationFrame(commit);
+    } else {
+      commit();
+    }
+    return true;
+  }
+  function setupInboxInfiniteScroll(body = $("#auto-body")) {
+    disconnectInboxObserver();
+    if (!body || view !== "auto" || autoTab !== "inbox") return;
+    const sentinel = body.querySelector?.('[data-inbox-sentinel="more"]');
+    if (!sentinel) return;
+    const gen = inboxObserverGen;
+    if (typeof IntersectionObserver === "function") {
+      inboxObserver = new IntersectionObserver((entries) => {
+        if (gen !== inboxObserverGen) return;
+        if (entries.some((e) => e.isIntersecting)) {
+          loadMoreInboxRows(body);
+        }
+      }, {
+        root: body,
+        rootMargin: "0px 0px 240px 0px",
+        threshold: 0,
+      });
+      inboxObserver.observe(sentinel);
+    } else if (typeof body.addEventListener === "function") {
+      const onScroll = () => {
+        if (gen !== inboxObserverGen || inboxLoadingMore) return;
+        if (body.scrollHeight - body.scrollTop - body.clientHeight <= 240) {
+          loadMoreInboxRows(body);
+        }
+      };
+      body.addEventListener("scroll", onScroll, { passive: true });
+      inboxScrollFallbackCleanup = () => body.removeEventListener("scroll", onScroll);
+      onScroll();
+    }
+  }
+  function selectInboxThread(nextThread) {
+    inboxThread = String(nextThread || "");
+    inboxRenderLimit = INBOX_PAGE_SIZE;
+    if (inboxThread) inboxRoutesOpen = false;
+    const body = $("#auto-body");
+    if (!body) return;
+    disconnectInboxObserver();
+    body._inboxRendered = false;
+    if (autoCache.inbox) {
+      body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
+      body._inboxRendered = true;
+      body._renderedTab = "inbox";
+      body._tabRendered = true;
+      body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
+      syncInboxOverflow(body);
+      markProgrammaticScroll();
+      body.scrollTop = 0;
+      setupInboxInfiniteScroll(body);
+    } else {
+      loadAuto();
     }
   }
   function toggleInboxRow(row, id, { animate = true } = {}) {
@@ -7807,24 +7973,28 @@
         }
         // Preserve active user text selection during background refreshes.
         if (!restore && sameInbox && hasSelectionInside(body)) return;
-        const subsOpen = sameInbox && !!body.querySelector(".inbox-subs-fold[open]");
         const focusToggleId = sameInbox && document.activeElement && body.contains(document.activeElement)
           ? document.activeElement.closest?.("[data-inbox-toggle]")?.dataset?.inboxToggle || ""
           : "";
+        const focusRoutesBtn = sameInbox && document.activeElement && body.contains(document.activeElement)
+          && !!document.activeElement.closest?.('[data-act="inbox-routes-toggle"]');
         const anchor = !restore && sameInbox ? captureInboxScrollAnchor(body) : null;
+        disconnectInboxObserver();
         applyAutoBodyMode(body, "inbox");
         body._inboxSig = sig;
         body._inboxRendered = true;
         body._renderedTab = "inbox";
         body._tabRendered = true;
         body.innerHTML = inboxHTML(triggers, threads);
-        if (subsOpen) { const d = body.querySelector(".inbox-subs-fold"); if (d) d.open = true; }
         syncInboxOverflow(body);
         if (restore) restoreSimpleScroll(body, restore);
         else restoreInboxScrollAnchor(body, anchor);
+        setupInboxInfiniteScroll(body);
         if (focusToggleId) {
           const btn = [...body.querySelectorAll("[data-inbox-toggle]")].find((el) => el.dataset.inboxToggle === focusToggleId);
           if (btn && !btn.hidden) btn.focus?.({ preventScroll: true });
+        } else if (focusRoutesBtn) {
+          body.querySelector?.('[data-act="inbox-routes-toggle"]')?.focus?.({ preventScroll: true });
         }
         return;
       } else if (targetTab === "memory") {
@@ -9518,7 +9688,7 @@
           </label>
           <label class="int-mode-opt">
             <input type="radio" name="gf_mode" value="agent" ${d.handle_mode === "agent" ? "checked" : ""}>
-            <span><b>交给已订阅该 ${esc(pr)} 的 Agent 直接处理</b><small>若已有在线 Agent 订阅该 ${esc(pr)} 线程则直接投递继续修；否则自动转交 Collie 先调研。</small></span>
+            <span><b>交给已订阅该 ${esc(pr)} 的 Agent 直接处理</b><small>若已有在线 Agent 订阅该 ${esc(pr)} 来源则直接投递继续修；否则自动转交 Collie 先调研。</small></span>
           </label>
         </div>
       </section>
@@ -11969,17 +12139,32 @@
     });
   }
 
+  function inboxRowHTML(t) {
+    const id = String(t.id ?? "");
+    const expanded = inboxExpanded.has(id);
+    const textId = inboxTextId(id);
+    return `<li class="row inbox-row${expanded ? " is-expanded is-expandable" : ""}" data-inbox-id="${esc(id)}">
+        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
+        <div class="inbox-main"><div class="meta"><b>#${esc(id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
+        <div class="text inbox-text" id="${esc(textId)}">${esc(t.text)}</div>
+        <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${expanded ? "收起" : "展开"} #${esc(id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${expanded ? "收起" : "展开"}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
+        <span class="right">${when(t.at)}</span></li>`;
+  }
+
   function inboxHTML(ts, ths = []) {
     const multiThread = ths.length > 1;
-    if (!multiThread || (inboxThread && !ths.some((th) => th.id === inboxThread))) inboxThread = "";
-    const shown = inboxThread ? ts.filter((t) => t.thread === inboxThread) : ts;
+    if (!multiThread || (inboxThread && !ths.some((th) => th.id === inboxThread))) {
+      inboxThread = "";
+    }
+    if (!multiThread) inboxRoutesOpen = false;
+    const shown = filteredInboxTriggers(ts);
     const activeWorkers = (sup.workers || []).filter((w) => !w.ended).map((w) => w.name);
     let threadBar = "";
     if (multiThread) {
       const selTh = inboxThread ? ths.find((th) => th.id === inboxThread) : null;
       const subsChips = (th) => {
         if (!th) return "";
-        if (th.id === "chat:main") return `<span class="muted">→ Collie（主线程）</span>`;
+        if (th.id === "chat:main") return `<div class="inbox-subs"><span class="muted">→ Collie（主会话）</span></div>`;
         const subs = th.subscribers || [];
         const pills = subs.length
           ? subs.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")
@@ -11990,33 +12175,32 @@
           : "";
         return `<div class="inbox-subs"><span>订阅：</span>${pills}${adder}</div>`;
       };
-      const allSubsFold = !selTh ? `<details class="inbox-subs-fold"><summary>线程与订阅管理（${ths.length} 条线程）</summary>
-        <div class="card"><ul class="rows">${ths.map((th) => `<li class="row">
+      const routesToggle = !selTh
+        ? `<button type="button" class="inbox-routes-btn${inboxRoutesOpen ? " is-open" : ""}" data-act="inbox-routes-toggle" aria-expanded="${inboxRoutesOpen ? "true" : "false"}" aria-controls="inbox-routes-panel"><span>订阅路由</span><svg class="inbox-routes-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button>`
+        : "";
+      const routesPanel = !selTh
+        ? `<div class="inbox-routes-panel" id="inbox-routes-panel"${inboxRoutesOpen ? "" : " hidden"}><div class="card inbox-routes-card"><ul class="rows">${ths.map((th) => `<li class="row inbox-route-row">
           <span class="badge">${th.triggers?.length || 0}</span>
-          <div><div class="meta"><b>${esc(th.id)}</b>${th.id === "chat:main" ? "<span>→ Collie（主线程）</span>" : th.subscribers?.length ? `<span class="inbox-subs">${th.subscribers.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")}</span>` : "<span>→ Collie</span>"}</div></div>
-          <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div></details>` : "";
+          <div class="inbox-route-main"><div class="meta"><button type="button" class="inbox-route-id" data-inbox-pick-thread="${esc(th.id)}" title="筛选该来源">${esc(th.id)}</button>${th.id === "chat:main" ? `<span class="muted">→ Collie（主会话）</span>` : th.subscribers?.length ? `<span class="inbox-subs">${th.subscribers.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")}</span>` : `<span class="muted">→ Collie</span>`}</div></div>
+          <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div></div>`
+        : "";
       threadBar = `<div class="inbox-bar">
-        <label class="inbox-filter">线程<select id="inbox-thread-filter" data-pick="compact" data-title="按线程筛选">
-          <option value="" ${!inboxThread ? "selected" : ""}>全部线程（${ths.length}）</option>
-          ${ths.map((th) => `<option value="${esc(th.id)}" data-sub="${esc((th.subscribers?.length ? "订阅：" + th.subscribers.join(", ") : "→ Collie") + " · " + (th.triggers?.length || 0) + " 条")}" ${inboxThread === th.id ? "selected" : ""}>${esc(th.id)}</option>`).join("")}
+        <label class="inbox-filter"><span class="inbox-filter-lbl">事件来源</span><select id="inbox-thread-filter" data-pick="compact" data-title="按事件来源筛选">
+          <option value="" ${!inboxThread ? "selected" : ""}>全部来源（${ths.length}）</option>
+          ${ths.map((th) => `<option value="${esc(th.id)}" data-sub="${esc((th.subscribers?.length ? "订阅：" + th.subscribers.join(", ") : th.id === "chat:main" ? "→ Collie（主会话）" : "→ Collie") + " · " + (th.triggers?.length || 0) + " 条")}" ${inboxThread === th.id ? "selected" : ""}>${esc(th.id)}</option>`).join("")}
         </select></label>
-        ${selTh ? subsChips(selTh) : ""}
-      </div>${allSubsFold}`;
+        ${selTh ? subsChips(selTh) : routesToggle}
+      </div>${routesPanel}`;
     }
     const visible = shown.slice(0, inboxRenderLimit);
     const moreCount = Math.max(0, shown.length - visible.length);
+    const feedFoot = shown.length > 0
+      ? (moreCount > 0
+        ? `<div class="inbox-feed-foot" id="inbox-feed-foot" data-inbox-sentinel="more" role="status" aria-live="polite"><span class="inbox-feed-status">正在加载更多…</span></div>`
+        : `<div class="inbox-feed-foot is-done" id="inbox-feed-foot"><span class="inbox-feed-status">已显示全部 ${shown.length} 条</span></div>`)
+      : "";
     return `${threadBar}
-      <div class="card"><ul class="rows">${visible.length ? visible.map((t) => {
-        const id = String(t.id ?? "");
-        const expanded = inboxExpanded.has(id);
-        const textId = inboxTextId(id);
-        return `<li class="row inbox-row${expanded ? " is-expanded is-expandable" : ""}" data-inbox-id="${esc(id)}">
-        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
-        <div class="inbox-main"><div class="meta"><b>#${esc(id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
-        <div class="text inbox-text" id="${esc(textId)}">${esc(t.text)}</div>
-        <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${expanded ? "收起" : "展开"} #${esc(id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${expanded ? "收起" : "展开"}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
-        <span class="right">${when(t.at)}</span></li>`;
-      }).join("") : `<li class="empty-row">${inboxThread ? "这条线程里还没有事件" : "收件箱是空的"}</li>`}</ul></div>${moreCount > 0 ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="inbox-more">加载更早 ${Math.min(40, moreCount)} 条（已显示 ${visible.length} / ${shown.length} 条）</button></div>` : ""}`;
+      <div class="card"><ul class="rows" id="inbox-list">${visible.length ? visible.map(inboxRowHTML).join("") : `<li class="empty-row">${inboxThread ? "该来源里还没有事件" : "收件箱是空的"}</li>`}</ul></div>${feedFoot}`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -12647,20 +12831,7 @@
 
   $("#auto-body").addEventListener("change", async (e) => {
     if (e.target.id === "inbox-thread-filter") {
-      inboxThread = e.target.value;
-      inboxRenderLimit = 40;
-      $("#auto-body")._inboxRendered = false;
-      if (autoCache.inbox) {
-        const body = $("#auto-body");
-        body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
-        body._inboxRendered = true;
-        body._renderedTab = "inbox";
-        body._tabRendered = true;
-        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
-        syncInboxOverflow(body);
-      } else {
-        loadAuto();
-      }
+      selectInboxThread(e.target.value);
       return;
     }
     if (e.target.id === "inbox-sub-add") {
@@ -12789,19 +12960,16 @@
       if (box) loadMoreEndedTimers(box, { reset: false });
       return;
     }
-    if (t.dataset.act === "inbox-more") {
-      inboxRenderLimit += 40;
-      const body = $("#auto-body");
-      if (autoCache.inbox && body) {
-        const prevTop = body.scrollTop;
-        body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
-        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
-        syncInboxOverflow(body);
-        markProgrammaticScroll();
-        body.scrollTop = prevTop;
-      } else {
-        loadAuto();
-      }
+    if (t.dataset.act === "inbox-routes-toggle") {
+      inboxRoutesOpen = !inboxRoutesOpen;
+      t.classList.toggle("is-open", inboxRoutesOpen);
+      t.setAttribute("aria-expanded", inboxRoutesOpen ? "true" : "false");
+      const panel = $("#auto-body")?.querySelector?.("#inbox-routes-panel");
+      if (panel) panel.hidden = !inboxRoutesOpen;
+      return;
+    }
+    if (t.dataset.inboxPickThread) {
+      selectInboxThread(t.dataset.inboxPickThread);
       return;
     }
     if (t.dataset.act === "mem-search-clear") {

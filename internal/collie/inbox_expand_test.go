@@ -217,8 +217,8 @@ let mockThreads = [];
 const autoBody = getEl("#auto-body");
 autoBody.clientHeight = 500;
 autoBody._rect = { top: 0, bottom: 500, left: 0, right: 600, width: 600, height: 500 };
-autoBody._qs[".inbox-subs-fold[open]"] = null;
-autoBody._qs[".inbox-subs-fold"] = null;
+autoBody._qs["#inbox-routes-panel"] = null;
+autoBody._qs['[data-inbox-sentinel="more"]'] = null;
 
 class FakeES {
   constructor() { this.readyState = 1; this.ls = {}; }

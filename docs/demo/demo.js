@@ -382,9 +382,33 @@
     { id: "t33", source: "github", thread: "github:alex/shop-api#58", from: "octo-dev", action: "candidate", status: "delivered", text: "issue_comment: 分页最后一页有重复数据，能看一下吗？@collie", at: ago(40), targets: ["collie"] },
     { id: "t34", source: "timer", thread: "chat:main", from: "", action: "respond", status: "delivered", text: "每天 9 点：检查各个任务的进展，有卡住的告诉我", at: ago(60 * 3), targets: ["collie"] },
   ];
+  const demoOlderSpecs = [
+    { source: "github", thread: "github:alex/shop-web#112", from: "maya", action: "candidate", status: "delivered", text: "review_comment: 首页骨架屏在窄屏下高度略抖动，建议固定卡片最小高度" },
+    { source: "worker", thread: "chat:main", from: "fix-flaky-test", action: "respond", status: "delivered", text: "report from fix-flaky-test: 已定位订单列表分页排序缺少 id 兜底，正在补充回归单测" },
+    { source: "github", thread: "github:alex/shop-api#54", from: "ci-bot", action: "notify", status: "delivered", text: "check_run: integration-tests 通过（耗时 3m 42s，0 flaky）" },
+    { source: "timer", thread: "chat:main", from: "", action: "respond", status: "delivered", text: "每 2 小时巡检：检查进行中分支测试状态与阻塞项" },
+    { source: "github", thread: "github:alex/shop-api#58", from: "octo-dev", action: "candidate", status: "delivered", text: "pull_request_review: 新增游标排序测试覆盖边界页，LGTM" },
+    { source: "chat", thread: "chat:main", from: "you", action: "respond", status: "delivered", text: "把昨天合并的迁移脚本顺手整理一下，确认回滚路径干净" },
+  ];
+  for (let i = 0; i < 56; i++) {
+    const sp = demoOlderSpecs[i % demoOlderSpecs.length];
+    triggers.push({
+      id: "t" + (35 + i),
+      source: sp.source,
+      thread: sp.thread,
+      from: sp.from,
+      action: sp.action,
+      status: sp.status,
+      text: `${sp.text}（记录 #${i + 1}）`,
+      at: ago(60 * (4 + i)),
+      targets: ["collie"],
+    });
+  }
   const threads = [
     { id: "chat:main", triggers: triggers.filter((t) => t.thread === "chat:main"), subscribers: [], last_at: ago(6) },
-    { id: "github:alex/shop-api#58", triggers: [triggers[2]], subscribers: ["codex-1"], last_at: ago(40) },
+    { id: "github:alex/shop-api#58", triggers: triggers.filter((t) => t.thread === "github:alex/shop-api#58"), subscribers: ["codex-1"], last_at: ago(40) },
+    { id: "github:alex/shop-web#112", triggers: triggers.filter((t) => t.thread === "github:alex/shop-web#112"), subscribers: ["claude-2"], last_at: ago(60 * 4) },
+    { id: "github:alex/shop-api#54", triggers: triggers.filter((t) => t.thread === "github:alex/shop-api#54"), subscribers: [], last_at: ago(60 * 6) },
   ];
   const timers = [
     { id: "tm1", spec: "weekdays 09:00", text: "检查各个任务的进展，有卡住的告诉我", target: "", enabled: true, next_run: later(60 * 18), owner: "you" },

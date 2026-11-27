@@ -37,6 +37,8 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   --accent-light: #111111; --on-accent-light: #ffffff;
   --ok-light: #15803d; --attn-light: #b45309; --attn-soft-light: #fbf3e8;
   --shadow-light: 0 1px 2px rgba(0,0,0,.04), 0 16px 48px rgba(0,0,0,.08);
+  --phone-bezel-light: #18181b;
+  --phone-shadow-light: 0 0 0 1px rgba(0,0,0,.12), 0 10px 24px -6px rgba(0,0,0,.20), 0 28px 64px -12px rgba(0,0,0,.28);
 
   --bg-dark: #0b0b0c; --bg-2-dark: #131315; --bg-3-dark: #1c1c1f;
   --line-dark: #232327; --line-2-dark: #323238;
@@ -44,6 +46,8 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   --accent-dark: #f2f2f0; --on-accent-dark: #0b0b0c;
   --ok-dark: #4ade80; --attn-dark: #f0a35e; --attn-soft-dark: #2a1f12;
   --shadow-dark: 0 1px 2px rgba(0,0,0,.45), 0 20px 56px rgba(0,0,0,.55);
+  --phone-bezel-dark: #222227;
+  --phone-shadow-dark: 0 0 0 1px rgba(255,255,255,.15), 0 12px 26px -6px rgba(0,0,0,.62), 0 34px 74px -12px rgba(0,0,0,.85);
 
   --bg: var(--bg-light); --bg-2: var(--bg-2-light); --bg-3: var(--bg-3-light);
   --line: var(--line-light); --line-2: var(--line-2-light);
@@ -51,6 +55,8 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
   --accent: var(--accent-light); --on-accent: var(--on-accent-light);
   --ok: var(--ok-light); --attn: var(--attn-light); --attn-soft: var(--attn-soft-light);
   --shadow: var(--shadow-light);
+  --phone-bezel: var(--phone-bezel-light);
+  --phone-shadow: var(--phone-shadow-light);
 
   --target-size: 28px;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
@@ -68,6 +74,8 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --accent: var(--accent-dark); --on-accent: var(--on-accent-dark);
     --ok: var(--ok-dark); --attn: var(--attn-dark); --attn-soft: var(--attn-soft-dark);
     --shadow: var(--shadow-dark);
+    --phone-bezel: var(--phone-bezel-dark);
+    --phone-shadow: var(--phone-shadow-dark);
   }
 }
 @supports (color: light-dark(white, black)) {
@@ -85,15 +93,18 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --ok: light-dark(var(--ok-light), var(--ok-dark));
     --attn: light-dark(var(--attn-light), var(--attn-dark));
     --attn-soft: light-dark(var(--attn-soft-light), var(--attn-soft-dark));
+    --phone-bezel: light-dark(var(--phone-bezel-light), var(--phone-bezel-dark));
   }
 }
 :root:has(> head > meta[name="color-scheme"][content="dark"]) {
   color-scheme: dark;
   --shadow: var(--shadow-dark);
+  --phone-shadow: var(--phone-shadow-dark);
 }
 :root:has(> head > meta[name="color-scheme"][content="light"]) {
   color-scheme: light;
   --shadow: var(--shadow-light);
+  --phone-shadow: var(--phone-shadow-light);
 }
 @supports not (color: light-dark(white, black)) {
   :root:has(> head > meta[name="color-scheme"][content="dark"]) {
@@ -102,6 +113,7 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --fg: var(--fg-dark); --fg-2: var(--fg-2-dark); --fg-3: var(--fg-3-dark);
     --accent: var(--accent-dark); --on-accent: var(--on-accent-dark);
     --ok: var(--ok-dark); --attn: var(--attn-dark); --attn-soft: var(--attn-soft-dark);
+    --phone-bezel: var(--phone-bezel-dark);
   }
   :root:has(> head > meta[name="color-scheme"][content="light"]) {
     --bg: var(--bg-light); --bg-2: var(--bg-2-light); --bg-3: var(--bg-3-light);
@@ -109,6 +121,7 @@ window.onerror = function () { document.documentElement.classList.remove("js"); 
     --fg: var(--fg-light); --fg-2: var(--fg-2-light); --fg-3: var(--fg-3-light);
     --accent: var(--accent-light); --on-accent: var(--on-accent-light);
     --ok: var(--ok-light); --attn: var(--attn-light); --attn-soft: var(--attn-soft-light);
+    --phone-bezel: var(--phone-bezel-light);
   }
 }
 
@@ -277,29 +290,58 @@ h1 em { font-style: normal; color: var(--attn); }
 }
 .proof span::before { content: "✓ "; color: var(--ok); }
 
-/* Hero media showcase — clean slot ready for future video cover/player swap */
-.stage { position: relative; margin: 40px auto 0; max-width: 1060px; padding-bottom: 24px; }
+/* Hero media showcase — desktop looping cinema stage + staggered break-out phone */
+.stage {
+  position: relative;
+  margin: 44px auto 0;
+  max-width: 1060px;
+  padding-inline-end: 44px;
+  padding-bottom: 36px;
+}
 .frame {
   border-radius: 16px; overflow: hidden;
-  border: 1px solid var(--line); box-shadow: var(--shadow);
-  background: var(--bg-2);
+  border: 1px solid #26262c; box-shadow: var(--shadow);
+  background: #141417;
 }
 .frame .bar {
   display: flex; align-items: center; gap: 7px;
-  min-block-size: 36px; padding: 6px 14px;
-  border-bottom: 1px solid var(--line); background: var(--bg-2);
+  min-block-size: 36px; padding: 5px 12px 5px 14px;
+  border-bottom: 1px solid #222228; background: #16161a;
 }
-.frame .bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); flex: none; }
-.frame .bar span { margin-left: 8px; font-size: 0.75rem; color: var(--fg-3); font-family: var(--mono); }
-.stage-media { position: relative; background: var(--bg); }
+.frame .bar i { width: 10px; height: 10px; border-radius: 50%; background: #32323a; flex: none; }
+.frame .bar span { margin-inline-start: 8px; font-size: 0.75rem; color: #9a9a94; font-family: var(--mono); }
+.media-toggle {
+  margin-inline-start: auto;
+  display: inline-flex; align-items: center; gap: 5px;
+  min-block-size: 26px; padding: 3px 10px;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06); color: #d6d6d0;
+  font: 0.72rem/1 var(--sans); font-weight: 500; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.media-toggle:hover {
+  background: rgba(255,255,255,.13); border-color: rgba(255,255,255,.28); color: #ffffff;
+}
+.media-toggle:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+.media-toggle svg { width: 11px; height: 11px; flex: none; }
+.media-toggle [hidden] { display: none; }
+@media (pointer: coarse) {
+  .media-toggle { min-block-size: 34px; padding: 5px 12px; }
+}
+.stage-media { position: relative; background: #0b0b0c; }
 .stage-media img,
 .stage-media video {
   width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top;
 }
 .stage-phone {
-  position: absolute; right: 16px; bottom: 0; width: 224px;
-  border-radius: 32px; border: 6px solid #1b1b1d;
-  box-shadow: var(--shadow); overflow: hidden; background: var(--bg);
+  position: absolute; inset-inline-end: 0; inset-block-end: 0; z-index: 2;
+  width: 204px; border-radius: 32px; corner-shape: squircle;
+  border: 6px solid var(--phone-bezel);
+  box-shadow: var(--phone-shadow); overflow: hidden; background: var(--bg);
+}
+@media (prefers-reduced-motion: no-preference) and (hover: hover) {
+  .stage-phone { transition: transform .32s cubic-bezier(.22, 1, .36, 1); }
+  .stage-phone:hover { transform: translateY(-4px); }
 }
 .stage-phone img { width: 100%; aspect-ratio: 390 / 844; object-fit: cover; object-position: top; }
 
@@ -375,8 +417,8 @@ h2 {
 .duo { display: flex; gap: 18px; justify-content: center; align-items: flex-start; }
 .duo .phone-card {
   width: 47%; max-width: 248px;
-  border-radius: 32px; border: 6px solid #1b1b1d;
-  box-shadow: var(--shadow); overflow: hidden; background: var(--bg);
+  border-radius: 32px; corner-shape: squircle; border: 6px solid var(--phone-bezel);
+  box-shadow: var(--phone-shadow); overflow: hidden; background: var(--bg);
 }
 .duo .phone-card img { width: 100%; aspect-ratio: 390 / 844; object-fit: cover; object-position: top; }
 
@@ -484,7 +526,8 @@ footer a { color: var(--fg-2); }
   .feature.flip .text { order: 0; }
   .facts { grid-template-columns: 1fr 1fr; }
   .steps { grid-template-columns: 1fr; }
-  .stage-phone { width: 176px; right: 12px; border-width: 5px; border-radius: 26px; }
+  .stage { padding-inline-end: 26px; padding-bottom: 26px; }
+  .stage-phone { width: 168px; border-width: 5px; border-radius: 26px; }
 }
 @media (max-width: 640px) {
   .wrap { padding-inline: max(16px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)); }
@@ -492,7 +535,7 @@ footer a { color: var(--fg-2); }
   nav { gap: 10px; }
   .ctrl { padding: 4px 8px; font-size: 0.75rem; }
   .hero { padding: 36px 0 12px; }
-  .stage { margin-top: 32px; padding-bottom: 0; }
+  .stage { margin-top: 32px; padding-inline-end: 0; padding-bottom: 0; }
   .stage-phone { display: none; }
   section { padding-top: 72px; }
   .points { grid-template-columns: 1fr; }
@@ -551,12 +594,19 @@ footer a { color: var(--fg-2); }
       <span data-i18n="proof_ports">Zero open ports</span>
     </div>
 
-    <!-- Primary media slot: silent looping hero showcase with static fallback -->
+    <!-- Primary media slot: silent looping hero showcase + staggered mobile decision view -->
     <div class="stage reveal" data-media-slot="hero-showcase">
       <div class="frame">
-        <div class="bar"><i></i><i></i><i></i><span data-i18n="stage_bar">collie · chat with Collie</span></div>
+        <div class="bar">
+          <i></i><i></i><i></i><span data-i18n="stage_bar">collie · chat with Collie</span>
+          <button type="button" class="media-toggle" id="hero-video-toggle" aria-controls="hero-video" aria-label="Pause looping demo video">
+            <svg class="ic-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="2.5" width="3.5" height="11" rx="1"/><rect x="9.5" y="2.5" width="3.5" height="11" rx="1"/></svg>
+            <svg class="ic-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" hidden><path d="M4 2.8v10.4L13 8z"/></svg>
+            <span class="media-toggle-label" data-i18n="video_pause">Pause</span>
+          </button>
+        </div>
         <div class="stage-media" id="hero-media">
-          <video id="hero-video" autoplay muted loop playsinline preload="metadata" poster="img/hero-light.png" width="1280" height="800" aria-label="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-aria="hero_img_alt">
+          <video id="hero-video" autoplay muted loop playsinline preload="metadata" poster="img/hero-dark.png" width="1280" height="800" aria-label="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-aria="hero_img_alt">
             <source src="img/hero-demo.mp4" type="video/mp4">
             <img class="only-light" src="img/hero-light.png" width="2880" height="1800" alt="Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
             <img class="only-dark" src="img/hero-dark.png" width="2880" height="1800" alt="Collie workspace in dark mode: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons" data-i18n-alt="hero_img_alt">
@@ -564,8 +614,8 @@ footer a { color: var(--fg-2); }
         </div>
       </div>
       <div class="stage-phone">
-        <img class="only-light" src="img/phone-decision-light.png" width="780" height="1688" alt="Mobile Collie view showing a concise report and one-tap decision buttons" data-i18n-alt="phone_decision_alt" loading="lazy">
-        <img class="only-dark" src="img/phone-decision-dark.png" width="780" height="1688" alt="Mobile Collie view in dark mode showing a concise report and one-tap decision buttons" data-i18n-alt="phone_decision_alt" loading="lazy">
+        <img class="only-light" src="img/phone-decision-light.png" width="780" height="1688" decoding="async" alt="Mobile Collie view showing a concise report, one-tap decision buttons, and expanded pending tray" data-i18n-alt="phone_decision_alt">
+        <img class="only-dark" src="img/phone-decision-dark.png" width="780" height="1688" decoding="async" alt="Mobile Collie view in dark mode showing a concise report, one-tap decision buttons, and expanded pending tray" data-i18n-alt="phone_decision_alt">
       </div>
     </div>
 
@@ -804,8 +854,12 @@ const COPY = {
     proof_web: "Pure Web UI · PWA",
     proof_ports: "Zero open ports",
     stage_bar: "collie · chat with Collie",
+    video_pause: "Pause",
+    video_play: "Play",
+    video_pause_aria: "Pause looping demo video",
+    video_play_aria: "Play looping demo video",
     hero_img_alt: "Collie workspace: parallel Claude Code and Codex workers report back with a concise brief and one-tap decision buttons",
-    phone_decision_alt: "Mobile Collie view showing a concise report and one-tap decision buttons",
+    phone_decision_alt: "Mobile Collie view showing a concise report, one-tap decision buttons, and expanded pending tray",
     phone_thread_alt: "Mobile Collie bottom-sheet reply-thread drawer with linked worker status pills",
     loop1_t: "Delegate once",
     loop1_d: "Describe the goal in chat—or let GitHub, Feishu / Lark, or a schedule trigger it automatically.",
@@ -918,8 +972,12 @@ const COPY = {
     proof_web: "纯 Web UI · PWA",
     proof_ports: "免开端口",
     stage_bar: "collie · 和 Collie 对话",
+    video_pause: "暂停",
+    video_play: "播放",
+    video_pause_aria: "暂停循环演示视频",
+    video_play_aria: "播放循环演示视频",
     hero_img_alt: "Collie 工作台：并行派出的 Claude Code 与 Codex 回报进展，Collie 给出精炼结论与一键决策选项",
-    phone_decision_alt: "手机端 Collie 界面：精炼结论配一键决策按钮与待处理钉住条",
+    phone_decision_alt: "手机端 Collie 界面：精炼结论、一键决策按钮与展开的待处理和钉住托盘",
     phone_thread_alt: "手机端 Collie 底部话题抽屉：多条分支讨论与关联 Agent 实时状态",
     loop1_t: "说清目标，放心交出去",
     loop1_d: "在对话里派活，或让 GitHub、飞书机器人与定时巡检自动把事送进来。",
@@ -1055,6 +1113,46 @@ function applyLang(lang) {
     const k = el.dataset.i18nAria;
     if (k in dict) el.setAttribute("aria-label", dict[k]);
   });
+  syncVideoToggleUI();
+}
+
+/* Hero looping video pause/play control + prefers-reduced-motion handling */
+const heroVideo = document.getElementById("hero-video");
+const heroVideoToggle = document.getElementById("hero-video-toggle");
+const reducedMotionMQ = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+function syncVideoToggleUI() {
+  if (!heroVideo || !heroVideoToggle) return;
+  const dict = COPY[currentLang];
+  const paused = heroVideo.paused;
+  const label = heroVideoToggle.querySelector(".media-toggle-label");
+  const icPause = heroVideoToggle.querySelector(".ic-pause");
+  const icPlay = heroVideoToggle.querySelector(".ic-play");
+  if (label) label.textContent = paused ? dict.video_play : dict.video_pause;
+  if (icPause) icPause.toggleAttribute("hidden", paused);
+  if (icPlay) icPlay.toggleAttribute("hidden", !paused);
+  heroVideoToggle.setAttribute("aria-label", paused ? dict.video_play_aria : dict.video_pause_aria);
+}
+
+if (heroVideo && heroVideoToggle) {
+  if (reducedMotionMQ.matches) {
+    heroVideo.removeAttribute("autoplay");
+    heroVideo.pause();
+  }
+  reducedMotionMQ.addEventListener?.("change", (e) => {
+    if (e.matches) heroVideo.pause();
+    syncVideoToggleUI();
+  });
+  heroVideoToggle.addEventListener("click", () => {
+    if (heroVideo.paused) {
+      heroVideo.play().catch(() => {});
+    } else {
+      heroVideo.pause();
+    }
+    syncVideoToggleUI();
+  });
+  heroVideo.addEventListener("play", syncVideoToggleUI);
+  heroVideo.addEventListener("pause", syncVideoToggleUI);
 }
 
 applyLang(detectInitialLang());
@@ -1068,24 +1166,16 @@ langBtn.addEventListener("click", () => {
 const schemeMeta = document.querySelector('meta[name="color-scheme"]');
 const darkMQ = window.matchMedia("(prefers-color-scheme: dark)");
 const themeBtn = document.getElementById("theme-toggle");
-const heroVideo = document.getElementById("hero-video");
 
 function renderedScheme() {
   const saved = readStored("collie-theme");
   if (saved === "light" || saved === "dark") return saved;
   return darkMQ.matches ? "dark" : "light";
 }
-function syncHeroPoster() {
-  if (!heroVideo) return;
-  heroVideo.poster = renderedScheme() === "dark" ? "img/hero-dark.png" : "img/hero-light.png";
-}
 function syncSchemeMeta() {
   const saved = readStored("collie-theme");
   schemeMeta.content = (saved === "light" || saved === "dark") ? saved : "light dark";
-  syncHeroPoster();
 }
-syncHeroPoster();
-darkMQ.addEventListener?.("change", syncHeroPoster);
 themeBtn.addEventListener("click", () => {
   const target = renderedScheme() === "dark" ? "light" : "dark";
   const sys = darkMQ.matches ? "dark" : "light";
@@ -1096,7 +1186,6 @@ themeBtn.addEventListener("click", () => {
     writeStored("collie-theme", target);
     schemeMeta.content = target;
   }
-  syncHeroPoster();
 });
 
 window.addEventListener("storage", (e) => {

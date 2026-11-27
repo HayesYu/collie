@@ -1388,6 +1388,7 @@
       seenCollieNotifyIds.clear();
       for (const id of keep) seenCollieNotifyIds.add(id);
     }
+    if (fresh.length) playChime();
     if (!fresh.length || !pageInBackground() || !canBrowserNotify()) return;
     const latest = fresh[fresh.length - 1];
     try {
@@ -1429,9 +1430,59 @@
     prevStatus = new Map(next.agents.map((a) => [a.pane_id, a.status]));
   }
 
+  // Built-in notification chime: synthesized with Web Audio, no asset files.
+  // Per-device toggle in localStorage ("collie.sound", default on). Browsers
+  // keep audio locked until the first user gesture; until then we stay silent.
+  let chimeCtx = null;
+  let chimeLastAt = 0;
+  function chimeUnlock() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      if (!chimeCtx) chimeCtx = new AC();
+      if (chimeCtx.state === "suspended") chimeCtx.resume().catch(() => {});
+      return chimeCtx;
+    } catch { return null; }
+  }
+  function chimeTones(ctx) {
+    const t0 = ctx.currentTime + 0.01;
+    [[987.77, 0], [1318.51, 0.13]].forEach(([freq, at]) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t0 + at);
+      gain.gain.exponentialRampToValueAtTime(0.16, t0 + at + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.55);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0 + at);
+      osc.stop(t0 + at + 0.6);
+    });
+  }
+  function playChime(force = false) {
+    if (!force && !store.get("sound", true)) return;
+    const now = Date.now();
+    if (!force && now - chimeLastAt < 1500) return;
+    try {
+      // Before any gesture we never create/resume the context, so nothing is
+      // queued to blast out later; a test click (force) is itself a gesture.
+      const ctx = force ? chimeUnlock() : chimeCtx;
+      if (!ctx) return;
+      if (ctx.state === "running") { chimeLastAt = now; chimeTones(ctx); }
+      else if (force) ctx.resume().then(() => { chimeLastAt = Date.now(); chimeTones(ctx); }).catch(() => {});
+    } catch {}
+  }
+  {
+    const unlock = () => {
+      const ctx = chimeUnlock();
+      if (ctx && ctx.state === "running") for (const ev of ["pointerdown", "keydown", "touchend"]) removeEventListener(ev, unlock, true);
+    };
+    for (const ev of ["pointerdown", "keydown", "touchend"]) addEventListener(ev, unlock, true);
+  }
+
   function ping(msg, a, kind) {
     if (a.pane_id !== current || document.hidden) {
       toast(msg, kind);
+      playChime();
       if (pageInBackground() && canBrowserNotify()) {
         try {
           const n = new Notification("Collie", { body: msg, icon: "/icon.svg", tag: a.pane_id });
@@ -9968,6 +10019,7 @@
     text: () => store.get("text", "normal"),
     sendKey: () => store.get("sendKey", "enter"),
     notify: () => store.get("notify", true),
+    sound: () => store.get("sound", true),
     fold: () => store.get("fold", true),
   };
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
@@ -10017,6 +10069,7 @@
       </div>
       <div class="card"><div class="card-h">通知</div>
         ${row("浏览器通知", esc(env.text), notifyCtl, env.warn)}
+        ${row("消息提示音", "Collie 有新回复、agent 完成或需要你确认时「叮咚」一声；仅对本设备生效", `<div class="pref-ctls"><button type="button" class="btn small ghost pref-test-btn" data-act="test-sound">试听</button>${sw("sound", prefs.sound())}</div>`)}
       </div>
       <div class="card"><div class="card-h">登录状态</div>
         ${row("退出登录", "清除当前浏览器的登录凭证，下次需要重新配对或输入访问令牌", `<button type="button" class="btn small danger-ghost" data-act="logout">退出登录</button>`)}
@@ -16234,6 +16287,7 @@
       if (act === "test-notify") {
         sendTestNotification();
       }
+      if (act === "test-sound") playChime(true);
       if (act === "pause") {
         const cur = (await api("/api/super/settings")).settings;
         await api("/api/super/settings", { body: { settings: { ...cur, paused: !cur.paused } } });

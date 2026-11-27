@@ -376,7 +376,17 @@ function makeEl(id = "", tag = "DIV") {
     classList: makeClassList(), children: [], options: [], scrollTop: 0, scrollHeight: 200, clientHeight: 200,
     clientWidth: 800, offsetWidth: 800, offsetParent: {}, isConnected: true, _qs: {}, _qsa: {},
     addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn); },
-    removeEventListener() {},
+    removeEventListener(type, fn) {
+      const list = listeners.get(type);
+      if (!list) return;
+      const idx = list.indexOf(fn);
+      if (idx >= 0) list.splice(idx, 1);
+    },
+    dispatch(type, ev = {}) {
+      const e = { type, target: el, currentTarget: el, preventDefault() {}, stopPropagation() {}, ...ev };
+      for (const fn of [...(listeners.get(type) || [])]) fn(e);
+      return e;
+    },
     querySelector(sel) {
       if (Object.prototype.hasOwnProperty.call(el._qs, sel)) return el._qs[sel];
       const child = makeEl(id + ":" + sel);
@@ -435,10 +445,37 @@ const doc = {
   removeEventListener() {},
 };
 
+let rafSeq = 0;
+const rafQueue = new Map();
+function flushRAF() {
+  const entries = [...rafQueue.entries()];
+  rafQueue.clear();
+  for (const [, fn] of entries) fn();
+}
+const ioInstances = [];
+class MockIntersectionObserver {
+  constructor(cb, opts = {}) {
+    this.cb = cb;
+    this.opts = opts;
+    this.observed = new Set();
+    this.disconnected = false;
+    ioInstances.push(this);
+  }
+  observe(el) { this.observed.add(el); }
+  unobserve(el) { this.observed.delete(el); }
+  disconnect() { this.disconnected = true; this.observed.clear(); }
+  trigger(isIntersecting = true) {
+    if (this.disconnected || this.observed.size === 0) return;
+    const entries = [...this.observed].map((target) => ({ target, isIntersecting }));
+    this.cb(entries, this);
+  }
+}
+
 const ctx = {
   console, Math, Date, JSON, Set, Map, RegExp, Error, Promise, URL, URLSearchParams, Object, Array, Number, String, Boolean,
   setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}, queueMicrotask,
-  requestAnimationFrame: () => 1, cancelAnimationFrame() {},
+  requestAnimationFrame: (fn) => { const id = ++rafSeq; rafQueue.set(id, fn); return id; },
+  cancelAnimationFrame: (id) => { rafQueue.delete(id); },
   document: doc,
   location: { hash: "#/auto", origin: "http://127.0.0.1:7788", href: "http://127.0.0.1:7788/#/auto", pathname: "/", search: "" },
   history: { state: null, pushState() {}, replaceState() {}, back() {} },
@@ -454,7 +491,7 @@ const ctx = {
   CustomEvent: class CustomEvent { constructor(t, d) { this.type = t; this.detail = d?.detail; } },
   ResizeObserver: class { observe() {} disconnect() {} },
   MutationObserver: class { observe() {} disconnect() {} },
-  IntersectionObserver: class { observe() {} disconnect() {} },
+  IntersectionObserver: MockIntersectionObserver,
   EventSource: class { addEventListener() {} close() {} },
   Notification: class { static permission = "default"; static async requestPermission() { return "default"; } },
   localStorage: {
@@ -486,7 +523,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { renderMemoryHTML, renderMemCrewHTML, inboxHTML, timersHTML, syncInboxOverflow, openAuto, loadAuto, autoCache, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, setAutoTab: (t) => { autoTab = t; }, getBody: () => $(\"#auto-body\") };\n})();"
+  "  globalThis.__test = { renderMemoryHTML, renderMemCrewHTML, inboxHTML, timersHTML, syncInboxOverflow, setupInboxInfiniteScroll, selectInboxThread, openAuto, loadAuto, autoCache, getInboxLimit: () => inboxRenderLimit, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, setAutoTab: (t) => { autoTab = t; }, getBody: () => $(\"#auto-body\") };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -535,11 +572,104 @@ assert.ok(tmHtml.includes('data-ended-lazy="1"') && tmHtml.includes("120 个"), 
 assert.equal((tmHtml.match(/class="tm-row is-ended"/g) || []).length, 0, "0 ended timer rows should render before expand");
 
 const manyTriggers = Array.from({ length: 120 }, (_, i) => ({
-  id: "t" + (i + 1), source: "chat", thread: "chat:main", from: "you", action: "respond", status: "delivered", text: "msg " + i, at: nowIso,
+  id: "t" + (i + 1),
+  source: i % 3 === 0 ? "github" : "chat",
+  thread: i % 3 === 0 ? "github:org/repo#12" : "chat:main",
+  from: "you",
+  action: "respond",
+  status: "delivered",
+  text: "msg " + i,
+  at: nowIso,
 }));
-const inbHtml = T.inboxHTML(manyTriggers, [{ id: "chat:main", triggers: [], subscribers: [], last_at: nowIso }]);
+const manyThreads = [
+  { id: "chat:main", triggers: manyTriggers.filter((t) => t.thread === "chat:main"), subscribers: [], last_at: nowIso },
+  { id: "github:org/repo#12", triggers: manyTriggers.filter((t) => t.thread === "github:org/repo#12"), subscribers: ["worker-001"], last_at: nowIso },
+];
+const inbHtml = T.inboxHTML(manyTriggers, manyThreads);
 assert.equal((inbHtml.match(/class="row inbox-row/g) || []).length, 40, "inbox must paginate initial render to 40 rows");
-assert.ok(inbHtml.includes('data-act="inbox-more"'), "inbox must offer load-more button for remaining triggers");
+assert.ok(inbHtml.includes("事件来源") && inbHtml.includes("全部来源（2）"), "inbox toolbar must use natural Chinese source wording");
+assert.ok(inbHtml.includes('data-act="inbox-routes-toggle"') && inbHtml.includes("订阅路由"), "inbox toolbar must include single-row subscription routes toggle");
+assert.ok(inbHtml.includes('id="inbox-routes-panel" hidden'), "subscription routes panel must start collapsed");
+assert.ok(!inbHtml.includes("线程"), "inbox UI must not contain machine-translated 线程 copy");
+assert.ok(!inbHtml.includes("inbox-subs-fold"), "inbox must drop old stacked details fold");
+assert.ok(!inbHtml.includes('data-act="inbox-more"'), "inbox must remove manual load-more button");
+assert.ok(inbHtml.includes('data-inbox-sentinel="more"') && inbHtml.includes("正在加载更多…"), "inbox must render subtle infinite-scroll sentinel");
+
+// 3b) Routes toggle in place + IntersectionObserver infinite scroll (with anti-dup guard & source-switch reset)
+{
+  const body = T.getBody();
+  T.setView("auto");
+  T.setAutoTab("inbox");
+  T.autoCache.inbox = { triggers: manyTriggers, threads: manyThreads };
+
+  const routesBtn = makeEl("routes-btn", "BUTTON");
+  routesBtn.dataset = { act: "inbox-routes-toggle" };
+  routesBtn.closest = (s) => (s === "button" ? routesBtn : null);
+  const routesPanel = makeEl("inbox-routes-panel", "DIV");
+  routesPanel.hidden = true;
+  body._qs["#inbox-routes-panel"] = routesPanel;
+
+  body.dispatch("click", { target: routesBtn });
+  assert.equal(routesPanel.hidden, false, "clicking 订阅路由 must expand panel");
+  assert.equal(routesBtn.getAttribute("aria-expanded"), "true");
+  assert.equal(routesBtn.classList.contains("is-open"), true);
+  body.dispatch("click", { target: routesBtn });
+  assert.equal(routesPanel.hidden, true, "clicking 订阅路由 again must collapse panel");
+  assert.equal(routesBtn.getAttribute("aria-expanded"), "false");
+
+  // Setup mock list + sentinel for infinite scroll batching
+  const ul = makeEl("inbox-list", "UL");
+  let appendedChunks = 0;
+  let appendedRows = 0;
+  ul.insertAdjacentHTML = (_pos, html) => {
+    appendedChunks++;
+    appendedRows += (html.match(/class="row inbox-row/g) || []).length;
+  };
+  const statusEl = makeEl("inbox-status", "SPAN");
+  statusEl.textContent = "正在加载更多…";
+  const foot = makeEl("inbox-feed-foot", "DIV");
+  foot.dataset = { inboxSentinel: "more" };
+  foot._qs[".inbox-feed-status"] = statusEl;
+  body._qs["#inbox-list"] = ul;
+  body._qs["#inbox-feed-foot"] = foot;
+  body._qs['[data-inbox-sentinel="more"]'] = foot;
+
+  ioInstances.length = 0;
+  T.setupInboxInfiniteScroll(body);
+  assert.equal(ioInstances.length, 1, "infinite scroll must register IntersectionObserver");
+  assert.equal(ioInstances[0].opts.root, body, "IntersectionObserver root must be #auto-body");
+  assert.equal(ioInstances[0].opts.rootMargin, "0px 0px 240px 0px", "IntersectionObserver must preload within 240px rootMargin");
+
+  // Duplicate intersect before rAF commits must only schedule one 40-item batch
+  ioInstances[0].trigger(true);
+  ioInstances[0].trigger(true);
+  flushRAF();
+  assert.equal(T.getInboxLimit(), 80, "first intersection appends exactly +40 items (40 -> 80)");
+  assert.equal(appendedChunks, 1, "anti-duplicate guard prevents double batching");
+  assert.equal(appendedRows, 40, "incremental insertAdjacentHTML appends 40 rows");
+  assert.equal(statusEl.textContent, "正在加载更多…", "footer stays in loading hint while more rows remain");
+  assert.equal(ioInstances[0].disconnected, false, "observer stays active while more rows remain");
+
+  // Second intersection loads final 40 items (80 -> 120) and shows done footer
+  ioInstances[0].trigger(true);
+  flushRAF();
+  assert.equal(T.getInboxLimit(), 120, "second intersection loads remaining rows to 120");
+  assert.equal(appendedRows, 80, "incremental insertAdjacentHTML appended 80 additional rows total");
+  assert.equal(statusEl.textContent, "已显示全部 120 条", "footer shows subtle total count when fully loaded");
+  assert.equal(foot.classList.contains("is-done"), true, "footer adds .is-done when complete");
+  assert.equal(ioInstances[0].disconnected, true, "observer disconnects once all items are rendered");
+
+  // Switching source filter resets render limit back to 40 and scrolls back to top
+  body.scrollTop = 640;
+  delete body._qs['[data-inbox-sentinel="more"]'];
+  body._qs['[data-inbox-sentinel="more"]'] = null;
+  T.selectInboxThread("github:org/repo#12");
+  assert.equal(T.getInboxLimit(), 40, "switching event source must reset pagination limit to 40");
+  assert.equal(body.scrollTop, 0, "switching event source must reset scrollTop to 0");
+  assert.ok(body.innerHTML.includes("已显示全部 40 条"), "40-item filtered source immediately shows done footer");
+  T.selectInboxThread("");
+  assert.equal(T.getInboxLimit(), 40, "switching back to all sources keeps limit reset at 40");
+}
 
 // 4) Zero-flash .is-integrations atomic switching & no /api/super/lark?fresh spam
 (async () => {

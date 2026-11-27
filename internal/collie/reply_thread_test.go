@@ -14,6 +14,7 @@ import (
 )
 
 func TestSuperSayQuoteUserAndCollieEntries(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -183,6 +184,7 @@ func TestSuperSayQuoteUserAndCollieEntries(t *testing.T) {
 }
 
 func TestReplyThreadSettingsAndNotificationsJS(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")

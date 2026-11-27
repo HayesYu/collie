@@ -12,6 +12,7 @@ import (
 )
 
 func TestClipWorkerSummaryRunes(t *testing.T) {
+	t.Parallel()
 	if got := clipWorkerSummaryRunes("short", 10); got != "short" {
 		t.Fatalf("short string changed: %q", got)
 	}
@@ -40,6 +41,7 @@ func TestClipWorkerSummaryRunes(t *testing.T) {
 }
 
 func TestSuperStateSlimsEndedWorkersPreservesActiveAndShow(t *testing.T) {
+	t.Parallel()
 	sup, _, call := newPendingTestEnv(t)
 	now := time.Now().UTC()
 
@@ -157,6 +159,7 @@ func TestSuperStateSlimsEndedWorkersPreservesActiveAndShow(t *testing.T) {
 }
 
 func TestWebV0295PerfDockMemoryAndAnchors(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}

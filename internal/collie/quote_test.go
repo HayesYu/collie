@@ -12,6 +12,7 @@ import (
 )
 
 func TestWorkerReportQuoteUsesActualReportAndTimelineEntry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -92,6 +93,7 @@ func TestWorkerReportQuoteUsesActualReportAndTimelineEntry(t *testing.T) {
 }
 
 func TestLegacyWorkerReportTriggerAndOtherWorkerQuotes(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	sp := &Super{
 		st: &State{
@@ -167,6 +169,7 @@ func TestLegacyWorkerReportTriggerAndOtherWorkerQuotes(t *testing.T) {
 }
 
 func TestQuoteFallbackFromSQLiteAndEarlierTimelineJump(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {

@@ -3,8 +3,10 @@ package collie
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"mime/multipart"
@@ -44,6 +46,9 @@ func makeTestZip(t *testing.T, entries []struct {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
+	zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(out, flate.BestSpeed)
+	})
 	for _, e := range entries {
 		fh := &zip.FileHeader{
 			Name:     e.name,
@@ -149,6 +154,7 @@ func postMultipartMemoryImport(t *testing.T, h http.Handler, token, mode, filena
 }
 
 func TestMemoryExportFilterAndRoundTrip(t *testing.T) {
+	t.Parallel()
 	srv1, sp1, h1 := newMemoryTestServer(t)
 	mem1 := sp1.memDir()
 
@@ -253,6 +259,7 @@ func TestMemoryExportFilterAndRoundTrip(t *testing.T) {
 }
 
 func TestMemoryImportMergeReplaceAndBackup(t *testing.T) {
+	t.Parallel()
 	srv, sp, h := newMemoryTestServer(t)
 	memDir := sp.memDir()
 
@@ -349,6 +356,7 @@ func TestMemoryImportMergeReplaceAndBackup(t *testing.T) {
 }
 
 func TestMemoryImportSecurityGuards(t *testing.T) {
+	t.Parallel()
 	srv, sp, h := newMemoryTestServer(t)
 	memDir := sp.memDir()
 	_ = os.MkdirAll(memDir, 0o700)
@@ -472,19 +480,43 @@ func TestMemoryImportSecurityGuards(t *testing.T) {
 			name: "total-size-zip-bomb",
 			payload: func() []byte {
 				chunk := bytes.Repeat([]byte("b"), memoryMaxSingleFileBytes-1024)
-				var entries []struct {
-					name string
-					body []byte
-					mode fs.FileMode
+				var raw bytes.Buffer
+				fw, err := flate.NewWriter(&raw, flate.BestSpeed)
+				if err != nil {
+					t.Fatal(err)
 				}
+				if _, err := fw.Write(chunk); err != nil {
+					t.Fatal(err)
+				}
+				if err := fw.Close(); err != nil {
+					t.Fatal(err)
+				}
+				comp := raw.Bytes()
+				sum := crc32.ChecksumIEEE(chunk)
+				var buf bytes.Buffer
+				zw := zip.NewWriter(&buf)
 				for i := 0; i < 12; i++ { // ~60 MiB uncompressed, <100 KB compressed
-					entries = append(entries, struct {
-						name string
-						body []byte
-						mode fs.FileMode
-					}{name: fmt.Sprintf("notes/part-%02d.md", i), body: chunk})
+					fh := &zip.FileHeader{
+						Name:               fmt.Sprintf("notes/part-%02d.md", i),
+						Method:             zip.Deflate,
+						Modified:           time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC),
+						CRC32:              sum,
+						CompressedSize64:   uint64(len(comp)),
+						UncompressedSize64: uint64(len(chunk)),
+					}
+					fh.SetMode(0o600)
+					w, err := zw.CreateRaw(fh)
+					if err != nil {
+						t.Fatalf("zip create raw %d: %v", i, err)
+					}
+					if _, err := w.Write(comp); err != nil {
+						t.Fatalf("zip write raw %d: %v", i, err)
+					}
 				}
-				return makeTestZip(t, entries)
+				if err := zw.Close(); err != nil {
+					t.Fatalf("zip close: %v", err)
+				}
+				return buf.Bytes()
 			}(),
 			wantStatus: 413,
 		},

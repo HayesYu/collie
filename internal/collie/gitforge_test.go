@@ -88,6 +88,7 @@ func newTestForgeEnv(t *testing.T, prov ForgeProvider) (*Super, *IntegrationMana
 }
 
 func TestGitForgeColdStartWatermarkAndNoiseFiltering(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
 	var curNow atomic.Int64
 	curNow.Store(base.UnixNano())
@@ -190,6 +191,7 @@ func TestGitForgeColdStartWatermarkAndNoiseFiltering(t *testing.T) {
 }
 
 func TestGitForgeThreeHandleModesAndSamplePullReadOnly(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	sampleItems := []ForgeItem{
 		{DedupKey: "s:1", Kind: "pr", Repo: "acme/web", Number: 42, Tag: "PR 评审", Title: "Polish modal", Author: "carol", URL: "https://example.com/acme/web/pull/42", At: now.Add(-2 * time.Minute)},
@@ -295,6 +297,7 @@ func TestGitForgeThreeHandleModesAndSamplePullReadOnly(t *testing.T) {
 // public repository source tree and demo bundle contain zero internal domains,
 // internal hostnames/IPs, or proprietary internal CLI tool names.
 func TestPublicRepoNoInternalTerms(t *testing.T) {
+	t.Parallel()
 	// Assemble forbidden markers from fragments so this test file stays clean too.
 	forbidden := []string{
 		strings.Join([]string{"byted", "cli"}, ""),

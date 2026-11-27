@@ -22,6 +22,7 @@ func writeFakeCLIScript(t *testing.T, dir, name, body string) string {
 }
 
 func TestCLIProviderDiscoverAndDeclarativeSources(t *testing.T) {
+	t.Parallel()
 	collieHome := t.TempDir()
 	provDir := filepath.Join(collieHome, "providers")
 	if err := os.MkdirAll(provDir, 0o700); err != nil {
@@ -173,6 +174,7 @@ esac
 }
 
 func TestCLIProviderTimeoutConcurrencyAndAuthCircuitBreak(t *testing.T) {
+	t.Parallel()
 	binDir := t.TempDir()
 
 	// 1) Timeout protection: script sleeps 2s while provider timeout is 120ms.

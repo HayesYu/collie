@@ -9,6 +9,7 @@ import (
 )
 
 func TestResumeFrom(t *testing.T) {
+	t.Parallel()
 	sp := &Super{st: &State{Workers: map[string]*Worker{
 		"done":  {Name: "done", Kind: "codex", Cwd: "/w", Machine: "m1", Ended: true, Session: "s-1"},
 		"live":  {Name: "live", Session: "s-2"},
@@ -38,6 +39,7 @@ func TestResumeFrom(t *testing.T) {
 }
 
 func TestRouterDocChanged(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	sp := &Super{st: &State{Workers: map[string]*Worker{}, Threads: map[string]*Thread{}}, subs: map[chan struct{}]bool{}}
 	asks := func() int {
@@ -66,6 +68,7 @@ func TestRouterDocChanged(t *testing.T) {
 }
 
 func TestAgentStopLine(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ screen, summary, want string }{
 		{"⏺ 正在读文件\n\n  ⎿  You've hit your usage limit · resets 5am\n\n> ", "正在读文件", "You've hit your usage limit · resets 5am"},
 		{"■ stream error: unexpected status 429 Too Many Requests\n", "", "stream error: unexpected status 429 Too Many Requests"},
@@ -87,6 +90,7 @@ func TestAgentStopLine(t *testing.T) {
 }
 
 func TestDreamSkills(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "d.md")
 	os.WriteFile(p, []byte("归档了两个任务。\n可做成 skill：Dorado 只读查表、Spark 草稿读 HDFS。\n\n# 记录\n"), 0o600)
 	if got := dreamLine(p, dreamSkillsPrefix); got != "Dorado 只读查表、Spark 草稿读 HDFS" {
@@ -102,6 +106,7 @@ func TestDreamSkills(t *testing.T) {
 }
 
 func TestAgyFullTranscript(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	short, full := filepath.Join(dir, "transcript.jsonl"), filepath.Join(dir, "transcript_full.jsonl")
 	os.WriteFile(short, nil, 0o600)
@@ -118,6 +123,7 @@ func TestAgyFullTranscript(t *testing.T) {
 }
 
 func TestSessionID(t *testing.T) {
+	t.Parallel()
 	if got := sessionID("path", "/u/.codex/sessions/2026/11/21/rollout-2026-11-21T03-21-45-01a1fa68-5cc0-7561-9652-081fb93ad0f9.jsonl"); got != "01a1fa68-5cc0-7561-9652-081fb93ad0f9" {
 		t.Errorf("codex path: %q", got)
 	}
@@ -130,6 +136,7 @@ func TestSessionID(t *testing.T) {
 }
 
 func TestFollow(t *testing.T) {
+	t.Parallel()
 	soon, later := time.Now().Add(time.Hour), time.Now().Add(20*time.Hour)
 	sp := &Super{st: &State{Timers: []*Timer{
 		{Spec: "weekdays 10:00", Text: "飞书 todo 例行", NextRun: soon.Add(-30 * time.Minute), Enabled: true, Owner: "collie"},
@@ -147,6 +154,7 @@ func TestFollow(t *testing.T) {
 }
 
 func TestSortedTimers(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, 11, 23, 14, 0, 0, 0, time.UTC)
 	t1 := base.Add(10 * time.Minute)
 	t2 := base.Add(2 * time.Hour)
@@ -175,6 +183,7 @@ func TestSortedTimers(t *testing.T) {
 }
 
 func TestProgressHash(t *testing.T) {
+	t.Parallel()
 	a := progressHash("⏺ Bash(collie show t12)\n✻ Thinking… (3m 21s · ↓ 1.2k tokens · esc to interrupt)\n> ")
 	b := progressHash("⏺ Bash(collie show t12)\n✶ Pondering… (4m 02s · ↓ 1.2k tokens · esc to interrupt)\n> ")
 	if a != b {
@@ -189,6 +198,7 @@ func TestProgressHash(t *testing.T) {
 }
 
 func TestDreamFixLine(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "j.md")
 	os.WriteFile(p, []byte("精简了指令。\n可改进 skill：feishu-todo（漏读话题回复）\n\n- 细节\n"), 0o600)
 	if got := dreamLine(p, dreamFixPrefix); got != "feishu-todo（漏读话题回复）" {

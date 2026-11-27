@@ -126,6 +126,7 @@ func TestFinishDreamSkillOptionsPendingDBAndLark(t *testing.T) {
 }
 
 func TestMemoryUpFrontSplitAnd10KBBudget(t *testing.T) {
+	t.Parallel()
 	sp, _, call := newPendingTestEnv(t)
 	sp.bin = "collie"
 
@@ -249,6 +250,7 @@ func TestMemoryUpFrontSplitAnd10KBBudget(t *testing.T) {
 }
 
 func TestNightlyDreamFailureAdvancesWatermarkAndManualDoesNot(t *testing.T) {
+	t.Parallel()
 	sp, _, _ := newPendingTestEnv(t)
 	now := time.Now()
 	yesterday := now.AddDate(0, 0, -1)
@@ -293,6 +295,7 @@ func TestNightlyDreamFailureAdvancesWatermarkAndManualDoesNot(t *testing.T) {
 }
 
 func TestRecoverActiveDreamClosesOrphanWorkspaceOnHubRestart(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {

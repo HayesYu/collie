@@ -20,9 +20,11 @@ func writeFakeAgy(t *testing.T, script string) string {
 }
 
 func TestResolveDefaultSettings(t *testing.T) {
+	t.Parallel()
 	const home = "/tmp/collie-home-test"
 
 	t.Run("agy present with both target models", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "agy" {
 				return "/usr/local/bin/agy"
@@ -56,6 +58,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("agy present via real CLI script with both target models", func(t *testing.T) {
+		t.Parallel()
 		bin := writeFakeAgy(t, `printf 'gemini-4-neon-medium\tGemini 4 Neon (Medium)\ngemini-4-neon-xhigh\tGemini 4 Neon (XHigh)\n'`)
 		lookup := func(name, _ string) string {
 			if name == "agy" {
@@ -72,6 +75,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("agy present with only one target model", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "agy" {
 				return "/usr/local/bin/agy"
@@ -87,6 +91,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("agy present without target models falls back to empty model", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "agy" {
 				return "/usr/local/bin/agy"
@@ -108,6 +113,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("agy present but models command errors", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "agy" {
 				return "/usr/local/bin/agy"
@@ -126,6 +132,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("agy present but models command times out promptly", func(t *testing.T) {
+		t.Parallel()
 		bin := writeFakeAgy(t, `sleep 5`)
 		lookup := func(name, _ string) string {
 			if name == "agy" {
@@ -148,6 +155,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("agy missing falls back to claude over codex", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "claude" || name == "codex" {
 				return "/usr/local/bin/" + name
@@ -171,6 +179,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("only codex present falls back to codex", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "codex" {
 				return "/usr/local/bin/codex"
@@ -187,6 +196,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("no agents installed falls back to claude", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(string, string) string { return "" }
 		got := resolveDefaultSettings(home, lookup, nil, time.Second)
 		if got.RouterKind != "claude" || got.WorkerKind != "claude" {
@@ -195,6 +205,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("only doubao installed does not auto-select doubao for router or default worker", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "doubao" {
 				return "/usr/local/bin/doubao"
@@ -208,6 +219,7 @@ func TestResolveDefaultSettings(t *testing.T) {
 	})
 
 	t.Run("only cursor-agent installed does not auto-select cursor for router or default worker", func(t *testing.T) {
+		t.Parallel()
 		lookup := func(name, _ string) string {
 			if name == "cursor-agent" || name == "cursor" {
 				return "/usr/local/bin/cursor-agent"
@@ -222,7 +234,9 @@ func TestResolveDefaultSettings(t *testing.T) {
 }
 
 func TestInitStatePersistsFreshAndNeverOverwritesSavedSettings(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh db detects once and persists to sqlite", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		db, err := openDB(filepath.Join(dir, "herd.db"))
 		if err != nil {
@@ -282,6 +296,7 @@ func TestInitStatePersistsFreshAndNeverOverwritesSavedSettings(t *testing.T) {
 	})
 
 	t.Run("existing user settings with empty omitempty models are never overwritten", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		db, err := openDB(filepath.Join(dir, "herd.db"))
 		if err != nil {
@@ -320,6 +335,7 @@ func TestInitStatePersistsFreshAndNeverOverwritesSavedSettings(t *testing.T) {
 	})
 
 	t.Run("existing antigravity user with empty default models keeps them empty", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		db, err := openDB(filepath.Join(dir, "herd.db"))
 		if err != nil {

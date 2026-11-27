@@ -404,6 +404,7 @@ func setupFeishuTestHarness(t *testing.T) (*Server, *Super, *FeishuAdapter, *fak
 }
 
 func TestFeishuAllowlistAndGroupMentionGuard(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, _, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -518,6 +519,7 @@ func TestFeishuAllowlistAndGroupMentionGuard(t *testing.T) {
 }
 
 func TestFeishuFullBidirectionalLoopAndReverseSync(t *testing.T) {
+	t.Parallel()
 	s, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -699,6 +701,7 @@ func TestFeishuFullBidirectionalLoopAndReverseSync(t *testing.T) {
 }
 
 func TestFeishuTestCardAndImageDownloadAndPairing(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -798,6 +801,7 @@ func TestFeishuTestCardAndImageDownloadAndPairing(t *testing.T) {
 }
 
 func TestFeishuFeedbackConfigParsing(t *testing.T) {
+	t.Parallel()
 	// 1) Array form + whitespace/dedup.
 	c1 := parseFeishuConfig(json.RawMessage(`{"app_id":"cli_x","allow_open_ids":["ou_1"],"feedback_chat_ids":["oc_1","oc_2, oc_1"]}`))
 	if len(c1.FeedbackChatIDs) != 2 || c1.FeedbackChatIDs[0] != "oc_1" || c1.FeedbackChatIDs[1] != "oc_2" {
@@ -827,6 +831,7 @@ func TestFeishuFeedbackConfigParsing(t *testing.T) {
 }
 
 func TestFeishuGroupFeedbackSecurityRouting(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -1109,6 +1114,7 @@ func TestFeishuGroupFeedbackSecurityRouting(t *testing.T) {
 }
 
 func TestFeishuReadCursorAckAndUnquotedReplySync(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -1280,6 +1286,7 @@ func TestFeishuReadCursorAckAndUnquotedReplySync(t *testing.T) {
 }
 
 func TestFeishuQuotedMessageTextImagePostAndFeedback(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	sp.integrations.humanBurst = 20
 	ctx := context.Background()
@@ -1774,6 +1781,7 @@ func TestFeishuQuotedMessageFailureDegradationAndLimits(t *testing.T) {
 }
 
 func TestFeishuQuotedInteractiveCardsAndOwnCardRecovery(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	sp.integrations.humanBurst = 30
 	ctx := context.Background()
@@ -1971,6 +1979,7 @@ func TestFeishuQuotedInteractiveCardsAndOwnCardRecovery(t *testing.T) {
 }
 
 func TestCleanFeishuInboundHTML(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -2072,6 +2081,7 @@ func TestCleanFeishuInboundHTML(t *testing.T) {
 }
 
 func TestFeishuInboundHTMLSanitizationInMessages(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -2141,6 +2151,7 @@ func TestFeishuInboundHTMLSanitizationInMessages(t *testing.T) {
 }
 
 func TestFeishuMergeForwardInboundAndQuoted(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -2640,6 +2651,7 @@ func TestFeishuMergeForwardResourceFallbackFilesAndSenderMapping(t *testing.T) {
 }
 
 func TestFeishuQuotedLocalImageUsesNativeReplyWithoutDuplication(t *testing.T) {
+	t.Parallel()
 	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
 	ctx := context.Background()
 
@@ -2724,6 +2736,7 @@ func TestFeishuQuotedLocalImageUsesNativeReplyWithoutDuplication(t *testing.T) {
 }
 
 func TestFeishuNeverFallbackToGroupChat(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Case 1: Owner previously DM'd (oc_p2p_owner), then @Collie in a public group,
@@ -3488,6 +3501,7 @@ func TestFeishuGroupRecentContext(t *testing.T) {
 }
 
 func TestOpenSourceRepoZeroInternalTerms(t *testing.T) {
+	t.Parallel()
 	// Guard against accidentally introducing internal tool names or internal corporate domains
 	// into the public repository source files.
 	forbidden := []string{

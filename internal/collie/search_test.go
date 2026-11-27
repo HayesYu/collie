@@ -11,6 +11,7 @@ import (
 )
 
 func TestSuperSearchFullHistoryAndEarlierUntil(t *testing.T) {
+	t.Parallel()
 	sp, db, call := newPendingTestEnv(t)
 
 	base := time.Date(2026, 11, 20, 9, 0, 0, 0, time.Local)

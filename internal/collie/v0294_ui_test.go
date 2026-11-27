@@ -7,6 +7,7 @@ import (
 )
 
 func TestWebV0294UIPolishAndReplyToGuard(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}

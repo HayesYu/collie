@@ -6,6 +6,7 @@ import (
 )
 
 func TestAskOf(t *testing.T) {
+	t.Parallel()
 	m := askOf("AskUserQuestion", json.RawMessage(`{"questions":[{"question":"Which?","header":"H","options":[{"label":"A"},{"label":"B"}],"multiSelect":false}]}`))
 	if m == nil || m.Kind != "ask" || m.Text != "Which?" || len(m.Options) != 2 {
 		t.Fatalf("AskUserQuestion: %+v", m)
@@ -20,6 +21,7 @@ func TestAskOf(t *testing.T) {
 }
 
 func TestQueuedCommand(t *testing.T) {
+	t.Parallel()
 	tr := newTranscript("", "claude")
 	if !tr.claudeLine([]byte(`{"type":"attachment","attachment":{"type":"queued_command","prompt":"还有些消息看不到","origin":{"kind":"human"}}}`)) {
 		t.Fatal("human queued command not taken")

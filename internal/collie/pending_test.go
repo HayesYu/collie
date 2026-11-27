@@ -69,6 +69,7 @@ func pendingIDs(t *testing.T, call func(string, string, any) *httptest.ResponseR
 }
 
 func TestPendingScopeAndFourResolutionRules(t *testing.T) {
+	t.Parallel()
 	sp, _, call := newPendingTestEnv(t)
 
 	// 0 items initially; plain Collie replies and other threads never count.
@@ -198,6 +199,7 @@ func TestPendingScopeAndFourResolutionRules(t *testing.T) {
 }
 
 func TestPendingDismissPersistenceAgeAndTrimmedQuote(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {
@@ -282,6 +284,7 @@ func TestPendingDismissPersistenceAgeAndTrimmedQuote(t *testing.T) {
 }
 
 func TestReplyCheckPersistencePendingAndFourResolutions(t *testing.T) {
+	t.Parallel()
 	sp, db, call := newPendingTestEnv(t)
 
 	// Non-main thread --check does not enter chat:main pending.
@@ -412,6 +415,7 @@ func TestReplyCheckPersistencePendingAndFourResolutions(t *testing.T) {
 }
 
 func TestPinPersistenceIdempotencyBeyondWindowAndCap(t *testing.T) {
+	t.Parallel()
 	sp, db, call := newPendingTestEnv(t)
 
 	// Validation: empty id -> 400; unknown or event/other-thread entry -> 404.

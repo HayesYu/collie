@@ -207,7 +207,7 @@ func earlierMessages(path, format string, before int64, want int) ([]*Message, i
 		return nil, 0
 	}
 	end := min(fi.Size(), before+1<<20)
-	for win := int64(4 << 20); ; win *= 4 {
+	for win := int64(512 << 10); ; win *= 4 {
 		t := newTranscript(path, format)
 		if start := before - win; start > 0 {
 			t.offset, t.partial = start, true

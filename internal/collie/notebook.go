@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Read-only notebook aggregation for the top-right floating white-paper card.
@@ -58,6 +60,8 @@ var (
 	nbFilePathRe  = regexp.MustCompile(`(?:^|[\s（(【\[「『"'` + "`" + `,:;：；、])((?:~/|/[A-Za-z0-9._-]+/)[A-Za-z0-9._/@+\-\x{4e00}-\x{9fff}]+\.(?:html?|csv|tsv|md|markdown|mdx|pdf|json|ya?ml|txt|svg|png|jpe?g|webp|xlsx|docx|py|go|tsx?|jsx?|sql|sh))(?::\d+(?:-\d+)?)?`)
 	nbHTMLTitleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 	nbCheckPrefix = regexp.MustCompile(`^\s*(?:[-*+]\s*\[[ xX]\]\s*|[-*+•>]\s*|\d+[.)]\s+)`)
+	nbCheckedLine = regexp.MustCompile(`^\s*[-*+]\s*\[[xX]\]\s*`)
+	nbFieldLineRe = regexp.MustCompile(`^\s*(?:\*{1,2}|_{1,2})?([A-Za-z][A-Za-z0-9 _/-]{0,24}|[\p{Han}]{1,8})(?:\*{1,2}|_{1,2})?\s*[:：]\s*(.*)$`)
 	nbWordBoundRe = regexp.MustCompile(`[^\p{L}\p{N}_-]+`)
 )
 
@@ -76,44 +80,141 @@ func isIgnoredNotebookArtifact(p string) bool {
 	return false
 }
 
+func trimLeadingDecorEmoji(s string) string {
+	s = strings.TrimSpace(s)
+	for s != "" {
+		r, sz := utf8.DecodeRuneInString(s)
+		if r == utf8.RuneError {
+			break
+		}
+		isDecor := (r >= 0x1F300 && r <= 0x1FAFF) || // pictographs, transport, symbols, supplemental
+			(r >= 0x2600 && r <= 0x27BF) || // misc symbols & dingbats (✅ ⚠️ ✨ etc.)
+			(r >= 0x23E9 && r <= 0x23FA) || // media/clock symbols (⏳ ⏩ etc.)
+			r == 0x25B6 || r == 0x25C0 || r == 0x2139 || // play / info
+			r == 0xFE0F || r == 0xFE0E || r == 0x200D // variation selectors & ZWJ
+		if !isDecor && !unicode.IsSpace(r) {
+			break
+		}
+		s = s[sz:]
+	}
+	return strings.TrimSpace(s)
+}
+
 func stripMarkdownInline(s string) string {
 	s = pendingLinkRe.ReplaceAllString(s, "$1")
 	s = strings.NewReplacer("**", "", "__", "", "`", "", "~~", "").Replace(s)
-	return strings.TrimSpace(oneLine(s))
+	return trimLeadingDecorEmoji(oneLine(s))
+}
+
+func isTaskMetaFieldKey(k string) bool {
+	switch strings.ToLower(strings.TrimSpace(k)) {
+	case "thread", "worker", "workers", "timer", "timers", "session", "branch", "worktree", "repo", "path", "id", "created", "updated", "owner", "machine", "线程", "话题", "定时器", "分支", "仓库", "路径":
+		return true
+	}
+	return false
+}
+
+func taskFieldRank(k string) int {
+	switch strings.ToLower(strings.TrimSpace(k)) {
+	case "status", "状态", "进展", "当前进展", "进行中", "进度":
+		return 1
+	case "next", "下一步", "待办", "blocked", "阻塞", "卡点":
+		return 2
+	case "goal", "目标", "摘要", "summary", "说明":
+		return 3
+	case "done", "已完成", "完成":
+		return 4
+	}
+	return 0
 }
 
 func parseTaskMarkdown(stem, raw string) (title, note string) {
 	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
 	inFence := false
+	bestRank := 99
+	bestNote := ""
+	pendingRank := 0
+	fallbackUnchecked := ""
+	fallbackAny := ""
+
+	consider := func(rank int, val string) {
+		val = stripMarkdownInline(val)
+		if val == "" {
+			return
+		}
+		if rank < bestRank {
+			bestRank = rank
+			bestNote = val
+		}
+	}
+
 	for _, l := range lines {
-		t := strings.TrimSpace(l)
-		if strings.HasPrefix(t, "```") {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "```") {
 			inFence = !inFence
 			continue
 		}
-		if inFence || t == "" || strings.HasPrefix(t, "---") {
+		if inFence || trimmed == "" || strings.HasPrefix(trimmed, "---") {
 			continue
 		}
-		if strings.HasPrefix(t, "#") {
+		if strings.HasPrefix(trimmed, "#") {
+			pendingRank = 0
 			if title == "" {
-				h := stripMarkdownInline(strings.TrimLeft(t, "# "))
+				h := stripMarkdownInline(strings.TrimLeft(trimmed, "# "))
 				if h != "" {
 					title = clip(h, 64)
 				}
 			}
 			continue
 		}
-		if note == "" {
-			clean := nbCheckPrefix.ReplaceAllString(t, "")
-			clean = stripMarkdownInline(clean)
-			if clean != "" {
-				note = clip(clean, 96)
+
+		// Indented continuation under an empty labeled field like "- **Goal**:\n  1. ..."
+		isIndented := strings.HasPrefix(l, "  ") || strings.HasPrefix(l, "\t")
+		if isIndented && pendingRank > 0 {
+			val := nbCheckPrefix.ReplaceAllString(trimmed, "")
+			consider(pendingRank, val)
+			pendingRank = 0
+			continue
+		}
+		pendingRank = 0
+
+		isChecked := nbCheckedLine.MatchString(l)
+		unbulleted := nbCheckPrefix.ReplaceAllString(trimmed, "")
+		if m := nbFieldLineRe.FindStringSubmatch(unbulleted); len(m) == 3 {
+			key, val := m[1], strings.TrimSpace(m[2])
+			if isTaskMetaFieldKey(key) {
+				continue
+			}
+			if rk := taskFieldRank(key); rk > 0 {
+				if val != "" {
+					consider(rk, val)
+				} else {
+					pendingRank = rk
+				}
+				continue
 			}
 		}
-		if title != "" && note != "" {
-			break
+
+		clean := stripMarkdownInline(unbulleted)
+		if clean == "" {
+			continue
+		}
+		if !isChecked && fallbackUnchecked == "" {
+			fallbackUnchecked = clean
+		}
+		if fallbackAny == "" {
+			fallbackAny = clean
 		}
 	}
+
+	if bestNote != "" {
+		note = clip(bestNote, 96)
+	} else if fallbackUnchecked != "" {
+		note = clip(fallbackUnchecked, 96)
+	} else if fallbackAny != "" {
+		note = clip(fallbackAny, 96)
+	}
+
 	if title == "" {
 		title = strings.ReplaceAll(stem, "-", " ")
 		title = strings.ReplaceAll(title, "_", " ")

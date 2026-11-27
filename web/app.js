@@ -13304,6 +13304,8 @@
       const lbl = notesExpanded ? "收起为简态" : "展开完整便签";
       notesExpandBtn.title = lbl;
       notesExpandBtn.setAttribute("aria-label", lbl);
+      const lblEl = notesExpandBtn.querySelector(".np-exp-lbl");
+      if (lblEl) lblEl.textContent = notesExpanded ? "收起" : "展开";
     }
 
     // 1. 进行中
@@ -13446,11 +13448,13 @@
       syncNotebookVisibility();
     }
   });
-  notesExpandBtn?.addEventListener("click", () => {
+  notesExpandBtn?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
     notesExpanded = !notesExpanded;
     renderNotebook();
   });
-  const hideNotebookFromCard = () => {
+  const hideNotebookFromCard = (ev) => {
+    ev?.stopPropagation?.();
     if (isWideNotesViewport()) {
       notesUserClosed = true;
       store.set("notesClosed", true);
@@ -13464,18 +13468,19 @@
   $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("[data-np-expand]")) {
-      ev.preventDefault();
-      notesExpanded = true;
-      renderNotebook();
-      return;
-    }
+    if (ev.target.closest("#np-close, #np-back, #np-handle, #np-expand")) return;
     const fBtn = ev.target.closest("[data-np-file]");
     if (fBtn) {
       ev.preventDefault();
       const fp = fBtn.dataset.npFile;
       if (!isWideNotesViewport()) notesManualOverlay = false;
       if (fp) openFile(fp);
+      return;
+    }
+    if (ev.target.closest("[data-np-expand]") || (isWideNotesViewport() && !notesExpanded)) {
+      ev.preventDefault();
+      notesExpanded = true;
+      renderNotebook();
       return;
     }
     const tBtn = ev.target.closest("[data-np-task]");
@@ -13501,9 +13506,14 @@
     }
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && notesOpen && !isWideNotesViewport() && !document.querySelector("dialog[open]")) {
-      notesManualOverlay = false;
-      syncNotebookVisibility();
+    if (ev.key === "Escape" && notesOpen && !document.querySelector("dialog[open]")) {
+      if (!isWideNotesViewport()) {
+        notesManualOverlay = false;
+        syncNotebookVisibility();
+      } else if (notesExpanded) {
+        notesExpanded = false;
+        renderNotebook();
+      }
     }
   });
   if (typeof ResizeObserver === "function") {

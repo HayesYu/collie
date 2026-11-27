@@ -140,7 +140,7 @@
             </div>
           </div>
           <button type="button" class="icon-btn" id="open-notes-btn" aria-label="展开或收起小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M14.5 4v16"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12A2.5 2.5 0 0 1 20.5 6v8.5L15 20H6a2.5 2.5 0 0 1-2.5-2.5V6A2.5 2.5 0 0 1 6 3.5Z"/><path d="M14.5 20v-4.5a1.5 1.5 0 0 1 1.5-1.5h4.5"/><path d="M8 9h8M8 13h4.5"/></svg>
           </button>
           <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
@@ -208,9 +208,10 @@
               <span class="np-sub" id="np-date"></span>
             </div>
             <div class="np-head-acts">
-              <button type="button" class="icon-btn np-act-btn" id="np-expand" aria-expanded="false" aria-label="展开完整便签" title="展开完整便签">
-                <svg class="ic-np-exp" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
-                <svg class="ic-np-col" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14l5-5 5 5"/></svg>
+              <button type="button" class="np-expand-btn" id="np-expand" aria-expanded="false" aria-label="展开完整便签" title="展开完整便签">
+                <span class="np-exp-lbl">展开</span>
+                <svg class="ic-np-exp" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 9.5l5.5 5.5 5.5-5.5"/></svg>
+                <svg class="ic-np-col" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 14.5l5.5-5.5 5.5 5.5"/></svg>
               </button>
               <button type="button" class="icon-btn np-act-btn" id="np-close" aria-label="隐藏小本本" title="隐藏到顶栏图标">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>

@@ -55,8 +55,8 @@
   --col: 780px; /* the conversation column */
   --head-h: 60px;
   --strip-h: 38px;
-  --notes-w: 232px;
-  --notes-w-exp: 276px;
+  --notes-w: 248px;
+  --notes-gap: 32px;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, "MesloLGS NF", "Symbols Nerd Font Mono", Menlo, Consolas, monospace;
   --vh: 100dvh;
@@ -2581,8 +2581,11 @@ a.url:hover { text-decoration-color: currentColor; }
   width: max-content; max-width: min(380px, calc(100vw - 32px));
 }
 @media (min-width: 1360px) {
-  body:has(#v-collie.has-notes) .toasts { inset-inline-end: calc(var(--notes-w) + 34px); }
-  body:has(#v-collie.has-notes.notes-expanded) .toasts { inset-inline-end: calc(var(--notes-w-exp) + 34px); }
+  body:has(#v-collie.has-notes) .toasts {
+    inset: 72px auto auto calc(var(--side-w) + (100vw - var(--side-w) - var(--notes-w) - var(--notes-gap)) / 2);
+    transform: translateX(-50%);
+    align-items: center;
+  }
 }
 .toasts[popover] {
   transition: opacity .16s ease, display .16s ease;
@@ -4567,7 +4570,7 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
   .int-input-row.has-multi .btn.small { flex: 1 1 auto; }
 }
 
-/* ─── v0.2.92: Floating White-Paper「小本本」(compact + one-click expand) ─── */
+/* ─── v0.2.93: Floating White-Paper「小本本」(attached to chat col, fixed width, pure vertical overlay) ─── */
 #open-notes-btn.on { background: var(--bg-3); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line-2); }
 .notes-scrim {
   display: none; position: fixed; inset: 0; z-index: 44;
@@ -4577,30 +4580,60 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
 }
 .notes-scrim[hidden] { display: none !important; }
 .notepane {
+  --np-bg: #ffffff;
   position: absolute;
   top: calc(var(--collie-top-h, 98px) + 6px);
-  right: 18px;
+  left: min(
+    calc(50% + (var(--col) - var(--notes-w) + var(--notes-gap)) / 2),
+    calc(100% - var(--notes-w) - 20px)
+  );
+  right: auto;
   width: var(--notes-w);
-  max-height: calc(100% - var(--collie-top-h, 98px) - 24px);
+  max-height: min(48vh, 420px);
   z-index: 16;
   display: flex; flex-direction: column;
   border-radius: 14px;
   border: 1px solid rgba(17, 17, 17, .085);
-  background: #ffffff;
+  background: var(--np-bg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, .03), 0 8px 24px rgba(0, 0, 0, .055);
   overflow: hidden;
-  transition: width .22s cubic-bezier(.32, .72, 0, 1), opacity .18s ease, transform .2s ease;
+  transition: box-shadow .2s ease, border-color .18s ease, opacity .18s ease, transform .2s ease;
 }
 .notepane[hidden] { display: none !important; }
-.notepane.is-expanded { width: var(--notes-w-exp); }
+.notepane.is-expanded {
+  width: var(--notes-w);
+  max-height: min(48vh, 420px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .04), 0 14px 36px rgba(0, 0, 0, .095);
+}
+.notepane.is-expanded::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0; height: 22px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--np-bg) 94%, transparent));
+}
+@media (min-width: 1360px) {
+  .notepane:not(.is-expanded) { cursor: pointer; }
+  .notepane:not(.is-expanded):hover {
+    border-color: var(--line-2);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, .04), 0 10px 28px rgba(0, 0, 0, .075);
+  }
+}
 :root[data-theme="dark"] .notepane {
-  background: #121214; border-color: #242428;
+  --np-bg: #121214;
+  background: var(--np-bg); border-color: #242428;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .38), 0 8px 26px rgba(0, 0, 0, .46);
+}
+:root[data-theme="dark"] .notepane.is-expanded {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .46), 0 16px 40px rgba(0, 0, 0, .58);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .notepane {
-    background: #121214; border-color: #242428;
+    --np-bg: #121214;
+    background: var(--np-bg); border-color: #242428;
     box-shadow: 0 1px 2px rgba(0, 0, 0, .38), 0 8px 26px rgba(0, 0, 0, .46);
+  }
+  :root:not([data-theme="light"]) .notepane.is-expanded {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .46), 0 16px 40px rgba(0, 0, 0, .58);
   }
 }
 .np-inner { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; }
@@ -4608,27 +4641,38 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
 .np-handle-pill { width: 38px; height: 4px; border-radius: 999px; background: var(--line-2); }
 .np-head {
   display: flex; align-items: center; gap: 6px;
-  height: 36px; padding: 4px 8px 0 13px; flex: none; min-width: 0;
+  height: 42px; padding: 4px 9px 0 13px; flex: none; min-width: 0;
 }
 .np-back { display: none; margin-left: -4px; }
 .np-title-row { display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0; }
 .np-title { margin: 0; font-size: 12.5px; font-weight: 600; letter-spacing: -.01em; color: var(--fg); white-space: nowrap; }
 .np-sub { font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.np-head-acts { display: inline-flex; align-items: center; gap: 1px; flex: none; }
-.np-act-btn { width: 24px; height: 24px; border-radius: 6px; color: var(--fg-3); }
+.np-head-acts { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.np-expand-btn {
+  display: inline-flex; align-items: center; gap: 2.5px; flex: none;
+  min-height: 26px; height: 26px; padding: 0 7px 0 9px;
+  border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--bg-2); color: var(--fg-2);
+  font-size: 11.5px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.np-expand-btn:hover { background: var(--bg-3); border-color: var(--line-2); color: var(--fg); }
+.np-expand-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 18%, transparent); }
+.np-expand-btn svg { width: 13px; height: 13px; stroke-width: 1.9; flex: none; }
+.np-act-btn { width: 26px; height: 26px; border-radius: 7px; color: var(--fg-3); }
 .np-act-btn:hover { background: var(--bg-2); color: var(--fg); }
-.np-act-btn svg { width: 13.5px; height: 13.5px; stroke-width: 1.8; }
+.np-act-btn svg { width: 14px; height: 14px; stroke-width: 1.8; }
 #np-expand .ic-np-col { display: none; }
 #np-expand[aria-expanded="true"] .ic-np-exp { display: none; }
 #np-expand[aria-expanded="true"] .ic-np-col { display: block; }
 .np-body {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   overscroll-behavior-y: contain;
-  padding: 5px 13px 10px;
+  padding: 5px 13px 11px;
   scrollbar-color: transparent transparent;
 }
 .np-body:hover { scrollbar-color: var(--line-2) transparent; }
-.notepane.is-expanded .np-body { padding: 7px 14px 13px; }
+.notepane.is-expanded .np-body { padding: 7px 14px 22px; }
 .np-sec + .np-sec { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .notepane.is-expanded .np-sec + .np-sec { margin-top: 11px; padding-top: 11px; }
 .np-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 3px; }
@@ -4637,7 +4681,7 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
 .np-more-pill {
   flex: none; border: 0; border-radius: 999px; padding: 1px 6px;
   background: var(--bg-2); color: var(--fg-3); font-size: 10.5px; font-weight: 500;
-  font-variant-numeric: tabular-nums; line-height: 1.45;
+  font-variant-numeric: tabular-nums; line-height: 1.45; cursor: pointer;
   transition: background .12s, color .12s;
 }
 .np-more-pill:hover { background: var(--bg-3); color: var(--fg); }
@@ -4709,14 +4753,13 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
 .np-timer-freq { display: none; font-size: 11px; color: var(--fg-3); margin-left: 5px; font-weight: 400; }
 .notepane.is-expanded .np-timer-freq { display: inline; }
 
-/* Optical centering on wide desktop (>= 1360px) while floating notebook card is open */
+/* Fixed optical slot on wide desktop (>= 1360px): NEVER shifts when expanding/collapsing */
 @media (min-width: 1360px) {
   #v-collie .thread, #v-collie .composer { transition: padding .26s cubic-bezier(.32, .72, 0, 1); }
-  #v-collie.has-notes { --notes-reserve: 266px; }
-  #v-collie.has-notes.notes-expanded { --notes-reserve: 310px; }
+  #v-collie.has-notes { --notes-reserve: calc(var(--notes-w) + var(--notes-gap)); }
   #v-collie.has-notes .thread {
     padding-left: max(20px, calc((100% - var(--notes-reserve) - var(--col)) / 2));
-    padding-right: max(var(--notes-reserve), calc((100% - var(--notes-reserve) - var(--col)) / 2 + var(--notes-reserve)));
+    padding-right: max(calc(var(--notes-reserve) + 4px), calc((100% - var(--notes-reserve) - var(--col)) / 2 + var(--notes-reserve)));
   }
   #v-collie.has-notes .composer {
     padding-left: max(12px, calc((100% - var(--notes-reserve) - var(--col) - 24px) / 2));
@@ -4729,14 +4772,15 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
 @media (max-width: 1359px) {
   .notes-scrim { display: block; }
   #v-collie.has-notes .notes-scrim { opacity: 1; pointer-events: auto; }
-  .notepane {
-    position: fixed; top: 0; right: 0; bottom: 0; z-index: 48;
+  .notepane, .notepane.is-expanded {
+    position: fixed; top: 0; left: auto; right: 0; bottom: 0; z-index: 48;
     width: min(310px, 88vw); max-height: none;
     border-radius: 0; border: 0; border-left: 1px solid var(--line);
     background: var(--bg); box-shadow: var(--shadow-lg);
     transform: translateX(100%);
     transition: transform .3s cubic-bezier(.32, .72, 0, 1);
   }
+  .notepane.is-expanded::after { display: none; }
   #v-collie.has-notes .notepane { transform: none; }
   .notepane .np-head { height: var(--head-h); padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); }
   .notepane .np-title { font-size: 14px; }
@@ -4751,9 +4795,9 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
 /* Mobile (<= 760px, 390px): 0 top bar, pure conversation; notebook opens on-demand bottom drawer */
 @media (max-width: 760px) {
   :root { --head-h: 54px; --strip-h: 36px; }
-  .notepane {
+  .notepane, .notepane.is-expanded {
     position: fixed; top: auto; left: 0; right: 0; bottom: 0; z-index: 50;
-    width: 100%; max-width: 100%;
+    width: 100%; max-width: 100%; max-height: none;
     height: min(calc(var(--vh) * 0.85), 680px);
     border-left: 0; border-top: 1px solid var(--line-2); border-radius: 18px 18px 0 0;
     box-shadow: 0 -10px 36px rgba(0, 0, 0, .18);

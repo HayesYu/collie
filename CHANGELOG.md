@@ -4,6 +4,28 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.2.93 (2026-11-27)
+
+### Highlights
+
+- **Floating「小本本」Positioning, Fixed Width & Zero-Shift Vertical Expansion (`web/index.html`, `web/app.css`, `web/app.js`)**:
+  - Anchored the desktop (`>= 1360px`) floating white-paper notebook directly alongside the right edge of the main conversation column (`32px` breathing gap, clamped against viewport edges) instead of pinning to the far-right window wall on ultrawide screens (`1600–1920px`).
+  - Unified compact and expanded widths to a fixed `248px` (`0px` horizontal width jump) and removed expanded padding overrides so toggling compact/expanded causes **0px shift** on main chat bubbles and the composer.
+  - Constrained expanded height to a restrained `max-height: min(48vh, 420px)` with smooth internal scrolling and a soft bottom fade, keeping the card in the upper-middle viewport well clear of the bottom composer.
+  - Upgraded the tiny expand chevron into a clear `展开 ⌄` / `收起 ⌃` pill button (`>= 26px` height) and made the entire compact card body (title bar, whitespace, `+N`) click-to-expand while preserving direct artifact preview and `×` hide actions.
+  - Replaced the header split-pane icon on `#open-notes-btn` with a crisp folded-corner lined notepad SVG matching the top-bar stroke style.
+- **Cleaner Human-Readable Task Subtitles in `GET /api/super/notebook` (`internal/collie/notebook.go`)**:
+  - Updated `memory/tasks/*.md` parsing to skip plumbing metadata lines (`Thread:`, `Workers:`, `Timer:`, etc.) and prioritize `Status` > `Next` > `Goal` (including multi-line indented items) > `Done`, stripping Markdown emphasis, backticks, and leading status emojis for clean one-line expanded subtitles.
+- **Static Demo Sync (`scripts/demo/demo.js`, `docs/demo/`)**:
+  - Regenerated `docs/demo/` with the updated notebook styling and interactions.
+
+### Client / API Changes
+
+- **`GET /api/super/notebook`**: Schema unchanged; `tasks[].note` now skips `Thread:`/`Workers:` metadata lines and surfaces clean `Status` / `Next` / `Goal` prose.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.92 (2026-11-27)
 
 ### Highlights

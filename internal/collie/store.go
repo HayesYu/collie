@@ -158,6 +158,23 @@ type Settings struct {
 	// Collie and its workers run with the agent's permission checks off
 	// (--dangerously-skip-permissions and the like) unless this is set.
 	AskPermissions bool `json:"ask_permissions,omitempty"`
+	// A worker idle (done with its turn, nothing queued for it) this many
+	// minutes is stopped to free its agent process; its session is kept for
+	// `spawn --resume`. 0 means the default (60), -1 never.
+	IdleStopMinutes int `json:"idle_stop_minutes,omitempty"`
+}
+
+const defaultIdleStopMinutes = 60
+
+// idleStop is how long a worker may sit idle before it is stopped; 0 = never.
+func (s Settings) idleStop() time.Duration {
+	switch {
+	case s.IdleStopMinutes < 0:
+		return 0
+	case s.IdleStopMinutes == 0:
+		return defaultIdleStopMinutes * time.Minute
+	}
+	return time.Duration(s.IdleStopMinutes) * time.Minute
 }
 
 type State struct {

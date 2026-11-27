@@ -7261,6 +7261,8 @@
       worker_machine: form.worker_machine ? form.worker_machine.value : (base.worker_machine || ""),
       reply_chars: readNum(form.reply_chars, base.reply_chars || 200, 40),
       stall_minutes: readNum(form.stall_minutes, base.stall_minutes || 0, 0),
+      // Shown as minutes with 0 = never; stored as 0 = default (60), -1 = never.
+      idle_stop_minutes: form.idle_stop_minutes ? (readNum(form.idle_stop_minutes, -1, 0) || -1) : base.idle_stop_minutes,
       rotate_pct: Number(form.rotate_pct.value),
       dream_at: form.dream_at.value,
       notify_webhook: form.notify_webhook.value.trim(),
@@ -7353,13 +7355,14 @@
       form[name]?.addEventListener("change", () => saver.flush());
     }
     // Text & number inputs auto-save after 500ms debounce or immediately on blur / IME-safe Enter.
-    for (const name of ["router_args", "worker_cwd", "notify_webhook", "reply_chars", "stall_minutes"]) {
+    for (const name of ["router_args", "worker_cwd", "notify_webhook", "reply_chars", "stall_minutes", "idle_stop_minutes"]) {
       const el = form[name];
       if (!el) continue;
       el.addEventListener("input", () => saver.schedule(500));
       el.addEventListener("blur", () => {
         if (name === "reply_chars" && (!el.value.trim() || Number(el.value) < 40)) el.value = "200";
         if (name === "stall_minutes" && (!el.value.trim() || Number(el.value) < 0)) el.value = "0";
+        if (name === "idle_stop_minutes" && (!el.value.trim() || Number(el.value) < 0)) el.value = "0";
         saver.flush();
       });
       el.addEventListener("keydown", (e) => {
@@ -7455,6 +7458,7 @@
         <div class="set-grid">
           <label>聊天回复长度<input name="reply_chars" type="number" min="40" step="20" value="${s.reply_chars || 200}"><small>平时每条回复的大致字数，要求详述时会自动写长</small></label>
           <label>多久没进展算卡住<input name="stall_minutes" type="number" min="0" value="${s.stall_minutes}"><small>分钟；0 表示不检查</small></label>
+          <label>空闲多久自动回收 worker<input name="idle_stop_minutes" type="number" min="0" value="${s.idle_stop_minutes < 0 ? 0 : (s.idle_stop_minutes || 60)}"><small>分钟；做完活后一直空闲就关掉它释放内存，会话保留可续；0 表示不回收</small></label>
         </div>
         <label class="check"><input type="checkbox" name="bypass" ${s.ask_permissions ? "" : "checked"}> 跳过权限确认：自动执行命令与改文件（重启 Collie、新派 agent 生效）</label>
         <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> 暂停投递：事件照收，先不交给 agent</label>

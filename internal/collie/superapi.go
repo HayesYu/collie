@@ -641,10 +641,20 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]any{"error": "unknown worker"})
 		return
 	}
+	s.stopWorker(r.Context(), wk, wk.Name+" 已停止")
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// stopWorker ends a worker the way `collie stop` does: interrupt its turn,
+// close its herdr workspace (which ends the agent and, for claude-sg, the
+// process in the container) and mark it gone. Its Session is kept so a later
+// `spawn --resume` can carry on. note is the event shown in its thread.
+func (s *Server) stopWorker(ctx context.Context, wk *Worker, note string) {
+	sp := s.sup
 	if wk.Session == "" && wk.PaneID != "" {
 		// herdr does not always know (Antigravity, or Codex without hook): ask the pane's machine.
 		local, m := split(wk.PaneID)
-		sess := s.titlesFor(m, r.Context())[local].Session
+		sess := s.titlesFor(m, ctx)[local].Session
 		if sess == "" && m == "" && kinds[wk.Kind] == "codex" {
 			if p, _ := s.findTranscript("codex", "", "", local, wk.Cwd); p != "" {
 				sess = codexSessionID(p)
@@ -660,26 +670,27 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 		// Esc stops the turn it is on, the way you would before closing it:
 		// Codex's turn lives in a shared daemon and would carry on without
 		// its window.
-		s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": wk.PaneID, "keys": []string{"esc"}}, nil)
+		s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": wk.PaneID, "keys": []string{"esc"}}, nil)
 		time.Sleep(700 * time.Millisecond)
 	}
 	if kinds[wk.Kind] == "codex" && wk.Session != "" {
 		// Its turn runs in Codex's shared daemon and outlives the terminal.
-		if err := s.stopCodexTurn(r.Context(), wk.Machine, wk.Session); err != nil {
+		if err := s.stopCodexTurn(ctx, wk.Machine, wk.Session); err != nil {
 			log.Printf("stop %s: interrupt its codex turn: %v", wk.Name, err)
 		}
 	}
 	if wk.WorkspaceID != "" {
-		s.herdr.Call(r.Context(), "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)
+		s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)
 	}
 	sp.mu.Lock()
 	wk.Ended, wk.Status = true, "gone"
 	for _, th := range sp.st.Threads {
 		th.Subscribers = remove(th.Subscribers, wk.Name)
 	}
-	sp.addEntryLocked("event", wk.Thread, wk.Name+" 已停止", wk.Name, "info")
+	delete(sp.idleSince, wk.Name)
+	sp.addEntryLocked("event", wk.Thread, note, wk.Name, "info")
+	sp.changed()
 	sp.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
@@ -943,6 +954,9 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 			} else {
 				ns.DreamAt = fmt.Sprintf("%02d:%02d", h, m)
 			}
+		}
+		if ns.IdleStopMinutes < 0 {
+			ns.IdleStopMinutes = -1
 		}
 		if ns.RotatePct > 95 || (ns.RotatePct > 0 && ns.RotatePct < 20) {
 			ns.RotatePct = 0

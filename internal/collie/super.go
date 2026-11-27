@@ -61,6 +61,7 @@ type Super struct {
 	lastScreen   map[string]screenMark
 	transcripts  map[string]*transcript
 	noAgent      map[string]time.Time  // worker → since when its pane has had no agent in it
+	idleSince    map[string]time.Time  // worker → since when it has sat idle (done with its turn)
 	pinnedCache  map[string]*Entry     // older pinned entries resolved from SQLite
 	sayDedup     map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
 	notifyBuf    []notice
@@ -104,6 +105,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 		lastScreen:  map[string]screenMark{},
 		transcripts: map[string]*transcript{},
 		noAgent:     map[string]time.Time{},
+		idleSince:   map[string]time.Time{},
 		sayDedup:    map[string]sayReceipt{},
 	}
 	db, err := openDB(filepath.Join(dir, "herd.db")) // ~/.collie/collie.db belongs to another app
@@ -705,6 +707,10 @@ func (sp *Super) tick(parent context.Context) {
 
 	// 5. Watchdog.
 	sp.watchdog(ctx, live, routerAlive)
+
+	// 6. Close workers that have sat idle too long: each one keeps an agent
+	// process (and its memory) alive until stopped.
+	sp.reapIdle(ctx, live, deliveries, now)
 }
 
 // fromHuman keeps what the human said in the chat.
@@ -1433,6 +1439,67 @@ func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, router
 		}
 	}
 	sp.watchRouter(ctx, live, stall)
+}
+
+// reapIdle stops workers that have been idle longer than the idle-stop
+// setting. Idle time is counted from when this process first saw it idle, so a
+// collie restart starts the clock again. Left alone: workers still starting,
+// working or blocked; ones with messages queued for them; ones subscribed to a
+// thread (they are waiting for its events); and ones without a herdr
+// workspace of their own to close.
+func (sp *Super) reapIdle(ctx context.Context, live map[string]liveAgent, delivered map[string][]*Trigger, now time.Time) {
+	sp.mu.Lock()
+	if sp.idleSince == nil {
+		sp.idleSince = map[string]time.Time{}
+	}
+	limit := sp.st.Settings.idleStop()
+	queued := map[string]bool{}
+	for _, t := range sp.st.Triggers {
+		if t.Status == "queued" {
+			for _, target := range t.Targets {
+				queued[target] = true
+			}
+		}
+	}
+	subscribed := map[string]bool{}
+	for _, th := range sp.st.Threads {
+		for _, sub := range th.Subscribers {
+			subscribed[sub] = true
+		}
+	}
+	var stale []*Worker
+	for name := range sp.idleSince {
+		if w := sp.st.Workers[name]; w == nil || w.Ended {
+			delete(sp.idleSince, name)
+		}
+	}
+	for name, w := range sp.st.Workers {
+		if w.Ended || name == routerName {
+			continue
+		}
+		a, alive := live[name]
+		// live is from before this tick's deliveries: one just handed work
+		// still reads idle here.
+		if !alive || (a.Status != "idle" && a.Status != "done") || queued[name] || len(delivered[name]) > 0 {
+			delete(sp.idleSince, name)
+			continue
+		}
+		since, seen := sp.idleSince[name]
+		if !seen {
+			sp.idleSince[name] = now
+			continue
+		}
+		if limit > 0 && now.Sub(since) >= limit && !subscribed[name] && w.WorkspaceID != "" {
+			stale = append(stale, w)
+		}
+	}
+	sp.mu.Unlock()
+
+	for _, w := range stale {
+		mins := int(limit.Minutes())
+		log.Printf("super: stopping %s, idle for %d min", w.Name, mins)
+		sp.s.stopWorker(ctx, w, fmt.Sprintf("%s 空闲超过 %d 分钟，已自动回收（需要时可 spawn --resume 接着用）", w.Name, mins))
+	}
 }
 
 // watchRouter catches Collie itself hanging mid-turn (a stream that never

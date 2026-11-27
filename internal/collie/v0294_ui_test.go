@@ -24,11 +24,9 @@ const appSrc = fs.readFileSync("web/app.js", "utf8");
 assert.ok(cssSrc.includes("#v-collie.has-notes .thread,\n  #v-collie.has-notes .working-row"), "working-row must share exact padding with .thread under #v-collie.has-notes");
 assert.ok(cssSrc.includes(".working-row { padding: 0 16px 18px; }"), "mobile working-row must match mobile .thread 16px side padding");
 
-// 1b) Top bar removes 22px fog veil and uses scroll-triggered 1px hairline
-const topAfterMatch = cssSrc.match(/\.collie-top::after\s*\{[^}]*\}/);
-assert.ok(topAfterMatch, "expected .collie-top::after rule");
-assert.ok(topAfterMatch[0].includes("height: 1px") && !topAfterMatch[0].includes("linear-gradient"), "22px top-bar fog veil must be replaced by crisp 1px hairline");
-assert.ok(cssSrc.includes(".collie-top.is-scrolled::after { opacity: 1; }"), "1px top-bar hairline must appear only when scrolled");
+// 1b) Top bar has neither 22px fog veil nor 1px scrolled bottom hairline (seamless header into chat stream)
+assert.ok(!cssSrc.includes(".collie-top::after"), ".collie-top::after must be removed so header stays seamless when static or scrolled");
+assert.ok(!cssSrc.includes(".collie-top.is-scrolled"), ".collie-top.is-scrolled hairline must be removed");
 
 // 1c) #crew tiered compacting classes (.is-no-kind / .is-tight + --crew-chip-max)
 assert.ok(cssSrc.includes(".crew.is-no-kind .chip .k { display: none; }"), "crew tier 1 must hide secondary agent kind");
@@ -179,57 +177,49 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { sup, syncNotebookVisibility, renderNotebook, setDockTab, getDockTab: () => dockTab, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, syncCollieTopScrolled, syncCrewCompact, renderEntryArtifacts, replyOptsMarkup, setReply, getReplyTo: () => replyTo, reconcileStaleReplyTo, openThreadDrawer, route };\n})();"
+  "  globalThis.__test = { sup, syncNotebookVisibility, renderNotebook, setNotesExpanded, getNotesExpanded: () => notesExpanded, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, syncCrewCompact, renderEntryArtifacts, replyOptsMarkup, setReply, getReplyTo: () => replyTo, reconcileStaleReplyTo, openThreadDrawer, route };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
 
-// 2a) Unified dock tabs & mutual exclusion: switching tabs keeps dock visible; opening search or more menu yields floating dock while keeping slot stable; closing restores it
+// 2a) Mutual exclusion: opening threads popover, search, or more menu yields floating notebook while keeping slot stable; closing restores it
 T.setView("collie");
 T.setNotebookData({ date: "2026-11-27", tasks: [{ id: "t1", title: "任务 A", note: "进展", tone: "active" }], artifacts: [], timers: [] });
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "dock visible initially on wide desktop");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "notebook visible initially on wide desktop");
 assert.equal(getEl("#v-collie").classList.contains("has-notes"), true);
-assert.equal(doc.body.classList.contains("collie-has-notes"), true, "body.collie-has-notes must sync with dock slot");
+assert.equal(doc.body.classList.contains("collie-has-notes"), true, "body.collie-has-notes must sync with notebook slot");
 
-// Switch to 话题线 tab inside unified dock -> stays open without shifting slot
-T.setDockTab("threads");
-assert.equal(T.getDockTab(), "threads");
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "switching to threads tab keeps unified dock visible");
-assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot stays stable across tab switch");
-T.setDockTab("notes");
+// Open threads popover -> notebook hides smoothly, has-notes slot stays stable
+getEl("#collie-threads-btn").dispatch("click");
+assert.equal(getEl("#collie-threads-pop").hidden, false);
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening threads popover must hide floating notebook");
+assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot must stay stable when threads popover opens");
+getEl("#collie-threads-btn").dispatch("click");
+assert.equal(getEl("#collie-threads-pop").hidden, true);
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "closing threads popover must restore floating notebook");
 
-// Open search -> dock hides; close search -> dock restores
+// Open search -> notebook hides; close search -> notebook restores
 getEl("#super-search-btn").dispatch("click");
 assert.equal(getEl("#super-search").hidden, false);
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening search must hide floating dock");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening search must hide floating notebook");
 assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot must stay stable when transient popover opens");
 getEl("#super-search-close").dispatch("click");
 assert.equal(getEl("#super-search").hidden, true);
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "closing search must restore floating dock");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "closing search must restore floating notebook");
 
-// Open collie-menu -> dock hides; Escape closes menu -> dock restores
+// Open collie-menu -> notebook hides; Escape closes menu -> notebook restores
 const menuOpener = makeEl("menu-opener");
 menuOpener.dataset.menu = "collie-menu";
 menuOpener.closest = (sel) => (sel === "[data-menu]" ? menuOpener : null);
 doc.dispatch("click", { target: menuOpener });
 assert.equal(getEl("#collie-menu").hidden, false);
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening more menu must hide floating dock");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening more menu must hide floating notebook");
 doc.dispatch("keydown", { key: "Escape" });
 assert.equal(getEl("#collie-menu").hidden, true);
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape closing more menu must restore floating dock");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape closing more menu must restore floating notebook");
 
-// 2b) Top-bar 1px hairline appears only when scrollTop > 4
-const sc = getEl("#super-thread").parentElement;
-const topEl = getEl("#v-collie .collie-top");
-sc.scrollTop = 0;
-T.syncCollieTopScrolled();
-assert.equal(topEl.classList.contains("is-scrolled"), false, "no hairline at scrollTop=0");
-sc.scrollTop = 12;
-T.syncCollieTopScrolled();
-assert.equal(topEl.classList.contains("is-scrolled"), true, "hairline shown when scrollTop > 4");
-
-// 2c) #crew tiered compacting: tier 0 -> tier 1 (is-no-kind) -> tier 2 (is-tight + --crew-chip-max)
+// 2b) #crew tiered compacting: tier 0 -> tier 1 (is-no-kind) -> tier 2 (is-tight + --crew-chip-max)
 const crew = makeEl("crew-test");
 crew.children = [{}, {}, {}, {}, {}, {}];
 crew.clientWidth = 500;

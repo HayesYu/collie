@@ -69,7 +69,7 @@
       </a>
       <a class="nav-item" id="nav-auto" href="#/auto">
         <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
-        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">记忆 · 定时 · 接入</div></span>
+        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">接入与定时</div></span>
         <span class="nav-right"><span class="count-pill attn" id="nav-int-err" hidden></span><span class="count-pill" id="nav-queue" hidden></span></span>
       </a>
     </nav>
@@ -121,10 +121,25 @@
         </div>
         <div class="d-head-acts">
           <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
-          <button type="button" class="dock-trigger" id="open-notes-btn" aria-label="展开或收起小本本与话题线" aria-pressed="false" aria-controls="notes-pane" title="小本本与话题线">
-            <span class="dock-trigger-lbl">小本本</span>
-            <span class="dock-trigger-dot" id="dock-trigger-dot" aria-hidden="true" hidden></span>
-            <span class="dock-trigger-cnt" id="dock-trigger-cnt" aria-hidden="true" hidden></span>
+          <div class="th-pop-wrap" id="collie-threads-wrap" hidden>
+            <button type="button" class="head-text-btn th-head-btn" id="collie-threads-btn" aria-expanded="false" aria-controls="collie-threads-pop" title="当前对话中的话题线">
+              <span class="th-head-lbl">话题线</span>
+              <span class="th-head-dot" id="collie-threads-dot" aria-hidden="true" hidden></span>
+              <span class="th-head-cnt" id="collie-threads-cnt"></span>
+            </button>
+            <div class="th-pop" id="collie-threads-pop" role="region" aria-label="话题线列表" hidden>
+              <div class="th-pop-head">
+                <div class="th-pop-tabs" id="collie-threads-tabs" role="group" aria-label="筛选话题线">
+                  <button type="button" class="th-pop-tab on" data-th-filter="all" aria-pressed="true">全部<span class="th-tab-cnt" id="collie-threads-cnt-all"></span></button>
+                  <button type="button" class="th-pop-tab" data-th-filter="active" aria-pressed="false">进行中<span class="th-tab-cnt" id="collie-threads-cnt-active"></span></button>
+                </div>
+                <span class="th-pop-sub" id="collie-threads-sub"></span>
+              </div>
+              <div class="th-pop-list" id="collie-threads-list" role="list"></div>
+            </div>
+          </div>
+          <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" aria-label="展开或收起小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
+            <span>小本本</span>
           </button>
           <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
@@ -178,61 +193,47 @@
       </div>
 
       <div class="notes-scrim" id="notes-scrim" aria-hidden="true"></div>
-      <aside class="notepane is-hidden" id="notes-pane" aria-label="小本本与话题线" aria-hidden="true" inert>
+      <aside class="notepane is-hidden" id="notes-pane" aria-label="小本本" aria-hidden="true" inert>
         <div class="np-inner">
-          <button type="button" class="np-handle" id="np-handle" aria-label="收起抽屉" title="收起抽屉">
+          <button type="button" class="np-handle" id="np-handle" aria-label="收起小本本" title="收起小本本">
             <span class="np-handle-pill" aria-hidden="true"></span>
           </button>
-          <header class="dk-head" id="np-head">
-            <div class="dk-tabs" id="dk-tablist" role="tablist" focusgroup="tablist nomemory" aria-label="右侧面板视图切换">
-              <button type="button" class="dk-tab" id="dk-tab-notes" role="tab" aria-selected="true" focusgroupstart data-dk-tab="notes">
-                <span>小本本</span>
-              </button>
-              <button type="button" class="dk-tab" id="dk-tab-threads" role="tab" aria-selected="false" tabindex="-1" data-dk-tab="threads">
-                <span>话题线</span>
-                <span class="dk-tab-dot" id="dk-th-dot" aria-hidden="true" hidden></span>
-                <span class="dk-tab-cnt" id="dk-th-cnt" hidden></span>
-              </button>
-            </div>
-            <button type="button" class="icon-btn dk-close" id="np-close" aria-label="收起小本本与话题线" title="收起到顶栏">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          <header class="np-head" id="np-head" title="点击切换紧凑或展开">
+            <button type="button" class="icon-btn np-back" id="np-back" aria-label="返回对话" title="返回对话">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
             </button>
+            <div class="np-title-row">
+              <h2 class="np-title">小本本</h2>
+              <span class="np-sub" id="np-date"></span>
+            </div>
+            <div class="np-head-acts">
+              <button type="button" class="icon-btn np-act-btn" id="np-close" aria-label="隐藏小本本" title="隐藏到顶栏">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
           </header>
-          <div class="dk-panels" id="dk-panels">
-            <div class="dk-panel" id="dk-panel-notes" role="tabpanel" aria-labelledby="dk-tab-notes">
-              <div class="dk-panel-inner" id="np-body">
-                <section class="np-sec" id="np-sec-tasks" aria-labelledby="np-h-tasks">
-                  <div class="np-sec-head">
-                    <h3 class="np-sec-title" id="np-h-tasks">进行中 <span class="np-date-inline" id="np-date"></span></h3>
-                  </div>
-                  <ul class="np-list" id="np-tasks-list"></ul>
-                </section>
-                <section class="np-sec" id="np-sec-files" aria-labelledby="np-h-files">
-                  <div class="np-sec-head">
-                    <h3 class="np-sec-title" id="np-h-files">今日产物</h3>
-                  </div>
-                  <ul class="np-list" id="np-files-list"></ul>
-                </section>
-                <section class="np-sec" id="np-sec-timers" aria-labelledby="np-h-timers">
-                  <div class="np-sec-head">
-                    <h3 class="np-sec-title" id="np-h-timers">下一条定时</h3>
-                  </div>
-                  <ul class="np-list" id="np-timers-list"></ul>
-                </section>
+          <div class="np-body" id="np-body">
+            <section class="np-sec" id="np-sec-tasks" aria-labelledby="np-h-tasks">
+              <div class="np-sec-head">
+                <h3 class="np-sec-title" id="np-h-tasks">进行中</h3>
+                <button type="button" class="np-more-pill" id="np-tasks-more" data-np-expand hidden></button>
               </div>
-            </div>
-            <div class="dk-panel" id="dk-panel-threads" role="tabpanel" aria-labelledby="dk-tab-threads" hidden="until-found">
-              <div class="dk-panel-inner" id="dk-threads-body">
-                <div class="dk-th-head">
-                  <div class="dk-th-filter" id="collie-threads-tabs" role="group" aria-label="筛选话题线">
-                    <button type="button" class="dk-th-fbtn on" data-th-filter="all" aria-pressed="true">全部<span class="dk-th-fcnt" id="collie-threads-cnt-all"></span></button>
-                    <button type="button" class="dk-th-fbtn" data-th-filter="active" aria-pressed="false">进行中<span class="dk-th-fcnt" id="collie-threads-cnt-active"></span></button>
-                  </div>
-                  <span class="dk-th-sub" id="collie-threads-sub"></span>
-                </div>
-                <div class="dk-th-list" id="collie-threads-list" role="list"></div>
+              <ul class="np-list" id="np-tasks-list"></ul>
+            </section>
+            <section class="np-sec" id="np-sec-files" aria-labelledby="np-h-files">
+              <div class="np-sec-head">
+                <h3 class="np-sec-title" id="np-h-files">今日产物</h3>
+                <button type="button" class="np-more-pill" id="np-files-more" data-np-expand hidden></button>
               </div>
-            </div>
+              <ul class="np-list" id="np-files-list"></ul>
+            </section>
+            <section class="np-sec" id="np-sec-timers" aria-labelledby="np-h-timers">
+              <div class="np-sec-head">
+                <h3 class="np-sec-title" id="np-h-timers">下一条定时</h3>
+                <button type="button" class="np-more-pill" id="np-timers-more" data-np-expand hidden></button>
+              </div>
+              <ul class="np-list" id="np-timers-list"></ul>
+            </section>
           </div>
         </div>
       </aside>
@@ -503,10 +504,6 @@
       </button>
       <div class="td-top">
       <header class="td-head">
-        <button type="button" class="td-back" id="td-back" aria-label="返回话题线列表" title="返回话题线列表">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
-          <span>话题线</span>
-        </button>
         <div class="td-title-wrap">
           <h2 class="td-title" id="td-title">话题线</h2>
           <div class="td-meta" id="td-meta"></div>

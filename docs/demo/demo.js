@@ -127,6 +127,7 @@
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: routerRun.kind, context: 23, rotate_at: 70, model: routerRun.model, effort: routerRun.effort, pending: routerPending() },
     entries, pending: computePending(), pinned: computePinned(), ...(lastReadEntryId ? { last_read_entry_id: lastReadEntryId } : {}), workers, queued: 0, queued_router: 0, paused: !!settings.settings.paused, earlier: true,
     follow: { next: new Date(new Date().setHours(33, 0, 0, 0)).toISOString(), next_text: "复查首页暗色模式的回归测试" }, // a check-again tomorrow 09:00
+    timers_count: timers.filter((t) => t.enabled).length,
     integrations_summary: {
       connected: [demoFeishu, demoGitHub, demoGitCLI].filter((x) => x.enabled && x.health.state === "connected").length,
       error: [demoFeishu, demoGitHub, demoGitCLI].filter((x) => x.enabled && x.health.state === "error").length,

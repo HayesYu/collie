@@ -601,6 +601,85 @@ function makeFakeFile({ name, type, bytes, failRead = false, readOnce = false, s
   assert.equal(tdForm._files[0].path, "/tmp/uploads/drawer-retry.png", "drawer retry uploads preserved memory Blob");
   tdForm._clearFiles();
 
+  // 14) #t11660: WeChat macOS delayed paste (>10s old) where stale 32-hex .jpg + generic image.png coexist
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  nextUploadHandler = null;
+  const oldTime = Date.now() - 120_000;
+  const wxDeadJpg = makeFakeFile({ name: "667e00fe934ec1122334455667788990.jpg", type: "image/jpeg", size: 88000, failRead: true, lastModified: oldTime });
+  const wxBitmapPng = makeFakeFile({ name: "image.png", type: "image/png", bytes: PNG_BYTES, readOnce: true, lastModified: oldTime });
+  const wxEv = input.dispatch("paste", {
+    clipboardData: {
+      items: [
+        { kind: "file", type: "image/jpeg", getAsFile: () => wxDeadJpg },
+        { kind: "file", type: "image/png", getAsFile: () => wxBitmapPng },
+      ],
+      files: [wxDeadJpg],
+      getData: () => "",
+    },
+  });
+  assert.equal(wxEv.defaultPrevented, true);
+  assert.equal(form._files.length, 1, "delayed WeChat paste must merge stale hash .jpg and image.png into 1 candidate group");
+  await settle();
+  assert.equal(toastLog.length, 0, "delayed WeChat paste must recover image.png with zero error toasts: " + JSON.stringify(toastLog));
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 1);
+  assert.equal(form._files[0].err, "");
+  form._clearFiles();
+
+  // 15) #t11660: navigator.clipboard.read() iterates multiple image/* types when first fails/empty
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  ctx.isSecureContext = true;
+  ctx.navigator.clipboard = {
+    async read() {
+      return [{
+        types: ["image/jpeg", "image/png"],
+        async getType(t) {
+          if (t === "image/jpeg") throw new Error("NotReadableError");
+          return new Blob([PNG_BYTES], { type: "image/png" });
+        },
+      }];
+    },
+  };
+  const wxOnlyDead = makeFakeFile({ name: "667e00fe934ec1122334455667788991.jpg", type: "image/jpeg", size: 54000, failRead: true });
+  input.dispatch("paste", {
+    clipboardData: {
+      items: [{ kind: "file", type: "image/jpeg", getAsFile: () => wxOnlyDead }],
+      files: [wxOnlyDead],
+      getData: () => "",
+    },
+  });
+  await settle();
+  assert.equal(toastLog.length, 0, "multi-type clipboard.read() must fall through failing jpeg to png: " + JSON.stringify(toastLog));
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 1);
+  assert.equal(form._files[0].err, "");
+  form._clearFiles();
+
+  // 16) #t11660: HTML-only <img src="file:///..."> paste falls back to navigator.clipboard.read()
+  toastLog.length = 0;
+  fetchCalls.length = 0;
+  let htmlFallbackReads = 0;
+  ctx.navigator.clipboard = {
+    async read() {
+      htmlFallbackReads++;
+      return [{ types: ["image/png"], async getType() { return new Blob([PNG_BYTES], { type: "image/png" }); } }];
+    },
+  };
+  const htmlOnlyEv = input.dispatch("paste", {
+    clipboardData: {
+      items: [],
+      files: [],
+      getData: (t) => (t === "text/html" ? '<img src="file:///Users/me/Library/Containers/com.tencent.xinWeChat/temp.jpg">' : ""),
+    },
+  });
+  assert.equal(htmlOnlyEv.defaultPrevented, true, "HTML-only img paste must intercept when clipboard.read() is available");
+  await settle();
+  assert.equal(htmlFallbackReads, 1, "HTML-only img paste must invoke clipboard.read()");
+  assert.equal(toastLog.length, 0, "HTML-only img paste recovers cleanly with zero error toasts: " + JSON.stringify(toastLog));
+  assert.equal(fetchCalls.filter((c) => c.url.startsWith("/api/uploads")).length, 1);
+  form._clearFiles();
+  delete ctx.navigator.clipboard;
+
   console.log("ALL_PASTE_UPLOAD_TESTS_OK");
 })().catch((e) => { console.error(e); process.exit(1); });
 `

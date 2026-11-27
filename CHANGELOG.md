@@ -4,6 +4,34 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.1 (2026-11-27)
+
+### Highlights
+
+- **Independent Minimalist「小本本」&「话题线」with Dual Silky Motion (`web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Split「小本本」and「话题线」back into two independent, harmonized plain-text top-bar triggers (zero SVG icons, subtle pending dot/count on `话题线`, automatic mutual exclusion between `#notes-pane`, `#collie-threads-pop`, search, and menu, and removed the redundant `← 话题线` back button from the thread focus drawer header).
+  - Restored the pure v0.2.94 minimalist「小本本」floating card (compact header `小本本` + date + `×`, no dual tabs and no bottom `展开详情` bar) with two isolated compositor-friendly motions:
+    1. **Open / close**: Smooth GPU-composited card entrance (`240ms` open / `180ms` close, `translate3d(12px, 0, 0) scale(0.985)` + `opacity`) synchronized with pure `transform: translate3d(var(--notes-shift), 0, 0)` main-chat yield so opening/closing the notebook never abruptly resizes the chat column or rewraps message text (and applies `0px` shift on ultra-wide screens where right-side breathing room already fits).
+    2. **Compact ↔ expanded**: Clicking the card header, blank space, or `+N` overflow pill smoothly unfolds extra rows in-place via isolated `contain: layout style paint` CSS Grid `0fr → 1fr` disclosure without rebuilding DOM, with fast fade-out before collapse and `Esc` stepwise collapse-then-close.
+- **Seamless Top Bar, Cleaner Sidebar & Integrations Polish (`internal/collie/superapi.go`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Removed the `.collie-top` 1px scrolled bottom hairline so the top bar blends seamlessly into the chat stream whether static or scrolled.
+  - Replaced the sidebar「自动化」subtitle with a compact global overview (`N 接入 · M 定时`, prioritizing `N 接入异常 · M 定时` on errors, or `接入与定时` when empty), backed by an optional `timers_count` field on `superView`.
+  - Removed the redundant `+ 添加好友边牧` button from the「自动化 → 接入」top status row, keeping friend management cleanly inside the「好友边牧」card.
+- **Zero-Flicker Peer Modal, Image Paste & Sticky-Bottom Reliability (`web/{app.css,app.js}`)**:
+  - **Zero-flicker Peer Modal**: Mounted the「好友边牧 · 受控收件箱」dialog structure once, switched main tabs / sub-tabs / default handling modes via in-place visibility & class updates, cached generated invites per mode, preloaded updated QR images before swapping `src`, and stabilized QR card & modal body heights so tab/mode switches never flicker or collapse into spinners.
+  - **Desktop Messaging App Image Paste Recovery**: Removed the 5-second `lastModified` cutoff that split delayed clipboard copies into separate failing entries, grouped hash-named sandbox `.jpg` references with memory bitmap candidates synchronously inside `paste`, and enforced strict layered fallback (`clipboardData` file items → `navigator.clipboard.read()` across all `image/*` types → `text/html` `data:image/`), eliminating false `剪贴板里的图片已失效` errors on macOS desktop pastes.
+  - **Image Attachment Send Auto-Scroll**: Added sticky-bottom tracking with capture `load`/`error` listeners on `#super-thread` and blob-URL thumbnail pre-seeding so sending messages with image attachments scrolls cleanly below the rendered image while immediately yielding if the user scrolls upward.
+- **View-Switch & Long-Distance Jump Performance Overhaul (`web/{app.css,app.js}`)**:
+  - **Zero-Flash, Zero-Layout-Rebuild Sidebar Navigation**: Parked `#v-collie` in a strict-contained offscreen layer (`.is-parked` with `contain: strict`, `inert`, and paused animations) instead of `display: none` so switching away from and back to main chat preserves the entire message layout tree and exact `scrollTop` with zero flash; replaced full sidebar `innerHTML` rebuilds on click with O(1) `syncSideActive()`; added signature caching and next-frame background refreshes for「自动化」,「设备」(including in-place pairing countdown patching),「偏好设置」, and Agent terminal view entry.
+  - **Distance-Aware Pin / Quote / Jump-to-Bottom Scroll**: Replaced long-distance `behavior: "smooth"` scrolling across hundreds of rich bubbles with `smartScrollCollie()`: nearby targets (`<= 1.5×` viewport and `<= 1400px`) glide smoothly directly, while distant jumps teleport instantaneously (`behavior: "auto"`) to `~180px` before the target and perform a short smooth glide on the next frame followed by target highlight.
+
+### Client / API Changes
+
+- **`GET /api/super` & SSE `event: super` (`superView`)**: Added optional field `timers_count?: number` (count of enabled timers; backwards-compatible, omitted when zero, older clients ignore safely).
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.0 (2026-11-27)
 
 ### Highlights

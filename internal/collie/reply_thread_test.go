@@ -1163,9 +1163,9 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.setCollieThreadsFilter("all");
   T.renderSuper({ force: true });
 
-  assert.equal(getEl("#dk-th-cnt").textContent, "1", "unified dock threads tab badge highlights 1 pending thread when pending > 0");
-  assert.equal(getEl("#dk-th-dot").hidden, false, "unified dock threads tab shows unread dot when pending > 0");
-  assert.equal(getEl("#collie-threads-cnt-all").textContent, "4", "全部 includes >=3 threads + active-agent + pending threads, excluding casual 1-liner q40");
+  assert.equal(getEl("#collie-threads-cnt").textContent, "4", "popover includes >=3 threads + active-agent + pending threads, excluding casual 1-liner q40");
+  assert.equal(getEl("#collie-threads-dot").hidden, false, "threads trigger shows pending dot when pending > 0");
+  assert.equal(getEl("#collie-threads-cnt-all").textContent, "4");
   assert.equal(getEl("#collie-threads-cnt-active").textContent, "3");
   const allListHtml = getEl("#collie-threads-list").innerHTML;
   assert.ok(allListHtml.includes('data-th-pick="q1"') && allListHtml.includes("1 个在跑"), "T1 shows running agent count in meta");
@@ -1192,8 +1192,8 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.setSup({ router: { status: "idle", alive: true }, entries: filterEntries, workers: settledWorkers, pending: [] });
   T.renderSuper({ force: true });
   assert.equal(getEl("#collie-threads-cnt-active").textContent, "0");
-  assert.equal(getEl("#dk-th-dot").hidden, true, "unread dot hides when pending clears");
-  assert.equal(getEl("#dk-th-cnt").textContent, "2", "dock badge falls back to remaining >=3-msg thread count when pending and active workers clear");
+  assert.equal(getEl("#collie-threads-dot").hidden, true, "pending dot hides when pending clears");
+  assert.equal(getEl("#collie-threads-cnt").textContent, "2", "threads badge falls back to remaining >=3-msg thread count when pending and active workers clear");
   assert.ok(getEl("#collie-threads-list").innerHTML.includes("当前没有进行中的话题"), "empty state rendered when 0 active threads");
   T.setCollieThreadsFilter("all");
 

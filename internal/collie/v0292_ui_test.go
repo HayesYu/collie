@@ -298,7 +298,7 @@ assert.ok(htmlSrc.includes('id="fv-mode-seg"') && htmlSrc.includes('id="rv-mode-
 assert.ok(htmlSrc.includes('id="fv-sandbox-tag"') && htmlSrc.includes('id="fv-widen"'), "file drawer must provide HTML sandbox badge and widen toggle");
 
 assert.ok(cssSrc.includes("--head-h: 60px"), "CSS must unify --head-h to 60px for 0px top-bar alignment");
-assert.ok(cssSrc.includes(".collie-top::after") && cssSrc.includes("container-type: inline-size"), "seamless top bar must use fade veil and container query");
+assert.ok(!cssSrc.includes(".collie-top::after") && cssSrc.includes("container-type: inline-size"), "seamless top bar must omit bottom hairline/veil and use container query");
 assert.ok(cssSrc.includes("@container collie-top"), "CSS must adapt #crew capsules via @container collie-top");
 assert.ok(cssSrc.includes(".dispatch-pill.is-override"), "CSS must keep default dispatch pill borderless ghost and add capsule only on .is-override");
 assert.ok(cssSrc.includes(".notepane") && cssSrc.includes("@media (min-width: 1360px)"), "CSS must implement floating white-paper notebook with 1360px wide breakpoint");
@@ -423,7 +423,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { parseDelimitedTable, renderDelimitedStage, HTML_SANDBOX_ATTR, CSV_PAGE_SIZE, CSV_MAX_PARSE_ROWS, replyOptsMarkup, renderEntryArtifacts, handleQuickOptionClick, submitInlineDecision, renderNotebook, syncNotebookVisibility, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, getPendingSays: () => pendingSays };\n})();"
+  "  globalThis.__test = { parseDelimitedTable, renderDelimitedStage, HTML_SANDBOX_ATTR, CSV_PAGE_SIZE, CSV_MAX_PARSE_ROWS, replyOptsMarkup, renderEntryArtifacts, handleQuickOptionClick, submitInlineDecision, renderNotebook, syncNotebookVisibility, setNotesExpanded, setNotebookData: (d) => { notebookData = d; }, setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, getPendingSays: () => pendingSays };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -470,7 +470,7 @@ T.renderDelimitedStage("fv", curCsv, fvBody, "");
 assert.ok(!fvBody.classList.contains("is-csv"), "raw mode must remove .is-csv");
 assert.ok(fvBody.innerHTML.includes("/api/r1,1,99.9"), "raw mode must display exact raw CSV text");
 
-// 2d) Unified floating dock (v0.2.95 single-state card): renders all items cleanly without expand toggle, and <1360px / drawer auto-yield
+// 2d) Floating notebook compact <-> expanded with stable DOM (.np-fold) & <1360px / drawer auto-yield
 T.setView("collie");
 T.setNotebookData({
   date: "2026-11-27",
@@ -492,15 +492,24 @@ T.setNotebookData({
 });
 ctx.innerWidth = 1440;
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "dock must default open at >= 1360px");
-assert.ok(getEl("#np-tasks-list").innerHTML.includes("任务 4"), "single-state dock must show all tasks without expand mode");
-assert.ok(getEl("#np-files-list").innerHTML.includes("笔记 C"), "single-state dock must show all artifacts");
-assert.ok(getEl("#np-timers-list").innerHTML.includes("定时 2"), "single-state dock must show all timers");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "notebook must default open at >= 1360px");
+assert.equal(getEl("#notes-pane").classList.contains("is-expanded"), false, "notebook must start in compact mode on wide desktop");
+assert.equal(getEl("#np-tasks-more").hidden, false);
+assert.equal(getEl("#np-tasks-more").textContent, "+1");
+assert.equal(getEl("#np-files-more").textContent, "+1");
+assert.equal(getEl("#np-timers-more").textContent, "+1");
+assert.ok(getEl("#np-tasks-list").innerHTML.includes("np-fold-more") && getEl("#np-tasks-list").innerHTML.includes("任务 4"), "overflow tasks live inside stable .np-fold-more wrapper");
+assert.ok(getEl("#np-files-list").innerHTML.includes("np-fold-more") && getEl("#np-files-list").innerHTML.includes("笔记 C"), "overflow artifacts live inside stable .np-fold-more wrapper");
+assert.ok(getEl("#np-timers-list").innerHTML.includes("np-fold-more") && getEl("#np-timers-list").innerHTML.includes("定时 2"), "overflow timers live inside stable .np-fold-more wrapper");
+T.setNotesExpanded(true);
+assert.equal(getEl("#notes-pane").classList.contains("is-expanded"), true, "setNotesExpanded(true) toggles .is-expanded smoothly");
+T.setNotesExpanded(false);
+assert.equal(getEl("#notes-pane").classList.contains("is-expanded"), false);
 
 // Auto-yield at 1280px (< 1360px)
 ctx.innerWidth = 1280;
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "dock must auto-yield at < 1360px");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "notebook must auto-yield at < 1360px");
 
 // Auto-yield when file drawer opens at 1440px, restore on close
 ctx.innerWidth = 1440;
@@ -508,10 +517,10 @@ T.syncNotebookVisibility();
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 getEl("#app").classList.add("has-file");
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "dock must yield when file drawer opens");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "notebook must yield when file drawer opens");
 getEl("#app").classList.remove("has-file");
 T.syncNotebookVisibility();
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "dock must restore when file drawer closes");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "notebook must restore when file drawer closes");
 
 // 2e) Decision card: pure option click sends pick=true without creating user bubble; renders collapsible receipt
 (async () => {

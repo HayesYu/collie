@@ -198,7 +198,7 @@ const ctx = {
   visualViewport: { height: 900, offsetTop: 0, addEventListener() {} },
   CSS: { escape: (s) => String(s), supports: () => true },
   HTMLDialogElement: { prototype: {} },
-  Blob, Uint8Array, TextEncoder, TextDecoder, atob, AbortController,
+  Blob, Uint8Array, TextEncoder, TextDecoder, atob, AbortController, URL,
   crypto: { randomUUID: () => "v0310-uuid" },
   performance: { now: () => nowMs },
   Event: class Event { constructor(t) { this.type = t; } },
@@ -228,7 +228,7 @@ function stepRaf(dtMs) {
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, setNotebookData: (d) => { notebookData = d; }, setFvCur: (c) => { fvCur = c; }, threadMetrics, isLayoutGliding, runDesktopDrawerGlide, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, openThreadDrawer, closeThreadDrawer, syncNotebookVisibility, applyThumbSrc, watchImgDecode, decodedThumbs, md, resolveInlineWorker, openWorkerFromLink, invokeCopy, getActiveWorkerKey: () => activeWorkerKey };\n})();"
+  "  globalThis.__test = { setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, setNotebookData: (d) => { notebookData = d; }, setFvCur: (c) => { fvCur = c; }, threadMetrics, isLayoutGliding, runDesktopDrawerGlide, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, openThreadDrawer, closeThreadDrawer, syncNotebookVisibility, applyThumbSrc, watchImgDecode, decodedThumbs, md, resolveInlineWorker, openWorkerFromLink, openExternalLinkInStandalone, invokeCopy, getActiveWorkerKey: () => activeWorkerKey };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -435,6 +435,60 @@ assert.equal(getEl("#open-notes-btn").tabIndex, 0);
   assert.ok(tdHtml.includes("简洁回复内容"), "thread drawer renders reply content");
   assert.ok(!tdHtml.includes("clap-btn") && !tdHtml.includes("data-clap") && !tdHtml.includes("has-claps"), "thread drawer omits clap button and has-claps class");
   T.closeThreadDrawer({ immediate: true });
+
+  // 2j) External links after Chinese punctuation & macOS Chrome PWA standalone click handling (#t13280)
+  const extUrl = "https://git.example.com/org/repo/merge_requests/8";
+  const mdBare = T.md("合并请求：" + extUrl);
+  const mdBold = T.md("**合并请求：" + extUrl + "**");
+  const mdParen = T.md("- 合并请求：" + extUrl + "（已合入）");
+  for (const [lbl, h] of [["bare", mdBare], ["bold", mdBold], ["paren", mdParen]]) {
+    assert.ok(h.includes('class="url" href="' + extUrl + '" target="_blank" rel="noopener noreferrer"'), lbl + " renders valid external anchor");
+  }
+  const extAnchor = makeEl("ext-url", "A");
+  extAnchor.setAttribute("href", extUrl);
+  extAnchor.setAttribute("target", "_blank");
+  extAnchor.setAttribute("rel", "noopener noreferrer");
+  extAnchor.closest = (sel) => (sel === "a[href]" ? extAnchor : null);
+  let focusCount = 0;
+  ctx.open = (url, target) => {
+    const win = { closed: false, opener: ctx, url, target, focus() { focusCount++; } };
+    openedWins.push(win);
+    return win;
+  };
+  const beforeExtCount = openedWins.length;
+  // Normal browser tab: leave native anchor click alone
+  ctx.navigator.standalone = false;
+  const evNorm = { button: 0, target: extAnchor, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  assert.equal(T.openExternalLinkInStandalone(extAnchor, evNorm), false);
+  assert.equal(evNorm.defaultPrevented, false);
+  assert.equal(openedWins.length, beforeExtCount);
+
+  // Standalone PWA mode: open explicitly via window.open, sever opener, focus window
+  ctx.navigator.standalone = true;
+  const evPwa = { button: 0, target: extAnchor, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  assert.equal(T.openExternalLinkInStandalone(extAnchor, evPwa), true);
+  assert.equal(evPwa.defaultPrevented, true);
+  assert.equal(openedWins.length, beforeExtCount + 1);
+  assert.equal(openedWins[beforeExtCount].url, extUrl);
+  assert.equal(openedWins[beforeExtCount].target, "_blank");
+  assert.equal(openedWins[beforeExtCount].opener, null);
+  assert.equal(focusCount, 1);
+
+  // Modifier click (Cmd+Click) is never intercepted
+  const evMod = { button: 0, metaKey: true, target: extAnchor, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  assert.equal(T.openExternalLinkInStandalone(extAnchor, evMod), false);
+  assert.equal(evMod.defaultPrevented, false);
+
+  // Popup-blocked fallback copies URL cleanly instead of failing silently
+  let copiedExt = "";
+  ctx.navigator.clipboard = { writeText: async (s) => { copiedExt = s; } };
+  ctx.open = () => null;
+  const evBlocked = { button: 0, target: extAnchor, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  assert.equal(T.openExternalLinkInStandalone(extAnchor, evBlocked), true);
+  assert.equal(evBlocked.defaultPrevented, true);
+  await new Promise((r) => queueMicrotask(r));
+  assert.equal(copiedExt, extUrl, "blocked standalone window.open falls back to copying URL");
+  ctx.navigator.standalone = false;
 
   console.log("ALL_V0310_FLICKER_SMOOTHNESS_TESTS_OK");
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -1044,8 +1044,13 @@
   let loginPairFailed = false;
   function isStandaloneMode() {
     try {
-      return window.navigator.standalone === true ||
-        (typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches);
+      if (window.navigator.standalone === true) return true;
+      if (typeof matchMedia !== "function") return false;
+      return !!(
+        matchMedia("(display-mode: standalone)")?.matches ||
+        matchMedia("(display-mode: window-controls-overlay)")?.matches ||
+        matchMedia("(display-mode: minimal-ui)")?.matches
+      );
     } catch { return false; }
   }
   function syncLoginTip() {
@@ -13433,6 +13438,7 @@
     const liveItems = liveShown.map((s) => s.pane_id
       ? itemSpec(s, wtMap, entries)
       : (() => { const h = extRow(s); return { key: "x:" + s.id, sig: h, html: h }; })());
+    const liveRest = Math.max(0, live.length - liveShown.length);
     if (live.length > LIVE_N) {
       const moreHtml = `<li><button type="button" class="more-row" data-act="live-more" aria-expanded="${liveAll}">${liveAll ? "收起" : `展开其余 ${liveRest} 个`}</button></li>`;
       liveItems.push({ key: "__live_more__", sig: moreHtml, html: moreHtml });
@@ -17283,6 +17289,41 @@
         openLightbox(items, index);
       }
     }
+  });
+  // macOS Chrome PWA standalone windows can silently drop or bury plain
+  // <a href="https://..." target="_blank" rel="noopener noreferrer"> clicks on
+  // out-of-scope URLs (#t13280). Open explicitly via window.open within the
+  // click user gesture and sever opener immediately; if blocked, copy the URL.
+  function openExternalLinkInStandalone(a, ev) {
+    if (!a || !ev || ev.defaultPrevented) return false;
+    if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return false;
+    if (!isStandaloneMode()) return false;
+    if (a.hasAttribute?.("download") || a.getAttribute?.("aria-disabled") === "true") return false;
+    if (a.id === "fv-wide" || a.id === "lb-open" || a.id === "lb-dl") return false;
+    const rawHref = (a.getAttribute?.("href") || "").trim();
+    if (!/^https?:\/\//i.test(rawHref)) return false;
+    let parsed;
+    try { parsed = new URL(rawHref, location.href); } catch { return false; }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (parsed.origin === location.origin && a.getAttribute?.("target") !== "_blank") return false;
+    if (window.getSelection?.()?.toString()) return false;
+    ev.preventDefault();
+    let win = null;
+    try { win = window.open(parsed.href, "_blank"); } catch {}
+    if (win) {
+      try { win.opener = null; } catch {}
+      try { win.focus?.(); } catch {}
+      return true;
+    }
+    Promise.resolve(copyText(parsed.href)).then((ok) => {
+      toast(ok ? "浏览器拦截了外部窗口，已复制链接" : "未能打开外部链接，请右键选择在浏览器中打开", "attn");
+    });
+    return true;
+  }
+  document.addEventListener("click", (e) => {
+    const a = e.target?.closest?.("a[href]");
+    if (!a) return;
+    openExternalLinkInStandalone(a, e);
   });
   // ───────────────────────────── Unified Three-in-One Right Drawer Shell (File / Thread / Dispatched Worker)
   const pane = $("#file-view");

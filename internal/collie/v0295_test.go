@@ -509,11 +509,8 @@ assert.ok(openLock && openLock.snap && openLock.snap.anchorId === "e42", "showFi
 // Simulate column narrow causing msgRow to drift +140px downward -> rAF lock compensates scrollTop by +140px
 msgTop = 260;
 perfNow = 50;
-while (rafQueue.length) {
-  const fn = rafQueue.shift();
-  fn(perfNow);
-  break;
-}
+const frameBatch = rafQueue.splice(0);
+for (const fn of frameBatch) fn(perfNow);
 assert.equal(sc.scrollTop, 560, "layout lock must restore scrollTop to keep anchored message fixed in viewport");
 
 T.closeFilePane();

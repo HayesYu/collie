@@ -28,9 +28,9 @@ assert.ok(cssSrc.includes(".working-row { padding: 0 16px 18px; }"), "mobile wor
 assert.ok(!cssSrc.includes(".collie-top::after"), ".collie-top::after must be removed so header stays seamless when static or scrolled");
 assert.ok(!cssSrc.includes(".collie-top.is-scrolled"), ".collie-top.is-scrolled hairline must be removed");
 
-// 1c) #crew tiered compacting classes (.is-no-kind / .is-tight + --crew-chip-max)
+// 1c) #crew readable horizontal strip: hides secondary agent kind on overflow, never crushes chip names with .is-tight
 assert.ok(cssSrc.includes(".crew.is-no-kind .chip .k { display: none; }"), "crew tier 1 must hide secondary agent kind");
-assert.ok(cssSrc.includes(".crew.is-tight .chip-name { max-inline-size: var(--crew-chip-max, 92px); }"), "crew tier 2 must clamp chip name width dynamically");
+assert.ok(!cssSrc.includes(".crew.is-tight") && cssSrc.includes("max-inline-size: 184px"), "crew chips must preserve readable width and scroll horizontally instead of crushing");
 
 // 1d) Whole-card clickable .snap-card without redundant .snap-open-btn box
 assert.ok(!cssSrc.includes(".snap-open-btn"), "redundant .snap-open-btn button box must be removed");
@@ -224,21 +224,20 @@ doc.dispatch("keydown", { key: "Escape" });
 assert.equal(getEl("#collie-menu").hidden, true);
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape closing more menu must restore floating notebook");
 
-// 2b) #crew tiered compacting: tier 0 -> tier 1 (is-no-kind) -> tier 2 (is-tight + --crew-chip-max)
+// 2b) #crew single-pass compacting: hides agent kind on overflow while keeping chips readable for horizontal scrolling (no .is-tight crush)
 const crew = makeEl("crew-test");
 crew.children = [{}, {}, {}, {}, {}, {}];
 crew.clientWidth = 500;
 Object.defineProperty(crew, "scrollWidth", {
   get() {
-    if (crew.classList.contains("is-tight")) return 480;
     if (crew.classList.contains("is-no-kind")) return 620;
     return 900;
   },
 });
 T.syncCrewCompact(crew);
 assert.equal(crew.classList.contains("is-no-kind"), true, "overflowing crew must hide agent kind first");
-assert.equal(crew.classList.contains("is-tight"), true, "still-overflowing crew must tighten chip name max-width");
-assert.ok(parseInt(crew.style.getPropertyValue("--crew-chip-max"), 10) >= 52, "dynamic --crew-chip-max must stay >= 52px");
+assert.equal(crew.classList.contains("is-tight"), false, "overflowing crew must NOT crush chips with .is-tight");
+assert.equal(crew.style.getPropertyValue("--crew-chip-max"), "", "crew must NOT dynamically crush chip width via --crew-chip-max");
 
 // 2d) Whole-card clickable .snap-card without 分屏预览 button box
 const snapHtml = T.renderEntryArtifacts({ id: "e90", role: "collie", text: "见 ~/work/prototype.html", files: ["~/work/prototype.html"] });

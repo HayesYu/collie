@@ -1302,7 +1302,7 @@ func (sp *Super) resumeFrom(name string) (*Worker, error) {
 	return &c, nil
 }
 
-func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool, resume string) (*Worker, <-chan error, error) {
+func (sp *Super) Spawn(kind, cwd, task, thread, name, label, by, machine, model, effort string, subscribe bool, resume string) (*Worker, <-chan error, error) {
 	m, err := sp.s.herdr.machine(machine)
 	if err != nil {
 		return nil, nil, fmt.Errorf("machine %q is not connected", machine)
@@ -1359,7 +1359,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		sp.mu.Unlock()
 		return nil, nil, fmt.Errorf("directory not found: %s", dir)
 	}
-	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting", Session: resume}
+	w := &Worker{Name: name, Label: cleanWorkerLabel(label), Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting", Session: resume}
 	sp.st.Workers[name] = w
 	if subscribe {
 		th := sp.threadLocked(thread)
@@ -1511,6 +1511,39 @@ func (sp *Super) workerByPane(pane string) string {
 		}
 	}
 	return ""
+}
+
+// workerLabels returns the display labels of active workers, keyed by pane_id
+// and ASCII worker name, so GET /api/state can expose them without holding
+// sp.mu across herdr RPCs.
+func (sp *Super) workerLabels() (byPane, byName map[string]string) {
+	if sp == nil {
+		return nil, nil
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	for _, w := range sp.st.Workers {
+		if w == nil || w.Ended {
+			continue
+		}
+		lbl := cleanWorkerLabel(w.Label)
+		if lbl == "" {
+			continue
+		}
+		if w.PaneID != "" {
+			if byPane == nil {
+				byPane = map[string]string{}
+			}
+			byPane[w.PaneID] = lbl
+		}
+		if w.Name != "" {
+			if byName == nil {
+				byName = map[string]string{}
+			}
+			byName[w.Name] = lbl
+		}
+	}
+	return byPane, byName
 }
 
 // ---------------------------------------------------------------- watchdog
@@ -2323,6 +2356,87 @@ func (sp *Super) MarkChatRead(entryID string) (string, bool, error) {
 	return id, true, nil
 }
 
+var (
+	errEntryNotFound = errors.New("找不到这条消息")
+	errNotClappable  = errors.New("只能给 Collie 的回复点赞")
+)
+
+// ClapEntry increments or sets lightweight applause on a Collie reply and persists
+// it directly to SQLite without waking the router, creating triggers, or consuming tokens.
+func (sp *Super) ClapEntry(entryID string, delta int, setVal *int) (int, bool, error) {
+	id := strings.TrimSpace(entryID)
+	if !isValidEntryID(id) {
+		return 0, false, errors.New("invalid entry_id")
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+
+	memIdx := -1
+	var target *Entry
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		if sp.st.Entries[i].ID == id {
+			memIdx = i
+			target = sp.st.Entries[i]
+			break
+		}
+	}
+	if target == nil && sp.db != nil {
+		var raw string
+		var colClaps int
+		if err := sp.db.QueryRow(`SELECT data, claps FROM entries WHERE id = ?`, id).Scan(&raw, &colClaps); err == nil {
+			var e Entry
+			if json.Unmarshal([]byte(raw), &e) == nil {
+				if colClaps > 0 && e.Claps == 0 {
+					e.Claps = colClaps
+				}
+				e.Claps = clampClaps(e.Claps)
+				target = &e
+			}
+		}
+	}
+	if target == nil {
+		return 0, false, errEntryNotFound
+	}
+	if target.Role != "collie" || (target.Thread != "" && target.Thread != mainThread) {
+		return 0, false, errNotClappable
+	}
+	cur := clampClaps(target.Claps)
+	next := cur
+	if setVal != nil {
+		next = clampClaps(*setVal)
+	} else {
+		next = clampClaps(cur + delta)
+	}
+	if next == cur {
+		return cur, false, nil
+	}
+	// Copy-on-write so any concurrent JSON marshaling of a previous superView snapshot stays race-free.
+	cp := *target
+	cp.Claps = next
+	if sp.db != nil {
+		if err := upsertEntryClaps(sp.db, &cp); err != nil {
+			return cur, false, err
+		}
+	} else {
+		sp.dirty = true
+	}
+	if memIdx >= 0 {
+		sp.st.Entries[memIdx] = &cp
+	}
+	if sp.pinnedCache != nil {
+		if _, ok := sp.pinnedCache[id]; ok {
+			sp.pinnedCache[id] = &cp
+		}
+	}
+	for ch := range sp.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return next, true, nil
+}
+
 // Dismiss marks one pending message as acknowledged/ignored by the human and persists it.
 func (sp *Super) Dismiss(id string) {
 	sp.dismiss(id, true)
@@ -2881,7 +2995,11 @@ func (sp *Super) Show(id string) (string, bool) {
 		return b.String(), true
 	}
 	if w := sp.st.Workers[id]; w != nil {
-		fmt.Fprintf(&b, "worker %s (%s)\nstatus: %s  thread: %s  pane: %s  cwd: %s\ncreated: %s by %s\n", w.Name, w.Kind, w.Status, w.Thread, w.PaneID, w.Cwd, w.CreatedAt.Format("01-02 15:04"), w.CreatedBy)
+		fmt.Fprintf(&b, "worker %s (%s)\n", w.Name, w.Kind)
+		if w.Label != "" {
+			fmt.Fprintf(&b, "label: %s\n", w.Label)
+		}
+		fmt.Fprintf(&b, "status: %s  thread: %s  pane: %s  cwd: %s\ncreated: %s by %s\n", w.Status, w.Thread, w.PaneID, w.Cwd, w.CreatedAt.Format("01-02 15:04"), w.CreatedBy)
 		fmt.Fprintf(&b, "\ntask:\n%s\n", w.Task)
 		if w.LastReport != "" {
 			fmt.Fprintf(&b, "\nlast report (%s):\n%s\n", w.ReportAt.Format("01-02 15:04"), w.LastReport)
@@ -2924,7 +3042,11 @@ func (sp *Super) List() string {
 			continue
 		}
 		any = true
-		fmt.Fprintf(&b, "  %-14s %-8s %-8s thread=%s  %s\n", w.Name, w.Kind, w.Status, w.Thread, clip(firstLine(w.Task), 70))
+		labelCol := ""
+		if w.Label != "" {
+			labelCol = fmt.Sprintf("label=%q  ", w.Label)
+		}
+		fmt.Fprintf(&b, "  %-14s %-8s %-8s thread=%s  %s%s\n", w.Name, w.Kind, w.Status, w.Thread, labelCol, clip(firstLine(w.Task), 70))
 	}
 	if !any {
 		b.WriteString("  (none)\n")

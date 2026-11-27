@@ -4,6 +4,80 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.7 (2026-11-27)
+
+### Highlights
+
+- **Lightweight Monochrome SVG Message Claps — Medium-Style Rapid Applause with Zero Token Cost (`internal/collie/{store.go,db.go,super.go,superapi.go,dream.go}`, `web/{app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Added an original monochrome fine-line SVG clap control into Collie's reply action bar (and the topic focus drawer), harmonizing cleanly with Collie's minimalist white-paper and matte-dark palette (strictly zero system emoji; hollow outline when unclapped, restrained monochrome fill with crisp `tabular-nums` count once clapped, persistently visible at rest while keeping sibling actions calm until hover or focus).
+  - Supports smooth single and rapid multi-click accumulation up to `50` with 60 FPS GPU-composited (`transform` + `opacity` only, zero forced layout reflow) micro-motion: spring-eased icon pop, 6 monochrome radial hairline lines blooming over 300ms, and a floating `+1 / +2 / +3` burst pill — respecting `prefers-reduced-motion` cleanly and keeping DOM nodes in-place without rebuilding message rows mid-burst.
+  - Supports right-click (`contextmenu`), mobile long-press (`520ms` with drag cancel), and keyboard `Backspace`/`Delete` to clear and undo claps with a subtle toast confirmation.
+  - Aggregates rapid clicks client-side with a 350ms debounce (plus `keepalive` flush on tab hide/unload), persists directly to SQLite via a lossless `entries.claps` column migration (kept in sync with `entries.data`), broadcasts live across devices over existing SSE `event: super`, and strictly guarantees **zero router wakeups, zero triggers, and zero token consumption**.
+  - Lightly surfaces `[claps:N]` positive-feedback tags and top applauded replies inside nightly `dream/input.md` to help Collie reinforce helpful response habits during memory consolidation; refreshed the interactive static demo under `docs/demo/`.
+
+### Client / API Changes
+
+- **New HTTP endpoint (`POST /api/chat/clap`, standard `s.auth`)**:
+  - Request JSON: `{ entry_id: string, delta?: number, claps?: number, reset?: boolean }` (`id` accepted as alias for `entry_id`; defaults to `delta: 1` when none of `reset`/`claps`/`delta` is specified; values are clamped to `0..50`).
+  - Response JSON (`200 OK`): `{ ok: true, entry_id: string, claps: number, max: 50, changed: boolean }`. Returns `400` for invalid `entry_id`, negative `claps`, or non-`collie` entries; `404` if the entry does not exist.
+  - Strictly zero-token: never enqueues a trigger, never wakes the router, and never emits notifications.
+- **`Entry.claps` (`GET /api/super`, SSE `event: super`, `GET /api/super/earlier`)**:
+  - Added optional integer field `claps?: number` (`omitempty`, omitted when `0`, range `1..50`) on `Entry` objects.
+  - SQLite `entries` table adds lossless column `claps INTEGER NOT NULL DEFAULT 0` with partial index `entries_claps`.
+- **Breaking changes**: None.
+
+---
+
+## v0.3.6 (2026-11-27)
+
+### Highlights
+
+- **Worker Short Display Labels (`collie spawn --label`) — Zero Extra Model Calls (`internal/collie/{store.go,db.go,cli.go,super.go,superapi.go,server.go}`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Added optional `--label` flag to `collie spawn` (e.g. `collie spawn --name fix-pagination --label "修分页单测" "..."` or `--label "Fix Auth"`), persisted in SQLite `workers.label` with automatic lossless migration for existing databases and seamless fallback to ASCII `name` when empty.
+  - Preserved `label` automatically across `collie spawn --resume <worker>` and allowed updating it when a new `--label` is provided; kept all underlying `herdr` / tmux / log / `collie send|stop|show` identifiers strictly on ASCII `name` with zero breaking changes.
+  - Exposed `label` in `GET /api/state`, `GET /api/super`, `collie list`, and `collie show`, and updated the default `ROUTER.md` template to guide Collie to attach a concise 4–6 character (or ~2 English word) `--label` in the human's language on every `collie spawn`.
+  - Updated Web UI and `docs/demo/` to prioritize `label` in the top active-agent crew strip, left sidebar worker list, thread drawer worker pills, and worker detail header (displaying `label` with a subtle monospace ASCII `name` subtitle, full ASCII `name` + task summary on native `title` hover, and seamless fallback to ASCII `name` when unlabeled).
+
+### Client / API Changes
+
+- **`POST /api/super/spawn` & CLI `collie spawn`**:
+  - Request body adds optional `label?: string` (CLI: `--label <text>`, whitespace-normalized and bounded to 64 runes; omitted or empty falls back to ASCII `name`; on `--resume`, retains the previous `label` unless a new non-empty `label` is passed).
+  - Response adds optional `label?: string` (omitted when empty).
+- **`GET /api/state` & SSE `event: state` (`AgentView`)**:
+  - Active worker entries in `agents[]` add optional `label?: string` (omitted when empty; `name` remains strictly ASCII).
+- **`GET /api/super` & SSE `event: super` (`Worker`)**:
+  - Entries in `workers[]` add optional `label?: string` (omitted when empty).
+- **SQLite `workers` table**:
+  - Added `label TEXT NOT NULL DEFAULT ''` column via automatic lossless `ALTER TABLE` migration on DB open.
+- **Breaking changes**: None.
+
+---
+
+## v0.3.5 (2026-11-27)
+
+### Highlights
+
+- **60 FPS Heavy-Load Smoothness Sprint Across Desktop, iPad & Mobile (`web/{app.css,app.js,index.html}`, `docs/demo/`)**:
+  - **Compositor-only topic drawer & 50/50 widen**: Registered `--thread-w` / `--file-w` as non-inheriting CSS `@property` values and scoped `--thread-w` exclusively to `#thread-drawer` (never mutating `<html>`); replaced `.app` `grid-template-columns` / `.td-inner` `width` animations and 45-frame `beginCollieLayoutLock` polling with a fixed-position GPU `translate3d` slide and raised the tablet overlay breakpoint from `1000px` to `1180px`, lifting heavy-load drawer open/widen from ~27 FPS (167ms stalls) to ~59–60 FPS with zero LongTasks.
+  - **Zero-jank sidebar & mobile route switching**: Upgraded parked `#v-collie.is-parked` from inherited `visibility: hidden` (plus descendant dot-pause selectors) to `content-visibility: hidden` (with `@supports not` fallback and never setting `inert`), and replaced mobile `<= 760px` `.main { display: none; }` tree destruction with a 1×1 stacked grid `content-visibility` switch — eliminating 167–183ms style-recalc stalls across desktop, iPad, and mobile.
+  - **In-place DOM patching for SSE pushes & drawer replies**: Extended `patchSuperThread` to update middle `.event` status dots/`wstate`, `.say` pins/`.te-count`, and `.mine` `.te-count` in place with zero `replaceChild` churn, lazily deferred `ensureLiveAnchor`, and moved `renderPendingBar()` after anchor reads to prevent layout thrashing during rapid drawer sends and SSE updates.
+  - **Zero-PrePaint floating side card & unified left-bias desktop reading preference**: Fixed the wide-screen (`>= 1664px`, e.g., `1920×1080`) `--notes-shift` regression so opening either floating card (`小本本` / `话题线`) consistently centers the main chat column in the remaining left space; replaced CSS `transition: transform` on the tall `.thread` container with a lightweight 60 FPS `requestAnimationFrame` matrix glide over persistent `will-change: transform`, eliminating Blink's 116ms PrePaint block.
+  - **Route-return side-card stability**: Removed the always-replaying `np-swap-in` keyframe and kept wide-desktop `#notes-pane` state frozen inside parked `#v-collie` when visiting other views, so returning to the main chat reveals open side cards in place with zero blink or jitter.
+  - **Removed expensive scrim blurs & layout transitions**: Dropped `backdrop-filter: blur(...)` from `.notes-scrim`, `.file-scrim`, `.thread-scrim`, `.super-jump`, and `dialog::backdrop` transitions, and eliminated layout/paint transitions (`box-shadow`, `padding`, `margin-top`) on `.notepane`.
+- **Symmetrical Collapsible「话题线」Side Card & De-Collided Labels (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Aligned「话题线」with「小本本」's minimalist white-paper collapse/expand pattern: wide desktop defaults to compact single-line「活跃话题」rows with a `+N 历史` pill; clicking unfolds 2nd-line nowrap metadata and the lower「历史话题」section via isolated `0fr -> 1fr` `.np-fold` grid rows without rebuilding DOM (`Esc` collapses before closing; narrow/mobile drawers open directly expanded).
+  - Renamed the left sidebar's running-agent group from「进行中」to「工作中」and the right thread card sections to「活跃话题」/「历史话题」, removing duplicate「进行中」labels on the same screen.
+- **Chat Stream Readability & Crew Strip Polish (`web/{app.css,app.js}`, `docs/demo/`)**:
+  - **External user quote bar**: Moved the `.re` quote strip outside the dark user bubble (directly above `.mine-media` and `.msg.user`, right-aligned, single-line ellipsis, `5px` gap) for all user message types (text, image+text, image-only) so short replies stay naturally compact while keeping click-to-jump intact.
+  - **Readable horizontal crew strip**: Removed `.is-tight` / `--crew-chip-max` over-truncation and hover width-expansion animations on `#crew` agent chips (`flex: 0 0 auto`, `max-inline-size: 184px` desktop / `164px` mobile), preserving full readable names with smooth horizontal scrolling and subtle fade cue on overflow.
+  - **Smarter consecutive Collie message grouping**: Tightened `.say.cont` merging so consecutive Collie replies break grouping (showing an independent Collie avatar and normal paragraph spacing) whenever the previous message carries a `↳ N 条回复` thread entry or the new message quotes a different topic root.
+- **Verification**: Added comprehensive unit & static contract tests (`internal/collie/v035_smoothness_test.go`), updated synced static demo (`docs/demo/`), and verified across Desktop (`1440×900` / `1920×1080`), iPad (`1024×768`), and Mobile (`390×844`) in both light and dark themes.
+
+### Client / API Changes
+
+- None (Web UI performance, layout, and interaction release only; no HTTP endpoint, SSE event, JSON schema, or CLI behavior changes).
+
+---
 ## v0.3.4 (2026-11-27)
 
 ### Highlights

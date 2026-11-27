@@ -29,6 +29,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/dismiss", s.superDismiss)
 	api("POST /api/super/pin", s.superPin)
 	api("POST /api/chat/read", s.superMarkRead)
+	api("POST /api/chat/clap", s.superClap)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
 	api("POST /api/super/report", s.superReport)
@@ -535,6 +536,63 @@ func (s *Server) superMarkRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "last_read_entry_id": cur, "changed": changed})
 }
 
+func (s *Server) superClap(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EntryID string `json:"entry_id"`
+		ID      string `json:"id"`
+		Delta   *int   `json:"delta"`
+		Claps   *int   `json:"claps"`
+		Reset   bool   `json:"reset"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := strings.TrimSpace(body.EntryID)
+	if id == "" {
+		id = strings.TrimSpace(body.ID)
+	}
+	if id == "" || !isValidEntryID(id) {
+		writeJSON(w, 400, map[string]any{"error": "invalid entry_id"})
+		return
+	}
+	var delta int
+	var setVal *int
+	switch {
+	case body.Reset:
+		z := 0
+		setVal = &z
+	case body.Claps != nil:
+		if *body.Claps < 0 {
+			writeJSON(w, 400, map[string]any{"error": "claps must be >= 0"})
+			return
+		}
+		v := *body.Claps
+		setVal = &v
+	case body.Delta != nil:
+		delta = *body.Delta
+	default:
+		delta = 1
+	}
+	claps, changed, err := s.sup.ClapEntry(id, delta, setVal)
+	if err != nil {
+		code := 500
+		if errors.Is(err, errEntryNotFound) {
+			code = 404
+		} else if errors.Is(err, errNotClappable) || strings.Contains(err.Error(), "invalid") {
+			code = 400
+		}
+		writeJSON(w, code, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":       true,
+		"entry_id": id,
+		"claps":    claps,
+		"max":      maxEntryClaps,
+		"changed":  changed,
+	})
+}
+
 // replyLen is a reply's length as people read it: each Chinese/Japanese/Korean
 // character counts one, and so does each run of Latin text (a word).
 func replyLen(s string) int {
@@ -563,6 +621,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		Task      string  `json:"task"`
 		Thread    string  `json:"thread"`
 		Name      string  `json:"name"`
+		Label     string  `json:"label"`
 		By        string  `json:"by"`
 		Machine   *string `json:"machine"`
 		Model     string  `json:"model"`
@@ -573,6 +632,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
+	body.Label = cleanWorkerLabel(body.Label)
 	session := ""
 	if body.Resume != "" {
 		old, err := s.sup.resumeFrom(body.Resume)
@@ -586,6 +646,9 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		body.Machine = &m
 		if body.Name == "" {
 			body.Name = old.Name
+		}
+		if body.Label == "" {
+			body.Label = old.Label
 		}
 		if body.Model == "" && body.Effort == "" {
 			body.Model, body.Effort = old.Model, old.Effort
@@ -620,7 +683,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	} else if body.Machine != nil {
 		machine = s.machineByName(*body.Machine)
 	}
-	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub, session)
+	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.Label, body.By, machine, body.Model, body.Effort, sub, session)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
@@ -639,6 +702,9 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 	res := map[string]any{"worker": wk.Name, "kind": wk.Kind, "status": status, "thread": wk.Thread,
 		"note": "its agent is starting; you will get a [collie] event when it reports, finishes, gets blocked or fails. Tell the human it is on its way, not that it is done"}
+	if wk.Label != "" {
+		res["label"] = wk.Label
+	}
 	writeJSON(w, 202, res)
 }
 

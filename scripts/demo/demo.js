@@ -20,8 +20,8 @@
     agent({ pane_id: "w2:p1@macbook", workspace_id: "w2@macbook", name: "claude-1", kind: "claude", status: "working", cwd: "/Users/alex/code/shop-web", topic: "首页加暗色模式", run: ["opus", "high"] }),
     agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "idle", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", run: ["gpt-6.1-sol", "high"] }),
     agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", run: ["", ""] }),
-    agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
-    agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
+    agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", label: "查分页单测", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
+    agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", label: "写v1.4日志", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
   ];
   const shells = [
     { pane_id: "w7:p1", workspace_id: "w7", workspace_label: "logs", name: "logs", kind: "", status: "shell", cwd: "/home/alex/code/shop-api", title: "", is_agent: false, machine: "" },
@@ -30,8 +30,8 @@
   const state = () => ({ ok: true, agents, shells, machines, ...(lastReadEntryId ? { last_read_entry_id: lastReadEntryId } : {}) });
 
   const workers = [
-    { name: "fix-flaky-test", kind: "codex", cwd: "/home/alex/code/shop-api", task: "找出 TestOrdersPagination 偶发失败的原因并修好", thread: "chat:main", pane_id: "w5:p1", workspace_id: "w5", machine: "", created_by: "collie", created_at: ago(14), status: "working", run: ["gpt-6.1-sol", "medium"] },
-    { name: "release-notes", kind: "claude", cwd: "/Users/alex/code/shop-web", task: "根据 v1.3..main 的提交写 v1.4 发布说明", thread: "chat:main", pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", machine: "macbook", created_by: "collie", created_at: ago(14), status: "done", last_report: "CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", report_at: ago(6), run: ["sonnet", "low"] },
+    { name: "fix-flaky-test", label: "查分页单测", kind: "codex", cwd: "/home/alex/code/shop-api", task: "找出 TestOrdersPagination 偶发失败的原因并修好", thread: "chat:main", pane_id: "w5:p1", workspace_id: "w5", machine: "", created_by: "collie", created_at: ago(14), status: "working", run: ["gpt-6.1-sol", "medium"] },
+    { name: "release-notes", label: "写v1.4日志", kind: "claude", cwd: "/Users/alex/code/shop-web", task: "根据 v1.3..main 的提交写 v1.4 发布说明", thread: "chat:main", pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", machine: "macbook", created_by: "collie", created_at: ago(14), status: "done", last_report: "CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", report_at: ago(6), run: ["sonnet", "low"] },
   ];
   let seq = 100;
   const dismissed = new Set();
@@ -49,7 +49,7 @@
   ];
   const entries = [
     entry("user", "订单接口的分页测试偶尔会挂，帮我查一下。顺便把 v1.4 的发布说明写了。\n\n附件：\n/home/alex/.collie/uploads/20261119/a1b2c3-ci-failure.png\n/home/alex/.collie/uploads/20261119/d4e5f6-query-plan.png", { at: ago(15) }),
-    entry("collie", "好，分两路并行：\n\n- **fix-flaky-test**（Codex · devbox）查 `TestOrdersPagination` 为什么偶发失败\n- **release-notes**（Claude · macbook）按 v1.3 以来的提交写发布说明\n\n有结果我再告诉你。", { at: ago(14.5) }),
+    entry("collie", "好，分两路并行：\n\n- **fix-flaky-test**（Codex · devbox）查 `TestOrdersPagination` 为什么偶发失败\n- **release-notes**（Claude · macbook）按 v1.3 以来的提交写发布说明\n\n有结果我再告诉你。", { at: ago(14.5), claps: 2 }),
     entry("event", "派出 fix-flaky-test（codex · devbox）", { tone: "spawn", ref: "fix-flaky-test", at: ago(14) }),
     entry("event", "派出 release-notes（claude · macbook）", { tone: "spawn", ref: "release-notes", at: ago(14) }),
     entry("user", "另外首页首屏好像有点慢，有空看看。", { at: ago(7.2) }),
@@ -57,7 +57,7 @@
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
     entry("event", "fix-flaky-test 回报：已定位 TestOrdersPagination 偶发失败根因并补齐第二排序键与压测。", { tone: "done", ref: "fix-flaky-test", at: ago(5.8) }),
     entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n顺带附上首页明暗主题验收宽截图与架构图：~/code/shop-web/docs/preview-dark.png 、~/code/shop-web/docs/preview-light.png 、~/code/shop-web/docs/architecture.svg\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
-    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 `~/code/shop-api/internal/orders/list.go:362-385` 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：`~/code/shop-api/bench-pagination.html`，原始分位明细表：`~/code/shop-api/docs/orders-benchmark.csv`，全接口压测与索引复盘长报告已整理到 `~/code/shop-api/docs/perf-audit-v1.4.md`（含 8 列宽表，支持顶栏下载、复制原文或新标签宽屏阅读），压测看板见 `https://metrics.example.com/shop-api/run-1020`，暗色首屏基准图见 `~/code/shop-web/docs/preview-dark.png`。\n\n另外冷备归档路径 `hdfs://cluster-east/warehouse/shop_orders/dt=2026-11-20`、`/api/orders` 路由签名与本地复现命令 `go test -count=1 ./...` 均保持不变；顺带扫到已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), files: ["~/code/shop-api/bench-pagination.html", "~/code/shop-api/docs/orders-benchmark.csv"] }),
+    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 `~/code/shop-api/internal/orders/list.go:362-385` 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：`~/code/shop-api/bench-pagination.html`，原始分位明细表：`~/code/shop-api/docs/orders-benchmark.csv`，全接口压测与索引复盘长报告已整理到 `~/code/shop-api/docs/perf-audit-v1.4.md`（含 8 列宽表，支持顶栏下载、复制原文或新标签宽屏阅读），压测看板见 `https://metrics.example.com/shop-api/run-1020`，暗色首屏基准图见 `~/code/shop-web/docs/preview-dark.png`。\n\n另外冷备归档路径 `hdfs://cluster-east/warehouse/shop_orders/dt=2026-11-20`、`/api/orders` 路由签名与本地复现命令 `go test -count=1 ./...` 均保持不变；顺带扫到已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), files: ["~/code/shop-api/bench-pagination.html", "~/code/shop-api/docs/orders-benchmark.csv"], claps: 5 }),
     entry("user", "先把 `orders` 复合索引的上线窗口排到今晚 23:00，用 `CONCURRENTLY` 建索引避免锁表。", { at: ago(2.0) }),
     entry("collie", "明白，已经按 `CREATE INDEX CONCURRENTLY` 整理进今晚 23:00 的变更单，建完自动跑一遍 200 轮翻页回归。", { at: ago(1.8) }),
     entry("user", "另外把旧的单列索引先留 3 天观察慢查询，确认 P99 稳在 30ms 内再下线。", { at: ago(1.4) }),
@@ -332,8 +332,8 @@
     ],
     "w1:p1": [
       { kind: "user", text: "[collie] 1 个事件 · 对话 · 订单接口的分页测试偶尔会挂……" },
-      tool("Bash", "collie spawn -kind codex -name fix-flaky-test \"…\"", "spawned fix-flaky-test on devbox"),
-      tool("Bash", "collie spawn -kind claude -machine macbook -name release-notes \"…\"", "spawned release-notes on macbook"),
+      tool("Bash", 'collie spawn -kind codex -name fix-flaky-test -label "查分页单测" "…"', "spawned fix-flaky-test on devbox"),
+      tool("Bash", 'collie spawn -kind claude -machine macbook -name release-notes -label "写v1.4日志" "…"', "spawned release-notes on macbook"),
       tool("Bash", "collie reply \"好，分两路并行……\"", "ok"),
     ],
   };
@@ -723,6 +723,30 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       const changed = idN(cand) > idN(lastReadEntryId);
       if (changed) lastReadEntryId = cand;
       return json({ ok: true, last_read_entry_id: lastReadEntryId, changed });
+    }
+    if (p === "/api/chat/clap" && method === "POST") {
+      const cand = String(body.entry_id || body.id || "").trim();
+      if (!/^e[0-9]+$/.test(cand)) return json({ error: "invalid entry_id" }, 400);
+      const hit = entries.find((e) => e.id === cand) || earlierEntries.find((e) => e.id === cand);
+      if (!hit) return json({ error: "找不到这条消息" }, 404);
+      if (hit.role !== "collie") return json({ error: "只能给 Collie 的回复点赞" }, 400);
+      const cur = Math.max(0, Math.min(50, Math.floor(Number(hit.claps) || 0)));
+      let next = cur;
+      if (body.reset) next = 0;
+      else if (typeof body.claps === "number") {
+        if (body.claps < 0) return json({ error: "claps must be >= 0" }, 400);
+        next = Math.max(0, Math.min(50, Math.floor(body.claps)));
+      } else {
+        const delta = typeof body.delta === "number" ? Math.trunc(body.delta) : 1;
+        next = Math.max(0, Math.min(50, cur + delta));
+      }
+      const changed = next !== cur;
+      if (changed) {
+        if (next > 0) hit.claps = next;
+        else delete hit.claps;
+        pushAll();
+      }
+      return json({ ok: true, entry_id: cand, claps: next, max: 50, changed });
     }
     if (p === "/api/super/dismiss") { if (body.id) dismissed.add(body.id); pushAll(); return json({ ok: true }); }
     if (p === "/api/super/pin") {

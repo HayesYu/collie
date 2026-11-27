@@ -281,6 +281,7 @@ type AgentView struct {
 	WorkspaceID    string     `json:"workspace_id"`
 	WorkspaceLabel string     `json:"workspace_label"`
 	Name           string     `json:"name"`
+	Label          string     `json:"label,omitempty"`
 	Kind           string     `json:"kind"`
 	Status         string     `json:"status"`
 	Cwd            string     `json:"cwd"`
@@ -338,6 +339,10 @@ func (s *Server) state(ctx context.Context) PaneState {
 	}
 
 	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, LastReadEntryID: lastRead}
+	var workerLabelByPane, workerLabelByName map[string]string
+	if s.sup != nil {
+		workerLabelByPane, workerLabelByName = s.sup.workerLabels()
+	}
 	topics := map[string]map[string]paneSession{"": s.titlesFor("", ctx)}
 	for _, m := range machines {
 		if !m.Local && m.Online {
@@ -367,6 +372,13 @@ func (s *Server) state(ctx context.Context) PaneState {
 		}
 		if v.Name == "" {
 			v.Name = v.WorkspaceLabel
+		}
+		if v.IsAgent && v.Name != routerName {
+			if lbl := workerLabelByPane[p.ID]; lbl != "" {
+				v.Label = lbl
+			} else if lbl := workerLabelByName[v.Name]; lbl != "" {
+				v.Label = lbl
+			}
 		}
 		if v.IsAgent {
 			v.Status = s.seen.status(p.ID, v.Status)

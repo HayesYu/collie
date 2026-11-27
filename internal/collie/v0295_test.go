@@ -204,10 +204,10 @@ assert.ok(cssSrc.includes(".notepane.is-hidden") && cssSrc.includes("transform-o
 assert.ok(cssSrc.includes("transform: translate3d(var(--notes-shift), 0, 0)"), "main chat yield for notebook must use pure GPU transform translate3d without column-width rewrap");
 assert.ok(cssSrc.includes(".np-fold") && cssSrc.includes("grid-template-rows: 0fr") && cssSrc.includes("grid-template-rows: 1fr"), "notebook compact<->expand must use isolated 0fr->1fr grid-row disclosure");
 assert.ok(cssSrc.includes("#v-collie.is-parked") && cssSrc.includes("contain: strict"), "#v-collie must use parked layer with strict containment instead of display:none churn");
-assert.ok(cssSrc.includes(".peer-qr-card") && cssSrc.includes("min-height: 214px"), "peer QR card must keep stable min-height to prevent tab/mode flicker");
-assert.ok(cssSrc.includes('dialog.int-sheet[data-modal-kind="peers"]') && cssSrc.includes("max-height: min(620px, calc(100dvh - 32px))") && !cssSrc.includes("min-height: min(620px, calc(var(--vh) - 180px))"), "peer modal must enforce max-height: min(620px, calc(100dvh - 32px)) and flex scroll without clipping footer");
-assert.ok(appSrc.includes("内网 / Tailscale 直连 · 令牌仅存本机") && !appSrc.includes("窄权令牌存 secrets.json"), "peer modal subtitle must use plain human language without secrets.json jargon");
-assert.ok(appSrc.includes("先帮我查清，草稿给我审") && appSrc.includes("只留个便签，不自动回复") && appSrc.includes("查完给方案，批准再干活"), "peer reception modes must use plain human language");
+assert.ok(cssSrc.includes(".pm-qr-plate") && cssSrc.includes("width: 138px") && cssSrc.includes("height: 138px"), "peer QR plate must keep stable dimensions to prevent tab/mode flicker");
+assert.ok(cssSrc.includes('dialog.int-sheet[data-modal-kind="peers"]') && cssSrc.includes("max-height: min(680px, calc(100dvh - 40px))") && !cssSrc.includes("min-height: min(620px, calc(var(--vh) - 180px))"), "peer modal must enforce clean max-height and flex scroll without clipping");
+assert.ok(!appSrc.includes("窄权令牌存 secrets.json"), "peer modal must never expose secrets.json engineering jargon");
+assert.ok(appSrc.includes("先查清，草稿给我审") && appSrc.includes("只留便签，不自动回复") && appSrc.includes("查完给方案，批准再干活"), "peer reception modes must use plain human language");
 assert.ok(cssSrc.includes(".app.has-thread #v-collie .viewer") && cssSrc.includes(".is-main-focused"), "desktop side-by-side thread drawer must gently dim left main stream and restore on hover/focus/click");
 assert.ok(cssSrc.includes(".mine-media") && cssSrc.includes(".msg.user.is-media-only"), "user image messages must render detached rounded media cards above compact text bubble or standalone without dark box");
 assert.ok(appSrc.includes("function syncPeerModalTabs") && appSrc.includes("function patchPeerQRCard") && appSrc.includes("invitesByMode"), "peer modal must mount once, cache invites, and patch in-place");

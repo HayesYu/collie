@@ -7349,11 +7349,31 @@
   let peerScanRAF = 0;
   let pendingPeerInvite = "";
   const PEER_JOIN_BASE = "https://lihuanyu0w0.github.io/collie/join/#";
-  const PEER_MODE_TEXT = {
-    advise: "先帮我查清，草稿给我审",
-    notify: "只留个便签，不自动回复",
-    propose: "查完给方案，批准再干活",
-  };
+  const PEER_MODES = [
+    {
+      id: "advise",
+      label: "先查清，草稿给我审",
+      short: "查清审草稿",
+      rec: "推荐",
+      desc: "只读查证并拟好回复，你确认才发送",
+    },
+    {
+      id: "notify",
+      label: "只留便签，不自动回复",
+      short: "只留便签",
+      rec: "",
+      desc: "仅在聊天里记一条提醒，不自动查证",
+    },
+    {
+      id: "propose",
+      label: "查完给方案，批准再干活",
+      short: "查完给方案",
+      rec: "",
+      desc: "先评估并提议方案，动手和回复都等你拍板",
+    },
+  ];
+  const peerModeInfo = (id) => PEER_MODES.find((m) => m.id === id) || PEER_MODES[0];
+  const PEER_MODE_TEXT = Object.fromEntries(PEER_MODES.map((m) => [m.id, m.label]));
   const INT_STATUS_TEXT = {
     connected: "已连通",
     connecting: "连接中",
@@ -8066,8 +8086,8 @@
             <span class="peer-ov-sub">${peerList.length} 位 · 内网 / Tailscale 直连</span>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button type="button" class="btn small" data-peer-open="list">管理权限</button>
-            <button type="button" class="btn primary small" data-peer-open="add">名片 / 扫码添加</button>
+            <button type="button" class="btn small" data-peer-open="friends">管理权限</button>
+            <button type="button" class="btn primary small" data-peer-open="card">我的名片</button>
           </div>
         </div>
         <ul class="peer-ov-list">${peerList.slice().sort((a, b) => (a.status === "pending_incoming" ? -1 : 0) - (b.status === "pending_incoming" ? -1 : 0)).map((p) => {
@@ -8228,8 +8248,33 @@
       intModalDraft.scanning = false;
     }
   }
+  let peerCopyBtnTimer = 0;
+  let peerPopAnchorEl = null;
+  let peerPopOpenMeta = { pop: null, trigger: null, fromPointer: false };
+  const isPeerPopOpen = (pop) => !!(pop && (pop.matches?.(":popover-open") || pop.classList?.contains(":popover-open")));
+  const anyPeerPopOpen = () => isPeerPopOpen($("#peer-mode-popover")) || isPeerPopOpen($("#peer-action-popover"));
+  function clearPeerPopAnchor() {
+    if (peerPopAnchorEl) {
+      try { peerPopAnchorEl.style.removeProperty("anchor-name"); } catch {}
+      peerPopAnchorEl.setAttribute?.("aria-expanded", "false");
+      peerPopAnchorEl = null;
+    }
+  }
+  function hidePeerPopovers() {
+    for (const id of ["#peer-mode-popover", "#peer-action-popover"]) {
+      const pop = $(id);
+      if (isPeerPopOpen(pop)) {
+        try { pop.hidePopover(); } catch {}
+      }
+    }
+    clearPeerPopAnchor();
+    peerPopOpenMeta = { pop: null, trigger: null, fromPointer: false };
+  }
   function stopPeerModalResources() {
     stopPeerCameraScan();
+    hidePeerPopovers();
+    clearTimeout(peerCopyBtnTimer);
+    peerCopyBtnTimer = 0;
   }
 
   const intModal = $("#int-modal");
@@ -8261,10 +8306,15 @@
         const r = intModal.getBoundingClientRect();
         return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
       };
-      intModal.addEventListener("pointerdown", (ev) => { pressedOutside = ev.target === intModal && outside(ev); });
-      intModal.addEventListener("pointerup", (ev) => { if (pressedOutside && outside(ev)) closeIntModal("cancel"); pressedOutside = false; });
+      intModal.addEventListener("pointerdown", (ev) => { pressedOutside = !anyPeerPopOpen() && ev.target === intModal && outside(ev); });
+      intModal.addEventListener("pointerup", (ev) => { if (pressedOutside && !anyPeerPopOpen() && outside(ev)) closeIntModal("cancel"); pressedOutside = false; });
     }
     intModal.addEventListener("cancel", (ev) => {
+      if (anyPeerPopOpen()) {
+        ev.preventDefault();
+        hidePeerPopovers();
+        return;
+      }
       if (!supportsTopLayerExit()) {
         ev.preventDefault();
         closeIntModal("cancel");
@@ -9865,6 +9915,7 @@
       }
       if (nextSig !== prevSig) {
         patchPeerHeaderAndList();
+        patchPeerQRCard();
       }
     } catch {}
   }
@@ -9896,13 +9947,16 @@
       const qrSrc = qrTarget ? `/api/qr?text=${encodeURIComponent(qrTarget)}` : "";
       if (qrSrc) await preloadPeerQRImage(qrSrc);
       if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
-      if (reset) d.invitesByMode = {};
+      if (reset) {
+        d.invitesByMode = {};
+        d.resetConfirm = false;
+      }
       d.invitesByMode[cacheKey] = inv;
       d.invite = inv;
       d.inviteLoading = false;
       d.inviteErr = "";
       patchPeerQRCard();
-      if (reset) toast("已重置名片密钥，旧二维码与旧链接已立即失效");
+      if (reset) toast("已重置名片密钥，旧链接已失效");
     } catch (err) {
       if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
       d.inviteLoading = false;
@@ -9920,8 +9974,12 @@
     }
     const list = Array.isArray(data?.peers) ? data.peers : [];
     const hasPendingIn = list.some((x) => x.status === "pending_incoming");
-    const tab = initialTab === "add" ? "add" : initialTab === "list" ? "list" : ((hasPendingIn || list.length > 0) ? "list" : "add");
-    const addSub = opts.sub === "scan" ? "scan" : "gen";
+    let tab;
+    if (initialTab === "friends" || initialTab === "list") tab = "friends";
+    else if (initialTab === "card") tab = "card";
+    else if (initialTab === "add") tab = opts.sub === "gen" ? "card" : "add";
+    else tab = (hasPendingIn || list.length > 0) ? "friends" : "card";
+
     const pasteRaw = String(opts.inviteRaw || "").trim();
     let pairName = "";
     if (pasteRaw) {
@@ -9935,16 +9993,17 @@
       data,
       _dataSig: peerDataSig(data),
       _mounted: false,
-      tab,
-      addSub, // gen | scan
+      tab, // friends | card | add
       genMode: "advise",
       hubNameInput: data?.hub_name || "",
       editingHubName: false,
+      savingHubName: false,
       invite: null,
       invitesByMode: {},
       inviteSeq: 0,
       inviteLoading: false,
       inviteErr: "",
+      resetConfirm: false,
       pasteRaw,
       fromInviteLink: !!pasteRaw,
       pairName,
@@ -9955,13 +10014,16 @@
       scanNote: "",
       approveModes: {}, // peerId -> selected mode before clicking Approve
       pingState: {}, // peerId -> {busy, ok, msg}
+      showAddrIds: {}, // peerId -> bool
       confirmRevokeId: "",
       busyPeerId: "",
+      activeModeTarget: null, // { kind: "default" | "add" | "approve" | "peer", peerId?, triggerEl }
+      activeActionPeerId: "",
     };
     renderPeerModal();
     if (!intModal.open) intModal.showModal();
     $("#int-modal-body").scrollTop = 0;
-    if (tab === "add" && addSub === "gen") ensurePeerInvite(false);
+    if (tab === "card") ensurePeerInvite(false);
     // Refresh live peers data in the background in case another device changed it.
     refreshPeerModalData();
   }
@@ -9972,18 +10034,18 @@
     stopPeerCameraScan();
     const isSecure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
     if (!isSecure) {
-      d.scanNote = "当前通过局域网 HTTP 访问，浏览器安全策略限制直接调用摄像头；请点击「从相册/截图识别」或用手机系统相机扫码后粘贴下方邀请码。";
-      renderPeerModal();
+      d.scanNote = "当前通过局域网 HTTP 访问，浏览器安全策略限制直接调用摄像头；请点击「识别图片」或用手机系统相机扫码后粘贴下方邀请码。";
+      patchPeerScanPanel();
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      d.scanNote = "当前设备或浏览器未提供摄像头访问接口，请改用「从相册/截图识别」或直接粘贴邀请码。";
-      renderPeerModal();
+      d.scanNote = "当前设备或浏览器未提供摄像头访问接口，请改用「识别图片」或直接粘贴邀请码。";
+      patchPeerScanPanel();
       return;
     }
     if (typeof window.BarcodeDetector !== "function") {
       d.scanNote = "当前浏览器暂不支持原生二维码实时解码（BarcodeDetector）；请用系统相机扫描名片二维码后粘贴邀请码，或更换 Chrome/Edge。";
-      renderPeerModal();
+      patchPeerScanPanel();
       return;
     }
     let detector;
@@ -9992,14 +10054,14 @@
         ? await window.BarcodeDetector.getSupportedFormats()
         : ["qr_code"];
       if (Array.isArray(fmts) && fmts.length && !fmts.includes("qr_code")) {
-        d.scanNote = "当前系统不支持 qr_code 原生解码，请直接粘贴同事发来的邀请码。";
-        renderPeerModal();
+        d.scanNote = "当前系统不支持 qr_code 原生解码，请直接粘贴好友发来的邀请码。";
+        patchPeerScanPanel();
         return;
       }
       detector = new window.BarcodeDetector({ formats: ["qr_code"] });
     } catch {
       d.scanNote = "原生扫码引擎初始化失败，请上传二维码图片或直接粘贴邀请码。";
-      renderPeerModal();
+      patchPeerScanPanel();
       return;
     }
     try {
@@ -10014,7 +10076,7 @@
       peerScanStream = stream;
       d.scanning = true;
       d.scanNote = "";
-      renderPeerModal();
+      patchPeerScanPanel();
       const video = $("#peer-scan-video");
       if (!video) { stopPeerCameraScan(); return; }
       video.srcObject = stream;
@@ -10032,12 +10094,13 @@
               if (isCanonicalPeerInvite(extracted)) {
                 stopPeerCameraScan();
                 d.pasteRaw = extracted;
+                d.fromInviteLink = true;
                 d.scanNote = "";
                 const parsed = parsePeerInviteClient(extracted, d.data?.hub_id);
                 if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
                   d.pairName = parsed.payload.hub_name;
                 }
-                renderPeerModal();
+                patchPeerScanPanel();
                 toast("已扫码识别好友边牧名片");
                 return;
               }
@@ -10051,13 +10114,13 @@
       stopPeerCameraScan();
       const name = err?.name || "";
       if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-        d.scanNote = "未授予摄像头权限，已优雅降级：可上传二维码截图或直接粘贴邀请码。";
+        d.scanNote = "未授予摄像头权限，可上传二维码截图或直接粘贴邀请码。";
       } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-        d.scanNote = "未检测到可用摄像头（桌面端常见），请直接粘贴同事的邀请码或上传二维码截图。";
+        d.scanNote = "未检测到可用摄像头，请直接粘贴好友的邀请链接或识别图片。";
       } else {
-        d.scanNote = `无法打开摄像头（${err?.message || name || "设备受限"}），请直接上传二维码图片或粘贴邀请码。`;
+        d.scanNote = `无法打开摄像头（${err?.message || name || "设备受限"}），请识别图片或粘贴邀请码。`;
       }
-      renderPeerModal();
+      patchPeerScanPanel();
     }
   }
 
@@ -10065,8 +10128,8 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !file) return;
     if (typeof window.BarcodeDetector !== "function") {
-      d.scanNote = "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请码文本。";
-      renderPeerModal();
+      d.scanNote = "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或名片码。";
+      patchPeerScanPanel();
       $("#peer-paste-input")?.focus();
       return;
     }
@@ -10081,156 +10144,467 @@
           .find((v) => isCanonicalPeerInvite(v));
         if (!hit) {
           d.scanNote = "未在图片中识别到有效的 Collie 好友名片二维码，请确认图片清晰或直接粘贴分享链接。";
-          renderPeerModal();
+          patchPeerScanPanel();
           return;
         }
         d.pasteRaw = hit;
+        d.fromInviteLink = true;
         d.scanNote = "";
         const parsed = parsePeerInviteClient(hit, d.data?.hub_id);
         if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
           d.pairName = parsed.payload.hub_name;
         }
-        renderPeerModal();
+        patchPeerScanPanel();
         toast("已从图片识别好友边牧名片");
       } finally {
         bmp.close?.();
       }
     } catch (err) {
       d.scanNote = `图片识别失败（${err?.message || "不支持该格式"}），请直接粘贴邀请码。`;
-      renderPeerModal();
+      patchPeerScanPanel();
     }
   }
 
-  function peerModeRadiosHTML(groupName, current, attr) {
-    return [
-      ["advise", "先帮我查清，草稿给我审", "推荐", "本地只读查证并拟好回复，你点确认才发给对方"],
-      ["notify", "只留个便签，不自动回复", "", "只在聊天里记一条提醒，不自动查也不消耗额度"],
-      ["propose", "查完给方案，批准再干活", "", "先评估并提议派人处理，动手和回复都等你拍板"],
-    ].map(([val, lbl, rec, desc]) => `
-      <label class="int-mode-opt">
-        <input type="radio" name="${esc(groupName)}" value="${val}" ${current === val ? "checked" : ""} ${attr}>
-        <span><b>${esc(lbl)}${rec ? `<span class="rec">${rec}</span>` : ""}</b><small>${esc(desc)}</small></span>
-      </label>`).join("");
+  // ─── Custom Collie Minimal Popover Menus (Viewport-Aware + Full-Width Trigger Sync) ───
+  const supportsPeerNativeAnchor = () =>
+    typeof CSS !== "undefined" &&
+    typeof CSS.supports === "function" &&
+    CSS.supports("position-area: block-end") &&
+    CSS.supports("width: anchor-size(width)");
+
+  const supportsFocusGroup = () =>
+    typeof HTMLElement !== "undefined" && "focusGroup" in HTMLElement.prototype;
+
+  function positionPeerPopoverFallback(pop, triggerEl, matchWidth, alignStart) {
+    if (!pop || !triggerEl) return;
+    const tr = triggerEl.getBoundingClientRect();
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 860;
+    const margin = 10;
+    const gap = 5;
+    if (matchWidth) {
+      const w = Math.min(Math.round(tr.width), vw - margin * 2);
+      pop.style.width = `${w}px`;
+      pop.style.minWidth = `${w}px`;
+      pop.style.maxWidth = `${w}px`;
+    } else {
+      pop.style.removeProperty("width");
+      pop.style.removeProperty("min-width");
+      pop.style.removeProperty("max-width");
+    }
+    const pr = pop.getBoundingClientRect();
+    const pw = pr.width || (matchWidth ? tr.width : (pop.classList.contains("is-narrow") ? 180 : 272));
+    const ph = pr.height || 180;
+    let left = (matchWidth || alignStart) ? tr.left : (tr.right - pw);
+    left = Math.max(margin, Math.min(left, vw - pw - margin));
+    let top = tr.bottom + gap;
+    if (top + ph > vh - margin && tr.top - gap - ph >= margin) {
+      top = tr.top - ph - gap;
+    }
+    top = Math.max(margin, Math.min(top, vh - ph - margin));
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top)}px`;
+  }
+
+  function clearPeerPopoverInlinePos(pop) {
+    if (!pop) return;
+    for (const k of ["left", "top", "width", "min-width", "max-width"]) {
+      try { pop.style.removeProperty(k); } catch {}
+    }
+  }
+
+  function isPeerTriggerFullWidth(triggerEl) {
+    if (!triggerEl) return false;
+    const parent = triggerEl.parentElement;
+    const tw = triggerEl.offsetWidth || triggerEl.getBoundingClientRect?.().width || 0;
+    const pw = parent ? (parent.clientWidth || parent.getBoundingClientRect?.().width || 0) : 0;
+    if (tw >= 230 && pw > 0 && tw >= pw - 28) return true;
+    if ((window.innerWidth || 1280) <= 600 && !triggerEl.classList?.contains("is-quiet") && tw >= 220) return true;
+    return false;
+  }
+
+  function openPeerPopover(pop, triggerEl, { fromPointer = false } = {}) {
+    if (!pop || !triggerEl) return;
+    // Close any other open peer popover first.
+    for (const id of ["#peer-mode-popover", "#peer-action-popover"]) {
+      const other = $(id);
+      if (other && other !== pop && isPeerPopOpen(other)) {
+        try { other.hidePopover(); } catch {}
+      }
+    }
+    clearPeerPopAnchor();
+
+    const isNarrow = pop.classList.contains("is-narrow");
+    const matchWidth = !isNarrow && isPeerTriggerFullWidth(triggerEl);
+    let alignStart = false;
+    if (!matchWidth && !isNarrow && intModal) {
+      const tr = triggerEl.getBoundingClientRect();
+      const mr = intModal.getBoundingClientRect();
+      if (mr.width > 0 && (tr.left + tr.width / 2) < (mr.left + mr.width / 2)) {
+        alignStart = true;
+      }
+    }
+    pop.classList.toggle("is-match-width", matchWidth);
+    pop.classList.toggle("is-align-start", alignStart);
+
+    try { triggerEl.style.setProperty("anchor-name", "--pm-anchor"); } catch {}
+    triggerEl.setAttribute("aria-expanded", "true");
+    peerPopAnchorEl = triggerEl;
+    peerPopOpenMeta = { pop, trigger: triggerEl, fromPointer };
+
+    try { pop.showPopover({ source: triggerEl }); }
+    catch { try { pop.showPopover(); } catch {} }
+
+    if (supportsPeerNativeAnchor()) {
+      clearPeerPopoverInlinePos(pop);
+    } else {
+      positionPeerPopoverFallback(pop, triggerEl, matchWidth, alignStart);
+    }
+
+    if (!fromPointer) {
+      const first = pop.querySelector(".pm-pop-item.is-selected, button:not(:disabled)");
+      first?.focus({ preventScroll: true });
+    }
+  }
+
+  let peerPopGlobalBound = false;
+  function bindPeerPopoverGlobals() {
+    if (peerPopGlobalBound) return;
+    peerPopGlobalBound = true;
+    for (const id of ["#peer-mode-popover", "#peer-action-popover"]) {
+      const pop = $(id);
+      if (!pop) continue;
+      pop.addEventListener("toggle", (ev) => {
+        if (ev.newState !== "closed") return;
+        const meta = peerPopOpenMeta;
+        if (meta.pop !== pop) return;
+        const trig = meta.trigger;
+        const fromPointer = meta.fromPointer;
+        clearPeerPopAnchor();
+        peerPopOpenMeta = { pop: null, trigger: null, fromPointer: false };
+        if (trig && trig.isConnected && intModal?.open && intModalKind === "peers") {
+          const focusInside = pop.contains(document.activeElement);
+          if (focusInside || !fromPointer) {
+            try { trig.focus(fromPointer ? { preventScroll: true, focusVisible: false } : { preventScroll: true }); }
+            catch { try { trig.focus(); } catch {} }
+          }
+        }
+      });
+      pop.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const trig = peerPopOpenMeta.trigger;
+          try { pop.hidePopover(); } catch {}
+          if (trig?.isConnected) {
+            try { trig.focus({ preventScroll: true }); } catch {}
+          }
+          return;
+        }
+        if (ev.key === "Tab") {
+          try { pop.hidePopover(); } catch {}
+          return;
+        }
+        if (!supportsFocusGroup() && ["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key)) {
+          const items = [...pop.querySelectorAll(".pm-pop-list > button:not(:disabled)")];
+          if (!items.length) return;
+          const cur = items.indexOf(document.activeElement);
+          const next = ev.key === "Home" ? 0
+            : ev.key === "End" ? items.length - 1
+            : cur < 0 ? 0
+            : (cur + (ev.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          items[next]?.focus({ preventScroll: true });
+        }
+      });
+    }
+  }
+
+  function populatePeerModePopover(tgt) {
+    const d = intModalDraft;
+    const pop = $("#peer-mode-popover");
+    if (!d || !pop || !tgt) return;
+    let cur = d.genMode || "advise";
+    if (tgt.kind === "add") cur = d.pairMode || "advise";
+    else if (tgt.kind === "approve") {
+      const p = (d.data?.peers || []).find((x) => x.id === tgt.peerId);
+      cur = d.approveModes[tgt.peerId] || p?.mode || "advise";
+    } else if (tgt.kind === "peer") {
+      const p = (d.data?.peers || []).find((x) => x.id === tgt.peerId);
+      cur = p?.mode || "advise";
+    }
+    const roleMenu = supportsFocusGroup() ? "" : ' role="menu"';
+    const roleItem = supportsFocusGroup() ? "" : ' role="menuitemradio"';
+    pop.innerHTML = `<div class="pm-pop-list" focusgroup="menu nomemory"${roleMenu}>${PEER_MODES.map((m) => `
+      <button type="button" class="pm-pop-item${m.id === cur ? " is-selected" : ""}"${roleItem} aria-checked="${m.id === cur}" data-pm-pick-mode="${m.id}">
+        <div class="pm-pop-item-body">
+          <div class="pm-pop-item-title">
+            <span>${esc(m.label)}</span>
+            ${m.rec ? `<span class="pm-pop-rec">${esc(m.rec)}</span>` : ""}
+          </div>
+          <div class="pm-pop-item-desc">${esc(m.desc)}</div>
+        </div>
+        <svg class="pm-pop-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+      </button>`).join("")}</div>`;
+
+    pop.querySelectorAll("[data-pm-pick-mode]").forEach((item) => {
+      item.addEventListener("click", async () => {
+        const next = item.dataset.pmPickMode;
+        const fromPointer = item._ptr || false;
+        peerPopOpenMeta.fromPointer = fromPointer;
+        try { pop.hidePopover(); } catch {}
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+
+        if (tgt.kind === "default") {
+          if (d.genMode === next) return;
+          d.genMode = next;
+          patchPeerQRCard();
+          await ensurePeerInvite(false);
+          toast(`默认接待方式已设为「${peerModeInfo(next).short}」`);
+        } else if (tgt.kind === "add") {
+          d.pairMode = next;
+          patchPeerScanPanel();
+        } else if (tgt.kind === "approve") {
+          d.approveModes[tgt.peerId] = next;
+          patchPeerHeaderAndList();
+        } else if (tgt.kind === "peer") {
+          const p = (d.data?.peers || []).find((x) => x.id === tgt.peerId);
+          if (!p || p.mode === next) return;
+          d.busyPeerId = p.id;
+          patchPeerHeaderAndList();
+          try {
+            await api(`/api/super/peers/${encodeURIComponent(p.id)}`, { method: "PATCH", body: { mode: next } });
+            const pr = await api("/api/super/peers");
+            peersPayload = pr;
+            if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+            d.data = pr;
+            d._dataSig = peerDataSig(pr);
+            d.busyPeerId = "";
+            patchPeerHeaderAndList();
+            toast(`已调整「${p.name}」为${peerModeInfo(next).short}`);
+            if (view === "auto" && autoTab === "integrations") loadAuto();
+          } catch (err) {
+            if (intModalDraft === d) {
+              d.busyPeerId = "";
+              patchPeerHeaderAndList();
+            }
+            toast(err.message, "attn");
+          }
+        }
+      });
+      item.addEventListener("pointerdown", () => { item._ptr = true; });
+    });
+  }
+
+  function populatePeerActionPopover(peerId) {
+    const d = intModalDraft;
+    const pop = $("#peer-action-popover");
+    const p = (d?.data?.peers || []).find((x) => x.id === peerId);
+    if (!d || !pop || !p) return;
+    const showAddr = !!d.showAddrIds[p.id];
+    const pingBusy = !!d.pingState[p.id]?.busy;
+    const isRevoked = p.status === "revoked_by_peer";
+    const roleMenu = supportsFocusGroup() ? "" : ' role="menu"';
+    const roleItem = supportsFocusGroup() ? "" : ' role="menuitem"';
+    pop.innerHTML = `<div class="pm-pop-list" focusgroup="menu nomemory"${roleMenu}>
+      ${!isRevoked ? `<button type="button" class="pm-pop-act"${roleItem} data-pm-act="ping" ${pingBusy ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14 0M8.5 16.05a6 6 0 0 1 7 0"/><circle cx="12" cy="19.5" r=".8" fill="currentColor" stroke="none"/></svg>
+        <span>${pingBusy ? "探测中…" : "测试连通"}</span>
+      </button>` : ""}
+      <button type="button" class="pm-pop-act"${roleItem} data-pm-act="addr">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>${showAddr ? "隐藏连接详情" : "查看连接详情"}</span>
+      </button>
+      <hr class="pm-pop-div">
+      <button type="button" class="pm-pop-act is-danger"${roleItem} data-pm-act="revoke">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg>
+        <span>移除 / 拉黑</span>
+      </button>
+    </div>`;
+
+    pop.querySelectorAll("[data-pm-act]").forEach((btn) => {
+      btn.addEventListener("pointerdown", () => { btn._ptr = true; });
+      btn.addEventListener("click", async () => {
+        const act = btn.dataset.pmAct;
+        peerPopOpenMeta.fromPointer = !!btn._ptr;
+        try { pop.hidePopover(); } catch {}
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        if (act === "ping") {
+          d.pingState[p.id] = { busy: true, ok: false, msg: "探测中…" };
+          patchPeerHeaderAndList();
+          try {
+            const res = await api(`/api/super/peers/${encodeURIComponent(p.id)}/ping`, { method: "POST" });
+            const latTxt = Number(res.latency_ms) > 0 ? `${res.latency_ms}ms` : "<1ms";
+            d.pingState[p.id] = res.ok
+              ? { busy: false, ok: true, msg: `已连通 · ${latTxt}${res.paused ? "（对方暂停）" : ""}` }
+              : { busy: false, ok: false, msg: res.error || "连接失败" };
+            if (res.ok) {
+              const pr = await api("/api/super/peers").catch(() => null);
+              if (pr && intModalDraft === d) { peersPayload = pr; d.data = pr; d._dataSig = peerDataSig(pr); }
+            }
+            if (intModalDraft === d) patchPeerHeaderAndList();
+          } catch (err) {
+            if (intModalDraft === d) {
+              d.pingState[p.id] = { busy: false, ok: false, msg: err.message };
+              patchPeerHeaderAndList();
+            }
+          }
+        } else if (act === "addr") {
+          d.showAddrIds[p.id] = !d.showAddrIds[p.id];
+          patchPeerHeaderAndList();
+        } else if (act === "revoke") {
+          d.confirmRevokeId = d.confirmRevokeId === p.id ? "" : p.id;
+          patchPeerHeaderAndList();
+        }
+      });
+    });
+  }
+
+  function bindPeerPopoverTrigger(triggerEl, popId, onBeforeOpen) {
+    if (!triggerEl) return;
+    let wasOpenOnDown = false;
+    triggerEl.addEventListener("pointerdown", () => {
+      const pop = $(popId);
+      wasOpenOnDown = isPeerPopOpen(pop) && peerPopAnchorEl === triggerEl;
+    });
+    triggerEl.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const pop = $(popId);
+      if (!pop) return;
+      if (wasOpenOnDown || (isPeerPopOpen(pop) && peerPopAnchorEl === triggerEl)) {
+        wasOpenOnDown = false;
+        try { pop.hidePopover(); } catch {}
+        return;
+      }
+      wasOpenOnDown = false;
+      const fromPointer = ev.detail !== 0;
+      onBeforeOpen();
+      openPeerPopover(pop, triggerEl, { fromPointer });
+    });
+    triggerEl.addEventListener("keydown", (ev) => {
+      if (ev.key !== "ArrowDown") return;
+      ev.preventDefault();
+      const pop = $(popId);
+      if (!pop) return;
+      onBeforeOpen();
+      openPeerPopover(pop, triggerEl, { fromPointer: false });
+    });
   }
 
   function syncPeerModalTabs() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const tList = $("#peer-tab-list"), tAdd = $("#peer-tab-add");
-    if (tList) {
-      const on = d.tab === "list";
-      tList.setAttribute("aria-selected", String(on));
-      tList.tabIndex = on ? 0 : -1;
-      tList.toggleAttribute?.("focusgroupstart", on);
+    for (const [id, key] of [
+      ["#peer-tab-friends", "friends"],
+      ["#peer-tab-card", "card"],
+      ["#peer-tab-add", "add"],
+    ]) {
+      const el = $(id);
+      if (!el) continue;
+      const on = d.tab === key;
+      el.setAttribute("aria-selected", String(on));
+      el.tabIndex = on ? 0 : -1;
+      el.toggleAttribute?.("focusgroupstart", on);
     }
-    if (tAdd) {
-      const on = d.tab === "add";
-      tAdd.setAttribute("aria-selected", String(on));
-      tAdd.tabIndex = on ? 0 : -1;
-      tAdd.toggleAttribute?.("focusgroupstart", on);
-    }
-    const pList = $("#peer-panel-list"), pAdd = $("#peer-panel-add");
-    if (pList) pList.hidden = d.tab !== "list";
+    const pFriends = $("#peer-panel-friends");
+    const pCard = $("#peer-panel-card");
+    const pAdd = $("#peer-panel-add");
+    if (pFriends) pFriends.hidden = d.tab !== "friends";
+    if (pCard) pCard.hidden = d.tab !== "card";
     if (pAdd) pAdd.hidden = d.tab !== "add";
-
-    for (const btn of intModal.querySelectorAll("[data-peer-add-sub]")) {
-      const on = btn.dataset.peerAddSub === d.addSub;
-      btn.classList.toggle("on", on);
-      btn.setAttribute("aria-pressed", String(on));
-    }
-    const sGen = $("#peer-sub-gen"), sScan = $("#peer-sub-scan");
-    if (sGen) sGen.hidden = d.addSub !== "gen";
-    if (sScan) sScan.hidden = d.addSub !== "scan";
   }
 
   function patchPeerQRCard() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const card = $("#peer-qr-card");
-    if (!card) return;
-    const data = d.data || { hub_name: "我的边牧" };
+    const data = d.data || { hub_id: "", hub_name: "我的边牧", addrs: [] };
     const inv = d.invite;
+    const plate = $("#peer-qr-plate");
     const qrTarget = peerInviteJoinURL(inv) || inv?.invite_code || "";
     const qrSrc = qrTarget ? `/api/qr?text=${encodeURIComponent(qrTarget)}` : "";
 
-    if (inv && qrSrc) {
-      card.classList.toggle("is-refreshing", !!d.inviteLoading);
-      let imgEl = $("#peer-qr-img", card);
-      if (!imgEl) {
-        card.innerHTML = `
-          <div class="peer-qr-top">
-            <div class="int-qr-frame"><img id="peer-qr-img" width="156" height="156" alt="好友边牧名片二维码" src="${qrSrc}"></div>
-            <div class="peer-qr-meta">
-              <div class="peer-qr-title">
-                <span id="peer-qr-hub-name">${esc(inv.hub_name || data.hub_name || "我的边牧")}</span>
-                <span class="peer-qr-badge">长期有效 · 需通过后接通</span>
-              </div>
-              <p class="peer-qr-hint">微信 / 飞书 / 系统相机扫码，或点击分享链接即可发起好友申请；须你点「通过」才正式接通。</p>
-              <div class="peer-qr-addrs" id="peer-qr-addrs">直连地址：${esc((inv.addrs || []).join(" · "))}</div>
-              <div class="peer-qr-btns">
-                <button type="button" class="btn primary small" id="peer-copy-invite">一键复制邀请链接</button>
-                <button type="button" class="btn small" id="peer-invite-regen" title="重置名片密钥，旧二维码与旧链接立即失效（不影响已配对好友）">重置名片</button>
-              </div>
-            </div>
-          </div>
-          <div class="int-code-line">
-            <span id="peer-qr-code-text" title="${esc(inv.invite_code)}">${esc(inv.invite_code)}</span>
-            <button type="button" class="btn ghost small" id="peer-qr-code-copy" data-copy="${esc(inv.invite_code)}">复制</button>
-          </div>`;
-        $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(true));
-        $("#peer-copy-invite", card)?.addEventListener("click", async () => {
-          if (!d.invite?.invite_code) return;
-          const share = peerShareText(d.invite, d.data?.hub_name || "我的边牧");
-          const ok = await copyText(share);
-          if (ok) toast("已复制好友名片分享链接（对方点开即可申请，需你通过）");
-          else toast("复制失败，请手动复制下方邀请码", "attn");
-        });
-      } else {
-        if (imgEl.getAttribute("src") !== qrSrc) imgEl.setAttribute("src", qrSrc);
-        setText($("#peer-qr-hub-name", card), inv.hub_name || data.hub_name || "我的边牧");
-        setText($("#peer-qr-addrs", card), `直连地址：${(inv.addrs || []).join(" · ")}`);
-        const codeEl = $("#peer-qr-code-text", card);
-        if (codeEl) {
-          setText(codeEl, inv.invite_code);
-          codeEl.title = inv.invite_code;
+    if (plate) {
+      if (inv && qrSrc) {
+        plate.classList.toggle("is-pulse", !!d.inviteLoading);
+        let imgEl = $("#peer-qr-img", plate);
+        if (!imgEl) {
+          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="好友边牧名片二维码" src="${qrSrc}">`;
+        } else if (imgEl.getAttribute("src") !== qrSrc) {
+          imgEl.setAttribute("src", qrSrc);
         }
-        const cpBtn = $("#peer-qr-code-copy", card);
-        if (cpBtn) cpBtn.dataset.copy = inv.invite_code;
+      } else {
+        plate.classList.remove("is-pulse");
+        if (d.inviteLoading) {
+          plate.innerHTML = `<span class="int-spinner" aria-label="正在加载二维码"></span>`;
+        } else {
+          plate.innerHTML = `<div class="pm-qr-fallback"><span>${d.inviteErr ? "加载失败" : "等待加载"}</span><button type="button" class="btn xs" id="peer-invite-retry">重试</button></div>`;
+          $("#peer-invite-retry", plate)?.addEventListener("click", () => ensurePeerInvite(false));
+        }
       }
-      const regenBtn = $("#peer-invite-regen", card);
-      if (regenBtn) regenBtn.disabled = !!d.inviteLoading;
-      return;
     }
 
-    card.classList.remove("is-refreshing");
-    if (d.inviteLoading) {
-      card.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2)"><span class="int-spinner" aria-hidden="true"></span><span>正在加载边牧个人名片二维码…</span></div>`;
-    } else if (d.inviteErr) {
-      card.innerHTML = `<div class="int-onboard-err"><span class="int-onboard-err-txt">${esc(d.inviteErr)}</span><button type="button" class="btn small" id="peer-invite-regen">重试</button></div>`;
-      $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(false));
-    } else {
-      card.innerHTML = `<button type="button" class="btn primary small" id="peer-invite-regen">加载边牧名片与二维码</button>`;
-      $("#peer-invite-regen", card)?.addEventListener("click", () => ensurePeerInvite(false));
+    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || "我的边牧";
+    setText($("#peer-hub-name-text"), displayName);
+    if (!d.editingHubName) {
+      const inp = $("#peer-hub-name");
+      if (inp && inp.value !== displayName) inp.value = displayName;
     }
+
+    const errEl = $("#peer-card-err");
+    if (errEl) {
+      errEl.hidden = !d.inviteErr;
+      setText(errEl, d.inviteErr || "");
+    }
+
+    const copyBtn = $("#peer-copy-invite");
+    if (copyBtn) copyBtn.disabled = !inv?.invite_code;
+
+    setText($("#peer-default-mode-label"), peerModeInfo(d.genMode).label);
+
+    const addrsList = (inv?.addrs?.length ? inv.addrs : data.addrs) || [];
+    const addrsText = addrsList.length ? addrsList.map((a) => String(a).replace(/^https?:\/\//, "")).join(" · ") : "-";
+    const addrsEl = $("#peer-adv-addrs");
+    if (addrsEl) {
+      setText(addrsEl, addrsText);
+      addrsEl.title = addrsList.join(" · ");
+    }
+    const codeEl = $("#peer-adv-code");
+    if (codeEl) {
+      setText(codeEl, inv?.invite_code || (d.inviteLoading ? "加载中…" : "-"));
+      codeEl.title = inv?.invite_code || "";
+    }
+    setText($("#peer-adv-hub-id"), inv?.hub_id || data.hub_id || "-");
+
+    const resetAsk = $("#peer-reset-ask");
+    const resetDo = $("#peer-reset-do");
+    const resetConfirm = $("#peer-reset-confirm");
+    if (resetAsk) resetAsk.disabled = !!d.inviteLoading;
+    if (resetDo) resetDo.disabled = !!d.inviteLoading;
+    if (resetConfirm) resetConfirm.hidden = !d.resetConfirm;
   }
 
   function patchPeerScanPanel() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
     const data = d.data || { hub_id: "" };
-    const camBtn = $("#peer-scan-cam");
-    const stopBtn = $("#peer-scan-stop");
-    if (camBtn) camBtn.hidden = !!d.scanning;
-    if (stopBtn) stopBtn.hidden = !d.scanning;
+    setText($("#peer-scan-toggle-lbl"), d.scanning ? "停止扫码" : "扫码");
     const stageSlot = $("#peer-scan-stage-slot");
     if (stageSlot) {
       if (d.scanning) {
         if (!$("#peer-scan-video", stageSlot)) {
-          stageSlot.innerHTML = `<div class="peer-scan-stage">
+          stageSlot.innerHTML = `<div class="pm-scan-stage">
             <video id="peer-scan-video" autoplay playsinline muted></video>
-            <div class="peer-scan-frame" aria-hidden="true"></div>
-            <span class="peer-scan-tip">将镜头对准好友的边牧名片二维码</span>
+            <div class="pm-scan-reticle" aria-hidden="true"></div>
+            <div class="pm-scan-bar">
+              <span>将镜头对准好友的名片二维码</span>
+              <button type="button" id="peer-scan-stop-inline">停止</button>
+            </div>
           </div>`;
+          $("#peer-scan-stop-inline", stageSlot)?.addEventListener("click", () => {
+            stopPeerCameraScan();
+            patchPeerScanPanel();
+          });
         }
         stageSlot.hidden = false;
       } else {
@@ -10244,49 +10618,66 @@
       setText(noteSlot, d.scanNote || "");
     }
     const pasteEl = $("#peer-paste-input");
-    if (pasteEl && pasteEl.value !== d.pasteRaw) pasteEl.value = d.pasteRaw;
+    if (pasteEl) {
+      if (pasteEl.value !== d.pasteRaw) pasteEl.value = d.pasteRaw;
+      pasteEl.classList.toggle("has-code", String(d.pasteRaw || "").trim().length > 0);
+    }
     const nameEl = $("#peer-pair-name");
     if (nameEl && nameEl.value !== d.pairName) nameEl.value = d.pairName;
+    setText($("#peer-add-mode-label"), peerModeInfo(d.pairMode).label);
 
     const parsed = parsePeerInviteClient(d.pasteRaw, data.hub_id);
-    const compactLinkConfirm = !!(d.fromInviteLink && parsed?.ok && !d.scanning);
-    $("#peer-sub-scan")?.classList.toggle("is-link-confirm", compactLinkConfirm);
-    const scanActionsEl = $("#peer-scan-actions");
-    const pasteFieldEl = $("#peer-paste-field");
-    if (scanActionsEl) scanActionsEl.hidden = compactLinkConfirm;
-    if (pasteFieldEl) pasteFieldEl.hidden = compactLinkConfirm;
+    const compactConfirmed = !!(parsed?.ok && !d.scanning);
+    const inputWrap = $("#peer-add-input-wrap");
+    if (inputWrap) inputWrap.hidden = compactConfirmed;
+
     const parsedSlot = $("#peer-scan-parsed-slot");
     if (parsedSlot) {
       if (!parsed) {
         parsedSlot.hidden = true;
+        parsedSlot.classList.remove("is-err");
         parsedSlot.innerHTML = "";
-      } else {
+      } else if (parsed.ok) {
         parsedSlot.hidden = false;
-        parsedSlot.innerHTML = parsed.ok
-          ? `<div class="peer-parsed">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                <div>识别到好友边牧：<b>${esc(parsed.payload.hub_name || parsed.payload.hub_id)}</b></div>
-                ${compactLinkConfirm ? `<button type="button" class="btn ghost small" id="peer-link-show-manual" style="padding:2px 8px;min-height:24px;font-size:11.5px">更换 / 扫码</button>` : ""}
-              </div>
-              <div class="mono" style="font-size:11.5px">${esc((parsed.payload.addrs || []).join(" · "))}</div>
-            </div>`
-          : `<div class="peer-parsed is-err" role="alert">${esc(parsed.error)}</div>`;
-        $("#peer-link-show-manual", parsedSlot)?.addEventListener("click", () => {
+        parsedSlot.classList.remove("is-err");
+        parsedSlot.innerHTML = `
+          <div class="pm-parsed-left">
+            <span class="pm-sdot ok" aria-hidden="true"></span>
+            <div>
+              <div class="pm-parsed-title">已识别「${esc(parsed.payload.hub_name || parsed.payload.hub_id)}」的名片</div>
+              <div class="pm-parsed-sub">点下方按钮即可向对方发送好友申请</div>
+            </div>
+          </div>
+          <button type="button" class="btn ghost xs" id="peer-clear-parsed-btn">更换 / 扫码</button>`;
+        $("#peer-clear-parsed-btn", parsedSlot)?.addEventListener("click", () => {
+          d.pasteRaw = "";
+          d.pairName = "";
           d.fromInviteLink = false;
+          d.pairErr = "";
           patchPeerScanPanel();
           $("#peer-paste-input")?.focus();
         });
+      } else {
+        parsedSlot.hidden = false;
+        parsedSlot.classList.add("is-err");
+        parsedSlot.innerHTML = `
+          <div class="pm-parsed-left">
+            <span class="pm-sdot attn" aria-hidden="true"></span>
+            <div class="pm-parsed-sub">${esc(parsed.error)}</div>
+          </div>`;
       }
     }
     const errSlot = $("#peer-pair-err-slot");
     if (errSlot) {
       errSlot.hidden = !d.pairErr;
-      setText(errSlot, d.pairErr || "");
+      errSlot.innerHTML = d.pairErr
+        ? `<div class="pm-parsed-left"><span class="pm-sdot attn" aria-hidden="true"></span><div class="pm-parsed-sub">${esc(d.pairErr)}</div></div>`
+        : "";
     }
     const submitBtn = $("#peer-pair-submit");
     if (submitBtn) {
       submitBtn.disabled = !(!d.pairing && !!parsed?.ok);
-      setText(submitBtn, d.pairing ? "正在发送好友申请…" : "发送好友申请");
+      setText(submitBtn, d.pairing ? "正在发送申请…" : "发送好友申请");
     }
   }
 
@@ -10299,142 +10690,187 @@
     const outgoing = peers.filter((p) => p.status === "pending_outgoing");
     const paired = peers.filter((p) => p.status !== "pending_incoming" && p.status !== "pending_outgoing");
     const blocklist = Array.isArray(data.blocklist) ? data.blocklist : [];
-    const info = peerCardSummary(data);
 
-    setHTML($("#int-modal-state"), `<span class="sdot ${esc(info.state)}" aria-hidden="true"></span><span>${esc(info.stateLbl)}</span>`);
-    setText($("#peer-tab-list-cnt"), String(peers.length));
-    const tabBadge = $("#peer-tab-pending-badge");
-    if (tabBadge) {
-      tabBadge.hidden = incoming.length === 0;
-      setText(tabBadge, String(incoming.length));
+    // Tab badge rules: show restrained amber badge when incoming > 0; hide total count at 0 or when pending badge is visible.
+    const countEl = $("#peer-tab-friends-cnt");
+    const badgeEl = $("#peer-tab-pending-badge");
+    if (countEl) {
+      setText(countEl, String(peers.length));
+      countEl.hidden = peers.length === 0 || incoming.length > 0;
     }
-    setText($("#peer-foot-hub-id"), data.hub_id || "-");
+    if (badgeEl) {
+      setText(badgeEl, String(incoming.length));
+      badgeEl.hidden = incoming.length === 0;
+    }
 
     const slot = $("#peer-list-slot");
     if (!slot) return;
+
+    const blocklistHTML = blocklist.length ? `
+      <details class="pm-fold" style="margin-top:6px">
+        <summary>已拉黑 (${blocklist.length})</summary>
+        <div class="pm-adv-box">
+          ${blocklist.map((b) => `
+            <div class="pm-adv-row">
+              <span style="font-size:12.5px;color:var(--pm-fg-2)">${esc(b.name || b.hub_id)} <span class="mono" style="font-size:11px;color:var(--pm-fg-3)">${esc(b.hub_id)}</span></span>
+              <button type="button" class="btn ghost xs" data-peer-unblock="${esc(b.hub_id)}">解除</button>
+            </div>`).join("")}
+        </div>
+      </details>` : "";
+
+    if (!peers.length) {
+      slot.innerHTML = `
+        <div class="pm-empty-state">
+          <div class="pm-empty-glyph" aria-hidden="true">${INT_ICONS.peers}</div>
+          <h3>还没有好友边牧</h3>
+          <p>把你的名片分享给信任的伙伴，或粘贴对方发来的邀请链接。对方仅能向收件箱发消息，无法触碰你的终端与文件。</p>
+          <div class="pm-empty-acts">
+            <button type="button" class="btn primary sm" data-peer-jump-tab="card">查看我的名片</button>
+            <button type="button" class="btn sm" data-peer-jump-tab="add">添加好友</button>
+          </div>
+        </div>
+        ${blocklistHTML}`;
+      bindPeerListEvents(slot);
+      return;
+    }
+
     const incomingHTML = incoming.length ? `
-      <section class="peer-req-sec" aria-label="待审批好友申请">
-        <div class="peer-req-sec-head">
-          <span>待审批好友申请（${incoming.length}）</span>
-          <span style="font-weight:400;color:var(--fg-3)">通过前对方零收发权限</span>
+      <section class="pm-req-group" aria-label="待审批好友申请">
+        <div class="pm-sec-eyebrow is-attn">
+          <span>待你审批 · ${incoming.length}</span>
+          <span class="pm-sec-eyebrow-note">通过前零收发权限</span>
         </div>
         ${incoming.map((p) => {
           const busy = d.busyPeerId === p.id;
           const selMode = d.approveModes[p.id] || p.mode || "advise";
-          return `<article class="peer-card is-pending-in">
-            <div class="peer-card-top">
-              <div class="peer-card-ident">
-                <div class="peer-card-name">
-                  <span class="sdot paused" aria-hidden="true"></span>
-                  <span>${esc(p.name)}</span>
-                  <span class="peer-status-pill is-pending">待你审批</span>
-                </div>
-                <div class="peer-card-sub">
-                  ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
-                  <span class="mono">${esc(p.hub_id)}</span>
+          const metaNote = p.created_at ? `请求添加好友 · ${ago(p.created_at)}` : "请求添加好友";
+          return `<article class="pm-req-card">
+            <div class="pm-req-top">
+              <div class="pm-peer-ident">
+                <span class="pm-sdot attn" aria-hidden="true"></span>
+                <div class="pm-peer-name-col">
+                  <div class="pm-peer-name">${esc(p.name)}</div>
+                  <div class="pm-peer-meta"><span>${esc(metaNote)}</span></div>
                 </div>
               </div>
+              <button type="button" class="pm-pick" aria-expanded="false" data-peer-mode-target="approve" data-peer-id="${esc(p.id)}" ${busy ? "disabled" : ""}>
+                <span class="pm-pick-txt">${esc(peerModeInfo(selMode).label)}</span>
+                <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
             </div>
-            <div class="int-mode-list">
-              ${peerModeRadiosHTML("peer_approve_mode_" + p.id, selMode, `data-peer-approve-mode="${esc(p.id)}" ${busy ? "disabled" : ""}`)}
-            </div>
-            <div class="peer-card-acts">
-              <button type="button" class="btn primary small" data-peer-approve="${esc(p.id)}" ${busy ? "disabled" : ""}>${busy ? "处理中…" : "通过"}</button>
-              <button type="button" class="btn small" data-peer-reject="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝</button>
+            <div class="pm-req-acts">
+              <button type="button" class="btn primary sm" data-peer-approve="${esc(p.id)}" ${busy ? "disabled" : ""}>${busy ? "处理中…" : "通过"}</button>
+              <button type="button" class="btn sm" data-peer-reject="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝</button>
               <span class="spacer"></span>
-              <button type="button" class="btn ghost small peer-danger" data-peer-reject-block="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝并拉黑</button>
+              <button type="button" class="btn ghost xs pm-danger" data-peer-reject-block="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝并拉黑</button>
             </div>
           </article>`;
         }).join("")}
       </section>` : "";
 
-    const outgoingHTML = outgoing.length ? outgoing.map((p) => {
+    const rowsHTML = [...paired, ...outgoing].map((p) => {
       const busy = d.busyPeerId === p.id;
-      return `<article class="peer-card is-pending-out">
-        <div class="peer-card-top">
-          <div class="peer-card-ident">
-            <div class="peer-card-name">
-              <span class="sdot connecting" aria-hidden="true"></span>
-              <span>${esc(p.name)}</span>
-              <span class="peer-status-pill is-wait">已发送好友申请，等待对方通过</span>
+      if (p.status === "pending_outgoing") {
+        return `<div class="pm-friend-row">
+          <div class="pm-friend-main is-single-act">
+            <div class="pm-peer-ident">
+              <span class="pm-sdot wait" aria-hidden="true"></span>
+              <div class="pm-peer-name-col">
+                <div class="pm-peer-name">${esc(p.name)}</div>
+                <div class="pm-peer-meta"><span>已发申请，等待对方通过</span></div>
+              </div>
             </div>
-            <div class="peer-card-sub">
-              ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
-              <span>对方点「通过」后将自动切换为在线直连</span>
+            <div class="pm-friend-controls">
+              <button type="button" class="btn ghost xs" data-peer-cancel="${esc(p.id)}" ${busy ? "disabled" : ""}>撤回</button>
+            </div>
+          </div>
+        </div>`;
+      }
+
+      const isPaused = p.status === "paused";
+      const isRevoked = p.status === "revoked_by_peer";
+      const globalOff = data.enabled === false;
+      const dotCls = isRevoked || (p.status === "active" && globalOff) ? "muted" : isPaused ? "attn" : "ok";
+      const statusText = isRevoked
+        ? "对方已解除 / 拒绝"
+        : isPaused
+          ? "已暂停接收"
+          : globalOff
+            ? "总开关已暂停"
+            : `今日 ${Number(p.today_count) || 0} 条${p.last_ok_at ? ` · ${ago(p.last_ok_at)}` : ""}`;
+      const ping = d.pingState[p.id];
+      const showAddr = !!d.showAddrIds[p.id];
+      const confirming = d.confirmRevokeId === p.id;
+      const mInfo = peerModeInfo(p.mode || "advise");
+      const cleanAddr = String(p.primary_addr || "").replace(/^https?:\/\//, "");
+      const addrSummary = [cleanAddr, p.id ? `@${p.id}` : "", p.hub_id || ""].filter(Boolean).join(" · ");
+
+      return `<div class="pm-friend-row${isPaused || isRevoked ? " is-paused" : ""}">
+        <div class="pm-friend-main">
+          <div class="pm-peer-ident">
+            <span class="pm-sdot ${dotCls}" aria-hidden="true"></span>
+            <div class="pm-peer-name-col">
+              <div class="pm-peer-name">${esc(p.name)}</div>
+              <div class="pm-peer-meta tnum">
+                <span>${esc(statusText)}</span>
+                ${ping?.msg ? `<span class="${ping.busy ? "" : ping.ok ? "pm-ping-ok" : "pm-ping-err"}" role="status">· ${esc(ping.msg)}</span>` : ""}
+              </div>
+            </div>
+          </div>
+          <div class="pm-friend-controls">
+            ${!isRevoked ? `<button type="button" class="pm-pick is-quiet" aria-expanded="false" data-peer-mode-target="peer" data-peer-id="${esc(p.id)}" title="调整接待方式" ${busy ? "disabled" : ""}>
+              <span class="pm-pick-txt pm-lbl-desktop">${esc(mInfo.short)}</span>
+              <span class="pm-pick-txt pm-lbl-mobile">${esc(mInfo.label)}</span>
+              <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>` : ""}
+            <div class="pm-friend-ctrl-tail">
+              ${!isRevoked ? `<button type="button" class="switch" role="switch" aria-checked="${!isPaused ? "true" : "false"}" aria-label="${isPaused ? "恢复接收" : "暂停接收"} ${esc(p.name)}" data-peer-pause="${esc(p.id)}" title="${isPaused ? "点击恢复接收" : "点击暂停接收"}" ${busy ? "disabled" : ""}></button>` : ""}
+              <button type="button" class="icon-btn" aria-expanded="false" data-peer-more="${esc(p.id)}" aria-label="更多操作 ${esc(p.name)}" title="更多操作" ${busy ? "disabled" : ""}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>
+              </button>
             </div>
           </div>
         </div>
-        <div class="peer-card-acts">
-          <span class="spacer"></span>
-          <button type="button" class="btn ghost small" data-peer-cancel="${esc(p.id)}" ${busy ? "disabled" : ""}>撤回申请</button>
-        </div>
-      </article>`;
-    }).join("") : "";
+        ${showAddr ? `<div class="pm-addr-drawer">
+          <span>${esc(addrSummary || "-")}</span>
+          <button type="button" class="btn ghost xs" data-peer-hide-addr="${esc(p.id)}">收起</button>
+        </div>` : ""}
+        ${confirming ? `<div class="pm-inline-confirm" role="alert">
+          <span>断开与 <strong>${esc(p.name)}</strong> 的连接？</span>
+          <div class="pm-inline-confirm-btns">
+            <button type="button" class="btn ghost xs" data-peer-cancel-revoke>取消</button>
+            <button type="button" class="btn pm-danger xs" data-peer-do-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>仅移除</button>
+            <button type="button" class="btn pm-danger xs" data-peer-do-block="${esc(p.id)}" ${busy ? "disabled" : ""}>移除并拉黑</button>
+          </div>
+        </div>` : ""}
+      </div>`;
+    }).join("");
 
     slot.innerHTML = `
       ${incomingHTML}
-      <div class="peer-guard">
+      ${rowsHTML ? `<div class="pm-friend-list">${rowsHTML}</div>` : ""}
+      ${blocklistHTML}
+      <div class="pm-privacy-foot">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
-        <span>好友仅能往收件箱发消息，<strong>无法碰你的终端、文件、记忆，也不能直接派活</strong>；随时可一键暂停、移除或拉黑。</span>
-      </div>
-      ${outgoingHTML}
-      ${!peers.length ? `
-        <div class="peer-empty">
-          <p>还没有配对的好友边牧。把你的长期有效边牧名片链接发给同内网 / Tailscale 的同事，或扫码/粘贴对方的名片即可发起好友申请。</p>
-          <button type="button" class="btn primary small" id="peer-go-add-btn">分享我的边牧名片 / 添加好友</button>
-        </div>` : paired.map((p) => {
-          const isPaused = p.status === "paused";
-          const isRevoked = p.status === "revoked_by_peer";
-          const stDot = p.status === "active" ? (data.enabled !== false ? "connected" : "disabled") : isPaused ? "paused" : "disabled";
-          const stText = p.status === "active" ? (data.enabled !== false ? "活跃" : "总开关已暂停") : isPaused ? "已暂停" : "对方已解除 / 拒绝";
-          const ping = d.pingState[p.id];
-          const confirming = d.confirmRevokeId === p.id;
-          const busy = d.busyPeerId === p.id;
-          return `<article class="peer-card${isPaused || isRevoked ? " is-paused" : ""}">
-            <div class="peer-card-top">
-              <div class="peer-card-ident">
-                <div class="peer-card-name">
-                  <span class="sdot ${stDot}" aria-hidden="true"></span>
-                  <span>${esc(p.name)}</span>
-                  <span class="peer-id-pill">@${esc(p.id)}</span>
-                </div>
-                <div class="peer-card-sub">
-                  <span>${esc(stText)}</span>
-                  ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
-                  <span>今日 ${Number(p.today_count) || 0} 条</span>
-                  ${p.last_ok_at ? `<span>最近连通 ${esc(ago(p.last_ok_at))}</span>` : ""}
-                </div>
-              </div>
-              ${!isRevoked ? `<button type="button" class="switch" role="switch" aria-checked="${!isPaused ? "true" : "false"}" aria-label="${isPaused ? "恢复接收" : "暂停接收"} ${esc(p.name)}" data-peer-pause="${esc(p.id)}" ${busy ? "disabled" : ""}></button>` : ""}
-            </div>
-            <div class="int-mode-list">
-              ${peerModeRadiosHTML("peer_mode_" + p.id, p.mode || "advise", `data-peer-mode="${esc(p.id)}" ${busy || isRevoked ? "disabled" : ""}`)}
-            </div>
-            <div class="peer-card-acts">
-              <button type="button" class="btn small" data-peer-ping="${esc(p.id)}" ${ping?.busy || busy ? "disabled" : ""}>${ping?.busy ? "探测中…" : "测连通"}</button>
-              ${ping?.msg ? `<span class="peer-ping-msg ${ping.ok ? "ok" : "err"}" role="status">${esc(ping.msg)}</span>` : ""}
-              <span class="spacer"></span>
-              <button type="button" class="btn ghost small peer-danger" data-peer-ask-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>移除 / 拉黑</button>
-            </div>
-            ${confirming ? `<div class="peer-confirm-row" role="alert">
-              <span>立即吊销令牌并断开 <strong>${esc(p.name)}</strong>？</span>
-              <div class="peer-confirm-btns">
-                <button type="button" class="btn small" data-peer-cancel-revoke>取消</button>
-                <button type="button" class="btn small peer-danger" data-peer-do-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>仅移除</button>
-                <button type="button" class="btn small peer-danger" data-peer-do-block="${esc(p.id)}" ${busy ? "disabled" : ""}>移除并拉黑</button>
-              </div>
-            </div>` : ""}
-          </article>`;
-        }).join("")}
-      ${blocklist.length ? `<div class="peer-block-sec">
-        <h3 class="int-sec-title">已拉黑的 Hub（${blocklist.length}）</h3>
-        ${blocklist.map((b) => `<div class="peer-block-row">
-          <span><strong>${esc(b.name || b.hub_id)}</strong> <span class="mono muted">${esc(b.hub_id)}</span></span>
-          <button type="button" class="btn ghost small" data-peer-unblock="${esc(b.hub_id)}">解除拉黑</button>
-        </div>`).join("")}
-      </div>` : ""}`;
+        <span>好友仅能向收件箱发消息，无法访问本机终端、文件与记忆</span>
+      </div>`;
 
     bindPeerListEvents(slot);
+  }
+
+  function switchPeerTab(next) {
+    const d = intModalDraft;
+    if (!d || intModalKind !== "peers") return;
+    if (next !== "friends" && next !== "card" && next !== "add") return;
+    hidePeerPopovers();
+    stopPeerCameraScan();
+    d.tab = next;
+    d.pairErr = "";
+    syncPeerModalTabs();
+    $("#int-modal-body").scrollTop = 0;
+    if (next === "friends") patchPeerHeaderAndList();
+    else if (next === "card") { patchPeerQRCard(); ensurePeerInvite(false); }
+    else if (next === "add") patchPeerScanPanel();
   }
 
   function renderPeerModal() {
@@ -10442,90 +10878,175 @@
     if (!d || intModalKind !== "peers" || !intModal) return;
     const data = d.data || { hub_id: "", hub_name: "我的边牧", enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
+    const pendingInCnt = peers.filter((x) => x.status === "pending_incoming").length;
+
+    bindPeerPopoverGlobals();
 
     if (!d._mounted) {
       d._mounted = true;
       $("#int-modal-icon").innerHTML = INT_ICONS.peers;
-      $("#int-modal-title").textContent = "好友边牧 · 受控收件箱";
-      $("#int-modal-sub").textContent = "内网 / Tailscale 直连 · 令牌仅存本机";
+      $("#int-modal-title").textContent = "好友边牧";
+      $("#int-modal-sub").textContent = "";
+      $("#int-modal-state").innerHTML = "";
 
       const tabsEl = $("#int-modal-tabs");
       if (tabsEl) {
         tabsEl.hidden = false;
         tabsEl.setAttribute("role", "tablist");
         tabsEl.setAttribute("focusgroup", "tablist nomemory");
-        tabsEl.setAttribute("aria-label", "好友边牧管理页签");
-        const pendingInCnt = peers.filter((x) => x.status === "pending_incoming").length;
+        tabsEl.setAttribute("aria-label", "好友边牧视图");
         tabsEl.innerHTML = `
-          <button type="button" role="tab" id="peer-tab-list" aria-selected="${d.tab === "list"}" ${d.tab === "list" ? "focusgroupstart" : ""} data-peer-tab="list">已配对好友 (<span id="peer-tab-list-cnt">${peers.length}</span>)<span class="peer-tab-badge" id="peer-tab-pending-badge" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span></button>
-          <button type="button" role="tab" id="peer-tab-add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""} data-peer-tab="add">扫码 / 添加好友</button>`;
+          <button type="button" role="tab" id="peer-tab-friends" data-peer-tab="friends" aria-selected="${d.tab === "friends"}" ${d.tab === "friends" ? "focusgroupstart" : ""}>
+            <span>好友</span>
+            <span class="pm-tab-count" id="peer-tab-friends-cnt" ${peers.length === 0 || pendingInCnt > 0 ? "hidden" : ""}>${peers.length}</span>
+            <span class="pm-tab-pending-pill" id="peer-tab-pending-badge" title="待审批申请" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span>
+          </button>
+          <button type="button" role="tab" id="peer-tab-card" data-peer-tab="card" aria-selected="${d.tab === "card"}" ${d.tab === "card" ? "focusgroupstart" : ""}>
+            <span>我的名片</span>
+          </button>
+          <button type="button" role="tab" id="peer-tab-add" data-peer-tab="add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""}>
+            <span>添加好友</span>
+          </button>`;
       }
 
       $("#int-modal-body").innerHTML = `
-        <div class="peer-panel" id="peer-panel-list" role="tabpanel" aria-labelledby="peer-tab-list" ${d.tab === "list" ? "" : "hidden"}>
-          <div class="peer-panel-inner" id="peer-list-slot"></div>
+        <div class="pm-panel" id="peer-panel-friends" role="tabpanel" aria-labelledby="peer-tab-friends" ${d.tab === "friends" ? "" : "hidden"}>
+          <div class="pm-panel-pad" id="peer-list-slot"></div>
         </div>
-        <div class="peer-panel" id="peer-panel-add" role="tabpanel" aria-labelledby="peer-tab-add" ${d.tab === "add" ? "" : "hidden"}>
-          <div class="peer-panel-inner">
-            <div class="seg" role="group" aria-label="添加好友方式">
-              <button type="button" class="${d.addSub === "gen" ? "on" : ""}" data-peer-add-sub="gen" aria-pressed="${d.addSub === "gen"}">我的边牧名片</button>
-              <button type="button" class="${d.addSub === "scan" ? "on" : ""}" data-peer-add-sub="scan" aria-pressed="${d.addSub === "scan"}">扫码 / 粘贴加好友</button>
+        <div class="pm-panel" id="peer-panel-card" role="tabpanel" aria-labelledby="peer-tab-card" ${d.tab === "card" ? "" : "hidden"}>
+          <div class="pm-panel-pad">
+            <section class="pm-card-hero" aria-label="我的边牧名片">
+              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="边牧名片二维码"></div>
+              <div class="pm-card-info">
+                <div class="pm-inline-name-row">
+                  <button type="button" class="pm-inline-name-btn" id="peer-name-display-btn" title="点击修改名片昵称">
+                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || "我的边牧")}</span>
+                    <svg class="pm-inline-name-pencil" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  </button>
+                  <form class="pm-inline-name-editor" id="peer-name-editor-form" hidden>
+                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="名片昵称" placeholder="输入边牧昵称" value="${esc(d.hubNameInput)}">
+                    <button type="submit" class="icon-btn" id="peer-hub-name-save" aria-label="保存昵称" title="保存 (Enter)">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+                    </button>
+                  </form>
+                </div>
+                <p class="pm-card-desc">扫码或点链接发起申请，经你同意后接通。</p>
+                <p class="pm-card-err" id="peer-card-err" role="alert" hidden></p>
+                <div class="pm-card-cta-row">
+                  <button type="button" class="btn primary" id="peer-copy-invite" disabled>
+                    <svg id="peer-copy-invite-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    <span id="peer-copy-invite-lbl">复制邀请链接</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <div class="pm-setting-row first">
+              <div class="pm-setting-copy">
+                <div class="pm-setting-label">新好友默认接待</div>
+                <div class="pm-setting-sub">对方来信时边牧的默认处理方式</div>
+              </div>
+              <button type="button" class="pm-pick" id="peer-default-mode-btn" aria-expanded="false" data-peer-mode-target="default">
+                <span class="pm-pick-txt" id="peer-default-mode-label">${esc(peerModeInfo(d.genMode).label)}</span>
+                <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
             </div>
-            <div class="int-sec" id="peer-sub-gen" ${d.addSub === "gen" ? "" : "hidden"}>
-              <div class="peer-qr-card" id="peer-qr-card"></div>
-              <div class="int-field">
-                <div class="int-field-label"><span>我的边牧名片昵称</span><span class="opt">展示给好友</span></div>
-                <div class="int-input-row">
-                  <input id="peer-hub-name" type="text" maxlength="40" value="${esc(d.hubNameInput)}" placeholder="例如：Alex的边牧">
-                  <button type="button" class="btn small" id="peer-hub-name-save">保存并刷新名片</button>
+
+            <details class="pm-fold" id="peer-adv-details">
+              <summary>连接与高级详情</summary>
+              <div class="pm-adv-box">
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">直连地址</span>
+                  <div class="pm-adv-v">
+                    <span class="pm-adv-code" id="peer-adv-addrs">-</span>
+                    <button type="button" class="btn ghost xs" id="peer-adv-copy-addrs">复制</button>
+                  </div>
+                </div>
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">名片码</span>
+                  <div class="pm-adv-v">
+                    <span class="pm-adv-code" id="peer-adv-code">-</span>
+                    <button type="button" class="btn ghost xs" id="peer-adv-copy-code">复制</button>
+                  </div>
+                </div>
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">本机标识</span>
+                  <div class="pm-adv-v">
+                    <span class="pm-adv-code" id="peer-adv-hub-id">${esc(data.hub_id || "-")}</span>
+                  </div>
+                </div>
+                <div class="pm-adv-row">
+                  <span class="pm-adv-k">名片密钥</span>
+                  <div class="pm-adv-v">
+                    <button type="button" class="btn xs" id="peer-reset-ask">重置名片</button>
+                  </div>
+                </div>
+                <div class="pm-reset-confirm" id="peer-reset-confirm" hidden>
+                  <span>旧二维码与链接将立即失效，不影响已配对好友。</span>
+                  <div class="pm-inline-confirm-btns">
+                    <button type="button" class="btn ghost xs" id="peer-reset-cancel">取消</button>
+                    <button type="button" class="btn pm-danger xs" id="peer-reset-do">确认重置</button>
+                  </div>
                 </div>
               </div>
-              <div class="int-field">
-                <div class="int-field-label"><span>新好友默认接待方式</span></div>
-                <div class="int-mode-list">
-                  ${peerModeRadiosHTML("peer_gen_mode", d.genMode, 'data-peer-gen-mode')}
+            </details>
+          </div>
+        </div>
+        <div class="pm-panel" id="peer-panel-add" role="tabpanel" aria-labelledby="peer-tab-add" ${d.tab === "add" ? "" : "hidden"}>
+          <div class="pm-panel-pad">
+            <div class="pm-add-block">
+              <div id="peer-add-input-wrap">
+                <div class="pm-field-head">
+                  <label class="pm-field-label" for="peer-paste-input">邀请链接或名片码</label>
+                  <div class="pm-scan-inline">
+                    <button type="button" class="pm-scan-link" id="peer-scan-toggle">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></svg>
+                      <span id="peer-scan-toggle-lbl">扫码</span>
+                    </button>
+                    <button type="button" class="pm-scan-link" id="peer-scan-img-btn">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 15-4.5-4.5a1.5 1.5 0 0 0-2.1 0L6 19"/></svg>
+                      <span>识别图片</span>
+                    </button>
+                    <input id="peer-scan-file" type="file" accept="image/*" class="visually-hidden">
+                  </div>
+                </div>
+                <div id="peer-scan-stage-slot" hidden></div>
+                <div class="pm-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
+                <textarea id="peer-paste-input" class="pm-paste-area" rows="2" spellcheck="false" placeholder="粘贴好友分享的邀请链接、整段文案或名片码">${esc(d.pasteRaw)}</textarea>
+              </div>
+
+              <div class="pm-parsed-card" id="peer-scan-parsed-slot" hidden></div>
+              <div class="pm-parsed-card is-err" id="peer-pair-err-slot" role="alert" hidden></div>
+
+              <div>
+                <div class="pm-setting-row" style="padding-top:4px">
+                  <div class="pm-setting-copy">
+                    <label class="pm-setting-label" for="peer-pair-name">备注名</label>
+                    <div class="pm-setting-sub">可选，留空自动使用对方昵称</div>
+                  </div>
+                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="例如：周远的边牧">
+                </div>
+                <div class="pm-setting-row last">
+                  <div class="pm-setting-copy">
+                    <div class="pm-setting-label">对他的接待方式</div>
+                    <div class="pm-setting-sub">配对通过后生效，随时可调整</div>
+                  </div>
+                  <button type="button" class="pm-pick" id="peer-add-mode-btn" aria-expanded="false" data-peer-mode-target="add">
+                    <span class="pm-pick-txt" id="peer-add-mode-label">${esc(peerModeInfo(d.pairMode).label)}</span>
+                    <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
                 </div>
               </div>
-            </div>
-            <div class="int-sec" id="peer-sub-scan" ${d.addSub === "scan" ? "" : "hidden"}>
-              <div class="peer-scan-actions" id="peer-scan-actions">
-                <button type="button" class="btn primary small" id="peer-scan-cam">摄像头扫码加好友</button>
-                <button type="button" class="btn small" id="peer-scan-stop" hidden>停止摄像头扫码</button>
-                <button type="button" class="btn small" id="peer-scan-img-btn">从相册 / 截图识别</button>
-                <input id="peer-scan-file" type="file" accept="image/*" capture="environment" hidden>
-              </div>
-              <div id="peer-scan-stage-slot" hidden></div>
-              <div class="peer-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
-              <div class="int-field" id="peer-paste-field">
-                <div class="int-field-label"><span>或直接粘贴好友分享链接 / 邀请码</span></div>
-                <textarea id="peer-paste-input" class="mono" rows="3" style="word-break:break-all;font-size:12px" placeholder="粘贴整段分享文案、https://lihuanyu0w0.github.io/collie/join/#... 或 collie-peer://v1/..." spellcheck="false">${esc(d.pasteRaw)}</textarea>
-                <p class="int-field-help">支持整段分享文案、/join/# 链接或邀请码；发出申请后须对方点「通过」才正式接通，连接凭据仅保存在各自本机。</p>
-              </div>
-              <div id="peer-scan-parsed-slot" hidden></div>
-              <div class="peer-parsed is-err" id="peer-pair-err-slot" role="alert" hidden></div>
-              <div class="int-field">
-                <div class="int-field-label"><span>给对方的备注名</span><span class="opt">可选</span></div>
-                <input id="peer-pair-name" type="text" maxlength="40" value="${esc(d.pairName)}" placeholder="留空自动使用对方名片昵称">
-              </div>
-              <div class="int-field">
-                <div class="int-field-label"><span>我对这位好友的接待方式</span></div>
-                <div class="int-mode-list">
-                  ${peerModeRadiosHTML("peer_pair_mode", d.pairMode, 'data-peer-pair-mode')}
-                </div>
-              </div>
-              <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:2px">
+
+              <div class="pm-add-foot">
+                <span class="pm-add-foot-note">须对方点「通过」才正式接通</span>
                 <button type="button" class="btn primary" id="peer-pair-submit" disabled>发送好友申请</button>
               </div>
             </div>
           </div>
         </div>`;
 
-      $("#int-modal-foot").innerHTML = `
-        <span class="peer-foot-id">本机 Hub：<span class="mono" id="peer-foot-hub-id">${esc(data.hub_id || "-")}</span></span>
-        <div class="int-sheet-foot-right">
-          <button type="button" class="btn small" id="peer-modal-done">完成</button>
-        </div>`;
-
+      $("#int-modal-foot").innerHTML = "";
       bindPeerModalStaticEvents();
     }
 
@@ -10539,77 +11060,176 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers") return;
 
-    $("#peer-modal-done")?.addEventListener("click", () => closeIntModal("done"));
-
+    // Single-level 3-tab switching + keyboard arrows
     const tabs = [...intModal.querySelectorAll("[data-peer-tab]")];
     tabs.forEach((btn, idx) => {
       btn.addEventListener("click", () => {
         const next = btn.dataset.peerTab;
         if (next === d.tab) return;
-        stopPeerCameraScan();
-        d.tab = next;
-        syncPeerModalTabs();
-        patchPeerScanPanel();
-        $("#int-modal-body").scrollTop = 0;
-        if (next === "add" && d.addSub === "gen") ensurePeerInvite(false);
+        switchPeerTab(next);
       });
       btn.addEventListener("keydown", (ev) => {
-        if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight" && ev.key !== "Home" && ev.key !== "End") return;
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
         ev.preventDefault();
-        const nextIdx = ev.key === "Home" ? 0 : ev.key === "End" ? tabs.length - 1 : (idx + (ev.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        const nextIdx = ev.key === "Home" ? 0
+          : ev.key === "End" ? tabs.length - 1
+          : (idx + (ev.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
         const target = tabs[nextIdx];
         if (!target) return;
-        stopPeerCameraScan();
-        d.tab = target.dataset.peerTab;
-        syncPeerModalTabs();
-        patchPeerScanPanel();
+        switchPeerTab(target.dataset.peerTab);
         target.focus();
-        if (d.tab === "add" && d.addSub === "gen") ensurePeerInvite(false);
       });
     });
 
-    intModal.querySelectorAll("[data-peer-add-sub]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const sub = btn.dataset.peerAddSub;
-        if (sub === d.addSub) return;
-        stopPeerCameraScan();
-        d.addSub = sub;
-        d.pairErr = "";
-        syncPeerModalTabs();
-        patchPeerScanPanel();
-        if (sub === "gen") ensurePeerInvite(false);
-      });
-    });
-
-    $("#peer-hub-name")?.addEventListener("focus", () => { d.editingHubName = true; });
-    $("#peer-hub-name")?.addEventListener("input", (ev) => { d.hubNameInput = ev.target.value; });
-    $("#peer-hub-name-save")?.addEventListener("click", async () => {
-      const name = String(d.hubNameInput || "").trim();
-      if (!name) { toast("昵称不能为空", "attn"); return; }
+    // Inline nickname editing (click -> input -> Enter / blur auto-save, Esc cancel)
+    let nameBlurTimer = 0;
+    const openNameEditor = () => {
+      const dispBtn = $("#peer-name-display-btn");
+      const form = $("#peer-name-editor-form");
+      const inp = $("#peer-hub-name");
+      if (!dispBtn || !form || !inp) return;
+      d.editingHubName = true;
+      dispBtn.hidden = true;
+      form.hidden = false;
+      inp.value = d.data?.hub_name || d.hubNameInput || "";
+      inp.focus();
+      inp.select?.();
+    };
+    const commitNameEditor = async (save) => {
+      clearTimeout(nameBlurTimer);
+      nameBlurTimer = 0;
+      const form = $("#peer-name-editor-form");
+      const dispBtn = $("#peer-name-display-btn");
+      const inp = $("#peer-hub-name");
+      if (!form || form.hidden || d.savingHubName) return;
+      const curName = String(d.data?.hub_name || "").trim();
+      const next = String(inp?.value || "").trim();
+      form.hidden = true;
+      if (dispBtn) dispBtn.hidden = false;
+      d.editingHubName = false;
+      if (!save || !next || next === curName) {
+        if (inp) inp.value = curName;
+        return;
+      }
+      d.savingHubName = true;
+      d.hubNameInput = next;
+      setText($("#peer-hub-name-text"), next);
       try {
-        await api("/api/super/peers/settings", { body: { hub_name: name } });
-        d.editingHubName = false;
+        await api("/api/super/peers/settings", { body: { hub_name: next } });
         const pr = await api("/api/super/peers");
         peersPayload = pr;
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
         d.data = pr;
         d._dataSig = peerDataSig(pr);
-        d.hubNameInput = pr.hub_name || name;
+        d.hubNameInput = pr.hub_name || next;
         d.invitesByMode = {};
-        toast("已更新本机名片昵称");
+        d.savingHubName = false;
         await ensurePeerInvite(false);
-      } catch (err) { toast(err.message, "attn"); }
+        toast("已更新名片昵称并刷新二维码");
+      } catch (err) {
+        d.savingHubName = false;
+        if (intModalDraft === d) patchPeerQRCard();
+        toast(err.message, "attn");
+      }
+    };
+
+    const nameInput = $("#peer-hub-name");
+    const nameIme = trackIME(nameInput);
+    $("#peer-name-display-btn")?.addEventListener("click", openNameEditor);
+    $("#peer-name-editor-form")?.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      if (isIMEComposing(ev, nameIme)) return;
+      commitNameEditor(true);
+    });
+    $("#peer-hub-name-save")?.addEventListener("mousedown", (ev) => {
+      // Prevent blur from firing before submit button click.
+      ev.preventDefault();
+    });
+    nameInput?.addEventListener("input", (ev) => { d.hubNameInput = ev.target.value; });
+    nameInput?.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        commitNameEditor(false);
+        $("#peer-name-display-btn")?.focus();
+        return;
+      }
+      if (ev.key === "Enter" && (isIMEComposing(ev, nameIme) || isPostCompositionSafariEnter(ev, nameIme))) {
+        ev.preventDefault();
+      }
+    });
+    nameInput?.addEventListener("blur", () => {
+      clearTimeout(nameBlurTimer);
+      nameBlurTimer = setTimeout(() => { commitNameEditor(true); }, 80);
     });
 
-    intModal.querySelectorAll("[data-peer-gen-mode]").forEach((r) => {
-      r.addEventListener("change", () => {
-        if (!r.checked) return;
-        d.genMode = r.value;
-        ensurePeerInvite(false);
-      });
+    // Primary CTA: copy invite link
+    $("#peer-copy-invite")?.addEventListener("click", async () => {
+      if (!d.invite?.invite_code) return;
+      const share = peerShareText(d.invite, d.data?.hub_name || "我的边牧");
+      const ok = await copyText(share);
+      if (!ok) {
+        toast("复制失败，请展开下方高级详情手动复制名片码", "attn");
+        return;
+      }
+      toast("已复制邀请链接，发给好友即可申请");
+      const lbl = $("#peer-copy-invite-lbl");
+      const ico = $("#peer-copy-invite-ico");
+      if (lbl) setText(lbl, "已复制链接");
+      if (ico) ico.innerHTML = `<path d="M5 13l4 4L19 7"/>`;
+      clearTimeout(peerCopyBtnTimer);
+      peerCopyBtnTimer = setTimeout(() => {
+        if (!intModal?.open || intModalKind !== "peers") return;
+        const l = $("#peer-copy-invite-lbl");
+        const i = $("#peer-copy-invite-ico");
+        if (l) setText(l, "复制邀请链接");
+        if (i) i.innerHTML = `<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>`;
+      }, 1800);
     });
 
-    $("#peer-scan-cam")?.addEventListener("click", () => startPeerCameraScan());
-    $("#peer-scan-stop")?.addEventListener("click", () => { stopPeerCameraScan(); patchPeerScanPanel(); });
+    // Advanced details copy & two-step reset card confirmation
+    $("#peer-adv-copy-addrs")?.addEventListener("click", async () => {
+      const addrs = (d.invite?.addrs?.length ? d.invite.addrs : d.data?.addrs) || [];
+      if (!addrs.length) return;
+      const ok = await copyText(addrs.map((a) => String(a).replace(/^https?:\/\//, "")).join(" · "));
+      toast(ok ? "已复制直连地址" : "复制失败", ok ? undefined : "attn");
+    });
+    $("#peer-adv-copy-code")?.addEventListener("click", async () => {
+      if (!d.invite?.invite_code) return;
+      const ok = await copyText(d.invite.invite_code);
+      toast(ok ? "已复制名片码" : "复制失败", ok ? undefined : "attn");
+    });
+    $("#peer-reset-ask")?.addEventListener("click", () => {
+      d.resetConfirm = true;
+      patchPeerQRCard();
+    });
+    $("#peer-reset-cancel")?.addEventListener("click", () => {
+      d.resetConfirm = false;
+      patchPeerQRCard();
+    });
+    $("#peer-reset-do")?.addEventListener("click", () => {
+      ensurePeerInvite(true);
+    });
+
+    // Default reception & Add Friend reception custom popover triggers
+    bindPeerPopoverTrigger($("#peer-default-mode-btn"), "#peer-mode-popover", () => {
+      d.activeModeTarget = { kind: "default", triggerEl: $("#peer-default-mode-btn") };
+      populatePeerModePopover(d.activeModeTarget);
+    });
+    bindPeerPopoverTrigger($("#peer-add-mode-btn"), "#peer-mode-popover", () => {
+      d.activeModeTarget = { kind: "add", triggerEl: $("#peer-add-mode-btn") };
+      populatePeerModePopover(d.activeModeTarget);
+    });
+
+    // Add Friend scan / image decode / paste / submit
+    $("#peer-scan-toggle")?.addEventListener("click", () => {
+      if (d.scanning) {
+        stopPeerCameraScan();
+        patchPeerScanPanel();
+      } else {
+        startPeerCameraScan();
+      }
+    });
     $("#peer-scan-img-btn")?.addEventListener("click", () => $("#peer-scan-file")?.click());
     $("#peer-scan-file")?.addEventListener("change", (ev) => {
       const f = ev.target.files?.[0];
@@ -10628,9 +11248,6 @@
       patchPeerScanPanel();
     });
     $("#peer-pair-name")?.addEventListener("input", (ev) => { d.pairName = ev.target.value; });
-    intModal.querySelectorAll("[data-peer-pair-mode]").forEach((r) => {
-      r.addEventListener("change", () => { d.pairMode = r.value; });
-    });
 
     $("#peer-pair-submit")?.addEventListener("click", async () => {
       const parsed = parsePeerInviteClient(d.pasteRaw, d.data?.hub_id);
@@ -10650,13 +11267,12 @@
         d.pairing = false;
         d.pasteRaw = "";
         d.pairName = "";
-        d.tab = "list";
-        syncPeerModalTabs();
-        patchPeerHeaderAndList();
+        d.fromInviteLink = false;
+        switchPeerTab("friends");
         patchPeerScanPanel();
         toast(res.pending
-          ? `已向 ${res.peer?.name || "好友边牧"} 发送好友申请，等待对方通过`
-          : `已与 ${res.peer?.name || "好友边牧"} 完成双向直连配对`);
+          ? `已向「${res.peer?.name || "好友边牧"}」发送好友申请`
+          : `已与「${res.peer?.name || "好友边牧"}」完成双向直连配对`);
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
@@ -10671,17 +11287,32 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !slot) return;
 
-    $("#peer-go-add-btn", slot)?.addEventListener("click", () => {
-      d.tab = "add";
-      d.addSub = "gen";
-      syncPeerModalTabs();
-      ensurePeerInvite(false);
+    slot.querySelectorAll("[data-peer-jump-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => switchPeerTab(btn.dataset.peerJumpTab));
     });
 
-    slot.querySelectorAll("[data-peer-approve-mode]").forEach((r) => {
-      r.addEventListener("change", () => {
-        if (!r.checked) return;
-        d.approveModes[r.dataset.peerApproveMode] = r.value;
+    slot.querySelectorAll("[data-peer-mode-target]").forEach((btn) => {
+      bindPeerPopoverTrigger(btn, "#peer-mode-popover", () => {
+        d.activeModeTarget = {
+          kind: btn.dataset.peerModeTarget,
+          peerId: btn.dataset.peerId,
+          triggerEl: btn,
+        };
+        populatePeerModePopover(d.activeModeTarget);
+      });
+    });
+
+    slot.querySelectorAll("[data-peer-more]").forEach((btn) => {
+      bindPeerPopoverTrigger(btn, "#peer-action-popover", () => {
+        d.activeActionPeerId = btn.dataset.peerMore;
+        populatePeerActionPopover(d.activeActionPeerId);
+      });
+    });
+
+    slot.querySelectorAll("[data-peer-hide-addr]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        delete d.showAddrIds[btn.dataset.peerHideAddr];
+        patchPeerHeaderAndList();
       });
     });
 
@@ -10698,16 +11329,16 @@
           });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           delete d.approveModes[pid];
           d.busyPeerId = "";
           patchPeerHeaderAndList();
-          toast(`已通过 ${res.peer?.name || "好友边牧"} 的申请，双方已直连`);
+          toast(`已通过「${res.peer?.name || "好友边牧"}」的申请`);
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
+          if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
           toast(err.message, "attn");
         }
       });
@@ -10723,16 +11354,16 @@
         });
         const pr = await api("/api/super/peers");
         peersPayload = pr;
+        if (intModalDraft !== d) return;
         d.data = pr;
         d._dataSig = peerDataSig(pr);
         delete d.approveModes[pid];
         d.busyPeerId = "";
         patchPeerHeaderAndList();
-        toast(block ? "已拒绝好友申请并拉黑该 Hub" : "已拒绝该好友申请");
+        toast(block ? "已拒绝申请并拉黑该边牧" : "已拒绝该好友申请");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
-        d.busyPeerId = "";
-        patchPeerHeaderAndList();
+        if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
         toast(err.message, "attn");
       }
     };
@@ -10748,6 +11379,7 @@
           await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "DELETE" });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           d.busyPeerId = "";
@@ -10755,8 +11387,7 @@
           toast("已撤回好友申请");
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
+          if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
           toast(err.message, "attn");
         }
       });
@@ -10773,6 +11404,7 @@
           await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "PATCH", body: { status: nextStatus } });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           d.busyPeerId = "";
@@ -10780,67 +11412,12 @@
           toast(nextStatus === "paused" ? "已暂停接收该好友来信" : "已恢复接收该好友来信");
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
+          if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
           toast(err.message, "attn");
         }
       });
     });
 
-    slot.querySelectorAll("[data-peer-mode]").forEach((r) => {
-      r.addEventListener("change", async () => {
-        const pid = r.dataset.peerMode;
-        const nextMode = r.value;
-        d.busyPeerId = pid;
-        patchPeerHeaderAndList();
-        try {
-          await api(`/api/super/peers/${encodeURIComponent(pid)}`, { method: "PATCH", body: { mode: nextMode } });
-          const pr = await api("/api/super/peers");
-          peersPayload = pr;
-          d.data = pr;
-          d._dataSig = peerDataSig(pr);
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
-          toast(`已切换接待方式：${PEER_MODE_TEXT[nextMode] || nextMode}`);
-          if (view === "auto" && autoTab === "integrations") loadAuto();
-        } catch (err) {
-          d.busyPeerId = "";
-          patchPeerHeaderAndList();
-          toast(err.message, "attn");
-        }
-      });
-    });
-
-    slot.querySelectorAll("[data-peer-ping]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const pid = btn.dataset.peerPing;
-        d.pingState[pid] = { busy: true, ok: false, msg: "" };
-        patchPeerHeaderAndList();
-        try {
-          const res = await api(`/api/super/peers/${encodeURIComponent(pid)}/ping`, { method: "POST" });
-          const latTxt = Number(res.latency_ms) > 0 ? `${res.latency_ms}ms` : "<1ms";
-          d.pingState[pid] = res.ok
-            ? { busy: false, ok: true, msg: `连通 · ${latTxt}${res.paused ? "（对方总开关暂停）" : ""}` }
-            : { busy: false, ok: false, msg: res.error || "连接失败" };
-          if (res.ok) {
-            const pr = await api("/api/super/peers").catch(() => null);
-            if (pr) { peersPayload = pr; d.data = pr; d._dataSig = peerDataSig(pr); }
-          }
-          patchPeerHeaderAndList();
-        } catch (err) {
-          d.pingState[pid] = { busy: false, ok: false, msg: err.message };
-          patchPeerHeaderAndList();
-        }
-      });
-    });
-
-    slot.querySelectorAll("[data-peer-ask-revoke]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const pid = btn.dataset.peerAskRevoke;
-        d.confirmRevokeId = d.confirmRevokeId === pid ? "" : pid;
-        patchPeerHeaderAndList();
-      });
-    });
     slot.querySelector("[data-peer-cancel-revoke]")?.addEventListener("click", () => {
       d.confirmRevokeId = "";
       patchPeerHeaderAndList();
@@ -10853,16 +11430,16 @@
         await api(`/api/super/peers/${encodeURIComponent(pid)}${block ? "?block=1" : ""}`, { method: "DELETE" });
         const pr = await api("/api/super/peers");
         peersPayload = pr;
+        if (intModalDraft !== d) return;
         d.data = pr;
         d._dataSig = peerDataSig(pr);
         d.confirmRevokeId = "";
         d.busyPeerId = "";
         patchPeerHeaderAndList();
-        toast(block ? "已立即吊销令牌并拉黑该 Hub" : "已立即吊销令牌并移除好友");
+        toast(block ? "已移除并拉黑该好友" : "已移除该好友");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
-        d.busyPeerId = "";
-        patchPeerHeaderAndList();
+        if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
         toast(err.message, "attn");
       }
     };
@@ -10876,10 +11453,11 @@
           await api(`/api/super/peers/blocklist/${encodeURIComponent(hid)}`, { method: "DELETE" });
           const pr = await api("/api/super/peers");
           peersPayload = pr;
+          if (intModalDraft !== d) return;
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           patchPeerHeaderAndList();
-          toast("已从黑名单移除");
+          toast("已解除拉黑");
         } catch (err) { toast(err.message, "attn"); }
       });
     });

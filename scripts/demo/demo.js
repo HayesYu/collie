@@ -951,7 +951,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
         hub_id: demoPeerHubID,
         hub_name: demoPeerHubName,
         enabled: demoPeersEnabled,
-        addrs: ["http://192.168.1.20:7788"],
+        addrs: ["http://192.168.1.20:7788", "http://100.64.0.18:7788"],
         peers: demoPeers,
         blocklist: demoPeerBlocklist,
         blocked_count: demoPeerBlocklist.length,
@@ -967,18 +967,35 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/super/peers/invite" && method === "POST") {
       const mode = body.mode || "advise";
       if (body.reset) demoPeerCardCode = "DEMO" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 12);
-      const compact = { h: demoPeerHubID, n: demoPeerHubName, a: ["192.168.1.20:7788"], t: demoPeerCardCode };
+      const compact = { h: demoPeerHubID, n: demoPeerHubName, a: ["192.168.1.20:7788", "100.64.0.18:7788"], t: demoPeerCardCode };
       const bytes = new TextEncoder().encode(JSON.stringify(compact));
       let bin = "";
       bytes.forEach((b) => { bin += String.fromCharCode(b); });
       const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
       const inv = "collie-peer://v2/" + b64;
       const joinUrl = "https://lihuanyu0w0.github.io/collie/join/#2." + b64;
-      return json({ invite_code: inv, join_url: joinUrl, code: compact.t, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: ["http://192.168.1.20:7788"], permanent: true });
+      return json({ invite_code: inv, join_url: joinUrl, code: compact.t, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: ["http://192.168.1.20:7788", "http://100.64.0.18:7788"], permanent: true });
     }
     if (p === "/api/super/peers/pair" && method === "POST") {
       const id = "peer-" + (demoPeers.length + 1);
-      const np = { id, hub_id: "hub_demo_" + (demoPeers.length + 1), name: body.name || "新好友的边牧", addrs: ["http://192.168.1.88:7788"], primary_addr: "http://192.168.1.88:7788", mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      let parsedName = "";
+      let parsedHubId = "hub_demo_" + (demoPeers.length + 1);
+      let parsedAddr = "http://192.168.1.88:7788";
+      try {
+        const raw = String(body.invite_code || "");
+        const m = raw.match(/collie-peer:\/\/v2\/([A-Za-z0-9_-]+)/);
+        if (m) {
+          const b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+          const bin = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const obj = JSON.parse(new TextDecoder().decode(bytes));
+          if (obj.n) parsedName = obj.n;
+          if (obj.h) parsedHubId = obj.h;
+          if (Array.isArray(obj.a) && obj.a[0]) parsedAddr = obj.a[0].includes("://") ? obj.a[0] : "http://" + obj.a[0];
+        }
+      } catch {}
+      const np = { id, hub_id: parsedHubId, name: body.name || parsedName || "新好友的边牧", addrs: [parsedAddr], primary_addr: parsedAddr, mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       demoPeers.push(np);
       pushAll();
       return json({ ok: true, pending: true, peer: np });
@@ -1008,7 +1025,9 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     const peerPingM = /^\/api\/super\/peers\/([^/]+)\/ping$/.exec(p);
     if (peerPingM && method === "POST") {
-      return json({ ok: true, peer_id: decodeURIComponent(peerPingM[1]), addr: "http://192.168.1.42:7788", latency_ms: 12, remote_name: "Sam的边牧", remote_version: "v0.2.95", protocol_ver: 1 });
+      const pid = decodeURIComponent(peerPingM[1]);
+      const target = demoPeers.find((x) => x.id === pid);
+      return json({ ok: true, peer_id: pid, addr: target?.primary_addr || "http://192.168.1.42:7788", latency_ms: 12, remote_name: target?.name || "Sam的边牧", remote_version: "v0.3.11", protocol_ver: 1 });
     }
     const peerBlockDelM = /^\/api\/super\/peers\/blocklist\/([^/]+)$/.exec(p);
     if (peerBlockDelM && method === "DELETE") {

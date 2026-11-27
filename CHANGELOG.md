@@ -4,6 +4,33 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.5 (2026-11-27)
+
+### Highlights
+
+- **60 FPS Heavy-Load Smoothness Sprint Across Desktop, iPad & Mobile (`web/{app.css,app.js,index.html}`, `docs/demo/`)**:
+  - **Compositor-only topic drawer & 50/50 widen**: Registered `--thread-w` / `--file-w` as non-inheriting CSS `@property` values and scoped `--thread-w` exclusively to `#thread-drawer` (never mutating `<html>`); replaced `.app` `grid-template-columns` / `.td-inner` `width` animations and 45-frame `beginCollieLayoutLock` polling with a fixed-position GPU `translate3d` slide and raised the tablet overlay breakpoint from `1000px` to `1180px`, lifting heavy-load drawer open/widen from ~27 FPS (167ms stalls) to ~59–60 FPS with zero LongTasks.
+  - **Zero-jank sidebar & mobile route switching**: Upgraded parked `#v-collie.is-parked` from inherited `visibility: hidden` (plus descendant dot-pause selectors) to `content-visibility: hidden` (with `@supports not` fallback and never setting `inert`), and replaced mobile `<= 760px` `.main { display: none; }` tree destruction with a 1×1 stacked grid `content-visibility` switch — eliminating 167–183ms style-recalc stalls across desktop, iPad, and mobile.
+  - **In-place DOM patching for SSE pushes & drawer replies**: Extended `patchSuperThread` to update middle `.event` status dots/`wstate`, `.say` pins/`.te-count`, and `.mine` `.te-count` in place with zero `replaceChild` churn, lazily deferred `ensureLiveAnchor`, and moved `renderPendingBar()` after anchor reads to prevent layout thrashing during rapid drawer sends and SSE updates.
+  - **Zero-PrePaint floating side card & unified left-bias desktop reading preference**: Fixed the wide-screen (`>= 1664px`, e.g., `1920×1080`) `--notes-shift` regression so opening either floating card (`小本本` / `话题线`) consistently centers the main chat column in the remaining left space; replaced CSS `transition: transform` on the tall `.thread` container with a lightweight 60 FPS `requestAnimationFrame` matrix glide over persistent `will-change: transform`, eliminating Blink's 116ms PrePaint block.
+  - **Route-return side-card stability**: Removed the always-replaying `np-swap-in` keyframe and kept wide-desktop `#notes-pane` state frozen inside parked `#v-collie` when visiting other views, so returning to the main chat reveals open side cards in place with zero blink or jitter.
+  - **Removed expensive scrim blurs & layout transitions**: Dropped `backdrop-filter: blur(...)` from `.notes-scrim`, `.file-scrim`, `.thread-scrim`, `.super-jump`, and `dialog::backdrop` transitions, and eliminated layout/paint transitions (`box-shadow`, `padding`, `margin-top`) on `.notepane`.
+- **Symmetrical Collapsible「话题线」Side Card & De-Collided Labels (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Aligned「话题线」with「小本本」's minimalist white-paper collapse/expand pattern: wide desktop defaults to compact single-line「活跃话题」rows with a `+N 历史` pill; clicking unfolds 2nd-line nowrap metadata and the lower「历史话题」section via isolated `0fr -> 1fr` `.np-fold` grid rows without rebuilding DOM (`Esc` collapses before closing; narrow/mobile drawers open directly expanded).
+  - Renamed the left sidebar's running-agent group from「进行中」to「工作中」and the right thread card sections to「活跃话题」/「历史话题」, removing duplicate「进行中」labels on the same screen.
+- **Chat Stream Readability & Crew Strip Polish (`web/{app.css,app.js}`, `docs/demo/`)**:
+  - **External user quote bar**: Moved the `.re` quote strip outside the dark user bubble (directly above `.mine-media` and `.msg.user`, right-aligned, single-line ellipsis, `5px` gap) for all user message types (text, image+text, image-only) so short replies stay naturally compact while keeping click-to-jump intact.
+  - **Readable horizontal crew strip**: Removed `.is-tight` / `--crew-chip-max` over-truncation and hover width-expansion animations on `#crew` agent chips (`flex: 0 0 auto`, `max-inline-size: 184px` desktop / `164px` mobile), preserving full readable names with smooth horizontal scrolling and subtle fade cue on overflow.
+  - **Smarter consecutive Collie message grouping**: Tightened `.say.cont` merging so consecutive Collie replies break grouping (showing an independent Collie avatar and normal paragraph spacing) whenever the previous message carries a `↳ N 条回复` thread entry or the new message quotes a different topic root.
+- **Verification**: Added comprehensive unit & static contract tests (`internal/collie/v035_smoothness_test.go`), updated synced static demo (`docs/demo/`), and verified across Desktop (`1440×900` / `1920×1080`), iPad (`1024×768`), and Mobile (`390×844`) in both light and dark themes.
+
+### Client / API Changes
+
+- None (Web UI performance, layout, and interaction release only; no HTTP endpoint, SSE event, JSON schema, or CLI behavior changes).
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.4 (2026-11-27)
 
 ### Highlights

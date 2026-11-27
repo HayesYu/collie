@@ -4647,10 +4647,12 @@
   }
   function promoteUserNodeInPlace(el, item) {
     const msgEl = el.querySelector?.(".msg.user");
-    if (!msgEl) return false;
+    if (!msgEl) return null;
+    const prevPinned = !!el.classList?.contains("is-pinned");
     const hasMedia = el.classList?.contains("has-media");
+    const hasQuote = el.classList?.contains("has-quote");
     const isMediaOnly = el.classList?.contains("is-media-only");
-    const nextCls = `mine${hasMedia ? " has-media" : ""}${isMediaOnly ? " is-media-only" : ""}${item.pinned ? " is-pinned" : ""}`;
+    const nextCls = `mine${hasMedia ? " has-media" : ""}${hasQuote ? " has-quote" : ""}${isMediaOnly ? " is-media-only" : ""}${item.pinned ? " is-pinned" : ""}`;
     if (el.className !== nextCls) el.className = nextCls;
     if (item.rootId) el.dataset.threadRoot = item.rootId;
     else delete el.dataset.threadRoot;
@@ -4658,31 +4660,128 @@
     const nextTitle = item.at ? fullTime(item.at) : "";
     if (nextTitle) msgEl.setAttribute("title", nextTitle);
     else msgEl.removeAttribute("title");
+    let layoutChanged = prevPinned !== !!item.pinned;
     const curPin = el.querySelector?.(".pin-ind");
     if (item.pinned && !curPin) {
       const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
       if (pinEl) el.insertBefore(pinEl, el.firstElementChild || msgEl);
+      layoutChanged = true;
     } else if (!item.pinned && curPin && curPin.parentNode === el) {
       el.removeChild(curPin);
+      layoutChanged = true;
     }
     const oldFoot = el.querySelector?.(":scope > .msg-foot, :scope > .msg-acts")
       || (msgEl.nextElementSibling && (msgEl.nextElementSibling.classList?.contains("msg-foot") || msgEl.nextElementSibling.classList?.contains("msg-acts")) ? msgEl.nextElementSibling : null);
-    const footHtml = item.renderFoot ? item.renderFoot() : "";
-    if (footHtml) {
-      const newFoot = parseSuperNode(footHtml);
-      if (newFoot) {
-        if (oldFoot && oldFoot.parentNode === el) el.replaceChild(newFoot, oldFoot);
-        else el.appendChild(newFoot);
+    const curEntry = oldFoot?.querySelector?.(".thread-entry");
+    const curCount = curEntry?.querySelector?.(".te-count");
+    if (!layoutChanged && item.teRoot && item.teCount > 0 && curEntry && curCount
+      && curEntry.dataset?.openThread === item.teRoot && curEntry.dataset?.focusMsg === item.key
+      && el._collieEntryId === (item.entryId || "")) {
+      const nextLbl = `${item.teCount} 条回复`;
+      if (curCount.textContent !== nextLbl) curCount.textContent = nextLbl;
+    } else {
+      const footHtml = item.renderFoot ? item.renderFoot() : "";
+      if (footHtml) {
+        const newFoot = parseSuperNode(footHtml);
+        if (newFoot) {
+          if (oldFoot && oldFoot.parentNode === el) el.replaceChild(newFoot, oldFoot);
+          else el.appendChild(newFoot);
+        }
+        if (!oldFoot || oldFoot.className !== newFoot?.className) layoutChanged = true;
+      } else if (oldFoot && oldFoot.parentNode === el) {
+        el.removeChild(oldFoot);
+        layoutChanged = true;
       }
-    } else if (oldFoot && oldFoot.parentNode === el) {
-      el.removeChild(oldFoot);
     }
     el._collieSig = item.sig;
     el._collieKey = item.key;
-    return true;
+    el._collieEntryId = item.entryId || "";
+    return { layoutChanged };
   }
-  function patchSuperThread(box, items) {
+  function promoteCollieNodeInPlace(el, item) {
+    const msgEl = el.querySelector?.(".msg.assistant");
+    if (!msgEl) return null;
+    const prevPinned = !!el.classList?.contains("is-pinned");
+    const nextCls = `say${item.cont ? " cont" : ""}${item.pinned ? " is-pinned" : ""}`;
+    if (el.className !== nextCls) el.className = nextCls;
+    if (item.rootId) el.dataset.threadRoot = item.rootId;
+    else delete el.dataset.threadRoot;
+    let layoutChanged = prevPinned !== !!item.pinned;
+    const curPin = msgEl.querySelector?.(":scope > .pin-ind") || msgEl.querySelector?.(".pin-ind");
+    if (item.pinned && !curPin) {
+      const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
+      if (pinEl) msgEl.insertBefore(pinEl, msgEl.firstElementChild);
+      layoutChanged = true;
+    } else if (!item.pinned && curPin && curPin.parentNode === msgEl) {
+      msgEl.removeChild(curPin);
+      layoutChanged = true;
+    }
+    const lastCh = msgEl.lastElementChild;
+    const oldFoot = (lastCh && (lastCh.classList?.contains("msg-foot") || lastCh.classList?.contains("msg-acts")))
+      ? lastCh
+      : msgEl.querySelector?.(":scope > .msg-foot, :scope > .msg-acts");
+    const curEntry = oldFoot?.querySelector?.(".thread-entry");
+    const curCount = curEntry?.querySelector?.(".te-count");
+    if (!layoutChanged && item.teRoot && item.teCount > 0 && curEntry && curCount
+      && curEntry.dataset?.openThread === item.teRoot && curEntry.dataset?.focusMsg === item.key) {
+      const nextLbl = `${item.teCount} 条回复`;
+      if (curCount.textContent !== nextLbl) curCount.textContent = nextLbl;
+    } else {
+      const footHtml = item.renderFoot ? item.renderFoot() : "";
+      if (footHtml) {
+        const newFoot = parseSuperNode(footHtml);
+        if (newFoot) {
+          if (oldFoot && oldFoot.parentNode === msgEl) msgEl.replaceChild(newFoot, oldFoot);
+          else msgEl.appendChild(newFoot);
+        }
+        if (!oldFoot || oldFoot.className !== newFoot?.className) layoutChanged = true;
+      } else if (oldFoot && oldFoot.parentNode === msgEl) {
+        msgEl.removeChild(oldFoot);
+        layoutChanged = true;
+      }
+    }
+    el._collieSig = item.sig;
+    el._collieKey = item.key;
+    return { layoutChanged };
+  }
+  function promoteEventInPlace(el, item) {
+    if (!el || (el.tagName || "").toLowerCase() !== item.tagName) return null;
+    if (el.className !== item.cls) el.className = item.cls;
+    if (item.tagName === "a") {
+      if (item.href) el.setAttribute("href", item.href);
+      else el.removeAttribute("href");
+      if (item.title) el.setAttribute("title", item.title);
+      else el.removeAttribute("title");
+    }
+    const dot = el.querySelector?.(".dot");
+    if (!dot) return null;
+    const nextDotCls = `dot ${item.tone}`;
+    if (dot.className !== nextDotCls) dot.className = nextDotCls;
+    const ws = el.querySelector?.(".wstate");
+    if (item.wstate) {
+      if (ws) {
+        if (ws.textContent !== item.wstate) ws.textContent = item.wstate;
+      } else {
+        const wsEl = parseSuperNode(`<span class="wstate">${esc(item.wstate)}</span>`);
+        if (wsEl) el.appendChild(wsEl);
+      }
+    } else if (ws && ws.parentNode === el) {
+      el.removeChild(ws);
+    }
+    el._collieSig = item.sig;
+    el._collieKey = item.key;
+    return { layoutChanged: false };
+  }
+  function patchSuperThread(box, items, opts = {}) {
     const t0 = performance.now();
+    const beforeLayout = typeof opts?.onBeforeLayoutMutate === "function" ? opts.onBeforeLayoutMutate : null;
+    let layoutNotified = false;
+    const noteLayoutMutate = () => {
+      if (!layoutNotified) {
+        layoutNotified = true;
+        if (beforeLayout) beforeLayout();
+      }
+    };
     const stats = box._colliePatchStats || (box._colliePatchStats = {
       renders: 0, fullRebuilds: 0, lastAdded: 0, lastUpdated: 0, lastRemoved: 0, lastReused: 0, lastMs: 0,
     });
@@ -4690,6 +4789,7 @@
     let nodeMap = box._collieNodes;
     const isInitial = !nodeMap || !nodeMap.size || !box.firstElementChild || items.length === 0;
     if (isInitial) {
+      noteLayoutMutate();
       nodeMap = new Map();
       box._collieNodes = nodeMap;
       if (!items.length) {
@@ -4697,7 +4797,7 @@
         stats.fullRebuilds++;
         stats.lastAdded = stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
         stats.lastMs = performance.now() - t0;
-        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, fullRebuild: true };
+        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, fullRebuild: true, layoutChanged: true };
       }
       const frag = document.createDocumentFragment();
       if (items.length > 16) {
@@ -4709,6 +4809,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
           }
@@ -4720,6 +4821,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
           }
@@ -4731,6 +4833,7 @@
           el._collieKey = it.key;
           el._collieSig = it.sig;
           if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+          if (it.entryId !== undefined) el._collieEntryId = it.entryId;
           nodeMap.set(it.key, el);
           frag.appendChild(el);
         }
@@ -4741,10 +4844,10 @@
       stats.lastAdded = items.length;
       stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
       stats.lastMs = performance.now() - t0;
-      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, fullRebuild: true };
+      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, fullRebuild: true, layoutChanged: true };
     }
 
-    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0;
+    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0, layoutChanged = false;
     const nextKeys = new Set();
     for (let i = 0; i < items.length; i++) {
       const k = items[i].key;
@@ -4769,9 +4872,11 @@
 
     for (const [k, el] of nodeMap) {
       if (!nextKeys.has(k)) {
+        noteLayoutMutate();
         if (el.parentNode === box) box.removeChild(el);
         nodeMap.delete(k);
         removed++;
+        layoutChanged = true;
       }
     }
 
@@ -4779,6 +4884,8 @@
     let pendingNew = null;
     const flushFrag = () => {
       if (!pendingNew || !pendingNew.length) return;
+      noteLayoutMutate();
+      layoutChanged = true;
       const frag = document.createDocumentFragment();
       if (pendingNew.length > 8) {
         _superPatchTpl.innerHTML = pendingNew.map((it) => it.render()).join("");
@@ -4789,6 +4896,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
             added++;
@@ -4801,6 +4909,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
             added++;
@@ -4813,6 +4922,7 @@
           el._collieKey = it.key;
           el._collieSig = it.sig;
           if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+          if (it.entryId !== undefined) el._collieEntryId = it.entryId;
           nodeMap.set(it.key, el);
           frag.appendChild(el);
           added++;
@@ -4835,15 +4945,29 @@
       }
       flushFrag();
       if (el._collieSig !== it.sig) {
-        if (it.canPromoteInPlace && el._collieMsgSig && el._collieMsgSig === it.msgSig && promoteUserNodeInPlace(el, it)) {
+        let promoted = null;
+        if (it.canPromoteInPlace && el._collieMsgSig && el._collieMsgSig === it.msgSig) {
+          promoted = promoteUserNodeInPlace(el, it);
+        } else if (it.canPromoteCollieInPlace && el._collieMsgSig && el._collieMsgSig === it.msgSig) {
+          promoted = promoteCollieNodeInPlace(el, it);
+        } else if (it.canPromoteEventInPlace && el._collieMsgSig && el._collieMsgSig === it.msgSig) {
+          promoted = promoteEventInPlace(el, it);
+        }
+        if (promoted) {
+          if (promoted.layoutChanged) {
+            noteLayoutMutate();
+            layoutChanged = true;
+          }
           updated++;
-          reused++;
         } else {
+          noteLayoutMutate();
+          layoutChanged = true;
           const fresh = parseSuperNode(it.render());
           if (fresh) {
             fresh._collieKey = it.key;
             fresh._collieSig = it.sig;
             if (it.msgSig !== undefined) fresh._collieMsgSig = it.msgSig;
+            if (it.entryId !== undefined) fresh._collieEntryId = it.entryId;
             const wasCursor = el === cursor;
             if (el.parentNode === box) box.replaceChild(fresh, el);
             el = fresh;
@@ -4858,6 +4982,8 @@
       if (el === cursor) {
         cursor = el.nextElementSibling;
       } else {
+        noteLayoutMutate();
+        layoutChanged = true;
         if (cursor) box.insertBefore(el, cursor);
         else box.appendChild(el);
         moved++;
@@ -4865,6 +4991,8 @@
     }
     flushFrag();
     while (cursor) {
+      noteLayoutMutate();
+      layoutChanged = true;
       const next = cursor.nextElementSibling;
       box.removeChild(cursor);
       cursor = next;
@@ -4875,7 +5003,7 @@
     stats.lastRemoved = removed;
     stats.lastReused = reused;
     stats.lastMs = performance.now() - t0;
-    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, fullRebuild: false };
+    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, fullRebuild: false, layoutChanged };
   }
 
   // Anti-flicker state for the in-stream "Collie 在想…" row (#super-working):
@@ -4957,9 +5085,10 @@
     return superBusyShown;
   }
 
+  const THREAD_DESKTOP_MIN = 1180;
   let collieStickBottom = true;
   let collieForceBottomUntil = 0;
-  const isDesktopThreadSideBySide = () => !!(activeThreadRoot && innerWidth > 1000 && $("#app")?.classList?.contains("has-thread"));
+  const isDesktopThreadSideBySide = () => !!(activeThreadRoot && innerWidth > THREAD_DESKTOP_MIN && $("#app")?.classList?.contains("has-thread"));
   function snapCollieStickBottom(sc = viewScroller("collie")) {
     if (view !== "collie" || !sc || collieInitialAnchor || activeCollieRestore || olderBusy) return;
     if (isDesktopThreadSideBySide()) return;
@@ -5128,7 +5257,6 @@
       superAsksGen,
     ].join("|");
 
-    renderPendingBar();
     lastSuperFastSig = computeSuperFastSig(allEntries);
     if (view === "collie") {
       const nbSig = [
@@ -5141,6 +5269,7 @@
     }
 
     if (!force && nextBodyKey === superBodyKey && (!canPatchSuperDom(box) || box.firstElementChild)) {
+      renderPendingBar();
       if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
@@ -5150,7 +5279,6 @@
       syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
       if (activeThreadRoot) syncThreadDrawer();
     } else {
-      ensureLiveAnchor();
       const items = [];
       if (olderShowRow) {
         items.push({ key: "__earlier__", sig: "earlier", render: () => `<div class="earlier-row">加载中…</div>` });
@@ -5219,6 +5347,7 @@
           return `<button type="button" class="thread-entry" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(eKey)}" aria-expanded="false">` +
             `${ICON_THREAD_BRANCH}<span class="te-count">${replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
         };
+        let prevCollieRoot = "", prevCollieHasEntry = false;
         for (let ei = 0; ei < allEntries.length; ei++) {
           const e = allEntries[ei];
           if (isHiddenSuperEntry(e)) continue;
@@ -5231,6 +5360,8 @@
               render: () => `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(uId)}" role="separator" aria-label="以下为未读消息"><span>以下为未读消息</span></div>`,
             });
             prev = "";
+            prevCollieRoot = "";
+            prevCollieHasEntry = false;
           }
           const at = +new Date(e.at) || 0;
           const talk = e.role === "user" || e.role === "collie";
@@ -5243,15 +5374,26 @@
               render: () => `<div class="time-sep">${esc(tLabel)}</div>`,
             });
             prev = "";
+            prevCollieRoot = "";
+            prevCollieHasEntry = false;
           }
           if (at) lastAt = at;
-          const cont = e.role === "collie" && prev === "collie";
-          prev = e.role;
           const pinned = !!(e.id && pinIds.has(e.id));
           const eRoot = eKey ? (threadInfo.allMsgToRoot.get(eKey) || "") : "";
           const showEntry = !!(eKey && threadInfo.showEntryOn.has(eKey));
           const teRoot = showEntry ? (threadInfo.msgToRoot.get(eKey) || "") : "";
           const teCount = teRoot ? (threadInfo.threads.get(teRoot)?.replyCount || 0) : 0;
+          const hasNewQuote = e.role === "collie" && !!(e.re && (!e.re.entry || e.re.entry !== lastCollie));
+          const sameCollieTopic = !!(eRoot && prevCollieRoot && eRoot === prevCollieRoot);
+          const cont = e.role === "collie" && prev === "collie" && !prevCollieHasEntry && !(hasNewQuote && !sameCollieTopic);
+          prev = e.role;
+          if (e.role === "collie") {
+            prevCollieRoot = eRoot;
+            prevCollieHasEntry = !!(teRoot && teCount > 0);
+          } else {
+            prevCollieRoot = "";
+            prevCollieHasEntry = false;
+          }
 
           if (e.role === "user") {
             const qi = analyzeQuote(e, ei);
@@ -5271,6 +5413,8 @@
               entryId: e.id || "",
               pinned,
               rootId: eRoot,
+              teRoot,
+              teCount,
               at,
               renderFoot,
               render: () => {
@@ -5280,10 +5424,11 @@
                 const quoteHtml = renderQuoteHtml(qi, e);
                 const mediaHtml = renderUserMedia(parts.imgs);
                 const idTitleAttrs = `data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}`;
+                const quoteCls = quoteHtml ? " has-quote" : "";
                 if (mediaHtml && !parts.hasBubbleContent) {
-                  return `<div class="mine is-media-only${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user is-media-only" ${idTitleAttrs}>${quoteHtml}${mediaHtml}</div>${renderFoot()}</div>`;
+                  return `<div class="mine is-media-only${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}<div class="msg user is-media-only" ${idTitleAttrs}>${mediaHtml}</div>${renderFoot()}</div>`;
                 }
-                return `<div class="mine${mediaHtml ? " has-media" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${quoteHtml}${parts.textHtml}${parts.attHtml}</div>${renderFoot()}</div>`;
+                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}${parts.attHtml}</div>${renderFoot()}</div>`;
               },
             });
             lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
@@ -5293,17 +5438,28 @@
             const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
             const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
             const artifactsHtml = renderEntryArtifacts(e, openFilePath);
-            const sig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${e.text || ""}`;
+            const msgSig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${e.text || ""}`;
+            const sig = `${msgSig}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}`;
+            const renderFoot = () => {
+              const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
+              const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot);
+              return entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
+            };
             items.push({
               key: eKey,
               sig,
+              msgSig,
+              canPromoteCollieInPlace: true,
+              cont,
+              pinned,
+              rootId: eRoot,
+              teRoot,
+              teCount,
+              renderFoot,
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
-                const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot);
-                const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${artifactsHtml}${optsHtml}${foot}</div></div>`;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${artifactsHtml}${optsHtml}${renderFoot()}</div></div>`;
               },
             });
             sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
@@ -5316,25 +5472,37 @@
             const isPeerReq = typeof e.ref === "string" && e.ref.startsWith("peer-req:");
             const pane = !hid && !past && !isPeerReq && e.ref ? paneOf(e.ref) : null;
             const hTitle = e.text?.includes("做梦") ? "翻看做梦前的对话" : "翻看交接前的对话";
-            const tag = hid ? `a href="#/h/${encodeURIComponent(hid)}" title="${hTitle}"`
-              : past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"`
-              : isPeerReq ? `button type="button" title="点击打开好友边牧审批"`
-              : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
+            const evHref = hid ? `#/h/${encodeURIComponent(hid)}`
+              : past ? `#/h/${encodeURIComponent(past.id)}`
+              : (!isPeerReq && pane) ? `#/p/${encodeURIComponent(pane)}` : "";
+            const evTitle = hid ? hTitle : past ? "看它的完整记录" : isPeerReq ? "点击打开好友边牧审批" : "";
+            const evTagName = evHref ? "a" : isPeerReq ? "button" : "div";
+            const tag = evTagName === "a" ? `a href="${evHref}"${evTitle ? ` title="${evTitle}"` : ""}`
+              : evTagName === "button" ? `button type="button" title="${evTitle}"` : "div";
             const w = e.tone === "spawn" ? (workerByNameMap.get(e.ref) || null) : null;
             const busyW = w && workerBusy(w);
             const stuck = w && !w.ended && w.status === "blocked";
             const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busyW ? "running" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
             const wstate = w ? (w.ended ? "已结束" : busyW ? "还在跑" : stuck ? "等你确认" : "") : "";
             const whenStr = hhmm(at || e.at);
-            const sig = `ev|${e.id || ""}|${e.ref || ""}|${e.tone || ""}|${tag}|${tone}|${wstate}|${whenStr}|${e.text || ""}`;
+            const cls = `event${e.tone === "error" ? " error" : ""}${isPeerReq ? " is-peer-req" : ""}`;
+            const msgSig = `ev|${e.id || ""}|${e.ref || ""}|${e.tone || ""}|${evTagName}|${whenStr}|${e.text || ""}`;
+            const sig = `${msgSig}|${evHref}|${evTitle}|${tone}|${wstate}`;
             items.push({
               key: eKey,
               sig,
+              msgSig,
+              canPromoteEventInPlace: true,
+              tagName: evTagName,
+              href: evHref,
+              title: evTitle,
+              cls,
+              tone,
+              wstate,
               render: () => {
                 const idAttr = e.id ? ` data-id="${esc(e.id)}"` : "";
                 const refAttr = e.ref ? ` data-ref="${esc(e.ref)}"` : "";
-                const cls = `event${e.tone === "error" ? " error" : ""}${isPeerReq ? " is-peer-req" : ""}`;
-                return `<${tag} class="${cls}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${whenStr}</span><span>${esc(e.text)}</span>${wstate ? `<span class="wstate">${wstate}</span>` : ""}</${tag.split(" ")[0]}>`;
+                return `<${tag} class="${cls}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${whenStr}</span><span>${esc(e.text)}</span>${wstate ? `<span class="wstate">${wstate}</span>` : ""}</${evTagName}>`;
               },
             });
           }
@@ -5353,20 +5521,25 @@
       }
       superBodyKey = nextBodyKey;
       let domMutated = false;
+      let domLayoutChanged = false;
       if (canPatchSuperDom(box)) {
-        const res = patchSuperThread(box, items);
+        const res = patchSuperThread(box, items, { onBeforeLayoutMutate: ensureLiveAnchor });
         domMutated = res.mutated;
+        domLayoutChanged = res.layoutChanged;
         if (domMutated) superDomGen++;
       } else {
         const html = items.map((it) => it.render()).join("");
         if (html !== superSig || force) {
+          ensureLiveAnchor();
           superSig = html;
           superDomGen++;
           box.innerHTML = html;
           domMutated = true;
+          domLayoutChanged = true;
         }
       }
       if (domMutated) {
+        renderPendingBar();
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (flashEntry.until > Date.now() && flashEntry.id) {
           const fid = CSS.escape(flashEntry.id);
@@ -5374,12 +5547,18 @@
           if (fEl && !fEl.classList.contains("flash")) fEl.classList.add("flash");
         }
         if (activeThreadRoot) syncThreadDrawer();
+        if (!domLayoutChanged && !busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
+          updateSuperJump();
+          return;
+        }
       } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
+        renderPendingBar();
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
         updateSuperJump();
         return;
       } else {
+        renderPendingBar();
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
       }
@@ -5554,12 +5733,6 @@
     }
     if ((crew.scrollWidth || 0) > cw + 2) {
       crew.classList.add("is-no-kind");
-      if ((crew.scrollWidth || 0) > cw + 2) {
-        crew.classList.add("is-tight");
-        const avail = Math.max(0, cw - 28 - Math.max(0, count - 1) * 4);
-        const perChipName = Math.max(52, Math.min(160, Math.floor(avail / count) - 31));
-        crew.style?.setProperty?.("--crew-chip-max", perChipName + "px");
-      }
     }
     crew._syncScrollFade?.();
   }
@@ -14612,7 +14785,7 @@
     if (a.dataset.threadRoot && !a.closest("#thread-drawer")) {
       const rootId = a.dataset.threadRoot;
       const targetId = a.dataset.goto || "";
-      const msgId = a.closest(".msg[data-id]")?.dataset.id || targetId;
+      const msgId = a.closest(".msg[data-id]")?.dataset.id || a.closest(".mine")?.querySelector(".msg[data-id]")?.dataset.id || targetId;
       if (activeThreadRoot === rootId) {
         if (targetId) jumpToEntry(targetId, opts);
       } else {
@@ -15201,7 +15374,14 @@
   const fileScrim = $("#file-scrim");
   const fvWidenBtn = $("#fv-widen");
   let fileWide = false;
-  const setFileW = (w) => document.documentElement.style.setProperty("--file-w", Math.round(w) + "px");
+  let _lastFileW = 0;
+  const setFileW = (w) => {
+    const px = Math.round(w);
+    _lastFileW = px;
+    if (pane) pane.style.setProperty("--file-w", px + "px");
+    const appEl = $("#app");
+    if (appEl) appEl.style.setProperty("--file-w", px + "px");
+  };
   // The widest the panel may be: the conversation keeps at least 360px.
   const fileMax = () => Math.max(420, innerWidth - ($(".side")?.offsetWidth || 0) - 360);
   const fileWideW = () => Math.min(Math.max(600, Math.round((innerWidth - ($(".side")?.offsetWidth || 0)) * 0.56)), fileMax());
@@ -15286,7 +15466,7 @@
     const up = () => {
       grip.removeEventListener("pointermove", move);
       document.body.classList.remove("dragging");
-      store.set("fileW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--file-w")) || 520);
+      store.set("fileW", _lastFileW || parseInt(getComputedStyle(pane || document.documentElement).getPropertyValue("--file-w")) || 520);
       if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
     };
     grip.addEventListener("pointermove", move);
@@ -15298,6 +15478,7 @@
   const NOTES_COMPACT_TASKS = 3;
   const NOTES_COMPACT_FILES = 2;
   const NOTES_COMPACT_TIMERS = 1;
+  const THREADS_COMPACT_ACTIVE = 5;
   const notesPane = $("#notes-pane");
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
@@ -15309,9 +15490,6 @@
   const thPopWrap = $("#collie-threads-wrap");
   const thHeadBtn = $("#collie-threads-btn");
   const thHeadDot = $("#collie-threads-dot");
-  const thPopTabs = $("#collie-threads-tabs");
-  const thPopCntAll = $("#collie-threads-cnt-all");
-  const thPopCntActive = $("#collie-threads-cnt-active");
   const thPopSub = $("#collie-threads-sub");
   const thPopList = $("#collie-threads-list");
   const normalizeSidePanePref = (v) => (v === "notes" || v === "threads" || v === "none") ? v : "";
@@ -15328,10 +15506,118 @@
   let notebookLastRefreshSig = "";
   let notesOpen = false;
   let notesExpanded = false;
+  let threadsExpanded = false;
   let _lastCollieTopH = 0;
   let _lastNotebookRenderKey = "";
+  let _collieShiftMode = null; // null | "none" | "notes" | "thread"
+  let _collieShiftCur = 0;
+  let _collieShiftTarget = 0;
+  let _collieShiftRAF = 0;
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
+  function computeCollieShiftPx(reservePx = 280) {
+    if (reservePx <= 0) return 0;
+    const sideW = $(".side")?.offsetWidth || (innerWidth <= 1100 ? 268 : 300);
+    const canvas = Math.max(0, innerWidth - sideW);
+    const free = (canvas - 780) / 2;
+    return -Math.min(reservePx / 2, Math.max(0, free - 20));
+  }
+  function syncCollieTopThreadClearance(px) {
+    const topEl = $("#v-collie .collie-top");
+    if (!topEl?.style) return;
+    if (px > 0) topEl.style.setProperty("--thread-top-pr", Math.round(px) + "px");
+    else topEl.style.removeProperty("--thread-top-pr");
+  }
+  function clearCollieShiftInline() {
+    if (_collieShiftRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_collieShiftRAF);
+      _collieShiftRAF = 0;
+    }
+    for (const el of [$("#super-thread"), $("#super-working"), $("#super-composer")]) {
+      if (el?.style) el.style.transform = "";
+    }
+  }
+  // Smooth 60 FPS rAF matrix glide for the unified left-biased desktop slot without CSS
+  // transition: transform (avoids Blink's 40k-node PrePaint invalidation on transition start/end).
+  function syncCollieLeftShift(mode, opts = {}) {
+    const nextMode = mode === "thread" && innerWidth > THREAD_DESKTOP_MIN
+      ? "thread"
+      : mode === "notes" && isWideNotesViewport()
+        ? "notes"
+        : "none";
+    const reserve = nextMode === "thread" ? (opts.threadW || _lastThreadW || 432)
+      : nextMode === "notes" ? 280 : 0;
+    const targetX = reserve > 0 ? computeCollieShiftPx(reserve) : 0;
+    syncCollieTopThreadClearance(nextMode === "thread" ? reserve : 0);
+    const prevMode = _collieShiftMode;
+    const prevTarget = _collieShiftTarget;
+    _collieShiftMode = nextMode;
+    _collieShiftTarget = targetX;
+    const els = [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style);
+    const settle = () => {
+      _collieShiftCur = targetX;
+      if (nextMode === "thread") {
+        const tr = `translate3d(${targetX.toFixed(2)}px, 0, 0)`;
+        for (const el of els) el.style.transform = tr;
+      } else {
+        for (const el of els) el.style.transform = "";
+      }
+    };
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!opts.immediate && !reduced && prevMode === nextMode && Math.abs(prevTarget - targetX) < 0.5 && _collieShiftRAF) {
+      return;
+    }
+    if (opts.immediate || prevMode === null || (prevMode === nextMode && Math.abs(prevTarget - targetX) < 0.5) || reduced || typeof requestAnimationFrame !== "function" || !els.length) {
+      if (_collieShiftRAF && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(_collieShiftRAF);
+        _collieShiftRAF = 0;
+      }
+      settle();
+      return;
+    }
+    const fromX = _collieShiftCur;
+    const delta = targetX - fromX;
+    if (Math.abs(delta) < 0.5) {
+      if (_collieShiftRAF && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(_collieShiftRAF);
+        _collieShiftRAF = 0;
+      }
+      settle();
+      return;
+    }
+    if (_collieShiftRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_collieShiftRAF);
+      _collieShiftRAF = 0;
+    }
+    const dur = nextMode !== "none" ? 240 : 180;
+    const t0 = performance.now();
+    // Apply starting transform immediately in the same frame as class toggle so there is 0px snap.
+    const startTr = `translate3d(${fromX.toFixed(2)}px, 0, 0)`;
+    for (const el of els) el.style.transform = startTr;
+    let sync = true;
+    const step = (now) => {
+      if (sync) {
+        _collieShiftRAF = 0;
+        settle();
+        return;
+      }
+      const p = Math.min(1, Math.max(0, (now - t0) / dur));
+      // Smooth cubic ease-out closely matching cubic-bezier(.22, 1, .36, 1)
+      const ease = 1 - Math.pow(1 - p, 3);
+      const x = fromX + delta * ease;
+      _collieShiftCur = x;
+      if (p >= 1) {
+        _collieShiftRAF = 0;
+        settle();
+        return;
+      }
+      const tr = `translate3d(${x.toFixed(2)}px, 0, 0)`;
+      for (const el of els) el.style.transform = tr;
+      _collieShiftRAF = requestAnimationFrame(step);
+    };
+    _collieShiftRAF = requestAnimationFrame(step);
+    sync = false;
+  }
   function persistSidePanePref(next) {
     sidePanePref = normalizeSidePanePref(next) || "none";
     store.set("sidePane", sidePanePref);
@@ -15383,19 +15669,26 @@
   function syncNotebookExpanded() {
     if (!notesPane) return;
     const isNotes = sidePaneActiveMode === "notes";
-    const showFull = isNotes && (notesExpanded || !isWideNotesViewport());
+    const showFull = !isWideNotesViewport() || (isNotes ? notesExpanded : threadsExpanded);
     notesPane.classList.toggle("is-expanded", showFull);
     notesPane.setAttribute("data-expanded", showFull ? "true" : "false");
-    const moreFolds = notesPane.querySelectorAll?.(".np-fold-more") || [];
+    const activeContainer = isNotes ? npBodyEl : npThreadsBodyEl;
+    const moreFolds = (activeContainer || notesPane).querySelectorAll?.(".np-fold-more") || [];
     for (const el of moreFolds) {
       if ("inert" in el) el.inert = !showFull;
       el.setAttribute?.("aria-hidden", showFull ? "false" : "true");
     }
+    const pills = (activeContainer || notesPane).querySelectorAll?.(".np-more-pill") || [];
+    for (const pill of pills) {
+      pill.tabIndex = showFull ? -1 : 0;
+      pill.setAttribute("aria-hidden", showFull ? "true" : "false");
+    }
     for (const id of ["#np-tasks-more", "#np-files-more", "#np-timers-more"]) {
       const pill = $(id);
       if (!pill) continue;
-      pill.tabIndex = showFull ? -1 : 0;
-      pill.setAttribute("aria-hidden", showFull ? "true" : "false");
+      const hiddenState = isNotes ? showFull : true;
+      pill.tabIndex = hiddenState ? -1 : 0;
+      pill.setAttribute("aria-hidden", hiddenState ? "true" : "false");
     }
   }
   function setNotesExpanded(next) {
@@ -15405,6 +15698,15 @@
       return;
     }
     notesExpanded = want;
+    syncNotebookExpanded();
+  }
+  function setThreadsExpanded(next) {
+    const want = !!next;
+    if (want === threadsExpanded) {
+      syncNotebookExpanded();
+      return;
+    }
+    threadsExpanded = want;
     syncNotebookExpanded();
   }
   function renderNotebook() {
@@ -15518,16 +15820,18 @@
     const col = $("#v-collie");
     if (!col || !notesPane) return;
     const immediate = !!opts.immediate;
-    if (immediate) {
-      col.classList.add("no-notes-anim");
-      if (_noNotesAnimRAF && typeof cancelAnimationFrame === "function") {
-        cancelAnimationFrame(_noNotesAnimRAF);
-        _noNotesAnimRAF = 0;
-      }
-    }
     const appEl = $("#app");
     const blockedByDrawer = !!(activeThreadRoot || appEl?.classList?.contains("has-file") || appEl?.classList?.contains("has-thread"));
     const blockedByPopover = hasTopRightOverlay();
+    // On wide desktop, #notes-pane lives inside parked #v-collie (content-visibility: hidden).
+    // Leaving #/collie freezes its open/slot state untouched so returning reveals it in-place
+    // on frame 0 with zero transition replay, zero opacity blink, and zero layout jitter.
+    if (view !== "collie" && isWideNotesViewport()) {
+      sidePaneOverlay = "";
+      notesOpen = false;
+      document.body?.classList?.toggle("collie-has-notes", false);
+      return;
+    }
     let wantOpen = false;
     let keepSlot = false;
     if (view === "collie" && !blockedByDrawer) {
@@ -15545,11 +15849,24 @@
     } else {
       sidePaneOverlay = "";
     }
+    const wasHidden = notesPane.classList.contains("is-hidden");
+    const hadNotes = col.classList.contains("has-notes");
+    const stateUnchanged = (wasHidden === !wantOpen) && (hadNotes === keepSlot);
+    if (immediate && !stateUnchanged) {
+      col.classList.add("no-notes-anim");
+      if (_noNotesAnimRAF && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(_noNotesAnimRAF);
+        _noNotesAnimRAF = 0;
+      }
+    }
     const isThreads = sidePaneActiveMode === "threads";
     notesOpen = wantOpen;
-    col.classList.toggle("has-notes", keepSlot);
+    if (hadNotes !== keepSlot) col.classList.toggle("has-notes", keepSlot);
     document.body?.classList?.toggle("collie-has-notes", keepSlot);
-    notesPane.classList.toggle("is-hidden", !wantOpen);
+    const hasThreadOpen = !!(activeThreadRoot || appEl?.classList?.contains("has-thread"));
+    const shiftMode = view === "collie" && hasThreadOpen ? "thread" : keepSlot ? "notes" : "none";
+    syncCollieLeftShift(shiftMode, { immediate: immediate || view !== "collie" });
+    if (wasHidden !== !wantOpen) notesPane.classList.toggle("is-hidden", !wantOpen);
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
     notesPane.setAttribute("aria-label", isThreads ? "话题线" : "小本本");
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
@@ -15559,7 +15876,7 @@
     if (thPopSub) thPopSub.hidden = !isThreads;
     if (npBodyEl) npBodyEl.hidden = isThreads;
     if (npThreadsBodyEl) npThreadsBodyEl.hidden = !isThreads;
-    if (npHeadEl) npHeadEl.title = isThreads ? "" : "点击切换紧凑或展开";
+    if (npHeadEl) npHeadEl.title = "点击切换紧凑或展开";
     if (notesBtn) {
       const onNotes = wantOpen && !isThreads;
       notesBtn.classList.toggle("on", onNotes);
@@ -15576,7 +15893,7 @@
       else renderNotebook();
     }
     syncNotebookExpanded();
-    if (immediate) {
+    if (immediate && !stateUnchanged) {
       if (typeof requestAnimationFrame === "function") {
         _noNotesAnimRAF = requestAnimationFrame(() => {
           _noNotesAnimRAF = requestAnimationFrame(() => {
@@ -15642,7 +15959,21 @@
   $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("#np-close, #np-back, #np-handle, #np-threads-body")) return;
+    if (ev.target.closest("#np-close, #np-back, #np-handle")) return;
+    if (sidePaneActiveMode === "threads") {
+      if (ev.target.closest("[data-th-pick]")) return;
+      if (!isWideNotesViewport()) return;
+      if (ev.target.closest("[data-np-expand]")) {
+        ev.preventDefault();
+        setThreadsExpanded(true);
+        return;
+      }
+      const sel = window.getSelection?.();
+      if (sel && !sel.isCollapsed && typeof notesPane.contains === "function" && notesPane.contains(sel.anchorNode)) return;
+      ev.preventDefault();
+      setThreadsExpanded(!threadsExpanded);
+      return;
+    }
     if (sidePaneActiveMode !== "notes") return;
     const fBtn = ev.target.closest("[data-np-file]");
     if (fBtn) {
@@ -15692,6 +16023,8 @@
         syncNotebookVisibility();
       } else if (sidePaneActiveMode === "notes" && notesExpanded) {
         setNotesExpanded(false);
+      } else if (sidePaneActiveMode === "threads" && threadsExpanded) {
+        setThreadsExpanded(false);
       }
     }
   });
@@ -15704,13 +16037,13 @@
   }
   window.addEventListener("resize", () => {
     if (view === "collie") {
+      clearCollieShiftInline();
       syncCollieTopHeight();
-      syncNotebookVisibility();
+      syncNotebookVisibility({ immediate: true });
     }
   });
 
   // ───────────────────────────── natural reply-chain thread drawer
-  let thPopFilter = "all"; // "all" | "active"
   let thPopSig = "";
 
   function openThreadFromAnywhere(rootId, focusId = "") {
@@ -15779,13 +16112,6 @@
   function closeCollieThreadsPop() {
     // Threads now live inside the unified #notes-pane side card; no standalone dropdown popover exists.
   }
-  function setCollieThreadsFilter(nextFilter) {
-    const f = nextFilter === "active" ? "active" : "all";
-    if (thPopFilter === f) return;
-    thPopFilter = f;
-    const entries = chatEntries();
-    renderCollieThreadsMenu(computeReplyThreads(entries), entries);
-  }
   let _thMenuRowsCache = { key: "", allRows: [], activeRows: [] };
   let _thPopInputSig = "";
   function renderCollieThreadsMenu(threadInfo, allEntries) {
@@ -15795,7 +16121,7 @@
     const pendList = activePending();
     const pendKey = `${sup.hasPending ? 1 : 0}:${pendList.map((p) => p.id).join(",")}:${dismissedLocal.size ? [...dismissedLocal].join(",") : ""}`;
     const rowsKey = `${entriesFingerprint(entries)}|${workerStateFingerprint()}|${pendKey}`;
-    const fullInputSig = `${rowsKey}|${thPopFilter}|${activeThreadRoot || ""}|${sidePanePref}|${sidePaneOverlay}|${dayBounds()}`;
+    const fullInputSig = `${rowsKey}|${activeThreadRoot || ""}|${sidePanePref}|${sidePaneOverlay}|${dayBounds()}`;
     if (fullInputSig === _thPopInputSig) return;
     _thPopInputSig = fullInputSig;
 
@@ -15833,6 +16159,7 @@
       activeRows = allRows.filter((r) => r.inProgress);
       _thMenuRowsCache = { key: rowsKey, allRows, activeRows };
     }
+    const inactiveRows = allRows.filter((r) => !r.inProgress);
     const keepThreadsVisible = sidePanePref === "threads" || sidePaneOverlay === "threads";
     if (!allRows.length && !keepThreadsVisible) {
       thPopWrap.hidden = true;
@@ -15844,49 +16171,45 @@
     thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
     thHeadBtn.classList.toggle("has-pending", pendingRowsCount > 0);
     if (thHeadDot) thHeadDot.hidden = pendingRowsCount === 0;
-    if (thPopCntAll) setText(thPopCntAll, String(allRows.length));
-    if (thPopCntActive) setText(thPopCntActive, String(activeRows.length));
-    if (thPopTabs) {
-      for (const tab of thPopTabs.querySelectorAll("[data-th-filter]")) {
-        const on = tab.dataset.thFilter === thPopFilter;
-        tab.classList.toggle("on", on);
-        tab.setAttribute("aria-pressed", on ? "true" : "false");
-      }
-    }
-    const filtered = thPopFilter === "active" ? activeRows : allRows;
-    const shown = filtered.slice(0, 30);
+    const shownActive = activeRows.slice(0, 20);
+    const shownInactive = inactiveRows.slice(0, Math.max(0, 30 - shownActive.length));
     if (thPopSub) {
-      setText(thPopSub, filtered.length > shown.length
-        ? `前 ${shown.length} / ${filtered.length} 条`
-        : pendingRowsCount > 0 ? `${pendingRowsCount} 条待处理`
-        : filtered.length > 0 ? `${filtered.length} 条` : "");
+      setText(thPopSub, pendingRowsCount > 0 ? `${pendingRowsCount} 条待处理`
+        : activeRows.length > 0 ? `${activeRows.length} 活跃`
+        : allRows.length > 0 ? `${allRows.length} 条历史` : "");
     }
+    const rowSigOf = ({ th, pending, activeWorkers, hasBlockedWorker, inProgress }) => [
+      th.rootId,
+      th.replyCount,
+      th.branchCount,
+      th.latest?.id || "",
+      th.latest?.at || "",
+      th.title,
+      th.preview || "",
+      pending ? 1 : 0,
+      activeWorkers.length,
+      hasBlockedWorker ? 1 : 0,
+      inProgress ? 1 : 0,
+    ];
+    // Stable DOM signature: intentionally excludes threadsExpanded so CSS 0fr -> 1fr runs without DOM rebuild.
     const sig = JSON.stringify([
-      thPopFilter,
       activeThreadRoot || "",
       allRows.length,
       activeRows.length,
-      shown.map(({ th, pending, activeWorkers, hasBlockedWorker, inProgress }) => [
-        th.rootId,
-        th.replyCount,
-        th.branchCount,
-        th.latest?.id || "",
-        th.latest?.at || "",
-        th.title,
-        th.preview || "",
-        pending ? 1 : 0,
-        activeWorkers.length,
-        hasBlockedWorker ? 1 : 0,
-        inProgress ? 1 : 0,
-      ]),
+      shownActive.map(rowSigOf),
+      shownInactive.map(rowSigOf),
     ]);
-    if (sig === thPopSig) return;
-    thPopSig = sig;
-    if (!shown.length) {
-      thPopList.innerHTML = `<div class="th-pop-empty" role="status">${thPopFilter === "active" ? "当前没有进行中的话题" : "暂无多轮话题线"}</div>`;
+    if (sig === thPopSig) {
+      syncNotebookExpanded();
       return;
     }
-    thPopList.innerHTML = shown.map(({ th, pending, activeWorkers, hasBlockedWorker, inProgress }) => {
+    thPopSig = sig;
+    if (!allRows.length) {
+      thPopList.innerHTML = `<div class="th-pop-empty" role="status">暂无多轮话题线</div>`;
+      syncNotebookExpanded();
+      return;
+    }
+    const renderRow = ({ th, pending, activeWorkers, hasBlockedWorker, inProgress }, foldMeta) => {
       const isAct = activeThreadRoot === th.rootId;
       const lastAt = th.latest?.at ? sepTime(+new Date(th.latest.at)) : "";
       const metaParts = [th.replyCount > 0 ? `${th.replyCount} 条回复` : "1 条消息"];
@@ -15894,26 +16217,58 @@
       if (activeWorkers.length > 0) {
         metaParts.push(hasBlockedWorker ? "Agent 等确认" : `${activeWorkers.length} 个在跑`);
       }
-      const dotHtml = pending
-        ? `<span class="th-pop-dot" aria-hidden="true"></span><span class="visually-hidden">待处理，</span>`
-        : "";
+      const dotCls = pending ? "is-attn" : inProgress ? "" : "is-idle";
+      const dotHtml = `<span class="th-pop-dot${dotCls ? " " + dotCls : ""}" aria-hidden="true"></span>${pending ? `<span class="visually-hidden">待处理，</span>` : ""}`;
       const previewHtml = th.preview
         ? `<div class="th-pop-preview" title="${esc(th.preview)}">${esc(th.preview)}</div>`
         : "";
-      return `<button type="button" class="th-pop-item${isAct ? " active" : ""}${pending ? " is-pending" : ""}${inProgress ? " is-active" : ""}" role="listitem" data-th-pick="${esc(th.rootId)}" data-th-latest="${esc(entryKey(th.latest))}"${pending ? ' data-th-pending="1"' : ""}${inProgress ? ' data-th-active="1"' : ""}>
-        ${dotHtml}
-        <div class="th-pop-title" title="${esc(th.fullTitle || th.title)}">${esc(th.title)}</div>
+      const metaInner = `<div class="th-pop-meta"><span>${esc(metaParts.join(" · "))}</span><span>${esc(lastAt)}</span></div>`;
+      const metaHtml = foldMeta
+        ? `<div class="np-fold" style="--stagger: 35ms"><div class="np-fold-inner">${metaInner}</div></div>`
+        : metaInner;
+      return `<button type="button" class="th-pop-item${isAct ? " active" : ""}${pending ? " is-pending" : ""}${inProgress ? " is-active" : " is-inactive"}" role="listitem" data-th-pick="${esc(th.rootId)}" data-th-latest="${esc(entryKey(th.latest))}"${pending ? ' data-th-pending="1"' : ""}${inProgress ? ' data-th-active="1"' : ""}>
+        <div class="th-pop-main">${dotHtml}<div class="th-pop-title" title="${esc(th.fullTitle || th.title)}">${esc(th.title)}</div></div>
         ${previewHtml}
-        <div class="th-pop-meta"><span>${esc(metaParts.join(" · "))}</span><span>${esc(lastAt)}</span></div>
+        ${metaHtml}
       </button>`;
-    }).join("");
+    };
+    const primaryActive = shownActive.slice(0, THREADS_COMPACT_ACTIVE);
+    const extraActive = shownActive.slice(THREADS_COMPACT_ACTIVE);
+    const hiddenTotal = extraActive.length + shownInactive.length;
+    const moreLabel = extraActive.length > 0 && shownInactive.length > 0
+      ? `+${hiddenTotal}`
+      : extraActive.length > 0
+        ? `+${extraActive.length}`
+        : shownInactive.length > 0
+          ? `+${shownInactive.length} 历史`
+          : "";
+    const moreTitle = shownInactive.length > 0
+      ? `展开查看全部 ${allRows.length} 条话题（含 ${inactiveRows.length} 条历史）`
+      : `展开查看全部 ${activeRows.length} 条活跃话题`;
+    const activeSecHtml = `<section class="np-sec np-th-sec-active" aria-labelledby="np-h-th-active">
+      <div class="np-sec-head">
+        <h3 class="np-sec-title" id="np-h-th-active">活跃话题</h3>
+        ${moreLabel ? `<button type="button" class="np-more-pill" id="np-threads-more" data-np-expand title="${esc(moreTitle)}">${esc(moreLabel)}</button>` : ""}
+      </div>
+      ${shownActive.length
+        ? primaryActive.map((r) => renderRow(r, true)).join("") +
+          (extraActive.length
+            ? `<div class="np-fold np-fold-more" style="--stagger: 55ms"><div class="np-fold-inner">${extraActive.map((r) => renderRow(r, true)).join("")}</div></div>`
+            : "")
+        : `<div class="th-pop-empty" role="status">暂无活跃话题</div>`}
+    </section>`;
+    const inactiveSecHtml = shownInactive.length
+      ? `<div class="np-fold np-fold-more np-th-inactive-fold" style="--stagger: 65ms"><div class="np-fold-inner"><section class="np-sec np-th-sec-inactive" aria-labelledby="np-h-th-inactive">
+          <div class="np-sec-head">
+            <h3 class="np-sec-title" id="np-h-th-inactive">历史话题</h3>
+            <span class="np-sub">${inactiveRows.length}</span>
+          </div>
+          ${shownInactive.map((r) => renderRow(r, false)).join("")}
+        </section></div></div>`
+      : "";
+    thPopList.innerHTML = activeSecHtml + inactiveSecHtml;
+    syncNotebookExpanded();
   }
-  thPopTabs?.addEventListener("click", (e) => {
-    const tab = e.target.closest("[data-th-filter]");
-    if (!tab) return;
-    e.stopPropagation();
-    setCollieThreadsFilter(tab.dataset.thFilter);
-  });
   thHeadBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (view !== "collie") return;
@@ -15959,7 +16314,15 @@
   const tdWidenBtn = $("#td-widen");
   const tdCloseBtn = $("#td-close");
   const tdGripEl = $("#td-grip");
-  const setThreadW = (w) => document.documentElement.style.setProperty("--thread-w", Math.round(w) + "px");
+  let _lastThreadW = 0;
+  const setThreadW = (w, opts = {}) => {
+    const px = Math.round(w);
+    _lastThreadW = px;
+    if (tdDrawer) tdDrawer.style.setProperty("--thread-w", px + "px");
+    if (activeThreadRoot && view === "collie" && innerWidth > THREAD_DESKTOP_MIN) {
+      syncCollieLeftShift("thread", { threadW: px, immediate: !!opts.immediate });
+    }
+  };
   const threadAvail = () => {
     const sideW = $(".side")?.offsetWidth || 260;
     return Math.max(480, innerWidth - sideW);
@@ -15975,7 +16338,7 @@
   };
   let threadWide = !!store.get("threadWide", false);
   function syncThreadWideUI() {
-    const activeWide = !!(activeThreadRoot && threadWide && innerWidth > 1000);
+    const activeWide = !!(activeThreadRoot && threadWide && innerWidth > THREAD_DESKTOP_MIN);
     $("#app")?.classList.toggle("thread-wide", activeWide);
     if (tdWidenBtn) {
       tdWidenBtn.setAttribute("aria-pressed", activeWide ? "true" : "false");
@@ -15985,11 +16348,11 @@
     }
   }
   function applyThreadWidth() {
-    if (innerWidth <= 1000) {
+    if (innerWidth <= THREAD_DESKTOP_MIN) {
       syncThreadWideUI();
       return;
     }
-    const defW = innerWidth <= 1120 ? 420 : 432;
+    const defW = 432;
     const w = threadWide
       ? threadWideW()
       : Math.max(360, Math.min(store.get("threadW", 0) || defW, threadMax()));
@@ -16002,14 +16365,9 @@
       syncThreadWideUI();
       return;
     }
-    const sc = activeThreadRoot && view === "collie" ? viewScroller("collie") : null;
-    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     threadWide = wide;
     store.set("threadWide", wide);
     applyThreadWidth();
-    if (lockSnap && innerWidth > 1000 && opts.animate !== false) {
-      beginCollieLayoutLock(lockSnap, { trackTransition: true });
-    }
   }
   let tdHideTimer = 0, tdFocusTimer = 0, tdLoadingRoot = false, tdWorkersSig = "";
   let tdComposerCtrl = null, tdAutoStickUntil = 0, tdDraftRoot = null;
@@ -16811,10 +17169,7 @@
     if (!resolved) return;
     const realRoot = resolved.rootId;
     const appEl = $("#app");
-    const sc = view === "collie" ? viewScroller("collie") : null;
-    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const hadFile = appEl.classList.contains("has-file");
-    const hadThread = appEl.classList.contains("has-thread");
     if (hadFile) closeFilePane();
     clearTimeout(tdHideTimer);
     const switched = activeThreadRoot !== realRoot;
@@ -16836,7 +17191,7 @@
     tdDrawer.setAttribute("aria-hidden", "false");
     $("#v-collie")?.classList?.remove("is-main-focused");
     appEl.classList.add("has-thread");
-    if (innerWidth > 1000) {
+    if (innerWidth > THREAD_DESKTOP_MIN) {
       // Quietly hide the main-stream thinking row and clear left focus while side-by-side drawer takes focus.
       const wk = $("#super-working"), st = $("#router-status");
       if (wk) wk.hidden = true;
@@ -16853,9 +17208,6 @@
       restoreScrollTop: hasRestore ? opts.restoreScrollTop : undefined,
       force: true,
     });
-    if (lockSnap) {
-      beginCollieLayoutLock(lockSnap, { trackTransition: !hadThread && innerWidth > 1000 });
-    }
     if (resolved.missingRoot && canLoadOlder()) {
       ensureThreadRootLoaded(activeThreadRoot, false);
     }
@@ -16865,8 +17217,6 @@
     const appEl = $("#app");
     const wasOpen = !!activeThreadRoot || !tdDrawer.hidden;
     const hadThread = appEl.classList.contains("has-thread");
-    const sc = wasOpen && opts.rerender !== false && view === "collie" ? viewScroller("collie") : null;
-    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     activeThreadRoot = null;
     activeThreadAnchor = "";
     drawerReplyTarget = null;
@@ -16889,20 +17239,17 @@
       if (tdScrim) tdScrim.hidden = true;
     };
     if (opts.immediate) hideNow();
-    else tdHideTimer = setTimeout(hideNow, 340);
+    else tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 260);
     if (wasOpen && opts.rerender !== false && view === "collie") {
       syncActiveThreadMarks();
-      if (lockSnap) {
-        beginCollieLayoutLock(lockSnap, { trackTransition: hadThread && innerWidth > 1000 && !opts.immediate });
-      }
-      if (hadThread && innerWidth > 1000) {
-        renderSuper(lockSnap ? { restore: lockSnap } : undefined);
+      if (hadThread && innerWidth > THREAD_DESKTOP_MIN) {
+        renderSuper();
       }
     }
   }
   function locateFromDrawer(msgId) {
     if (!msgId) return;
-    if (innerWidth <= 1000 && activeThreadRoot) closeThreadDrawer();
+    if (innerWidth <= THREAD_DESKTOP_MIN && activeThreadRoot) closeThreadDrawer();
     requestAnimationFrame(() => jumpToEntry(msgId));
   }
 
@@ -16911,7 +17258,7 @@
     const tdHeadEl = tdDrawer.querySelector(".td-head");
     let tdSkipHandleClickUntil = 0;
     tdWidenBtn?.addEventListener("click", () => {
-      if (innerWidth <= 1000 || !activeThreadRoot) return;
+      if (innerWidth <= THREAD_DESKTOP_MIN || !activeThreadRoot) return;
       setThreadWide(!threadWide);
     });
     $("#v-collie")?.addEventListener("pointerdown", () => {
@@ -16921,7 +17268,7 @@
       $("#v-collie")?.classList?.remove("is-main-focused");
     });
     $("#v-collie")?.addEventListener("click", (e) => {
-      if (!activeThreadRoot || !threadWide || innerWidth <= 1000) return;
+      if (!activeThreadRoot || !threadWide || innerWidth <= THREAD_DESKTOP_MIN) return;
       if (window.getSelection?.()?.toString()) return;
       if (e.target.closest?.("a, button, input, textarea, select, label, .composer, .d-head, .crew, .super-search, .pending-wrap, .msg, .event, .ask, .thumb")) return;
       setThreadWide(false);
@@ -17093,28 +17440,21 @@
       });
     }
     tdGripEl?.addEventListener("pointerdown", (e) => {
-      if (innerWidth <= 1000) return;
+      if (innerWidth <= THREAD_DESKTOP_MIN) return;
       e.preventDefault();
-      cancelCollieLayoutLock();
-      const sc = view === "collie" ? viewScroller("collie") : null;
-      const gripSnap = sc ? captureColliePos(sc) : null;
       const grip = e.currentTarget;
       grip.setPointerCapture(e.pointerId);
       document.body.classList.add("dragging");
       const max = threadDragMax();
       const move = (ev) => {
-        setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)));
-        if (gripSnap && sc) {
-          applyColliePos(sc, gripSnap);
-          updateSuperJump();
-        }
+        setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)), { immediate: true });
       };
       const up = () => {
         grip.removeEventListener("pointermove", move);
         grip.removeEventListener("pointerup", up);
         grip.removeEventListener("pointercancel", up);
         document.body.classList.remove("dragging");
-        const finalW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--thread-w")) || 432;
+        const finalW = _lastThreadW || parseInt(getComputedStyle(tdDrawer).getPropertyValue("--thread-w")) || 432;
         const wideCut = Math.min(threadMax() + 40, Math.max(460, threadWideW() - 24));
         if (finalW > wideCut) {
           threadWide = true;
@@ -17125,11 +17465,6 @@
           store.set("threadW", finalW);
         }
         syncThreadWideUI();
-        if (gripSnap && sc) {
-          applyColliePos(sc, gripSnap);
-          captureViewScroll("collie", null, navCur);
-          updateSuperJump();
-        }
       };
       grip.addEventListener("pointermove", move);
       grip.addEventListener("pointerup", up, { once: true });

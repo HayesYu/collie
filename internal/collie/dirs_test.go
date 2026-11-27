@@ -481,7 +481,7 @@ assert.match(appJs, /data-act="timer-open"/, "timers tab must render compact + æ
 assert.match(appJs, /class="tm-row/, "timers list must use full-width tm-row layout");
 assert.match(css, /\.set-sec \.pick,\s*\.set-sec \.pick\.compact\s*\{[\s\S]*?width:\s*100%/, "settings dropdown triggers must stretch full width");
 assert.match(html, /id="td-handle"/, "thread drawer must include mobile bottom-sheet grabber handle");
-assert.match(css, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.threadpane\s*\{[\s\S]*?border-radius:\s*20px 20px 0 0;[\s\S]*?transform:\s*translateY\(100%\);/, "mobile thread drawer must render as rounded bottom sheet");
+assert.match(css, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.threadpane\s*\{[\s\S]*?border-radius:\s*20px 20px 0 0;[\s\S]*?transform:\s*translate(?:Y\(100%\)|3d\(0,\s*100%,\s*0\));/, "mobile thread drawer must render as rounded bottom sheet");
 
 // 4. Pure helper logic tests extracted from app.js via vm.
 const extractFn = (name) => {

@@ -918,36 +918,42 @@ const mkEntry = (n, role, text, extra = {}) => ({
   liveES.emit("super", { router: { status: "working", alive: true, replied: true }, entries: with309Reply, workers: [], pending: [], pinned: [] });
   assert.equal(wk.hidden, true, "#super-working hides immediately (0ms) when Collie replies");
 
-  // ── 5) Desktop topic drawer widen / restore toggle (#td-widen) ──
+  // ── 5) Desktop topic drawer widen / restore toggle (#td-widen) with --thread-w sunk onto #thread-drawer (never <html>) ──
   const tdWiden = getEl("#td-widen");
+  const tdDrawerEl = getEl("#thread-drawer");
   const appEl = getEl("#app");
   T.openThreadDrawer("e290", "e290", "e290");
-  assert.equal(doc.documentElement.style.getPropertyValue("--thread-w"), "432px", "default drawer width is restrained 432px");
+  assert.equal(tdDrawerEl.style.getPropertyValue("--thread-w"), "432px", "default drawer width is restrained 432px on #thread-drawer");
+  assert.equal(doc.documentElement.style.getPropertyValue("--thread-w"), "", "P0-1: --thread-w must NEVER be written to <html>");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "false");
   assert.equal(tdWiden.title, "拓宽抽屉");
   assert.equal(appEl.classList.contains("thread-wide"), false);
 
   // Click widen -> splits remaining width 50/50 between main chat and thread drawer, persists to localStorage.
   tdWiden.dispatch("click");
-  const wideW = parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10);
+  const wideW = parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10);
   assert.equal(wideW, 590, "widened drawer splits remaining width 50/50 (1180 * 0.5 = 590, got " + wideW + ")");
   assert.equal(1440 - 260 - wideW, 590, "main chat gets symmetric 50% width");
+  assert.equal(doc.documentElement.style.getPropertyValue("--thread-w"), "", "widening must NOT touch <html> style");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "true");
   assert.equal(tdWiden.title, "还原宽度");
   assert.equal(appEl.classList.contains("thread-wide"), true);
   assert.equal(storage.get("collie.threadWide"), "true", "wide preference persisted in localStorage");
 
-  // Narrow desktop (>1000px) keeps comfortable 480px lower bound while leaving >= 200px main strip.
-  ctx.innerWidth = 1024;
+  // Narrow desktop (>1180px) keeps comfortable 480px lower bound while leaving >= 200px main strip; <=1180px enters iPad overlay.
+  ctx.innerWidth = 1220;
   getEl(".side").offsetWidth = 268;
   for (const fn of (winListeners.get("resize") || [])) fn();
-  const narrowWideW = parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10);
-  assert.equal(narrowWideW, 480, "narrow desktop keeps 480px lower bound (got " + narrowWideW + ")");
-  assert.ok(1024 - 268 - narrowWideW >= 200, "narrow desktop leaves >= 200px main strip");
+  const narrowWideW = parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10);
+  assert.equal(narrowWideW, 480, "narrow desktop (>1180px) keeps 480px lower bound (got " + narrowWideW + ")");
+  assert.ok(1220 - 268 - narrowWideW >= 200, "narrow desktop leaves >= 200px main strip");
+  ctx.innerWidth = 1024;
+  for (const fn of (winListeners.get("resize") || [])) fn();
+  assert.equal(appEl.classList.contains("thread-wide"), false, "iPad <=1180px exits desktop side-by-side wide mode");
   ctx.innerWidth = 1440;
   getEl(".side").offsetWidth = 260;
   for (const fn of (winListeners.get("resize") || [])) fn();
-  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), 590, "resizing back restores 50/50 width");
+  assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), 590, "resizing back restores 50/50 width");
 
   // Dragging .td-grip in wide mode stays wide smoothly without jumping, and dragging narrower cleanly restores normal mode.
   const tdGrip = getEl("#td-grip");
@@ -955,14 +961,14 @@ const mkEntry = (n, role, text, extra = {}) => ({
   tdGrip.dispatch("pointerdown", { pointerId: 1, clientX: 1440 - 590 });
   tdGrip.dispatch("pointermove", { pointerId: 1, clientX: 1440 - 640 });
   tdGrip.dispatch("pointerup", { pointerId: 1 });
-  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), 640, "dragging wider keeps exact width without jumping");
+  assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), 640, "dragging wider keeps exact width without jumping");
   assert.equal(appEl.classList.contains("thread-wide"), true, "dragging wider keeps wide state active");
   assert.equal(storage.get("collie.threadWide"), "true");
 
   tdGrip.dispatch("pointerdown", { pointerId: 2, clientX: 1440 - 640 });
   tdGrip.dispatch("pointermove", { pointerId: 2, clientX: 1440 - 440 });
   tdGrip.dispatch("pointerup", { pointerId: 2 });
-  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), 440, "dragging narrower keeps exact width without jumping");
+  assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), 440, "dragging narrower keeps exact width without jumping");
   assert.equal(appEl.classList.contains("thread-wide"), false, "dragging below wide threshold exits wide mode");
   assert.equal(storage.get("collie.threadWide"), "false");
   assert.equal(storage.get("collie.threadW"), "440");
@@ -970,17 +976,17 @@ const mkEntry = (n, role, text, extra = {}) => ({
   // Re-enter wide mode via button; close & reopen remembers widened preference.
   storage.delete("collie.threadW");
   tdWiden.dispatch("click");
-  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), wideW);
+  assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), wideW);
   T.closeThreadDrawer({ immediate: true });
   assert.equal(appEl.classList.contains("thread-wide"), false, "closing drawer clears active wide class");
   T.openThreadDrawer("e290", "e290", "e290");
-  assert.equal(parseInt(doc.documentElement.style.getPropertyValue("--thread-w"), 10), wideW, "reopen restores widened preference");
+  assert.equal(parseInt(tdDrawerEl.style.getPropertyValue("--thread-w"), 10), wideW, "reopen restores widened preference");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "true");
 
   // Clicking blank area of exposed main-stream (#v-collie) collapses back to restrained width.
   const blankTarget = new DomNode("DIV");
   getEl("#v-collie").dispatch("click", { target: blankTarget });
-  assert.equal(doc.documentElement.style.getPropertyValue("--thread-w"), "432px", "clicking blank main area restores restrained width");
+  assert.equal(tdDrawerEl.style.getPropertyValue("--thread-w"), "432px", "clicking blank main area restores restrained width");
   assert.equal(tdWiden.getAttribute("aria-pressed"), "false");
   assert.equal(storage.get("collie.threadWide"), "false", "restored preference persisted");
 

@@ -461,7 +461,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, resetChat: () => { older = []; pendingSays.length = 0; dismissedLocal.clear(); }, setState: (st) => { localState = st; state = mergedState(); }, setHist: (h) => { hist = h || []; }, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, connect, renderSuper, renderSide, itemHTML, computeReplyThreads, computeWorkerThreadMap, extractGoalFromTask, agentTaskSummary, threadTitleFromText, threadPreviewFromEntry, isThreadPending, renderCollieThreadsMenu, setCollieThreadsFilter, getCollieThreadsFilter: () => thPopFilter, dismissPending, extractThreadWorkers, openThreadDrawer, openThreadFromAnywhere, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, resetChat: () => { older = []; pendingSays.length = 0; dismissedLocal.clear(); }, setState: (st) => { localState = st; state = mergedState(); }, setHist: (h) => { hist = h || []; }, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, connect, renderSuper, renderSide, itemHTML, computeReplyThreads, computeWorkerThreadMap, extractGoalFromTask, agentTaskSummary, threadTitleFromText, threadPreviewFromEntry, isThreadPending, renderCollieThreadsMenu, setThreadsExpanded, getThreadsExpanded: () => threadsExpanded, dismissPending, extractThreadWorkers, openThreadDrawer, openThreadFromAnywhere, closeThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, settingsHTML, renderPrefs, notifyEnvState, syncCollieNotifyWatermark, sendTestNotification };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 
@@ -1001,7 +1001,7 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.renderSuper({ force: true });
 
   const popListHtml = getEl("#collie-threads-list").innerHTML;
-  const popItems = popListHtml.match(/<button[\s\S]*?<\/button>/g) || [];
+  const popItems = popListHtml.match(/<button[^>]*class="th-pop-item[\s\S]*?<\/button>/g) || [];
   assert.equal(popItems.length, 4, "all 4 threads rendered in #collie-threads-list");
 
   const findPopItem = (rootId) => popItems.find((h) => h.includes('data-th-pick="' + rootId + '"')) || "";
@@ -1010,29 +1010,29 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   const item3 = findPopItem("p20");
   const item4 = findPopItem("p30");
 
-  // Thread 1: stripped worker prefix + Collie preview + pending dot
+  // Thread 1: stripped worker prefix + Collie preview + pending amber dot
   assert.ok(item1.includes('<div class="th-pop-title"'), "item1 has title");
   assert.ok(item1.includes(">未读自动定位与分割线 · 已准备就绪，等待确认发版</div>"), "item1 stripped worker prefix cleanly: " + item1);
   assert.ok(item1.includes('<div class="th-pop-preview" title="Collie：都验完了：四象限全绿，要现在切 v0.2.71 发版吗？">Collie：都验完了：四象限全绿，要现在切 v0.2.71 发版吗？</div>'), "item1 renders cleaned Collie latest-reply preview: " + item1);
-  assert.ok(item1.includes("is-pending") && item1.includes('data-th-pending="1"') && item1.includes('class="th-pop-dot"'), "item1 shows pending dot for unresolved options");
+  assert.ok(item1.includes("is-pending") && item1.includes('data-th-pending="1"') && item1.includes('class="th-pop-dot is-attn"'), "item1 shows pending amber dot for unresolved options");
 
-  // Thread 2: check=true pending dot
-  assert.ok(item2.includes("is-pending") && item2.includes('class="th-pop-dot"'), "item2 shows pending dot for unresolved check");
+  // Thread 2: check=true pending amber dot
+  assert.ok(item2.includes("is-pending") && item2.includes('class="th-pop-dot is-attn"'), "item2 shows pending amber dot for unresolved check");
   assert.ok(item2.includes("Collie：顺带发现一处重试阈值偏高，你空了确认一眼。"), "item2 renders Collie check preview");
 
-  // Thread 3: stripped worker prefix + user preview (strips attachment trailer & bold) + NO dot
+  // Thread 3: stripped worker prefix + user preview (strips attachment trailer & bold) + idle dot (NO attn dot)
   assert.ok(item3.includes(">夜间基准评测 · 跑出结果了，P99 下降 22%</div>"), "item3 stripped worker prefix cleanly: " + item3);
   assert.ok(item3.includes("你：先停吧，结论够清楚了"), "item3 renders cleaned user latest-reply preview");
-  assert.ok(!item3.includes("is-pending") && !item3.includes("th-pop-dot"), "settled user-ended thread has NO pending dot");
+  assert.ok(!item3.includes("is-pending") && !item3.includes("is-attn") && item3.includes('class="th-pop-dot is-idle"'), "settled user-ended thread has hollow idle dot and NO pending attn dot");
 
-  // Thread 4: dismissed/resolved options (absent from sup.pending) -> NO dot
-  assert.ok(!item4.includes("is-pending") && !item4.includes("th-pop-dot"), "resolved options thread absent from sup.pending has NO pending dot");
+  // Thread 4: dismissed/resolved options (absent from sup.pending) -> idle dot (NO attn dot)
+  assert.ok(!item4.includes("is-pending") && !item4.includes("is-attn") && item4.includes('class="th-pop-dot is-idle"'), "resolved options thread absent from sup.pending has idle dot and NO pending attn dot");
 
-  // 8c) Dismissing p12 immediately clears its pending dot in #collie-threads-list
+  // 8c) Dismissing p12 immediately clears its pending amber dot in #collie-threads-list
   await T.dismissPending("p12");
-  const afterDismissItems = (getEl("#collie-threads-list").innerHTML.match(/<button[\s\S]*?<\/button>/g) || []);
+  const afterDismissItems = (getEl("#collie-threads-list").innerHTML.match(/<button[^>]*class="th-pop-item[\s\S]*?<\/button>/g) || []);
   const item2After = afterDismissItems.find((h) => h.includes('data-th-pick="p10"')) || "";
-  assert.ok(!item2After.includes("is-pending") && !item2After.includes("th-pop-dot"), "dismissing p12 immediately removes pending dot");
+  assert.ok(!item2After.includes("is-pending") && !item2After.includes("is-attn"), "dismissing p12 immediately removes pending amber dot");
 
   // 8d) Alias markers (opts / buttons / pending) work cleanly when sup.pending is absent
   const aliasEntries = [
@@ -1052,10 +1052,10 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.equal(T.isThreadPending(aliasInfo.threads.get("b1"), aliasEntries), true, "opts alias marks thread pending");
   assert.equal(T.isThreadPending(aliasInfo.threads.get("c1"), aliasEntries), true, "pending flag alias marks thread pending");
 
-  // 8e) CSS contracts for popover preview & pending dot alignment
+  // 8e) CSS contracts for symmetrical threads card dot alignment & forced-colors support
   assert.ok(appCss.includes(".th-pop-preview"), "CSS defines .th-pop-preview");
   assert.ok(appCss.includes(".th-pop-dot"), "CSS defines .th-pop-dot");
-  assert.ok(appCss.includes(".th-pop-list:has(.th-pop-item.is-pending)"), "CSS aligns gutter via :has() when pending items exist");
+  assert.ok(appCss.includes(".th-pop-dot.is-attn") && appCss.includes(".th-pop-dot.is-idle"), "CSS defines uniform active/pending/idle dot styles");
   assert.ok(appCss.includes("@media (forced-colors: active)"), "CSS supports Forced Colors Mode for pending dot");
 
   // ─── 9. Universal focus drawer (1-msg & 2-msg), 0px scroll preservation, auto-quote & in-drawer quick options ───
@@ -1121,7 +1121,7 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.ok(getEl("#td-list").innerHTML.includes('class="reply-opts"') && getEl("#td-list").innerHTML.includes('data-opt="直接发版"'), "drawer renders quick-reply options for pending Collie message");
   T.closeThreadDrawer({ immediate: true });
 
-  // ─── 10. Thread list popover 2-way filter (全部 / 进行中) with active agents + pending options ───
+  // ─── 10. Symmetrical 话题线 side card (活跃话题 collapsed 1-line + +N 历史 pill -> expanded 历史话题) ───
   const qTs = (m) => new Date(now - m * 60000).toISOString();
   const filterWorkers = [
     { name: "wk-run", kind: "codex", status: "working", pane_id: "w31:p1", task: "重构查询索引并补齐基准测试", created_at: qTs(20) },
@@ -1135,20 +1135,20 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
     { pane_id: "w34:p1", name: "claude-1", kind: "claude", status: "working", is_agent: true, cwd: "/tmp/web", topic: "首页暗色模式" },
   ];
   const filterEntries = [
-    // T1: >=3 msgs + active working agent wk-run (NO pending buttons) -> in 全部 & 进行中
+    // T1: >=3 msgs + active working agent wk-run (NO pending buttons) -> in 活跃话题
     { id: "q1", role: "user", text: "帮我优化查询索引", at: qTs(22) },
     { id: "q2", role: "collie", text: "已派 wk-run（查询索引优化）去处理。", at: qTs(21), re: { entry: "q1", who: "你", text: "帮我优化查询索引" } },
     { id: "q3", role: "user", text: "注意兼容旧分页参数。", at: qTs(19), re: { entry: "q2", who: "Collie", text: "已派 wk-run" } },
-    // T2: 2-msg Q&A + active blocked agent wk-blk (<3 msgs, active agent!) -> in 全部 & 进行中
+    // T2: 2-msg Q&A + active blocked agent wk-blk (<3 msgs, active agent!) -> in 活跃话题
     { id: "q10", role: "user", text: "修一下登录态刷新问题", at: qTs(18) },
     { id: "q11", role: "collie", text: "交给 wk-blk 去排查了。", at: qTs(17), re: { entry: "q10", who: "你", text: "修一下登录态刷新问题" } },
-    // T3: 1-msg standalone Collie with pending options -> in 全部 & 进行中
+    // T3: 1-msg standalone Collie with pending options -> in 活跃话题
     { id: "q20", role: "collie", text: "wk-fin 整理完旧脚本了，要直接删掉吗？", at: qTs(10), options: ["直接删", "先留档"] },
-    // T4: >=3 msgs settled (no active worker, no pending) -> in 全部 ONLY
+    // T4: >=3 msgs settled (no active worker, no pending) -> in folded 历史话题
     { id: "q30", role: "user", text: "明早提醒我看周报", at: qTs(30) },
     { id: "q31", role: "collie", text: "好的，设好了 09:00。", at: qTs(29), re: { entry: "q30", who: "你", text: "明早提醒我看周报" } },
     { id: "q32", role: "user", text: "谢谢。", at: qTs(28), re: { entry: "q31", who: "Collie", text: "好的，设好了 09:00。" } },
-    // Casual 1-msg standalone (no worker, no pending) -> NOT in popover list
+    // Casual 1-msg standalone (no worker, no pending) -> NOT in list
     { id: "q40", role: "user", text: "顺便记一句随手备忘", at: qTs(5) },
   ];
   T.resetChat();
@@ -1160,41 +1160,35 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
     pending: [{ id: "q20", at: qTs(10), summary: "wk-fin 整理完旧脚本了，要直接删掉吗？", options: ["直接删", "先留档"] }],
   });
   T.setView("collie");
-  T.setCollieThreadsFilter("all");
   T.renderSuper({ force: true });
 
   assert.equal(getEl("#collie-threads-dot").hidden, false, "threads trigger shows pending dot when pending > 0");
-  assert.equal(getEl("#collie-threads-cnt-all").textContent, "4", "threads side card includes >=3 threads + active-agent + pending threads, excluding casual 1-liner q40");
-  assert.equal(getEl("#collie-threads-cnt-active").textContent, "3");
-  const allListHtml = getEl("#collie-threads-list").innerHTML;
-  assert.ok(allListHtml.includes('data-th-pick="q1"') && allListHtml.includes("1 个在跑"), "T1 shows running agent count in meta");
-  assert.ok(allListHtml.includes('data-th-pick="q10"') && allListHtml.includes("Agent 等确认"), "T2 (2-msg blocked agent) included with Agent 等确认 meta");
-  assert.ok(allListHtml.includes('data-th-pick="q20"') && allListHtml.includes("1 条消息"), "T3 (1-msg pending) included with 1 条消息 meta");
-  assert.ok(allListHtml.includes('data-th-pick="q30"'), "T4 settled thread included in 全部");
-  assert.ok(!allListHtml.includes('data-th-pick="q40"'), "casual 1-liner q40 stays out of popover list");
+  assert.equal(getEl("#collie-threads-sub").textContent, "1 条待处理", "threads header sub shows pending count");
+  const thListHtml = getEl("#collie-threads-list").innerHTML;
+  assert.ok(thListHtml.includes("活跃话题") && thListHtml.includes("历史话题"), "threads card separates 活跃话题 and 历史话题 sections");
+  assert.ok(thListHtml.includes(">+1 历史<"), "collapsed threads card surfaces +1 历史 pill when historical threads exist");
+  assert.ok(thListHtml.includes('data-th-pick="q1"') && thListHtml.includes("1 个在跑"), "T1 shows running agent count in foldable meta");
+  assert.ok(thListHtml.includes('data-th-pick="q10"') && thListHtml.includes("Agent 等确认"), "T2 (2-msg blocked agent) included with Agent 等确认 meta");
+  assert.ok(thListHtml.includes('data-th-pick="q20"') && thListHtml.includes("1 条消息"), "T3 (1-msg pending) included with 1 条消息 meta");
+  assert.ok(thListHtml.includes('np-th-inactive-fold') && thListHtml.includes('data-th-pick="q30"'), "settled T4 lives inside foldable 历史话题 section");
+  assert.ok(!thListHtml.includes('data-th-pick="q40"'), "casual 1-liner q40 stays out of threads list");
 
-  // Switch filter to 进行中
-  T.setCollieThreadsFilter("active");
-  assert.equal(T.getCollieThreadsFilter(), "active");
-  assert.equal(tabActiveEl.getAttribute("aria-pressed"), "true");
-  assert.equal(tabAllEl.getAttribute("aria-pressed"), "false");
-  const activeListHtml = getEl("#collie-threads-list").innerHTML;
-  assert.ok(activeListHtml.includes('data-th-pick="q1"'), "T1 shown in 进行中");
-  assert.ok(activeListHtml.includes('data-th-pick="q10"'), "T2 shown in 进行中");
-  assert.ok(activeListHtml.includes('data-th-pick="q20"'), "T3 shown in 进行中");
-  assert.ok(!activeListHtml.includes('data-th-pick="q30"'), "settled T4 hidden in 进行中");
+  // Expand / collapse threads card via setThreadsExpanded without rebuilding DOM
+  assert.equal(T.getThreadsExpanded(), false, "threads card starts collapsed");
+  T.setThreadsExpanded(true);
+  assert.equal(T.getThreadsExpanded(), true, "threads card expands cleanly");
+  T.setThreadsExpanded(false);
 
-  // When all workers finish and pending clears -> 进行中 count is 0 with calm empty state
+  // When all workers finish and pending clears -> 0 active threads shows calm empty state + historical fold
   const settledWorkers = filterWorkers.map((w) => ({ ...w, status: "done" }));
   const settledAgents = filterAgents.map((a) => ({ ...a, status: "done" }));
   T.setState({ ok: true, agents: settledAgents, shells: [], machines: [{ id: "", name: "local", local: true, online: true }] });
   T.setSup({ router: { status: "idle", alive: true }, entries: filterEntries, workers: settledWorkers, pending: [] });
   T.renderSuper({ force: true });
-  assert.equal(getEl("#collie-threads-cnt-active").textContent, "0");
   assert.equal(getEl("#collie-threads-dot").hidden, true, "pending dot hides when pending clears");
-  assert.equal(getEl("#collie-threads-cnt-all").textContent, "2", "threads count falls back to remaining >=3-msg thread count when pending and active workers clear");
-  assert.ok(getEl("#collie-threads-list").innerHTML.includes("当前没有进行中的话题"), "empty state rendered when 0 active threads");
-  T.setCollieThreadsFilter("all");
+  assert.equal(getEl("#collie-threads-sub").textContent, "2 条历史", "header sub shows historical count when 0 active");
+  assert.ok(getEl("#collie-threads-list").innerHTML.includes("暂无活跃话题"), "calm empty state rendered when 0 active threads");
+  assert.ok(getEl("#collie-threads-list").innerHTML.includes(">+2 历史<"), "pill reflects 2 settled historical threads");
 
   // ─── 11. Left sidebar Agent card: 1-line human summary + direct topic drawer button ───
   // 11a) extractGoalFromTask handles preamble skipping, explicit goal labels, and bracket topics
@@ -1256,9 +1250,9 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   assert.equal(T.getActiveThreadRoot(), "q1", "target topic drawer opens automatically after routing to #/collie");
   T.closeThreadDrawer({ immediate: true });
 
-  // 11d) HTML & CSS contracts for new focus drawer, filter tabs & sidebar agent summary/topic button
-  assert.ok(indexHtml.includes('id="collie-threads-tabs"') && indexHtml.includes('data-th-filter="active"'), "index.html adds 2-way 全部/进行中 filter tabs");
-  assert.ok(appCss.includes(".th-pop-tabs") && appCss.includes(".th-pop-tab.on::after") && appCss.includes(".th-pop-empty"), "CSS defines minimalist borderless filter tabs and empty state");
+  // 11d) HTML & CSS contracts for new focus drawer, symmetrical threads card & sidebar agent summary/topic button
+  assert.ok(!indexHtml.includes('id="collie-threads-tabs"') && indexHtml.includes('id="np-threads-body"'), "index.html drops legacy filter tabs in favor of symmetrical collapsible 话题线 card");
+  assert.ok(appCss.includes(".np-th-sec-inactive") && appCss.includes(".th-pop-empty"), "CSS defines symmetrical inactive threads section and empty state");
   assert.ok(appCss.includes(".item-wrap") && appCss.includes(".item-sum") && appCss.includes(".item-th-btn"), "CSS defines sidebar agent summary and corner topic icon button");
   assert.ok(appCss.includes("#v-collie .say .msg-acts:focus-within") && appCss.includes(".msg-acts button.focus-btn.active"), "CSS exposes hover actions on keyboard focus and highlights active focus-btn");
 

@@ -3399,7 +3399,9 @@
     const barSig = `${total}:${P}:${M}:${lastPend?.id || ""}:${lastPin?.id || ""}:${sum}`;
     if (barSig !== pendingBarSig) {
       pendingBarSig = barSig;
-      const lead = P ? `<span class="pending-dot"></span>` : `<span class="pending-pin-ico">${ICON_PIN}</span>`;
+      const lead = P
+        ? `<span class="pending-dot" aria-hidden="true"></span>`
+        : `<span class="pending-dot neutral" aria-hidden="true"></span>`;
       if (total === 1) {
         const onlyId = lastPend ? lastPend.id : lastPin.id;
         const xBtn = lastPend
@@ -4470,7 +4472,7 @@
     setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "");
     const cx = $("#router-ctx");
     setText(cx, r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "");
-    cx.classList.toggle("warn", !!r.handover || (r.rotate_at > 0 && r.context >= r.rotate_at - 10));
+    cx.classList.toggle("warn", !!r.handover || (!!r.alive && Number(r.context) >= 75));
     const cxTitle = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
     if (cx.title !== cxTitle) cx.title = cxTitle;
     renderRouterModel(r);
@@ -8814,8 +8816,19 @@
   });
 
   // ───────────────────────────── preferences (per device, in localStorage)
+  const ACCENTS = [
+    ["amber", "暖琥珀"],
+    ["cobalt", "钴蓝"],
+    ["pine", "松绿"],
+    ["ink", "纯黑白"],
+  ];
+  const VALID_ACCENTS = new Set(ACCENTS.map(([v]) => v));
   const prefs = {
     theme: () => store.get("theme", "system"),
+    accent: () => {
+      const v = store.get("accent", "amber");
+      return VALID_ACCENTS.has(v) ? v : "amber";
+    },
     text: () => store.get("text", "normal"),
     sendKey: () => store.get("sendKey", "enter"),
     notify: () => store.get("notify", true),
@@ -8824,22 +8837,30 @@
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
   function applyLook() {
     const root = document.documentElement;
-    const t = prefs.theme(), x = prefs.text();
+    const t = prefs.theme(), a = prefs.accent(), x = prefs.text();
     if (t === "system") delete root.dataset.theme; else root.dataset.theme = t;
+    if (a === "amber") delete root.dataset.accent; else root.dataset.accent = a;
     if (x === "normal") delete root.dataset.text; else root.dataset.text = x;
+    const cs = $('meta[name="color-scheme"]');
+    if (cs) cs.content = t === "light" || t === "dark" ? t : "light dark";
     const dark = t === "dark" || (t === "system" && darkMQ.matches);
     $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#0b0b0c" : "#ffffff"; });
     dispatchEvent(new Event("collie:theme"));
   }
   darkMQ.addEventListener("change", applyLook);
   addEventListener("storage", (ev) => {
-    if (!ev.key || ev.key === "collie.theme" || ev.key === "collie.text") applyLook();
+    if (!ev.key || ev.key === "collie.theme" || ev.key === "collie.accent" || ev.key === "collie.text") {
+      applyLook();
+      if (view === "prefs") renderPrefs();
+    }
   });
   applyLook();
 
   function renderPrefs(restore = null) {
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
+    const accentPick = (cur) => `<div class="accent-pick" role="radiogroup" aria-label="点睛色" data-pref="accent">${ACCENTS.map(([v, label]) =>
+      `<button type="button" class="accent-opt${v === cur ? " on" : ""}" role="radio" aria-checked="${v === cur}" tabindex="${v === cur ? "0" : "-1"}" data-v="${v}"><span class="accent-dot ${v}" aria-hidden="true"></span><span>${label}</span></button>`).join("")}</div>`;
     const sw = (key, on, disabled = false) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"${disabled ? " disabled" : ""}></button>`;
     const row = (title, sub, ctl, warn = false) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small${warn ? ' class="pref-hint-warn"' : ""}>${sub}</small>` : ""}</div>${ctl}</div>`;
     const env = notifyEnvState();
@@ -8850,6 +8871,7 @@
     $("#prefs-body").innerHTML = `<div class="prefs">
       <div class="card"><div class="card-h">外观</div>
         ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
+        ${row("点睛色", "仅用于未读、待处理圆点与告警等少数提醒", accentPick(prefs.accent()))}
         ${row("对话文字", "", seg("text", prefs.text(), [["small", "小"], ["normal", "标准"], ["large", "大"]]))}
       </div>
       <div class="card"><div class="card-h">对话</div>
@@ -8870,7 +8892,7 @@
   $("#prefs-body").addEventListener("click", async (e) => {
     const link = e.target.closest("a[data-auto-tab]");
     if (link) autoTab = link.dataset.autoTab;
-    const b = e.target.closest(".seg[data-pref] button, button.switch[data-pref]");
+    const b = e.target.closest(".seg[data-pref] button, .accent-pick[data-pref] button, button.switch[data-pref]");
     if (!b || b.disabled) return;
     if (b.classList.contains("switch")) {
       const key = b.dataset.pref, on = b.getAttribute("aria-checked") !== "true";
@@ -8896,10 +8918,29 @@
     } else {
       const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
       if (key === "mode2") setMode(v); else store.set(key, v);
-      if (key === "theme" || key === "text") applyLook();
+      if (key === "theme" || key === "accent" || key === "text") applyLook();
       if (key === "sendKey") syncThreadComposerHint();
     }
     renderPrefs();
+  });
+  $("#prefs-body").addEventListener("keydown", (e) => {
+    const group = e.target.closest('.accent-pick[role="radiogroup"]');
+    if (!group) return;
+    const opts = [...group.querySelectorAll('button[role="radio"]')];
+    const idx = opts.indexOf(e.target.closest('button[role="radio"]'));
+    if (idx < 0 || !opts.length) return;
+    let next = -1;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % opts.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + opts.length) % opts.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = opts.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    const v = opts[next].dataset.v;
+    store.set("accent", v);
+    applyLook();
+    renderPrefs();
+    $(`.accent-pick[data-pref="accent"] button[data-v="${CSS.escape(v)}"]`, $("#prefs-body"))?.focus();
   });
 
   // ───────────────────────────── devices

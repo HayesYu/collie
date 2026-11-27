@@ -4,6 +4,28 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.2.89 (2026-11-27)
+
+### Highlights
+
+- **Restrained Visual Accent Hierarchy**:
+  - Tightened `--attn` semantics across the Web UI (`web/app.css`, `web/app.js`) so everyday navigation stays calm monochrome while reserving the accent strictly for high-signal attention anchors (unread badges & divider, pending indicator dot, `>= 75%` router context warning, and error/alert states).
+  - Neutralized active thread chrome — header `话题线 N` button, inline `↳ N 条回复 >` entry pill, message focus button, sidebar topic icon button, and selected topic popover row — to crisp light/dark monochrome gray with gentle hover elevation.
+  - Raised the header router context gauge (`#router-ctx`) warning threshold to `>= 75%` (or active `handover`), keeping `< 75%` quiet muted gray instead of lighting up early.
+  - Neutralized the bottom `待处理 / 钉住` tray bar background, border, label, and dismiss button to clean light/dark surfaces with hairline neutral borders, keeping only the single leading `--attn` indicator dot when pending items exist (and a neutral dot when all items are pinned).
+  - Unified unread anchors (`.unread-sep`, `.count-pill.unread`, `.super-jump .sj-badge`), `.toast.attn`, and destructive confirm buttons onto `--attn` / `--attn-solid` tokens with zero hardcoded amber hexes.
+- **4 Selectable Restrained Accent Colors**:
+  - Added a 4-option accent color picker (`amber` warm amber default, `cobalt`, `pine`, `ink` pure monochrome) in `偏好设置 → 外观` directly below the light/dark theme switcher (`web/index.html`, `web/app.css`, `web/app.js`).
+  - Persists per browser in `localStorage` (`collie.accent`), applies pre-paint to prevent FOUC, syncs across tabs via `storage` events, supports `radiogroup` arrow-key navigation, fits cleanly on a single row at 390px mobile width, and tunes text/border/surface tokens for WCAG AA (`>= 4.5:1`) contrast across both light and dark themes.
+
+### Client / API Changes
+
+- **HTTP API / SSE / CLI**: None.
+- **Web browser preference**: Stores optional `collie.accent` (`"amber"` | `"cobalt"` | `"pine"` | `"ink"`, default `"amber"`) in `localStorage` and reflects non-default presets on `<html data-accent="...">`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.88 (2026-11-27)
 
 ### Highlights

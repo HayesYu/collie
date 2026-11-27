@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
   <meta name="mobile-web-app-capable" content="yes">
@@ -19,8 +20,13 @@
     // Apply this device's look before first paint (see 偏好设置).
     try {
       const g = (k) => JSON.parse(localStorage.getItem("collie." + k) || "null");
-      const t = g("theme"), x = g("text");
-      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      const t = g("theme"), a = g("accent"), x = g("text");
+      if (t === "light" || t === "dark") {
+        document.documentElement.dataset.theme = t;
+        const cs = document.querySelector('meta[name="color-scheme"]');
+        if (cs) cs.content = t;
+      }
+      if (a === "cobalt" || a === "pine" || a === "ink") document.documentElement.dataset.accent = a;
       if (x === "small" || x === "large") document.documentElement.dataset.text = x;
     } catch {}
   </script>

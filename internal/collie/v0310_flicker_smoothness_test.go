@@ -91,6 +91,11 @@ assert.ok(htmlSrc.includes('id="wd-interrupt"') && htmlSrc.includes('class="sd-a
 assert.ok(cssSrc.includes(".sd-act-btn.is-stop.is-armed") && cssSrc.includes(".menu button.is-armed"), "armed red danger styles must exist for both drawer and terminal menu interrupt buttons");
 assert.ok(appSrc.includes("const INTERRUPT_ARM_MS = 3000;") && appSrc.includes("function triggerArmedInterrupt("), "3s double-click interrupt confirmation controller must exist");
 
+// 1k) Tablet HTML drawer coordinate stability (#t13467): minmax(0, 1fr) prevents column blowout on <=1180px & <=760px, iframe clamps width
+assert.ok(cssSrc.includes(".app.has-worker { grid-template-columns: var(--side-w) minmax(0, 1fr); }"), "tablet <=1180px overlay must use minmax(0, 1fr) instead of bare 1fr");
+assert.ok(cssSrc.includes(".fv-html-sandbox { width: 100%; height: 100%; flex: 1; min-width: 0; max-width: 100%;"), "HTML sandbox iframe must clamp min-width/max-width inside flex column");
+assert.ok(appSrc.includes("function composerMetrics(") && appSrc.includes("const isDesktopDrawerViewport ="), "composerMetrics and matchMedia-synced isDesktopDrawerViewport must exist");
+
 // ─── 2. Runtime VM Tests ───
 function makeClassList() {
   const set = new Set();
@@ -210,6 +215,8 @@ const doc = {
     return e;
   },
 };
+const esInstances = [];
+const winListeners = new Map();
 const ctx = {
   console, Math, Date, JSON, Set, Map, RegExp, Error, Promise, URL, URLSearchParams, Object, Array, Number, String, Boolean,
   setTimeout: (fn, ms = 0) => { const id = timerSeq++; activeTimers.set(id, { id, fn, at: nowMs + (Number(ms) || 0) }); return id; },
@@ -233,13 +240,20 @@ const ctx = {
   ResizeObserver: class { observe() {} disconnect() {} },
   MutationObserver: class { observe() {} disconnect() {} },
   IntersectionObserver: class { observe() {} disconnect() {} },
-  EventSource: class { addEventListener() {} close() {} },
+  EventSource: class {
+    constructor(url) { this.url = String(url || ""); this._l = new Map(); this.closed = false; esInstances.push(this); }
+    addEventListener(t, fn) { if (!this._l.has(t)) this._l.set(t, []); this._l.get(t).push(fn); }
+    dispatch(t, ev = {}) { for (const fn of [...(this._l.get(t) || [])]) fn(ev); }
+    close() { this.closed = true; }
+  },
   Notification: class { static permission = "default"; static async requestPermission() { return "default"; } },
   localStorage: { getItem: (k) => (storage.has(k) ? storage.get(k) : null), setItem: (k, v) => storage.set(k, String(v)), removeItem: (k) => storage.delete(k) },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   getComputedStyle: (el) => ({ getPropertyValue: (k) => el?.style?.getPropertyValue?.(k) || "" }),
   getSelection: () => ({ isCollapsed: true, toString: () => "" }),
-  addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
+  addEventListener(t, fn) { if (!winListeners.has(t)) winListeners.set(t, []); winListeners.get(t).push(fn); },
+  removeEventListener(t, fn) { const l = winListeners.get(t); if (!l) return; const i = l.indexOf(fn); if (i >= 0) l.splice(i, 1); },
+  dispatchEvent(ev) { for (const fn of [...(winListeners.get(ev?.type) || [])]) fn(ev); },
   fetch: async (url, init = {}) => { fetchCalls.push({ url: String(url), method: init.method || "GET", body: init.body || "" }); return { ok: true, status: 200, json: async () => ({ ok: true, turns: [] }) }; },
 };
 ctx.window = ctx;
@@ -264,7 +278,7 @@ function advanceTimers(dtMs) {
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { setView: (v) => { view = v; }, setCurrent: (c) => { current = c; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, setNotebookData: (d) => { notebookData = d; }, setFvCur: (c) => { fvCur = c; }, route, setConnDotState, syncSideActive, syncCollieTopHeight, renderSide, disarmInterrupt, isInterruptArmed, threadMetrics, isLayoutGliding, runDesktopDrawerGlide, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, openThreadDrawer, closeThreadDrawer, syncNotebookVisibility, applyThumbSrc, watchImgDecode, decodedThumbs, md, resolveInlineWorker, openWorkerFromLink, openExternalLinkInStandalone, invokeCopy, getActiveWorkerKey: () => activeWorkerKey };\n})();"
+  "  globalThis.__test = { setView: (v) => { view = v; }, setCurrent: (c) => { current = c; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, setNotebookData: (d) => { notebookData = d; }, setFvCur: (c) => { fvCur = c; }, route, setConnDotState, syncSideActive, syncCollieTopHeight, renderSide, disarmInterrupt, isInterruptArmed, threadMetrics, composerMetrics, isDesktopDrawerViewport, isLayoutGliding, runDesktopDrawerGlide, showFilePane, closeFilePane, setSideCollapsed, openWorkerDrawer, closeWorkerDrawer, drawWdLive, syncWorkerDrawerMeta, wdLiveCache, drawLive, renderHead, clearDetailLive, openThreadDrawer, closeThreadDrawer, syncNotebookVisibility, applyThumbSrc, watchImgDecode, decodedThumbs, md, resolveInlineWorker, openWorkerFromLink, openExternalLinkInStandalone, invokeCopy, getActiveWorkerKey: () => activeWorkerKey };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -681,6 +695,164 @@ assert.equal(getEl("#open-notes-btn").tabIndex, 0);
   assert.equal(moreMenu.hidden, true, "second click closes #more-menu after sending");
   assert.equal(keyCalls().length, 1, "second click within 3s sends ctrl+c on active pane");
   assert.ok(keyCalls()[0].url.includes("/api/panes/p-w2/keys") && keyCalls()[0].body.includes('"ctrl+c"'));
+
+  // 2m) Tablet HTML drawer coordinate stability (#t13467):
+  //     - Separate composerMetrics (no scrollbar gutter) vs threadMetrics (with gutter) eliminates 4-6px composer end-jump
+  //     - Wide tablet (>=1181px, e.g. iPad Pro 11" 1194x834) applies frame-0 has-drawer-col-cap for 0px overlap & 0px end-jump
+  //     - Tablet overlay (<=1180px, e.g. 820x1180 / 1024x768 / 1180x820) leaves zero inline width/transform on main chat & drawer
+  //     - Rotating across 1180px while open finishes glide and clears inline drawer width & chat transforms
+  T.setView("collie");
+  const compClosed = T.composerMetrics(895, 780);
+  const compOpen = T.composerMetrics(455, 780);
+  assert.equal(compClosed.effCompW, 804);
+  assert.equal(compClosed.padLeft, 45.5);
+  assert.equal(compOpen.effCompW, 431);
+  assert.equal(compOpen.padLeft, 12);
+
+  // iPad Pro 11" landscape (1194x834, 299px sidebar, 440px HTML drawer -> 455px main)
+  ctx.innerWidth = 1194;
+  ctx.innerHeight = 834;
+  getEl(".side").offsetWidth = 299;
+  const colEl = getEl("#v-collie");
+  const thEl = getEl("#super-thread");
+  const compEl = getEl("#super-composer");
+  thEl.parentElement.offsetWidth = 895;
+  thEl.parentElement.clientWidth = 875;
+  T.showFilePane();
+  assert.equal(getEl("#app").classList.contains("is-drawer-opening"), true, "wide tablet >=1181px starts staged glide");
+  assert.equal(colEl.classList.contains("has-drawer-col-cap"), true, "tight wide tablet caps column width on frame 0 so content never slides under incoming HTML drawer");
+  assert.equal(colEl.style.getPropertyValue("--drawer-col-cap"), "395px");
+  assert.equal(colEl.style.getPropertyValue("--drawer-comp-w"), "431px");
+  assert.notEqual(thEl.style.transform, compEl.style.transform, "thread (guttered) and composer (gutter-free) must apply distinct exact translate3d offsets");
+  stepRaf(16);
+  stepRaf(260);
+  assert.equal(colEl.classList.contains("has-drawer-col-cap"), false, "frame N removes has-drawer-col-cap atomically");
+  assert.equal(thEl.style.transform, "", "frame N clears thread inline transform");
+  assert.equal(compEl.style.transform, "", "frame N clears composer inline transform");
+
+  // Rotate while open from 1194x834 -> 820x1180 (crosses 1180px into tablet overlay)
+  ctx.innerWidth = 820;
+  ctx.innerHeight = 1180;
+  getEl(".side").offsetWidth = 268;
+  ctx.dispatchEvent({ type: "resize" });
+  assert.equal(getEl("#file-view").style.width, "", "rotating across 1180px clears desktop inline width on #file-view");
+  assert.equal(thEl.style.transform, "");
+  assert.equal(compEl.style.transform, "");
+  T.closeFilePane({ immediate: true });
+
+  // Open HTML drawer directly on tablet overlay (1180x820): zero inline transforms, zero inline width, zero desktop glide
+  ctx.innerWidth = 1180;
+  ctx.innerHeight = 820;
+  getEl(".side").offsetWidth = 297;
+  T.showFilePane();
+  assert.equal(getEl("#app").classList.contains("has-file"), true);
+  assert.equal(getEl("#app").classList.contains("is-drawer-opening"), false, "tablet <=1180px must stay pure overlay without desktop glide");
+  assert.equal(colEl.classList.contains("has-drawer-col-cap"), false);
+  assert.equal(getEl("#file-view").style.width, "", "tablet <=1180px must not stamp desktop width onto #file-view");
+  assert.equal(thEl.style.transform, "");
+  assert.equal(compEl.style.transform, "");
+  T.closeFilePane({ immediate: true });
+  ctx.innerWidth = 1440;
+  ctx.innerHeight = 900;
+  getEl(".side").offsetWidth = 300;
+
+  // 2n) Worker ended auto-close + remove redundant #wd-gone banner + clear #wd-live & full-screen #live (#t13522, #t13532)
+  const toastTexts = () => getEl("#toasts").children.map((c) => c.dataset?.msg || c.children?.[0]?.textContent || c.textContent || "");
+  const clearToasts = () => { getEl("#toasts").children.length = 0; };
+  T.setView("collie");
+  T.setState({
+    agents: [
+      { pane_id: "p-w1", name: "fix-alpha", label: "任务甲", kind: "claude", status: "working", is_agent: true, cwd: "/tmp/a" },
+      { pane_id: "p-w2", name: "fix-beta", label: "任务乙", kind: "codex", status: "working", is_agent: true, cwd: "/tmp/b" },
+    ],
+    shells: [],
+    machines: [],
+  });
+  T.setSup({
+    router: { status: "idle", alive: true },
+    workers: [
+      { name: "fix-alpha", label: "任务甲", pane_id: "p-w1", status: "working", task: "推进甲", ended: false },
+      { name: "fix-beta", label: "任务乙", pane_id: "p-w2", status: "working", task: "推进乙", ended: false },
+      { name: "done-gamma", label: "已完成丙", pane_id: "", status: "done", task: "历史任务", last_report: "已收尾", ended: true },
+    ],
+    entries: [],
+  });
+
+  // Case 1: Watching live worker -> agent finishes via state update -> clears #wd-live & cache, hides #wd-gone, auto-closes drawer, shows toast
+  clearToasts();
+  T.openWorkerDrawer({ worker: "fix-alpha", immediate: true });
+  T.drawWdLive({ status: "working", tail: "running tests...", meta: "2s" });
+  assert.equal(getEl("#wd-live").hidden, false, "live worker shows #wd-live spinner while active");
+  assert.equal(T.wdLiveCache.has("p-w1"), true, "wdLiveCache caches active spinner while live");
+  assert.equal(getEl("#wd-gone").hidden, true, "#wd-gone stays hidden while live");
+
+  T.setState({
+    agents: [
+      { pane_id: "p-w2", name: "fix-beta", label: "任务乙", kind: "codex", status: "working", is_agent: true, cwd: "/tmp/b" },
+    ],
+    shells: [],
+    machines: [],
+  });
+  T.setSup({
+    router: { status: "idle", alive: true },
+    workers: [
+      { name: "fix-alpha", label: "任务甲", pane_id: "p-w1", status: "done", task: "推进甲", ended: true },
+      { name: "fix-beta", label: "任务乙", pane_id: "p-w2", status: "working", task: "推进乙", ended: false },
+      { name: "done-gamma", label: "已完成丙", pane_id: "", status: "done", task: "历史任务", last_report: "已收尾", ended: true },
+    ],
+    entries: [],
+  });
+  T.syncWorkerDrawerMeta();
+  assert.equal(getEl("#wd-live").hidden, true, "ended worker must hide #wd-live immediately");
+  assert.equal(getEl("#wd-live").innerHTML, "", "ended worker must clear #wd-live innerHTML");
+  assert.equal(T.wdLiveCache.has("p-w1"), false, "ended worker must clear wdLiveCache");
+  assert.equal(getEl("#wd-gone").hidden, true, "#wd-gone orange banner must never appear in drawer");
+  assert.equal(T.getActiveWorkerKey(), null, "live->ended worker auto-closes drawer");
+  assert.equal(getEl("#app").classList.contains("has-worker"), false, "auto-close removes .has-worker");
+  assert.ok(toastTexts().some((t) => t.includes("任务甲 已完成")), "auto-close shows subtle completion toast");
+  // Repeated sync must not duplicate toast
+  const toastCountAfterClose = getEl("#toasts").children.length;
+  T.syncWorkerDrawerMeta();
+  assert.equal(getEl("#toasts").children.length, toastCountAfterClose, "subsequent meta sync must not duplicate completion toast");
+
+  // Case 2: Watching live worker -> SSE "gone" fires before state removes agent -> clears spinner, closes drawer, shows toast
+  clearToasts();
+  esInstances.length = 0;
+  T.openWorkerDrawer({ worker: "fix-beta", immediate: true });
+  T.drawWdLive({ status: "working", tail: "compiling...", meta: "4s" });
+  assert.equal(getEl("#wd-live").hidden, false);
+  const betaEs = esInstances[esInstances.length - 1];
+  assert.ok(betaEs, "live worker opens EventSource stream");
+  betaEs.dispatch("gone");
+  assert.equal(getEl("#wd-live").hidden, true, "SSE gone clears #wd-live immediately");
+  assert.equal(getEl("#wd-live").innerHTML, "");
+  assert.equal(T.wdLiveCache.has("p-w2"), false);
+  assert.equal(getEl("#wd-gone").hidden, true, "SSE gone must not show redundant #wd-gone banner");
+  assert.equal(T.getActiveWorkerKey(), null, "SSE gone auto-closes watched live drawer");
+  assert.ok(toastTexts().some((t) => t.includes("任务乙 已完成")), "SSE gone shows completion toast");
+
+  // Case 3: Opening an already-ended historical worker stays open quietly without #wd-gone banner, spinner, or toast
+  clearToasts();
+  T.openWorkerDrawer({ worker: "done-gamma", immediate: true });
+  assert.equal(T.getActiveWorkerKey(), "done-gamma", "opening ended historical worker keeps drawer open");
+  assert.equal(getEl("#app").classList.contains("has-worker"), true);
+  assert.equal(getEl("#wd-gone").hidden, true, "historical ended worker must hide redundant #wd-gone banner");
+  assert.equal(getEl("#wd-live").hidden, true, "historical ended worker must not show #wd-live spinner");
+  assert.equal(getEl("#wd-live").innerHTML, "");
+  assert.equal(getEl("#wd-peek-note").textContent, "任务已结束 · 只读记录", "calm read-only footer stays visible");
+  assert.equal(getEl("#toasts").children.length, 0, "opening historical worker must not fire completion toast");
+  T.closeWorkerDrawer({ immediate: true });
+
+  // Case 4: Full-screen pane (#live) clears spinner when session ends (renderHead missing agent & SSE gone)
+  T.setView("pane");
+  T.setCurrent("p-w2");
+  T.drawLive({ status: "working", tail: "building...", meta: "3s" });
+  assert.equal(getEl("#live").hidden, false);
+  T.setState({ agents: [], shells: [], machines: [] });
+  T.renderHead();
+  assert.equal(getEl("#live").hidden, true, "full-screen #live must hide when pane leaves state.agents");
+  assert.equal(getEl("#live").innerHTML, "", "full-screen #live must clear innerHTML when ended");
+  assert.equal(getEl("#live")._html, "", "full-screen #live must reset _html cache");
 
   console.log("ALL_V0310_FLICKER_SMOOTHNESS_TESTS_OK");
 })().catch((e) => { console.error(e); process.exit(1); });

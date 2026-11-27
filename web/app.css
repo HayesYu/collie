@@ -2133,7 +2133,7 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .msg.user .att { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .msg.user .att span, .msg.user .att a { font-size: 12.5px; padding: 2px 8px; border-radius: 8px; background: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 14%, transparent); text-decoration: none; }
 .msg.user .att a:hover { background: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 22%, transparent); }
-.fv-html-sandbox { width: 100%; height: 100%; flex: 1; min-height: 0; border: 0; display: block; background: var(--bg); }
+.fv-html-sandbox { width: 100%; height: 100%; flex: 1; min-width: 0; max-width: 100%; min-height: 0; border: 0; display: block; background: var(--bg); }
 .send { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; border: 0; background: var(--accent); color: var(--on-accent); transition: transform .1s, opacity .15s; }
 .send svg { width: 17px; height: 17px; }
 .send:active { transform: scale(.94); }
@@ -2821,8 +2821,8 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
 @media (max-width: 1180px) {
   .app.has-drawer,
   .app.has-file,
-  .app.has-worker { grid-template-columns: var(--side-w) 1fr; }
-  .app.has-thread { grid-template-columns: var(--side-w) 1fr; }
+  .app.has-worker { grid-template-columns: var(--side-w) minmax(0, 1fr); }
+  .app.has-thread { grid-template-columns: var(--side-w) minmax(0, 1fr); }
   .drawer-scrim, .file-scrim, .thread-scrim, .worker-scrim { display: block; }
   .app.has-file .file-scrim,
   .app.has-thread .thread-scrim,
@@ -2856,8 +2856,8 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
 @media (max-width: 760px) {
   .app.has-drawer,
   .app.has-file,
-  .app.has-worker { grid-template-columns: 1fr; }
-  .app.has-thread { grid-template-columns: 1fr; }
+  .app.has-worker { grid-template-columns: minmax(0, 1fr); }
+  .app.has-thread { grid-template-columns: minmax(0, 1fr); }
   .drawer-scrim, .file-scrim, .thread-scrim, .worker-scrim {
     display: block;
     background: rgba(10, 10, 12, .38);
@@ -3579,7 +3579,7 @@ a.url:hover { text-decoration-color: currentColor; }
 
 /* ─── responsive ─── */
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; }
   .side, .main { grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; }
   .side { border-right: 0; z-index: 2; content-visibility: visible; }
   .main { display: flex; z-index: 0; content-visibility: hidden; }

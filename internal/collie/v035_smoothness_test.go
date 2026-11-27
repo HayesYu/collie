@@ -31,7 +31,7 @@ assert.ok(cssSrc.includes("padding-right: var(--thread-top-pr, 0px);"), "P0-1: .
 assert.ok(cssSrc.includes("#v-collie.is-parked") && cssSrc.includes("content-visibility: hidden;"), "P0-2: parked #v-collie must use content-visibility: hidden");
 assert.ok(!cssSrc.includes("#v-collie.is-parked .dot"), "P0-2: must remove #v-collie.is-parked .dot descendant pause rules that trigger unpark recalc");
 assert.ok(!appSrc.includes("col.inert = true"), "P0-2: must never set inert on #v-collie (causes full-tree IsInert style recalc)");
-assert.ok(cssSrc.includes(".app { grid-template-columns: 1fr; grid-template-rows: 1fr; }"), "P0-2: mobile uses stacked 1x1 grid");
+assert.ok(cssSrc.includes(".app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; }"), "P0-2: mobile uses stacked 1x1 grid");
 assert.ok(!/\.app:not\(\.in-detail\) \.main\s*\{\s*display:\s*none;/.test(cssSrc), "P0-2: mobile must not destroy .main render tree via display:none");
 
 // 4) P0-4 + Unified left-bias desktop reading preference fix (all widths including >=1664px / 1920px)

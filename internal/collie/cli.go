@@ -22,6 +22,7 @@ var cliCommands = map[string]func([]string) error{
 	"subscribe": cliSubscribe, "stop": cliStop, "answer": cliAnswer, "show": cliShow, "list": cliList,
 	"timer": cliTimer, "say": cliSay, "hook": cliHook, "pair": cliPair, "memory": cliMemory,
 	"feishu": cliFeishu, "forge": cliForge, "peer": cliPeer,
+	"update": cliUpdate, "upgrade": cliUpgrade,
 }
 
 func collieDir() string {

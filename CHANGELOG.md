@@ -4,6 +4,25 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.4 (2026-11-27)
+
+### Highlights
+
+- **Native `collie update` (Alias: `collie upgrade`) CLI Self-Update (`internal/collie/{update_cli.go,updates.go,cli.go,main.go,server.go}`)**:
+  - Added native `collie update` (and friendly alias `collie upgrade`) reusing Collie's hardened self-update pipeline (`selfUpdateMu`, 3x retry with IPv4 fallback, automatic proxy-failure direct IPv4 fallback, `checksums.txt` SHA-256 verification, `<tmp> version` executability check, and atomic `os.Rename` binary replacement).
+  - **Local update (`collie update` / `collie update --force`)**: Compares current version against GitHub `releases/latest`, prints a friendly message when already up to date (`--force` reinstalls or switches a `dev` source build to the latest official release), atomically replaces the running binary, and automatically detects and smoothly restarts active managed services pointing to that binary (Linux `systemd --user` `collie-hub` / `collie-node`; macOS `launchd` `com.collie.node` / `com.collie.hub` with built-in `LWCR / EX_CONFIG` `bootout + bootstrap` fallback; or prints a clean manual restart hint when unmanaged).
+  - **Read-only version check (`collie update --check`)**: Prints a clear current-vs-latest comparison (and supports `--all --check` to inspect the entire connected fleet) with exit code `0` and zero downloads or file changes.
+  - **One-command fleet rolling update (`collie update --all`)**: Talks to the connected Hub's `/api/version` and `/api/update`, upgrading all outdated online remote nodes first (automatically leveraging Hub `yamux` relay fallback when remote nodes cannot reach GitHub directly), skipping offline/up-to-date nodes cleanly, upgrading the Hub last, and printing a structured per-machine summary.
+  - Added comprehensive race-checked unit tests (`internal/collie/update_cli_test.go`) covering mock GitHub releases, checksum & broken-binary blocking, proxy-to-direct IPv4 fallback, Linux/macOS service restarts, fleet update ordering, and machine-token auth; updated `collie --help`, bilingual READMEs, and the homepage Quick Start & Upgrade docs.
+
+### Client / API Changes
+
+- **Paired machine token auth scope (`GET /api/version`, `POST /api/update`)**:
+  - Paired computer (`kind: "machine"`) Bearer tokens are now permitted to call `GET /api/version` and `POST /api/update` so `collie update --all` works from joined nodes as well as the Hub machine. Web-only routes (`POST /api/login`, `GET /api/devices`, etc.) remain restricted (`401 Unauthorized`).
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.3 (2026-11-27)
 
 ### Highlights

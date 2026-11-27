@@ -120,7 +120,7 @@ The node dials outbound to the hub (zero open ports, no SSH) and saves its revoc
 
 > **Integrations & security notes:** The installer sets up missing herdr integrations for Claude Code and Antigravity without overwriting existing configs, and skips Codex global hooks by default (Collie discovers, chats with, and resumes Codex natively without editing `~/.codex/hooks.json`; pass `COLLIE_INSTALL_CODEX_HOOK=1` if you explicitly want it). Hub traffic is plain HTTP on LAN—place it behind Tailscale/VPN or an HTTPS reverse proxy (`--url https://…`) for cross-network access.
 
-**Keeping the fleet updated:** When a new release lands, tap **Update all** in the sidebar or *Devices*—Collie upgrades remote nodes first, then the hub itself, without interrupting running agents.
+**Keeping the fleet updated:** Tap **Update all** in the sidebar or *Devices*, or run `collie update` (alias `collie upgrade`) from any terminal—use `collie update --check` to inspect versions or `collie update --all` to upgrade remote nodes first (with automatic Hub relay fallback) and then the hub, without interrupting running agents.
 
 ## Architecture
 
@@ -172,9 +172,17 @@ When machines sit in networks that cannot reach each other (office devbox, cloud
 
 Any machine running `collie node` exposes the same web UI locally at `http://127.0.0.1:17788` (proxied to the hub). Because browsers treat `127.0.0.1` as a secure origin, open it in Chrome, pair once with an 8-character code, and click **Install Collie** in the address bar for a standalone Dock app with desktop notifications. Change the port with `collie node --ui 127.0.0.1:<port>`, or disable with `--ui off`.
 
-### Manual upgrade &amp; install from source
+### CLI upgrade &amp; install from source
 
-Re-run the installer to upgrade manually (`… | sh -s -- node` needs no re-pairing; include any custom `--url` flags when upgrading `hub`).
+Upgrade in place from any terminal (verifies SHA-256 checksums, replaces the binary atomically, and smoothly restarts active `systemd --user` or `launchd` services):
+
+```bash
+collie update --check   # check current vs latest version (read-only)
+collie update           # update this machine (alias: collie upgrade; add --force to reinstall)
+collie update --all     # upgrade all online remote nodes first, then the hub
+```
+
+You can also re-run the installer script (`… | sh -s -- node` needs no re-pairing; include any custom `--url` flags when upgrading `hub`).
 
 To build and install from source (requires **Go 1.25+** and `git`):
 
@@ -237,6 +245,7 @@ collie say "…"                                               # message Router 
 collie hook <source> "…"                                     # inject a test external event
 collie pair [--computer]                                     # print phone QR / computer join command
 collie node [--hub URL --code CODE] [--name mac]             # connect this machine to a hub
+collie update [--check | --all | --force]                    # check or update collie (alias: upgrade)
 ```
 
 </details>

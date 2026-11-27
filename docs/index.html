@@ -784,7 +784,7 @@ footer a { color: var(--fg-2); }
         <div><b data-i18n="fact1_t">Single Go binary</b><span data-i18n="fact1_d">SQLite, xterm.js, and embedded web UI included—zero external CDN</span></div>
         <div><b data-i18n="fact2_t">Zero-port outbound tunnels</b><span data-i18n="fact2_d">Multiplexed yamux over IPv4 &amp; pure IPv6 with automatic reconnect</span></div>
         <div><b data-i18n="fact3_t">Multi-hub federation</b><span data-i18n="fact3_d">Run one hub per isolated network and view every fleet in one sidebar</span></div>
-        <div><b data-i18n="fact4_t">Rolling fleet updates</b><span data-i18n="fact4_d">One click upgrades remote nodes first, then the hub—running agents stay untouched</span></div>
+        <div><b data-i18n="fact4_t">Rolling fleet updates</b><span data-i18n="fact4_d">One click in Web UI or `collie update --all` upgrades remote nodes first, then the hub—running agents stay untouched</span></div>
       </div>
     </div>
   </section>
@@ -798,6 +798,7 @@ footer a { color: var(--fg-2); }
         <div class="tabs" role="tablist" aria-label="Installation modes" data-i18n-aria="tabs_label">
           <button type="button" role="tab" id="tab-hub" aria-selected="true" data-tab="hub" data-i18n="tab_hub">Start hub</button>
           <button type="button" role="tab" id="tab-node" aria-selected="false" tabindex="-1" data-tab="node" data-i18n="tab_node">Join computer</button>
+          <button type="button" role="tab" id="tab-upgrade" aria-selected="false" tabindex="-1" data-tab="upgrade" data-i18n="tab_upgrade">Upgrade</button>
           <button type="button" role="tab" id="tab-bin" aria-selected="false" tabindex="-1" data-tab="bin" data-i18n="tab_bin">Binary only</button>
           <button type="button" role="tab" id="tab-src" aria-selected="false" tabindex="-1" data-tab="src" data-i18n="tab_src">From source</button>
         </div>
@@ -811,6 +812,12 @@ footer a { color: var(--fg-2); }
           <div class="panel-body">
             <p data-i18n="p_node">Run on any other computer. Copy the hub URL and pairing code from Devices → Connect a computer—dials outbound, no open ports.</p>
             <div class="cmd"><pre><code>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://&lt;hub&gt;:7788 --code &lt;code&gt;</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
+          </div>
+        </div>
+        <div class="panel" role="tabpanel" id="panel-upgrade" aria-labelledby="tab-upgrade" data-panel="upgrade" hidden="until-found">
+          <div class="panel-body">
+            <p data-i18n-html="p_upgrade">Verifies SHA-256, replaces the binary atomically, and restarts active <code>systemd --user</code> / <code>launchd</code> services (alias: <code>collie upgrade</code>). Add <code>--check</code> to inspect or <code>--all</code> to upgrade the whole fleet.</p>
+            <div class="cmd"><pre><code>collie update</code></pre><button type="button" class="copy" data-i18n="copy">Copy</button></div>
           </div>
         </div>
         <div class="panel" role="tabpanel" id="panel-bin" aria-labelledby="tab-bin" data-panel="bin" hidden="until-found">
@@ -944,17 +951,19 @@ const COPY = {
     fact3_t: "Multi-hub federation",
     fact3_d: "Run one hub per isolated network and view every fleet in one sidebar",
     fact4_t: "Rolling fleet updates",
-    fact4_d: "One click upgrades remote nodes first, then the hub—running agents stay untouched",
+    fact4_d: "One click in Web UI or collie update --all upgrades remote nodes first, then the hub—running agents stay untouched",
     inst_kicker: "Quick Start",
     inst_h2: "Up and running in 30 seconds",
     inst_sub: "macOS, Linux (amd64 / arm64), and Windows via WSL2 (Ubuntu/Debian). Verifies SHA-256 checksums, installs herdr if missing, registers a background service (launchd or systemd --user), and prints a QR code ready to scan.",
     tabs_label: "Installation modes",
     tab_hub: "Start hub",
     tab_node: "Join computer",
+    tab_upgrade: "Upgrade",
     tab_bin: "Binary only",
     tab_src: "From source",
     p_hub: "Run on an always-on machine, then scan the terminal QR code from your phone to pair.",
     p_node: "Run on any other computer. Copy the hub URL and pairing code from Devices → Connect a computer—dials outbound, no open ports.",
+    p_upgrade: "Verifies SHA-256, replaces the binary atomically, and restarts active <code>systemd --user</code> / <code>launchd</code> services (alias: <code>collie upgrade</code>). Pass <code>--check</code> to inspect or <code>--all</code> to update the whole fleet.",
     p_bin: "Install only the <code>collie</code> binary to <code>~/.local/bin</code> without registering a service.",
     p_src: "Requires Go 1.25+. Run the same script inside the repo to build locally; pass <code>hub</code> or <code>node --hub … --code …</code>.",
     copy: "Copy",
@@ -1063,17 +1072,19 @@ const COPY = {
     fact3_t: "多 hub 聚合",
     fact3_d: "互不相通的网络各跑一个，侧栏合在一处统一管理",
     fact4_t: "一键全端升级",
-    fact4_d: "先远端 node 后 hub 自动校验重启，不打断正在跑的 Agent",
+    fact4_d: "Web 一键或 collie update --all 先远端 node 后 hub 自动校验重启，不打断正在跑的 Agent",
     inst_kicker: "快速开始",
     inst_h2: "一行命令，30 秒跑起",
     inst_sub: "支持 macOS、Linux（amd64 / arm64）与 Windows（WSL2 Ubuntu / Debian 终端内跑同一条命令）。自动校验 SHA-256、补装 herdr、注册后台服务（launchd / systemd --user），启动即打印配对二维码。",
     tabs_label: "安装方式",
     tab_hub: "做 hub",
     tab_node: "加入电脑",
+    tab_upgrade: "升级",
     tab_bin: "只装命令",
     tab_src: "从源码",
     p_hub: "在一台常开的电脑上运行，随后用手机扫终端里的二维码就能配对。",
     p_node: "在其他电脑上运行。在 hub 的「设备 → 连接一台电脑」复制地址和配对码；主动出站连接，不用开端口。",
+    p_upgrade: "自动校验 SHA-256、原子替换二进制并平滑重启 <code>systemd --user</code> / <code>launchd</code> 服务（支持别名 <code>collie upgrade</code>）。只读查版本加 <code>--check</code>，一键升级全端加 <code>--all</code>。",
     p_bin: "只把 <code>collie</code> 装到 <code>~/.local/bin</code>，不注册后台服务。",
     p_src: "需要 Go 1.25+。在仓库内跑同一个脚本即可本地编译；后面可接 <code>hub</code> 或 <code>node --hub … --code …</code>。",
     copy: "复制",

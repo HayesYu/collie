@@ -176,13 +176,16 @@ assert.ok(cssSrc.includes(".side.is-scroll-paused .dot::after"), "scroll-pause g
 assert.ok(!/\.dot\.idle\s*\{[^}]*animation:/.test(cssSrc), ".dot.idle must be calm static with zero infinite animation");
 assert.ok(cssSrc.includes("wait-halo 2.8s ease-in-out infinite"), "preserve active wait-halo animation contract");
 
-// 1b) Unified Right Dock「小本本 | 话题线」+ clean panel-right icon + single-state + v0.2.94 left-biased layout
+// 1b) Unified Right Dock「小本本 | 话题线」+ lightweight plain-text 小本本 trigger + ← 话题线 drawer return + left-biased layout
 assert.ok(!htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"'), "separate top-bar threads popover must be merged into unified right dock");
 assert.ok(!htmlSrc.includes('id="np-tasks-more"') && !htmlSrc.includes('id="np-back"'), "single-state dock must omit expand/back controls");
 assert.ok(htmlSrc.includes('id="dk-tablist"') && htmlSrc.includes('id="dk-tab-notes"') && htmlSrc.includes('id="dk-tab-threads"'), "unified dock must expose accessible dual-tab bar");
 assert.ok(htmlSrc.includes('id="dk-panel-notes"') && htmlSrc.includes('id="dk-panel-threads"'), "unified dock must expose dual tabpanels");
-assert.ok(htmlSrc.includes('class="dock-ico-pane"') && htmlSrc.includes('M15 4v16'), "unified dock trigger must use crisp panel-right linear SVG");
-assert.ok(!htmlSrc.match(/id="open-notes-btn"[\s\S]*?<\/button>/)[0].includes("<circle"), "dock trigger icon must not contain microwave-style dots");
+const dockBtnHtml = htmlSrc.match(/<button[^>]*id="open-notes-btn"[\s\S]*?<\/button>/)?.[0] || "";
+assert.ok(dockBtnHtml.includes("小本本") && !dockBtnHtml.includes("<svg"), "unified dock trigger must be plain-text 小本本 button without SVG icon");
+assert.ok(dockBtnHtml.includes('id="dock-trigger-dot"') && dockBtnHtml.includes('id="dock-trigger-cnt"'), "unified dock trigger must expose subtle unread dot and count badge");
+const tdBackHtml = htmlSrc.match(/<button[^>]*id="td-back"[\s\S]*?<\/button>/)?.[0] || "";
+assert.ok(tdBackHtml.includes("话题线"), "thread focus drawer header must include lightweight ← 话题线 return button");
 assert.ok(cssSrc.includes("--notes-reserve: calc(var(--notes-w) + var(--notes-gap))"), "wide desktop must preserve v0.2.94 left-biased --notes-reserve layout");
 assert.ok(cssSrc.includes(".notepane.is-hidden") && cssSrc.includes("transform-origin: calc(100% - 16px) -12px"), "desktop dock open/close must use compositor transform+opacity from top-right origin");
 assert.ok(cssSrc.includes(".dk-tabs::before") && cssSrc.includes("border-block-end: 1.5px solid var(--fg)"), "tab underline must use border-block-end with anchor positioning");
@@ -322,7 +325,7 @@ ctx.globalThis = ctx;
 const marker = "  boot();\n})();";
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, syncAnimPowerState, superThreadWorkerFingerprint, setDockTab, getDockTab: () => dockTab, syncNotebookVisibility, renderCollieThreadsMenu, replyOptsMarkup, bucketDoneMemoryItems, renderMemoryHTML, showFilePane, closeFilePane, getCollieLayoutLock: () => collieLayoutLock };\n})();"
+  "  globalThis.__test = { setView: (v) => { view = v; }, setSup: (s) => { sup = normSup(s); }, setState: (s) => { state = s; }, syncAnimPowerState, superThreadWorkerFingerprint, setDockTab, getDockTab: () => dockTab, syncNotebookVisibility, renderCollieThreadsMenu, openThreadDrawer, getActiveThreadRoot: () => activeThreadRoot, replyOptsMarkup, bucketDoneMemoryItems, renderMemoryHTML, showFilePane, closeFilePane, getCollieLayoutLock: () => collieLayoutLock };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
@@ -369,16 +372,19 @@ assert.equal(getEl("#dock-trigger-dot").hidden, true, "top-bar unread dot hides 
 assert.equal(getEl("#dk-th-dot").hidden, false, "threads tab unread dot shows for pending thread");
 assert.equal(getEl("#dk-th-cnt").textContent, "1");
 
-// Collapse dock -> top-bar unread dot appears
+// Collapse dock -> top-bar unread dot & count badge appear
 getEl("#np-close").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
 assert.equal(getEl("#notes-pane").inert, true);
 assert.equal(getEl("#dock-trigger-dot").hidden, false, "top-bar unread dot must appear when dock is collapsed with pending threads");
+assert.equal(getEl("#dock-trigger-cnt").hidden, false, "top-bar unread count must appear when dock is collapsed with pending threads");
+assert.equal(getEl("#dock-trigger-cnt").textContent, "1");
 
 // Reopen via single top-bar trigger & keyboard ArrowRight switches tab
 getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 assert.equal(getEl("#dock-trigger-dot").hidden, true);
+assert.equal(getEl("#dock-trigger-cnt").hidden, true);
 getEl("#dk-tablist").dispatch("keydown", { key: "ArrowRight" });
 assert.equal(T.getDockTab(), "threads", "ArrowRight must switch dock tab to threads");
 assert.equal(getEl("#dk-panel-notes").hidden, "until-found", "inactive panel must use hidden=until-found");
@@ -467,6 +473,29 @@ T.closeFilePane();
 assert.ok(!getEl("#app").classList.contains("has-file"), "closeFilePane must remove .has-file");
 const closeLock = T.getCollieLayoutLock();
 assert.ok(closeLock && closeLock.snap && closeLock.snap.anchorId === "e42", "closeFilePane must preserve layout scroll lock so closing CSV/file preview does not drift main chat");
+
+// 2f) ← 话题线 return button in thread focus drawer: closes drawer & lands back on dock 话题线 tab (desktop + mobile)
+T.openThreadDrawer("e1", "e1", "e1");
+assert.equal(T.getActiveThreadRoot(), "e1");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening thread drawer yields right dock");
+getEl("#td-back").dispatch("click");
+assert.equal(T.getActiveThreadRoot(), null, "← 话题线 must close thread drawer on desktop");
+assert.equal(getEl("#thread-drawer").hidden, true, "thread drawer hides immediately on return");
+assert.equal(T.getDockTab(), "threads", "← 话题线 must return to 话题线 tab on desktop");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "right dock reopens on 话题线 tab");
+
+ctx.innerWidth = 390;
+T.setDockTab("notes", { animate: false });
+T.syncNotebookVisibility();
+T.openThreadDrawer("e1", "e1", "e1");
+assert.equal(T.getActiveThreadRoot(), "e1");
+getEl("#td-back").dispatch("click");
+assert.equal(T.getActiveThreadRoot(), null, "← 话题线 must close thread drawer on mobile");
+assert.equal(T.getDockTab(), "threads", "← 话题线 must return to 话题线 tab in mobile bottom drawer");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "mobile dual-tab bottom drawer opens on return");
+assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "mobile bottom drawer scrim activates on return");
+ctx.innerWidth = 1440;
+T.syncNotebookVisibility();
 
 console.log("OK: all v0.2.95 perf, right-dock, memory-bucket, reply-dedup & filepane-anchor checks passed");
 `

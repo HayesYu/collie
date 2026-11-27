@@ -90,11 +90,11 @@ const htmlSrc = fs.readFileSync("web/index.html", "utf8");
 const cssSrc = fs.readFileSync("web/app.css", "utf8");
 const appSrc = fs.readFileSync("web/app.js", "utf8");
 
-// 1) Header dock trigger uses crisp panel-right linear SVG (rounded rect + single clean right vertical line, zero microwave dots)
+// 1) Header dock trigger uses ultra-light plain-text "小本本" button (no heavy icon/microwave dots) with unread dot/count
 const notesBtnMatch = htmlSrc.match(/id="open-notes-btn"[\s\S]*?<\/button>/);
 assert.ok(notesBtnMatch, "expected #open-notes-btn in index.html");
-assert.ok(notesBtnMatch[0].includes('width="17" height="16"') && notesBtnMatch[0].includes('M15 4v16'), "header dock icon must use clean panel-right linear SVG");
-assert.ok(!notesBtnMatch[0].includes('<circle'), "header dock icon must not contain redundant microwave-style dots");
+assert.ok(notesBtnMatch[0].includes("小本本") && !notesBtnMatch[0].includes("<svg"), "header dock trigger must be compact plain-text 小本本 button without SVG icon");
+assert.ok(notesBtnMatch[0].includes('id="dock-trigger-dot"') && notesBtnMatch[0].includes('id="dock-trigger-cnt"'), "header dock trigger must keep subtle unread dot and count badge");
 
 // 2) Minimal dock header keeps dual tabs + single close icon (no redundant expand pill button)
 assert.ok(!htmlSrc.includes('id="np-expand"') && htmlSrc.includes('id="np-close"') && htmlSrc.includes('id="dk-tablist"'), "dock header must omit expand pill and keep dual tabs + close button");

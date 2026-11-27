@@ -122,9 +122,10 @@
         </div>
         <div class="d-head-acts">
           <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
-          <button type="button" class="icon-btn dock-trigger" id="open-notes-btn" aria-label="展开或收起小本本与话题线" aria-pressed="false" aria-controls="notes-pane" title="小本本与话题线">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect class="dock-ico-pane" x="15" y="4" width="5.5" height="16" rx="1.2"/><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M15 4v16"/></svg>
+          <button type="button" class="dock-trigger" id="open-notes-btn" aria-label="展开或收起小本本与话题线" aria-pressed="false" aria-controls="notes-pane" title="小本本与话题线">
+            <span class="dock-trigger-lbl">小本本</span>
             <span class="dock-trigger-dot" id="dock-trigger-dot" aria-hidden="true" hidden></span>
+            <span class="dock-trigger-cnt" id="dock-trigger-cnt" aria-hidden="true" hidden></span>
           </button>
           <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
@@ -503,8 +504,9 @@
       </button>
       <div class="td-top">
       <header class="td-head">
-        <button type="button" class="icon-btn td-back" id="td-back" aria-label="返回主聊天" title="返回主聊天">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+        <button type="button" class="td-back" id="td-back" aria-label="返回话题线列表" title="返回话题线列表">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+          <span>话题线</span>
         </button>
         <div class="td-title-wrap">
           <h2 class="td-title" id="td-title">话题线</h2>

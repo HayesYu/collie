@@ -1774,7 +1774,21 @@ body.dragging { cursor: col-resize; user-select: none; }
   border-bottom: 0; background: var(--bg);
   padding-top: env(safe-area-inset-top);
 }
-.td-back { display: none; margin-left: -6px; }
+.td-back {
+  display: inline-flex; align-items: center; gap: 3px; flex: none;
+  min-block-size: 28px; padding: 0 8px 0 6px; margin-left: -6px;
+  border-radius: 999px; border: 1px solid transparent; background: transparent;
+  color: var(--fg-3); font: 450 12px/1 var(--sans); letter-spacing: -.01em;
+  cursor: pointer; white-space: nowrap;
+  transition: background .14s, color .14s;
+}
+.td-back svg {
+  width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; opacity: .82;
+}
+.td-back:hover { background: var(--bg-2); color: var(--fg); }
+.td-back:hover svg { opacity: 1; }
+.td-back:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 42%, transparent); outline-offset: -2px; }
 .td-title-wrap { flex: 1; min-width: 0; }
 .td-title {
   margin: 0; font-size: 14.5px; font-weight: 600; letter-spacing: -.01em;
@@ -2037,10 +2051,10 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   .td-handle:focus-visible .td-handle-pill,
   .td-handle:active .td-handle-pill,
   .threadpane.is-dragging .td-handle-pill { background: var(--fg-3); width: 44px; }
-  .td-head { padding: 2px 10px 10px 16px; min-height: 44px; padding-top: 2px; touch-action: pan-x; }
+  .td-head { padding: 2px 10px 10px 14px; min-height: 44px; padding-top: 2px; touch-action: pan-x; }
   .td-head:has(+ .td-workers:not([hidden])) { padding-bottom: 4px; min-height: 38px; }
   .td-workers { padding: 4px 14px 10px 16px; }
-  .td-back { display: none; }
+  .td-back { margin-left: -4px; padding: 0 7px 0 5px; }
   #td-close { display: inline-grid; }
   .td-body { padding: 14px 14px 20px; scrollbar-gutter: auto; }
   .td-node { padding: 9px 6px 12px; margin: 0 -6px; }
@@ -2058,7 +2072,8 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
 @media (pointer: coarse) {
   .td-node-acts { opacity: .8; }
   .td-worker { min-block-size: 30px; padding: 0 11px 0 10px; }
-  .td-back, #td-locate-root, #td-close { min-inline-size: 36px; min-block-size: 36px; width: 36px; height: 36px; }
+  .td-back { min-block-size: 32px; }
+  #td-locate-root, #td-close { min-inline-size: 36px; min-block-size: 36px; width: 36px; height: 36px; }
   .td-cbar .td-attach, .td-cbar .send { width: 34px; height: 34px; }
   .td-cbar .td-attach { position: relative; }
   .td-cbar .td-attach::after { content: ""; position: absolute; inset: -5px; }
@@ -4833,22 +4848,39 @@ a.int-forge-title:hover { text-decoration: underline; text-underline-offset: 2px
   .peer-ov-row { gap: 8px; padding: 11px 14px; }
 }
 
-/* ─── v0.2.95: Unified Right Floating Dock「小本本 | 话题线」(single-state card, v0.2.94 left-biased layout, compositor open/close motion) ─── */
-.dock-trigger { position: relative; }
-.dock-trigger svg { stroke-width: 1.75; }
-.dock-trigger .dock-ico-pane { fill: transparent; stroke: none; transition: fill .14s ease; }
-.dock-trigger.on { background: var(--bg-3); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line-2); }
-.dock-trigger.on .dock-ico-pane { fill: color-mix(in srgb, currentColor 16%, transparent); }
+/* ─── Unified Right Floating Dock「小本本 | 话题线」(single-state card, left-biased layout, compositor open/close motion) ─── */
+.dock-trigger {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 4.5px; flex: none;
+  min-block-size: 28px; padding: 0 9px; border-radius: 999px;
+  border: 1px solid transparent; background: transparent; color: var(--fg-3);
+  font: 450 12.5px/1 var(--sans); letter-spacing: -.01em;
+  cursor: pointer; white-space: nowrap;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.dock-trigger:hover { background: var(--bg-2); color: var(--fg-2); }
+.dock-trigger:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 42%, transparent); outline-offset: -2px; }
+.dock-trigger.on { background: var(--bg-2); color: var(--fg); }
+.dock-trigger.on:hover { background: var(--bg-3); color: var(--fg); }
+.dock-trigger.has-unread:not(.on) { color: var(--fg-2); }
 .dock-trigger-dot {
-  position: absolute; top: 5px; right: 5px;
-  width: 6px; height: 6px; border-radius: 50%;
+  width: 5.5px; height: 5.5px; border-radius: 50%; flex: none;
   background: var(--attn);
-  box-shadow: 0 0 0 1.5px var(--bg);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--attn) 16%, transparent);
   pointer-events: none;
-  transition: opacity .15s ease, transform .15s ease;
+}
+.dock-trigger-cnt {
+  font-size: 11px; font-weight: 500; line-height: 1;
+  color: var(--attn); font-variant-numeric: tabular-nums;
+  margin-left: -1px; pointer-events: none;
 }
 .dock-trigger.on .dock-trigger-dot,
-.dock-trigger-dot[hidden] { opacity: 0; transform: scale(.5); }
+.dock-trigger.on .dock-trigger-cnt,
+.dock-trigger-dot[hidden],
+.dock-trigger-cnt[hidden] { display: none; }
+@media (pointer: coarse) {
+  .dock-trigger { min-block-size: 32px; padding: 0 9px; }
+}
 .notes-scrim {
   display: none; position: fixed; inset: 0; z-index: 44;
   background: rgba(10, 10, 12, .28);

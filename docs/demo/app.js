@@ -14423,6 +14423,7 @@
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
   const dockTriggerDot = $("#dock-trigger-dot");
+  const dockTriggerCnt = $("#dock-trigger-cnt");
   const dkTablist = $("#dk-tablist");
   const dkTabNotes = $("#dk-tab-notes");
   const dkTabThreads = $("#dk-tab-threads");
@@ -14444,9 +14445,13 @@
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
   function syncDockTriggerBadge() {
-    if (!dockTriggerDot) return;
     const showDot = dockPendingThreads > 0 && !notesOpen;
-    dockTriggerDot.hidden = !showDot;
+    if (dockTriggerDot) dockTriggerDot.hidden = !showDot;
+    if (dockTriggerCnt) {
+      dockTriggerCnt.hidden = !showDot;
+      setText(dockTriggerCnt, showDot ? (dockPendingThreads > 99 ? "99+" : String(dockPendingThreads)) : "");
+    }
+    if (notesBtn) notesBtn.classList.toggle("has-unread", showDot);
   }
   function setDockTab(nextTab, opts = {}) {
     const target = nextTab === "threads" ? "threads" : "notes";
@@ -15952,8 +15957,25 @@
       if (activeThreadRoot) applyThreadWidth();
       else syncThreadWideUI();
     });
+    function returnToThreadsFromDrawer() {
+      closeAllColliePopovers();
+      if (view === "collie") {
+        setDockTab("threads", { animate: false });
+        if (isWideNotesViewport()) {
+          notesUserClosed = false;
+          store.set("notesClosed", false);
+        } else {
+          notesManualOverlay = true;
+        }
+      }
+      if (activeThreadRoot || !tdDrawer?.hidden) {
+        closeThreadDrawer({ immediate: true, rerender: true });
+      } else if (view === "collie") {
+        syncNotebookVisibility();
+      }
+    }
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
-    tdBackBtn?.addEventListener("click", () => closeThreadDrawer());
+    tdBackBtn?.addEventListener("click", () => returnToThreadsFromDrawer());
     tdScrim?.addEventListener("click", () => closeThreadDrawer());
     tdHandleBtn?.addEventListener("click", () => {
       if (performance.now() < tdSkipHandleClickUntil) return;

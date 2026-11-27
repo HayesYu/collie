@@ -4,6 +4,51 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.0 (2026-11-27)
+
+### Highlights
+
+- **Peer Hub Controlled Inbox & Physical Auth Isolation (`internal/collie/db.go`, `peer.go`, `peer_api.go`, `server.go`)**:
+  - Introduced zero-relay peer-to-peer collaboration between private Collie Hubs on the same LAN or Tailscale network while preserving strict per-owner Hub, node, and memory sovereignty.
+  - Added isolated SQLite tables (`peers`, `peer_messages`, `peer_blocklist`); minted 256-bit `clp_` inbound peer tokens stored exclusively as SHA-256 hashes in SQLite, while storing outbound peer tokens solely in `SecretStore` (`~/.collie/secrets.json`, `0600`) — never mixing peer credentials into `Auth.devices` or `hubs.json`.
+  - Added a dedicated narrow `peerAuth` middleware (Bearer header only, no cookies, no query params, no CORS) strictly scoped to `/api/peer/{ping,inbox,revoke}` (0 terminal / 0 file / 0 memory / 0 direct worker-spawn access), guarded unmatched `/api/*` routes through `s.auth`, and added instant one-sided pause, revoke, and hub blocklist controls.
+- **Zero-Relay Bidirectional Pairing & Built-In Local QR Code Friend Adding (`internal/collie/peer.go`, `hub.go`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Reused `lanAddresses()` and Collie's built-in local `go-qrcode` generator (zero third-party CDN) to issue 10-minute one-time `collie-peer://v1/...` invites and high-contrast white-surface QR business cards; handshake executes atomic bidirectional token exchange with reverse `/api/peer/ping` reachability checks and HTTP redirects disabled (`CheckRedirect`).
+  - Added the「好友边牧」card and paired-peer overview inside「自动化 → 接入」, reusing `<dialog class="sheet int-sheet">` for managing paired peers (per-peer pause/resume, handling mode, live latency ping, two-step revoke/block, and unblock) and adding friends via「我的边牧名片」QR card + one-click copy or「扫码 / 粘贴加好友」(browser `BarcodeDetector` live camera scan with graceful degradation to QR image upload or invite-code paste with real-time UTF-8 preview).
+- **Async Investigation & Handoff Loop + `collie peer` CLI (`internal/collie/peer.go`, `super.go`, `superapi.go`, `cli.go`, `main.go`)**:
+  - Routed peer exchanges to stable threads (`peer:<peer_id>:<topic_id>`) with `source="peer:<peer_id>"` so incoming peer messages never interrupt the owner's active human `chat` turn, backed by durable `integration_dedup` idempotency, dual-layer token-bucket rate limiting (per-peer 6/min burst 3, global 20/min burst 8, queue backpressure 10), L0 `notify` (0 Router wake), L1 `advise` (default read-only investigation wrapped with explicit anti-prompt-injection guardrails), and L3 `propose` readiness.
+  - Added `collie peer ls|list|invite|pair|ping|send --confirm|revoke [--block]` CLI subcommands with double-latch confirmation (`--confirm` + `confirm: true`), outbound `SecretStore` / master token / private-key / common-token leak blocking, and updated `ROUTER.md` guidance.
+  - Added end-to-end dual-Hub HTTP loopback race tests (`internal/collie/peer_test.go`) and regenerated `docs/demo/` via `scripts/demo.sh`.
+- **Unified Dock & Thread Drawer Navigation Polish (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Replaced the top-bar `panel-right` icon with an ultra-light plain-text `小本本` button aligned with the `派活 · 默认` aesthetic, showing a subtle unread dot and count badge when collapsed with pending threads.
+  - Added a lightweight `← 话题线` back button at the top-left of the thread focus drawer header (`.td-head`) that closes the thread drawer and returns directly to the `话题线` tab in the right dock (and the mobile dual-tab bottom drawer), unifying the thread-list → thread-focus → back-to-list loop.
+
+### Client / API Changes
+
+- **`GET /api/super` & SSE `event: super` (`superView`)**: Added optional field `peers_summary?: { total, active, online, paused, enabled }` (backwards-compatible; older clients ignore it safely).
+- **New narrow peer-to-peer HTTP endpoints (`/api/peer/*`, authenticated strictly by `peerAuth` Bearer `clp_` token or one-time invite code; CORS disabled)**:
+  - `POST /api/peer/pair/accept`: Redeems a 10-minute one-time invite code with reverse `/api/peer/ping` verification and exchanges independent 256-bit tokens.
+  - `GET /api/peer/ping`: Returns `{ ok, hub_name, version, protocol_ver, paused }`.
+  - `POST /api/peer/inbox`: Delivers a structured message (`msg_id`, `topic_id`, `kind`: `ask|handoff|reply|ack`, `in_reply_to`, `hop`, `subject`, `body`, `sent_at`; max 32 KB request / 16 KB body) into the controlled inbox with idempotent dedup and rate limiting.
+  - `POST /api/peer/revoke`: Notifies the remote hub of unilateral unpairing.
+- **New owner peer-management HTTP endpoints (`/api/super/peers*`, standard `s.auth`)**:
+  - `GET /api/super/peers`: Returns `{ hub_id, hub_name, enabled, addrs, peers, blocklist, blocked_count, summary }`.
+  - `POST /api/super/peers/settings`: Updates `{ enabled?, hub_name? }`.
+  - `POST /api/super/peers/invite`: Issues a 10-minute one-time invite `{ invite_code, code, hub_id, hub_name, mode, addrs, expires_at }`.
+  - `POST /api/super/peers/pair`: Initiates bidirectional handshake from `{ invite_code, name?, mode? }`.
+  - `PATCH /api/super/peers/{id}`: Updates `{ name?, mode?, status? }` (`active | paused | blocked`).
+  - `POST /api/super/peers/{id}/ping`: Probes remote reachability and round-trip latency (`{ ok, peer_id, addr, latency_ms, remote_name, remote_version, protocol_ver, paused, error? }`).
+  - `DELETE /api/super/peers/{id}[?block=1]`: Immediately revokes local hash/secret and optionally adds `hub_id` to `peer_blocklist`.
+  - `POST /api/super/peers/{id}/send`: Sends a human-confirmed message (`{ topic_id?, kind?, subject?, body, in_reply_to?, hop?, confirm: true }`) with outbound secret-leak blocking.
+  - `GET /api/super/peers/{id}/messages`: Lists recent peer message records.
+  - `DELETE /api/super/peers/blocklist/{hub_id}`: Removes a hub from the blocklist.
+- **Existing endpoint adjustments**:
+  - `GET /api/qr`: Raised `text` parameter limit from 512 to 1024 bytes (auto EC Low above 256 bytes) to accommodate `collie-peer://v1/...` business card QR codes.
+  - Unmatched `/api/*` paths now pass through `s.auth` before returning `404` so unauthenticated or narrow peer tokens receive `401`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.95 (2026-11-27)
 
 ### Highlights

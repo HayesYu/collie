@@ -192,7 +192,7 @@ sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>   # 加入电
 在 **自动化 → 接入** 中配置（密钥独立保存在 `0600` 权限的 `~/.collie/secrets.json`，前端零回显）：
 
 - **GitHub 与可插拔代码托管源** — 内置 GitHub 适配器，按 `notify` / `advise` / `agent` 三档模式追踪 PR 评审、`@` 提及与 CI 失败并维持稳定线程；也可在 `~/.collie/providers/*.json` 放入自定义 CLI provider 接入任意托管平台。
-- **飞书 / Lark 零公网长连接** — 原生 WebSocket 长连接支持双向对话与交互式决策卡片，无需公网回调地址；同时也兼容事件订阅 Webhook（`/hooks/feishu?key=…`，已自动处理 `url_verification`）。
+- **飞书 / Lark 零公网长连接** — 原生 WebSocket 长连接支持双向对话与交互式决策卡片，无需公网回调地址；在群聊中直接 `@Collie` 且未引用父消息时，若已为应用开通可选的 `im:message.group_msg` 权限，会自动附带最近群聊上下文（未开通则优雅降级为原消息）。同时也兼容事件订阅 Webhook（`/hooks/feishu?key=…`，已自动处理 `url_verification`）。
 - **GitHub 与通用 Webhook** — 在「自动化 → 接入」复制地址：
   - GitHub：`/hooks/github?key=…`（Content type 选 `application/json`）
   - 通用：`POST /hooks/<source>?key=…`，JSON `{"text","thread","from","id"}`，支持 `X-Idempotency-Key` 去重。Webhook 立即返回 `202`，过滤与路由在收件箱异步完成。

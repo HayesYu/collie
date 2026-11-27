@@ -96,17 +96,17 @@ assert.ok(notesBtnMatch, "expected #open-notes-btn in index.html");
 assert.ok(!notesBtnMatch[0].includes('M14.5 4v16'), "header notebook icon must not use split-sidebar divider");
 assert.ok(notesBtnMatch[0].includes('M14.5 20v-4.5') && notesBtnMatch[0].includes('M8 9h8'), "header notebook icon must use folded-corner lined note SVG");
 
-// 2) Clear expand pill button markup (展开 / 收起)
-assert.ok(htmlSrc.includes('class="np-expand-btn" id="np-expand"') && htmlSrc.includes('class="np-exp-lbl">展开</span>'), "expand button must render visible 展开/收起 pill");
+// 2) Minimal notebook header keeps only the close icon (no redundant expand pill button)
+assert.ok(!htmlSrc.includes('id="np-expand"') && htmlSrc.includes('id="np-close"'), "notebook header must omit redundant expand pill and keep clean close button");
 
-// 3) Fixed width (no horizontal width jump), attached right of chat column, 0px chat shift on expand, restrained max-height min(48vh, 420px)
+// 3) Fixed width (no horizontal width jump), centered in right empty channel, 0px chat shift on expand, restrained max-height min(48vh, 420px)
 assert.ok(cssSrc.includes("--notes-w: 248px"), "notebook must use fixed 248px width");
 assert.ok(!cssSrc.includes("--notes-w-exp"), "expanded notebook must not change width via --notes-w-exp");
 assert.ok(!cssSrc.includes("#v-collie.has-notes.notes-expanded"), "expanding notebook must never alter main chat column padding/reserve");
 assert.ok(cssSrc.includes("max-height: min(48vh, 420px)"), "expanded notebook must cap height to min(48vh, 420px)");
-assert.ok(cssSrc.includes("calc(50% + (var(--col) - var(--notes-w) + var(--notes-gap)) / 2)"), "notebook must track right side of main conversation column");
-assert.ok(cssSrc.includes(".notepane:not(.is-expanded) { cursor: pointer; }"), "compact notebook card must show pointer cursor across body");
-assert.ok(cssSrc.includes(".np-expand-btn") && cssSrc.includes("min-height: 26px"), "expand button must be >=26px tall");
+assert.ok(cssSrc.includes("(100% - var(--np-col-right) - var(--notes-w)) * 0.55"), "notebook must center optically in the right empty channel");
+assert.ok(cssSrc.includes(".notepane { cursor: pointer; }"), "desktop notebook card must show pointer cursor for click-to-toggle");
+assert.ok(!cssSrc.includes(".np-expand-btn"), "redundant .np-expand-btn CSS must be removed");
 
 // 4) Runtime VM check: compact body click expands, artifact click stays preview, expand button toggles 展开/收起
 function makeClassList() {
@@ -168,9 +168,6 @@ for (const [formSel, inputSel] of [["#super-composer", "#super-input"], ["#compo
 }
 getEl("#re-draft")._qs[".re-t"] = makeEl("#re-draft .re-t");
 getEl("#re-draft")._qs["button"] = makeEl("#re-draft button");
-const expLbl = makeEl(".np-exp-lbl");
-expLbl.textContent = "展开";
-getEl("#np-expand")._qs[".np-exp-lbl"] = expLbl;
 
 const storage = new Map();
 const doc = {
@@ -229,18 +226,15 @@ T.setView("collie");
 T.setNotebookData({ date: "2026-11-27", tasks: [{ id: "t1", title: "任务 A", note: "进展 A", tone: "active" }], artifacts: [], timers: [] });
 T.syncNotebookVisibility();
 assert.equal(T.getNotesExpanded(), false);
-assert.equal(expLbl.textContent, "展开");
 
-// Clicking blank space in compact mode expands the card and flips button label to 收起
+// Clicking blank space / header in compact mode expands the card
 const blankTarget = makeEl("blank");
 getEl("#notes-pane").dispatch("click", { target: blankTarget });
 assert.equal(T.getNotesExpanded(), true, "clicking blank area on compact notebook must expand it");
-assert.equal(expLbl.textContent, "收起", "expand button label must switch to 收起 when expanded");
 
-// Clicking #np-expand toggles back to compact
-getEl("#np-expand").dispatch("click");
-assert.equal(T.getNotesExpanded(), false, "clicking 收起 button must collapse back to compact");
-assert.equal(expLbl.textContent, "展开");
+// Clicking blank space / header again toggles back to compact
+getEl("#notes-pane").dispatch("click", { target: blankTarget });
+assert.equal(T.getNotesExpanded(), false, "clicking blank area on expanded notebook must collapse back to compact");
 `
 	cmd := exec.Command("node", "-e", script)
 	cmd.Dir = filepath.Join("..", "..")

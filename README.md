@@ -192,7 +192,7 @@ Binary only (no service): `curl -fsSL https://lihuanyu0w0.github.io/collie/insta
 Configure integrations in **Automation → Integrations** (credentials are stored in `~/.collie/secrets.json` with `0600` permissions and never echoed back):
 
 - **GitHub &amp; pluggable Git forges** — Built-in GitHub integration monitors PR reviews, `@mentions`, and CI failures in `notify`, `advise`, or `agent` mode with stable per-PR threads. Drop custom JSON definitions into `~/.collie/providers/*.json` to connect any CLI-backed code host.
-- **Feishu / Lark (zero-public-IP WebSocket)** — Native long-connection client supports bidirectional chat and interactive decision cards with no public callback URL required; event webhooks (`/hooks/feishu?key=…`, with `url_verification`) are also supported.
+- **Feishu / Lark (zero-public-IP WebSocket)** — Native long-connection client supports bidirectional chat and interactive decision cards with no public callback URL required; when directly `@`-mentioned in a group chat without quoting a parent message, granting the optional `im:message.group_msg` scope automatically attaches recent group context (gracefully degrading when not enabled). Event webhooks (`/hooks/feishu?key=…`, with `url_verification`) are also supported.
 - **GitHub &amp; Generic Webhooks** — Copy URLs from *Automation → Integrations*:
   - GitHub webhook: `/hooks/github?key=…` (`application/json`)
   - Generic webhook: `POST /hooks/<source>?key=…` with JSON `{"text","thread","from","id"}` and optional `X-Idempotency-Key` deduplication. Webhooks return `202 Accepted` immediately and route asynchronously through the inbox.

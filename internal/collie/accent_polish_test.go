@@ -56,14 +56,30 @@ assert.ok(
   ".unread-sep text and hairline gradient must stay restrained neutral gray"
 );
 
-// Neutral pending tray surface, border, label, dismiss; only .pending-dot lights up with --attn
-for (const sel of [".pending-bar", ".pending-label", ".pending-x"]) {
+// Neutral pending/pin tray surface, border, label, dismiss; only .pending-dot lights up with --attn
+for (const sel of [".pending-bar", ".pending-label", ".pending-x", ".pending-more", ".pending-pin-ico, .pending-both-pin"]) {
   assert.ok(!cssBlock(sel).includes("--attn"), sel + " must stay neutral without --attn fill/border/text");
 }
 assert.ok(cssBlock(".pending-dot").includes("var(--attn)"), ".pending-dot must use var(--attn)");
+assert.ok(!cssSrc.includes(".pending-dot.neutral"), "pin bar must no longer style a gray .pending-dot.neutral");
+assert.ok(cssBlock(".pending-bar").includes("border-radius: 10px"), ".pending-bar must use 10px micro-rounded floating bar");
+assert.ok(!cssBlock(".pending-x").includes("border-left"), ".pending-x must not render a hard vertical divider line");
 assert.ok(
-  cssBlock(".pending-dot.neutral").includes("var(--fg-3)") && !cssBlock(".pending-dot.neutral").includes("--attn"),
-  ".pending-dot.neutral must be neutral gray without --attn"
+  cssBlock(".pending-pin-ico svg").includes("width: 14px") &&
+  cssBlock(".pending-pin-ico svg").includes("height: 14px") &&
+  cssBlock(".pending-pin-ico svg").includes("stroke-width: 1.6"),
+  ".pending-pin-ico svg must be 14px linear pushpin with stroke-width 1.6"
+);
+assert.ok(
+  cssBlock(".pin-ind svg").includes("stroke-width: 1.6") &&
+  cssBlock(".msg-acts button.pin-btn svg").includes("stroke-width: 1.6"),
+  "all site-wide pin SVG icons must share unified 1.6 linear stroke-width"
+);
+assert.ok(
+  cssSrc.includes(".pending-bar:hover .pending-x") &&
+  cssSrc.includes(".pending-bar:focus-within .pending-x") &&
+  cssSrc.includes("@media (hover: none) and (pointer: coarse), (max-width: 760px)"),
+  "unpin button must stay muted until hover/focus on desktop and remain clearly visible on touch/mobile devices"
 );
 
 // True attention anchors use --attn cleanly
@@ -318,13 +334,20 @@ checkCtx({ alive: true, status: "idle", context: 75, rotate_at: 80 }, true, "上
 checkCtx({ alive: true, status: "idle", context: 88, rotate_at: 0 }, true, "上下文 88%");
 checkCtx({ alive: true, status: "working", context: 40, handover: true, rotate_at: 70 }, true, "正在交接记忆…");
 
-// 2b) Pending tray leading dot: lit --attn dot when pending > 0; calm neutral dot when pin-only
+// 2b) Pending / pin floating bar:
+// - pending > 0: lit --attn dot + 待处理 label + compact count toggle when total >= 2
+// - pin-only (1 item): 14px linear pushpin SVG (no gray dot, no visible 已钉住 · prefix), direct jump on bar, borderless unpin ×
+// - pin-only (>1 items): direct jump on bar + compact count toggle opening upward list with per-item jump & unpin
 const nowIso = new Date().toISOString();
 const pendingWrap = getEl("#pending-wrap");
 const pendingBar = getEl("#pending-bar");
+const pendingList = getEl("#pending-list");
 T.setSup({
   router: { alive: true, status: "idle", context: 42 },
-  entries: [{ id: "e1", role: "collie", text: "要立刻刷入吗？", at: nowIso, options: ["刷入", "稍后"] }],
+  entries: [
+    { id: "e1", role: "collie", text: "要立刻刷入吗？", at: nowIso, options: ["刷入", "稍后"] },
+    { id: "e2", role: "collie", text: "已钉住的长期约定", at: nowIso },
+  ],
   pending: [{ id: "e1", at: nowIso, summary: "要立刻刷入吗？", options: ["刷入", "稍后"] }],
   pinned: [{ id: "e2", at: nowIso, role: "collie", summary: "已钉住的长期约定" }],
   workers: [],
@@ -333,8 +356,11 @@ T.renderPendingBar();
 assert.equal(pendingWrap.hidden, false);
 assert.equal(pendingWrap.classList.contains("pin-only"), false);
 assert.ok(pendingBar.innerHTML.includes('class="pending-dot"'), "pending tray must show active .pending-dot");
-assert.ok(!pendingBar.innerHTML.includes("pending-dot neutral"), "pending tray with pending items must not use neutral dot");
+assert.ok(!pendingBar.innerHTML.includes("pending-dot neutral"), "pending tray must not use neutral dot");
+assert.ok(pendingBar.innerHTML.includes('data-goto-pending="e1"'), "mixed tray main bar must jump directly to active pending item");
+assert.ok(pendingBar.innerHTML.includes('class="pending-more"') && pendingBar.innerHTML.includes('>2<'), "mixed tray must show compact count trigger");
 
+// Single pin-only bar: linear pushpin SVG, no gray dot, no visible 已钉住 ·, direct jump + aria-label=取消钉住
 T.setSup({
   router: { alive: true, status: "idle", context: 42 },
   entries: [{ id: "e2", role: "collie", text: "已钉住的长期约定", at: nowIso }],
@@ -345,7 +371,56 @@ T.setSup({
 T.renderPendingBar();
 assert.equal(pendingWrap.hidden, false);
 assert.equal(pendingWrap.classList.contains("pin-only"), true);
-assert.ok(pendingBar.innerHTML.includes('class="pending-dot neutral"'), "pin-only tray must use neutral dot");
+assert.ok(pendingBar.innerHTML.includes('class="pending-pin-ico"'), "pin-only bar must render leading linear pushpin icon");
+assert.ok(pendingBar.innerHTML.includes('stroke="currentColor"') && pendingBar.innerHTML.includes('stroke-width="1.6"'), "pin SVG must use stroke=currentColor and stroke-width=1.6");
+assert.ok(!pendingBar.innerHTML.includes("pending-dot"), "pin-only bar must omit leading dot");
+assert.ok(!pendingBar.innerHTML.includes("pending-label") && !pendingBar.innerHTML.includes("pending-sep"), "pin-only bar must omit visible 已钉住 · prefix");
+assert.ok(pendingBar.innerHTML.includes('data-goto-pending="e2"'), "single pin bar must jump directly to pinned message");
+assert.ok(pendingBar.innerHTML.includes('data-unpin="e2"') && pendingBar.innerHTML.includes('aria-label="取消钉住"'), "single pin bar must render accessible unpin button");
+
+// Multi pin-only bar (>1 pins): direct jump on main bar + count pill expanding compact list
+T.setSup({
+  router: { alive: true, status: "idle", context: 42 },
+  entries: [
+    { id: "e2", role: "collie", text: "第一条钉住约定", at: nowIso },
+    { id: "e3", role: "user", text: "第二条钉住约定", at: nowIso },
+    { id: "e4", role: "collie", text: "第三条最新钉住约定", at: nowIso },
+  ],
+  pending: [],
+  pinned: [
+    { id: "e2", at: nowIso, role: "collie", summary: "第一条钉住约定" },
+    { id: "e3", at: nowIso, role: "user", summary: "第二条钉住约定" },
+    { id: "e4", at: nowIso, role: "collie", summary: "第三条最新钉住约定" },
+  ],
+  workers: [],
+});
+T.renderPendingBar();
+assert.equal(pendingWrap.hidden, false);
+assert.equal(pendingWrap.classList.contains("pin-only"), true);
+assert.ok(pendingBar.innerHTML.includes('data-goto-pending="e4"'), "multi pin bar must default to newest pin for direct jump");
+assert.ok(pendingBar.innerHTML.includes('class="pending-more"') && pendingBar.innerHTML.includes('data-toggle-pending') && pendingBar.innerHTML.includes('>3<'), "multi pin bar must show compact 3-item toggle pill");
+assert.equal(pendingList.hidden, true);
+// Toggle open via click on [data-toggle-pending]
+const toggleBtn = makeEl("toggle-btn");
+toggleBtn.closest = (sel) => (sel === "[data-toggle-pending]" ? toggleBtn : null);
+pendingWrap.dispatch("click", { target: toggleBtn });
+assert.equal(pendingWrap.classList.contains("open"), true, "clicking count pill opens pinned list");
+assert.equal(pendingList.hidden, false, "pinned list becomes visible when open");
+assert.ok(
+  pendingList.innerHTML.includes('data-pick-pin="e4"') &&
+  pendingList.innerHTML.includes('data-pick-pin="e3"') &&
+  pendingList.innerHTML.includes('data-pick-pin="e2"') &&
+  pendingList.innerHTML.includes('aria-label="取消钉住"'),
+  "expanded pinned list must render all pinned rows with jump and unpin controls"
+);
+// Clicking an older pinned row updates activePinId and closes list
+const pickOlder = makeEl("pick-e2");
+pickOlder.dataset.gotoPending = "e2";
+pickOlder.dataset.pickPin = "e2";
+pickOlder.closest = (sel) => (sel === "[data-goto-pending]" ? pickOlder : null);
+pendingWrap.dispatch("click", { target: pickOlder });
+assert.equal(pendingWrap.classList.contains("open"), false, "jumping to a pinned row closes list");
+assert.ok(pendingBar.innerHTML.includes('data-goto-pending="e2"'), "bar surfaces the selected pinned item after jumping from list");
 
 // 2c) 4-accent preferences picker: default amber, click switching, persistence, invalid fallback, keyboard arrows, cross-tab sync
 const htmlEl = doc.documentElement;

@@ -4251,8 +4251,8 @@
   // Quick-reply options picked while scrolled above the bottom: entryId -> { text, sending }.
   const pickedReplyOpts = new Map();
   const ICON_X = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
-  const ICON_PIN = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-body" d="M9.5 3.5h5v5l3 3v2h-11v-2l3-3z"/><path d="M8.5 3.5h7M12 13.5v7"/></svg>`;
-  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
+  const ICON_PIN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="pin-body" d="M15 4.5l-4 4-4 1.5-1.5 1.5 7 7 1.5-1.5 1.5-4 4-4z"/><path d="M14.5 4l5.5 5.5M9 15l-4.5 4.5"/></svg>`;
+  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", activePinId = "", lastPinTopId = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0, superJumpHiding = false;
   const SUPER_JUMP_DIST = 120;
 
   const SMART_SCROLL_GLIDE_PX = 180;
@@ -4490,6 +4490,7 @@
       wrap.classList.remove("open", "pin-only");
       listEl.hidden = true;
       pendingBarSig = pendingListSig = "";
+      activePinId = lastPinTopId = "";
       updateSuperJump();
       return;
     }
@@ -4497,36 +4498,51 @@
     wrap.classList.toggle("open", pendingOpen);
     wrap.classList.toggle("pin-only", pend.length === 0);
     const P = pend.length, M = pinsAll.length;
-    const lastPend = P ? pend[P - 1] : null, lastPin = M ? pinsAll[M - 1] : null;
-    const sum = lastPend ? lastPend.summary : pinDisplaySummary(lastPin);
-    const label = P && M ? (total === 1 ? "待处理 · 钉住" : `待处理 (${P}) · 钉住 (${M})`)
-      : P ? (total === 1 ? "待处理" : `待处理 (${P})`)
-      : (total === 1 ? "已钉住" : `已钉住 (${M})`);
-    const barSig = `${total}:${P}:${M}:${lastPend?.id || ""}:${lastPin?.id || ""}:${sum}`;
+    const lastPend = P ? pend[P - 1] : null;
+    const latestPin = M ? pinsAll[M - 1] : null;
+    const latestPinId = latestPin?.id || "";
+    if (latestPinId && latestPinId !== lastPinTopId) {
+      activePinId = latestPinId;
+      lastPinTopId = latestPinId;
+    } else if (!latestPinId) {
+      activePinId = lastPinTopId = "";
+    }
+    const shownPin = (activePinId && pinsAll.find((p) => p.id === activePinId)) || latestPin;
+    if (shownPin && shownPin.id !== activePinId) activePinId = shownPin.id;
+    const activeItem = lastPend || shownPin;
+    const sum = lastPend ? lastPend.summary : pinDisplaySummary(shownPin);
+    const activeBothPin = !!(lastPend && pinIds.has(lastPend.id));
+    const barSig = `${total}:${P}:${M}:${activeItem?.id || ""}:${activeBothPin ? 1 : 0}:${sum}`;
     if (barSig !== pendingBarSig) {
       pendingBarSig = barSig;
       const lead = P
-        ? `<span class="pending-dot" aria-hidden="true"></span>`
-        : `<span class="pending-dot neutral" aria-hidden="true"></span>`;
+        ? `<span class="pending-dot" aria-hidden="true"></span>${activeBothPin ? `<span class="pending-both-pin" title="已钉住" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-label">待处理</span><span class="pending-sep" aria-hidden="true">·</span>`
+        : `<span class="pending-pin-ico" aria-hidden="true">${ICON_PIN}</span><span class="visually-hidden">已钉住：</span>`;
+      const mainBtn = `<button type="button" class="pending-main" data-goto-pending="${esc(activeItem.id)}" title="${esc(sum)}">${lead}<span class="pending-sum">${esc(sum)}</span></button>`;
       if (total === 1) {
-        const onlyId = lastPend ? lastPend.id : lastPin.id;
         const xBtn = lastPend
-          ? `<button type="button" class="pending-x" data-dismiss="${esc(onlyId)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>`
-          : `<button type="button" class="pending-x" data-unpin="${esc(onlyId)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>`;
-        bar.innerHTML = `<button type="button" class="pending-main" data-goto-pending="${esc(onlyId)}" title="${esc(sum)}">
-            ${lead}<span class="pending-label">${esc(label)}</span><span class="pending-sep">·</span><span class="pending-sum">${esc(sum)}</span>
-          </button>${xBtn}`;
+          ? `<button type="button" class="pending-x" data-dismiss="${esc(activeItem.id)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>`
+          : `<button type="button" class="pending-x" data-unpin="${esc(activeItem.id)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>`;
+        bar.innerHTML = `${mainBtn}${xBtn}`;
       } else {
-        bar.innerHTML = `<button type="button" class="pending-main" data-toggle-pending aria-expanded="${pendingOpen}" title="${esc(sum)}">
-            ${lead}<span class="pending-label">${esc(label)}</span><span class="pending-sep">·</span><span class="pending-sum">${esc(sum)}</span>
-            <svg class="pending-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14l5-5 5 5"/></svg>
-          </button>`;
+        const moreTitle = P && M
+          ? `查看全部 ${P} 条待处理与 ${M} 条已钉住消息`
+          : P
+            ? `查看全部 ${P} 条待处理消息`
+            : `查看全部 ${M} 条已钉住消息`;
+        const moreAria = P && M
+          ? `展开全部 ${P} 条待处理与 ${M} 条已钉住消息`
+          : P
+            ? `展开全部 ${P} 条待处理消息`
+            : `展开全部 ${M} 条已钉住消息`;
+        bar.innerHTML = `${mainBtn}<button type="button" class="pending-more" data-toggle-pending aria-expanded="${pendingOpen}" aria-controls="pending-list" title="${esc(moreTitle)}" aria-label="${esc(moreAria)}"><span class="pending-count">${total}</span><svg class="pending-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14l5-5 5 5"/></svg></button>`;
       }
     } else {
       bar.querySelector("[data-toggle-pending]")?.setAttribute("aria-expanded", String(pendingOpen));
     }
     if (total >= 2 && pendingOpen) {
       const listSig = JSON.stringify([
+        P ? "" : (shownPin?.id || ""),
         pend.map((p) => [p.id, p.summary, p.at, pinIds.has(p.id) ? 1 : 0]),
         pinsOnly.map((p) => [p.id, p.summary, p.at, p.role]),
       ]);
@@ -4534,18 +4550,20 @@
         pendingListSig = listSig;
         const pendRows = [...pend].reverse().map((p) => `<div class="pending-item">
           <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(p.summary)}">
-            <span class="pending-dot"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="已钉住">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+            <span class="pending-dot" aria-hidden="true"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="已钉住" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
           </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>
         </div>`);
         const pinRows = [...pinsOnly].reverse().map((p) => {
           const ps = pinDisplaySummary(p);
-          return `<div class="pending-item is-pin">
-          <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(ps)}">
-            <span class="pending-pin-ico">${ICON_PIN}</span><span class="pending-sum">${esc(ps)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+          const isCur = !P && shownPin && p.id === shownPin.id;
+          return `<div class="pending-item is-pin${isCur ? " is-active" : ""}">
+          <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" data-pick-pin="${esc(p.id)}" title="${esc(ps)}">
+            <span class="pending-pin-ico" aria-hidden="true">${ICON_PIN}</span><span class="pending-sum">${esc(ps)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
           </button><button type="button" class="pending-x" data-unpin="${esc(p.id)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>
         </div>`;
         });
-        listEl.innerHTML = [...pendRows, ...pinRows].join("");
+        const sep = pendRows.length && pinRows.length ? `<div class="pending-list-sep" role="separator"></div>` : "";
+        listEl.innerHTML = `${pendRows.join("")}${sep}${pinRows.join("")}`;
       }
       listEl.hidden = false;
     } else {
@@ -7319,13 +7337,22 @@
     if (unpin) { ev.preventDefault(); ev.stopPropagation(); togglePin(unpin.dataset.unpin, false); return; }
     if (ev.target.closest("[data-toggle-pending]")) { ev.preventDefault(); pendingOpen = !pendingOpen; renderPendingBar(); return; }
     const go = ev.target.closest("[data-goto-pending]");
-    if (go) { ev.preventDefault(); jumpToEntry(go.dataset.gotoPending); }
+    if (go) {
+      ev.preventDefault();
+      if (go.dataset.pickPin) activePinId = go.dataset.pickPin;
+      jumpToEntry(go.dataset.gotoPending);
+    }
   });
   document.addEventListener("click", (ev) => {
     if (pendingOpen && !ev.composedPath().includes($("#pending-wrap"))) { pendingOpen = false; renderPendingBar(); }
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && pendingOpen && !document.querySelector("dialog[open]")) { pendingOpen = false; renderPendingBar(); }
+    if (ev.key === "Escape" && pendingOpen && !document.querySelector("dialog[open]")) {
+      const returnFocus = $("#pending-list")?.contains?.(document.activeElement);
+      pendingOpen = false;
+      renderPendingBar();
+      if (returnFocus) $("#pending-bar")?.querySelector?.("[data-toggle-pending]")?.focus?.();
+    }
   });
 
   bindComposer($("#super-composer"), $("#super-input"), async (text, re) => {

@@ -402,7 +402,7 @@
   addEventListener("resize", () => closePick());
   document.addEventListener("scroll", (e) => { if (pickOpen && !pickPop.contains(e.target)) closePick(); }, { capture: true, passive: true });
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") syncPick(e.target); });
-  const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "screen", "log"]);
+  const NO_SELECT_IDS = new Set(["super-thread", "td-list", "live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "screen", "log"]);
   let _screenSkipHost = null;
   const isScreenDomTarget = (t) => {
     if (!t) return false;
@@ -1129,10 +1129,59 @@
   let liveUpdateRAF = 0;
   let liveComposeTimer = 0;
   const LIVE_SIDE = 1, LIVE_PENDING_BARS = 2, LIVE_SUPER = 4, LIVE_UPDATE_ENTRY = 8, LIVE_HEAD = 16;
+  let _lastAnimBg = null, _lastAnimIdle = null;
+  let _scrollAnimPaused = false, _scrollAnimTimer = 0;
+  function hasActiveWork() {
+    const rs = sup.router?.status;
+    if (rs === "working" || rs === "starting" || rs === "waiting" || rs === "dreaming") return true;
+    for (const w of sup.workers || []) {
+      if (w && !w.ended && workerBusy(w)) return true;
+    }
+    for (const a of state.agents || []) {
+      if (a && (a.status === "working" || a.status === "starting" || a.status === "waiting")) return true;
+    }
+    return false;
+  }
+  function syncAnimPowerState() {
+    const root = document.documentElement;
+    if (!root?.classList) return;
+    const bg = !!document.hidden;
+    const idle = !hasActiveWork();
+    if (bg !== _lastAnimBg) {
+      _lastAnimBg = bg;
+      root.classList.toggle("is-bg", bg);
+    }
+    if (idle !== _lastAnimIdle) {
+      _lastAnimIdle = idle;
+      root.classList.toggle("is-idle", idle);
+    }
+  }
+  function setScrollAnimPaused(paused) {
+    const want = !!paused;
+    if (want === _scrollAnimPaused) return;
+    _scrollAnimPaused = want;
+    $(".side")?.classList?.toggle("is-scroll-paused", want);
+    $("#crew")?.classList?.toggle("is-scroll-paused", want);
+    $("#super-working")?.classList?.toggle("is-scroll-paused", want);
+  }
+  function clearCollieScrollAnimPause() {
+    if (_scrollAnimTimer) { clearTimeout(_scrollAnimTimer); _scrollAnimTimer = 0; }
+    setScrollAnimPaused(false);
+  }
+  function noteCollieScrollAnimPause() {
+    if (view !== "collie" || document.hidden || performance.now() < programmaticScrollUntil) return;
+    setScrollAnimPaused(true);
+    if (_scrollAnimTimer) clearTimeout(_scrollAnimTimer);
+    _scrollAnimTimer = setTimeout(() => {
+      _scrollAnimTimer = 0;
+      setScrollAnimPaused(false);
+    }, 160);
+  }
   function endCollieUserScroll(dropDeferred = false) {
     if (collieScrollEndTimer) { clearTimeout(collieScrollEndTimer); collieScrollEndTimer = 0; }
     if (collieScrollCapTimer) { clearTimeout(collieScrollCapTimer); collieScrollCapTimer = 0; }
     collieScrolling = false;
+    clearCollieScrollAnimPause();
     if (dropDeferred) {
       deferredScrollMask = 0;
       return;
@@ -1287,8 +1336,11 @@
     liveEv = ev;
   }
   document.addEventListener("visibilitychange", () => {
+    syncAnimPowerState();
+    if (document.hidden) clearCollieScrollAnimPause();
     if (!document.hidden && $("#login").hidden && liveEv?.readyState === EventSource.CLOSED) connect();
   });
+  syncAnimPowerState();
 
   // A finished agent you have open here has been seen: the hub then shows
   // it as idle everywhere (herdr itself only counts its own terminal).
@@ -1813,6 +1865,7 @@
     $("#nav-auto").classList.toggle("active", view === "auto");
     $("#nav-devices").classList.toggle("active", view === "devices");
     $("#nav-prefs").classList.toggle("active", view === "prefs");
+    syncAnimPowerState();
   }
 
   // ───────────────────────────── routing & scroll restoration
@@ -2320,6 +2373,7 @@
     if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); }
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
     if (prevView === "collie" && next !== "collie") {
+      if (replyTo && isSuperComposerEmpty()) setReply(null);
       if (activeThreadRoot) {
         threadByIdx.set(prevIdx, {
           rootId: activeThreadRoot,
@@ -2338,8 +2392,9 @@
       activeCollieRestore = null;
       pendingUnreadAnchorOnVisible = false;
       pendingOpen = false;
-      hideSearchPanel();
-      closeCollieThreadsPop();
+      if (superSearchOpen) closeSuperSearchFn?.(false);
+      else hideSearchPanel();
+      closeCollieMenus();
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
       syncNotebookVisibility();
     }
@@ -2388,6 +2443,7 @@
       renderTarget(true);
       loadNotebook(true);
       syncNotebookVisibility();
+      syncCollieTopScrolled();
       if (wantThread?.rootId) {
         openThreadDrawer(wantThread.rootId, wantThread.focusId || "", wantThread.focusId || wantThread.rootId);
       } else if (savedThread?.rootId) {
@@ -2694,14 +2750,48 @@
     }
     return null;
   }
+  const _entryGraphCache = new WeakMap();
+  function getEntryGraph(entries) {
+    if (!Array.isArray(entries) || !entries.length) {
+      return { parentOf: new Map(), replyByTarget: new Map() };
+    }
+    const len = entries.length;
+    const last = entries[len - 1];
+    const lastId = last?.id || "";
+    const lastClient = last?.client_msg_id || "";
+    const cached = _entryGraphCache.get(entries);
+    if (cached && cached.len === len && cached.lastId === lastId && cached.lastClient === lastClient) {
+      return cached;
+    }
+    const parentOf = new Map();
+    const indexOf = new Map();
+    for (let i = 0; i < len; i++) {
+      const x = entries[i];
+      if (!x?.id) continue;
+      indexOf.set(x.id, i);
+      if (x.re?.entry) parentOf.set(x.id, x.re.entry);
+    }
+    const replyByTarget = new Map();
+    for (let i = 0; i < len; i++) {
+      const x = entries[i];
+      if (!x || x.role !== "user") continue;
+      let cur = x.re?.entry || "";
+      for (let step = 0; step < 64 && cur; step++) {
+        if (!replyByTarget.has(cur)) {
+          const tIdx = indexOf.get(cur);
+          if (tIdx === undefined || tIdx < i) replyByTarget.set(cur, x);
+        }
+        cur = parentOf.get(cur) || "";
+      }
+    }
+    const graph = { len, lastId, lastClient, parentOf, replyByTarget };
+    _entryGraphCache.set(entries, graph);
+    return graph;
+  }
   function inEntryReplyChain(startId, targetId, entries) {
     if (!startId || !targetId) return false;
     if (startId === targetId) return true;
-    const parentOf = new Map();
-    for (let i = 0; i < (entries?.length || 0); i++) {
-      const x = entries[i];
-      if (x?.id && x.re?.entry) parentOf.set(x.id, x.re.entry);
-    }
+    const { parentOf } = getEntryGraph(entries);
     const reaches = (from, want) => {
       let cur = from;
       for (let step = 0; step < 64 && cur; step++) {
@@ -2723,13 +2813,7 @@
     const entry = allEntries?.[idx];
     if (entry?.pick) return false;
     if (sup.hasPending) return (pendIds || new Set(activePending().map((p) => p.id))).has(id);
-    for (let j = idx + 1; j < allEntries.length; j++) {
-      const next = allEntries[j];
-      if (next.role === "user") {
-        const reId = next.re?.entry || "";
-        if (reId && inEntryReplyChain(reId, id, allEntries)) return false;
-      }
-    }
+    if (getEntryGraph(allEntries).replyByTarget.has(id)) return false;
     return true;
   }
   function resolveDecisionInfo(e, idx, allEntries) {
@@ -2755,20 +2839,16 @@
       return { state: "dismissed", text: "", at: "", sending: false };
     }
     if (Array.isArray(allEntries) && idx >= 0) {
-      for (let j = idx + 1; j < allEntries.length; j++) {
-        const next = allEntries[j];
-        if (!next || next.role !== "user") continue;
-        const reId = next.re?.entry || "";
-        if (reId === e.id || (reId && inEntryReplyChain(reId, e.id, allEntries))) {
-          const txt = threadEntryPlainText(next).trim();
-          const matchedOpt = (e.options || []).some((o) => o === txt);
-          return {
-            state: matchedOpt ? "picked" : "custom",
-            text: txt,
-            at: next.at || "",
-            sending: false,
-          };
-        }
+      const next = getEntryGraph(allEntries).replyByTarget.get(e.id);
+      if (next) {
+        const txt = threadEntryPlainText(next).trim();
+        const matchedOpt = (e.options || []).some((o) => o === txt);
+        return {
+          state: matchedOpt ? "picked" : "custom",
+          text: txt,
+          at: next.at || "",
+          sending: false,
+        };
       }
     }
     return { state: "dismissed", text: "", at: "", sending: false };
@@ -2786,14 +2866,15 @@
       if (res) {
         const isDismissed = res.state === "dismissed";
         const isCustom = res.state === "custom";
-        const lbl = isDismissed ? "已划掉" : isCustom ? "已补充：" : "已选：";
-        const val = isDismissed ? "暂不处理" : (res.text || "");
+        const lbl = isDismissed ? "已划掉" : isCustom ? "已回复" : "已选：";
+        const val = isDismissed ? "暂不处理" : isCustom ? "" : (res.text || "");
         const atStr = res.at ? hhmm(res.at) : "";
         const origHtml = optList.map((o) => {
           const hit = !isDismissed && !isCustom && o === res.text;
           return `<span class="rr-orig-opt${hit ? " is-picked" : ""}">${hit ? "✓ " : ""}${esc(o)}</span>`;
         }).join("");
-        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span><span class="rr-val">${esc(val)}</span>${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div>${isCustom && res.text ? `<div class="rr-custom-note">你的附言：${esc(res.text)}</div>` : ""}</div></details>`;
+        const valHtml = val ? `<span class="rr-val">${esc(val)}</span>` : "";
+        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span>${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
       }
       return "";
     }
@@ -2803,8 +2884,17 @@
     return "";
   }
   const SNAP_PATH_RE = /(?:^|[\s（(【\[「『"'`,:;：；、])((?:~\/|\/[A-Za-z0-9._-]+\/)[A-Za-z0-9._/@+\-\u4e00-\u9fff]+\.(?:html?|csv|tsv))(?::\d+(?:-\d+)?)?/gi;
+  const _artifactExtractCache = new WeakMap();
+  const _artifactRenderCache = new WeakMap();
   function extractEntryArtifacts(e) {
     if (!e || e.role !== "collie") return [];
+    const text = e.text || "";
+    const files = Array.isArray(e.files) ? e.files : null;
+    const filesKey = files && files.length ? files.join("\0") : "";
+    const cached = _artifactExtractCache.get(e);
+    if (cached && cached.text === text && cached.filesKey === filesKey) {
+      return cached.items;
+    }
     const seen = new Set();
     const out = [];
     const add = (raw) => {
@@ -2825,36 +2915,47 @@
         isCsv: ext === "csv" || ext === "tsv",
       });
     };
-    if (Array.isArray(e.files)) {
-      for (const fp of e.files) add(fp);
+    if (files) {
+      for (const fp of files) add(fp);
     }
-    if (e.text) {
-      for (const m of String(e.text).matchAll(SNAP_PATH_RE)) {
+    if (text) {
+      for (const m of String(text).matchAll(SNAP_PATH_RE)) {
         if (m[1]) add(m[1]);
       }
     }
+    _artifactExtractCache.set(e, { text, filesKey, items: out });
     return out;
   }
-  function renderEntryArtifacts(e) {
+  function renderEntryArtifacts(e, openPathOverride) {
     const items = extractEntryArtifacts(e);
     if (!items.length) return "";
-    const openPath = !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "";
-    const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
+    const openPath = openPathOverride !== undefined
+      ? openPathOverride
+      : (!$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "");
+    const activeMatch = openPath && items.some((it) => it.path === openPath) ? openPath : "";
     const hasExplicit = Array.isArray(e.files) && e.files.length > 0;
-    const renderChip = (it) => {
-      const act = openPath === it.path;
-      const actLbl = act ? "预览中" : it.isHtml ? "分屏预览" : it.isCsv ? "表格预览" : "预览";
-      return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-act">${actLbl}</span></button>`;
-    };
-    if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
-      return `<div class="msg-files">${renderChip(primary)}</div>`;
+    const cached = _artifactRenderCache.get(e);
+    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit) {
+      return cached.html;
     }
-    const primaryAct = openPath === primary.path;
-    const btnLbl = primaryAct ? "预览中" : primary.isHtml ? "分屏预览" : primary.isCsv ? "表格预览" : "预览文件";
-    const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
-    const rest = items.filter((it) => it.path !== primary.path);
-    const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-    return `<section class="snap-card" aria-label="${esc(primary.name)}"><div class="snap-head"><div class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><div class="snap-titles"><div class="snap-title">${esc(primary.name)}</div><div class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</div></div></div><button type="button" class="snap-open-btn${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}">${ICON_SPLIT_MINI}<span>${btnLbl}</span></button></div>${extraChips}</section>`;
+    const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
+    const chevSVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+    const renderChip = (it) => {
+      const act = activeMatch === it.path;
+      return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "预览 ") + it.name)}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>`;
+    };
+    let html;
+    if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
+      html = `<div class="msg-files">${renderChip(primary)}</div>`;
+    } else {
+      const primaryAct = activeMatch === primary.path;
+      const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
+      const rest = items.filter((it) => it.path !== primary.path);
+      const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
+      html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc((primaryAct ? "正在预览 " : "预览 ") + primary.name)}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+    }
+    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, html });
+    return html;
   }
   function threadEntryPlainText(e) {
     let t = String(e?.text || "");
@@ -3145,6 +3246,36 @@
     }
     const fp = `${workers.length}:${agents.length}:${hs.length}:${h >>> 0}`;
     _wsFpCache = { wRef: workers, wLen: workers.length, aRef: agents, aLen: agents.length, hRef: hs, hLen: hs.length, fp };
+    return fp;
+  }
+  let _stWfpCache = { wRef: null, wLen: -1, aRef: null, aLen: -1, hRef: null, hLen: -1, fp: "" };
+  function superThreadWorkerFingerprint() {
+    const workers = sup.workers || [], agents = state.agents || [], hs = hist || [];
+    if (_stWfpCache.wRef === workers && _stWfpCache.wLen === workers.length &&
+      _stWfpCache.aRef === agents && _stWfpCache.aLen === agents.length &&
+      _stWfpCache.hRef === hs && _stWfpCache.hLen === hs.length) {
+      return _stWfpCache.fp;
+    }
+    let h = 2166136261;
+    for (let i = 0; i < workers.length; i++) {
+      const w = workers[i];
+      if (!w) continue;
+      const flags = (workerBusy(w) ? 1 : 0) | (!w.ended && workerStatus(w) === "blocked" ? 2 : 0) | (w.ended ? 4 : 0);
+      h = fnvHashStr(h, w.name || "");
+      h = fnvHashStr(h, w.pane_id || "");
+      h = Math.imul(h ^ flags, 16777619);
+    }
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      if (!a) continue;
+      h = fnvHashStr(h, a.name || "");
+      h = fnvHashStr(h, a.pane_id || "");
+      h = Math.imul(h ^ (a.status === "blocked" ? 3 : 1), 16777619);
+    }
+    const lastH = hs.length ? (hs[0]?.id || hs[hs.length - 1]?.id || "") : "";
+    h = fnvHashStr(h, lastH);
+    const fp = `${workers.length}:${agents.length}:${hs.length}:${h >>> 0}`;
+    _stWfpCache = { wRef: workers, wLen: workers.length, aRef: agents, aLen: agents.length, hRef: hs, hLen: hs.length, fp };
     return fp;
   }
   // Group user/collie messages connected by `re.entry` into natural reply threads,
@@ -3903,6 +4034,16 @@
 
   // ───────────────────────────── Collie conversation search
   let searchTimer = 0, searchAbort = null, searchSeq = 0;
+  let superSearchOpen = false, collieMenuOpen = false, closeSuperSearchFn = null;
+  const hasTopRightOverlay = () => !!(superSearchOpen || collieMenuOpen);
+  function closeCollieMenus() {
+    collieMenuOpen = false;
+    $$(".menu").forEach((m) => { m.hidden = true; });
+  }
+  function closeAllColliePopovers() {
+    closeCollieMenus();
+    if (superSearchOpen) closeSuperSearchFn?.(false);
+  }
   let searchQuery = "", searchHits = [], searchTotal = 0, searchHasMore = false, searchIdx = -1;
   {
     const btn = $("#super-search-btn"), wrap = $("#super-search"), input = $("#super-search-input");
@@ -4018,9 +4159,12 @@
     const openSuperSearch = (selectExisting = false) => {
       if (!wrap || !input || !btn) return;
       const wasHidden = wrap.hidden;
+      closeCollieMenus();
+      superSearchOpen = true;
       wrap.hidden = false;
       btn.classList.add("on");
       btn.setAttribute("aria-expanded", "true");
+      syncNotebookVisibility();
       input.focus({ preventScroll: true });
       if (selectExisting && !wasHidden && input.value) input.select();
       const q = input.value.trim();
@@ -4035,14 +4179,17 @@
       searchAbort?.abort();
       searchSeq++;
       window.__collieHideSearchPanel();
+      superSearchOpen = false;
       wrap.hidden = true;
       btn.classList.remove("on");
       btn.setAttribute("aria-expanded", "false");
+      syncNotebookVisibility();
       if (refocus && view === "collie") {
         if (!narrow()) $("#super-input")?.focus({ preventScroll: true });
         else btn.focus({ preventScroll: true });
       }
     };
+    closeSuperSearchFn = closeSuperSearch;
     const selectSearchHit = (id) => {
       if (!id) return;
       window.__collieHideSearchPanel();
@@ -4248,6 +4395,7 @@
       captureViewScroll("collie", null, navCur);
     }
     updateSuperJump();
+    syncCollieTopScrolled();
   }
   function beginInitialAnchor(mode, opts = {}) {
     cancelInitialAnchor();
@@ -4625,6 +4773,7 @@
     const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew._html ?? crew.innerHTML;
     const r = sup.router || {};
     const allEntries = chatEntries();
+    reconcileStaleReplyTo(allEntries);
     for (const e of allEntries) {
       if (e.id && e.pick && pickedReplyOpts.has(e.id) && !pickedReplyOpts.get(e.id)?.sending) {
         pickedReplyOpts.delete(e.id);
@@ -4672,6 +4821,7 @@
     const crewChanged = setHTML(crew, crewHTML) || crewWillChange;
     if (crewChanged) {
       if (prevCrewScroll > 0) crew.scrollLeft = prevCrewScroll;
+      syncCrewCompact(crew);
       crew._syncScrollFade?.();
       syncCollieTopHeight();
     }
@@ -4719,7 +4869,7 @@
       openInlineDecisionId || "",
       !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "",
       pinList.map((p) => p.id).join(","),
-      workerStateFingerprint(),
+      superThreadWorkerFingerprint(),
       superAsksGen,
     ].join("|");
 
@@ -4768,6 +4918,7 @@
         const threadInfo = curThreadInfo;
         const pendIds = new Set(pendList.map((p) => p.id));
         const pinIds = new Set(pinList.map((p) => p.id));
+        const openFilePath = !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "";
         const workerByNameMap = getWorkerLookup().byName;
         const findWorkerEventBefore = (worker, idx) => {
           if (!worker) return "";
@@ -4878,7 +5029,7 @@
             const qSig = qi ? qi.sig : "";
             const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
             const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
-            const artifactsHtml = renderEntryArtifacts(e);
+            const artifactsHtml = renderEntryArtifacts(e, openFilePath);
             const sig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${e.text || ""}`;
             items.push({
               key: eKey,
@@ -5120,6 +5271,34 @@
       }
     }
     updateSuperJump();
+    syncCollieTopScrolled();
+  }
+  function syncCollieTopScrolled() {
+    const sc = $("#super-thread")?.parentElement;
+    const topEl = $("#v-collie .collie-top");
+    if (!sc || !topEl) return;
+    topEl.classList.toggle("is-scrolled", (sc.scrollTop || 0) > 4);
+  }
+  function syncCrewCompact(crew) {
+    if (!crew) return;
+    const count = crew.children?.length || 0;
+    const cw = crew.clientWidth || 0;
+    crew.classList.remove("is-no-kind", "is-tight");
+    crew.style?.removeProperty?.("--crew-chip-max");
+    if (!count || cw <= 0) {
+      crew._syncScrollFade?.();
+      return;
+    }
+    if ((crew.scrollWidth || 0) > cw + 2) {
+      crew.classList.add("is-no-kind");
+      if ((crew.scrollWidth || 0) > cw + 2) {
+        crew.classList.add("is-tight");
+        const avail = Math.max(0, cw - 28 - Math.max(0, count - 1) * 4);
+        const perChipName = Math.max(52, Math.min(160, Math.floor(avail / count) - 31));
+        crew.style?.setProperty?.("--crew-chip-max", perChipName + "px");
+      }
+    }
+    crew._syncScrollFade?.();
   }
   $("#super-thread")._loadMore = () => canLoadOlder() && loadOlder();
   {
@@ -5158,9 +5337,11 @@
     };
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
+      noteCollieScrollAnimPause();
       if (superJumpScrollRAF) return;
       const run = () => {
         superJumpScrollRAF = 0;
+        syncCollieTopScrolled();
         updateSuperJump();
         if (performance.now() >= programmaticScrollUntil) {
           maybeScheduleReadAtBottom();
@@ -5188,6 +5369,7 @@
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
+      noteCollieScrollAnimPause();
       if (e.deltaY < 0 && superJumpHiding) { jumpSeq++; superJumpHiding = false; updateSuperJump(); }
     }, { passive: true });
     sc?.addEventListener("touchstart", () => {
@@ -5241,26 +5423,39 @@
         el.scrollLeft += delta;
       }, { passive: false });
       const syncFade = () => {
-        if (supportsScrollFade) return;
-        const maxScroll = el.scrollWidth - el.clientWidth;
+        const maxScroll = (el.scrollWidth || 0) - (el.clientWidth || 0);
         const overflow = maxScroll > 1;
+        el.classList.toggle("is-overflow", overflow);
+        if (supportsScrollFade) return;
         el.classList.toggle("more-start", overflow && el.scrollLeft > 1);
         el.classList.toggle("more-end", overflow && el.scrollLeft < maxScroll - 1);
       };
       el._syncScrollFade = syncFade;
-      if (!supportsScrollFade) {
+      {
         let raf = 0;
         const schedule = () => {
           if (raf) return;
           raf = requestAnimationFrame(() => { raf = 0; syncFade(); });
         };
-        el.addEventListener("scroll", schedule, { passive: true });
+        if (!supportsScrollFade) el.addEventListener("scroll", schedule, { passive: true });
         if (typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(el);
         else addEventListener("resize", schedule, { passive: true });
         syncFade();
       }
     };
     bindHorizontalStrip($("#crew"));
+    {
+      const crewEl = $("#crew");
+      if (crewEl) {
+        let crewFitRAF = 0;
+        const scheduleCrewFit = () => {
+          if (crewFitRAF) return;
+          crewFitRAF = requestAnimationFrame(() => { crewFitRAF = 0; syncCrewCompact(crewEl); });
+        };
+        if (typeof ResizeObserver === "function") new ResizeObserver(scheduleCrewFit).observe(crewEl);
+        else addEventListener("resize", scheduleCrewFit, { passive: true });
+      }
+    }
     bindHorizontalStrip($("#td-workers"));
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
@@ -5577,22 +5772,66 @@
 
   // Quoting one of Collie's messages: it rides along with what you send next.
   let replyTo = null;
-  const setReply = (e) => {
+  let replyToSetLatestId = "";
+  let replyToHadPick = false;
+  const isSuperComposerEmpty = () => {
+    const inp = $("#super-input");
+    const form = $("#super-composer");
+    return !(inp?.value || "").trim() && !(form?._files?.length);
+  };
+  const setReply = (e, opts = {}) => {
     replyTo = e ? { entry: e.id, who: e.role === "user" ? "你" : "Collie", text: e.text } : null;
+    replyToSetLatestId = e ? latestPersistedEntryId() : "";
+    replyToHadPick = !!(e && e.pick);
     const box = $("#re-draft");
     box.hidden = !e;
     if (e) {
       const whoEl = $(".re-who", box);
       if (whoEl) whoEl.textContent = replyTo.who;
       $(".re-t", box).textContent = reLine(e.text);
-      $("#super-input").focus({ preventScroll: true });
+      if (opts.focus !== false) $("#super-input").focus({ preventScroll: true });
     }
   };
+  function reconcileStaleReplyTo(allEntries) {
+    if (!replyTo?.entry) return;
+    const targetId = replyTo.entry;
+    if (sup.dismissed?.[targetId] || dismissedLocal.has(targetId)) {
+      setReply(null);
+      return;
+    }
+    const baseNum = entryIdNum(replyToSetLatestId);
+    for (let i = (allEntries?.length || 0) - 1; i >= 0; i--) {
+      const e = allEntries[i];
+      if (!e) continue;
+      if (e.id === targetId && !replyToHadPick && e.pick) {
+        setReply(null);
+        return;
+      }
+      if (e.role === "user" && e.id && e.re?.entry === targetId) {
+        const n = entryIdNum(e.id);
+        if (n > 0 && n > baseNum) {
+          setReply(null);
+          return;
+        }
+      }
+    }
+  }
   const reLine = (t) => plainLine(t);
   $("#re-draft button").addEventListener("click", () => setReply(null));
+  $("#super-input")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && replyTo && !ev.isComposing && ev.keyCode !== 229) {
+      ev.preventDefault();
+      setReply(null);
+    }
+  });
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest(".re-btn[data-re]");
     if (!b) return;
+    if (window.getSelection?.()?.toString()) return;
+    const threadBox = $("#super-thread");
+    if (threadBox && typeof threadBox.contains === "function" && !threadBox.contains(b) && !b.closest?.("#super-thread")) return;
+    ev.preventDefault();
+    ev.stopPropagation();
     const e = chatEntries().find((x) => x.id === b.dataset.re);
     if (e) setReply(e);
   });
@@ -5662,7 +5901,7 @@
         const idx = pendingSays.indexOf(mine);
         if (idx >= 0) pendingSays.splice(idx, 1);
       }
-      if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry));
+      if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry), { focus: false });
       opts.onRollback?.();
       const errSc = !scrollBottom && view === "collie" ? viewScroller("collie") : null;
       const errRestore = errSc && !isCollieNearBottom(errSc)
@@ -5696,7 +5935,7 @@
     if (!id || !text || busyReplyOpts.has(id)) return;
     busyReplyOpts.add(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
-    if (replyTo?.entry === id) setReply(null);
+    if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
     pickedReplyOpts.set(id, { state: "custom", text, at: new Date().toISOString(), sending: true });
     try {
@@ -5777,7 +6016,7 @@
     grp.querySelectorAll("button").forEach((x) => { x.disabled = true; });
     const text = b.dataset.opt;
     if (openInlineDecisionId === id) openInlineDecisionId = null;
-    if (replyTo?.entry === id) setReply(null);
+    if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
     const sc = viewScroller("collie");
     const nearBot = isCollieNearBottom(sc);
@@ -5866,7 +6105,7 @@
     await sendSuper(text, re, true);
   }, () => targetNow().machine, {
     beforeSend: () => { const re = replyTo; setReply(null); return re; },
-    onError: (re) => { if (re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry)); },
+    onError: (re) => { if (re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry), { focus: false }); },
   });
 
   // ───────────────────────────── automation view
@@ -6933,7 +7172,7 @@
       <div class="int-toggle-row">
         <div class="tl">
           <b>群聊中仅响应 @Collie</b>
-          <small>私信默认直接回复；拉进群后只有 @机器人 才会触发，不打扰群聊。</small>
+          <small>私信默认直接回复；拉进群后只有 @机器人 才会触发。在群里直接 @机器人 且未引用消息时，若已开通可选权限 <code>im:message.group_msg</code> 会自动附带最近群聊上下文（未开通则自动降级）。</small>
         </div>
         <button type="button" class="switch" id="fs-mention-sw" role="switch" aria-checked="${d.group_mention_only ? "true" : "false"}" aria-label="群聊中仅响应 @Collie"></button>
       </div>
@@ -8204,6 +8443,62 @@
     return `<div class="mem-ins-wrap">${undoBar}${explicitBlock}${inferredBlock}${extraBlock}</div>`;
   }
 
+  const DONE_WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  function resolveDoneDate(f) {
+    if (f?.mod) {
+      const d = new Date(f.mod);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    const m = String(f?.name || "").match(/(20\d{2})[-_]?(\d{2})[-_]?(\d{2})/);
+    if (m) {
+      const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    return null;
+  }
+  function bucketDoneMemoryItems(items, nowDate = new Date()) {
+    const now = nowDate instanceof Date && !Number.isNaN(nowDate.getTime()) ? nowDate : new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const nowY = now.getFullYear();
+    const nowM = now.getMonth();
+    const map = new Map();
+    const list = [];
+    for (const item of items || []) {
+      const f = item?.f || item;
+      const d = resolveDoneDate(f);
+      let key = "done:unknown", label = "更早", kind = "month";
+      if (d) {
+        const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
+        const itemDay = new Date(y, m, day);
+        const diffDays = Math.round((todayStart - itemDay) / 86400000);
+        if (diffDays < 7) {
+          kind = "day";
+          key = `done:day:${y}-${pad2(m + 1)}-${pad2(day)}`;
+          if (diffDays <= 0) label = "今天";
+          else if (diffDays === 1) label = "昨天";
+          else label = `${pad2(m + 1)}-${pad2(day)} ${DONE_WEEKDAYS[d.getDay()]}`;
+        } else if (y === nowY && m === nowM) {
+          kind = "week";
+          const weekIdx = Math.floor((day - 1) / 7) + 1;
+          key = `done:week:${y}-${pad2(m + 1)}-w${weekIdx}`;
+          label = `${m + 1} 月第 ${weekIdx} 周`;
+        } else {
+          kind = "month";
+          key = `done:month:${y}-${pad2(m + 1)}`;
+          label = `${y} 年 ${m + 1} 月`;
+        }
+      }
+      let bucket = map.get(key);
+      if (!bucket) {
+        bucket = { key, label, kind, items: [] };
+        map.set(key, bucket);
+        list.push(bucket);
+      }
+      bucket.items.push(item);
+    }
+    return list;
+  }
+
   function renderMemoryHTML(r, query = "") {
     const files = r.files || [];
     const dreams = r.dreams || [];
@@ -8329,10 +8624,14 @@
         return `<details class="mem-fold" ${searching ? "open" : ""} data-mem-key="dream:${esc(d.name)}"><summary><span class="muted mem-name">${nameHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span>${hitBadge ? `<span class="mem-meta-r">${hitBadge}</span>` : ""}</summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`;
       }).join("")}</div>` : "";
 
-    // Completed tasks (已结束)
+    // Completed tasks (已结束) — progressive time buckets: near 7d by day, earlier this month by week, older by month
     const doneItems = filterFiles(done, (f) => f.name.replace(/^tasks\/done\//, ""));
+    const doneBuckets = bucketDoneMemoryItems(doneItems);
     const doneSection = doneItems.length ? `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">已结束<span class="muted">${searching ? `命中 ${doneItems.length} / ${done.length} 件` : `${done.length} 件 · 做完或放弃的事，不再先读`}</span></summary>
-        <div class="card">${doneItems.map(({ f, hit }) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>` : "";
+        <div class="mem-done-buckets">${doneBuckets.map((b, bi) => {
+          const openBucket = searching || (bi === 0 && b.kind === "day");
+          return `<details class="mem-done-bucket" ${openBucket ? "open" : ""} data-mem-key="${esc(b.key)}" data-done-bucket="${esc(b.kind)}"><summary><span class="mem-done-bname">${esc(b.label)}</span><span class="mem-done-bcnt">${b.items.length} 件</span></summary><div class="mem-done-blist">${b.items.map(({ f, hit }) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>`;
+        }).join("")}</div></details>` : "";
 
     const bodySections = [
       legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : "",
@@ -12654,11 +12953,11 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, .thumb, img")) return;
+    if (m && e.target.closest("a, button, summary, details, input, .thumb, img")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
-  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "router-status", "screen", "log"]);
+  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "router-status", "screen", "log"]);
   function triggerThumbLoads(root) {
     if (!root || root.nodeType !== 1) return;
     if (root.tagName === "IMG") {
@@ -13242,37 +13541,58 @@
     fvWidenBtn.setAttribute("aria-label", lbl);
   }
   function showFilePane() {
-    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: view === "collie" });
+    const appEl = $("#app");
+    const hadFile = !!appEl?.classList?.contains("has-file");
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false });
     clearTimeout(paneTimer);
     const baseW = fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || Math.min(innerWidth * 0.45, 580), fileMax()), 380);
     setFileW(baseW);
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
     if (fileScrim) fileScrim.hidden = false;
-    $("#app").classList.add("has-file");
+    appEl?.classList?.add("has-file");
     syncFileWidenUI();
     syncNotebookVisibility();
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: !hadFile && innerWidth > 1000, duration: 500 });
+    }
   }
   function closeFilePane() {
-    $("#app").classList.remove("has-file");
+    const appEl = $("#app");
+    const hadFile = !!appEl?.classList?.contains("has-file");
+    const wasOpen = hadFile || (!!pane && !pane.hidden);
+    const sc = wasOpen && view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    appEl?.classList?.remove("has-file");
     fileSeq++;
     clearTimeout(paneTimer);
+    syncFileWidenUI();
+    syncNotebookVisibility();
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: hadFile && innerWidth > 1000, duration: 500 });
+    }
     paneTimer = setTimeout(() => {
       pane.hidden = true;
       if (fileScrim) fileScrim.hidden = true;
       if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
-      if (view === "collie") renderSuper();
+      if (view === "collie") {
+        const useRestore = lockSnap && collieLayoutLock?.snap === lockSnap ? { restore: lockSnap, once: true } : undefined;
+        renderSuper(useRestore);
+      }
     }, 340);
-    syncFileWidenUI();
-    syncNotebookVisibility();
   }
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
   $("#fv-handle")?.addEventListener("click", () => closeFilePane());
   fileScrim?.addEventListener("click", () => closeFilePane());
   fvWidenBtn?.addEventListener("click", () => {
     if (innerWidth <= 1000 || pane?.hidden) return;
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     fileWide = !fileWide;
     setFileW(fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || 540, fileMax()), 380));
     syncFileWidenUI();
+    if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pane.hidden && !document.querySelector("dialog[open]")) closeFilePane(); });
   $("#fv-grip")?.addEventListener("pointerdown", (e) => {
@@ -13280,42 +13600,112 @@
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
     document.body.classList.add("dragging");
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const dragSnap = sc ? captureColliePos(sc) : null;
     const max = fileMax();
-    const move = (ev) => { fileWide = false; setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360)); syncFileWidenUI(); };
+    const move = (ev) => {
+      fileWide = false;
+      setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360));
+      syncFileWidenUI();
+      if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
+    };
     const up = () => {
       grip.removeEventListener("pointermove", move);
       document.body.classList.remove("dragging");
       store.set("fileW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--file-w")) || 520);
+      if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
     };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up, { once: true });
   });
 
-  // ───────────────────────────── Floating White-Paper「小本本」(compact + one-click expand)
+  // ───────────────────────────── Unified Right Floating Dock「小本本 | 话题线」(single-state card + compositor motion)
   const NOTES_WIDE_MIN = 1360;
-  const NOTES_COMPACT_TASKS = 3;
-  const NOTES_COMPACT_FILES = 2;
-  const NOTES_COMPACT_TIMERS = 1;
   const notesPane = $("#notes-pane");
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
-  const notesExpandBtn = $("#np-expand");
+  const dockTriggerDot = $("#dock-trigger-dot");
+  const dkTablist = $("#dk-tablist");
+  const dkTabNotes = $("#dk-tab-notes");
+  const dkTabThreads = $("#dk-tab-threads");
+  const dkPanelNotes = $("#dk-panel-notes");
+  const dkPanelThreads = $("#dk-panel-threads");
+  const dkThDot = $("#dk-th-dot");
+  const dkThCnt = $("#dk-th-cnt");
   let notebookData = null;
   let notebookFetching = false;
   let notebookRefreshTimer = 0;
   let notebookLastRefreshSig = "";
   let notesUserClosed = !!store.get("notesClosed", false);
   let notesOpen = false;
-  let notesExpanded = false;
   let notesManualOverlay = false;
+  let dockTab = store.get("dockTab", "notes") === "threads" ? "threads" : "notes";
+  let dockPendingThreads = 0;
+  let _lastCollieTopH = 0;
+  let _lastNotebookRenderKey = "";
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
-  function syncCollieTopHeight() {
-    const col = $("#v-collie");
-    const topEl = col?.querySelector?.(".collie-top");
-    if (!col || !topEl) return;
-    const h = topEl.offsetHeight || 98;
-    col.style.setProperty("--collie-top-h", Math.round(h) + "px");
+  function syncDockTriggerBadge() {
+    if (!dockTriggerDot) return;
+    const showDot = dockPendingThreads > 0 && !notesOpen;
+    dockTriggerDot.hidden = !showDot;
+  }
+  function setDockTab(nextTab, opts = {}) {
+    const target = nextTab === "threads" ? "threads" : "notes";
+    const changed = target !== dockTab;
+    const prevIdx = dockTab === "threads" ? 1 : 0;
+    const nextIdx = target === "threads" ? 1 : 0;
+    dockTab = target;
+    if (opts.persist !== false) store.set("dockTab", dockTab);
+    const tabs = [
+      [dkTabNotes, "notes"],
+      [dkTabThreads, "threads"],
+    ];
+    for (const [tb, key] of tabs) {
+      if (!tb) continue;
+      const sel = key === dockTab;
+      tb.setAttribute("aria-selected", sel ? "true" : "false");
+      tb.tabIndex = sel ? 0 : -1;
+      if (typeof tb.toggleAttribute === "function") tb.toggleAttribute("focusgroupstart", sel);
+    }
+    const panels = [
+      [dkPanelNotes, dockTab === "notes"],
+      [dkPanelThreads, dockTab === "threads"],
+    ];
+    for (const [panel, active] of panels) {
+      if (!panel) continue;
+      if (active) {
+        panel.hidden = false;
+        if (changed && opts.animate !== false) {
+          panel.style?.setProperty?.("--dk-dir", nextIdx > prevIdx ? "6px" : "-6px");
+          panel.classList?.remove("is-entering");
+          void panel.offsetWidth;
+          panel.classList?.add("is-entering");
+        }
+      } else {
+        panel.classList?.remove("is-entering");
+        panel.hidden = "until-found";
+      }
+    }
+    if (dockTab === "notes" && notesOpen) {
+      renderNotebook();
+      if (!notebookData) loadNotebook(false);
+    } else if (dockTab === "threads" && notesOpen) {
+      const entries = chatEntries();
+      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
+    }
+  }
+  function syncCollieTopHeight(measuredH) {
+    if (!notesPane) return;
+    let h = typeof measuredH === "number" && measuredH > 0 ? Math.round(measuredH) : 0;
+    if (!h) {
+      const topEl = $("#v-collie .collie-top");
+      if (!topEl) return;
+      h = Math.round(topEl.offsetHeight || 98);
+    }
+    if (h === _lastCollieTopH) return;
+    _lastCollieTopH = h;
+    notesPane.style.setProperty("--collie-top-h", h + "px");
   }
   function formatNotebookDate(isoDate) {
     const d = isoDate ? new Date(isoDate + "T00:00:00") : new Date();
@@ -13351,33 +13741,20 @@
   function renderNotebook() {
     if (!notesPane) return;
     const data = notebookData || { date: "", tasks: [], artifacts: [], timers: [] };
+    const allTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const allFiles = Array.isArray(data.artifacts) ? data.artifacts : [];
+    const allTimers = Array.isArray(data.timers) ? data.timers : [];
+    const renderKey = `${data.date || ""}|${JSON.stringify(allTasks)}|${JSON.stringify(allFiles)}|${JSON.stringify(allTimers)}`;
+    if (renderKey === _lastNotebookRenderKey) return;
+    _lastNotebookRenderKey = renderKey;
     const dateEl = $("#np-date");
     if (dateEl) dateEl.textContent = formatNotebookDate(data.date);
-    const showFull = notesExpanded || !isWideNotesViewport();
-    notesPane.classList.toggle("is-expanded", !!showFull);
-    $("#v-collie")?.classList.toggle("notes-expanded", !!(notesOpen && isWideNotesViewport() && notesExpanded));
-    if (notesExpandBtn) {
-      notesExpandBtn.setAttribute("aria-expanded", notesExpanded ? "true" : "false");
-      const lbl = notesExpanded ? "收起为简态" : "展开完整便签";
-      notesExpandBtn.title = lbl;
-      notesExpandBtn.setAttribute("aria-label", lbl);
-      const lblEl = notesExpandBtn.querySelector(".np-exp-lbl");
-      if (lblEl) lblEl.textContent = notesExpanded ? "收起" : "展开";
-    }
 
-    // 1. 进行中
-    const allTasks = Array.isArray(data.tasks) ? data.tasks : [];
-    const shownTasks = showFull ? allTasks : allTasks.slice(0, NOTES_COMPACT_TASKS);
-    const taskMoreEl = $("#np-tasks-more");
-    if (taskMoreEl) {
-      const rem = allTasks.length - shownTasks.length;
-      taskMoreEl.hidden = showFull || rem <= 0;
-      if (rem > 0) { taskMoreEl.textContent = `+${rem}`; taskMoreEl.title = `展开查看全部 ${allTasks.length} 项`; }
-    }
+    // 1. 进行中 (single-state clean card showing all active tasks)
     const tasksListEl = $("#np-tasks-list");
     if (tasksListEl) {
-      tasksListEl.innerHTML = shownTasks.length
-        ? shownTasks.map((tk) => {
+      tasksListEl.innerHTML = allTasks.length
+        ? allTasks.map((tk) => {
             const dotCls = tk.tone === "attn" ? "is-attn" : tk.tone === "idle" ? "is-idle" : "";
             const noteHtml = tk.note ? `<span class="np-item-note">${esc(tk.note)}</span>` : "";
             return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span>${noteHtml}</button></li>`;
@@ -13386,18 +13763,10 @@
     }
 
     // 2. 今日产物
-    const allFiles = Array.isArray(data.artifacts) ? data.artifacts : [];
-    const shownFiles = showFull ? allFiles : allFiles.slice(0, NOTES_COMPACT_FILES);
-    const filesMoreEl = $("#np-files-more");
-    if (filesMoreEl) {
-      const rem = allFiles.length - shownFiles.length;
-      filesMoreEl.hidden = showFull || rem <= 0;
-      if (rem > 0) { filesMoreEl.textContent = `+${rem}`; filesMoreEl.title = `展开查看全部 ${allFiles.length} 个产物`; }
-    }
     const filesListEl = $("#np-files-list");
     if (filesListEl) {
-      filesListEl.innerHTML = shownFiles.length
-        ? shownFiles.map((f) => {
+      filesListEl.innerHTML = allFiles.length
+        ? allFiles.map((f) => {
             const ext = String(f.ext || "").toLowerCase();
             const isHtml = ext === "html" || ext === "htm";
             const atStr = f.at ? hhmm(f.at) : "";
@@ -13408,18 +13777,10 @@
     }
 
     // 3. 下一条定时
-    const allTimers = Array.isArray(data.timers) ? data.timers : [];
-    const shownTimers = showFull ? allTimers : allTimers.slice(0, NOTES_COMPACT_TIMERS);
-    const timersMoreEl = $("#np-timers-more");
-    if (timersMoreEl) {
-      const rem = allTimers.length - shownTimers.length;
-      timersMoreEl.hidden = showFull || rem <= 0;
-      if (rem > 0) { timersMoreEl.textContent = `+${rem}`; timersMoreEl.title = `展开查看全部 ${allTimers.length} 条定时`; }
-    }
     const timersListEl = $("#np-timers-list");
     if (timersListEl) {
-      timersListEl.innerHTML = shownTimers.length
-        ? shownTimers.map((tm) => {
+      timersListEl.innerHTML = allTimers.length
+        ? allTimers.map((tm) => {
             const clk = formatNotebookTimerClock(tm.next_run);
             const freq = formatNotebookTimerFreq(tm.spec);
             return `<li class="np-timer" title="${esc((clk ? clk + " " : "") + tm.text)}"><span class="np-timer-at">${esc(clk)}</span><span class="np-timer-txt">${esc(tm.text)}${freq ? `<span class="np-timer-freq">${esc(freq)}</span>` : ""}</span></li>`;
@@ -13432,29 +13793,36 @@
     if (!col || !notesPane) return;
     const appEl = $("#app");
     const blockedByDrawer = !!(activeThreadRoot || appEl?.classList?.contains("has-file") || appEl?.classList?.contains("has-thread"));
+    const blockedByPopover = hasTopRightOverlay();
     let wantOpen = false;
+    let keepSlot = false;
     if (view === "collie" && !blockedByDrawer) {
       if (isWideNotesViewport()) {
         notesManualOverlay = false;
-        wantOpen = !notesUserClosed;
+        keepSlot = !notesUserClosed;
+        wantOpen = keepSlot && !blockedByPopover;
       } else {
+        if (blockedByPopover) notesManualOverlay = false;
         wantOpen = notesManualOverlay;
+        keepSlot = wantOpen;
       }
-    } else if (blockedByDrawer) {
+    } else {
       notesManualOverlay = false;
     }
     notesOpen = wantOpen;
-    col.classList.toggle("has-notes", wantOpen);
-    col.classList.toggle("notes-expanded", !!(wantOpen && isWideNotesViewport() && notesExpanded));
-    notesPane.hidden = !wantOpen;
+    col.classList.toggle("has-notes", keepSlot);
+    document.body?.classList?.toggle("collie-has-notes", keepSlot);
+    notesPane.classList.toggle("is-hidden", !wantOpen);
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
-    if (notesScrim) notesScrim.hidden = !(wantOpen && !isWideNotesViewport());
+    if ("inert" in notesPane) notesPane.inert = !wantOpen;
     if (notesBtn) {
       notesBtn.classList.toggle("on", wantOpen);
       notesBtn.setAttribute("aria-pressed", wantOpen ? "true" : "false");
     }
+    syncDockTriggerBadge();
     if (wantOpen) {
       syncCollieTopHeight();
+      setDockTab(dockTab, { animate: false, persist: false });
       renderNotebook();
     }
   }
@@ -13474,14 +13842,43 @@
     }
   }
   function scheduleNotebookRefresh(sig = "") {
+    if (!notesOpen) return;
     if (sig && sig === notebookLastRefreshSig && notebookData) return;
     if (sig) notebookLastRefreshSig = sig;
     if (notebookRefreshTimer) return;
     notebookRefreshTimer = setTimeout(() => {
       notebookRefreshTimer = 0;
-      if (view === "collie") loadNotebook(false);
-    }, 900);
+      if (view === "collie" && notesOpen) loadNotebook(false);
+    }, 2500);
   }
+  dkTablist?.addEventListener("click", (ev) => {
+    const tab = ev.target.closest?.("[data-dk-tab]");
+    if (!tab) return;
+    ev.stopPropagation();
+    setDockTab(tab.dataset.dkTab);
+  });
+  dkTablist?.addEventListener("keydown", (ev) => {
+    const tabs = [dkTabNotes, dkTabThreads].filter(Boolean);
+    if (!tabs.length) return;
+    const cur = tabs.findIndex((t) => t.getAttribute?.("aria-selected") === "true");
+    let next = -1;
+    if (ev.key === "ArrowRight") next = (cur + 1) % tabs.length;
+    else if (ev.key === "ArrowLeft") next = (cur - 1 + tabs.length) % tabs.length;
+    else if (ev.key === "Home") next = 0;
+    else if (ev.key === "End") next = tabs.length - 1;
+    if (next < 0) return;
+    ev.preventDefault();
+    setDockTab(tabs[next].dataset.dkTab);
+    tabs[next].focus?.();
+  });
+  dkPanelNotes?.addEventListener("beforematch", () => {
+    if (dockTab !== "notes") setDockTab("notes", { animate: false });
+  });
+  dkPanelThreads?.addEventListener("beforematch", () => {
+    if (dockTab !== "threads") setDockTab("threads", { animate: false });
+  });
+  setDockTab(dockTab, { animate: false, persist: false });
+
   notesBtn?.addEventListener("click", () => {
     if (view !== "collie") return;
     if (notesOpen) {
@@ -13493,6 +13890,7 @@
       }
       syncNotebookVisibility();
     } else {
+      closeAllColliePopovers();
       if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
       if ($("#app")?.classList?.contains("has-file")) closeFilePane();
       if (isWideNotesViewport()) {
@@ -13505,11 +13903,6 @@
       syncNotebookVisibility();
     }
   });
-  notesExpandBtn?.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    notesExpanded = !notesExpanded;
-    renderNotebook();
-  });
   const hideNotebookFromCard = (ev) => {
     ev?.stopPropagation?.();
     if (isWideNotesViewport()) {
@@ -13521,23 +13914,16 @@
     syncNotebookVisibility();
   };
   $("#np-close")?.addEventListener("click", hideNotebookFromCard);
-  $("#np-back")?.addEventListener("click", hideNotebookFromCard);
   $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("#np-close, #np-back, #np-handle, #np-expand")) return;
+    if (ev.target.closest("#np-close, #np-handle")) return;
     const fBtn = ev.target.closest("[data-np-file]");
     if (fBtn) {
       ev.preventDefault();
       const fp = fBtn.dataset.npFile;
       if (!isWideNotesViewport()) notesManualOverlay = false;
       if (fp) openFile(fp);
-      return;
-    }
-    if (ev.target.closest("[data-np-expand]") || (isWideNotesViewport() && !notesExpanded)) {
-      ev.preventDefault();
-      notesExpanded = true;
-      renderNotebook();
       return;
     }
     const tBtn = ev.target.closest("[data-np-task]");
@@ -13563,19 +13949,17 @@
     }
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && notesOpen && !document.querySelector("dialog[open]")) {
-      if (!isWideNotesViewport()) {
-        notesManualOverlay = false;
-        syncNotebookVisibility();
-      } else if (notesExpanded) {
-        notesExpanded = false;
-        renderNotebook();
-      }
+    if (ev.key === "Escape" && notesOpen && !isWideNotesViewport() && !document.querySelector("dialog[open]")) {
+      notesManualOverlay = false;
+      syncNotebookVisibility();
     }
   });
   if (typeof ResizeObserver === "function") {
     const collieTopEl = $("#v-collie .collie-top");
-    if (collieTopEl) new ResizeObserver(() => syncCollieTopHeight()).observe(collieTopEl);
+    if (collieTopEl) new ResizeObserver((entries) => {
+      const bs = entries?.[0]?.borderBoxSize?.[0]?.blockSize || entries?.[0]?.contentRect?.height || 0;
+      syncCollieTopHeight(bs);
+    }).observe(collieTopEl);
   }
   window.addEventListener("resize", () => {
     if (view === "collie") {
@@ -13585,10 +13969,6 @@
   });
 
   // ───────────────────────────── natural reply-chain thread drawer
-  const thPopWrap = $("#collie-threads-wrap");
-  const thHeadBtn = $("#collie-threads-btn");
-  const thHeadCnt = $("#collie-threads-cnt");
-  const thPop = $("#collie-threads-pop");
   const thPopTabs = $("#collie-threads-tabs");
   const thPopCntAll = $("#collie-threads-cnt-all");
   const thPopCntActive = $("#collie-threads-cnt-active");
@@ -13655,16 +14035,10 @@
         }
       }
     }
-    if (thPopWrap && !opts.skipMenu) {
+    if (thPopList && !opts.skipMenu) {
       const entries = chatEntries();
       renderCollieThreadsMenu(threadInfo || computeReplyThreads(entries), entries);
     }
-  }
-  function closeCollieThreadsPop() {
-    if (!thPop || thPop.hidden) return;
-    thPop.hidden = true;
-    thPop.style.top = "";
-    thHeadBtn?.setAttribute("aria-expanded", "false");
   }
   function setCollieThreadsFilter(nextFilter) {
     const f = nextFilter === "active" ? "active" : "all";
@@ -13676,7 +14050,7 @@
   let _thMenuRowsCache = { key: "", allRows: [], activeRows: [] };
   let _thPopInputSig = "";
   function renderCollieThreadsMenu(threadInfo, allEntries) {
-    if (!thPopWrap || !thHeadBtn || !thHeadCnt || !thPop || !thPopList) return;
+    if (!thPopList) return;
     const entries = allEntries || chatEntries();
     const info = threadInfo || computeReplyThreads(entries);
     const pendList = activePending();
@@ -13720,15 +14094,16 @@
       activeRows = allRows.filter((r) => r.inProgress);
       _thMenuRowsCache = { key: rowsKey, allRows, activeRows };
     }
-    if (!allRows.length) {
-      thPopWrap.hidden = true;
-      closeCollieThreadsPop();
-      thPopSig = "";
-      return;
+    const pendingRowsCount = allRows.filter((r) => r.pending).length;
+    dockPendingThreads = pendingRowsCount;
+    syncDockTriggerBadge();
+    if (dkThDot) dkThDot.hidden = pendingRowsCount === 0;
+    if (dkTabThreads) dkTabThreads.classList.toggle("has-unread", pendingRowsCount > 0);
+    if (dkThCnt) {
+      const badgeNum = pendingRowsCount > 0 ? pendingRowsCount : allRows.length;
+      dkThCnt.hidden = badgeNum === 0;
+      setText(dkThCnt, badgeNum > 0 ? String(badgeNum) : "");
     }
-    thPopWrap.hidden = false;
-    setText(thHeadCnt, String(allRows.length));
-    thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
     if (thPopCntAll) setText(thPopCntAll, String(allRows.length));
     if (thPopCntActive) setText(thPopCntActive, String(activeRows.length));
     if (thPopTabs) {
@@ -13743,6 +14118,7 @@
     if (thPopSub) {
       setText(thPopSub, filtered.length > shown.length
         ? `前 ${shown.length} / ${filtered.length} 条`
+        : pendingRowsCount > 0 ? `${pendingRowsCount} 条待处理`
         : filtered.length > 0 ? "按最近活跃" : "");
     }
     const sig = JSON.stringify([
@@ -13767,7 +14143,7 @@
     if (sig === thPopSig) return;
     thPopSig = sig;
     if (!shown.length) {
-      thPopList.innerHTML = `<div class="th-pop-empty" role="status">当前没有进行中的话题</div>`;
+      thPopList.innerHTML = `<div class="th-pop-empty" role="status">${thPopFilter === "active" ? "当前没有进行中的话题" : "暂无多轮话题线"}</div>`;
       return;
     }
     thPopList.innerHTML = shown.map(({ th, pending, activeWorkers, hasBlockedWorker, inProgress }) => {
@@ -13798,42 +14174,13 @@
     e.stopPropagation();
     setCollieThreadsFilter(tab.dataset.thFilter);
   });
-  thHeadBtn?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (!thPop) return;
-    const willOpen = thPop.hidden;
-    $$(".menu").forEach((m) => { m.hidden = true; });
-    if (willOpen) {
-      const entries = chatEntries();
-      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
-      if (narrow()) {
-        const hr = $("#v-collie .d-head")?.getBoundingClientRect?.();
-        thPop.style.top = hr && hr.bottom > 0 ? Math.round(hr.bottom + 6) + "px" : "";
-      } else {
-        thPop.style.top = "";
-      }
-      thPop.hidden = false;
-      thHeadBtn.setAttribute("aria-expanded", "true");
-    } else {
-      closeCollieThreadsPop();
-    }
-  });
   thPopList?.addEventListener("click", (e) => {
     const item = e.target.closest("[data-th-pick]");
     if (!item) return;
     const rootId = item.dataset.thPick;
     const latestId = item.dataset.thLatest || "";
-    closeCollieThreadsPop();
+    if (!isWideNotesViewport()) notesManualOverlay = false;
     if (rootId) openThreadDrawer(rootId, latestId, latestId);
-  });
-  document.addEventListener("click", (e) => {
-    if (thPop && !thPop.hidden && !e.target.closest("#collie-threads-wrap")) closeCollieThreadsPop();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && thPop && !thPop.hidden) {
-      closeCollieThreadsPop();
-      thHeadBtn?.focus({ preventScroll: true });
-    }
   });
 
   const tdDrawer = $("#thread-drawer");
@@ -14700,6 +15047,7 @@
   }
   function openThreadDrawer(rootId, focusMsgId = "", anchorId = "", opts = {}) {
     if (!tdDrawer || !rootId) return;
+    if (replyTo && isSuperComposerEmpty()) setReply(null);
     cancelInitialAnchor();
     const info = computeReplyThreads(chatEntries());
     const resolved = resolveThread(info, rootId, anchorId || focusMsgId || rootId);
@@ -14955,6 +15303,7 @@
             ? info.byId.get(drawerReplyTarget)
             : fallbackLatest;
           if (!targetMsg?.id) return false;
+          if (replyTo && (replyTo.entry === targetMsg.id || isSuperComposerEmpty())) setReply(null);
           const ctx = {
             targetRe: { entry: targetMsg.id, who: threadWhoLabel(targetMsg), text: targetMsg.text },
             prevBranch: drawerReplyTarget,
@@ -16229,11 +16578,25 @@
   // ───────────────────────────── menus
   document.addEventListener("click", (e) => {
     const opener = e.target.closest("[data-menu]");
+    const prevCollieMenuOpen = collieMenuOpen;
     $$(".menu").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
     if (opener) {
-      closeCollieThreadsPop();
       const m = $("#" + opener.dataset.menu);
-      m.hidden = !m.hidden;
+      const willOpen = opener.dataset.menu === "collie-menu" ? !collieMenuOpen : !!m?.hidden;
+      if (opener.dataset.menu === "collie-menu" && willOpen && superSearchOpen) {
+        closeSuperSearchFn?.(false);
+      }
+      if (m) m.hidden = !willOpen;
+      collieMenuOpen = opener.dataset.menu === "collie-menu" ? willOpen : false;
+    } else {
+      collieMenuOpen = false;
+    }
+    if (prevCollieMenuOpen !== collieMenuOpen) syncNotebookVisibility();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && collieMenuOpen) {
+      closeCollieMenus();
+      syncNotebookVisibility();
     }
   });
 

@@ -49,24 +49,34 @@ type fakeFeishuResource struct {
 	Delay    time.Duration
 }
 
+type fakeFeishuChatHistory struct {
+	Items  []map[string]any
+	Status int
+	Code   int
+	Msg    string
+	Delay  time.Duration
+}
+
 type fakeFeishuServer struct {
-	srv       *httptest.Server
-	mu        sync.Mutex
-	calls     []fakeFeishuCall
-	msgSeq    int
-	imgData   []byte
-	messages  map[string]fakeFeishuMessage
-	resources map[string]fakeFeishuResource
-	images    map[string]fakeFeishuResource
+	srv         *httptest.Server
+	mu          sync.Mutex
+	calls       []fakeFeishuCall
+	msgSeq      int
+	imgData     []byte
+	messages    map[string]fakeFeishuMessage
+	chatHistory map[string]fakeFeishuChatHistory
+	resources   map[string]fakeFeishuResource
+	images      map[string]fakeFeishuResource
 }
 
 func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 	t.Helper()
 	ff := &fakeFeishuServer{
-		imgData:   []byte("\x89PNG\r\n\x1a\nfake-png-bytes"),
-		messages:  map[string]fakeFeishuMessage{},
-		resources: map[string]fakeFeishuResource{},
-		images:    map[string]fakeFeishuResource{},
+		imgData:     []byte("\x89PNG\r\n\x1a\nfake-png-bytes"),
+		messages:    map[string]fakeFeishuMessage{},
+		chatHistory: map[string]fakeFeishuChatHistory{},
+		resources:   map[string]fakeFeishuResource{},
+		images:      map[string]fakeFeishuResource{},
 	}
 	ff.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -193,6 +203,44 @@ func newFakeFeishuServer(t *testing.T) *fakeFeishuServer {
 			w.Header().Set("Content-Type", "image/png")
 			w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
 			_, _ = w.Write(res.Data)
+
+		case r.Method == http.MethodGet && r.URL.Path == "/open-apis/im/v1/messages":
+			cid := r.URL.Query().Get("container_id")
+			ff.mu.Lock()
+			hist, ok := ff.chatHistory[cid]
+			ff.mu.Unlock()
+			if !ok {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": 0,
+					"msg":  "ok",
+					"data": map[string]any{"items": []any{}, "has_more": false},
+				})
+				return
+			}
+			if hist.Delay > 0 {
+				select {
+				case <-time.After(hist.Delay):
+				case <-r.Context().Done():
+					return
+				}
+			}
+			if hist.Code != 0 {
+				if hist.Status > 0 {
+					w.WriteHeader(hist.Status)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": hist.Code, "msg": hist.Msg})
+				return
+			}
+			if hist.Status >= 400 {
+				w.WriteHeader(hist.Status)
+				_, _ = w.Write([]byte(`{"code":500,"msg":"internal error"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]any{"items": hist.Items, "has_more": false},
+			})
 
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/open-apis/im/v1/messages/"):
 			msgID := strings.TrimPrefix(r.URL.Path, "/open-apis/im/v1/messages/")
@@ -2875,6 +2923,566 @@ func TestFeishuNeverFallbackToGroupChat(t *testing.T) {
 		fa.mgr.mu.Unlock()
 		if fa.CanSendFallback() {
 			t.Fatal("CanSendFallback must be false when AllowOpenIDs is empty and only a group chat was seen")
+		}
+	})
+}
+
+func TestFeishuGroupRecentContext(t *testing.T) {
+	botMention := []*larkim.MentionEvent{{
+		Key:           strPtr("@_user_1"),
+		Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+		MentionedType: strPtr("bot"),
+		Name:          strPtr("Collie Test Bot"),
+	}}
+
+	t.Run("AllowlistedGroupNoParentFetchesChronologicalAndKeepsBubbleClean", func(t *testing.T) {
+		_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+		ctx := context.Background()
+
+		// Record one of Collie's own sent cards so interactive card resolves cleanly.
+		fa.recordSentCard("om_hist_card_own", "上轮巡检结论：延迟 42ms 正常")
+
+		// Fake server returns newest-first (ByCreateTimeDesc), including current trigger message,
+		// a deleted message, an empty text message, and multiple message types.
+		ff.mu.Lock()
+		ff.chatHistory["oc_group_ctx"] = fakeFeishuChatHistory{
+			Items: []map[string]any{
+				{
+					"message_id":  "om_trigger_now",
+					"msg_type":    "text",
+					"create_time": "1732700010000",
+					"sender":      map[string]any{"id": "ou_allowed_owner", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"text":"@_user_1 分析一下"}`},
+				},
+				{
+					"message_id":  "om_hist_deleted",
+					"msg_type":    "text",
+					"deleted":     true,
+					"create_time": "1732700009000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"text":"这条已撤回不应出现"}`},
+				},
+				{
+					"message_id":  "om_hist_empty",
+					"msg_type":    "text",
+					"create_time": "1732700008000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"text":"   "}`},
+				},
+				{
+					"message_id":  "om_hist_mf",
+					"msg_type":    "merge_forward",
+					"create_time": "1732700007000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{}`},
+				},
+				{
+					"message_id":  "om_hist_file",
+					"msg_type":    "file",
+					"create_time": "1732700006000",
+					"sender":      map[string]any{"id": "ou_colleague_noperm", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"file_key":"file_1","file_name":"trace.log"}`},
+				},
+				{
+					"message_id":  "om_hist_img",
+					"msg_type":    "image",
+					"create_time": "1732700005000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"image_key":"img_1"}`},
+				},
+				{
+					"message_id":  "om_hist_card_own",
+					"msg_type":    "interactive",
+					"create_time": "1732700004000",
+					"sender":      map[string]any{"id": "cli_test_app", "id_type": "app_id", "sender_type": "app"},
+					"body":        map[string]any{"content": `{"title":"请升级至最新版本客户端"}`},
+				},
+				{
+					"message_id":  "om_hist_card_ext",
+					"msg_type":    "interactive",
+					"create_time": "1732700003000",
+					"sender":      map[string]any{"id": "cli_alert_bot", "id_type": "app_id", "sender_type": "app"},
+					"body":        map[string]any{"content": `{"header":{"title":{"content":"告警通知"}},"elements":[{"tag":"markdown","content":"订单接口 502 比例升高"}]}`},
+				},
+				{
+					"message_id":  "om_hist_post",
+					"msg_type":    "post",
+					"create_time": "1732700002000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"zh_cn":{"title":"排查笔记","content":[[{"tag":"text","text":"Redis 连接池打满"},{"tag":"img","image_key":"img_post_1"}]]}}`},
+				},
+				{
+					"message_id":  "om_hist_text",
+					"msg_type":    "text",
+					"create_time": "1732700001000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"text":"刚刚 15:58 线上报了几个超时"}`},
+				},
+			},
+		}
+		ff.mu.Unlock()
+
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_grp_ctx_1"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_trigger_now"),
+					ChatId:      strPtr("oc_group_ctx"),
+					ChatType:    strPtr("group"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"@_user_1 分析一下"}`),
+					Mentions:    botMention,
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive: %v", err)
+		}
+
+		// Verify query parameters on GET /open-apis/im/v1/messages.
+		var listCall *fakeFeishuCall
+		ff.mu.Lock()
+		for i := range ff.calls {
+			c := ff.calls[i]
+			if c.Method == http.MethodGet && c.Path == "/open-apis/im/v1/messages" {
+				listCall = &c
+				break
+			}
+		}
+		ff.mu.Unlock()
+		if listCall == nil {
+			t.Fatalf("expected GET /open-apis/im/v1/messages call")
+		}
+		for _, wantParam := range []string{"container_id_type=chat", "container_id=oc_group_ctx", "sort_type=ByCreateTimeDesc", "page_size=10"} {
+			if !strings.Contains(listCall.Query, wantParam) {
+				t.Errorf("list query %q missing %q", listCall.Query, wantParam)
+			}
+		}
+
+		// Web UI bubble text must stay concise (without flooding group history).
+		sp.mu.Lock()
+		if len(sp.st.Entries) != 1 {
+			sp.mu.Unlock()
+			t.Fatalf("expected 1 user entry, got %d", len(sp.st.Entries))
+		}
+		bubbleText := sp.st.Entries[0].Text
+		if len(sp.st.Triggers) != 1 {
+			sp.mu.Unlock()
+			t.Fatalf("expected 1 trigger, got %d", len(sp.st.Triggers))
+		}
+		promptText := sp.st.Triggers[0].Text
+		sp.mu.Unlock()
+
+		if bubbleText != "分析一下" {
+			t.Fatalf("Web UI bubble text = %q, want concise '分析一下'", bubbleText)
+		}
+		if strings.Contains(bubbleText, "[群聊最近上下文]") {
+			t.Fatalf("Web UI bubble must not include group context block: %q", bubbleText)
+		}
+
+		// Router prompt must contain chronological [群聊最近上下文], all message types, and original message.
+		for _, want := range []string{
+			"[群聊最近上下文]",
+			"林同学：刚刚 15:58 线上报了几个超时",
+			"林同学：排查笔记",
+			"Redis 连接池打满（含 1 张图片）",
+			"告警通知",
+			"订单接口 502 比例升高",
+			"Collie Test Bot：上轮巡检结论：延迟 42ms 正常",
+			"林同学：[图片]",
+			maskIdentifier("ou_colleague_noperm") + "：[飞书文件：trace.log]",
+			"林同学：[合并转发消息]",
+			"\n\n分析一下",
+		} {
+			if !strings.Contains(promptText, want) {
+				t.Errorf("router prompt missing %q:\n%s", want, promptText)
+			}
+		}
+		for _, forbid := range []string{"这条已撤回不应出现", "@_user_1", "ou_colleague_noperm"} {
+			if strings.Contains(promptText, forbid) {
+				t.Errorf("router prompt must not contain %q:\n%s", forbid, promptText)
+			}
+		}
+		// Verify chronological order (oldest first, newest last).
+		idx1 := strings.Index(promptText, "刚刚 15:58 线上报了几个超时")
+		idx2 := strings.Index(promptText, "排查笔记")
+		idx3 := strings.Index(promptText, "订单接口 502 比例升高")
+		idx4 := strings.Index(promptText, "上轮巡检结论")
+		idx5 := strings.Index(promptText, "[图片]")
+		idx6 := strings.Index(promptText, "trace.log")
+		idx7 := strings.Index(promptText, "[合并转发消息]")
+		if !(idx1 < idx2 && idx2 < idx3 && idx3 < idx4 && idx4 < idx5 && idx5 < idx6 && idx6 < idx7) {
+			t.Errorf("group context is not in chronological order: indices=%v\n%s", []int{idx1, idx2, idx3, idx4, idx5, idx6, idx7}, promptText)
+		}
+		// Trigger message itself must not be duplicated inside [群聊最近上下文].
+		ctxSection := strings.Split(promptText, "\n\n分析一下")[0]
+		if strings.Contains(ctxSection, "分析一下") {
+			t.Errorf("current trigger message leaked into [群聊最近上下文]:\n%s", ctxSection)
+		}
+	})
+
+	t.Run("SingleMessageAndTotalLengthTruncationKeepsNewest", func(t *testing.T) {
+		_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+		ctx := context.Background()
+
+		// Create 10 long messages (each 420 runes -> clipped to <= 300 runes each).
+		// 10 * 300 = 3000+ runes > 2500 total cap -> oldest messages dropped, newest preserved.
+		items := make([]map[string]any, 0, 10)
+		for i := 10; i >= 1; i-- {
+			marker := "MSG_" + strconv.Itoa(i) + "_"
+			longBody := marker + strings.Repeat("测", 420)
+			items = append(items, map[string]any{
+				"message_id":  "om_long_" + strconv.Itoa(i),
+				"msg_type":    "text",
+				"create_time": strconv.FormatInt(1732700000000+int64(i)*1000, 10),
+				"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+				"body":        map[string]any{"content": `{"text":"` + longBody + `"}`},
+			})
+		}
+		ff.mu.Lock()
+		ff.chatHistory["oc_group_long"] = fakeFeishuChatHistory{Items: items}
+		ff.mu.Unlock()
+
+		ev := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_grp_long"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_long_trigger"),
+					ChatId:      strPtr("oc_group_long"),
+					ChatType:    strPtr("group"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"@_user_1 总结下"}`),
+					Mentions:    botMention,
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+			t.Fatalf("handleMessageReceive: %v", err)
+		}
+
+		sp.mu.Lock()
+		promptText := sp.st.Triggers[0].Text
+		sp.mu.Unlock()
+
+		parts := strings.Split(promptText, "\n\n总结下")
+		if len(parts) != 2 {
+			t.Fatalf("unexpected prompt layout:\n%s", promptText)
+		}
+		ctxBlock := parts[0]
+		if gotRunes := len([]rune(ctxBlock)); gotRunes > feishuGroupCtxTotalMaxRunes {
+			t.Fatalf("context block runes = %d, want <= %d", gotRunes, feishuGroupCtxTotalMaxRunes)
+		}
+		// Newest message (MSG_10_) must be retained, oldest (MSG_1_) dropped due to total cap.
+		if !strings.Contains(ctxBlock, "MSG_10_") {
+			t.Errorf("newest message MSG_10_ missing from truncated context:\n%s", ctxBlock)
+		}
+		if strings.Contains(ctxBlock, "MSG_1_") {
+			t.Errorf("oldest message MSG_1_ should have been trimmed by total cap:\n%s", ctxBlock)
+		}
+		// Every individual message line must respect per-message cap (~300 runes + sender prefix).
+		for _, line := range strings.Split(ctxBlock, "\n")[1:] {
+			if r := len([]rune(line)); r > feishuGroupCtxMsgMaxRunes+30 {
+				t.Errorf("single context line exceeded per-message cap (%d runes): %s", r, clip(line, 60))
+			}
+		}
+	})
+
+	t.Run("WithParentIDOrP2PDoesNotFetchGroupHistory", func(t *testing.T) {
+		_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+		ctx := context.Background()
+
+		ff.mu.Lock()
+		ff.messages["om_parent_q"] = fakeFeishuMessage{
+			MsgType: "text",
+			Content: `{"text":"被直接引用的父消息"}`,
+		}
+		ff.chatHistory["oc_group_quoted"] = fakeFeishuChatHistory{
+			Items: []map[string]any{{
+				"message_id":  "om_unused_hist",
+				"msg_type":    "text",
+				"create_time": "1732700001000",
+				"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+				"body":        map[string]any{"content": `{"text":"不应该拉取的群历史"}`},
+			}},
+		}
+		ff.mu.Unlock()
+
+		evQuoted := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_grp_quoted"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_grp_quoted"),
+					ParentId:    strPtr("om_parent_q"),
+					ChatId:      strPtr("oc_group_quoted"),
+					ChatType:    strPtr("group"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"@_user_1 看这条"}`),
+					Mentions:    botMention,
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, evQuoted, sink); err != nil {
+			t.Fatal(err)
+		}
+
+		evP2P := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_p2p_no_ctx"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_p2p_1"),
+					ChatId:      strPtr("oc_p2p_direct"),
+					ChatType:    strPtr("p2p"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"私聊消息"}`),
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, evP2P, sink); err != nil {
+			t.Fatal(err)
+		}
+
+		ff.mu.Lock()
+		for _, c := range ff.calls {
+			if c.Method == http.MethodGet && c.Path == "/open-apis/im/v1/messages" {
+				ff.mu.Unlock()
+				t.Fatalf("unexpected group history list call when parentID is set or chat is p2p: %+v", c)
+			}
+		}
+		ff.mu.Unlock()
+
+		sp.mu.Lock()
+		gotQuotedPrompt := sp.st.Triggers[0].Text
+		sp.mu.Unlock()
+		if !strings.Contains(gotQuotedPrompt, "被直接引用的父消息") || strings.Contains(gotQuotedPrompt, "[群聊最近上下文]") {
+			t.Fatalf("quoted group message unexpected prompt:\n%s", gotQuotedPrompt)
+		}
+	})
+
+	t.Run("PermissionErrorAndTimeoutDegradeGracefully", func(t *testing.T) {
+		_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+		ctx := context.Background()
+
+		// 1) Missing im:message.group_msg permission (code 99991672).
+		ff.mu.Lock()
+		ff.chatHistory["oc_group_noperm"] = fakeFeishuChatHistory{
+			Code: 99991672,
+			Msg:  "Access denied. Need im:message.group_msg scope",
+		}
+		// 2) Slow/hanging API exceeding feishuGroupCtxFetchTimeout.
+		ff.chatHistory["oc_group_timeout"] = fakeFeishuChatHistory{
+			Delay: 250 * time.Millisecond,
+			Items: []map[string]any{{
+				"message_id":  "om_slow_1",
+				"msg_type":    "text",
+				"create_time": "1732700001000",
+				"body":        map[string]any{"content": `{"text":"太慢了"}`},
+			}},
+		}
+		ff.mu.Unlock()
+
+		origTimeout := feishuGroupCtxFetchTimeout
+		feishuGroupCtxFetchTimeout = 40 * time.Millisecond
+		t.Cleanup(func() { feishuGroupCtxFetchTimeout = origTimeout })
+
+		for _, tc := range []struct {
+			evtID  string
+			msgID  string
+			chatID string
+			text   string
+		}{
+			{"evt_deg_perm", "om_deg_1", "oc_group_noperm", "权限缺失时照常投递"},
+			{"evt_deg_to", "om_deg_2", "oc_group_timeout", "超时时照常投递"},
+		} {
+			ev := &larkim.P2MessageReceiveV1{
+				EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: tc.evtID}},
+				Event: &larkim.P2MessageReceiveV1Data{
+					Sender: &larkim.EventSender{
+						SenderType: strPtr("user"),
+						SenderId:   &larkim.UserId{OpenId: strPtr("ou_allowed_owner")},
+					},
+					Message: &larkim.EventMessage{
+						MessageId:   strPtr(tc.msgID),
+						ChatId:      strPtr(tc.chatID),
+						ChatType:    strPtr("group"),
+						MessageType: strPtr("text"),
+						Content:     strPtr(`{"text":"@_user_1 ` + tc.text + `"}`),
+						Mentions:    botMention,
+					},
+				},
+			}
+			if err := fa.handleMessageReceive(ctx, ev, sink); err != nil {
+				t.Fatalf("handleMessageReceive(%s) must degrade gracefully, got err: %v", tc.evtID, err)
+			}
+		}
+
+		sp.mu.Lock()
+		defer sp.mu.Unlock()
+		if len(sp.st.Entries) != 2 || len(sp.st.Triggers) != 2 {
+			t.Fatalf("expected 2 degraded entries & triggers, got entries=%d triggers=%d", len(sp.st.Entries), len(sp.st.Triggers))
+		}
+		if sp.st.Entries[0].Text != "权限缺失时照常投递" || sp.st.Triggers[0].Text != "权限缺失时照常投递" {
+			t.Fatalf("perm-degraded mismatch: entry=%q trig=%q", sp.st.Entries[0].Text, sp.st.Triggers[0].Text)
+		}
+		if sp.st.Entries[1].Text != "超时时照常投递" || sp.st.Triggers[1].Text != "超时时照常投递" {
+			t.Fatalf("timeout-degraded mismatch: entry=%q trig=%q", sp.st.Entries[1].Text, sp.st.Triggers[1].Text)
+		}
+	})
+
+	t.Run("FeedbackGroupAttachesRecentContextWithoutParentAndSkipsWithParent", func(t *testing.T) {
+		_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+		ctx := context.Background()
+
+		cfgJSON, _ := json.Marshal(FeishuConfig{
+			Region:           "cn",
+			AppID:            "cli_test_app",
+			AllowOpenIDs:     []string{"ou_allowed_owner"},
+			FeedbackChatIDs:  []string{"oc_fb_ctx"},
+			GroupMentionOnly: true,
+			InstantChatSync:  true,
+		})
+		fa.mu.Lock()
+		fa.activeCfg = parseFeishuConfig(cfgJSON)
+		fa.mu.Unlock()
+
+		ff.mu.Lock()
+		ff.chatHistory["oc_fb_ctx"] = fakeFeishuChatHistory{
+			Items: []map[string]any{
+				{
+					"message_id":  "om_fb_trigger",
+					"msg_type":    "text",
+					"create_time": "1732700020000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"text":"@_user_1 帮看下这个问题"}`},
+				},
+				{
+					"message_id":  "om_fb_prev_2",
+					"msg_type":    "text",
+					"create_time": "1732700015000",
+					"sender":      map[string]any{"id": "ou_colleague_noperm", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"text":"我在 Safari 上也能复现"}`},
+				},
+				{
+					"message_id":  "om_fb_prev_1",
+					"msg_type":    "text",
+					"create_time": "1732700010000",
+					"sender":      map[string]any{"id": "ou_colleague_named", "id_type": "open_id", "sender_type": "user"},
+					"body":        map[string]any{"content": `{"text":"小本本展开时和话题线有遮挡"}`},
+				},
+			},
+		}
+		ff.messages["om_fb_parent"] = fakeFeishuMessage{
+			MsgType: "text",
+			Content: `{"text":"被引用的反馈父消息"}`,
+		}
+		ff.mu.Unlock()
+
+		// 1) Feedback @Collie without parentID -> attaches [群聊最近上下文] inside feedback event.
+		fbNoParent := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_fb_ctx_1"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_named")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_fb_trigger"),
+					ChatId:      strPtr("oc_fb_ctx"),
+					ChatType:    strPtr("group"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"@_user_1 帮看下这个问题"}`),
+					Mentions:    botMention,
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, fbNoParent, sink); err != nil {
+			t.Fatal(err)
+		}
+		sp.mu.Lock()
+		if len(sp.st.Entries) != 0 || len(sp.st.Triggers) != 1 {
+			sp.mu.Unlock()
+			t.Fatalf("feedback must not create user entry; entries=%d triggers=%d", len(sp.st.Entries), len(sp.st.Triggers))
+		}
+		fbText := sp.st.Triggers[0].Text
+		sp.mu.Unlock()
+		for _, want := range []string{
+			feishuGroupFeedbackTag,
+			"[群聊最近上下文]",
+			"林同学：小本本展开时和话题线有遮挡",
+			maskIdentifier("ou_colleague_noperm") + "：我在 Safari 上也能复现",
+			"反馈内容：\n帮看下这个问题",
+		} {
+			if !strings.Contains(fbText, want) {
+				t.Errorf("feedback trigger missing %q:\n%s", want, fbText)
+			}
+		}
+		if strings.Index(fbText, "小本本展开时和话题线有遮挡") > strings.Index(fbText, "我在 Safari 上也能复现") {
+			t.Errorf("feedback group context not chronological:\n%s", fbText)
+		}
+
+		// 2) Feedback @Collie WITH parentID -> must NOT fetch group history list.
+		ff.mu.Lock()
+		beforeListCalls := 0
+		for _, c := range ff.calls {
+			if c.Method == http.MethodGet && c.Path == "/open-apis/im/v1/messages" {
+				beforeListCalls++
+			}
+		}
+		ff.mu.Unlock()
+
+		fbWithParent := &larkim.P2MessageReceiveV1{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_fb_ctx_2"}},
+			Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{
+					SenderType: strPtr("user"),
+					SenderId:   &larkim.UserId{OpenId: strPtr("ou_colleague_named")},
+				},
+				Message: &larkim.EventMessage{
+					MessageId:   strPtr("om_fb_trigger_2"),
+					ParentId:    strPtr("om_fb_parent"),
+					ChatId:      strPtr("oc_fb_ctx"),
+					ChatType:    strPtr("group"),
+					MessageType: strPtr("text"),
+					Content:     strPtr(`{"text":"@_user_1 就这条"}`),
+					Mentions:    botMention,
+				},
+			},
+		}
+		if err := fa.handleMessageReceive(ctx, fbWithParent, sink); err != nil {
+			t.Fatal(err)
+		}
+
+		ff.mu.Lock()
+		afterListCalls := 0
+		for _, c := range ff.calls {
+			if c.Method == http.MethodGet && c.Path == "/open-apis/im/v1/messages" {
+				afterListCalls++
+			}
+		}
+		ff.mu.Unlock()
+		if afterListCalls != beforeListCalls {
+			t.Fatalf("feedback message with parentID made extra group list calls: before=%d after=%d", beforeListCalls, afterListCalls)
+		}
+		sp.mu.Lock()
+		fbText2 := sp.st.Triggers[1].Text
+		sp.mu.Unlock()
+		if !strings.Contains(fbText2, "被引用的反馈父消息") || strings.Contains(fbText2, "[群聊最近上下文]") {
+			t.Fatalf("feedback message with parentID unexpected text:\n%s", fbText2)
 		}
 	})
 }

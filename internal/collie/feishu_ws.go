@@ -42,10 +42,15 @@ const (
 	feishuMergeForwardMaxRunes     = 4000
 	feishuMergeForwardMaxDepth     = 3
 	feishuMergeForwardMaxMessages  = 50
+	feishuGroupCtxPageSize         = 10
+	feishuGroupCtxMaxMessages      = 10
+	feishuGroupCtxMsgMaxRunes      = 300
+	feishuGroupCtxTotalMaxRunes    = 2500
 )
 
 var (
 	feishuQuoteFetchTimeout     = 8 * time.Second
+	feishuGroupCtxFetchTimeout  = 5 * time.Second
 	feishuQuoteImageTimeout     = 15 * time.Second
 	feishuQuoteTotalTimeout     = 25 * time.Second
 	feishuQuoteMaxImageBytes    = int64(20 << 20)
@@ -675,6 +680,10 @@ func (f *FeishuAdapter) resolveSenderLabel(ctx context.Context, client *larksdk.
 }
 
 func formatFeishuGroupFeedback(senderLabel, chatID, messageID, text string) string {
+	return formatFeishuGroupFeedbackWithContext(senderLabel, chatID, messageID, text, "")
+}
+
+func formatFeishuGroupFeedbackWithContext(senderLabel, chatID, messageID, text, groupCtx string) string {
 	var b strings.Builder
 	b.WriteString(feishuGroupFeedbackTag)
 	fmt.Fprintf(&b, "\n发送者：%s", senderLabel)
@@ -683,6 +692,9 @@ func formatFeishuGroupFeedback(senderLabel, chatID, messageID, text string) stri
 	}
 	if messageID != "" {
 		fmt.Fprintf(&b, "\n消息 ID：%s", messageID)
+	}
+	if ctxBlock := strings.TrimSpace(groupCtx); ctxBlock != "" {
+		fmt.Fprintf(&b, "\n%s", ctxBlock)
 	}
 	fmt.Fprintf(&b, "\n反馈内容：\n%s", strings.TrimSpace(text))
 	if chatID != "" && messageID != "" {
@@ -776,10 +788,11 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 		log.Printf("feishu-ws: ignored message from non-allowlisted sender %s", maskIdentifier(senderOpenID))
 		return nil
 	}
+	botMentioned := chatType == "group" && f.isBotMentioned(msg.Mentions, botOpenID, botName)
 	if isFeedback {
 		// Non-allowlisted members in feedback groups must explicitly @Collie;
 		// normal group chatter is silently dropped to prevent context explosion.
-		if !f.isBotMentioned(msg.Mentions, botOpenID, botName) {
+		if !botMentioned {
 			return nil
 		}
 		text, err := f.extractInboundText(ctx, client, messageID, parentID, msgType, deref(msg.Content), msg.Mentions)
@@ -790,6 +803,10 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 		if text == "" {
 			return nil
 		}
+		var groupCtx string
+		if parentID == "" {
+			groupCtx = f.fetchGroupRecentContext(ctx, client, chatID, messageID)
+		}
 		senderLabel, senderFrom := f.resolveSenderLabel(ctx, client, senderOpenID)
 		f.recordFeedbackEvent(time.Now())
 		f.recordFeedbackMessage(messageID, chatID)
@@ -799,7 +816,7 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 				DedupKey: eventID,
 				Thread:   mainThread,
 				From:     senderFrom,
-				Text:     formatFeishuGroupFeedback(senderLabel, chatID, messageID, text),
+				Text:     formatFeishuGroupFeedbackWithContext(senderLabel, chatID, messageID, text, groupCtx),
 				Ref:      chatID,
 				Action:   "respond",
 				Target:   routerName,
@@ -813,7 +830,7 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 
 	// 3. Group chat @Collie guard.
 	if chatType == "group" && cfg.GroupMentionOnly {
-		if !f.isBotMentioned(msg.Mentions, botOpenID, botName) {
+		if !botMentioned {
 			return nil
 		}
 	}
@@ -845,6 +862,17 @@ func (f *FeishuAdapter) handleMessageReceive(ctx context.Context, event *larkim.
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
+	}
+	// When directly @-mentioned in a group chat without quoting a parent message,
+	// attach recent group context to the Router prompt only (keeping the Web UI bubble concise).
+	if chatType == "group" && parentID == "" && botMentioned {
+		if groupCtx := f.fetchGroupRecentContext(ctx, client, chatID, messageID); groupCtx != "" {
+			basePrompt := strings.TrimSpace(promptText)
+			if basePrompt == "" {
+				basePrompt = text
+			}
+			promptText = groupCtx + "\n\n" + basePrompt
+		}
 	}
 
 	route := feishuRoute{
@@ -1249,6 +1277,278 @@ func (f *FeishuAdapter) fetchMessageItems(ctx context.Context, client *larksdk.C
 		return nil, nil
 	}
 	return resp.Data.Items, nil
+}
+
+func clipRunes(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if maxRunes <= 0 {
+		return ""
+	}
+	rs := []rune(s)
+	if len(rs) <= maxRunes {
+		return s
+	}
+	if maxRunes == 1 {
+		return "…"
+	}
+	return strings.TrimRight(string(rs[:maxRunes-1]), " \t\r\n") + "…"
+}
+
+func isFeishuGroupHistoryPermissionErr(code int, msg string) bool {
+	if code == 99991672 || code == 99991663 || code == 230027 {
+		return true
+	}
+	low := strings.ToLower(msg)
+	return strings.Contains(low, "im:message.group_msg") || strings.Contains(low, "permission") || strings.Contains(low, "scope")
+}
+
+func (f *FeishuAdapter) resolveGroupContextSender(ctx context.Context, client *larksdk.Client, sender *larkim.Sender) string {
+	if sender == nil {
+		return "未知用户"
+	}
+	if name := strings.TrimSpace(deref(sender.SenderName)); name != "" {
+		return name
+	}
+	if sender.SenderI18nNames != nil {
+		for _, cand := range []*string{sender.SenderI18nNames.ZhCn, sender.SenderI18nNames.EnUs, sender.SenderI18nNames.JaJp} {
+			if name := strings.TrimSpace(deref(cand)); name != "" {
+				return name
+			}
+		}
+	}
+	id := strings.TrimSpace(deref(sender.Id))
+	senderType := strings.ToLower(strings.TrimSpace(deref(sender.SenderType)))
+	idType := strings.ToLower(strings.TrimSpace(deref(sender.IdType)))
+	if senderType == "app" || senderType == "bot" {
+		f.mu.RLock()
+		botID := f.botOpenID
+		botName := f.botName
+		appID := f.activeCfg.AppID
+		f.mu.RUnlock()
+		openBotID := strings.TrimSpace(deref(sender.OpenBotId))
+		if (openBotID != "" && openBotID == botID) || (id != "" && (id == botID || (appID != "" && id == appID))) {
+			return nonEmpty(botName, "Collie")
+		}
+		if id != "" {
+			return "机器人(" + maskIdentifier(id) + ")"
+		}
+		return "机器人"
+	}
+	if id == "" {
+		if senderType == "anonymous" {
+			return "匿名用户"
+		}
+		return "未知用户"
+	}
+	if idType == "" || idType == "open_id" || strings.HasPrefix(id, "ou_") {
+		_, from := f.resolveSenderLabel(ctx, client, id)
+		if from != "" {
+			return from
+		}
+	}
+	return maskIdentifier(id)
+}
+
+func (f *FeishuAdapter) extractGroupContextBody(item *larkim.Message) string {
+	if item == nil || (item.Deleted != nil && *item.Deleted) {
+		return ""
+	}
+	itemID := strings.TrimSpace(deref(item.MessageId))
+	msgType := strings.ToLower(strings.TrimSpace(deref(item.MsgType)))
+	rawContent := ""
+	if item.Body != nil {
+		rawContent = deref(item.Body.Content)
+	}
+	switch msgType {
+	case "text":
+		var body struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(rawContent), &body); err != nil {
+			return ""
+		}
+		return strings.TrimSpace(cleanFeishuInboundHTML(replaceFeishuMessageMentions(body.Text, item.Mentions)))
+	case "post":
+		txt, imgs := parseFeishuPostContent(rawContent)
+		txt = strings.TrimSpace(cleanFeishuInboundHTML(replaceFeishuMessageMentions(txt, item.Mentions)))
+		nImg := len(dedupNonEmpty(imgs))
+		if txt == "" {
+			if nImg > 1 {
+				return fmt.Sprintf("[图片（%d 张）]", nImg)
+			}
+			if nImg == 1 {
+				return "[图片]"
+			}
+			return ""
+		}
+		if nImg > 0 {
+			txt += fmt.Sprintf("（含 %d 张图片）", nImg)
+		}
+		return txt
+	case "interactive":
+		if ownText, ok := f.lookupOwnQuotedCard(itemID); ok {
+			return strings.TrimSpace(ownText)
+		}
+		txt, imgs := parseFeishuInteractiveContent(rawContent)
+		txt = strings.TrimSpace(cleanFeishuInboundHTML(replaceFeishuMessageMentions(txt, item.Mentions)))
+		if txt == "" {
+			if len(dedupNonEmpty(imgs)) > 0 {
+				return "[飞书卡片（含图片）]"
+			}
+			return "[飞书卡片消息]"
+		}
+		return txt
+	case "image":
+		return "[图片]"
+	case "file":
+		var body struct {
+			FileName string `json:"file_name"`
+		}
+		_ = json.Unmarshal([]byte(rawContent), &body)
+		if name := strings.TrimSpace(body.FileName); name != "" {
+			return fmt.Sprintf("[飞书文件：%s]", name)
+		}
+		return "[飞书文件]"
+	case "merge_forward":
+		return "[合并转发消息]"
+	default:
+		if msgType == "" {
+			return ""
+		}
+		return fmt.Sprintf("[飞书 %s 消息]", msgType)
+	}
+}
+
+// fetchGroupRecentContext fetches up to the last 10 messages of a group chat
+// when @Collie is invoked without quoting a parent message. Any permission error
+// (e.g. missing im:message.group_msg) or network/API timeout degrades silently
+// to "" so inbound message delivery is never blocked.
+func (f *FeishuAdapter) fetchGroupRecentContext(ctx context.Context, client *larksdk.Client, chatID, currentMsgID string) string {
+	chatID = strings.TrimSpace(chatID)
+	currentMsgID = strings.TrimSpace(currentMsgID)
+	if client == nil || chatID == "" {
+		return ""
+	}
+	timeout := feishuGroupCtxFetchTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req := larkim.NewListMessageReqBuilder().
+		ContainerIdType("chat").
+		ContainerId(chatID).
+		SortType("ByCreateTimeDesc").
+		PageSize(feishuGroupCtxPageSize).
+		Build()
+	resp, err := client.Im.V1.Message.List(reqCtx, req)
+	if err != nil {
+		log.Printf("feishu-ws: fetch group recent context chat=%s failed (degrading): %v", maskIdentifier(chatID), err)
+		return ""
+	}
+	if resp == nil || !resp.Success() {
+		if resp != nil {
+			if isFeishuGroupHistoryPermissionErr(resp.Code, resp.Msg) {
+				log.Printf("feishu-ws: group recent context unavailable for chat=%s (code=%d; enable optional scope im:message.group_msg to attach recent group history)", maskIdentifier(chatID), resp.Code)
+			} else {
+				log.Printf("feishu-ws: fetch group recent context chat=%s api error code=%d msg=%s (degrading)", maskIdentifier(chatID), resp.Code, resp.Msg)
+			}
+		}
+		return ""
+	}
+	if resp.Data == nil || len(resp.Data.Items) == 0 {
+		return ""
+	}
+
+	type ctxItem struct {
+		msg  *larkim.Message
+		body string
+		ts   int64
+	}
+	var filtered []ctxItem
+	for _, it := range resp.Data.Items {
+		if it == nil {
+			continue
+		}
+		if id := strings.TrimSpace(deref(it.MessageId)); id != "" && id == currentMsgID {
+			continue
+		}
+		if it.Deleted != nil && *it.Deleted {
+			continue
+		}
+		body := f.extractGroupContextBody(it)
+		if body == "" {
+			continue
+		}
+		filtered = append(filtered, ctxItem{
+			msg:  it,
+			body: clipRunes(body, feishuGroupCtxMsgMaxRunes),
+			ts:   parseFeishuCreateTime(it.CreateTime),
+		})
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+
+	// API returns newest-first (ByCreateTimeDesc); reverse to chronological order
+	// and stably sort by CreateTime when timestamps are available.
+	slices.Reverse(filtered)
+	slices.SortStableFunc(filtered, func(a, b ctxItem) int {
+		if a.ts <= 0 || b.ts <= 0 || a.ts == b.ts {
+			return 0
+		}
+		if a.ts < b.ts {
+			return -1
+		}
+		return 1
+	})
+	if len(filtered) > feishuGroupCtxMaxMessages {
+		filtered = filtered[len(filtered)-feishuGroupCtxMaxMessages:]
+	}
+
+	formatted := make([]string, 0, len(filtered))
+	for _, it := range filtered {
+		sender := f.resolveGroupContextSender(reqCtx, client, it.msg.Sender)
+		lines := appendFormattedSenderLines(nil, "", sender, it.body)
+		if len(lines) > 0 {
+			formatted = append(formatted, strings.Join(lines, "\n"))
+		}
+	}
+	if len(formatted) == 0 {
+		return ""
+	}
+
+	const header = "[群聊最近上下文]"
+	headerRunes := len([]rune(header))
+	maxTotal := feishuGroupCtxTotalMaxRunes
+	if maxTotal <= headerRunes+10 {
+		maxTotal = 2500
+	}
+
+	// Keep the most recent entries that fit within feishuGroupCtxTotalMaxRunes.
+	var keptRev []string
+	used := headerRunes
+	for i := len(formatted) - 1; i >= 0; i-- {
+		entry := formatted[i]
+		need := 1 + len([]rune(entry)) // leading '\n' + entry
+		if used+need > maxTotal {
+			if len(keptRev) == 0 {
+				avail := maxTotal - used - 1
+				if avail > 0 {
+					keptRev = append(keptRev, clipRunes(entry, avail))
+				}
+			}
+			break
+		}
+		keptRev = append(keptRev, entry)
+		used += need
+	}
+	if len(keptRev) == 0 {
+		return ""
+	}
+	slices.Reverse(keptRev)
+	return header + "\n" + strings.Join(keptRev, "\n")
 }
 
 type feishuSubImageStatus int

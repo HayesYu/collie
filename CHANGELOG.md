@@ -4,6 +4,68 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.2.95 (2026-11-27)
+
+### Highlights
+
+- **Unified Right Floating Dock「小本本 | 话题线」(`web/index.html`, `web/app.css`, `web/app.js`)**:
+  - Merged the floating notebook（「小本本」）and the thread list popover（「话题线」）into a single right floating card with a minimalist dual-tab header (`小本本 | 话题线`, anchor-positioned sliding underline, unread dot + count badge) and a single `×` button.
+  - Consolidated the top-bar threads and notebook controls into a single clean `panel-right` linear toggle icon (`#open-notes-btn`) matching top-bar stroke weight (`1.75px`), with subtle active-pane shading when open and an unread dot when collapsed.
+  - Simplified the card to a clean single scrollable state (removed compact/expanded mode switching), preserved the wide-desktop (`>= 1360px`) left-biased main chat column (`--notes-reserve`), and upgraded open/close motion to pure compositor-layer `transform + opacity` animations (top-right origin pop on wide desktop, slide-in sheet on `< 1360px`, and unified dual-tab bottom drawer on mobile `<= 760px`).
+- **Backend SSE Payload Slimming & Residual Main-Chat Jank / Idle Power-Saving Fixes (`internal/collie/superapi.go`, `web/app.css`, `web/app.js`)**:
+  - Slimmed `superState()` (`GET /api/super` and SSE `event: super`) for ended (`ended` / `gone` / `stopped`) workers by rune-safely capping historical `task` (`<= 400` runes) and `last_report` (`<= 240` runes) on the response copy while leaving active workers, underlying store records, and `GET /api/super/show/{id}` / `collie show` completely lossless (~45% smaller `/api/super` payload and ~66% smaller `workers` payload in busy workspaces).
+  - Eliminated 60Hz idle style/PrePaint wakeups: converted `.dot.idle` to a calm static indicator, guarded ambient animations with `@media (prefers-reduced-motion: no-preference)`, and added power-saving pause gates when the tab is hidden (`html.is-bg`), all workspaces are idle (`html.is-idle`), or the user is actively scrolling main chat (`.is-scroll-paused`).
+  - Eliminated residual desktop main-chat scroll and message-insertion jank: replaced `.thread > * + *` (which caused Blink full-subtree style recalcs across 3,000+ elements on DOM updates) with flex `gap: var(--thread-gap)`, promoted `.viewer.chatbg` with `will-change: scroll-position`, removed hover `transition: opacity` layer thrashing on `.msg-acts` and message timestamps during scrolling, gated `#crew` / `.td-workers` ScrollTimeline fade masks behind `.is-overflow`, and decoupled `#super-thread` render fingerprinting from irrelevant worker `report_at`/`topic` churn (`superThreadWorkerFingerprint()`).
+- **Memory Page「已结束」Progressive Time Bucketing (`web/app.js`, `web/app.css`)**:
+  - Grouped `tasks/done/*.md` items chronologically descending: near 7 days by day (`今天`, `昨天`, `MM-DD 周X`, auto-expanding only the most recent day bucket), earlier in the current month by week (`M 月第 N 周`, default collapsed), and earlier months by month (`YYYY 年 M 月`, default collapsed), with per-group counts and automatic bucket expansion on search hits.
+- **Decision Card Free-Text Reply Deduplication (`web/app.js`)**:
+  - Kept pure option clicks as `✓ 已选：<option> · HH:MM` without emitting a duplicate user bubble, while simplifying free-text inline replies on the original decision card to a light `✓ 已回复 · HH:MM` pill instead of repeating the user's message text that already appears in the chat bubble.
+- **`.filepane` Open/Close Scroll Anchor Lock (`web/app.js`)**:
+  - Anchored `#super-thread` to the top visible message before opening, widening, or closing `.filepane` (such as `.csv` / `.html` / file previews) so the main chat viewport no longer drifts across layout transitions.
+- **Homepage, Bilingual README & Static Demo Sync (`docs/index.html`, `README.md`, `README.zh-CN.md`, `docs/demo/`)**:
+  - Highlighted Collie's Gemini / Antigravity multi-terminal command deck positioning (alongside Claude Code, Codex, and Cursor) in both English and Chinese, and regenerated `docs/demo/` via `scripts/demo.sh`.
+
+### Client / API Changes
+
+- **`GET /api/super` & SSE `event: super`**: Backward-compatible payload slimming — ended (`ended: true`, `status: "gone"`, or `status: "stopped"`) worker entries now cap `task` at 400 runes (`…`) and `last_report` at 240 runes (`…`) on the view snapshot. Active workers are unchanged, and full lossless worker/trigger records remain available via `GET /api/super/show/{id}` (`collie show <id>`).
+- **Breaking changes**: None.
+
+---
+
+## v0.2.94 (2026-11-27)
+
+### Highlights
+
+- **Feishu Group Chat Automatic Recent Context on Direct `@Collie` (`internal/collie/feishu_ws.go`, `web/app.js`, `README.md`, `README.zh-CN.md`)**:
+  - When directly `@`-mentioned in a Feishu group chat without quoting a parent message (`parentID == ""`) — across both allowlisted groups and read-only feedback groups (`feedback_chat_ids`) — Collie now fetches up to the last 10 messages via `im.v1.message.list` (`container_id_type=chat`, `sort_type=ByCreateTimeDesc`, `page_size=10`), excludes the trigger message itself plus deleted/empty messages, sorts chronologically, resolves sender names via existing caches, extracts readable text/summaries (`text`, `post`, `interactive`, `image`, `file`, `merge_forward`), enforces per-message (`<= 300` runes) and total (`<= 2500` runes, retaining newest) caps, and attaches a `[群聊最近上下文]` block to the Router prompt (keeping the Web UI user bubble concise for allowlisted groups, and embedding the context inside read-only feedback events).
+  - Gracefully degrades without blocking delivery when the optional `im:message.group_msg` scope is absent or the OpenAPI request times out/errors, and skips history fetches whenever a parent message is explicitly quoted (`parentID != ""`).
+  - Documented the optional `im:message.group_msg` scope in README and the Feishu integration setup modal.
+- **Floating「小本本」Visual Centering, Click-to-Toggle & Top-Right Overlay Mutual Exclusion (`web/index.html`, `web/app.css`, `web/app.js`)**:
+  - Positioned the desktop (`>= 1360px`) floating notebook optically within the right empty channel (55% across the free space between the main chat column and viewport edge, clamped cleanly against both edges) for balanced breathing room on `1440px` and `1728px+` displays.
+  - Removed the redundant top-right `展开 / 收起` pill button from the notebook card (leaving only the minimal `×` close button); clicking the card header, empty area, or `+N` pills toggles compact/expanded directly while preserving direct task jump and artifact preview clicks.
+  - Added automatic mutual exclusion between the desktop floating notebook and all top-right popovers/overlays (threads list `#collie-threads-pop`, search bar `#super-search`, and more menu `#collie-menu`): opening any overlay yields the notebook card without shifting the conversation column, and closing restores it automatically.
+- **`#super-working` 0px Alignment, Scroll-Triggered 1px Top Hairline & Tiered `#crew` Compacting (`web/app.css`, `web/app.js`)**:
+  - Aligned `#super-working` ("Collie 在想…") with the exact horizontal padding of `#super-thread` in both wide notebook mode (`#v-collie.has-notes`) and mobile (`<= 760px`), eliminating horizontal avatar drift (`0px` delta).
+  - Replaced the 22px bottom gradient fog veil under `.collie-top` with a crisp `1px` low-opacity hairline (`rgba(0,0,0,0.06)` light / `rgba(255,255,255,0.07)` dark) that appears only once the chat stream scrolls (`scrollTop > 4`).
+  - Added content-aware tiered compaction for `#crew` worker capsules (`.is-no-kind` hides secondary agent kind labels first, then `.is-tight` dynamically computes `--crew-chip-max` so overflowing strips stay crisp without slicing pills in half).
+- **Whole-Card Clickable `.snap-card`, Jitter-Free `.reply-receipt` & Stale Composer `replyTo` Guards (`web/app.css`, `web/app.js`)**:
+  - Converted `.snap-card` header rows into whole-card clickable buttons with subtle hover feedback and a quiet `›` chevron cue, removing the redundant `分屏预览` button box.
+  - Refactored `.reply-receipt` (`<details>`) to a stable block wrapper with an `inline-flex` pill `<summary>` and a pure compositor-layer 140ms `opacity + translateY(-3px)` fade-in on `.reply-receipt[open] > .rr-body` (removing per-frame `::details-content` `block-size` reflows and `interpolate-size`), cutting open/close layout passes by ~81%, paint cost by ~66%, eliminating trailing-frame width bounce, and preventing mobile tap `.show-time` flicker.
+  - Guarded `#super-composer` `replyTo` against phantom/stale quotes: auto-clears when the quoted entry is resolved/picked/dismissed or answered by a newer user message via SSE/another device, clears orphaned quotes when navigating away, opening the thread drawer, or picking another decision option while the main input is empty (preserving `replyTo` whenever a draft is typed), and supports `Escape` in `#super-input` to clear the quote.
+- **Desktop Rendering & SSE Performance Overhaul (`web/app.css`, `web/app.js`)**:
+  - Replaced top-level `body:has(#v-collie.has-notes) .toasts` with a lightweight `body.collie-has-notes` class toggled in `syncNotebookVisibility()`, cutting desktop SSE style-recalculation cost by 94%–96%.
+  - Moved `--notes-reserve` / `--col-left` / `--col-right` statically onto `#v-collie`, scoped `--collie-top-h` writes to `#notes-pane` with an equality guard and `ResizeObserver` `borderBoxSize`, removed 260ms `.thread`/`.composer` `padding` transitions and the unused `.notes-expanded` class, and added `contain: layout style paint` on `.notepane` (cutting notebook toggle Long Tasks by ~90%).
+  - Added `WeakMap` memoization for `inEntryReplyChain` / `resolveDecisionInfo` and `extractEntryArtifacts` / `renderEntryArtifacts`, hoisted `openFilePath` outside the `renderSuper` loop, skipped `/api/super/notebook` background refreshes when `!notesOpen`, added dirty-key dedup in `renderNotebook`, and excluded `#np-{tasks,files,timers}-list` from global `MutationObserver` scans.
+- **Static Demo Sync (`docs/demo/`)**:
+  - Regenerated `docs/demo/` via `scripts/demo.sh`.
+
+### Client / API Changes
+
+- **HTTP API / SSE / CLI / JSON schemas**: None.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.93 (2026-11-27)
 
 ### Highlights

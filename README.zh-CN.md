@@ -4,7 +4,7 @@
 
 <p align="center"><sub>养一只边牧，放牧一群 Agent</sub><br>
 <b>别再守着 8 个 AI 终端，把活交给 Collie 盯到底</b><br>
-开源自托管 Super Agent · Claude Code · Codex · Antigravity — 做完只端上 3 行结论和一键决策选项。</p>
+开源自托管 Super Agent · Antigravity (Gemini) · Claude Code · Codex · Cursor — 做完只端上 3 行结论和一键决策选项。</p>
 
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ 10 秒在线体验</b></a> ·
@@ -26,7 +26,9 @@
 <b><a href="https://www.bilibili.com/video/BV1a41EziEsE/">▶ 点击观看 3 分钟完整介绍视频（B 站）→</a></b>
 </p>
 
-不用再在七八个终端窗口，以及 Claude、Codex、Antigravity 各自的桌面端 App 之间来回切窗口了。**Collie** 是一个开源自托管的 **Super Agent**，用一个统一工作台把所有电脑上的 Agent 全部收编（同时依然保留随时接管本机已有桌面/CLI 会话的能力）：在对话里说清目标，它帮你并行派活、盯进度、遇错自愈、定时巡检，**做完只把 3 行结论和 2–4 个一键决策选项端到你面前**。因为 Collie 只有一套**纯 Web UI**（手机加到主屏幕即 PWA），手机和电脑是完全一致的完整体验——发需求、看结论、点选项、翻话题抽屉、看图片和报告，**通勤、外出、开会根本不用背电脑**。
+> **单开 Antigravity 是单兵，套上 Collie 才是你的 Gemini 专武**——把多终端并行、长任务盯盘和手机指挥全接管（同样原生支持 Claude Code、Codex 与 Cursor）。
+
+不用再在七八个终端窗口，以及 Antigravity、Claude、Codex、Cursor 各自的桌面端 App 之间来回切窗口了。**Collie** 是一个开源自托管的 **Super Agent**，用一个统一工作台把所有电脑上的 Agent 全部收编（同时依然保留随时接管本机已有桌面/CLI 会话的能力）：在对话里说清目标，它帮你并行派活、盯进度、遇错自愈、定时巡检，**做完只把 3 行结论和 2–4 个一键决策选项端到你面前**。因为 Collie 只有一套**纯 Web UI**（手机加到主屏幕即 PWA），手机和电脑是完全一致的完整体验——发需求、看结论、点选项、翻话题抽屉、看图片和报告，**通勤、外出、开会根本不用背电脑**。
 
 > Collie 是一只边牧（border collie）：[herdr](https://herdr.dev) 让终端稳稳跑着，Collie 帮你放牧一群 Agent。
 
@@ -192,7 +194,7 @@ sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>   # 加入电
 在 **自动化 → 接入** 中配置（密钥独立保存在 `0600` 权限的 `~/.collie/secrets.json`，前端零回显）：
 
 - **GitHub 与可插拔代码托管源** — 内置 GitHub 适配器，按 `notify` / `advise` / `agent` 三档模式追踪 PR 评审、`@` 提及与 CI 失败并维持稳定线程；也可在 `~/.collie/providers/*.json` 放入自定义 CLI provider 接入任意托管平台。
-- **飞书 / Lark 零公网长连接** — 原生 WebSocket 长连接支持双向对话与交互式决策卡片，无需公网回调地址；同时也兼容事件订阅 Webhook（`/hooks/feishu?key=…`，已自动处理 `url_verification`）。
+- **飞书 / Lark 零公网长连接** — 原生 WebSocket 长连接支持双向对话与交互式决策卡片，无需公网回调地址；在群聊中直接 `@Collie` 且未引用父消息时，若已为应用开通可选的 `im:message.group_msg` 权限，会自动附带最近群聊上下文（未开通则优雅降级为原消息）。同时也兼容事件订阅 Webhook（`/hooks/feishu?key=…`，已自动处理 `url_verification`）。
 - **GitHub 与通用 Webhook** — 在「自动化 → 接入」复制地址：
   - GitHub：`/hooks/github?key=…`（Content type 选 `application/json`）
   - 通用：`POST /hooks/<source>?key=…`，JSON `{"text","thread","from","id"}`，支持 `X-Idempotency-Key` 去重。Webhook 立即返回 `202`，过滤与路由在收件箱异步完成。

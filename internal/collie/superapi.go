@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (s *Server) superRoutes(mux *http.ServeMux) {
@@ -118,6 +119,38 @@ type followView struct {
 	NextText string    `json:"next_text"` // what it will look at then
 }
 
+const (
+	// Ended workers stay in superView for 12h so sidebar/thread links keep their
+	// short task summaries without shipping multi-kilobyte historical prompts or
+	// final reports on every SSE tick. Full details remain in store and `collie show`.
+	endedWorkerTaskMaxRunes       = 400
+	endedWorkerLastReportMaxRunes = 240
+)
+
+func clipWorkerSummaryRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 || len(s) <= maxRunes || utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == maxRunes {
+			return strings.TrimRight(s[:i], " \t\r\n") + "…"
+		}
+		n++
+	}
+	return s
+}
+
+func slimEndedWorkerView(cp *Worker) {
+	if cp == nil {
+		return
+	}
+	if cp.Ended || cp.Status == "gone" || cp.Status == "stopped" {
+		cp.Task = clipWorkerSummaryRunes(cp.Task, endedWorkerTaskMaxRunes)
+		cp.LastReport = clipWorkerSummaryRunes(cp.LastReport, endedWorkerLastReportMaxRunes)
+	}
+}
+
 func (s *Server) superState(ctx context.Context) superView {
 	sp := s.sup
 	live, _ := sp.liveAgents(ctx)
@@ -191,6 +224,7 @@ func (s *Server) superState(ctx context.Context) superView {
 	for _, w := range sp.st.Workers {
 		if !w.Ended || time.Since(w.CreatedAt) < 12*time.Hour {
 			cp := *w
+			slimEndedWorkerView(&cp)
 			v.Workers = append(v.Workers, &cp)
 		}
 	}

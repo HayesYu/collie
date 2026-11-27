@@ -521,6 +521,7 @@ func (sp *Super) writeDreamInput() error {
 	b.WriteString("## Chat with the human and Collie's event log\n\n")
 	sp.mu.Lock()
 	var lines []string
+	var applauded []*Entry
 	for _, e := range sp.st.Entries {
 		if e.At.Before(since) {
 			continue
@@ -529,13 +530,34 @@ func (sp *Super) writeDreamInput() error {
 		if who == "" {
 			who = "event"
 		}
-		lines = append(lines, fmt.Sprintf("- %s %s: %s", e.At.Format("01-02 15:04"), who, clip(oneLine(e.Text), 600)))
+		clapTag := ""
+		if e.Role == "collie" && e.Claps > 0 {
+			clapTag = fmt.Sprintf(" [claps:%d]", e.Claps)
+			cp := *e
+			applauded = append(applauded, &cp)
+		}
+		lines = append(lines, fmt.Sprintf("- %s %s%s: %s", e.At.Format("01-02 15:04"), who, clapTag, clip(oneLine(e.Text), 600)))
 	}
 	sp.mu.Unlock()
 	if len(lines) > 500 {
 		lines = lines[len(lines)-500:]
 	}
 	b.WriteString(strings.Join(lines, "\n"))
+	if len(applauded) > 0 {
+		sort.SliceStable(applauded, func(i, j int) bool {
+			if applauded[i].Claps != applauded[j].Claps {
+				return applauded[i].Claps > applauded[j].Claps
+			}
+			return applauded[i].At.After(applauded[j].At)
+		})
+		if len(applauded) > 8 {
+			applauded = applauded[:8]
+		}
+		b.WriteString("\n\n### Replies the human applauded (positive feedback signal)\n\n")
+		for _, e := range applauded {
+			fmt.Fprintf(&b, "- [claps:%d] %s: %s\n", e.Claps, e.At.Format("01-02 15:04"), clip(oneLine(e.Text), 240))
+		}
+	}
 	b.WriteString("\n\n## Collie's own sessions (its reasoning and the commands it ran)\n")
 
 	history.Lock()

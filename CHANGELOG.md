@@ -4,6 +4,30 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.7 (2026-11-27)
+
+### Highlights
+
+- **Lightweight Monochrome SVG Message Claps — Medium-Style Rapid Applause with Zero Token Cost (`internal/collie/{store.go,db.go,super.go,superapi.go,dream.go}`, `web/{app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Added an original monochrome fine-line SVG clap control into Collie's reply action bar (and the topic focus drawer), harmonizing cleanly with Collie's minimalist white-paper and matte-dark palette (strictly zero system emoji; hollow outline when unclapped, restrained monochrome fill with crisp `tabular-nums` count once clapped, persistently visible at rest while keeping sibling actions calm until hover or focus).
+  - Supports smooth single and rapid multi-click accumulation up to `50` with 60 FPS GPU-composited (`transform` + `opacity` only, zero forced layout reflow) micro-motion: spring-eased icon pop, 6 monochrome radial hairline lines blooming over 300ms, and a floating `+1 / +2 / +3` burst pill — respecting `prefers-reduced-motion` cleanly and keeping DOM nodes in-place without rebuilding message rows mid-burst.
+  - Supports right-click (`contextmenu`), mobile long-press (`520ms` with drag cancel), and keyboard `Backspace`/`Delete` to clear and undo claps with a subtle toast confirmation.
+  - Aggregates rapid clicks client-side with a 350ms debounce (plus `keepalive` flush on tab hide/unload), persists directly to SQLite via a lossless `entries.claps` column migration (kept in sync with `entries.data`), broadcasts live across devices over existing SSE `event: super`, and strictly guarantees **zero router wakeups, zero triggers, and zero token consumption**.
+  - Lightly surfaces `[claps:N]` positive-feedback tags and top applauded replies inside nightly `dream/input.md` to help Collie reinforce helpful response habits during memory consolidation; refreshed the interactive static demo under `docs/demo/`.
+
+### Client / API Changes
+
+- **New HTTP endpoint (`POST /api/chat/clap`, standard `s.auth`)**:
+  - Request JSON: `{ entry_id: string, delta?: number, claps?: number, reset?: boolean }` (`id` accepted as alias for `entry_id`; defaults to `delta: 1` when none of `reset`/`claps`/`delta` is specified; values are clamped to `0..50`).
+  - Response JSON (`200 OK`): `{ ok: true, entry_id: string, claps: number, max: 50, changed: boolean }`. Returns `400` for invalid `entry_id`, negative `claps`, or non-`collie` entries; `404` if the entry does not exist.
+  - Strictly zero-token: never enqueues a trigger, never wakes the router, and never emits notifications.
+- **`Entry.claps` (`GET /api/super`, SSE `event: super`, `GET /api/super/earlier`)**:
+  - Added optional integer field `claps?: number` (`omitempty`, omitted when `0`, range `1..50`) on `Entry` objects.
+  - SQLite `entries` table adds lossless column `claps INTEGER NOT NULL DEFAULT 0` with partial index `entries_claps`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.6 (2026-11-27)
 
 ### Highlights
@@ -54,7 +78,6 @@ All notable changes to Collie are documented in this file. Each release includes
 - None (Web UI performance, layout, and interaction release only; no HTTP endpoint, SSE event, JSON schema, or CLI behavior changes).
 
 ---
-
 ## v0.3.4 (2026-11-27)
 
 ### Highlights

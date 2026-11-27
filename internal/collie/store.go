@@ -119,7 +119,12 @@ type Entry struct {
 	// ClientMsgID echoes the sender's idempotency token so optimistic UI entries
 	// reconcile 1:1 with SSE snapshots even when SSE arrives before the HTTP reply.
 	ClientMsgID string `json:"client_msg_id,omitempty"`
+	// Claps records lightweight user applause on a Collie reply (0..maxEntryClaps);
+	// purely a zero-token UI/memory signal that never wakes the router or creates triggers.
+	Claps int `json:"claps,omitempty"`
 }
+
+const maxEntryClaps = 50
 
 // SearchHit is one matched user/collie message in a conversation search.
 type SearchHit struct {

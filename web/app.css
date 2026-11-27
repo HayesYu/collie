@@ -824,8 +824,218 @@ html.is-idle .working-row .wk-t,
 .msg-acts button.focus-btn.active { color: var(--fg); background: var(--bg-3); }
 .msg-acts svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .msg-acts .t { margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+/* Minimalist monochrome SVG clap control (zero emoji, pure GPU compositor micro-motion) */
+.msg-acts button.clap-btn,
+.td-act.clap-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: auto;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  overflow: visible;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+  transition: color .14s ease, background-color .14s ease;
+}
+.td-act.clap-btn {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+}
+.clap-btn.on {
+  gap: 4px;
+  padding: 0 7px 0 5.5px;
+  color: color-mix(in srgb, var(--fg) 84%, var(--fg-2));
+}
+.clap-btn.on:hover {
+  color: var(--fg);
+}
+.clap-ico-wrap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  pointer-events: none;
+}
+.clap-ico {
+  width: 15px;
+  height: 15px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform-origin: center;
+  will-change: transform;
+}
+.td-act.clap-btn .clap-ico-wrap,
+.td-act.clap-btn .clap-ico {
+  width: 13.5px;
+  height: 13.5px;
+}
+.clap-ico .clap-body {
+  fill: transparent;
+  transition: fill .16s ease;
+}
+.clap-btn.on .clap-ico {
+  stroke-width: 1.4;
+}
+.clap-btn.on .clap-ico .clap-body {
+  fill: currentColor;
+}
+.clap-n {
+  font: 500 11.5px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+  color: inherit;
+  pointer-events: none;
+}
+.clap-n:empty { display: none; }
+.td-act.clap-btn .clap-n { font-size: 11px; }
+/* Persistently show clapped count on desktop while keeping sibling actions calm until hover/focus-visible */
+#v-collie .say.has-claps .msg-acts {
+  opacity: 1;
+  pointer-events: auto;
+}
+#v-collie .say.has-claps .msg-acts > :not(.clap-btn) {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .14s ease;
+}
+#v-collie .say.has-claps:hover .msg-acts > :not(.clap-btn),
+#v-collie .say.has-claps .msg.show-time .msg-acts > :not(.clap-btn),
+#v-collie .say.has-claps .msg-acts:has(:focus-visible) > :not(.clap-btn) {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Persistent clapped cue in thread drawer too */
+.td-node.has-claps .td-node-acts { opacity: 1; }
+.td-node.has-claps .td-node-acts > :not(.clap-btn) { opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.td-node.has-claps:hover .td-node-acts > :not(.clap-btn),
+.td-node.has-claps .td-node-acts:has(:focus-visible) > :not(.clap-btn) { opacity: 1; pointer-events: auto; }
+/* 6 radial hairline monochrome rays (pure transform + opacity, 300ms) */
+.clap-burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.clap-burst i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1.4px;
+  height: 4.5px;
+  margin: -2.25px 0 0 -0.7px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+/* Minimalist floating +1 / +2 / +3 counter above clap icon */
+.clap-float {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 4px);
+  padding: 2.5px 6px;
+  border-radius: 999px;
+  background: var(--fg);
+  color: var(--bg);
+  font: 600 10.5px/1.1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .14);
+  transform: translate3d(-50%, 0, 0);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+:root[data-theme="dark"] .clap-float {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .45);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .clap-float {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .45);
+  }
+}
+/* Opt in to spatial spring/ray/drift motion only when user has no reduced-motion preference */
+@media (prefers-reduced-motion: no-preference) {
+  .clap-btn.clap-pop-a .clap-ico {
+    animation: clap-pop-a 260ms cubic-bezier(.34, 1.56, .64, 1);
+    animation-timing-function: linear(0, .38 14%, 1.18 42%, 1.04 62%, .98 78%, 1);
+  }
+  .clap-btn.clap-pop-b .clap-ico {
+    animation: clap-pop-b 260ms cubic-bezier(.34, 1.56, .64, 1);
+    animation-timing-function: linear(0, .38 14%, 1.18 42%, 1.04 62%, .98 78%, 1);
+  }
+  .clap-burst i {
+    animation: clap-ray 300ms cubic-bezier(.22, 1, .36, 1) forwards;
+  }
+  .clap-float.pop-a {
+    animation: clap-float-a 760ms cubic-bezier(.22, 1, .36, 1) forwards;
+  }
+  .clap-float.pop-b {
+    animation: clap-float-b 760ms cubic-bezier(.22, 1, .36, 1) forwards;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .clap-burst { display: none; }
+  .clap-float.pop-a,
+  .clap-float.pop-b {
+    animation: clap-float-reduced 650ms ease-out forwards;
+  }
+}
+@keyframes clap-pop-a {
+  0%   { transform: scale(1); }
+  24%  { transform: scale(.86); }
+  58%  { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+@keyframes clap-pop-b {
+  0%   { transform: scale(1); }
+  24%  { transform: scale(.86); }
+  58%  { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+@keyframes clap-ray {
+  0%   { opacity: 0; transform: rotate(var(--a)) translate3d(0, -6.5px, 0) scaleY(.35); }
+  24%  { opacity: .82; transform: rotate(var(--a)) translate3d(0, -10.5px, 0) scaleY(1); }
+  100% { opacity: 0; transform: rotate(var(--a)) translate3d(0, -15.5px, 0) scaleY(.2); }
+}
+@keyframes clap-float-a {
+  0%   { opacity: 0; transform: translate3d(-50%, 4px, 0) scale(.86); }
+  14%  { opacity: 1; transform: translate3d(-50%, -6px, 0) scale(1.04); }
+  26%  { opacity: 1; transform: translate3d(-50%, -8px, 0) scale(1); }
+  74%  { opacity: 1; transform: translate3d(-50%, -10px, 0) scale(1); }
+  100% { opacity: 0; transform: translate3d(-50%, -17px, 0) scale(.94); }
+}
+@keyframes clap-float-b {
+  0%   { opacity: 0; transform: translate3d(-50%, 4px, 0) scale(.86); }
+  14%  { opacity: 1; transform: translate3d(-50%, -6px, 0) scale(1.04); }
+  26%  { opacity: 1; transform: translate3d(-50%, -8px, 0) scale(1); }
+  74%  { opacity: 1; transform: translate3d(-50%, -10px, 0) scale(1); }
+  100% { opacity: 0; transform: translate3d(-50%, -17px, 0) scale(.94); }
+}
+@keyframes clap-float-reduced {
+  0%   { opacity: 0; }
+  18%  { opacity: 1; }
+  78%  { opacity: 1; }
+  100% { opacity: 0; }
+}
 @media (pointer: coarse) {
   .msg-acts button { width: 32px; height: 32px; }
+  .msg-acts button.clap-btn { width: auto; min-width: 32px; height: 32px; padding: 0 7px; }
+  .msg-acts button.clap-btn.on { padding: 0 9px 0 7.5px; }
 }
 .pin-ind {
   display: inline-flex; align-items: center; gap: 4px; margin: 0 0 4px;
@@ -838,6 +1048,10 @@ html.is-idle .working-row .wk-t,
   .msg-acts, #v-collie .mine .msg-acts { display: none; margin-bottom: 0; }
   #v-collie .msg.show-time .msg-acts, #v-collie .mine .msg.show-time + .msg-acts,
   #v-collie .msg.show-time .msg-foot .msg-acts, #v-collie .mine .msg.show-time + .msg-foot .msg-acts { display: flex; opacity: 1; pointer-events: auto; }
+  #v-collie .say.has-claps .msg-acts { display: flex; opacity: 1; pointer-events: auto; margin-top: 2px; margin-bottom: 0; }
+  #v-collie .say.has-claps .msg:not(.show-time) .msg-acts > :not(.clap-btn) { display: none; }
+  #v-collie .say.has-claps .msg.show-time .msg-acts > :not(.clap-btn) { display: grid; opacity: 1; pointer-events: auto; }
+  #v-collie .say.has-claps .msg.show-time .msg-acts > .t { display: inline; opacity: 1; pointer-events: auto; }
 }
 /* Quiet inline reply-chain footer: only shown on messages in a >=2 reply chain */
 #v-collie .say, #v-collie .mine { position: relative; }
@@ -2190,6 +2404,11 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   .td-node-acts { opacity: .75; }
   .td-act span { display: none; }
   .td-act { width: 28px; height: 28px; padding: 0; justify-content: center; }
+  .td-act.clap-btn { width: auto; min-width: 28px; height: 28px; padding: 0 6px; }
+  .td-act.clap-btn .clap-ico-wrap { display: inline-grid; }
+  .td-act.clap-btn .clap-n { display: inline; }
+  .td-act.clap-btn .clap-n:empty { display: none; }
+  .td-node.has-claps .td-node-acts > :not(.clap-btn) { opacity: .75; pointer-events: auto; }
   .td-foot { padding: 8px 12px max(12px, env(safe-area-inset-bottom, 0px)); }
   .td-ta { font-size: 16px; }
   .td-hint { display: none; }
@@ -2200,6 +2419,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
 }
 @media (pointer: coarse) {
   .td-node-acts { opacity: .8; }
+  .td-node.has-claps .td-node-acts > :not(.clap-btn) { opacity: .8; pointer-events: auto; }
   .td-worker { min-block-size: 30px; padding: 0 11px 0 10px; }
   #td-locate-root, #td-close { min-inline-size: 36px; min-block-size: 36px; width: 36px; height: 36px; }
   .td-cbar .td-attach, .td-cbar .send { width: 34px; height: 34px; }

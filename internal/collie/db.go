@@ -109,6 +109,7 @@ func openDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+// migrateDB applies lossless, idempotent schema upgrades for existing databases.
 func migrateDB(db *sql.DB) error {
 	hasLabel, err := tableHasColumn(db, "workers", "label")
 	if err != nil {
@@ -118,6 +119,18 @@ func migrateDB(db *sql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE workers ADD COLUMN label TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
+	}
+	hasClaps, err := tableHasColumn(db, "entries", "claps")
+	if err != nil {
+		return err
+	}
+	if !hasClaps {
+		if _, err := db.Exec(`ALTER TABLE entries ADD COLUMN claps INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS entries_claps ON entries(claps) WHERE claps > 0`); err != nil {
+		return err
 	}
 	return nil
 }
@@ -168,6 +181,55 @@ func loadWorkers(db *sql.DB, into func(*Worker)) error {
 	return rows.Err()
 }
 
+func clampClaps(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > maxEntryClaps {
+		return maxEntryClaps
+	}
+	return n
+}
+
+func loadEntryRows(db *sql.DB, q string, into func(*Entry), args ...any) error {
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var data string
+		var colClaps int
+		if err := rows.Scan(&data, &colClaps); err != nil {
+			return err
+		}
+		v := new(Entry)
+		if json.Unmarshal([]byte(data), v) == nil {
+			if colClaps > 0 && v.Claps == 0 {
+				v.Claps = colClaps
+			}
+			v.Claps = clampClaps(v.Claps)
+			into(v)
+		}
+	}
+	return rows.Err()
+}
+
+func upsertEntryClaps(db *sql.DB, e *Entry) error {
+	if db == nil || e == nil || e.ID == "" {
+		return nil
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(
+		`INSERT INTO entries(id,n,at,thread,data,claps) VALUES(?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET data=excluded.data, claps=excluded.claps`,
+		e.ID, idNum(e.ID), e.At.Unix(), e.Thread, string(b), clampClaps(e.Claps),
+	)
+	return err
+}
 func idNum(id string) int64 {
 	n, _ := strconv.ParseInt(strings.TrimLeft(id, "abcdefghijklmnopqrstuvwxyz"), 10, 64)
 	return n
@@ -294,7 +356,7 @@ func loadStateWithMeta(db *sql.DB, home string) (*State, bool, error) {
 		}
 	})
 	st.Triggers = trig
-	loadRows(db, `SELECT data FROM (SELECT data, n FROM entries ORDER BY n DESC LIMIT 600) ORDER BY n`, func(e *Entry) { st.Entries = append(st.Entries, e) })
+	loadEntryRows(db, `SELECT data, claps FROM (SELECT data, claps, n FROM entries ORDER BY n DESC LIMIT 600) ORDER BY n`, func(e *Entry) { st.Entries = append(st.Entries, e) })
 	loadRows(db, `SELECT data FROM threads ORDER BY last_at DESC LIMIT 500`, func(t *Thread) { st.Threads[t.ID] = t })
 	if err := loadWorkers(db, func(w *Worker) { st.Workers[w.Name] = w }); err != nil {
 		return nil, false, err
@@ -357,8 +419,8 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 			w.Name, w.CreatedAt.Unix(), w.Label, js(w))
 	}
 	for _, e := range st.Entries {
-		put(`INSERT INTO entries(id,n,at,thread,data) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`,
-			e.ID, idNum(e.ID), e.At.Unix(), e.Thread, js(e))
+		put(`INSERT INTO entries(id,n,at,thread,data,claps) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data, claps=excluded.claps`,
+			e.ID, idNum(e.ID), e.At.Unix(), e.Thread, js(e), clampClaps(e.Claps))
 	}
 	for _, t := range st.Timers {
 		put(`INSERT INTO timers(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, t.ID, js(t))
@@ -385,7 +447,7 @@ func threadHistory(db *sql.DB, thread string, before int64, limit int) []*Trigge
 // newest first, straight from the DB (memory keeps only the recent ones).
 func entryHistory(db *sql.DB, thread string, before int64, limit int) []*Entry {
 	var out []*Entry
-	loadRows(db, `SELECT data FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) AND n < ? ORDER BY n DESC LIMIT ?`,
+	loadEntryRows(db, `SELECT data, claps FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) AND n < ? ORDER BY n DESC LIMIT ?`,
 		func(e *Entry) { out = append(out, e) }, thread, thread, before, limit)
 	return out
 }
@@ -394,7 +456,7 @@ func entryHistory(db *sql.DB, thread string, before int64, limit int) []*Entry {
 // (inclusive) plus up to `pad` older context entries, newest first, capped at maxRows.
 func entryHistoryUntil(db *sql.DB, thread string, before, until int64, pad, maxRows int) ([]*Entry, bool) {
 	var out []*Entry
-	loadRows(db, `SELECT data FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) AND n < ? AND n >= ? ORDER BY n DESC LIMIT ?`,
+	loadEntryRows(db, `SELECT data, claps FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) AND n < ? AND n >= ? ORDER BY n DESC LIMIT ?`,
 		func(e *Entry) { out = append(out, e) }, thread, thread, before, until, maxRows+1)
 	if len(out) > maxRows {
 		return out[:maxRows], true
@@ -414,7 +476,7 @@ func entryHistoryUntil(db *sql.DB, thread string, before, until int64, pad, maxR
 // threadEntries reads all stored entries of a thread from SQLite, newest first.
 func threadEntries(db *sql.DB, thread string) []*Entry {
 	var out []*Entry
-	loadRows(db, `SELECT data FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) ORDER BY n DESC`,
+	loadEntryRows(db, `SELECT data, claps FROM entries WHERE (thread = ? OR (? = 'chat:main' AND thread = '')) ORDER BY n DESC`,
 		func(e *Entry) { out = append(out, e) }, thread, thread)
 	return out
 }

@@ -2273,6 +2273,87 @@ func (sp *Super) MarkChatRead(entryID string) (string, bool, error) {
 	return id, true, nil
 }
 
+var (
+	errEntryNotFound = errors.New("找不到这条消息")
+	errNotClappable  = errors.New("只能给 Collie 的回复点赞")
+)
+
+// ClapEntry increments or sets lightweight applause on a Collie reply and persists
+// it directly to SQLite without waking the router, creating triggers, or consuming tokens.
+func (sp *Super) ClapEntry(entryID string, delta int, setVal *int) (int, bool, error) {
+	id := strings.TrimSpace(entryID)
+	if !isValidEntryID(id) {
+		return 0, false, errors.New("invalid entry_id")
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+
+	memIdx := -1
+	var target *Entry
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		if sp.st.Entries[i].ID == id {
+			memIdx = i
+			target = sp.st.Entries[i]
+			break
+		}
+	}
+	if target == nil && sp.db != nil {
+		var raw string
+		var colClaps int
+		if err := sp.db.QueryRow(`SELECT data, claps FROM entries WHERE id = ?`, id).Scan(&raw, &colClaps); err == nil {
+			var e Entry
+			if json.Unmarshal([]byte(raw), &e) == nil {
+				if colClaps > 0 && e.Claps == 0 {
+					e.Claps = colClaps
+				}
+				e.Claps = clampClaps(e.Claps)
+				target = &e
+			}
+		}
+	}
+	if target == nil {
+		return 0, false, errEntryNotFound
+	}
+	if target.Role != "collie" || (target.Thread != "" && target.Thread != mainThread) {
+		return 0, false, errNotClappable
+	}
+	cur := clampClaps(target.Claps)
+	next := cur
+	if setVal != nil {
+		next = clampClaps(*setVal)
+	} else {
+		next = clampClaps(cur + delta)
+	}
+	if next == cur {
+		return cur, false, nil
+	}
+	// Copy-on-write so any concurrent JSON marshaling of a previous superView snapshot stays race-free.
+	cp := *target
+	cp.Claps = next
+	if sp.db != nil {
+		if err := upsertEntryClaps(sp.db, &cp); err != nil {
+			return cur, false, err
+		}
+	} else {
+		sp.dirty = true
+	}
+	if memIdx >= 0 {
+		sp.st.Entries[memIdx] = &cp
+	}
+	if sp.pinnedCache != nil {
+		if _, ok := sp.pinnedCache[id]; ok {
+			sp.pinnedCache[id] = &cp
+		}
+	}
+	for ch := range sp.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return next, true, nil
+}
+
 // Dismiss marks one pending message as acknowledged/ignored by the human and persists it.
 func (sp *Super) Dismiss(id string) {
 	sp.dismiss(id, true)

@@ -29,6 +29,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/dismiss", s.superDismiss)
 	api("POST /api/super/pin", s.superPin)
 	api("POST /api/chat/read", s.superMarkRead)
+	api("POST /api/chat/clap", s.superClap)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
 	api("POST /api/super/report", s.superReport)
@@ -533,6 +534,63 @@ func (s *Server) superMarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "last_read_entry_id": cur, "changed": changed})
+}
+
+func (s *Server) superClap(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EntryID string `json:"entry_id"`
+		ID      string `json:"id"`
+		Delta   *int   `json:"delta"`
+		Claps   *int   `json:"claps"`
+		Reset   bool   `json:"reset"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := strings.TrimSpace(body.EntryID)
+	if id == "" {
+		id = strings.TrimSpace(body.ID)
+	}
+	if id == "" || !isValidEntryID(id) {
+		writeJSON(w, 400, map[string]any{"error": "invalid entry_id"})
+		return
+	}
+	var delta int
+	var setVal *int
+	switch {
+	case body.Reset:
+		z := 0
+		setVal = &z
+	case body.Claps != nil:
+		if *body.Claps < 0 {
+			writeJSON(w, 400, map[string]any{"error": "claps must be >= 0"})
+			return
+		}
+		v := *body.Claps
+		setVal = &v
+	case body.Delta != nil:
+		delta = *body.Delta
+	default:
+		delta = 1
+	}
+	claps, changed, err := s.sup.ClapEntry(id, delta, setVal)
+	if err != nil {
+		code := 500
+		if errors.Is(err, errEntryNotFound) {
+			code = 404
+		} else if errors.Is(err, errNotClappable) || strings.Contains(err.Error(), "invalid") {
+			code = 400
+		}
+		writeJSON(w, code, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":       true,
+		"entry_id": id,
+		"claps":    claps,
+		"max":      maxEntryClaps,
+		"changed":  changed,
+	})
 }
 
 // replyLen is a reply's length as people read it: each Chinese/Japanese/Korean

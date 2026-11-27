@@ -377,11 +377,11 @@ func normalizePeerMode(mode string) (string, bool) {
 func peerModeLabel(mode string) string {
 	switch mode {
 	case "notify":
-		return "仅收信知会"
+		return "只留个便签，不自动回复"
 	case "propose":
-		return "提议派活，等主人确认"
+		return "查完给方案，批准再干活"
 	default:
-		return "只读调研，等主人拍板"
+		return "先帮我查清，草稿给我审"
 	}
 }
 

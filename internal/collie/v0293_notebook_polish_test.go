@@ -90,14 +90,14 @@ const htmlSrc = fs.readFileSync("web/index.html", "utf8");
 const cssSrc = fs.readFileSync("web/app.css", "utf8");
 const appSrc = fs.readFileSync("web/app.js", "utf8");
 
-// 1) Header triggers (话题线 & 小本本) both use harmonized ultra-light plain-text buttons without SVG icons
+// 1) Header triggers (话题线 & 小本本) both use harmonized ultra-light plain-text buttons without SVG icons or count badges
 const notesBtnMatch = htmlSrc.match(/id="open-notes-btn"[\s\S]*?<\/button>/);
 assert.ok(notesBtnMatch, "expected #open-notes-btn in index.html");
 assert.ok(notesBtnMatch[0].includes("小本本") && !notesBtnMatch[0].includes("<svg"), "header notebook trigger must be plain-text 小本本 button without SVG icon");
 const thBtnMatch = htmlSrc.match(/id="collie-threads-btn"[\s\S]*?<\/button>/);
 assert.ok(thBtnMatch, "expected independent #collie-threads-btn in index.html");
 assert.ok(thBtnMatch[0].includes("话题线") && !thBtnMatch[0].includes("<svg"), "header threads trigger must be plain-text 话题线 button without SVG icon");
-assert.ok(thBtnMatch[0].includes('id="collie-threads-dot"') && thBtnMatch[0].includes('id="collie-threads-cnt"'), "header threads trigger must expose subtle pending dot and count");
+assert.ok(thBtnMatch[0].includes('id="collie-threads-dot"') && !thBtnMatch[0].includes('id="collie-threads-cnt"'), "header threads trigger must expose subtle pending dot without trailing number badge");
 
 // 2) Pure minimalist v0.2.94 notebook header (no dual tabs, no bottom 展开详情 bar, no top-right expand pill)
 assert.ok(!htmlSrc.includes('id="np-expand"') && !htmlSrc.includes('id="dk-tablist"') && htmlSrc.includes('id="np-close"'), "notebook header must stay pure v0.2.94 minimalist (小本本 + ×) without dual tabs or expand pill");

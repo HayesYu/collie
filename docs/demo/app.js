@@ -4224,14 +4224,13 @@
 
   // ───────────────────────────── Collie conversation search
   let searchTimer = 0, searchAbort = null, searchSeq = 0;
-  let thPopOpen = false, superSearchOpen = false, collieMenuOpen = false, closeSuperSearchFn = null;
-  const hasTopRightOverlay = () => !!(thPopOpen || superSearchOpen || collieMenuOpen);
+  let superSearchOpen = false, collieMenuOpen = false, closeSuperSearchFn = null;
+  const hasTopRightOverlay = () => !!(superSearchOpen || collieMenuOpen);
   function closeCollieMenus() {
     collieMenuOpen = false;
     $$(".menu").forEach((m) => { m.hidden = true; });
   }
   function closeAllColliePopovers() {
-    closeCollieThreadsPop({ sync: false });
     closeCollieMenus();
     if (superSearchOpen) closeSuperSearchFn?.(false);
   }
@@ -4629,7 +4628,9 @@
   function promoteUserNodeInPlace(el, item) {
     const msgEl = el.querySelector?.(".msg.user");
     if (!msgEl) return false;
-    const nextCls = `mine${item.pinned ? " is-pinned" : ""}`;
+    const hasMedia = el.classList?.contains("has-media");
+    const isMediaOnly = el.classList?.contains("is-media-only");
+    const nextCls = `mine${hasMedia ? " has-media" : ""}${isMediaOnly ? " is-media-only" : ""}${item.pinned ? " is-pinned" : ""}`;
     if (el.className !== nextCls) el.className = nextCls;
     if (item.rootId) el.dataset.threadRoot = item.rootId;
     else delete el.dataset.threadRoot;
@@ -4640,7 +4641,7 @@
     const curPin = el.querySelector?.(".pin-ind");
     if (item.pinned && !curPin) {
       const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
-      if (pinEl) el.insertBefore(pinEl, msgEl);
+      if (pinEl) el.insertBefore(pinEl, el.firstElementChild || msgEl);
     } else if (!item.pinned && curPin && curPin.parentNode === el) {
       el.removeChild(curPin);
     }
@@ -4938,8 +4939,10 @@
 
   let collieStickBottom = true;
   let collieForceBottomUntil = 0;
+  const isDesktopThreadSideBySide = () => !!(activeThreadRoot && innerWidth > 1000 && $("#app")?.classList?.contains("has-thread"));
   function snapCollieStickBottom(sc = viewScroller("collie")) {
     if (view !== "collie" || !sc || collieInitialAnchor || activeCollieRestore || olderBusy) return;
+    if (isDesktopThreadSideBySide()) return;
     if (flashEntry.until > Date.now()) return;
     if (!collieStickBottom && performance.now() >= collieForceBottomUntil) return;
     markProgrammaticScroll(140);
@@ -4947,7 +4950,7 @@
     if (typeof requestAnimationFrame === "function") {
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       superScrollRAF = requestAnimationFrame(() => {
-        if (view !== "collie" || collieInitialAnchor || activeCollieRestore) return;
+        if (view !== "collie" || collieInitialAnchor || activeCollieRestore || isDesktopThreadSideBySide()) return;
         if (!collieStickBottom && performance.now() >= collieForceBottomUntil) return;
         markProgrammaticScroll(120);
         sc.scrollTop = sc.scrollHeight;
@@ -4969,6 +4972,8 @@
     const restore = opts?.restore || null;
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
     const scroller = box.parentElement;
+    const drawerSideBySide = isDesktopThreadSideBySide();
+    const drawerFreezeMain = !forceBottom && drawerSideBySide;
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
     const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
@@ -4976,10 +4981,12 @@
       && performance.now() <= collieInitialAnchor.until;
     const stickBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && performance.now() < collieForceBottomUntil;
-    const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || stickBottomLock || distBefore <= AT_BOTTOM_PX);
+    const atBottom = forceBottom ? true : drawerFreezeMain ? false : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || stickBottomLock || distBefore <= AT_BOTTOM_PX);
     if (forceBottom) {
       collieStickBottom = true;
       collieForceBottomUntil = performance.now() + 4000;
+    } else if (drawerFreezeMain) {
+      collieForceBottomUntil = 0;
     } else if (holdRestore && !holdRestore.atBottom) {
       collieStickBottom = false;
       collieForceBottomUntil = 0;
@@ -5011,8 +5018,10 @@
     if (st.className !== stCls) st.className = stCls;
     setHTML(st, `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`);
     // While Collie is busy on a human turn (or blocked/dreaming), show the indicator
-    // where its next message will appear; quiet background inspections stay in header.
-    const busyInfo = resolveSuperBusy(r, allEntries, opts || {});
+    // where its next message will appear; quiet background inspections stay in header,
+    // and desktop side-by-side focus drawer keeps the left stream calm without a mirrored thinking row.
+    const rawBusyInfo = resolveSuperBusy(r, allEntries, opts || {});
+    const busyInfo = drawerSideBySide ? null : rawBusyInfo;
     const busy = busyInfo?.text || null;
     const busyChanged = (busy || "") !== prevBusy;
     if (busyChanged) ensureLiveAnchor();
@@ -5247,7 +5256,14 @@
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                return `<div class="mine${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${renderQuoteHtml(qi, e)}${userText(e.text)}</div>${renderFoot()}</div>`;
+                const parts = parseUserParts(e.text);
+                const quoteHtml = renderQuoteHtml(qi, e);
+                const mediaHtml = renderUserMedia(parts.imgs);
+                const idTitleAttrs = `data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}`;
+                if (mediaHtml && !parts.hasBubbleContent) {
+                  return `<div class="mine is-media-only${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}<div class="msg user is-media-only" ${idTitleAttrs}>${quoteHtml}${mediaHtml}</div>${renderFoot()}</div>`;
+                }
+                return `<div class="mine${mediaHtml ? " has-media" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${quoteHtml}${parts.textHtml}${parts.attHtml}</div>${renderFoot()}</div>`;
               },
             });
             lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
@@ -6381,9 +6397,9 @@
   let peerScanStream = null;
   let peerScanRAF = 0;
   const PEER_MODE_TEXT = {
-    advise: "只读调研，等我拍板",
-    notify: "仅收信知会",
-    propose: "提议派活，等我确认",
+    advise: "先帮我查清，草稿给我审",
+    notify: "只留个便签，不自动回复",
+    propose: "查完给方案，批准再干活",
   };
   const INT_STATUS_TEXT = {
     connected: "已连通",
@@ -6795,7 +6811,7 @@
             <button type="button" class="switch" role="switch" aria-checked="${peerInfo.enabled ? "true" : "false"}" aria-label="开关 好友边牧收件箱" data-peer-global-toggle></button>
           </div>
         </div>
-        <p class="int-desc">各自独享私有 Hub 与记忆，只通过窄权收件箱异步协查与交接，默认只读调研后交给你一键拍板。</p>
+        <p class="int-desc">各自保留本机工作区与记忆，只收发受控消息；默认先帮你查清并拟好草稿，确认后才回复对方。</p>
         <div class="int-foot">
           <span class="int-status is-${esc(peerInfo.state)}">
             <span class="sdot ${esc(peerInfo.state)}" aria-hidden="true"></span>
@@ -8564,7 +8580,7 @@
     try {
       const inv = await api("/api/super/peers/invite", { body: { mode: d.genMode } });
       if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
-      const qrSrc = inv?.invite_code ? `/api/qr?text=${encodeURIComponent(inv.invite_code)}` : "";
+      const qrSrc = inv?.invite_code ? `demo-qr.png?text=${encodeURIComponent(inv.invite_code)}` : "";
       if (qrSrc) await preloadPeerQRImage(qrSrc);
       if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
       d.invitesByMode[cacheKey] = inv;
@@ -8760,9 +8776,9 @@
 
   function peerModeRadiosHTML(groupName, current, attr) {
     return [
-      ["advise", "只读调研，等我拍板", "推荐", "本地只读查证并拟好回复草稿，经你一键拍板后才发回"],
-      ["notify", "仅收信知会", "", "只在对话流留一条轻量摘要，不唤醒 Collie，零模型消耗"],
-      ["propose", "提议派活，等我确认", "", "先只读评估影响面并提议开 Worker，派活与回传均须你确认"],
+      ["advise", "先帮我查清，草稿给我审", "推荐", "本地只读查证并拟好回复，你点确认才发给对方"],
+      ["notify", "只留个便签，不自动回复", "", "只在聊天里记一条提醒，不自动查也不消耗额度"],
+      ["propose", "查完给方案，批准再干活", "", "先评估并提议派人处理，动手和回复都等你拍板"],
     ].map(([val, lbl, rec, desc]) => `
       <label class="int-mode-opt">
         <input type="radio" name="${esc(groupName)}" value="${val}" ${current === val ? "checked" : ""} ${attr}>
@@ -8807,7 +8823,7 @@
     if (!card) return;
     const data = d.data || { hub_name: "我的边牧" };
     const inv = d.invite;
-    const qrSrc = inv?.invite_code ? `/api/qr?text=${encodeURIComponent(inv.invite_code)}` : "";
+    const qrSrc = inv?.invite_code ? `demo-qr.png?text=${encodeURIComponent(inv.invite_code)}` : "";
 
     if (inv && qrSrc) {
       card.classList.toggle("is-refreshing", !!d.inviteLoading);
@@ -8821,7 +8837,7 @@
                 <span id="peer-qr-hub-name">${esc(inv.hub_name || data.hub_name || "我的边牧")}</span>
                 <span class="peer-qr-countdown" id="peer-invite-countdown">${esc(peerInviteRemainStr(d))}</span>
               </div>
-              <p class="peer-qr-hint">同事在 Collie「接入 → 好友边牧」扫码或粘贴邀请码即可完成双向探活与令牌交换；一次性使用，不含长期密钥。</p>
+              <p class="peer-qr-hint">同事在 Collie「接入 → 好友边牧」扫码或粘贴邀请码即可完成直连配对；邀请码仅一次有效，10 分钟后自动作废。</p>
               <div class="peer-qr-addrs" id="peer-qr-addrs">直连地址：${esc((inv.addrs || []).join(" · "))}</div>
               <div class="peer-qr-btns">
                 <button type="button" class="btn primary small" id="peer-copy-invite">一键复制邀请码</button>
@@ -8928,7 +8944,7 @@
     const submitBtn = $("#peer-pair-submit");
     if (submitBtn) {
       submitBtn.disabled = !(!d.pairing && !!parsed?.ok);
-      setText(submitBtn, d.pairing ? "双向探活握手中…" : "验证并完成配对");
+      setText(submitBtn, d.pairing ? "正在连接并配对…" : "验证并完成配对");
     }
   }
 
@@ -8949,7 +8965,7 @@
     slot.innerHTML = `
       <div class="peer-guard">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
-        <span>好友令牌与你的设备令牌物理隔离：对方仅能投递受控收件箱，<strong>0 终端 / 0 文件 / 0 记忆 / 0 直接派活权限</strong>，随时可单方一键暂停、移除或拉黑。</span>
+        <span>好友仅能往收件箱发消息，<strong>无法碰你的终端、文件、记忆，也不能直接派活</strong>；随时可一键暂停、移除或拉黑。</span>
       </div>
       ${!peers.length ? `
         <div class="peer-empty">
@@ -9020,7 +9036,7 @@
       d._mounted = true;
       $("#int-modal-icon").innerHTML = INT_ICONS.peers;
       $("#int-modal-title").textContent = "好友边牧 · 受控收件箱";
-      $("#int-modal-sub").textContent = "内网 / Tailscale 直连 · 窄权令牌存 secrets.json (0600)";
+      $("#int-modal-sub").textContent = "内网 / Tailscale 直连 · 令牌仅存本机";
 
       const tabsEl = $("#int-modal-tabs");
       if (tabsEl) {
@@ -9071,7 +9087,7 @@
               <div class="int-field">
                 <div class="int-field-label"><span>或直接粘贴好友邀请码</span></div>
                 <textarea id="peer-paste-input" class="mono" rows="3" style="word-break:break-all;font-size:12px" placeholder="collie-peer://v1/..." spellcheck="false">${esc(d.pasteRaw)}</textarea>
-                <p class="int-field-help">聊天软件仅传递 10 分钟一次性邀请码；双方长期令牌在后端直连握手时独立签发并写入 secrets.json。</p>
+                <p class="int-field-help">聊天软件里只发 10 分钟一次性邀请码；配对成功后，双方连接凭据仅保存在各自本机。</p>
               </div>
               <div id="peer-scan-parsed-slot" hidden></div>
               <div class="peer-parsed is-err" id="peer-pair-err-slot" role="alert" hidden></div>
@@ -13098,7 +13114,19 @@
         i++;
         continue;
       }
-      html += m.kind === "user" ? `<div class="msg user">${userText(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
+      if (m.kind === "user") {
+        const parts = parseUserParts(m.text);
+        const mediaHtml = renderUserMedia(parts.imgs);
+        if (mediaHtml && !parts.hasBubbleContent) {
+          html += `<div class="msg user is-media-only">${mediaHtml}</div>`;
+        } else if (mediaHtml) {
+          html += `<div class="mine-group">${mediaHtml}<div class="msg user">${parts.textHtml}${parts.attHtml}</div></div>`;
+        } else {
+          html += `<div class="msg user">${parts.textHtml}${parts.attHtml}</div>`;
+        }
+      } else {
+        html += `<div class="msg assistant">${md(m.text)}</div>`;
+      }
       cut();
       i++;
     }
@@ -14510,7 +14538,7 @@
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
-    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".mine") || triggerEl?.closest(".mine-group") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
     const seen = new Set(), items = [];
     const add = (it) => {
@@ -15014,7 +15042,7 @@
     grip.addEventListener("pointerup", up, { once: true });
   });
 
-  // ───────────────────────────── Floating White-Paper「小本本」(v0.2.94 minimalist card + compositor open/close & isolated 0fr->1fr expand motion)
+  // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」&「话题线」）
   const NOTES_WIDE_MIN = 1360;
   const NOTES_COMPACT_TASKS = 3;
   const NOTES_COMPACT_FILES = 2;
@@ -15022,18 +15050,42 @@
   const notesPane = $("#notes-pane");
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
+  const npTitleEl = $("#np-title");
+  const npDateEl = $("#np-date");
+  const npHeadEl = $("#np-head");
+  const npBodyEl = $("#np-body");
+  const npThreadsBodyEl = $("#np-threads-body");
+  const thPopWrap = $("#collie-threads-wrap");
+  const thHeadBtn = $("#collie-threads-btn");
+  const thHeadDot = $("#collie-threads-dot");
+  const thPopTabs = $("#collie-threads-tabs");
+  const thPopCntAll = $("#collie-threads-cnt-all");
+  const thPopCntActive = $("#collie-threads-cnt-active");
+  const thPopSub = $("#collie-threads-sub");
+  const thPopList = $("#collie-threads-list");
+  const normalizeSidePanePref = (v) => (v === "notes" || v === "threads" || v === "none") ? v : "";
+  let sidePanePref = (() => {
+    const saved = normalizeSidePanePref(store.get("sidePane", ""));
+    if (saved) return saved;
+    return store.get("notesClosed", false) ? "none" : "notes";
+  })();
+  let sidePaneOverlay = ""; // "" | "notes" | "threads" on < 1360px
+  let sidePaneActiveMode = sidePanePref === "threads" ? "threads" : "notes";
   let notebookData = null;
   let notebookFetching = false;
   let notebookRefreshTimer = 0;
   let notebookLastRefreshSig = "";
-  let notesUserClosed = !!store.get("notesClosed", false);
   let notesOpen = false;
   let notesExpanded = false;
-  let notesManualOverlay = false;
   let _lastCollieTopH = 0;
   let _lastNotebookRenderKey = "";
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
+  function persistSidePanePref(next) {
+    sidePanePref = normalizeSidePanePref(next) || "none";
+    store.set("sidePane", sidePanePref);
+    store.set("notesClosed", sidePanePref === "none");
+  }
   function syncCollieTopHeight(measuredH) {
     if (!notesPane) return;
     let h = typeof measuredH === "number" && measuredH > 0 ? Math.round(measuredH) : 0;
@@ -15079,7 +15131,8 @@
   }
   function syncNotebookExpanded() {
     if (!notesPane) return;
-    const showFull = notesExpanded || !isWideNotesViewport();
+    const isNotes = sidePaneActiveMode === "notes";
+    const showFull = isNotes && (notesExpanded || !isWideNotesViewport());
     notesPane.classList.toggle("is-expanded", showFull);
     notesPane.setAttribute("data-expanded", showFull ? "true" : "false");
     const moreFolds = notesPane.querySelectorAll?.(".np-fold-more") || [];
@@ -15228,33 +15281,50 @@
     let keepSlot = false;
     if (view === "collie" && !blockedByDrawer) {
       if (isWideNotesViewport()) {
-        notesManualOverlay = false;
-        keepSlot = !notesUserClosed;
+        sidePaneOverlay = "";
+        keepSlot = sidePanePref !== "none";
         wantOpen = keepSlot && !blockedByPopover;
+        if (sidePanePref !== "none") sidePaneActiveMode = sidePanePref;
       } else {
-        if (blockedByPopover) notesManualOverlay = false;
-        wantOpen = notesManualOverlay;
+        if (blockedByPopover) sidePaneOverlay = "";
+        wantOpen = !!sidePaneOverlay;
         keepSlot = wantOpen;
+        if (sidePaneOverlay) sidePaneActiveMode = sidePaneOverlay;
       }
     } else {
-      notesManualOverlay = false;
+      sidePaneOverlay = "";
     }
+    const isThreads = sidePaneActiveMode === "threads";
     notesOpen = wantOpen;
     col.classList.toggle("has-notes", keepSlot);
     document.body?.classList?.toggle("collie-has-notes", keepSlot);
     notesPane.classList.toggle("is-hidden", !wantOpen);
+    notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
+    notesPane.setAttribute("aria-label", isThreads ? "话题线" : "小本本");
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
     if ("inert" in notesPane) notesPane.inert = !wantOpen;
+    if (npTitleEl) setText(npTitleEl, isThreads ? "话题线" : "小本本");
+    if (npDateEl) npDateEl.hidden = isThreads;
+    if (thPopSub) thPopSub.hidden = !isThreads;
+    if (npBodyEl) npBodyEl.hidden = isThreads;
+    if (npThreadsBodyEl) npThreadsBodyEl.hidden = !isThreads;
+    if (npHeadEl) npHeadEl.title = isThreads ? "" : "点击切换紧凑或展开";
     if (notesBtn) {
-      notesBtn.classList.toggle("on", wantOpen);
-      notesBtn.setAttribute("aria-pressed", wantOpen ? "true" : "false");
+      const onNotes = wantOpen && !isThreads;
+      notesBtn.classList.toggle("on", onNotes);
+      notesBtn.setAttribute("aria-pressed", onNotes ? "true" : "false");
+    }
+    if (thHeadBtn) {
+      const onThreads = wantOpen && isThreads;
+      thHeadBtn.classList.toggle("on", onThreads);
+      thHeadBtn.setAttribute("aria-pressed", onThreads ? "true" : "false");
     }
     if (wantOpen) {
       if (!col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
-      renderNotebook();
-    } else {
-      syncNotebookExpanded();
+      if (isThreads) renderCollieThreadsMenu();
+      else renderNotebook();
     }
+    syncNotebookExpanded();
     if (immediate) {
       if (typeof requestAnimationFrame === "function") {
         _noNotesAnimRAF = requestAnimationFrame(() => {
@@ -15275,7 +15345,7 @@
       const r = await api("/api/super/notebook");
       if (r && typeof r === "object") {
         notebookData = r;
-        if (notesOpen) renderNotebook();
+        if (notesOpen && sidePaneActiveMode === "notes") renderNotebook();
       }
     } catch {
       // Quiet read-only failure: never disrupt main chat.
@@ -15284,48 +15354,36 @@
     }
   }
   function scheduleNotebookRefresh(sig = "") {
-    if (!notesOpen) return;
+    if (!notesOpen || sidePaneActiveMode !== "notes") return;
     if (sig && sig === notebookLastRefreshSig && notebookData) return;
     if (sig) notebookLastRefreshSig = sig;
     if (notebookRefreshTimer) return;
     notebookRefreshTimer = setTimeout(() => {
       notebookRefreshTimer = 0;
-      if (view === "collie" && notesOpen) loadNotebook(false);
+      if (view === "collie" && notesOpen && sidePaneActiveMode === "notes") loadNotebook(false);
     }, 2500);
   }
 
   notesBtn?.addEventListener("click", () => {
     if (view !== "collie") return;
-    if (notesOpen) {
-      if (isWideNotesViewport()) {
-        notesUserClosed = true;
-        store.set("notesClosed", true);
-      } else {
-        notesManualOverlay = false;
-      }
+    if (notesOpen && sidePaneActiveMode === "notes") {
+      if (isWideNotesViewport()) persistSidePanePref("none");
+      else sidePaneOverlay = "";
       syncNotebookVisibility();
     } else {
       closeAllColliePopovers();
       if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
       if ($("#app")?.classList?.contains("has-file")) closeFilePane();
-      if (isWideNotesViewport()) {
-        notesUserClosed = false;
-        store.set("notesClosed", false);
-      } else {
-        notesManualOverlay = true;
-      }
+      if (isWideNotesViewport()) persistSidePanePref("notes");
+      else sidePaneOverlay = "notes";
       loadNotebook(true);
       syncNotebookVisibility();
     }
   });
   const hideNotebookFromCard = (ev) => {
     ev?.stopPropagation?.();
-    if (isWideNotesViewport()) {
-      notesUserClosed = true;
-      store.set("notesClosed", true);
-    } else {
-      notesManualOverlay = false;
-    }
+    if (isWideNotesViewport()) persistSidePanePref("none");
+    else sidePaneOverlay = "";
     syncNotebookVisibility();
   };
   $("#np-close")?.addEventListener("click", hideNotebookFromCard);
@@ -15333,12 +15391,13 @@
   $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("#np-close, #np-back, #np-handle")) return;
+    if (ev.target.closest("#np-close, #np-back, #np-handle, #np-threads-body")) return;
+    if (sidePaneActiveMode !== "notes") return;
     const fBtn = ev.target.closest("[data-np-file]");
     if (fBtn) {
       ev.preventDefault();
       const fp = fBtn.dataset.npFile;
-      if (!isWideNotesViewport()) notesManualOverlay = false;
+      if (!isWideNotesViewport()) sidePaneOverlay = "";
       if (fp) openFile(fp);
       return;
     }
@@ -15348,7 +15407,7 @@
       const entryId = tBtn.dataset.npEntry || "";
       const worker = tBtn.dataset.npWorker || "";
       if (!isWideNotesViewport()) {
-        notesManualOverlay = false;
+        sidePaneOverlay = "";
         syncNotebookVisibility();
       }
       if (entryId) {
@@ -15378,9 +15437,9 @@
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && notesOpen && !document.querySelector("dialog[open]")) {
       if (!isWideNotesViewport()) {
-        notesManualOverlay = false;
+        sidePaneOverlay = "";
         syncNotebookVisibility();
-      } else if (notesExpanded) {
+      } else if (sidePaneActiveMode === "notes" && notesExpanded) {
         setNotesExpanded(false);
       }
     }
@@ -15400,16 +15459,6 @@
   });
 
   // ───────────────────────────── natural reply-chain thread drawer
-  const thPopWrap = $("#collie-threads-wrap");
-  const thHeadBtn = $("#collie-threads-btn");
-  const thHeadDot = $("#collie-threads-dot");
-  const thHeadCnt = $("#collie-threads-cnt");
-  const thPop = $("#collie-threads-pop");
-  const thPopTabs = $("#collie-threads-tabs");
-  const thPopCntAll = $("#collie-threads-cnt-all");
-  const thPopCntActive = $("#collie-threads-cnt-active");
-  const thPopSub = $("#collie-threads-sub");
-  const thPopList = $("#collie-threads-list");
   let thPopFilter = "all"; // "all" | "active"
   let thPopSig = "";
 
@@ -15476,15 +15525,8 @@
       renderCollieThreadsMenu(threadInfo || computeReplyThreads(entries), entries);
     }
   }
-  function closeCollieThreadsPop(opts = {}) {
-    const wasOpen = thPopOpen || (!!thPop && !thPop.hidden);
-    thPopOpen = false;
-    if (thPop) {
-      thPop.hidden = true;
-      thPop.style.top = "";
-    }
-    thHeadBtn?.setAttribute("aria-expanded", "false");
-    if (wasOpen && opts.sync !== false) syncNotebookVisibility();
+  function closeCollieThreadsPop() {
+    // Threads now live inside the unified #notes-pane side card; no standalone dropdown popover exists.
   }
   function setCollieThreadsFilter(nextFilter) {
     const f = nextFilter === "active" ? "active" : "all";
@@ -15496,13 +15538,13 @@
   let _thMenuRowsCache = { key: "", allRows: [], activeRows: [] };
   let _thPopInputSig = "";
   function renderCollieThreadsMenu(threadInfo, allEntries) {
-    if (!thPopWrap || !thHeadBtn || !thHeadCnt || !thPop || !thPopList) return;
+    if (!thPopWrap || !thHeadBtn || !thPopList) return;
     const entries = allEntries || chatEntries();
     const info = threadInfo || computeReplyThreads(entries);
     const pendList = activePending();
     const pendKey = `${sup.hasPending ? 1 : 0}:${pendList.map((p) => p.id).join(",")}:${dismissedLocal.size ? [...dismissedLocal].join(",") : ""}`;
     const rowsKey = `${entriesFingerprint(entries)}|${workerStateFingerprint()}|${pendKey}`;
-    const fullInputSig = `${rowsKey}|${thPopFilter}|${activeThreadRoot || ""}|${dayBounds()}`;
+    const fullInputSig = `${rowsKey}|${thPopFilter}|${activeThreadRoot || ""}|${sidePanePref}|${sidePaneOverlay}|${dayBounds()}`;
     if (fullInputSig === _thPopInputSig) return;
     _thPopInputSig = fullInputSig;
 
@@ -15540,15 +15582,14 @@
       activeRows = allRows.filter((r) => r.inProgress);
       _thMenuRowsCache = { key: rowsKey, allRows, activeRows };
     }
-    if (!allRows.length) {
+    const keepThreadsVisible = sidePanePref === "threads" || sidePaneOverlay === "threads";
+    if (!allRows.length && !keepThreadsVisible) {
       thPopWrap.hidden = true;
-      closeCollieThreadsPop();
       thPopSig = "";
       return;
     }
     const pendingRowsCount = allRows.filter((r) => r.pending).length;
     thPopWrap.hidden = false;
-    setText(thHeadCnt, String(allRows.length));
     thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
     thHeadBtn.classList.toggle("has-pending", pendingRowsCount > 0);
     if (thHeadDot) thHeadDot.hidden = pendingRowsCount === 0;
@@ -15567,7 +15608,7 @@
       setText(thPopSub, filtered.length > shown.length
         ? `前 ${shown.length} / ${filtered.length} 条`
         : pendingRowsCount > 0 ? `${pendingRowsCount} 条待处理`
-        : filtered.length > 0 ? "按最近活跃" : "");
+        : filtered.length > 0 ? `${filtered.length} 条` : "");
     }
     const sig = JSON.stringify([
       thPopFilter,
@@ -15624,43 +15665,30 @@
   });
   thHeadBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (!thPop) return;
-    const willOpen = !thPopOpen;
-    closeCollieMenus();
-    if (willOpen) {
-      if (superSearchOpen) closeSuperSearchFn?.(false);
-      const entries = chatEntries();
-      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
-      if (narrow()) {
-        const hr = $("#v-collie .d-head")?.getBoundingClientRect?.();
-        thPop.style.top = hr && hr.bottom > 0 ? Math.round(hr.bottom + 6) + "px" : "";
-      } else {
-        thPop.style.top = "";
-      }
-      thPopOpen = true;
-      thPop.hidden = false;
-      thHeadBtn.setAttribute("aria-expanded", "true");
+    if (view !== "collie") return;
+    if (notesOpen && sidePaneActiveMode === "threads") {
+      if (isWideNotesViewport()) persistSidePanePref("none");
+      else sidePaneOverlay = "";
       syncNotebookVisibility();
-    } else {
-      closeCollieThreadsPop();
+      return;
     }
+    closeAllColliePopovers();
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
+    if ($("#app")?.classList?.contains("has-file")) closeFilePane();
+    if (isWideNotesViewport()) persistSidePanePref("threads");
+    else sidePaneOverlay = "threads";
+    const entries = chatEntries();
+    renderCollieThreadsMenu(computeReplyThreads(entries), entries);
+    syncNotebookVisibility();
   });
   thPopList?.addEventListener("click", (e) => {
     const item = e.target.closest("[data-th-pick]");
     if (!item) return;
+    e.stopPropagation();
     const rootId = item.dataset.thPick;
     const latestId = item.dataset.thLatest || "";
-    closeCollieThreadsPop();
+    if (!isWideNotesViewport()) sidePaneOverlay = "";
     if (rootId) openThreadDrawer(rootId, latestId, latestId);
-  });
-  document.addEventListener("click", (e) => {
-    if (thPopOpen && !e.target.closest("#collie-threads-wrap")) closeCollieThreadsPop();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && thPopOpen) {
-      closeCollieThreadsPop();
-      thHeadBtn?.focus({ preventScroll: true });
-    }
   });
 
   const tdDrawer = $("#thread-drawer");
@@ -16555,7 +16583,16 @@
     tdDrawer.style.transform = "";
     if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = false; }
     tdDrawer.setAttribute("aria-hidden", "false");
+    $("#v-collie")?.classList?.remove("is-main-focused");
     appEl.classList.add("has-thread");
+    if (innerWidth > 1000) {
+      // Quietly hide the main-stream thinking row and clear left focus while side-by-side drawer takes focus.
+      const wk = $("#super-working"), st = $("#router-status");
+      if (wk) wk.hidden = true;
+      if (st) st.hidden = false;
+      const ae = document.activeElement;
+      if (ae && $("#v-collie")?.contains?.(ae) && typeof ae.blur === "function") ae.blur();
+    }
     syncNotebookVisibility();
     syncActiveThreadMarks(info);
     const hasRestore = typeof opts.restoreScrollTop === "number";
@@ -16591,6 +16628,7 @@
     if (tdScrim) tdScrim.style.opacity = "";
     appEl.classList.remove("has-thread");
     appEl.classList.remove("thread-wide");
+    $("#v-collie")?.classList?.remove("is-main-focused");
     syncThreadWideUI();
     syncNotebookVisibility();
     tdDrawer.setAttribute("aria-hidden", "true");
@@ -16605,6 +16643,9 @@
       syncActiveThreadMarks();
       if (lockSnap) {
         beginCollieLayoutLock(lockSnap, { trackTransition: hadThread && innerWidth > 1000 && !opts.immediate });
+      }
+      if (hadThread && innerWidth > 1000) {
+        renderSuper(lockSnap ? { restore: lockSnap } : undefined);
       }
     }
   }
@@ -16621,6 +16662,12 @@
     tdWidenBtn?.addEventListener("click", () => {
       if (innerWidth <= 1000 || !activeThreadRoot) return;
       setThreadWide(!threadWide);
+    });
+    $("#v-collie")?.addEventListener("pointerdown", () => {
+      if (isDesktopThreadSideBySide()) $("#v-collie")?.classList?.add("is-main-focused");
+    });
+    tdDrawer.addEventListener("pointerdown", () => {
+      $("#v-collie")?.classList?.remove("is-main-focused");
     });
     $("#v-collie")?.addEventListener("click", (e) => {
       if (!activeThreadRoot || !threadWide || innerWidth <= 1000) return;
@@ -17935,6 +17982,39 @@
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
   const linkUserFiles = (escaped) => escaped.replace(FILE_RE, (_, pre, p) => `${pre}<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`);
+  function parseUserParts(raw) {
+    const t = String(raw || "");
+    const i = t.lastIndexOf("附件：\n");
+    let bodyRaw = i >= 0 ? t.slice(0, i).trimEnd() : t;
+    const imgs = [];
+    const rest = [];
+    if (bodyRaw.includes("[image:")) {
+      bodyRaw = bodyRaw.replace(IMG_TOKEN, (_, p) => {
+        if (p) imgs.push(p);
+        return "";
+      }).replace(/^\n+|\n+$/g, "");
+    }
+    if (i >= 0) {
+      const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
+      for (const p of paths) {
+        if (IMG_EXT.test(p)) imgs.push(p);
+        else rest.push(p);
+      }
+    }
+    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
+    const textHtml = bodyRaw ? linkUserFiles(esc(bodyRaw)) : "";
+    const attHtml = rest.length
+      ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>`
+      : "";
+    return { imgs, textHtml, attHtml, hasBubbleContent: !!(textHtml || attHtml) };
+  }
+  function renderUserMedia(imgs) {
+    if (!imgs.length) return "";
+    const gridCls = imgs.length === 1 ? "is-single"
+      : (imgs.length === 2 || imgs.length === 4) ? "is-grid-2"
+      : "is-grid-3";
+    return `<div class="mine-media ${gridCls}" data-count="${imgs.length}"><span class="thumbs">${imgs.map(thumbBtn).join("")}</span></div>`;
+  }
   function userText(t) {
     const i = t.lastIndexOf("附件：\n");
     if (i < 0) return withImages(linkUserFiles(esc(t)));

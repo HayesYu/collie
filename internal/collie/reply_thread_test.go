@@ -1163,9 +1163,8 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.setCollieThreadsFilter("all");
   T.renderSuper({ force: true });
 
-  assert.equal(getEl("#collie-threads-cnt").textContent, "4", "popover includes >=3 threads + active-agent + pending threads, excluding casual 1-liner q40");
   assert.equal(getEl("#collie-threads-dot").hidden, false, "threads trigger shows pending dot when pending > 0");
-  assert.equal(getEl("#collie-threads-cnt-all").textContent, "4");
+  assert.equal(getEl("#collie-threads-cnt-all").textContent, "4", "threads side card includes >=3 threads + active-agent + pending threads, excluding casual 1-liner q40");
   assert.equal(getEl("#collie-threads-cnt-active").textContent, "3");
   const allListHtml = getEl("#collie-threads-list").innerHTML;
   assert.ok(allListHtml.includes('data-th-pick="q1"') && allListHtml.includes("1 个在跑"), "T1 shows running agent count in meta");
@@ -1193,7 +1192,7 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
   T.renderSuper({ force: true });
   assert.equal(getEl("#collie-threads-cnt-active").textContent, "0");
   assert.equal(getEl("#collie-threads-dot").hidden, true, "pending dot hides when pending clears");
-  assert.equal(getEl("#collie-threads-cnt").textContent, "2", "threads badge falls back to remaining >=3-msg thread count when pending and active workers clear");
+  assert.equal(getEl("#collie-threads-cnt-all").textContent, "2", "threads count falls back to remaining >=3-msg thread count when pending and active workers clear");
   assert.ok(getEl("#collie-threads-list").innerHTML.includes("当前没有进行中的话题"), "empty state rendered when 0 active threads");
   T.setCollieThreadsFilter("all");
 

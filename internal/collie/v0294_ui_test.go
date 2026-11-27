@@ -190,14 +190,19 @@ assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "noteb
 assert.equal(getEl("#v-collie").classList.contains("has-notes"), true);
 assert.equal(doc.body.classList.contains("collie-has-notes"), true, "body.collie-has-notes must sync with notebook slot");
 
-// Open threads popover -> notebook hides smoothly, has-notes slot stays stable
+// Switch to threads in-place inside unified #notes-pane -> stays open in threads mode, clicking again closes, clicking 小本本 restores notes
 getEl("#collie-threads-btn").dispatch("click");
-assert.equal(getEl("#collie-threads-pop").hidden, false);
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "opening threads popover must hide floating notebook");
-assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot must stay stable when threads popover opens");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "switching to threads keeps unified side card open");
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads");
+assert.equal(getEl("#np-threads-body").hidden, false);
+assert.equal(getEl("#np-body").hidden, true);
+assert.equal(getEl("#v-collie").classList.contains("has-notes"), true, "chat slot stays stable when switching side card modes");
 getEl("#collie-threads-btn").dispatch("click");
-assert.equal(getEl("#collie-threads-pop").hidden, true);
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "closing threads popover must restore floating notebook");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true, "clicking active threads button closes unified side card");
+assert.equal(getEl("#v-collie").classList.contains("has-notes"), false, "closing side card resets chat slot");
+getEl("#open-notes-btn").dispatch("click");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "clicking 小本本 reopens unified side card in notes mode");
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
 
 // Open search -> notebook hides; close search -> notebook restores
 getEl("#super-search-btn").dispatch("click");

@@ -37,7 +37,6 @@ function cssBlock(selector) {
 for (const sel of [
   ".unread-sep",
   ".th-head-btn.has-active",
-  ".th-head-btn.has-active .th-head-cnt",
   ".thread-entry.active",
   ".thread-entry.active .te-ico",
   ".thread-entry.active .te-count",

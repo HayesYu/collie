@@ -184,8 +184,8 @@ assert.ok(cssSrc.includes(".side.is-scroll-paused .dot::after"), "scroll-pause g
 assert.ok(!/\.dot\.idle\s*\{[^}]*animation:/.test(cssSrc), ".dot.idle must be calm static with zero infinite animation");
 assert.ok(cssSrc.includes("wait-halo 2.8s ease-in-out infinite"), "preserve active wait-halo animation contract");
 
-// 1b) v0.3.1 Independent plain-text 话题线 & 小本本 triggers, minimalist v0.2.94 notebook + 2 motion sets, clean drawer/header/integrations
-assert.ok(htmlSrc.includes('id="collie-threads-btn"') && htmlSrc.includes('id="collie-threads-pop"'), "independent top-bar threads popover must be restored");
+// 1b) v0.3.2 Symmetrical plain-text 话题线 & 小本本 triggers sharing unified right floating card, peer modal anti-clip + human copy, desktop drawer main-stream calm & detached user media cards
+assert.ok(htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"') && htmlSrc.includes('id="np-threads-body"'), "threads list must live inside unified #notes-pane without standalone #collie-threads-pop dropdown");
 assert.ok(!htmlSrc.includes('id="dk-tablist"') && !htmlSrc.includes('id="dk-tab-notes"') && !htmlSrc.includes('id="dk-tab-threads"'), "notebook card must drop dual-tab bar and restore pure v0.2.94 header");
 assert.ok(!htmlSrc.includes("展开详情"), "notebook card must never include a bottom 展开详情 text bar");
 assert.ok(htmlSrc.includes('id="np-tasks-more"') && htmlSrc.includes('id="np-files-more"') && htmlSrc.includes('id="np-timers-more"'), "notebook must restore +N overflow pills");
@@ -193,7 +193,7 @@ const notesBtnHtml = htmlSrc.match(/<button[^>]*id="open-notes-btn"[\s\S]*?<\/bu
 const thBtnHtml = htmlSrc.match(/<button[^>]*id="collie-threads-btn"[\s\S]*?<\/button>/)?.[0] || "";
 assert.ok(notesBtnHtml.includes("小本本") && !notesBtnHtml.includes("<svg"), "notebook trigger must be plain-text 小本本 button without SVG icon");
 assert.ok(thBtnHtml.includes("话题线") && !thBtnHtml.includes("<svg"), "threads trigger must be plain-text 话题线 button without SVG icon");
-assert.ok(thBtnHtml.includes('id="collie-threads-dot"') && thBtnHtml.includes('id="collie-threads-cnt"'), "threads trigger must expose subtle pending dot and count");
+assert.ok(thBtnHtml.includes('id="collie-threads-dot"') && !thBtnHtml.includes('id="collie-threads-cnt"'), "threads trigger must expose subtle pending dot without trailing number badge");
 assert.ok(!htmlSrc.includes('id="td-back"'), "thread focus drawer header must omit redundant ← 话题线 back button");
 assert.ok(!cssSrc.includes(".collie-top::after") && !cssSrc.includes(".collie-top.is-scrolled"), ".collie-top must stay seamless without bottom hairline or fog veil");
 assert.ok(!appSrc.includes("+ 添加好友边牧"), "integrations top status row must not render redundant + 添加好友边牧 CTA button");
@@ -203,6 +203,11 @@ assert.ok(cssSrc.includes("transform: translate3d(var(--notes-shift), 0, 0)"), "
 assert.ok(cssSrc.includes(".np-fold") && cssSrc.includes("grid-template-rows: 0fr") && cssSrc.includes("grid-template-rows: 1fr"), "notebook compact<->expand must use isolated 0fr->1fr grid-row disclosure");
 assert.ok(cssSrc.includes("#v-collie.is-parked") && cssSrc.includes("contain: strict"), "#v-collie must use parked layer with strict containment instead of display:none churn");
 assert.ok(cssSrc.includes(".peer-qr-card") && cssSrc.includes("min-height: 214px"), "peer QR card must keep stable min-height to prevent tab/mode flicker");
+assert.ok(cssSrc.includes('dialog.int-sheet[data-modal-kind="peers"]') && cssSrc.includes("max-height: min(620px, calc(100dvh - 32px))") && !cssSrc.includes("min-height: min(620px, calc(var(--vh) - 180px))"), "peer modal must enforce max-height: min(620px, calc(100dvh - 32px)) and flex scroll without clipping footer");
+assert.ok(appSrc.includes("内网 / Tailscale 直连 · 令牌仅存本机") && !appSrc.includes("窄权令牌存 secrets.json"), "peer modal subtitle must use plain human language without secrets.json jargon");
+assert.ok(appSrc.includes("先帮我查清，草稿给我审") && appSrc.includes("只留个便签，不自动回复") && appSrc.includes("查完给方案，批准再干活"), "peer reception modes must use plain human language");
+assert.ok(cssSrc.includes(".app.has-thread #v-collie .viewer") && cssSrc.includes(".is-main-focused"), "desktop side-by-side thread drawer must gently dim left main stream and restore on hover/focus/click");
+assert.ok(cssSrc.includes(".mine-media") && cssSrc.includes(".msg.user.is-media-only"), "user image messages must render detached rounded media cards above compact text bubble or standalone without dark box");
 assert.ok(appSrc.includes("function syncPeerModalTabs") && appSrc.includes("function patchPeerQRCard") && appSrc.includes("invitesByMode"), "peer modal must mount once, cache invites, and patch in-place");
 assert.ok(appSrc.includes("async function smartScrollCollie") && appSrc.includes("function syncSideActive") && appSrc.includes("function setCollieParked"), "smartScrollCollie, O(1) syncSideActive, and parked #v-collie must exist");
 
@@ -397,8 +402,8 @@ T.syncNotebookVisibility();
 T.renderCollieThreadsMenu();
 assert.equal(getEl("#collie-threads-wrap").hidden, false);
 assert.equal(getEl("#collie-threads-dot").hidden, false, "threads button shows pending dot when pending > 0");
-assert.equal(getEl("#collie-threads-cnt").textContent, "1");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
 assert.equal(T.getNotesExpanded(), false);
 
 // Expand via blank click, collapse via Escape
@@ -409,18 +414,27 @@ doc.dispatch("keydown", { key: "Escape" });
 assert.equal(T.getNotesExpanded(), false, "Escape collapses expanded floating notebook back to compact");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape from expanded stays open in compact state");
 
-// Open threads popover -> notebook hides smoothly; Escape closes popover -> notebook restores
+// Switch side card in-place to 话题线 -> persists "threads"; click again -> closes & persists "none"; click 小本本 -> restores "notes"
 getEl("#collie-threads-btn").dispatch("click");
-assert.equal(getEl("#collie-threads-pop").hidden, false);
-assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
-doc.dispatch("keydown", { key: "Escape" });
-assert.equal(getEl("#collie-threads-pop").hidden, true);
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads");
+assert.equal(getEl("#np-threads-body").hidden, false);
+assert.equal(getEl("#np-body").hidden, true);
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "threads", "switching to threads persists collie.sidePane = threads");
+getEl("#collie-threads-btn").dispatch("click");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
+assert.equal(getEl("#notes-pane").inert, true);
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "none", "closing side card persists collie.sidePane = none");
+getEl("#open-notes-btn").dispatch("click");
+assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "notes", "reopening notebook persists collie.sidePane = notes");
 
-// Close & reopen notebook via plain-text 小本本 trigger
+// Close & reopen notebook via card close × button
 getEl("#np-close").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
 assert.equal(getEl("#notes-pane").inert, true);
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "none");
 getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 assert.equal(getEl("#notes-pane").inert, false);

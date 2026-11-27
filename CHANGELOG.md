@@ -4,6 +4,27 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.2 (2026-11-27)
+
+### Highlights
+
+- **Unified Right Minimalist Side Card for「小本本」&「话题线」+ Symmetrical Top Bar (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Replaced the standalone threads dropdown popover (`#collie-threads-pop`) with the exact same minimalist white-paper right floating card used by「小本本」— sharing identical placement, typography, shadows, mobile/tablet drawers, and GPU `translate3d` synchronized main-chat yield.
+  - Kept two symmetrical pure-text top-bar toggles (`话题线` and `小本本`, removing the trailing count badge from `话题线` while keeping only a subtle dot when unresolved items exist): defaults to「小本本」, switches smoothly in-place between「小本本」and「话题线」, collapses cleanly to neither on second click or `×`, and persists the user's last choice (`collie.sidePane`: `notes` / `threads` / `none`).
+- **Peer Hub Modal Anti-Clipping Layout & Plain-Language Reception Modes (`web/{app.css,app.js}`, `internal/collie/peer.go`, `docs/demo/`)**:
+  - Fixed bottom-bar clipping on shorter screens (such as iPad landscape `1024×768`) by constraining `dialog.int-sheet[data-modal-kind="peers"]` to `max-height: min(620px, calc(100dvh - 32px))` with a fixed header/tabs/footer flex column and scrollable `flex: 1; min-height: 0; overflow-y: auto` body—guaranteeing zero footer truncation and zero tab-switch height flicker across desktop, iPad, and mobile.
+  - Replaced engineering jargon with plain-language copy in the modal subtitle (`内网 / Tailscale 直连 · 令牌仅存本机`), invitation notes, and the three reception modes (`先帮我查清，草稿给我审`, `只留个便签，不自动回复`, `查完给方案，批准再干活`).
+- **Calm Left Main Stream During Desktop Side-by-Side Thread Focus (`web/{app.css,app.js}`)**:
+  - When replying inside the side-by-side desktop thread drawer (`> 1000px`), froze the left main conversation's scroll position, suppressed mirrored pop-in and `Collie 在想…` thinking-row animations in the left stream, and softly receded the left stream into the background (restoring full clarity immediately on hover, focus, click, or drawer close).
+- **Modern Detached Rounded User Image Cards (`web/{app.css,app.js}`, `docs/demo/`)**:
+  - Separated attached images out of the dark user text bubble into right-aligned rounded media cards (subtle 1px border + soft shadow, 6px gap above the compact text bubble, compact 2/3-column grid for multiple images, and pure standalone rounded cards with zero dark background wrapper for image-only messages), preserving click-to-zoom lightbox gallery navigation.
+
+### Client / API Changes
+
+- None.
+
+---
+
 ## v0.3.1 (2026-11-27)
 
 ### Highlights

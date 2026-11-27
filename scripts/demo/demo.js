@@ -1048,6 +1048,17 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/super/timers") {
       if (method === "POST") timers.push({ id: "tm" + (++seq), spec: body.spec, text: body.text, target: body.target, enabled: true, next_run: later(60), owner: "you" });
+      const active = timers.filter((t) => t.enabled);
+      const ended = timers.filter((t) => !t.enabled);
+      if (q.get("ended_only") === "1") {
+        const off = Math.max(0, Number(q.get("ended_offset")) || 0);
+        const lim = Math.max(1, Math.min(200, Number(q.get("ended_limit")) || 40));
+        return json({ ended: ended.slice(off, off + lim), active_count: active.length, ended_count: ended.length, ended_offset: off, ended_limit: lim, ended_has_more: off + lim < ended.length });
+      }
+      if (q.has("ended_limit")) {
+        const lim = Math.max(0, Math.min(200, Number(q.get("ended_limit")) || 0));
+        return json({ timers: [...active, ...ended.slice(0, lim)], active_count: active.length, ended_count: ended.length, ended_has_more: lim < ended.length });
+      }
       return json({ timers });
     }
     const delTimerM = /^\/api\/super\/timers\/([^/]+)\/delete$/.exec(p);
@@ -1056,6 +1067,37 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       if (idx >= 0) timers.splice(idx, 1);
       return json({ ok: true });
     }
+    if (p === "/api/super/memory/file") {
+      const reqPath = q.get("path") || "";
+      if (reqPath.startsWith("dreams/")) {
+        const name = reqPath.slice("dreams/".length);
+        const d = (memory.dreams || []).find((x) => x.name === name);
+        return d ? json({ file: d }) : json({ error: "not found" }, 404);
+      }
+      const f = (memory.files || []).find((x) => x.name === reqPath);
+      return f ? json({ file: f }) : json({ error: "not found" }, 404);
+    }
+    if (p === "/api/super/memory/done") {
+      const done = (memory.files || []).filter((x) => x.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
+      const off = Math.max(0, Number(q.get("offset")) || 0);
+      const lim = Math.max(1, Math.min(200, Number(q.get("limit")) || 60));
+      const firstLine = (t) => String(t || "").split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || "";
+      const slice = done.slice(off, off + lim).map((f) => ({ name: f.name, text: "", preview: firstLine(f.text), summary_only: true, size: f.size, mod: f.mod }));
+      return json({ files: slice, total: done.length, offset: off, limit: lim, has_more: off + lim < done.length });
+    }
+    if (p === "/api/super/memory/search") {
+      const terms = (q.get("q") || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const lim = Math.max(1, Math.min(200, Number(q.get("limit")) || 60));
+      const hitOf = (txt) => {
+        const low = String(txt || "").toLowerCase();
+        if (!terms.length || !terms.every((t) => low.includes(t))) return 0;
+        return terms.reduce((s, t) => s + Math.max(1, low.split(t).length - 1), 0);
+      };
+      let totalHits = 0;
+      const mFiles = (memory.files || []).filter((f) => { const h = hitOf(f.name + "\n" + f.text); if (h) totalHits += h; return h > 0; });
+      const mDreams = (memory.dreams || []).filter((d) => { const h = hitOf("dreams/" + d.name + "\n" + d.text); if (h) totalHits += h; return h > 0; });
+      return json({ query: q.get("q") || "", files: mFiles.slice(0, lim), dreams: mDreams.slice(0, lim), total_files: mFiles.length + mDreams.length, total_hits: totalHits, truncated: mFiles.length + mDreams.length > lim });
+    }
     if (p === "/api/super/memory") {
       if (method === "POST" && body.path) {
         const f = memory.files.find((x) => x.name === body.path);
@@ -1063,6 +1105,19 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
         memory.up_front = memory.files.filter((x) => x.name === "instructions.md" || x.name === "notes/index.md" || /^tasks\/[^/]+\.md$/.test(x.name)).reduce((s, x) => s + x.size, 0);
         memory.messages = memory.files.filter((x) => x.name === "messages.md").reduce((s, x) => s + x.size, 0);
         memory.loaded = memory.up_front + memory.messages;
+      }
+      if (q.get("summary") === "1") {
+        const includeDone = q.get("include_done") !== "0";
+        const firstLine = (t) => String(t || "").split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || "";
+        const isUpFront = (n) => n === "instructions.md" || n === "notes/index.md" || n === "messages.md" || /^tasks\/[^/]+\.md$/.test(n);
+        const doneCount = (memory.files || []).filter((f) => f.name.startsWith("tasks/done/")).length;
+        const files = (memory.files || []).filter((f) => includeDone || !f.name.startsWith("tasks/done/")).map((f) => (
+          isUpFront(f.name) || f.legacy ? f : { name: f.name, text: "", preview: firstLine(f.text), summary_only: true, size: f.size, mod: f.mod }
+        ));
+        const dreams = (memory.dreams || []).map((d, i) => (
+          i === 0 ? d : { name: d.name, text: "", preview: firstLine(d.text), summary_only: true, size: d.size, mod: d.mod }
+        ));
+        return json({ ...memory, files, dreams, done_count: doneCount, summary_mode: true });
       }
       return json(memory);
     }

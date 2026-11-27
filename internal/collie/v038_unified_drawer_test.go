@@ -57,8 +57,8 @@ assert.ok(!/\.ss-hit\.active\s*\{[^}]*border-left:\s*3px/.test(cssSrc), "search 
 assert.ok(cssSrc.includes("#v-collie .say:hover, #v-collie .mine:hover,\n#v-collie .say:focus-within, #v-collie .mine:focus-within { z-index: 4; }"), "hovered/focused message row must elevate z-index above next sibling stacking context");
 assert.ok(cssSrc.includes("#v-collie .mine .msg-acts { justify-content: flex-end; height: 26px; padding-top: 2px; margin: 0 -6px -26px 0; }"), ".mine .msg-acts must replace margin-top gap with padding-top for seamless hover bridge");
 
-// 1g) Desktop 54px Icon Rail, flat same-plane zero-shadow transitions, unified sidebar topic-icon alignment (#t12760, #t12764, #t12772)
-assert.ok(htmlSrc.includes('id="side-collapse-btn"') && htmlSrc.includes('id="side-expand-btn"') && htmlSrc.includes('id="side-rail"') && htmlSrc.includes('id="rail-live"') && htmlSrc.includes('id="rail-peers"'), "desktop 54px icon rail controls must exist");
+// 1g) Desktop 54px Icon Rail, merged Collie brand toggle, flat same-plane zero-shadow transitions, unified sidebar topic-icon alignment (#t12760, #t12764, #t12772, #t12988)
+assert.ok(htmlSrc.includes('id="side-toggle-btn"') && !htmlSrc.includes('id="side-collapse-btn"') && htmlSrc.includes('id="side-expand-btn"') && htmlSrc.includes('id="side-rail"') && htmlSrc.includes('id="rail-live"') && htmlSrc.includes('id="rail-peers"'), "desktop 54px icon rail and merged top-left Collie toggle controls must exist");
 assert.ok(cssSrc.includes(".app:not(.side-collapsed) #v-collie #crew { display: none; }"), "desktop (>1000px) hides duplicate top #crew strip when left sidebar is expanded");
 assert.ok(cssSrc.includes(".app > .main { grid-column: 2; grid-row: 1; }"), "desktop .main must stay pinned to grid column 2");
 assert.ok(cssSrc.includes(".app.side-collapsed { --side-w: 54px; }") && cssSrc.includes(".app.is-side-opening { --side-w: 54px; }"), "desktop left sidebar collapses to 54px icon rail instead of 0px");

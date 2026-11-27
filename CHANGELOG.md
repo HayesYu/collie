@@ -4,6 +4,38 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.10 (2026-11-28)
+
+### Highlights
+
+- **Zero-Flicker Sidebar/Worker Switching, Dark-Mode Anti-White-Flash & 60 FPS GPU Glides (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - **Worker Switching & Spinner Stability**: Eliminated `#worker-drawer` blank opacity blink on in-drawer worker switches (removed `sd-swap` fade when switching between workers, kept the previous message list visible with a 140ms delayed skeleton fallback, made re-clicking the active worker a no-op, and upgraded `#live-list` / `#rail-live` / `#attention` / `#shells` to keyed in-place DOM patching so `.active` highlights and spinning indicators never reset). Removed main-chat scroll-pause freezing (`is-scroll-paused`) so working spinners glide continuously during scrolling while keeping background-tab power-saving (`html.is-bg`).
+  - **Dark-Mode Attached Image Anti-White-Flash**: Replaced all hardcoded light `#f6f6f4` image-container fills with theme-adaptive `--img-bg` (`#1b1b1f` in dark mode / `#f4f4f2` in light mode) and added a `decodedThumbs` cache with `decode()`/`load` reveal guards so dark-mode thumbnails never flash white and cached redraws appear instantaneously.
+  - **60 FPS Left/Right Drawer Glides & Zero Rail Disappearance**: Added scrollbar-gutter-aware `threadMetrics` to eliminate Frame-0 reverse jumps and Frame-N double reflows across desktop drawer open/widen/narrow/close transitions, added GPU-composited `.is-drawer-narrowing` staging for returning from 50/50 split to default width, suppressed mid-glide `ResizeObserver` thrashing via `isLayoutGliding()`, and kept the 54px `.side-rail` dual-mounted and counter-translated throughout collapse/expand so rail icons stay visible on every frame.
+  - **Merged Top-Left Collie Toggle, Unified 4-Icon Footer & Restrained Polish**: Merged the desktop sidebar collapse/expand control directly into the top-left Collie icon (`#side-toggle-btn` / `#side-expand-btn`, `0.00px` coordinate delta across expanded ↔ collapsed, cross-fading to a linear sidebar icon on hover); unified the expanded `.side-foot` into the exact same 4-icon strip as the 54px rail (`Automation / Peer Collies / Devices / Preferences`) and dropped the redundant sidebar Automation text row; choreographed soft GPU handoff between the floating notebook (`#notes-pane`) and right drawers with top-bar「小本本」pill smoothly fading out while the card is open (`0px` header icon shift); removed the redundant clap button inside `#thread-drawer` while keeping main-chat claps intact.
+  - **Desktop Worker Drawer Routing, macOS Clipboard Image Paste, File-Preview & Standalone PWA Link Actions**: Routed all desktop main-chat and thread-drawer worker links (including inline backtick worker mentions) directly into the right `#worker-drawer` without jumping full-screen; hardened macOS clipboard image paste (inspecting `file._itemType`, synchronous `arrayBuffer()` read initiation, UUID/hash cache matching, TIFF sniffing with optional canvas PNG transcoding, `text/html` `data:image/` fallback in `navigator.clipboard.read()`, and actionable non-HTTPS hints); fixed `#file-view` / `#rv-copy` copy buttons in HTML sandbox and CSV table modes (binding `commandfor` to persistent `fv-body`/`rv-body` with iframe-focus and plain-HTTP `execCommand` fallbacks + toast confirmation), fixed `#fv-wide` new-tab opening across regular browsers, Chrome PWA standalone windows, and remote hubs, and explicitly routed external `http(s)://` link clicks via `window.open` (with opener severing and clipboard-copy fallback if popup-blocked) in desktop standalone/app-window PWA mode so links in chat messages always open reliably.
+- **Instant Memory & Automation Secondary Pages + Zero-Flash Integrations Switching (`internal/collie/{memapi.go,superapi.go,super.go,memory_io.go,peer_api.go}`, `web/{app.js,app.css}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - **Memory Page (`记忆`)**: Added lightweight summary mode (`GET /api/super/memory?summary=1&include_done=0`) with mtime/size-keyed 1-line preview caching, on-demand single-file loading (`GET /api/super/memory/file`), paginated archived tasks (`GET /api/super/memory/done`), and server-side full-text multi-term search (`GET /api/super/memory/search`). Deferred Markdown rendering, edit `<textarea>` creation, and O(|text|) worker-crew matching until cards are actually expanded or edited, cutting initial DOM nodes by >95% at 350–1,000+ archived files.
+  - **Timers (`定时`) & Inbox (`收件箱`)**: Added optional server-side ended-timer pagination (`GET /api/super/timers?ended_limit=0` / `ended_only=1`), lazy-loaded ended timers, 40-row progressive Inbox pagination, and 2-phase read-then-write `syncInboxOverflow()` batching to eliminate O(N) layout thrashing.
+  - **Zero-Flash Integrations (`接入`) & Instant Tab Switching**: Added per-tab in-memory stale-while-revalidate caching (`autoCache`), atomic `.is-integrations` width-class toggling coupled strictly to DOM commit (eliminating the 800px ↔ 940px cross-tab layout jolt), idle integrations pre-warming, HTTP `ETag` / `304 Not Modified` conditional polling across all automation endpoints, lazy `/api/super/lark` checks (removing the 6-second `?fresh` subprocess loop), and flicker-free Settings model selects.
+
+### Client / API Changes
+
+- **`GET /api/super/memory`** (backward compatible):
+  - Default response (no query params) keeps full file bodies unchanged and adds optional `"done_count": number`, `"version": string`, and HTTP `ETag` / `If-None-Match` (`304 Not Modified`).
+  - New optional query params: `summary=1` (returns full `text` only for up-front files `instructions.md`, `notes/index.md`, open `tasks/*.md`, `messages.md`, legacy files, and latest `dreams[0]`; deferred notes/dreams return `"summary_only": true` + `"preview": string` with empty `"text"`) and `include_done=0` (omits `tasks/done/*.md` from `files` while preserving accurate `"done_count"`).
+- **New HTTP endpoints (standard `s.auth`)**:
+  - `GET /api/super/memory/file?path=<relpath>`: reads a single `.md` file under `memory/`, `dreams/`, or legacy `memory.md` / `memory-archive.md`; returns `200 { file }` (`400` on invalid/traversal path, `404` if missing).
+  - `GET /api/super/memory/done?offset=0&limit=60`: returns newest-first paginated `tasks/done/*.md` metadata (`summary_only: true`, `preview`) with `{ files, total, offset, limit, has_more }`.
+  - `GET /api/super/memory/search?q=<query>&limit=60`: full-text multi-term AND search across `memory/**/*.md`, legacy files, and `dreams/*.md`; returns `{ query, files, dreams, total_files, total_hits, truncated }`.
+- **`GET /api/super/timers`** (backward compatible):
+  - Default response (no query params) unchanged; adds optional `ended_limit`, `ended_offset`, and `ended_only=1` query params returning `active_count`, `ended_count`, `ended_has_more` (and `ended` slice when `ended_only=1`).
+- **HTTP `ETag` / `304 Not Modified`**:
+  - Added `ETag` + `If-None-Match` (`304 Not Modified`) support to `GET /api/super/memory`, `GET /api/super/timers`, `GET /api/super/triggers`, `GET /api/super/integrations`, `GET /api/super/peers`, and `GET /api/super/settings`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.9 (2026-11-28)
 
 ### Highlights

@@ -50,6 +50,9 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("GET /api/super/search", s.superSearch)
 	api("GET /api/super/notebook", s.superNotebook)
 	api("GET /api/super/memory", s.superMemory)
+	api("GET /api/super/memory/file", s.superMemoryFile)
+	api("GET /api/super/memory/done", s.superMemoryDone)
+	api("GET /api/super/memory/search", s.superMemorySearch)
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("GET /api/memory/export", s.memoryExport)
 	api("POST /api/memory/import", s.memoryImport)
@@ -878,10 +881,29 @@ func (s *Server) superList(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, s.sup.List())
 }
 
+func writeJSONETag(w http.ResponseWriter, r *http.Request, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		writeJSON(w, 200, v)
+		return
+	}
+	sum := sha256.Sum256(b)
+	etag := `"` + hex.EncodeToString(sum[:12]) + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if etagMatches(r, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(b)
+	w.Write([]byte{'\n'})
+}
+
 func (s *Server) superTriggers(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	sp.mu.Lock()
-	defer sp.mu.Unlock()
 	ts := sp.st.Triggers
 	if len(ts) > 120 {
 		ts = ts[len(ts)-120:]
@@ -894,13 +916,17 @@ func (s *Server) superTriggers(w http.ResponseWriter, r *http.Request) {
 	}
 	ths := []*Thread{}
 	for _, th := range sp.st.Threads {
-		ths = append(ths, th)
+		cp := *th
+		cp.Subscribers = slices.Clone(th.Subscribers)
+		cp.Triggers = slices.Clone(th.Triggers)
+		ths = append(ths, &cp)
 	}
+	sp.mu.Unlock()
 	sort.Slice(ths, func(i, j int) bool { return ths[i].LastAt.After(ths[j].LastAt) })
 	if len(ths) > 40 {
 		ths = ths[:40]
 	}
-	writeJSON(w, 200, map[string]any{"triggers": out, "threads": ths})
+	writeJSONETag(w, r, map[string]any{"triggers": out, "threads": ths})
 }
 
 // ---------------------------------------------------------------- timers
@@ -908,8 +934,78 @@ func (s *Server) superTriggers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) superTimers(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"timers": sortedTimers(sp.st.Timers)})
+	sorted := sortedTimers(sp.st.Timers)
+	all := make([]*Timer, len(sorted))
+	for i, t := range sorted {
+		cp := *t
+		if t.LastRun != nil {
+			lr := *t.LastRun
+			cp.LastRun = &lr
+		}
+		all[i] = &cp
+	}
+	sp.mu.Unlock()
+
+	q := r.URL.Query()
+	endedOnly := q.Get("ended_only") == "1" || q.Get("ended_only") == "true"
+	rawEndedLimit := strings.TrimSpace(q.Get("ended_limit"))
+	if !endedOnly && rawEndedLimit == "" {
+		writeJSONETag(w, r, map[string]any{"timers": all})
+		return
+	}
+
+	active := make([]*Timer, 0, len(all))
+	ended := make([]*Timer, 0, len(all))
+	for _, t := range all {
+		if t.Enabled {
+			active = append(active, t)
+		} else {
+			ended = append(ended, t)
+		}
+	}
+	endedLimit := 40
+	if rawEndedLimit != "" {
+		if n, err := strconv.Atoi(rawEndedLimit); err == nil && n >= 0 {
+			endedLimit = n
+		}
+	}
+	if endedLimit > 200 {
+		endedLimit = 200
+	}
+	endedOffset, _ := strconv.Atoi(strings.TrimSpace(q.Get("ended_offset")))
+	if endedOffset < 0 {
+		endedOffset = 0
+	}
+	if endedOffset > len(ended) {
+		endedOffset = len(ended)
+	}
+	endedEnd := endedOffset + endedLimit
+	if endedEnd > len(ended) {
+		endedEnd = len(ended)
+	}
+	endedSlice := ended[endedOffset:endedEnd]
+	hasMore := endedEnd < len(ended)
+
+	if endedOnly {
+		writeJSONETag(w, r, map[string]any{
+			"ended":          endedSlice,
+			"active_count":   len(active),
+			"ended_count":    len(ended),
+			"ended_offset":   endedOffset,
+			"ended_limit":    endedLimit,
+			"ended_has_more": hasMore,
+		})
+		return
+	}
+	combined := make([]*Timer, 0, len(active)+len(endedSlice))
+	combined = append(combined, active...)
+	combined = append(combined, endedSlice...)
+	writeJSONETag(w, r, map[string]any{
+		"timers":         combined,
+		"active_count":   len(active),
+		"ended_count":    len(ended),
+		"ended_has_more": hasMore,
+	})
 }
 
 func sortedTimers(ts []*Timer) []*Timer {
@@ -1006,9 +1102,12 @@ func (s *Server) hookKey() string {
 func (s *Server) superSettings(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	writeJSON(w, 200, map[string]any{
-		"settings": sp.st.Settings, "policies": sp.st.Policies,
+	st := sp.st.Settings
+	st.RouterArgs = slices.Clone(st.RouterArgs)
+	pol := slices.Clone(sp.st.Policies)
+	sp.mu.Unlock()
+	writeJSONETag(w, r, map[string]any{
+		"settings": st, "policies": pol,
 		"hook_key": s.hookKey(), "router_dir": sp.routerDir(), "bin": sp.bin,
 	})
 }
@@ -1187,7 +1286,7 @@ func (s *Server) superIntegrations(w http.ResponseWriter, r *http.Request) {
 	sp.mu.Lock()
 	st := sp.st.Settings
 	sp.mu.Unlock()
-	writeJSON(w, 200, map[string]any{
+	writeJSONETag(w, r, map[string]any{
 		"integrations": list,
 		"summary":      sum,
 		"hook_key":     s.hookKey(),

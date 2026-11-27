@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -37,6 +38,9 @@ type Super struct {
 
 	mu            sync.Mutex
 	memIOMu       sync.Mutex
+	memMetaMu     sync.Mutex
+	memMeta       map[string]memMetaEntry
+	memGen        atomic.Uint64
 	st            *State
 	dirty         bool
 	deletedTimers []string

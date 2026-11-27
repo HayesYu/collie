@@ -242,7 +242,7 @@ func (s *Server) superPeersList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		blocked = []PeerBlockEntry{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSONETag(w, r, map[string]any{
 		"hub_id":        hubID,
 		"hub_name":      hubName,
 		"enabled":       enabled,

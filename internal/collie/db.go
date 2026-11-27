@@ -53,6 +53,44 @@ CREATE TABLE IF NOT EXISTS integration_messages (
     PRIMARY KEY (entry_id, kind)
 );
 CREATE INDEX IF NOT EXISTS integration_messages_ext ON integration_messages(kind, external_id);
+CREATE TABLE IF NOT EXISTS peers (
+    id              TEXT PRIMARY KEY,
+    hub_id          TEXT NOT NULL UNIQUE,
+    name            TEXT NOT NULL,
+    addrs           TEXT NOT NULL DEFAULT '[]',
+    mode            TEXT NOT NULL DEFAULT 'advise',
+    status          TEXT NOT NULL DEFAULT 'active',
+    inbound_hash    TEXT NOT NULL DEFAULT '',
+    protocol_ver    INTEGER NOT NULL DEFAULT 1,
+    last_ok_at      INTEGER NOT NULL DEFAULT 0,
+    last_active_at  INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS peers_inbound_hash ON peers(inbound_hash) WHERE inbound_hash != '';
+CREATE TABLE IF NOT EXISTS peer_messages (
+    msg_id          TEXT PRIMARY KEY,
+    peer_id         TEXT NOT NULL,
+    topic_id        TEXT NOT NULL,
+    thread          TEXT NOT NULL,
+    direction       TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    subject         TEXT NOT NULL DEFAULT '',
+    in_reply_to     TEXT NOT NULL DEFAULT '',
+    trigger_id      TEXT NOT NULL DEFAULT '',
+    entry_id        TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL,
+    hop             INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS peer_messages_thread ON peer_messages(thread, created_at);
+CREATE INDEX IF NOT EXISTS peer_messages_peer   ON peer_messages(peer_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS peer_blocklist (
+    hub_id          TEXT PRIMARY KEY,
+    name            TEXT NOT NULL DEFAULT '',
+    blocked_at      INTEGER NOT NULL,
+    token_hash      TEXT NOT NULL DEFAULT ''
+);
 `
 
 func openDB(path string) (*sql.DB, error) {

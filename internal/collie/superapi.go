@@ -112,6 +112,8 @@ type superView struct {
 	Follow *followView `json:"follow,omitempty"`
 	// IntegrationsSummary: live counts of connected/error integrations for sidebar & UI badges.
 	IntegrationsSummary *IntegrationsSummary `json:"integrations_summary,omitempty"`
+	// PeersSummary: live counts of paired peer hubs for UI card & SSE updates.
+	PeersSummary *PeersSummary `json:"peers_summary,omitempty"`
 }
 
 type followView struct {
@@ -233,6 +235,10 @@ func (s *Server) superState(ctx context.Context) superView {
 	if sp.integrations != nil {
 		sum := sp.integrations.Summary()
 		v.IntegrationsSummary = &sum
+	}
+	if sp.peers != nil {
+		psum := sp.peers.Summary()
+		v.PeersSummary = &psum
 	}
 	hasQueuedChat := false
 	for _, t := range sp.st.Triggers {

@@ -184,16 +184,15 @@ assert.ok(cssSrc.includes(".side.is-scroll-paused .dot::after"), "scroll-pause g
 assert.ok(!/\.dot\.idle\s*\{[^}]*animation:/.test(cssSrc), ".dot.idle must be calm static with zero infinite animation");
 assert.ok(cssSrc.includes("wait-halo 2.8s ease-in-out infinite"), "preserve active wait-halo animation contract");
 
-// 1b) v0.3.2 Symmetrical plain-text 话题线 & 小本本 triggers sharing unified right floating card, peer modal anti-clip + human copy, desktop drawer main-stream calm & detached user media cards
-assert.ok(htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"') && htmlSrc.includes('id="np-threads-body"'), "threads list must live inside unified #notes-pane without standalone #collie-threads-pop dropdown");
-assert.ok(!htmlSrc.includes('id="dk-tablist"') && !htmlSrc.includes('id="dk-tab-notes"') && !htmlSrc.includes('id="dk-tab-threads"'), "notebook card must drop dual-tab bar and restore pure v0.2.94 header");
+// 1b) Plan A (#t12590) single plain-text 小本本 trigger + frameless in-card 事项/话题 tabs, peer modal anti-clip + human copy, desktop drawer main-stream calm & detached user media cards
+assert.ok(!htmlSrc.includes('id="collie-threads-btn"') && !htmlSrc.includes('id="collie-threads-pop"') && htmlSrc.includes('id="np-threads-body"') && htmlSrc.includes('id="np-tabs"'), "threads list must live inside unified #notes-pane with in-card #np-tabs and no duplicate top-bar button or dropdown");
+assert.ok(!htmlSrc.includes('id="dk-tablist"') && !htmlSrc.includes('id="dk-tab-notes"') && !htmlSrc.includes('id="dk-tab-threads"'), "legacy #dk-tablist markup stays removed");
 assert.ok(!htmlSrc.includes("展开详情"), "notebook card must never include a bottom 展开详情 text bar");
 assert.ok(htmlSrc.includes('id="np-tasks-more"') && htmlSrc.includes('id="np-files-more"') && htmlSrc.includes('id="np-timers-more"'), "notebook must restore +N overflow pills");
 const notesBtnHtml = htmlSrc.match(/<button[^>]*id="open-notes-btn"[\s\S]*?<\/button>/)?.[0] || "";
-const thBtnHtml = htmlSrc.match(/<button[^>]*id="collie-threads-btn"[\s\S]*?<\/button>/)?.[0] || "";
-assert.ok(notesBtnHtml.includes("小本本") && !notesBtnHtml.includes("<svg"), "notebook trigger must be plain-text 小本本 button without SVG icon");
-assert.ok(thBtnHtml.includes("话题线") && !thBtnHtml.includes("<svg"), "threads trigger must be plain-text 话题线 button without SVG icon");
-assert.ok(thBtnHtml.includes('id="collie-threads-dot"') && !thBtnHtml.includes('id="collie-threads-cnt"'), "threads trigger must expose subtle pending dot without trailing number badge");
+const thTabHtml = htmlSrc.match(/<button[^>]*id="np-tab-threads"[\s\S]*?<\/button>/)?.[0] || "";
+assert.ok(notesBtnHtml.includes("小本本") && !notesBtnHtml.includes("<svg") && notesBtnHtml.includes('id="open-notes-dot"'), "notebook trigger must be plain-text 小本本 button with subtle pending dot and no SVG icon");
+assert.ok(thTabHtml.includes("话题") && !thTabHtml.includes("<svg") && thTabHtml.includes('id="collie-threads-dot"'), "in-card 话题 tab must expose subtle pending dot without trailing number badge");
 assert.ok(!htmlSrc.includes('id="td-back"'), "thread focus drawer header must omit redundant ← 话题线 back button");
 assert.ok(!cssSrc.includes(".collie-top::after") && !cssSrc.includes(".collie-top.is-scrolled"), ".collie-top must stay seamless without bottom hairline or fog veil");
 assert.ok(!appSrc.includes("+ 添加好友边牧"), "integrations top status row must not render redundant + 添加好友边牧 CTA button");
@@ -400,8 +399,8 @@ T.setNotebookData({
 ctx.innerWidth = 1440;
 T.syncNotebookVisibility();
 T.renderCollieThreadsMenu();
-assert.equal(getEl("#collie-threads-wrap").hidden, false);
-assert.equal(getEl("#collie-threads-dot").hidden, false, "threads button shows pending dot when pending > 0");
+assert.equal(getEl("#open-notes-dot").hidden, false, "top-bar 小本本 button shows subtle pending dot when pending > 0");
+assert.equal(getEl("#collie-threads-dot").hidden, false, "in-card 话题 tab shows pending dot when pending > 0");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
 assert.equal(T.getNotesExpanded(), false);
@@ -414,21 +413,23 @@ doc.dispatch("keydown", { key: "Escape" });
 assert.equal(T.getNotesExpanded(), false, "Escape collapses expanded floating notebook back to compact");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false, "Escape from expanded stays open in compact state");
 
-// Switch side card in-place to 话题线 -> persists "threads"; click again -> closes & persists "none"; click 小本本 -> restores "notes"
-getEl("#collie-threads-btn").dispatch("click");
+// Switch side card in-place to 话题 -> persists "threads"; click 小本本 -> closes & persists "none"; click 小本本 again -> reopens; switch back to 事项 -> persists "notes"
+getEl("#np-tab-threads").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads");
 assert.equal(getEl("#np-threads-body").hidden, false);
 assert.equal(getEl("#np-body").hidden, true);
 assert.equal(JSON.parse(storage.get("collie.sidePane")), "threads", "switching to threads persists collie.sidePane = threads");
-getEl("#collie-threads-btn").dispatch("click");
+getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), true);
 assert.equal(getEl("#notes-pane").inert, true);
 assert.equal(JSON.parse(storage.get("collie.sidePane")), "none", "closing side card persists collie.sidePane = none");
 getEl("#open-notes-btn").dispatch("click");
 assert.equal(getEl("#notes-pane").classList.contains("is-hidden"), false);
+assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "threads", "reopening restores last active tab");
+getEl("#np-tab-notes").dispatch("click");
 assert.equal(getEl("#notes-pane").getAttribute("data-side-mode"), "notes");
-assert.equal(JSON.parse(storage.get("collie.sidePane")), "notes", "reopening notebook persists collie.sidePane = notes");
+assert.equal(JSON.parse(storage.get("collie.sidePane")), "notes", "switching back to 事项 persists collie.sidePane = notes");
 
 // Close & reopen notebook via card close × button
 getEl("#np-close").dispatch("click");

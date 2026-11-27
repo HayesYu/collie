@@ -2,10 +2,12 @@ package collie
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,7 +115,7 @@ func TestPeerDualHubEndToEndLoopback(t *testing.T) {
 	if err := json.Unmarshal(raw, &inv); err != nil {
 		t.Fatalf("unmarshal invite: %v", err)
 	}
-	if !strings.HasPrefix(inv.InviteCode, peerInvitePrefix) || !strings.HasPrefix(inv.JoinURL, peerJoinBaseURL) || !inv.Permanent || inv.ExpiresAt != nil || inv.Code == "" || len(inv.Addrs) == 0 {
+	if !strings.HasPrefix(inv.InviteCode, peerInvitePrefixV2) || !strings.HasPrefix(inv.JoinURL, peerJoinBaseURL+"2.") || !inv.Permanent || inv.ExpiresAt != nil || len(inv.Code) != 22 || len(inv.Addrs) == 0 {
 		t.Fatalf("bad permanent card result: %+v", inv)
 	}
 
@@ -801,16 +803,37 @@ func TestPeerPermanentCardResetAndLegacyCompat(t *testing.T) {
 	if _, err := decodePeerInvite(expiredLegacy, time.Now()); err == nil {
 		t.Fatalf("expected expired legacy invite to fail decodePeerInvite")
 	}
-	// Extraction supports /join/#<b64>, /join/#collie-peer://v1/<b64>, and ?peer_invite=.
-	b64Only := strings.TrimPrefix(card3.InviteCode, peerInvitePrefix)
+	// Extraction supports v2 (/join/#2.<b64>, collie-peer://v2/<b64>, web+collie://join/2.<b64>, ?peer_invite=)
+	// as well as legacy v1 (/join/#<b64>, collie-peer://v1/<b64>).
+	b64V2 := strings.TrimPrefix(card3.InviteCode, peerInvitePrefixV2)
+	v1Code, err := encodePeerInviteV1(PeerInvitePayload{
+		V: 1, Code: card3.Code, HubID: card3.HubID, HubName: card3.HubName, Addrs: card3.Addrs,
+	})
+	if err != nil {
+		t.Fatalf("encodePeerInviteV1: %v", err)
+	}
+	b64V1 := strings.TrimPrefix(v1Code, peerInvitePrefix)
 	for _, sample := range []string{
+		card3.InviteCode,
 		card3.JoinURL,
-		"https://lihuanyu0w0.github.io/collie/join/#collie-peer://v1/" + b64Only,
-		"http://127.0.0.1:17788/?peer_invite=collie-peer%3A%2F%2Fv1%2F" + b64Only,
+		"https://lihuanyu0w0.github.io/collie/join/#collie-peer://v2/" + b64V2,
+		"web+collie://join/2." + b64V2,
+		"web+collie://2." + b64V2,
+		"http://127.0.0.1:17788/?peer_invite=web%2Bcollie%3A%2F%2Fjoin%2F2." + b64V2,
+		"http://127.0.0.1:17788/?peer_invite=collie-peer%3A%2F%2Fv2%2F" + b64V2,
+		v1Code,
+		"https://lihuanyu0w0.github.io/collie/join/#" + b64V1,
+		"https://lihuanyu0w0.github.io/collie/join/#collie-peer://v1/" + b64V1,
+		"web+collie://join/" + b64V1,
+		"http://127.0.0.1:17788/?peer_invite=collie-peer%3A%2F%2Fv1%2F" + b64V1,
 		"加我好友\n" + card3.JoinURL + "\n谢谢",
 	} {
-		if _, err := decodePeerInvite(sample, time.Now()); err != nil {
+		dec, err := decodePeerInvite(sample, time.Now())
+		if err != nil {
 			t.Fatalf("decodePeerInvite(%q) failed: %v", sample, err)
+		}
+		if dec.HubID != card3.HubID || dec.Code != card3.Code || len(dec.Addrs) == 0 {
+			t.Fatalf("decodePeerInvite(%q) mismatch: %+v", sample, dec)
 		}
 	}
 
@@ -914,5 +937,113 @@ func TestPeerPermanentCardResetAndLegacyCompat(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw, &legPair); err != nil || !legPair.OK || legPair.Pending || legPair.Peer.Status != "active" {
 		t.Fatalf("expected immediate active fallback for legacy A, got %s", raw)
+	}
+}
+
+func TestPeerInviteV2CompactAndCompat(t *testing.T) {
+	now := time.Now()
+	secret := newPeerInviteCodeSecret()
+	if len(secret) != 22 {
+		t.Fatalf("expected 16-byte base64url card secret (22 chars), got len=%d (%q)", len(secret), secret)
+	}
+
+	// 1. Compact v2 omits http://, keeps https://, caps to top-2 non-IPv6 addrs, omits k for "card" and e=0.
+	p := PeerInvitePayload{
+		HubID:   "hub_a1b2c3d4e5f6",
+		HubName: "Alice",
+		Code:    secret,
+		Addrs: []string{
+			"http://100.64.1.2:7788",
+			"https://hub.example.com",
+			"http://192.168.1.9:7788",
+			"http://[fd7a:115c:a1e0::1]:7788",
+			"http://127.0.0.1:7788",
+		},
+		Kind: "card",
+	}
+	v2Code, err := encodePeerInvite(p)
+	if err != nil {
+		t.Fatalf("encodePeerInvite: %v", err)
+	}
+	if !strings.HasPrefix(v2Code, peerInvitePrefixV2) {
+		t.Fatalf("encodePeerInvite must default to v2 prefix, got %q", v2Code)
+	}
+	v1Code, err := encodePeerInviteV1(p)
+	if err != nil {
+		t.Fatalf("encodePeerInviteV1: %v", err)
+	}
+	if len(v2Code) >= len(v1Code)*65/100 {
+		t.Fatalf("expected v2 (%d chars) to be significantly shorter than v1 (%d chars): v2=%s", len(v2Code), len(v1Code), v2Code)
+	}
+
+	// Inspect raw compact JSON keys inside v2 base64url payload.
+	b64V2 := strings.TrimPrefix(v2Code, peerInvitePrefixV2)
+	rawJSON, err := base64.RawURLEncoding.DecodeString(b64V2)
+	if err != nil {
+		t.Fatalf("decode v2 base64: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rawJSON, &m); err != nil {
+		t.Fatalf("unmarshal v2 json: %v", err)
+	}
+	if _, hasK := m["k"]; hasK {
+		t.Fatalf("v2 permanent card must omit k, got %s", rawJSON)
+	}
+	if _, hasE := m["e"]; hasE {
+		t.Fatalf("v2 permanent card with exp=0 must omit e, got %s", rawJSON)
+	}
+	if m["h"] != p.HubID || m["n"] != p.HubName || m["t"] != secret {
+		t.Fatalf("unexpected v2 compact fields: %s", rawJSON)
+	}
+	rawAddrs, _ := m["a"].([]any)
+	if len(rawAddrs) != 2 || rawAddrs[0] != "100.64.1.2:7788" || rawAddrs[1] != "https://hub.example.com" {
+		t.Fatalf("unexpected v2 compact addrs (want http:// stripped, https:// kept, max 2): %s", rawJSON)
+	}
+
+	// 2. Round-trip decode for v2, /join/#2., web+collie://join/2., ?peer_invite=, and legacy v1.
+	joinURL := peerJoinURL(v2Code)
+	if joinURL != peerJoinBaseURL+"2."+b64V2 {
+		t.Fatalf("peerJoinURL(v2) = %q, want %q", joinURL, peerJoinBaseURL+"2."+b64V2)
+	}
+	for _, sample := range []string{
+		v2Code,
+		joinURL,
+		"2." + b64V2,
+		"web+collie://join/2." + b64V2,
+		"web+collie://2." + b64V2,
+		"http://127.0.0.1:7788/?peer_invite=" + url.QueryEscape("web+collie://join/2."+b64V2),
+		v1Code,
+		peerJoinURL(v1Code),
+	} {
+		dec, err := decodePeerInvite(sample, now)
+		if err != nil {
+			t.Fatalf("decodePeerInvite(%q): %v", sample, err)
+		}
+		if dec.HubID != p.HubID || dec.HubName != p.HubName || dec.Code != secret || dec.Kind != "card" {
+			t.Fatalf("decoded mismatch for %q: %+v", sample, dec)
+		}
+		if len(dec.Addrs) < 2 || dec.Addrs[0] != "http://100.64.1.2:7788" || dec.Addrs[1] != "https://hub.example.com" {
+			t.Fatalf("expanded addrs mismatch for %q: %+v", sample, dec.Addrs)
+		}
+	}
+
+	// 3. One-time invite preserves k="once" and e=exp, and rejects when expired.
+	exp := now.Add(10 * time.Minute).Unix()
+	onceCode, err := encodePeerInvite(PeerInvitePayload{
+		HubID: "hub_once", HubName: "Once", Code: "ONCECODE1234",
+		Addrs: []string{"http://[2001:db8::1]:7788"}, Kind: "once", Exp: exp,
+	})
+	if err != nil {
+		t.Fatalf("encode once: %v", err)
+	}
+	decOnce, err := decodePeerInvite(onceCode, now)
+	if err != nil {
+		t.Fatalf("decode once: %v", err)
+	}
+	if decOnce.Kind != "once" || decOnce.Exp != exp || len(decOnce.Addrs) != 1 || decOnce.Addrs[0] != "http://[2001:db8::1]:7788" {
+		t.Fatalf("unexpected decoded once invite: %+v", decOnce)
+	}
+	if _, err := decodePeerInvite(onceCode, time.Unix(exp+1, 0)); err == nil {
+		t.Fatalf("expected expired v2 once invite to fail")
 	}
 }

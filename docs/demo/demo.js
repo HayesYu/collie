@@ -966,15 +966,15 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/super/peers/invite" && method === "POST") {
       const mode = body.mode || "advise";
-      if (body.reset) demoPeerCardCode = "DEMO" + Math.random().toString(36).slice(2, 10).toUpperCase();
-      const payload = { v: 1, code: demoPeerCardCode, hub_id: demoPeerHubID, hub_name: demoPeerHubName, addrs: ["http://192.168.1.20:7788"] };
-      const bytes = new TextEncoder().encode(JSON.stringify(payload));
+      if (body.reset) demoPeerCardCode = "DEMO" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 12);
+      const compact = { h: demoPeerHubID, n: demoPeerHubName, a: ["192.168.1.20:7788"], t: demoPeerCardCode };
+      const bytes = new TextEncoder().encode(JSON.stringify(compact));
       let bin = "";
       bytes.forEach((b) => { bin += String.fromCharCode(b); });
       const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-      const inv = "collie-peer://v1/" + b64;
-      const joinUrl = "https://lihuanyu0w0.github.io/collie/join/#" + b64;
-      return json({ invite_code: inv, join_url: joinUrl, code: payload.code, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: payload.addrs, permanent: true });
+      const inv = "collie-peer://v2/" + b64;
+      const joinUrl = "https://lihuanyu0w0.github.io/collie/join/#2." + b64;
+      return json({ invite_code: inv, join_url: joinUrl, code: compact.t, hub_id: demoPeerHubID, hub_name: demoPeerHubName, mode, addrs: ["http://192.168.1.20:7788"], permanent: true });
     }
     if (p === "/api/super/peers/pair" && method === "POST") {
       const id = "peer-" + (demoPeers.length + 1);

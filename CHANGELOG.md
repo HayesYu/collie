@@ -4,6 +4,31 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.8 (2026-11-27)
+
+### Highlights
+
+- **Unified Right Three-in-One Drawer, Plan A In-Card Notebook/Threads, Centered Command Search & Smooth GPU Main-Chat Glide (`web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Unified Artifact Preview (`#file-view`), Topic Thread Drawer (`#thread-drawer`), and new Collie-Dispatched Live Worker Drawer (`#worker-drawer`, default read-only peek bar with on-demand「直接插话」and auto-exposed approval cards) into a single `.side-drawer` shell docked in desktop Grid Column 3 (`>= 1181px`), eliminating the `v0.3.5` file-preview left blank void (`.sd-inner { width: 100% }`) and 50/50 topic-drawer bubble overlap.
+  - Replaced the dual top-bar「小本本 / 话题线」buttons with a single「小本本」button and a frameless sliding in-card two-tab switcher (`事项 / 话题`) inside `#notes-pane`, plus a Raycast/Linear-style viewport-centered command search card (`#super-search`).
+  - Added desktop left-sidebar collapse/expand toggle (`#side-collapse-btn` / `#side-expand-btn` / `Cmd+\`) with lockstep 240ms `cubic-bezier(0.22, 1, 0.36, 1)` pure-GPU `translate3d` glide across left sidebar, `#notes-pane`, and three-in-one drawer transitions (zero per-frame text reflow), automatically hiding the duplicate top `#crew` capsule strip on desktop (`> 1000px`) while the left sidebar is expanded (and showing it on mobile, tablet, or when sidebar is collapsed, with chip clicks opening the right worker drawer).
+  - Fixed Top-Layer toast display inside open `<dialog>` modals, fixed message hover action bar stacking/hit-gap (`#v-collie .mine .msg-acts`), added `ResizeObserver` bottom/anchor scroll lock across viewport width resizing (`#v-collie .viewer` & `#td-body`), and updated the monochrome clap SVG icon from a heart to a crisp fine-line thumbs-up (`1.75px` stroke, zero emoji).
+- **Compact `v2` Peer Invite Codes, `web+collie://` PWA Launch & Redesigned `/join/` Card (`internal/collie/peer.go`, `web/{manifest.webmanifest,app.js}`, `docs/join/index.html`)**:
+  - Switched `encodePeerInvite` default output to compact `collie-peer://v2/<base64url>` and `/join/#2.<base64url>` (~60% shorter QR payload using short JSON keys `h/n/a/t/k/e`, `http://`-stripped top-2 IPv4/Tailscale addresses, and 128-bit base64url card tokens) while maintaining full backward compatibility with legacy `v1` invites.
+  - Registered `"protocol_handlers": [{ "protocol": "web+collie", "url": "/?peer_invite=%s" }]` and `"launch_handler": { "client_mode": ["focus-existing", "auto"] }` in `web/manifest.webmanifest` and added `web+collie://join/` prefix normalization in both Go and Web UI.
+  - Redesigned the zero-server `docs/join/` landing page into a minimalist invitation card with one-click preset switching (Local Node Proxy, Local Hub, Installed App `web+collie://`, Custom URL) and full `v2` / `v1` client-side decoding.
+
+### Client / API Changes
+
+- **Compact `v2` Peer Invite Payload (`POST /api/super/peers/invite`, `POST /api/super/peers/pair`)**:
+  - `POST /api/super/peers/invite` now returns compact `v2` codes (`invite_code: "collie-peer://v2/<base64url>"`, `join_url: "https://lihuanyu0w0.github.io/collie/join/#2.<base64url>"`) encoding short keys `{ h, n, a, t, k?, e? }` (`http://` omitted in `a`, `https://` preserved; `k` omitted for `"card"`, `"once"` for one-time invites; `t` uses 16-byte 128-bit base64url for permanent cards).
+  - `POST /api/super/peers/pair`, `extractPeerInvite`, and `decodePeerInvite` accept both legacy `v1` (`collie-peer://v1/...`, `/join/#<v1b64>`) and new `v2` (`collie-peer://v2/...`, `/join/#2.<v2b64>`, `web+collie://join/2.<v2b64>`, `/?peer_invite=...`).
+- **PWA Manifest (`GET /manifest.webmanifest`)**:
+  - Added `protocol_handlers` (`web+collie` -> `/?peer_invite=%s`) and `launch_handler` (`["focus-existing", "auto"]`).
+- **Breaking changes**: None (fully backward-compatible with `v1` peer invites).
+
+---
+
 ## v0.3.7 (2026-11-27)
 
 ### Highlights

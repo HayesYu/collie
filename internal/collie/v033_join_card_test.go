@@ -165,20 +165,48 @@ const instrumented = appSrc.replace(
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 const T = ctx.__test;
 
-// Extract & parse all supported formats: pure code, /join/#<payload>, /join/#collie-peer://v1/<payload>, share copy, ?peer_invite=
+// Extract & parse all supported formats: v1 legacy + v2 compact + web+collie:// PWA protocol handler
+const v2Obj = { h: "hub_alice001", n: "Alice的边牧", a: ["100.64.1.2:7788", "https://hub.example.com"], t: "aBcDeFgHiJkLmNoPqRsTuV" };
+const b64V2 = Buffer.from(JSON.stringify(v2Obj)).toString("base64url");
+const canonicalV2 = "collie-peer://v2/" + b64V2;
+const joinUrlV2 = "https://lihuanyu0w0.github.io/collie/join/#2." + b64V2;
+
 for (const sample of [
   canonicalInvite,
   joinUrl,
   "https://lihuanyu0w0.github.io/collie/join/#" + canonicalInvite,
+  "web+collie://join/" + b64Payload,
+  "web+collie://" + canonicalInvite,
   "来加我的 Collie 好友边牧「Alice的边牧」，点击链接即可发起申请：\n" + joinUrl,
   "http://127.0.0.1:17788/?peer_invite=" + encodeURIComponent(canonicalInvite),
 ]) {
-  assert.equal(T.extractPeerInviteCode(sample), canonicalInvite, "extract failed for: " + sample);
+  assert.equal(T.extractPeerInviteCode(sample), canonicalInvite, "v1 extract failed for: " + sample);
   const parsed = T.parsePeerInviteClient(sample, "hub_bob002");
-  assert.equal(parsed?.ok, true, "parse failed for: " + sample);
+  assert.equal(parsed?.ok, true, "v1 parse failed for: " + sample);
   assert.equal(parsed.payload.hub_name, "Alice的边牧");
   assert.equal(parsed.inviteCode, canonicalInvite);
 }
+
+for (const sample of [
+  canonicalV2,
+  joinUrlV2,
+  "2." + b64V2,
+  "https://lihuanyu0w0.github.io/collie/join/#" + canonicalV2,
+  "web+collie://join/2." + b64V2,
+  "web+collie://2." + b64V2,
+  "http://127.0.0.1:17788/?peer_invite=" + encodeURIComponent("web+collie://join/2." + b64V2),
+  "来加我的 Collie 好友边牧「Alice的边牧」，点击链接即可发起申请：\n" + joinUrlV2,
+]) {
+  assert.equal(T.extractPeerInviteCode(sample), canonicalV2, "v2 extract failed for: " + sample);
+  const parsed = T.parsePeerInviteClient(sample, "hub_bob002");
+  assert.equal(parsed?.ok, true, "v2 parse failed for: " + sample);
+  assert.equal(parsed.payload.v, 2);
+  assert.equal(parsed.payload.hub_name, "Alice的边牧");
+  assert.equal(parsed.payload.code, "aBcDeFgHiJkLmNoPqRsTuV");
+  assert.equal(parsed.payload.kind, "card");
+  assert.deepEqual(parsed.payload.addrs, ["http://100.64.1.2:7788", "https://hub.example.com"]);
+}
+assert.equal(T.peerInviteJoinURL({ invite_code: canonicalV2 }), joinUrlV2, "v2 fallback join URL must use #2.<b64>");
 
 // Permanent card has no expiry; legacy expired card still rejected
 const expiredObj = { ...payloadObj, exp: Math.floor(Date.now() / 1000) - 60 };
@@ -190,12 +218,17 @@ const share = T.peerShareText({ invite_code: canonicalInvite, join_url: joinUrl,
 assert.ok(share.includes(joinUrl) && !share.includes("collie-peer://v1/"), "share text must use clean clickable /join/# URL");
 assert.equal(T.peerInviteJoinURL({ invite_code: canonicalInvite }), joinUrl, "fallback join URL computed cleanly");
 
-// capturePeerInviteFromURL extracts ?peer_invite= and immediately strips it from address bar
+// capturePeerInviteFromURL extracts ?peer_invite= (including web+collie://join/2.<b64>) and immediately strips it from address bar
 const captured = T.capturePeerInviteFromURL();
 assert.equal(captured, canonicalInvite);
 assert.equal(T.getPendingInvite(), canonicalInvite);
 assert.equal(ctx.location.search, "", "peer_invite must be stripped from URL search");
 assert.equal(replacedUrls[replacedUrls.length - 1], "/", "replaceState cleans URL to /");
+
+ctx.location.search = "?peer_invite=" + encodeURIComponent("web+collie://join/2." + b64V2);
+const capturedProto = T.capturePeerInviteFromURL();
+assert.equal(capturedProto, canonicalV2, "web+collie://join/2.<b64> via ?peer_invite= normalizes to canonical v2 invite");
+assert.equal(ctx.location.search, "", "protocol handler ?peer_invite= must be stripped cleanly");
 
 // Main chat #peer-req-bar shows when pending_incoming > 0 and hides when 0
 T.setSup({ router: { alive: true, pending: false }, peers_summary: { total: 1, active: 0, pending_incoming: 2, enabled: true } });

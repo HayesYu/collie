@@ -90,17 +90,17 @@ const htmlSrc = fs.readFileSync("web/index.html", "utf8");
 const cssSrc = fs.readFileSync("web/app.css", "utf8");
 const appSrc = fs.readFileSync("web/app.js", "utf8");
 
-// 1) Header triggers (话题线 & 小本本) both use harmonized ultra-light plain-text buttons without SVG icons or count badges
+// 1) Plan A (#t12590): single top-bar plain-text 小本本 trigger (with subtle pending dot) + frameless in-card 事项/话题 tabs
 const notesBtnMatch = htmlSrc.match(/id="open-notes-btn"[\s\S]*?<\/button>/);
 assert.ok(notesBtnMatch, "expected #open-notes-btn in index.html");
 assert.ok(notesBtnMatch[0].includes("小本本") && !notesBtnMatch[0].includes("<svg"), "header notebook trigger must be plain-text 小本本 button without SVG icon");
-const thBtnMatch = htmlSrc.match(/id="collie-threads-btn"[\s\S]*?<\/button>/);
-assert.ok(thBtnMatch, "expected independent #collie-threads-btn in index.html");
-assert.ok(thBtnMatch[0].includes("话题线") && !thBtnMatch[0].includes("<svg"), "header threads trigger must be plain-text 话题线 button without SVG icon");
-assert.ok(thBtnMatch[0].includes('id="collie-threads-dot"') && !thBtnMatch[0].includes('id="collie-threads-cnt"'), "header threads trigger must expose subtle pending dot without trailing number badge");
+assert.ok(notesBtnMatch[0].includes('id="open-notes-dot"'), "header 小本本 button exposes subtle pending dot");
+assert.ok(!htmlSrc.includes('id="collie-threads-btn"'), "Plan A removes duplicate top-bar #collie-threads-btn");
+const thTabMatch = htmlSrc.match(/id="np-tab-threads"[\s\S]*?<\/button>/);
+assert.ok(thTabMatch && thTabMatch[0].includes("话题") && thTabMatch[0].includes('id="collie-threads-dot"'), "in-card 话题 tab exposes subtle pending dot without heavy badge");
 
-// 2) Pure minimalist v0.2.94 notebook header (no dual tabs, no bottom 展开详情 bar, no top-right expand pill)
-assert.ok(!htmlSrc.includes('id="np-expand"') && !htmlSrc.includes('id="dk-tablist"') && htmlSrc.includes('id="np-close"'), "notebook header must stay pure v0.2.94 minimalist (小本本 + ×) without dual tabs or expand pill");
+// 2) Minimalist in-card two-tab header (事项 / 话题 + sliding ink + ×, no bottom 展开详情 bar, no top-right expand pill)
+assert.ok(!htmlSrc.includes('id="np-expand"') && !htmlSrc.includes('id="dk-tablist"') && htmlSrc.includes('id="np-tabs"') && htmlSrc.includes('id="np-tab-ink"') && htmlSrc.includes('id="np-close"'), "notebook header uses frameless #np-tabs + #np-tab-ink + #np-close without legacy #dk-tablist or expand pill");
 assert.ok(!htmlSrc.includes("展开详情"), "notebook card must never render a bottom 展开详情 text bar");
 
 // 3) Fixed width (no horizontal width jump), centered in right empty channel, 0px chat shift, isolated 0fr->1fr disclosure

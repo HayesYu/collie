@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
-	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,6 +33,7 @@ import (
 const (
 	peerProtocolVer      = 1
 	peerInvitePrefix     = "collie-peer://v1/"
+	peerInvitePrefixV2   = "collie-peer://v2/"
 	peerJoinBaseURL      = "https://lihuanyu0w0.github.io/collie/join/#"
 	peerTokenPrefix      = "clp_"
 	peerInviteTTL        = 10 * time.Minute
@@ -49,9 +50,11 @@ var (
 	errPeerRedirectBlocked = errors.New("HTTP redirects are disabled for peer requests")
 	peerTopicRe            = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	peerMsgIDRe            = regexp.MustCompile(`^[A-Za-z0-9._:-]{4,128}$`)
-	peerDirectInviteRe     = regexp.MustCompile(`collie-peer://v1/([A-Za-z0-9_-]{16,}=*)`)
-	peerJoinHashRe         = regexp.MustCompile(`(?i)/join/?#(?:collie-peer://v1/)?([A-Za-z0-9_%-]{16,}=*)`)
+	peerDirectInviteRe     = regexp.MustCompile(`collie-peer://(v[12])/([A-Za-z0-9_-]{16,}=*)`)
+	peerWebProtoInviteRe   = regexp.MustCompile(`(?i)web\+collie://(?:join/)?([^\s]+)`)
+	peerJoinHashRe         = regexp.MustCompile(`(?i)/join/?#([^\s]+)`)
 	peerQueryInviteRe      = regexp.MustCompile(`(?i)[?&#]peer_invite=([^&\s]+)`)
+	peerV2FragRe           = regexp.MustCompile(`^2\.([A-Za-z0-9_-]{16,}=*)$`)
 	peerRawB64Re           = regexp.MustCompile(`^[A-Za-z0-9_-]{16,}=*$`)
 	peerSecretLeakPatterns = []struct {
 		label string
@@ -138,7 +141,19 @@ type PeerInvitePayload struct {
 	HubID   string   `json:"hub_id"`
 	HubName string   `json:"hub_name"`
 	Addrs   []string `json:"addrs"`
-	Exp     int64    `json:"exp,omitempty"` // 0 / omitted = permanent business card; >0 = legacy expiring invite
+	Kind    string   `json:"kind,omitempty"` // "card" (default) | "once"
+	Exp     int64    `json:"exp,omitempty"`  // 0 / omitted = permanent business card; >0 = expiring invite
+}
+
+// peerInviteCompactV2 is the compact v2 wire JSON encoded inside collie-peer://v2/<b64url>
+// and /join/#2.<b64url>, cutting QR payload length by ~60% while staying lossless.
+type peerInviteCompactV2 struct {
+	H string   `json:"h,omitempty"` // hub_id
+	N string   `json:"n,omitempty"` // hub_name
+	A []string `json:"a,omitempty"` // compact addrs ("http://" stripped, "https://" kept)
+	T string   `json:"t,omitempty"` // token / card secret
+	K string   `json:"k,omitempty"` // kind: omitted for "card", "once" for one-time invite
+	E int64    `json:"e,omitempty"` // expires_at unix seconds, omitted when 0
 }
 
 type PeerInviteResult struct {
@@ -351,13 +366,13 @@ func (pm *PeerManager) initIdentity() {
 	}
 	var secret string
 	if pm.db.QueryRow(`SELECT v FROM kv WHERE k='peer_card_secret'`).Scan(&secret) == nil && strings.TrimSpace(secret) != "" {
-		pm.cardSecret = strings.ToUpper(strings.TrimSpace(secret))
+		pm.cardSecret = strings.TrimSpace(secret)
 	} else {
 		pm.cardSecret = newPeerInviteCodeSecret()
 		_, _ = pm.db.Exec(`INSERT INTO kv(k,v) VALUES('peer_card_secret',?) ON CONFLICT(k) DO NOTHING`, pm.cardSecret)
 		var persisted string
 		if pm.db.QueryRow(`SELECT v FROM kv WHERE k='peer_card_secret'`).Scan(&persisted) == nil && strings.TrimSpace(persisted) != "" {
-			pm.cardSecret = strings.ToUpper(strings.TrimSpace(persisted))
+			pm.cardSecret = strings.TrimSpace(persisted)
 		}
 	}
 	var cm string
@@ -402,13 +417,9 @@ func newPeerMsgID() string {
 }
 
 func newPeerInviteCodeSecret() string {
-	b := make([]byte, 8)
+	b := make([]byte, 16)
 	_, _ = rand.Read(b)
-	raw := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)
-	if len(raw) > 12 {
-		raw = raw[:12]
-	}
-	return raw
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func isValidPeerTokenFormat(tok string) bool {
@@ -573,51 +584,158 @@ func (pm *PeerManager) notifyChanged() {
 
 // ---------------------------------------------------------------- invite encoding
 
-func peerJoinURL(inviteCode string) string {
-	s := strings.TrimSpace(inviteCode)
-	payload := strings.TrimPrefix(s, peerInvitePrefix)
-	payload = strings.TrimRight(strings.TrimSpace(payload), "=")
-	if payload == "" {
-		return ""
+func compactPeerAddrsForV2(addrs []string) []string {
+	clean := sanitizePeerAddrs(addrs, 6)
+	if len(clean) == 0 {
+		return nil
 	}
-	return peerJoinBaseURL + payload
+	var primary, loopback, ipv6 []string
+	for _, a := range clean {
+		u, err := url.Parse(a)
+		if err != nil {
+			continue
+		}
+		host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+		ip := net.ParseIP(host)
+		switch {
+		case ip != nil && ip.To4() == nil:
+			ipv6 = append(ipv6, a)
+		case host == "localhost" || (ip != nil && ip.IsLoopback()):
+			loopback = append(loopback, a)
+		default:
+			primary = append(primary, a)
+		}
+	}
+	var chosen []string
+	switch {
+	case len(primary) > 0:
+		chosen = primary
+	case len(loopback) > 0:
+		chosen = loopback
+	default:
+		chosen = ipv6
+	}
+	if len(chosen) > 2 {
+		chosen = chosen[:2]
+	}
+	out := make([]string, 0, len(chosen))
+	for _, a := range chosen {
+		if strings.HasPrefix(a, "http://") {
+			out = append(out, strings.TrimPrefix(a, "http://"))
+		} else {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
-// extractPeerInvite normalizes pure collie-peer://v1/..., /join/#<payload>,
-// ?peer_invite=..., or multi-line share text into canonical collie-peer://v1/<b64>.
+func expandPeerAddrsFromV2(raw []string) []string {
+	expanded := make([]string, 0, len(raw))
+	for _, a := range raw {
+		s := strings.TrimSpace(a)
+		if s == "" {
+			continue
+		}
+		if !strings.Contains(s, "://") {
+			s = "http://" + s
+		}
+		expanded = append(expanded, s)
+	}
+	return sanitizePeerAddrs(expanded, 6)
+}
+
+func peerJoinURL(inviteCode string) string {
+	s := strings.TrimSpace(inviteCode)
+	if strings.HasPrefix(s, peerInvitePrefixV2) {
+		payload := strings.TrimRight(strings.TrimSpace(strings.TrimPrefix(s, peerInvitePrefixV2)), "=")
+		if payload == "" {
+			return ""
+		}
+		return peerJoinBaseURL + "2." + payload
+	}
+	if strings.HasPrefix(s, peerInvitePrefix) {
+		payload := strings.TrimRight(strings.TrimSpace(strings.TrimPrefix(s, peerInvitePrefix)), "=")
+		if payload == "" {
+			return ""
+		}
+		return peerJoinBaseURL + payload
+	}
+	return ""
+}
+
+func normalizePeerInviteToken(frag string) string {
+	s := strings.TrimSpace(frag)
+	if s == "" {
+		return ""
+	}
+	if dec, err := url.QueryUnescape(s); err == nil && dec != "" {
+		s = strings.TrimSpace(dec)
+	}
+	s = strings.TrimLeft(s, "#/")
+	s = strings.TrimRight(s, ".,;!?)\"'】》」")
+	if m := peerDirectInviteRe.FindStringSubmatch(s); len(m) == 3 {
+		if m[1] == "v2" {
+			return peerInvitePrefixV2 + m[2]
+		}
+		return peerInvitePrefix + m[2]
+	}
+	if m := peerV2FragRe.FindStringSubmatch(s); len(m) == 2 {
+		return peerInvitePrefixV2 + m[1]
+	}
+	if peerRawB64Re.MatchString(s) {
+		return peerInvitePrefix + s
+	}
+	return ""
+}
+
+// extractPeerInvite normalizes collie-peer://v2/..., collie-peer://v1/...,
+// /join/#2.<v2b64>, /join/#<v1b64>, web+collie://join/..., ?peer_invite=...,
+// or multi-line share text into canonical collie-peer://v2/<b64> or collie-peer://v1/<b64>.
 func extractPeerInvite(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return ""
 	}
-	if m := peerDirectInviteRe.FindStringSubmatch(s); len(m) == 2 {
-		return peerInvitePrefix + m[1]
-	}
-	if m := peerJoinHashRe.FindStringSubmatch(s); len(m) == 2 {
-		frag := m[1]
-		if dec, err := url.QueryUnescape(frag); err == nil && dec != "" {
-			frag = dec
-		}
-		frag = strings.TrimSpace(strings.TrimPrefix(frag, peerInvitePrefix))
-		if peerRawB64Re.MatchString(frag) {
-			return peerInvitePrefix + frag
-		}
-	}
+	// 1. ?peer_invite=... (including URL-encoded web+collie://join/... from PWA protocol_handlers)
 	if m := peerQueryInviteRe.FindStringSubmatch(s); len(m) == 2 {
-		if dec, err := url.QueryUnescape(m[1]); err == nil {
-			dec = strings.TrimSpace(dec)
-			if strings.HasPrefix(dec, peerInvitePrefix) {
-				return dec
-			}
-			if peerRawB64Re.MatchString(dec) {
-				return peerInvitePrefix + dec
+		val := strings.TrimSpace(m[1])
+		if dec, err := url.QueryUnescape(val); err == nil && dec != "" {
+			val = strings.TrimSpace(dec)
+		}
+		if val != "" && val != s {
+			if norm := extractPeerInvite(val); strings.HasPrefix(norm, peerInvitePrefixV2) || strings.HasPrefix(norm, peerInvitePrefix) {
+				return norm
 			}
 		}
+	}
+	// 2. web+collie://join/<payload> or web+collie://<payload>
+	if m := peerWebProtoInviteRe.FindStringSubmatch(s); len(m) == 2 {
+		if norm := normalizePeerInviteToken(m[1]); norm != "" {
+			return norm
+		}
+	}
+	// 3. Direct collie-peer://v2/<b64> or collie-peer://v1/<b64>
+	if m := peerDirectInviteRe.FindStringSubmatch(s); len(m) == 3 {
+		if m[1] == "v2" {
+			return peerInvitePrefixV2 + m[2]
+		}
+		return peerInvitePrefix + m[2]
+	}
+	// 4. /join/#2.<v2b64>, /join/#<v1b64>, /join/#collie-peer://v[12]/<b64>
+	if m := peerJoinHashRe.FindStringSubmatch(s); len(m) == 2 {
+		if norm := normalizePeerInviteToken(m[1]); norm != "" {
+			return norm
+		}
+	}
+	// 5. Bare 2.<v2b64> fragment
+	if m := peerV2FragRe.FindStringSubmatch(s); len(m) == 2 {
+		return peerInvitePrefixV2 + m[1]
 	}
 	return s
 }
 
-func encodePeerInvite(p PeerInvitePayload) (string, error) {
+// encodePeerInviteV1 encodes the legacy v1 format (kept for compatibility testing).
+func encodePeerInviteV1(p PeerInvitePayload) (string, error) {
 	p.V = peerProtocolVer
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -626,12 +744,39 @@ func encodePeerInvite(p PeerInvitePayload) (string, error) {
 	return peerInvitePrefix + base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// encodePeerInvite defaults to compact v2 encoding (collie-peer://v2/<b64url>).
+func encodePeerInvite(p PeerInvitePayload) (string, error) {
+	kind := strings.TrimSpace(p.Kind)
+	if kind == "card" {
+		kind = ""
+	}
+	compact := peerInviteCompactV2{
+		H: strings.TrimSpace(p.HubID),
+		N: strings.TrimSpace(p.HubName),
+		A: compactPeerAddrsForV2(p.Addrs),
+		T: strings.TrimSpace(p.Code),
+		K: kind,
+		E: p.Exp,
+	}
+	b, err := json.Marshal(compact)
+	if err != nil {
+		return "", err
+	}
+	return peerInvitePrefixV2 + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
 func decodePeerInvite(raw string, now time.Time) (*PeerInvitePayload, error) {
 	s := extractPeerInvite(raw)
-	if !strings.HasPrefix(s, peerInvitePrefix) {
-		return nil, fmt.Errorf("邀请码格式无效，应以 %s 开头或为有效的 /join/# 名片链接", peerInvitePrefix)
+	isV2 := strings.HasPrefix(s, peerInvitePrefixV2)
+	isV1 := !isV2 && strings.HasPrefix(s, peerInvitePrefix)
+	if !isV2 && !isV1 {
+		return nil, fmt.Errorf("邀请码格式无效，应以 %s 或 %s 开头或为有效的 /join/# 名片链接", peerInvitePrefixV2, peerInvitePrefix)
 	}
-	encoded := strings.TrimSpace(strings.TrimPrefix(s, peerInvitePrefix))
+	prefix := peerInvitePrefix
+	if isV2 {
+		prefix = peerInvitePrefixV2
+	}
+	encoded := strings.TrimSpace(strings.TrimPrefix(s, prefix))
 	if encoded == "" || len(encoded) > 4096 {
 		return nil, fmt.Errorf("邀请码内容长度异常")
 	}
@@ -644,16 +789,39 @@ func decodePeerInvite(raw string, now time.Time) (*PeerInvitePayload, error) {
 		}
 	}
 	var p PeerInvitePayload
-	if err := json.Unmarshal(b, &p); err != nil {
-		return nil, fmt.Errorf("邀请码数据损坏")
+	if isV2 {
+		var c peerInviteCompactV2
+		if err := json.Unmarshal(b, &c); err != nil {
+			return nil, fmt.Errorf("邀请码数据损坏")
+		}
+		kind := strings.TrimSpace(c.K)
+		if kind == "" {
+			kind = "card"
+		}
+		p = PeerInvitePayload{
+			V:       2,
+			Code:    strings.TrimSpace(c.T),
+			HubID:   strings.TrimSpace(c.H),
+			HubName: strings.TrimSpace(c.N),
+			Addrs:   expandPeerAddrsFromV2(c.A),
+			Kind:    kind,
+			Exp:     c.E,
+		}
+	} else {
+		if err := json.Unmarshal(b, &p); err != nil {
+			return nil, fmt.Errorf("邀请码数据损坏")
+		}
+		if p.V != peerProtocolVer {
+			return nil, fmt.Errorf("不支持的邀请码版本 v%d", p.V)
+		}
+		p.Code = strings.TrimSpace(p.Code)
+		p.HubID = strings.TrimSpace(p.HubID)
+		p.HubName = strings.TrimSpace(p.HubName)
+		p.Addrs = sanitizePeerAddrs(p.Addrs, 6)
+		if p.Kind == "" {
+			p.Kind = "card"
+		}
 	}
-	if p.V != peerProtocolVer {
-		return nil, fmt.Errorf("不支持的邀请码版本 v%d", p.V)
-	}
-	p.Code = strings.ToUpper(strings.TrimSpace(p.Code))
-	p.HubID = strings.TrimSpace(p.HubID)
-	p.HubName = strings.TrimSpace(p.HubName)
-	p.Addrs = sanitizePeerAddrs(p.Addrs, 6)
 	if p.Code == "" || p.HubID == "" || len(p.Addrs) == 0 {
 		return nil, fmt.Errorf("邀请码缺少必要字段（code / hub_id / addrs）")
 	}
@@ -1187,7 +1355,7 @@ func (pm *PeerManager) CreateInviteWithReset(mode string, addrs []string, reset 
 // It NEVER activates inbound inbox permissions directly: the peer is recorded
 // as `pending_incoming` until Side A explicitly clicks Approve.
 func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, selfAddrs []string) (*peerPairAcceptResp, int, error) {
-	code := strings.ToUpper(strings.TrimSpace(req.Code))
+	code := strings.TrimSpace(req.Code)
 	remoteHubID := strings.TrimSpace(req.HubID)
 	remoteName := strings.TrimSpace(req.HubName)
 	remoteAddrs := sanitizePeerAddrs(req.Addrs, 6)
@@ -1222,9 +1390,16 @@ func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, se
 	}
 	matchedPermanent := pm.cardSecret != "" && len(code) == len(pm.cardSecret) &&
 		subtle.ConstantTimeCompare([]byte(code), []byte(pm.cardSecret)) == 1
+	if !matchedPermanent && pm.cardSecret != "" && len(code) == len(pm.cardSecret) {
+		upper := strings.ToUpper(code)
+		matchedPermanent = subtle.ConstantTimeCompare([]byte(upper), []byte(pm.cardSecret)) == 1
+	}
 	var legacyInv *peerInviteRecord
 	if !matchedPermanent {
 		inv, ok := pm.invites[code]
+		if !ok {
+			inv, ok = pm.invites[strings.ToUpper(code)]
+		}
 		if !ok {
 			pm.mu.Unlock()
 			return nil, http.StatusUnauthorized, fmt.Errorf("名片密钥无效或已重置，请让对方分享最新名片")

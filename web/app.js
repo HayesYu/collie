@@ -1700,10 +1700,23 @@
   // nothing, so until there's a title use the folder it works in.
   const autoName = (n) => /^(claude|codex|agy|antigravity|doubao|cursor)-\d+$/.test(n || "");
   const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "~";
+  const cleanLabel = (s) => (typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "");
+  const workerLabelOf = (w) => cleanLabel(w?.label);
+  const workerDisplayName = (w) => workerLabelOf(w) || (w?.name || "");
+  function agentLabelOf(v) {
+    if (!v || !v.is_agent || v.name === ROUTER) return "";
+    const direct = cleanLabel(v.label);
+    if (direct) return direct;
+    const w = findWorkerForAgent(v);
+    if (w && !w.ended) return workerLabelOf(w);
+    return "";
+  }
   function title(v) {
     if (!v) return "";
     if (v.name === ROUTER) return "Collie";
-    if (isWorker(v.name)) return v.name; // Collie talks about its agents by name
+    if (isWorker(v.name)) return agentLabelOf(v) || v.name;
+    const lbl = cleanLabel(v.label);
+    if (lbl) return lbl;
     return v.topic || (v.name && !autoName(v.name) ? v.name : base(tilde(v.cwd))) || v.pane_id;
   }
 
@@ -1715,17 +1728,20 @@
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
     const label = v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
     const isRealAgent = v.is_agent && v.name !== ROUTER;
+    const workerLbl = isRealAgent ? agentLabelOf(v) : "";
+    const hasAlias = !!(workerLbl && v.name && workerLbl !== v.name);
     const entries = isRealAgent ? (allEntries || chatEntries()) : null;
     const linked = isRealAgent ? ((workerThreadMap || computeWorkerThreadMap(null, entries)).get(v.name) || null) : null;
     const sum = isRealAgent ? agentTaskSummary(v, findWorkerForAgent(v), linked, entries) : null;
     const sumText = sum && sum.short && sum.short !== label ? sum.short : "";
     const sumFull = sumText ? (sum.full || sumText) : "";
-    const cardTitle = sumFull ? `${label} — ${sumFull}` : label;
+    const nameTip = hasAlias ? `${label} (${v.name})` : label;
+    const cardTitle = sumFull ? `${nameTip} — ${sumFull}` : nameTip;
     const sumHtml = sumText ? `<div class="item-sum" title="${esc(sumFull)}">${esc(sumText)}</div>` : "";
     const itemCls = `item${sumHtml ? " has-sum" : ""}${linked ? " has-th" : ""}`;
     const card = `<a class="${itemCls}" href="#/p/${encodeURIComponent(v.pane_id)}" title="${esc(cardTitle)}">
       <span class="glyph">${glyph(v)}</span>
-      <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm" title="${esc(label)}">${esc(label)}</span><span class="by-collie">Collie 派出</span>` : esc(label)}</div>${sumHtml}<div class="sub">${esc(sub)}</div></span>
+      <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm" title="${esc(cardTitle)}">${esc(label)}</span><span class="by-collie">Collie 派出</span>` : esc(label)}</div>${sumHtml}<div class="sub">${esc(sub)}</div></span>
       <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a>`;
     if (!linked) return `<li>${card}</li>`;
     const thTip = linked.title ? `打开关联话题：${linked.title}` : "打开关联话题抽屉";
@@ -3376,6 +3392,7 @@
       const w = workers[i];
       if (!w) continue;
       h = fnvHashStr(h, w.name || "");
+      h = fnvHashStr(h, w.label || "");
       h = fnvHashStr(h, w.status || "");
       h = fnvHashStr(h, w.pane_id || "");
       h = fnvHashStr(h, w.thread || "");
@@ -3387,6 +3404,7 @@
       const a = agents[i];
       if (!a) continue;
       h = fnvHashStr(h, a.name || "");
+      h = fnvHashStr(h, a.label || "");
       h = fnvHashStr(h, a.status || "");
       h = fnvHashStr(h, a.pane_id || "");
       h = fnvHashStr(h, a.kind || "");
@@ -3417,6 +3435,7 @@
       if (!w) continue;
       const flags = (workerBusy(w) ? 1 : 0) | (!w.ended && workerStatus(w) === "blocked" ? 2 : 0) | (w.ended ? 4 : 0);
       h = fnvHashStr(h, w.name || "");
+      h = fnvHashStr(h, w.label || "");
       h = fnvHashStr(h, w.pane_id || "");
       h = Math.imul(h ^ flags, 16777619);
     }
@@ -3424,6 +3443,7 @@
       const a = agents[i];
       if (!a) continue;
       h = fnvHashStr(h, a.name || "");
+      h = fnvHashStr(h, a.label || "");
       h = fnvHashStr(h, a.pane_id || "");
       h = Math.imul(h ^ (a.status === "blocked" ? 3 : 1), 16777619);
     }
@@ -5195,9 +5215,13 @@
     if (view === "collie") renderTarget();
     const crewHTML = active.map((w) => {
       const pane = paneOf(w.name);
+      const disp = workerDisplayName(w);
       const kindLbl = KIND_LABEL[w.kind] || w.kind;
       const stLbl = STATUS_LABEL[workerStatus(w)] || "";
-      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""} title="${esc([w.name, kindLbl, stLbl].filter(Boolean).join(" · "))}"><span class="dot ${esc(workerStatus(w))}" aria-hidden="true"></span><span class="chip-name">${esc(w.name)}</span><span class="k">${esc(kindLbl)}</span></a>`;
+      const metaTip = [w.name, kindLbl, stLbl].filter(Boolean).join(" · ");
+      const goal = w.task ? extractGoalFromTask(w.task).goal : "";
+      const tip = goal && goal !== disp && goal !== w.name ? `${metaTip} — ${goal}` : metaTip;
+      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""} data-worker="${esc(w.name)}" title="${esc(tip)}"><span class="dot ${esc(workerStatus(w))}" aria-hidden="true"></span><span class="chip-name">${esc(disp)}</span><span class="k">${esc(kindLbl)}</span></a>`;
     }).join("");
     const crewWillChange = crewHTML !== prevCrew;
     if (crewWillChange) ensureLiveAnchor();
@@ -6864,7 +6888,7 @@
         const r = await api("/api/super/memory");
         if (view !== "auto" || autoTab !== "memory" || memEditing) return;
         // Workers' states count too: the task cards show them.
-        const sig = JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + workerStatus(w)).join();
+        const sig = JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + (w.label || "") + ":" + workerStatus(w)).join();
         memData = r;
         if (sig !== body._memSig || !body.querySelector("#mem-content")) {
           const first = !body._memSig;
@@ -10298,7 +10322,9 @@
         const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
         const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
         const st = workerStatus(w);
-        return `<a ${href ? `href="${href}"` : ""} title="${esc((KIND_LABEL[w.kind] || w.kind) + " · " + (STATUS_LABEL[st] || st))}"><span class="dot ${esc(st)}"></span>${esc(w.name)}</a>`;
+        const disp = workerDisplayName(w);
+        const tip = [w.name, KIND_LABEL[w.kind] || w.kind, STATUS_LABEL[st] || st].filter(Boolean).join(" · ");
+        return `<a ${href ? `href="${href}"` : ""} title="${esc(tip)}"><span class="dot ${esc(st)}"></span>${esc(disp)}</a>`;
       }).join("")}</span>`;
     };
     let matchedFiles = 0;
@@ -10687,7 +10713,11 @@
     timerForm.querySelectorAll(".tm-days button").forEach((b, i) => b.classList.toggle("on", i === 0));
     const liveWorkers = (sup.workers || []).filter((w) => !w.ended);
     timerForm.target.innerHTML = `<option value="" data-sub="由它决定怎么处理">Collie</option>`
-      + liveWorkers.map((w) => `<option value="${esc(w.name)}" data-sub="${esc(KIND_LABEL[w.kind] || w.kind)}">${esc(w.name)}</option>`).join("");
+      + liveWorkers.map((w) => {
+        const lbl = workerLabelOf(w);
+        const text = lbl && lbl !== w.name ? `${lbl} (${w.name})` : w.name;
+        return `<option value="${esc(w.name)}" data-sub="${esc(KIND_LABEL[w.kind] || w.kind)}">${esc(text)}</option>`;
+      }).join("");
     timerForm.target.value = "";
     syncPick(timerForm.every_u);
     syncPick(timerForm.target);
@@ -12836,8 +12866,18 @@
     const v = find(current);
     if (!v) return;
     markSeen(v);
+    const wLabel = agentLabelOf(v);
+    const hasAlias = !!(v.is_agent && v.name && v.name !== ROUTER && wLabel && wLabel !== v.name);
     $("#d-name").textContent = v.name === ROUTER ? "Collie 的终端" : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
-    $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER ? `名字：${v.name}` : "";
+    $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER
+      ? (hasAlias ? `${wLabel} (${v.name})` : `名字：${v.name}`)
+      : "";
+    const wid = $("#d-worker-id");
+    if (wid) {
+      wid.hidden = !hasAlias;
+      wid.textContent = hasAlias ? v.name : "";
+      wid.title = hasAlias ? `底层名称：${v.name}` : "";
+    }
     $("#d-kind").textContent = v.is_agent ? (KIND_LABEL[v.kind] || v.kind) : "";
     const role = isWorker(v.name) ? "Collie 派出" : "";
     $("#d-worker").hidden = !role;
@@ -16592,6 +16632,8 @@
       );
       out.push({
         name,
+        label: cleanLabel(w?.label || live?.label || ""),
+        task: w?.task || "",
         status,
         ended,
         kind,
@@ -16669,19 +16711,23 @@
       }
       return;
     }
-    const sig = JSON.stringify(list.map((w) => [w.name, w.status, w.ended ? 1 : 0, w.href, w.kind]));
+    const sig = JSON.stringify(list.map((w) => [w.name, w.label || "", w.status, w.ended ? 1 : 0, w.href, w.kind]));
     if (!force && sig === tdWorkersSig && !tdWorkersEl.hidden) return;
     tdWorkersSig = sig;
     tdWorkersEl.hidden = false;
     tdWorkersEl.innerHTML = list.map((w) => {
+      const disp = w.label || w.name;
       const stLabel = STATUS_LABEL[w.status] || (w.ended ? "已停止" : w.status);
       const kindLabel = KIND_LABEL[w.kind] || w.kind || "";
-      const tip = [w.name, kindLabel, stLabel].filter(Boolean).join(" · ");
+      const metaTip = [w.name, kindLabel, stLabel].filter(Boolean).join(" · ");
+      const goal = w.task ? extractGoalFromTask(w.task).goal : "";
+      const tip = goal && goal !== disp && goal !== w.name ? `${metaTip} — ${goal}` : metaTip;
       const cls = `td-worker${w.ended ? " is-ended" : ""}${w.href ? "" : " is-static"}`;
-      const inner = `<span class="dot ${esc(w.status)}" aria-hidden="true"></span><span class="td-worker-name">${esc(w.name)}</span>`;
+      const inner = `<span class="dot ${esc(w.status)}" aria-hidden="true"></span><span class="td-worker-name">${esc(disp)}</span>`;
       if (w.href) {
         const act = w.isHist ? "查看记录" : "打开终端";
-        return `<a class="${cls}" href="${esc(w.href)}" data-td-worker="${esc(w.name)}" data-td-status="${esc(w.status)}" title="${esc(tip)}" aria-label="${esc(`${w.name}，${stLabel}，${act}`)}">${inner}</a>`;
+        const aria = disp !== w.name ? `${disp}（${w.name}），${stLabel}，${act}` : `${w.name}，${stLabel}，${act}`;
+        return `<a class="${cls}" href="${esc(w.href)}" data-td-worker="${esc(w.name)}" data-td-status="${esc(w.status)}" title="${esc(tip)}" aria-label="${esc(aria)}">${inner}</a>`;
       }
       return `<span class="${cls}" data-td-worker="${esc(w.name)}" data-td-status="${esc(w.status)}" title="${esc(tip)}">${inner}</span>`;
     }).join("");

@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS triggers (id TEXT PRIMARY KEY, n INTEGER NOT NULL, at
 CREATE INDEX IF NOT EXISTS triggers_status ON triggers(status);
 CREATE INDEX IF NOT EXISTS triggers_thread ON triggers(thread, n);
 CREATE TABLE IF NOT EXISTS threads  (id TEXT PRIMARY KEY, last_at INTEGER NOT NULL, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS workers  (name TEXT PRIMARY KEY, created_at INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS workers  (name TEXT PRIMARY KEY, created_at INTEGER NOT NULL, label TEXT NOT NULL DEFAULT '', data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS entries  (id TEXT PRIMARY KEY, n INTEGER NOT NULL, at INTEGER NOT NULL, thread TEXT NOT NULL, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS entries_thread ON entries(thread, n);
 CREATE TABLE IF NOT EXISTS timers   (id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -102,7 +102,70 @@ func openDB(path string) (*sql.DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
+	if err := migrateDB(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+func migrateDB(db *sql.DB) error {
+	hasLabel, err := tableHasColumn(db, "workers", "label")
+	if err != nil {
+		return err
+	}
+	if !hasLabel {
+		if _, err := db.Exec(`ALTER TABLE workers ADD COLUMN label TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tableHasColumn(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func loadWorkers(db *sql.DB, into func(*Worker)) error {
+	rows, err := db.Query(`SELECT label, data FROM workers`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var colLabel, data string
+		if err := rows.Scan(&colLabel, &data); err != nil {
+			return err
+		}
+		w := new(Worker)
+		if json.Unmarshal([]byte(data), w) == nil {
+			if w.Label == "" && colLabel != "" {
+				w.Label = cleanWorkerLabel(colLabel)
+			} else if w.Label != "" {
+				w.Label = cleanWorkerLabel(w.Label)
+			}
+			into(w)
+		}
+	}
+	return rows.Err()
 }
 
 func idNum(id string) int64 {
@@ -233,7 +296,9 @@ func loadStateWithMeta(db *sql.DB, home string) (*State, bool, error) {
 	st.Triggers = trig
 	loadRows(db, `SELECT data FROM (SELECT data, n FROM entries ORDER BY n DESC LIMIT 600) ORDER BY n`, func(e *Entry) { st.Entries = append(st.Entries, e) })
 	loadRows(db, `SELECT data FROM threads ORDER BY last_at DESC LIMIT 500`, func(t *Thread) { st.Threads[t.ID] = t })
-	loadRows(db, `SELECT data FROM workers`, func(w *Worker) { st.Workers[w.Name] = w })
+	if err := loadWorkers(db, func(w *Worker) { st.Workers[w.Name] = w }); err != nil {
+		return nil, false, err
+	}
 	loadRows(db, `SELECT data FROM timers`, func(t *Timer) { st.Timers = append(st.Timers, t) })
 	return st, hasSettings, nil
 }
@@ -288,8 +353,8 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 			th.ID, th.LastAt.Unix(), js(th))
 	}
 	for _, w := range st.Workers {
-		put(`INSERT INTO workers(name,created_at,data) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET data=excluded.data`,
-			w.Name, w.CreatedAt.Unix(), js(w))
+		put(`INSERT INTO workers(name,created_at,label,data) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET label=excluded.label, data=excluded.data`,
+			w.Name, w.CreatedAt.Unix(), w.Label, js(w))
 	}
 	for _, e := range st.Entries {
 		put(`INSERT INTO entries(id,n,at,thread,data) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`,

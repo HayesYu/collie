@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Durable state for the super-agent: the trigger inbox, threads, workers,
@@ -38,6 +39,7 @@ type Thread struct {
 
 type Worker struct {
 	Name        string    `json:"name"`
+	Label       string    `json:"label,omitempty"`
 	Kind        string    `json:"kind"`
 	Machine     string    `json:"machine,omitempty"` // "" = the hub's own machine
 	Cwd         string    `json:"cwd"`
@@ -60,6 +62,29 @@ type Worker struct {
 	// Session is its agent's conversation id, kept after it stops so a later
 	// `spawn --resume` can carry on where it left off.
 	Session string `json:"session,omitempty"`
+}
+
+const workerLabelMaxRunes = 64
+
+// cleanWorkerLabel normalizes an optional short human-facing worker label:
+// collapses whitespace/newlines and bounds extreme inputs without trimming
+// normal short labels (4–6 CJK characters or a couple of English words).
+func cleanWorkerLabel(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	if len(s) <= workerLabelMaxRunes || utf8.RuneCountInString(s) <= workerLabelMaxRunes {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == workerLabelMaxRunes {
+			return strings.TrimSpace(s[:i])
+		}
+		n++
+	}
+	return s
 }
 
 // DecisionPick records how the human resolved a Collie --opt decision card.

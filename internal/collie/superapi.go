@@ -563,6 +563,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		Task      string  `json:"task"`
 		Thread    string  `json:"thread"`
 		Name      string  `json:"name"`
+		Label     string  `json:"label"`
 		By        string  `json:"by"`
 		Machine   *string `json:"machine"`
 		Model     string  `json:"model"`
@@ -573,6 +574,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
+	body.Label = cleanWorkerLabel(body.Label)
 	session := ""
 	if body.Resume != "" {
 		old, err := s.sup.resumeFrom(body.Resume)
@@ -586,6 +588,9 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		body.Machine = &m
 		if body.Name == "" {
 			body.Name = old.Name
+		}
+		if body.Label == "" {
+			body.Label = old.Label
 		}
 		if body.Model == "" && body.Effort == "" {
 			body.Model, body.Effort = old.Model, old.Effort
@@ -620,7 +625,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	} else if body.Machine != nil {
 		machine = s.machineByName(*body.Machine)
 	}
-	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub, session)
+	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.Label, body.By, machine, body.Model, body.Effort, sub, session)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
@@ -639,6 +644,9 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 	res := map[string]any{"worker": wk.Name, "kind": wk.Kind, "status": status, "thread": wk.Thread,
 		"note": "its agent is starting; you will get a [collie] event when it reports, finishes, gets blocked or fails. Tell the human it is on its way, not that it is done"}
+	if wk.Label != "" {
+		res["label"] = wk.Label
+	}
 	writeJSON(w, 202, res)
 }
 

@@ -4,6 +4,31 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.6 (2026-11-27)
+
+### Highlights
+
+- **Worker Short Display Labels (`collie spawn --label`) — Zero Extra Model Calls (`internal/collie/{store.go,db.go,cli.go,super.go,superapi.go,server.go}`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Added optional `--label` flag to `collie spawn` (e.g. `collie spawn --name fix-pagination --label "修分页单测" "..."` or `--label "Fix Auth"`), persisted in SQLite `workers.label` with automatic lossless migration for existing databases and seamless fallback to ASCII `name` when empty.
+  - Preserved `label` automatically across `collie spawn --resume <worker>` and allowed updating it when a new `--label` is provided; kept all underlying `herdr` / tmux / log / `collie send|stop|show` identifiers strictly on ASCII `name` with zero breaking changes.
+  - Exposed `label` in `GET /api/state`, `GET /api/super`, `collie list`, and `collie show`, and updated the default `ROUTER.md` template to guide Collie to attach a concise 4–6 character (or ~2 English word) `--label` in the human's language on every `collie spawn`.
+  - Updated Web UI and `docs/demo/` to prioritize `label` in the top active-agent crew strip, left sidebar worker list, thread drawer worker pills, and worker detail header (displaying `label` with a subtle monospace ASCII `name` subtitle, full ASCII `name` + task summary on native `title` hover, and seamless fallback to ASCII `name` when unlabeled).
+
+### Client / API Changes
+
+- **`POST /api/super/spawn` & CLI `collie spawn`**:
+  - Request body adds optional `label?: string` (CLI: `--label <text>`, whitespace-normalized and bounded to 64 runes; omitted or empty falls back to ASCII `name`; on `--resume`, retains the previous `label` unless a new non-empty `label` is passed).
+  - Response adds optional `label?: string` (omitted when empty).
+- **`GET /api/state` & SSE `event: state` (`AgentView`)**:
+  - Active worker entries in `agents[]` add optional `label?: string` (omitted when empty; `name` remains strictly ASCII).
+- **`GET /api/super` & SSE `event: super` (`Worker`)**:
+  - Entries in `workers[]` add optional `label?: string` (omitted when empty).
+- **SQLite `workers` table**:
+  - Added `label TEXT NOT NULL DEFAULT ''` column via automatic lossless `ALTER TABLE` migration on DB open.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.5 (2026-11-27)
 
 ### Highlights
@@ -27,7 +52,6 @@ All notable changes to Collie are documented in this file. Each release includes
 ### Client / API Changes
 
 - None (Web UI performance, layout, and interaction release only; no HTTP endpoint, SSE event, JSON schema, or CLI behavior changes).
-- **Breaking changes**: None.
 
 ---
 

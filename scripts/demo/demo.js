@@ -20,8 +20,8 @@
     agent({ pane_id: "w2:p1@macbook", workspace_id: "w2@macbook", name: "claude-1", kind: "claude", status: "working", cwd: "/Users/alex/code/shop-web", topic: "首页加暗色模式", run: ["opus", "high"] }),
     agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "idle", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", run: ["gpt-6.1-sol", "high"] }),
     agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", run: ["", ""] }),
-    agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
-    agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
+    agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", label: "查分页单测", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
+    agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", label: "写v1.4日志", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
   ];
   const shells = [
     { pane_id: "w7:p1", workspace_id: "w7", workspace_label: "logs", name: "logs", kind: "", status: "shell", cwd: "/home/alex/code/shop-api", title: "", is_agent: false, machine: "" },
@@ -30,8 +30,8 @@
   const state = () => ({ ok: true, agents, shells, machines, ...(lastReadEntryId ? { last_read_entry_id: lastReadEntryId } : {}) });
 
   const workers = [
-    { name: "fix-flaky-test", kind: "codex", cwd: "/home/alex/code/shop-api", task: "找出 TestOrdersPagination 偶发失败的原因并修好", thread: "chat:main", pane_id: "w5:p1", workspace_id: "w5", machine: "", created_by: "collie", created_at: ago(14), status: "working", run: ["gpt-6.1-sol", "medium"] },
-    { name: "release-notes", kind: "claude", cwd: "/Users/alex/code/shop-web", task: "根据 v1.3..main 的提交写 v1.4 发布说明", thread: "chat:main", pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", machine: "macbook", created_by: "collie", created_at: ago(14), status: "done", last_report: "CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", report_at: ago(6), run: ["sonnet", "low"] },
+    { name: "fix-flaky-test", label: "查分页单测", kind: "codex", cwd: "/home/alex/code/shop-api", task: "找出 TestOrdersPagination 偶发失败的原因并修好", thread: "chat:main", pane_id: "w5:p1", workspace_id: "w5", machine: "", created_by: "collie", created_at: ago(14), status: "working", run: ["gpt-6.1-sol", "medium"] },
+    { name: "release-notes", label: "写v1.4日志", kind: "claude", cwd: "/Users/alex/code/shop-web", task: "根据 v1.3..main 的提交写 v1.4 发布说明", thread: "chat:main", pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", machine: "macbook", created_by: "collie", created_at: ago(14), status: "done", last_report: "CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", report_at: ago(6), run: ["sonnet", "low"] },
   ];
   let seq = 100;
   const dismissed = new Set();
@@ -332,8 +332,8 @@
     ],
     "w1:p1": [
       { kind: "user", text: "[collie] 1 个事件 · 对话 · 订单接口的分页测试偶尔会挂……" },
-      tool("Bash", "collie spawn -kind codex -name fix-flaky-test \"…\"", "spawned fix-flaky-test on devbox"),
-      tool("Bash", "collie spawn -kind claude -machine macbook -name release-notes \"…\"", "spawned release-notes on macbook"),
+      tool("Bash", 'collie spawn -kind codex -name fix-flaky-test -label "查分页单测" "…"', "spawned fix-flaky-test on devbox"),
+      tool("Bash", 'collie spawn -kind claude -machine macbook -name release-notes -label "写v1.4日志" "…"', "spawned release-notes on macbook"),
       tool("Bash", "collie reply \"好，分两路并行……\"", "ok"),
     ],
   };

@@ -235,23 +235,43 @@ func cliSay(args []string) error {
 	return err
 }
 
-func cliSpawn(args []string) error {
-	fs := flag.NewFlagSet("spawn", flag.ExitOnError)
+func parseSpawn(args []string, in io.Reader, tty bool) (map[string]any, error) {
+	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
 	kind := fs.String("kind", "", "claude | codex | antigravity | doubao | cursor (default from settings)")
 	cwd := fs.String("cwd", "", "working directory (default from settings)")
 	thread := fs.String("thread", mainThread, "thread this work belongs to")
 	name := fs.String("name", "", "worker name (default kind-N)")
+	label := fs.String("label", "", "short human-readable display label (e.g. \"修分页单测\" or \"Fix Auth\")")
 	machine := fs.String("machine", "", "which computer (see `collie list`; default from settings)")
 	model := fs.String("model", "", "model to launch with (default from settings for the default kind)")
 	effort := fs.String("effort", "", "thinking effort: low | medium | high | xhigh | max ...")
 	sub := fs.Bool("subscribe", false, "route later events of --thread straight to this worker")
 	resume := fs.String("resume", "", "a stopped worker to carry on from: its computer, directory and conversation")
-	fs.Parse(args)
-	t, err := textArg(fs)
-	if err != nil {
-		return err
+	if err := fs.Parse(args); err != nil {
+		return nil, err
 	}
-	body := map[string]any{"kind": *kind, "cwd": *cwd, "name": *name, "task": t, "by": by(), "model": *model, "effort": *effort, "resume": *resume}
+	t := strings.Join(fs.Args(), " ")
+	if t == "-" || (t == "" && !tty && in != nil) {
+		b, err := io.ReadAll(in)
+		if err != nil {
+			return nil, err
+		}
+		t = string(b)
+	}
+	if strings.TrimSpace(t) == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	body := map[string]any{
+		"kind":   *kind,
+		"cwd":    *cwd,
+		"name":   *name,
+		"label":  cleanWorkerLabel(*label),
+		"task":   t,
+		"by":     by(),
+		"model":  *model,
+		"effort": *effort,
+		"resume": *resume,
+	}
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "subscribe" {
 			body["subscribe"] = *sub
@@ -263,6 +283,17 @@ func cliSpawn(args []string) error {
 			body["thread"] = *thread
 		}
 	})
+	return body, nil
+}
+
+func cliSpawn(args []string) error {
+	body, err := parseSpawn(args, os.Stdin, isTerminal(os.Stdin))
+	if err == flag.ErrHelp {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	b, err := cliCall("POST", "/api/super/spawn", body)
 	if err == nil {
 		printResult(b)
@@ -907,8 +938,12 @@ sessions and tidies memory/. Its journal is in dreams/.
     reply back to you (e.g. approving a ticket, running a manual login/key setup, replying
     to someone else, confirming a calendar invite) so it stays in their pending list until
     they silently mark it done.
-- ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--thread T] [--name N] \"task brief\"`" + `
+- ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--thread T] [--name N] [--label L] \"task brief\"`" + `
   starts a worker in the background and returns at once. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
+  Whenever you spawn a worker, also pass a concise ` + "`--label`" + ` in the human's language (4–6 Chinese
+  characters or ~2 English words, e.g. ` + "`--name fix-pagination --label \"修分页单测\"`" + ` or
+  ` + "`--name fix-auth --label \"Fix Auth\"`" + `) so the UI chips and sidebar show what it is doing at a
+  glance with zero extra model calls (keep ` + "`--name`" + ` ASCII; ` + "`send`" + `/` + "`stop`" + `/` + "`show`" + ` still take ` + "`--name`" + `).
   ` + "`{{BIN}} list`" + ` shows the connected computers. Use --machine when the human names a
   computer or the code lives there (cwd is then a path on that computer; "~" is its home).
   The brief is complete and self-contained: goal, context, constraints, what "done" means
@@ -930,9 +965,9 @@ sessions and tidies memory/. Its journal is in dreams/.
 - ` + "`{{BIN}} subscribe WORKER THREAD`" + ` — route a thread's future events straight to that worker
   (e.g. its GitHub PR thread). chat:main always stays with you.
 - ` + "`{{BIN}} stop WORKER`" + ` — stop a worker and close its terminal. Its conversation is kept:
-  ` + "`{{BIN}} spawn --resume WORKER \"what next\"`" + ` opens it again on the same computer and
-  directory, so a follow-up on earlier work carries on with everything it knew. Spawn
-  fresh for a new job.
+  ` + "`{{BIN}} spawn --resume WORKER [--label L] \"what next\"`" + ` opens it again on the same computer and
+  directory (keeping its previous ` + "`--label`" + ` unless a new one is passed), so a follow-up on earlier
+  work carries on with everything it knew. Spawn fresh for a new job.
 - ` + "`{{BIN}} list`" + ` — workers, threads, timers.
 - ` + "`{{BIN}} show ID`" + ` — expand any id (trigger t12, thread github:org/repo#4, worker name).
   Results contain further ids: follow them hop by hop to recall older context. Long

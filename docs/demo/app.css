@@ -567,6 +567,12 @@ html.is-idle .working-row .wk-t,
 .d-meta .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .d-meta > * { white-space: nowrap; flex: none; }
 .d-meta > .mono { flex: 0 1 auto; min-width: 0; }
+.d-meta > .d-worker-id { flex: 0 1 auto; min-width: 0; max-inline-size: 220px; }
+@media (max-width: 760px) {
+  #detail .d-meta { gap: 8px; }
+  #detail .d-meta > .d-worker-id { max-inline-size: none; flex: 1 1 auto; }
+  #detail .d-meta:has(#d-worker-id:not([hidden])) #d-cwd { display: none; }
+}
 #v-collie .d-meta { gap: 10px; }
 #v-collie #router-model, #v-collie #router-queue { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 700px) { #d-model { display: none; } }

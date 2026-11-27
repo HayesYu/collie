@@ -178,18 +178,37 @@ $args
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Interactive</string>
   <key>StandardOutPath</key><string>$(xml "$log")</string>
   <key>StandardErrorPath</key><string>$(xml "$log")</string>
 </dict>
 </plist>"
-    if [ -n "${COLLIE_DRY_SERVICE:-}" ]; then say "$unit"; return; fi
-    mkdir -p "$(dirname "$plist")"
-    printf '%s\n' "$unit" > "$plist"
-    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$plist"
+    if [ -n "${COLLIE_DRY_SERVICE:-}" ]; then say "${unit}"; return; fi
+    mkdir -p "$(dirname "${plist}")" "$(dirname "${log}")"
+    printf '%s\n' "${unit}" > "${plist}"
+    uid=$(id -u)
+    launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+    # macOS launchctl bootout is asynchronous; wait up to ~5s for teardown before bootstrap.
+    w=0
+    while [ "${w}" -lt 10 ] && launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; do
+      if sleep 0.5 2>/dev/null; then
+        w=$((w + 1))
+      else
+        sleep 1
+        w=$((w + 2))
+      fi
+    done
+    attempt=0
+    until launchctl bootstrap "gui/${uid}" "${plist}" 2>/dev/null; do
+      attempt=$((attempt + 1))
+      if [ "${attempt}" -ge 4 ]; then
+        launchctl bootstrap "gui/${uid}" "${plist}"
+        break
+      fi
+      sleep 1
+    done
     step "已作为后台服务运行（launchd: ${label}）"
-    say "    日志：tail -f $log"
+    say "    日志：tail -f ${log}"
   else
     unitdir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
     file=${unitdir}/collie-${name}.service

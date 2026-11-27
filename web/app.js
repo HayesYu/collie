@@ -1458,8 +1458,11 @@
   let serverReadCursorId = "";
   let sessionUnreadMarkerId = "";
   let unreadAnchorApplied = false;
+  let pendingUnreadAnchorOnVisible = false;
   let readSyncTimer = 0;
   let pendingReadSyncId = "";
+  let pendingReadDeferCursor = false;
+  let scrollReadTimer = 0;
   const latestEntryNum = (list) => {
     let max = 0;
     for (const e of list || []) {
@@ -1525,25 +1528,51 @@
       })
       .catch(() => {});
   }
+  function applyPendingReadCursor(entryId) {
+    const id = String(entryId || "").trim();
+    const n = entryIdNum(id);
+    if (n > entryIdNum(readCursorId)) {
+      readCursorId = id;
+      store.set(CHAT_READ_KEY, id);
+    }
+  }
+  function cancelPendingChatRead() {
+    if (readSyncTimer) { clearTimeout(readSyncTimer); readSyncTimer = 0; }
+    pendingReadSyncId = "";
+    pendingReadDeferCursor = false;
+  }
+  function clearScrollReadTimer() {
+    if (scrollReadTimer) { clearTimeout(scrollReadTimer); scrollReadTimer = 0; }
+  }
   function flushPendingChatRead(keepalive = false) {
     if (!pendingReadSyncId) return;
     clearTimeout(readSyncTimer);
     readSyncTimer = 0;
     const sendId = pendingReadSyncId;
+    const deferCursor = pendingReadDeferCursor;
     pendingReadSyncId = "";
+    pendingReadDeferCursor = false;
+    if (deferCursor) applyPendingReadCursor(sendId);
     sendChatReadNow(sendId, keepalive);
   }
   function commitChatRead(entryId, opts = {}) {
     const id = String(entryId || "").trim();
     const n = entryIdNum(id);
     if (n <= 0) return;
-    if (n > entryIdNum(readCursorId)) {
-      readCursorId = id;
-      store.set(CHAT_READ_KEY, id);
+    const deferCursor = !!opts.deferCursor && !opts.immediate;
+    if (!deferCursor) applyPendingReadCursor(id);
+    const targetId = deferCursor
+      ? (n > entryIdNum(readCursorId) ? id : readCursorId)
+      : readCursorId;
+    if (!targetId) return;
+    if (!deferCursor && entryIdNum(targetId) <= entryIdNum(serverReadCursorId)) return;
+    if (deferCursor && entryIdNum(targetId) <= entryIdNum(readCursorId) && entryIdNum(targetId) <= entryIdNum(serverReadCursorId)) return;
+    if (entryIdNum(targetId) > entryIdNum(pendingReadSyncId)) {
+      pendingReadSyncId = targetId;
+      pendingReadDeferCursor = deferCursor;
+    } else if (!deferCursor) {
+      pendingReadDeferCursor = false;
     }
-    const targetId = readCursorId;
-    if (entryIdNum(targetId) <= entryIdNum(serverReadCursorId)) return;
-    pendingReadSyncId = targetId;
     if (opts.immediate) {
       flushPendingChatRead(!!opts.keepalive);
       return;
@@ -1552,8 +1581,16 @@
     readSyncTimer = setTimeout(() => {
       readSyncTimer = 0;
       const sendId = pendingReadSyncId;
+      const shouldApply = pendingReadDeferCursor;
       pendingReadSyncId = "";
-      if (sendId) sendChatReadNow(sendId, false);
+      pendingReadDeferCursor = false;
+      if (!sendId) return;
+      if (shouldApply) {
+        applyPendingReadCursor(sendId);
+        updateSuperJump();
+        renderSide();
+      }
+      sendChatReadNow(sendId, false);
     }, opts.delay ?? CHAT_READ_DEBOUNCE_MS);
   }
   function normSup(s) {
@@ -2093,11 +2130,15 @@
     const atBottom = dist <= AT_BOTTOM_PX;
     const routeKey = routeKeyFor(v, id);
     const snap = { routeKey, atBottom, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0 };
-    if (v === "collie" && !atBottom) {
-      const anc = captureCollieAnchor(sc);
-      if (anc) {
-        snap.anchorId = anc.anchorId;
-        snap.anchorOffset = anc.anchorOffset;
+    if (v === "collie") {
+      snap.readCursorId = readCursorId || "";
+      snap.wasUnreadAnchor = !!(collieInitialAnchor?.mode === "unread" || collieInitialAnchor?.mode === "unread-auto" || activeCollieRestore?.unreadSep);
+      if (!atBottom) {
+        const anc = captureCollieAnchor(sc);
+        if (anc) {
+          snap.anchorId = anc.anchorId;
+          snap.anchorOffset = anc.anchorOffset;
+        }
       }
     }
     if (typeof idx === "number") scrollByIdx.set(idx, snap);
@@ -2240,8 +2281,11 @@
     }
     if (next !== "collie") {
       endCollieUserScroll(true);
+      clearScrollReadTimer();
       cancelCollieLayoutLock();
       cancelInitialAnchor();
+      activeCollieRestore = null;
+      pendingUnreadAnchorOnVisible = false;
       pendingOpen = false;
       hideSearchPanel();
       closeCollieThreadsPop();
@@ -2270,10 +2314,21 @@
       const savedThread = !wantThread && wasExistingIdx ? threadByIdx.get(navCur) : null;
       const superEl = $("#super-thread");
       const needRebuild = !superBodyKey || (canPatchSuperDom(superEl) && !superEl?.firstElementChild);
-      if (saved && !saved.atBottom) {
+      const unreadNow = computeUnreadInfo(chatEntries(), readCursorId);
+      const curCursorN = entryIdNum(readCursorId);
+      const savedCursorN = entryIdNum(saved?.readCursorId);
+      const savedAnchorN = entryIdNum(saved?.anchorId);
+      const preferUnreadAnchor = !saved || saved.atBottom
+        || (!wasExistingIdx && unreadNow.count > 0)
+        || (saved.wasUnreadAnchor && curCursorN > 0 && savedAnchorN > 0 && savedAnchorN <= curCursorN)
+        || (savedCursorN > 0 && curCursorN > savedCursorN);
+      if (!preferUnreadAnchor) {
         unreadAnchorApplied = true;
         renderSuper({ force: needRebuild, restore: saved });
       } else {
+        scrollByRoute.delete("collie");
+        if (typeof navCur === "number") scrollByIdx.delete(navCur);
+        activeCollieRestore = null;
         unreadAnchorApplied = false;
         sessionUnreadMarkerId = "";
         renderSuper({ force: needRebuild, unreadAnchor: true });
@@ -3191,6 +3246,64 @@
     commitChatRead(latestId, opts);
     updateSuperJump();
   }
+  function maybeAdvanceReadByScroll(sc = viewScroller("collie")) {
+    if (view !== "collie" || document.hidden || collieLayoutLock || activeThreadRoot || collieInitialAnchor) return;
+    if (!sc || sc.clientHeight <= 0 || performance.now() < programmaticScrollUntil) return;
+    const curN = entryIdNum(readCursorId);
+    if (curN <= 0) return;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    if (dist <= AT_BOTTOM_PX) {
+      maybeScheduleReadAtBottom();
+      return;
+    }
+    const unreadNow = computeUnreadInfo();
+    if (!unreadNow.count) return;
+    const box = $("#super-thread");
+    if (!box) return;
+    const msgs = box.querySelectorAll(".msg[data-id], .event[data-id]");
+    if (!msgs || !msgs.length) return;
+    const sr = sc.getBoundingClientRect();
+    const cutoff = sr.top + 24;
+    let lo = 0, hi = msgs.length - 1, passedIdx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const mr = msgs[mid].getBoundingClientRect();
+      if (mr.bottom <= cutoff) {
+        passedIdx = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (passedIdx < 0) return;
+    const all = chatEntries();
+    const byId = new Map();
+    for (let i = 0; i < all.length; i++) {
+      if (all[i]?.id) byId.set(all[i].id, all[i]);
+    }
+    let advanceId = "";
+    for (let i = passedIdx; i >= 0; i--) {
+      const id = msgs[i]?.dataset?.id || "";
+      const n = entryIdNum(id);
+      if (n <= curN) break;
+      const ent = byId.get(id);
+      if (ent && isSubstantiveUnread(ent)) {
+        advanceId = id;
+        break;
+      }
+    }
+    if (!advanceId) return;
+    commitChatRead(advanceId);
+    updateSuperJump();
+    renderSide();
+  }
+  function scheduleScrollReadCheck(delayMs = 260) {
+    clearScrollReadTimer();
+    scrollReadTimer = setTimeout(() => {
+      scrollReadTimer = 0;
+      maybeAdvanceReadByScroll();
+    }, delayMs);
+  }
 
   function optimisticallyResolved(p, list = chatEntries()) {
     const id = typeof p === "string" ? p : p?.id;
@@ -3792,8 +3905,10 @@
       const q = input.value.trim();
       if (q && q === searchQuery && panel.hidden) showSearchPanel();
     });
+    const searchIme = trackIME(input);
     input?.addEventListener("keydown", (e) => {
-      if (e.isComposing || e.keyCode === 229) return;
+      if (isIMEComposing(e, searchIme)) return;
+      if (isPostCompositionSafariEnter(e, searchIme)) { e.preventDefault(); return; }
       if (e.key === "ArrowDown" && searchHits.length) {
         e.preventDefault();
         if (panel.hidden) showSearchPanel();
@@ -3868,6 +3983,23 @@
     try { collieInitialAnchor.ro?.disconnect?.(); } catch {}
     collieInitialAnchor = null;
   }
+  function hasPendingUnreadImages(box, sepEl) {
+    if (!box || !sepEl || typeof box.querySelectorAll !== "function") return false;
+    const imgs = box.querySelectorAll("img");
+    if (!imgs || !imgs.length) return false;
+    const canCompare = typeof sepEl.compareDocumentPosition === "function";
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs[i];
+      if (!img) continue;
+      const hasSrc = !!img.getAttribute?.("src");
+      const pendingThumb = !hasSrc && !!img.parentElement?.classList?.contains?.("thumb") && !img.parentElement.classList.contains("broken");
+      const loadingImg = hasSrc && img.complete === false;
+      if (!pendingThumb && !loadingImg) continue;
+      if (canCompare && !(sepEl.compareDocumentPosition(img) & 4)) continue;
+      return true;
+    }
+    return false;
+  }
   function placeUnreadAnchor(scroller, sepEl) {
     const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     const sr = scroller.getBoundingClientRect();
@@ -3883,13 +4015,14 @@
       scroller.scrollTop = scroller.scrollHeight;
       return { fitsAtBottom: true, wantTop: maxTop };
     }
-    markProgrammaticScroll(140);
+    markProgrammaticScroll(240);
     scroller.scrollTop = wantTop;
     return { fitsAtBottom: false, wantTop };
   }
   function applyInitialAnchor(fromResize = false) {
     if (!collieInitialAnchor) return;
     if (view !== "collie") { cancelInitialAnchor(); return; }
+    if (document.hidden || pendingUnreadAnchorOnVisible) return;
     if (performance.now() > collieInitialAnchor.until) { cancelInitialAnchor(); return; }
     if (activeThreadRoot || collieLayoutLock || olderBusy) return;
     const box = $("#super-thread"), sc = box?.parentElement;
@@ -3903,7 +4036,7 @@
     if (collieInitialAnchor.mode === "bottom") {
       markProgrammaticScroll(120);
       sc.scrollTop = sh;
-      const snap = { routeKey: "collie", atBottom: true, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0 };
+      const snap = { routeKey: "collie", atBottom: true, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0, readCursorId: readCursorId || "", wasUnreadAnchor: false };
       if (typeof navCur === "number") scrollByIdx.set(navCur, snap);
       scrollByRoute.set("collie", snap);
       updateSuperJump();
@@ -3914,15 +4047,34 @@
     if (!sepEl) { cancelInitialAnchor(); return; }
     const placed = placeUnreadAnchor(sc, sepEl);
     if (placed.fitsAtBottom) {
-      collieInitialAnchor.mode = "bottom";
-      maybeScheduleReadAtBottom();
-    } else if (activeCollieRestore?.unreadSep) {
-      activeCollieRestore.scrollTop = placed.wantTop;
+      // Keep mode as "unread-auto" rather than locking one-way to "bottom" so
+      // late-loading images expanding below #unread-sep can flip back cleanly.
+      collieInitialAnchor.mode = "unread-auto";
+      collieInitialAnchor.atBottom = true;
+      activeCollieRestore = null;
+      const snap = { routeKey: "collie", atBottom: true, scrollTop: sc.scrollTop, anchorId: "", anchorOffset: 0, readCursorId: readCursorId || "", wasUnreadAnchor: false };
+      if (typeof navCur === "number") scrollByIdx.set(navCur, snap);
+      scrollByRoute.set("collie", snap);
+      if (!hasPendingUnreadImages(box, sepEl)) {
+        maybeScheduleReadAtBottom({ deferCursor: true });
+      }
+    } else {
+      collieInitialAnchor.mode = "unread";
+      collieInitialAnchor.atBottom = false;
+      if (pendingReadDeferCursor || readSyncTimer) cancelPendingChatRead();
+      activeCollieRestore = {
+        unreadSep: true,
+        anchorId: sessionUnreadMarkerId,
+        anchorOffset: UNREAD_TOP_PAD,
+        atBottom: false,
+        scrollTop: placed.wantTop,
+        until: collieInitialAnchor.until,
+      };
+      captureViewScroll("collie", null, navCur);
     }
-    captureViewScroll("collie", null, navCur);
     updateSuperJump();
   }
-  function beginInitialAnchor(mode) {
+  function beginInitialAnchor(mode, opts = {}) {
     cancelInitialAnchor();
     const box = $("#super-thread"), sc = box?.parentElement;
     if (!box || !sc) return;
@@ -3933,8 +4085,12 @@
       try { ro.observe(box); } catch {}
       try { ro.observe(sc); } catch {}
     }
-    const timer = setTimeout(cancelInitialAnchor, INITIAL_ANCHOR_MS);
-    collieInitialAnchor = { mode, until, timer, ro, lastH: sc.scrollHeight, lastCH: sc.clientHeight };
+    const timer = setTimeout(() => {
+      const wasAutoBottom = collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom;
+      cancelInitialAnchor();
+      if (wasAutoBottom) maybeScheduleReadAtBottom({ deferCursor: true });
+    }, INITIAL_ANCHOR_MS);
+    collieInitialAnchor = { mode, atBottom: mode === "bottom" || !!opts.atBottom, until, timer, ro, lastH: sc.scrollHeight, lastCH: sc.clientHeight };
   }
 
   let superBodyKey = "", superDomGen = 0, superAsksGen = 0;
@@ -4275,11 +4431,13 @@
     const scroller = box.parentElement;
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
     const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot && collieInitialAnchor?.mode === "bottom" && performance.now() <= collieInitialAnchor.until;
+    const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
+      && (collieInitialAnchor?.mode === "bottom" || (collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom))
+      && performance.now() <= collieInitialAnchor.until;
     const atBottom = forceBottom ? true : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || distBefore <= AT_BOTTOM_PX);
     const jumping = flashEntry.until > Date.now();
     const shouldApplyUnreadAnchor = (wantUnreadAnchor || !unreadAnchorApplied) && !forceBottom && !holdRestore && !activeThreadRoot && view === "collie";
-    const needLiveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread";
+    const needLiveAnchor = !atBottom && !holdRestore && !jumping && !olderBusy && !shouldApplyUnreadAnchor && collieInitialAnchor?.mode !== "unread" && collieInitialAnchor?.mode !== "unread-auto";
     let liveAnchor = null;
     let liveAnchorCaptured = false;
     const ensureLiveAnchor = () => {
@@ -4347,9 +4505,10 @@
 
     if (!isEmptyChat) {
       const unreadNow = computeUnreadInfo(allEntries, readCursorId);
+      const markerStale = !sessionUnreadMarkerId || (entryIdNum(readCursorId) > 0 && entryIdNum(sessionUnreadMarkerId) <= entryIdNum(readCursorId));
       if (shouldApplyUnreadAnchor) {
         sessionUnreadMarkerId = unreadNow.firstUnreadId;
-      } else if (!sessionUnreadMarkerId && (!atBottom || document.hidden) && unreadNow.firstUnreadId) {
+      } else if (markerStale && (!atBottom || document.hidden) && unreadNow.firstUnreadId) {
         sessionUnreadMarkerId = unreadNow.firstUnreadId;
       }
       curThreadInfo = computeReplyThreads(allEntries);
@@ -4614,32 +4773,38 @@
       }
     }
     if (shouldApplyUnreadAnchor && scroller.clientHeight > 0) {
+      clearScrollReadTimer();
       const hasEntries = chatEntries().length > 0;
       if (hasEntries) unreadAnchorApplied = true;
       const sepEl = sessionUnreadMarkerId ? $("#unread-sep", box) : null;
       const firstEl = sessionUnreadMarkerId ? findUnreadRowEl(box, sessionUnreadMarkerId) : null;
+      if (document.hidden && !forceBottom && (sessionUnreadMarkerId || computeUnreadInfo(allEntries, readCursorId).count > 0)) {
+        pendingUnreadAnchorOnVisible = true;
+        if (sepEl && firstEl) placeUnreadAnchor(scroller, sepEl);
+        updateSuperJump();
+        return;
+      }
+      pendingUnreadAnchorOnVisible = false;
       if (sepEl && firstEl) {
         const placed = placeUnreadAnchor(scroller, sepEl);
         if (placed.fitsAtBottom) {
-          beginInitialAnchor("bottom");
-          const set = scroller.scrollTop;
+          beginInitialAnchor("unread-auto", { atBottom: true });
+          if (typeof cancelAnimationFrame === "function") {
+            cancelAnimationFrame(superScrollRAF);
+            cancelAnimationFrame(collieRestoreRAF);
+          }
           if (typeof requestAnimationFrame === "function") {
-            if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
             superScrollRAF = requestAnimationFrame(() => {
-              if (collieInitialAnchor?.mode === "bottom" || scroller.scrollTop === set) {
-                markProgrammaticScroll();
-                scroller.scrollTop = scroller.scrollHeight;
-              }
-              captureViewScroll("collie", null, navCur);
-              updateSuperJump();
-              maybeScheduleReadAtBottom();
+              if (view !== "collie" || !collieInitialAnchor) return;
+              applyInitialAnchor();
             });
           } else {
             captureViewScroll("collie", null, navCur);
-            maybeScheduleReadAtBottom();
+            if (!hasPendingUnreadImages(box, sepEl)) maybeScheduleReadAtBottom({ deferCursor: true });
           }
         } else {
-          beginInitialAnchor("unread");
+          beginInitialAnchor("unread", { atBottom: false });
+          if (pendingReadDeferCursor || readSyncTimer) cancelPendingChatRead();
           activeCollieRestore = {
             unreadSep: true,
             anchorId: sessionUnreadMarkerId,
@@ -4688,11 +4853,14 @@
       updateSuperJump();
       return;
     }
-    if (!forceBottom && !holdRestore && !jumping && !olderBusy && collieInitialAnchor?.mode === "unread" && performance.now() <= collieInitialAnchor.until) {
+    if (!forceBottom && !holdRestore && !jumping && !olderBusy
+      && (collieInitialAnchor?.mode === "unread" || collieInitialAnchor?.mode === "unread-auto")
+      && performance.now() <= collieInitialAnchor.until) {
       applyInitialAnchor();
       return;
     }
     if (holdRestore && !holdRestore.atBottom) {
+      clearScrollReadTimer();
       if (typeof cancelAnimationFrame === "function") {
         cancelAnimationFrame(superScrollRAF);
         cancelAnimationFrame(collieRestoreRAF);
@@ -4703,8 +4871,8 @@
         updateSuperJump();
         return;
       }
-      activeCollieRestore = { ...holdRestore, until: performance.now() + 340 };
-      if (holdRestore.unreadSep && collieInitialAnchor?.mode === "unread") {
+      activeCollieRestore = { ...holdRestore, until: Math.max(holdRestore.until || 0, performance.now() + 340) };
+      if (holdRestore.unreadSep && (collieInitialAnchor?.mode === "unread" || collieInitialAnchor?.mode === "unread-auto")) {
         applyInitialAnchor();
         return;
       }
@@ -4721,6 +4889,17 @@
       return;
     }
     if ((atBottom && !jumping) || forceBottom) {
+      if (document.hidden && !forceBottom && (sessionUnreadMarkerId || computeUnreadInfo(allEntries, readCursorId).count > 0)) {
+        pendingUnreadAnchorOnVisible = true;
+        cancelInitialAnchor();
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+        updateSuperJump();
+        return;
+      }
+      if (forceBottom) {
+        pendingUnreadAnchorOnVisible = false;
+        clearScrollReadTimer();
+      }
       activeCollieRestore = null;
       markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
@@ -4767,6 +4946,9 @@
       }
       if (collieInitialAnchor) applyInitialAnchor();
     }, true);
+    box?.addEventListener("error", (e) => {
+      if (e.target?.tagName === "IMG" && collieInitialAnchor) applyInitialAnchor();
+    }, true);
     let superJumpScrollRAF = 0;
     const maybePrefetchOlder = () => {
       if (view !== "collie" || olderBusy || !canLoadOlder() || !sc) return;
@@ -4787,6 +4969,7 @@
         updateSuperJump();
         if (performance.now() >= programmaticScrollUntil) {
           maybeScheduleReadAtBottom();
+          scheduleScrollReadCheck(260);
           maybePrefetchOlder();
         }
       };
@@ -4802,6 +4985,7 @@
             endCollieUserScroll(false);
           }, 80);
         }
+        if (performance.now() >= programmaticScrollUntil) scheduleScrollReadCheck(120);
         maybePrefetchOlder();
       }, { passive: true });
     }
@@ -4884,13 +5068,25 @@
     bindHorizontalStrip($("#crew"));
     bindHorizontalStrip($("#td-workers"));
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) flushPendingChatRead(true);
-      else maybeScheduleReadAtBottom();
+      if (document.hidden) {
+        if (pendingReadDeferCursor) cancelPendingChatRead();
+        else flushPendingChatRead(true);
+      } else if (view === "collie" && pendingUnreadAnchorOnVisible) {
+        pendingUnreadAnchorOnVisible = false;
+        cancelInitialAnchor();
+        activeCollieRestore = null;
+        unreadAnchorApplied = false;
+        renderSuper({ unreadAnchor: true });
+      } else {
+        maybeScheduleReadAtBottom();
+      }
     });
     addEventListener("pagehide", () => flushPendingChatRead(true));
     $("#super-jump")?.addEventListener("click", async () => {
       if (!sc) return;
       const seq = ++jumpSeq;
+      clearScrollReadTimer();
+      pendingUnreadAnchorOnVisible = false;
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
@@ -5124,6 +5320,7 @@
 
   async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID(), opts = {}) {
     const scrollBottom = opts.scrollBottom !== false;
+    const shouldCommitRead = scrollBottom || !!opts.commitRead;
     const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
     const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
     // Only what was picked here goes along; the hub fills in its current defaults.
@@ -5143,10 +5340,14 @@
     };
     pendingSays.push(mine);
     if (scrollBottom) {
+      pendingUnreadAnchorOnVisible = false;
+      clearScrollReadTimer();
       cancelInitialAnchor();
       activeCollieRestore = null;
       unreadAnchorApplied = true;
       sessionUnreadMarkerId = "";
+    }
+    if (shouldCommitRead) {
       const latestBeforeSend = latestPersistedEntryId();
       if (latestBeforeSend) commitChatRead(latestBeforeSend, { immediate: false });
     }
@@ -5177,7 +5378,7 @@
     }
     // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
     mine.id = r?.entry || mine.id || "";
-    if (mine.id && scrollBottom) commitChatRead(mine.id, { immediate: true });
+    if (mine.id && shouldCommitRead) commitChatRead(mine.id, { immediate: true });
     const idx = pendingSays.indexOf(mine);
     if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
       if (mine.id) rememberPromotedPending(mine.id, mine._localId);
@@ -5207,6 +5408,8 @@
     const shouldScrollBottom = typeof opts.scrollBottom === "boolean"
       ? opts.scrollBottom
       : (!opts.inDrawer && isCollieNearBottom(sc));
+    const shouldCommitRead = shouldScrollBottom
+      || (!!opts.inDrawer && (isCollieNearBottom(sc) || computeUnreadInfo().count === 0));
     let keepSnap = null;
     if (opts.inDrawer) {
       tdForceScroll = true;
@@ -5228,6 +5431,7 @@
         undefined,
         {
           scrollBottom: shouldScrollBottom,
+          commitRead: shouldCommitRead,
           restore: keepSnap,
           onRollback: () => { pickedReplyOpts.delete(id); },
         },
@@ -6711,8 +6915,14 @@
       $("#gf-repo-input")?.focus();
     };
     $("#gf-add-repo")?.addEventListener("click", addRepo);
-    $("#gf-repo-input")?.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); addRepo(); }
+    const gfRepoInput = $("#gf-repo-input");
+    const gfRepoIme = trackIME(gfRepoInput);
+    gfRepoInput?.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      if (isIMEComposing(ev, gfRepoIme)) return;
+      if (isPostCompositionSafariEnter(ev, gfRepoIme)) { ev.preventDefault(); return; }
+      ev.preventDefault();
+      addRepo();
     });
     intModal.querySelectorAll("[data-gf-rm-repo]").forEach((b) => {
       b.addEventListener("click", () => {
@@ -7362,9 +7572,11 @@
         if (name === "stall_minutes" && (!el.value.trim() || Number(el.value) < 0)) el.value = "0";
         saver.flush();
       });
+      const elIme = trackIME(el);
       el.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
-          if (e.isComposing || e.keyCode === 229) return;
+          if (isIMEComposing(e, elIme)) return;
+          if (isPostCompositionSafariEnter(e, elIme)) { e.preventDefault(); return; }
           e.preventDefault();
           saver.flush();
         }
@@ -10534,7 +10746,7 @@
       for (const el of document.querySelectorAll(".thumb[data-img] img")) {
         if (el.parentElement.dataset.img === p) { el.src = u; el.parentElement.classList.remove("broken"); }
       }
-    } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); }
+    } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
   }
   // Under each Collie message, on hover: copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
   const ICON_COPY = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
@@ -12610,7 +12822,9 @@
       tdComposerCtrl = bindComposer(tdComposer, tdInput, async (text, ctx) => {
         tdForceScroll = true;
         tdAutoStickUntil = performance.now() + 1200;
-        await sendSuper(text, ctx.targetRe, false, undefined, { scrollBottom: false });
+        const mainSc = view === "collie" ? viewScroller("collie") : null;
+        const commitRead = isCollieNearBottom(mainSc) || computeUnreadInfo().count === 0;
+        await sendSuper(text, ctx.targetRe, false, undefined, { scrollBottom: false, commitRead });
         if (tdBodyEl) requestAnimationFrame(() => { tdBodyEl.scrollTop = tdBodyEl.scrollHeight; });
       }, () => targetNow().machine, {
         sendBtn: tdSendBtn,
@@ -13776,6 +13990,35 @@
       + (rest.length ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>` : "");
   }
 
+  // Safari on macOS fires compositionend before the confirming Enter keydown
+  // (WebKit bug 165004), so event.isComposing is already false. Track
+  // compositionend event.timeStamp and swallow plain Enter within 30ms
+  // (Math.abs also handles Safari's inverted timestamp ordering).
+  function trackIME(el) {
+    if (!el) return null;
+    if (el._imeTracker) return el._imeTracker;
+    const tracker = { composing: false, lastCompositionEndAt: null };
+    el._imeTracker = tracker;
+    el.addEventListener("compositionstart", () => { tracker.composing = true; });
+    el.addEventListener("compositionend", (ev) => {
+      tracker.composing = false;
+      tracker.lastCompositionEndAt = (typeof ev?.timeStamp === "number" && ev.timeStamp > 0)
+        ? ev.timeStamp
+        : performance.now();
+    });
+    el.addEventListener("blur", () => { tracker.composing = false; });
+    return tracker;
+  }
+  function isIMEComposing(e, tracker) {
+    return !!(e?.isComposing || e?.key === "Process" || e?.keyCode === 229 || tracker?.composing);
+  }
+  function isPostCompositionSafariEnter(e, tracker) {
+    if (!tracker || tracker.lastCompositionEndAt === null) return false;
+    if (e?.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return false;
+    const ts = (typeof e.timeStamp === "number" && e.timeStamp > 0) ? e.timeStamp : performance.now();
+    return Math.abs(ts - tracker.lastCompositionEndAt) <= 30;
+  }
+
   function bindComposer(form, input, send, machine, opts = {}) {
     if (!form || !input) return null;
     const growFn = opts.grow || grow;
@@ -13794,9 +14037,15 @@
         },
       });
     }
+    const ime = trackIME(input);
     input.addEventListener("input", () => { growFn(input); syncBtn(); });
     input.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      if (e.key !== "Enter" || e.shiftKey) return;
+      if (isIMEComposing(e, ime)) return;
+      if (isPostCompositionSafariEnter(e, ime)) {
+        e.preventDefault();
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       // "mod": Enter makes a new line and ⌘/Ctrl+Enter sends.
       if (prefs.sendKey() === "mod" ? mod : !mod) {

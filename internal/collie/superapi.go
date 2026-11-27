@@ -150,10 +150,29 @@ func (s *Server) superState(ctx context.Context) superView {
 	if sp.dream != nil {
 		v.Router.Status = "dreaming"
 	}
+	const (
+		superDefaultEntries      = 200
+		superUnreadMaxEntries    = 500
+		superUnreadContextBefore = 10
+	)
 	es := sp.st.Entries
-	if len(es) > 200 {
-		es = es[len(es)-200:]
-		v.Earlier = true
+	if len(es) > superDefaultEntries {
+		start := len(es) - superDefaultEntries
+		if curN := idNum(sp.st.LastReadEntryID); curN > 0 && idNum(es[start].ID) > curN {
+			minStart := max(0, len(es)-superUnreadMaxEntries)
+			target := start
+			for i := start - 1; i >= minStart; i-- {
+				target = i
+				if idNum(es[i].ID) <= curN {
+					break
+				}
+			}
+			start = max(minStart, target-superUnreadContextBefore)
+		}
+		if start > 0 {
+			es = es[start:]
+			v.Earlier = true
+		}
 	}
 	v.Entries = append([]*Entry{}, es...)
 	v.Pending = sp.pendingLocked(time.Now())

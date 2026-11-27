@@ -52,21 +52,23 @@ type Super struct {
 	routerNudged    bool      // the watchdog interrupted this turn once already
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
-	routerRun    *[2]string
-	routerLaunch *routerLaunchConfig
-	handover     *handover            // set while the router writes its memory before a fresh session
-	dream        *dreamRun            // set while Collie sleeps and a dream session tidies its memory
-	lastTrust    map[string]time.Time // pane → when its trust dialog was last answered
-	lastAnswer   map[string]time.Time // pane → when a dialog there was just answered
-	lastScreen   map[string]screenMark
-	transcripts  map[string]*transcript
-	noAgent      map[string]time.Time  // worker → since when its pane has had no agent in it
-	pinnedCache  map[string]*Entry     // older pinned entries resolved from SQLite
-	sayDedup     map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
-	notifyBuf    []notice
-	notifyAt     time.Time
-	seenAt       time.Time // when a page of Collie was last open in front of you
-	seenURL      string    // where that page was, for the link in a notification
+	routerRun          *[2]string
+	routerLaunch       *routerLaunchConfig
+	handover           *handover            // set while the router writes its memory before a fresh session
+	dream              *dreamRun            // set while Collie sleeps and a dream session tidies its memory
+	activeDreamPending bool                 // persisted active_dream marker waiting for restart cleanup
+	hubUpdating        bool                 // set while Hub self-update has reserved an idle restart window
+	lastTrust          map[string]time.Time // pane → when its trust dialog was last answered
+	lastAnswer         map[string]time.Time // pane → when a dialog there was just answered
+	lastScreen         map[string]screenMark
+	transcripts        map[string]*transcript
+	noAgent            map[string]time.Time  // worker → since when its pane has had no agent in it
+	pinnedCache        map[string]*Entry     // older pinned entries resolved from SQLite
+	sayDedup           map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
+	notifyBuf          []notice
+	notifyAt           time.Time
+	seenAt             time.Time // when a page of Collie was last open in front of you
+	seenURL            string    // where that page was, for the link in a notification
 
 	secrets       *SecretStore
 	integrations  *IntegrationManager
@@ -114,6 +116,7 @@ func newSuper(s *Server, dir string) (*Super, error) {
 	if sp.st, err = initState(db, s.home, s.detectInitialSettings); err != nil {
 		return nil, err
 	}
+	_, sp.activeDreamPending = sp.loadActiveDream()
 	sec, err := openSecretStore(dir)
 	if err != nil {
 		return nil, err
@@ -431,6 +434,7 @@ func (sp *Super) Run(ctx context.Context) {
 	if err := sp.writeRouterFiles(); err != nil {
 		log.Printf("router files: %v", err)
 	}
+	sp.recoverActiveDream(ctx)
 	if sp.integrations != nil {
 		sp.integrations.Start(ctx)
 	}
@@ -665,8 +669,8 @@ func (sp *Super) tick(parent context.Context) {
 
 	// 4. Deliver batches to free sessions.
 	for target, list := range deliveries {
-		if target == routerName && (sp.handingOver() || sp.dreaming()) {
-			continue // events wait for the fresh session
+		if target == routerName && (sp.handingOver() || sp.dreaming() || sp.isHubUpdating()) {
+			continue // events wait for the fresh session or hub restart
 		}
 		a, alive := live[target]
 		if !alive {

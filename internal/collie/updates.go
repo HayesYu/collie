@@ -43,6 +43,8 @@ var (
 	selfUpdateTimeout        = 2*time.Minute + 30*time.Second
 	selfUpdateForwardTimeout = 2*time.Minute + 50*time.Second
 	selfUpdateRelayTimeout   = 2*time.Minute + 30*time.Second
+	hubUpdateIdleWait        = 8 * time.Second
+	hubUpdateIdlePoll        = 400 * time.Millisecond
 	maxRelayBinarySize       = int64(128 << 20)
 	relayCacheTTL            = 15 * time.Minute
 	relayCacheMaxEntries     = 8
@@ -608,6 +610,101 @@ func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"version": version, "latest": latest, "outdated": old, "machines": machines})
 }
 
+func (sp *Super) isHubUpdating() bool {
+	if sp == nil {
+		return false
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.hubUpdating
+}
+
+// tryReserveHubRestart checks that the Hub is idle (no active Dream, Handover,
+// running/launching Router turn, or queued unpaused Router trigger) and sets an
+// exclusive hubUpdating guard blocking new Dream/Handover/Router turns until
+// release() is called or the process execs into the new binary.
+func (sp *Super) tryReserveHubRestart(ctx context.Context) (func(), bool, string) {
+	if sp == nil {
+		return func() {}, true, ""
+	}
+	if sp.s != nil && sp.s.herdr != nil {
+		if live, ok := sp.liveAgents(ctx); ok {
+			if a, alive := live[routerName]; alive && a.Status != "idle" && a.Status != "done" {
+				return nil, false, "Collie 正在处理当前轮次，为避免中断，请等待本轮结束后再更新 Hub"
+			}
+		}
+	}
+
+	sp.mu.Lock()
+	switch {
+	case sp.hubUpdating:
+		sp.mu.Unlock()
+		return nil, false, "Hub 正在执行更新重启，请稍候"
+	case sp.dream != nil:
+		sp.mu.Unlock()
+		return nil, false, "Collie 正在做梦整理记忆，为避免中断，请稍等完成后再更新 Hub"
+	case sp.handover != nil:
+		sp.mu.Unlock()
+		return nil, false, "Collie 正在交接会话记忆，为避免中断，请稍等完成后再更新 Hub"
+	case sp.routerLaunching || !sp.routerAskedAt.IsZero():
+		sp.mu.Unlock()
+		return nil, false, "Collie 正在处理当前轮次，为避免中断，请等待本轮结束后再更新 Hub"
+	}
+	if sp.st != nil && !sp.st.Settings.Paused {
+		for _, t := range sp.st.Triggers {
+			if t.Status == "queued" && (len(t.Targets) == 0 || contains(t.Targets, routerName)) {
+				sp.mu.Unlock()
+				return nil, false, "有待投递给 Collie 的对话消息，请稍等处理完后再更新 Hub"
+			}
+		}
+	}
+	sp.hubUpdating = true
+	sp.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			sp.mu.Lock()
+			sp.hubUpdating = false
+			sp.mu.Unlock()
+		})
+	}
+	return release, true, ""
+}
+
+// waitAndReserveHubRestart waits briefly (up to maxWait) for an in-flight
+// Router turn or handover to finish before claiming the exclusive Hub restart
+// guard; if still busy after maxWait, it returns a clear user-facing reason.
+func (sp *Super) waitAndReserveHubRestart(ctx context.Context, maxWait time.Duration) (func(), bool, string) {
+	release, ok, reason := sp.tryReserveHubRestart(ctx)
+	if ok || maxWait <= 0 {
+		return release, ok, reason
+	}
+	poll := hubUpdateIdlePoll
+	if poll <= 0 {
+		poll = 200 * time.Millisecond
+	}
+	deadline := time.Now().Add(maxWait)
+	for {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return nil, false, reason
+		}
+		wait := min(poll, rem)
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, false, reason
+		case <-t.C:
+		}
+		release, ok, reason = sp.tryReserveHubRestart(ctx)
+		if ok {
+			return release, true, ""
+		}
+	}
+}
+
 // selfUpdate replaces this computer's collie with the latest release and
 // restarts it in place (same process id, so launchd, systemd or nohup keep
 // tracking it). herdr and the agents in it keep running meanwhile.
@@ -649,6 +746,19 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 		log.Printf("self-update noop (current=%s latest=%s dur=%s): already up to date", version, latest, time.Since(start).Round(time.Millisecond))
 		writeJSON(w, 200, map[string]any{"ok": true, "version": version, "latest": true})
 		return
+	}
+	if s.sup != nil && !s.node {
+		releaseHubRestart, ok, busyReason := s.sup.waitAndReserveHubRestart(ctx, hubUpdateIdleWait)
+		if !ok {
+			log.Printf("self-update deferred (current=%s target=%s dur=%s): %s", version, latest, time.Since(start).Round(time.Millisecond), busyReason)
+			writeJSON(w, 409, map[string]any{"error": busyReason})
+			return
+		}
+		defer func() {
+			if !restarting {
+				releaseHubRestart()
+			}
+		}()
 	}
 	exe, err := executablePath()
 	if err != nil {

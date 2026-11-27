@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 func TestChatReadCursorPersistenceAndAPI(t *testing.T) {
@@ -194,6 +196,60 @@ func TestChatReadCursorPersistenceAndAPI(t *testing.T) {
 	}
 	if reloaded2.LastReadEntryID != "e99" {
 		t.Fatalf("saveState round-trip LastReadEntryID = %q, want e99", reloaded2.LastReadEntryID)
+	}
+}
+
+func TestSuperStateExpandsWindowForOlderLastReadEntryID(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "herd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	st, err := loadState(db, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-10 * time.Hour)
+	for i := 1; i <= 600; i++ {
+		st.Entries = append(st.Entries, &Entry{
+			ID:     fmt.Sprintf("e%d", i),
+			Role:   "collie",
+			Thread: mainThread,
+			Text:   fmt.Sprintf("entry %d", i),
+			At:     base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	herdr := newHerdr(filepath.Join(dir, "missing-herdr.sock"), "devbox", dir)
+	herdr.local.conn.dial = func(context.Context) (net.Conn, error) { return nil, errors.New("offline") }
+	srv := &Server{herdr: herdr, token: "tok", home: dir, web: fstest.MapFS{}, auths: newAuth(db, "tok")}
+	sp := &Super{s: srv, db: db, dir: dir, st: st, subs: map[chan struct{}]bool{}}
+	srv.sup = sp
+
+	// 1) LastReadEntryID inside tail 200 -> default 200 entries.
+	st.LastReadEntryID = "e550"
+	v1 := srv.superState(context.Background())
+	if len(v1.Entries) != 200 || v1.Entries[0].ID != "e401" || !v1.Earlier {
+		t.Fatalf("within-200 window = len:%d first:%s earlier:%v, want len:200 first:e401 earlier:true",
+			len(v1.Entries), v1.Entries[0].ID, v1.Earlier)
+	}
+
+	// 2) LastReadEntryID earlier than tail 200 (e250) -> expands back to e240..e600 (361 entries, <= 500).
+	st.LastReadEntryID = "e250"
+	v2 := srv.superState(context.Background())
+	if len(v2.Entries) != 361 || v2.Entries[0].ID != "e240" || v2.Entries[len(v2.Entries)-1].ID != "e600" || !v2.Earlier {
+		t.Fatalf("expanded window = len:%d first:%s last:%s earlier:%v, want len:361 first:e240 last:e600 earlier:true",
+			len(v2.Entries), v2.Entries[0].ID, v2.Entries[len(v2.Entries)-1].ID, v2.Earlier)
+	}
+
+	// 3) LastReadEntryID older than 500 cap (e20) -> capped at 500 entries (e101..e600).
+	st.LastReadEntryID = "e20"
+	v3 := srv.superState(context.Background())
+	if len(v3.Entries) != 500 || v3.Entries[0].ID != "e101" || v3.Entries[len(v3.Entries)-1].ID != "e600" || !v3.Earlier {
+		t.Fatalf("capped window = len:%d first:%s last:%s earlier:%v, want len:500 first:e101 last:e600 earlier:true",
+			len(v3.Entries), v3.Entries[0].ID, v3.Entries[len(v3.Entries)-1].ID, v3.Earlier)
 	}
 }
 
@@ -471,7 +527,12 @@ const ctx = vm.createContext({
   crypto: { randomUUID: () => "cr-uuid-" + (++uuidSeq) },
   navigator: { userAgent: "Mac Chrome", platform: "MacIntel" },
   location: { href: "http://127.0.0.1:7788/#/collie", origin: "http://127.0.0.1:7788", pathname: "/", search: "", hash: "#/collie", hostname: "127.0.0.1" },
-  history: { state: { collieIdx: 0 }, replaceState() {}, pushState() {}, back() {} },
+  history: {
+    state: { collieIdx: 0 },
+    replaceState(s, _t, url) { this.state = s; if (typeof url === "string" && url.startsWith("#")) ctx.location.hash = url; },
+    pushState(s, _t, url) { this.state = s; if (typeof url === "string" && url.startsWith("#")) ctx.location.hash = url; },
+    back() {},
+  },
   localStorage: {
     getItem: (k) => (storage.has(k) ? storage.get(k) : null),
     setItem: (k, v) => storage.set(k, String(v)),
@@ -533,7 +594,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot marker in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSide, renderSuper, renderPendingBar, activePending, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied }), resetReadState: (srv = '', loc = '') => { older = []; sup = { router: { status: 'idle' }, entries: [], workers: [], pending: [], pinned: [] }; pendingSays.length = 0; dismissedLocal.clear(); pickedReplyOpts.clear(); readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; clearTimeout(readSyncTimer); readSyncTimer = 0; pendingReadSyncId = ''; if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
+  "  globalThis.__test = { getSup: () => sup, setSup: (s) => { sup = normSup(s); }, setLocalState, setView: (v) => { view = v; }, setBooted: (b) => { booted = !!b; }, route, renderSide, renderSuper, renderPendingBar, activePending, sendSuper, computeUnreadInfo, updateSuperJump, maybeScheduleReadAtBottom, maybeAdvanceReadByScroll, flushPendingChatRead, openThreadDrawer, closeThreadDrawer, clearProgScroll: () => { programmaticScrollUntil = 0; }, getActiveCollieRestore: () => activeCollieRestore, getReadState: () => ({ readCursorId, serverReadCursorId, sessionUnreadMarkerId, unreadAnchorApplied, pendingUnreadAnchorOnVisible }), resetReadState: (srv = '', loc = '') => { older = []; sup = { router: { status: 'idle' }, entries: [], workers: [], pending: [], pinned: [] }; pendingSays.length = 0; dismissedLocal.clear(); pickedReplyOpts.clear(); readCursorId = ''; serverReadCursorId = srv; sessionUnreadMarkerId = ''; unreadAnchorApplied = false; pendingUnreadAnchorOnVisible = false; activeCollieRestore = null; scrollByRoute.clear(); scrollByIdx.clear(); cancelInitialAnchor(); clearScrollReadTimer(); cancelPendingChatRead(); if (loc) localStorage.setItem('collie.chatReadEntryId', JSON.stringify(loc)); else localStorage.removeItem('collie.chatReadEntryId'); } };\n})();"
 );
 vm.runInContext(instrumented, ctx);
 
@@ -1083,6 +1144,189 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(scroller.scrollTop, scroller.scrollHeight, "composer send with quote still scrolls to bottom");
   assert.equal(serverLastRead, "e" + saySeq, "composer send advances read cursor");
   simOptHeights = false;
+
+  // 15) P0-1 & P2-1: Leaving #/collie clears activeCollieRestore; returning via forward click
+  // with cross-device cursor advance + new unreads ignores stale scrollByRoute and anchors to new unread.
+  curRowHeight = 140;
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setView("collie");
+  ctx.location.hash = "#/collie";
+  ctx.history.state = { collieIdx: 1 };
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e4" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(T.getActiveCollieRestore()?.unreadSep, "precondition: activeCollieRestore armed on unread anchor");
+  // Leave #/collie to #/auto
+  T.clearProgScroll();
+  ctx.location.hash = "#/auto";
+  ctx.history.state = null;
+  T.route();
+  assert.equal(T.getActiveCollieRestore(), null, "leaving #/collie must clear activeCollieRestore");
+  // Server advances read cursor cross-device to e12 and pushes new unreads e13..e20.
+  const newerBatch = [...manyEntries];
+  for (let i = 13; i <= 20; i++) newerBatch.push(mkEntry(i, "collie", "fresh unread " + i));
+  serverLastRead = "e12";
+  T.setSup({ router: { status: "idle" }, entries: newerBatch, workers: [], pending: [], pinned: [], last_read_entry_id: "e12" });
+  // Forward click back to #/collie (history.state = null)
+  ctx.location.hash = "#/collie";
+  ctx.history.state = null;
+  T.route();
+  assert.ok(threadBox.innerHTML.includes('id="unread-sep" data-first-unread="e13"'), "returning to #/collie must move divider to new first unread e13");
+  const sep15 = layoutNodes.find((x) => x.isSep);
+  assert.ok(sep15 && sep15.y - scroller.scrollTop >= 12 && sep15.y - scroller.scrollTop <= 16, "divider e13 anchored at 14px, got " + (sep15 ? sep15.y - scroller.scrollTop : "none"));
+
+  // 16) P0-1 single-device: scrolled up in history -> leave #/collie -> new unreads -> forward click #/collie lands on new unread.
+  T.clearProgScroll();
+  serverLastRead = "e20";
+  T.resetReadState("", "");
+  T.setView("collie");
+  ctx.location.hash = "#/collie";
+  ctx.history.state = { collieIdx: 3 };
+  T.setSup({ router: { status: "idle" }, entries: newerBatch, workers: [], pending: [], pinned: [], last_read_entry_id: "e20" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  // Scroll up slightly to e10 then leave to #/auto
+  const e10Node16 = layoutNodes.find((x) => x.id === "e10");
+  scroller.scrollTop = e10Node16.y;
+  T.clearProgScroll();
+  ctx.location.hash = "#/auto";
+  ctx.history.state = null;
+  T.route();
+  const batch16 = [...newerBatch];
+  for (let i = 21; i <= 28; i++) batch16.push(mkEntry(i, "collie", "brand new unread " + i));
+  T.setSup({ router: { status: "idle" }, entries: batch16, workers: [], pending: [], pinned: [], last_read_entry_id: "e20" });
+  ctx.location.hash = "#/collie";
+  ctx.history.state = null;
+  T.route();
+  assert.ok(threadBox.innerHTML.includes('id="unread-sep" data-first-unread="e21"'), "forward click with new unreads must jump to e21 instead of old e10 snapshot");
+  const sep16 = layoutNodes.find((x) => x.isSep);
+  assert.ok(sep16 && sep16.y - scroller.scrollTop >= 12 && sep16.y - scroller.scrollTop <= 16, "e21 anchored at ~14px");
+
+  // 17) P0-3: Background tab receives >1 screen SSE unreads -> must NOT scroll to bottom or auto-mark read on foreground!
+  fetchCalls.length = 0;
+  serverLastRead = "e20";
+  T.resetReadState("", "");
+  T.setView("collie");
+  T.setSup({ router: { status: "idle" }, entries: newerBatch, workers: [], pending: [], pinned: [], last_read_entry_id: "e20" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const bottomBeforeHide = scroller.scrollTop;
+  docHidden = true;
+  T.setSup({ router: { status: "idle" }, entries: batch16, workers: [], pending: [], pinned: [], last_read_entry_id: "e20" });
+  T.renderSuper();
+  assert.ok(scroller.scrollTop < scroller.scrollHeight - scroller.clientHeight, "hidden tab must NOT jump to bottom over new unreads");
+  assert.equal(scroller.scrollTop, bottomBeforeHide, "hidden tab keeps scrollTop steady before foreground");
+  assert.equal(T.getReadState().pendingUnreadAnchorOnVisible, true, "hidden tab arms pendingUnreadAnchorOnVisible");
+  // Foreground tab -> visibilitychange must anchor at #unread-sep (e21) and NOT mark read.
+  docHidden = false;
+  doc.dispatchDoc("visibilitychange");
+  await wait(520);
+  const sep17 = layoutNodes.find((x) => x.isSep);
+  assert.ok(sep17 && sep17.y - scroller.scrollTop >= 12 && sep17.y - scroller.scrollTop <= 16, "returning to foreground anchors #unread-sep at 14px");
+  assert.equal(serverLastRead, "e20", "returning to foreground with >1 screen unreads must NOT silently mark all read");
+  assert.equal(getEl("#super-jump-badge").textContent, "8", "jump badge reflects 8 unreads");
+
+  // 18) P0-2: (a) Thread drawer reply when main chat is near bottom advances cursor;
+  // (b) Scrolling unread messages past top of viewport (bottom <= top + 24) advances read cursor to highest scrolled-past unread.
+  fetchCalls.length = 0;
+  serverLastRead = "e10";
+  T.resetReadState("", "");
+  T.setView("collie");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e10" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+  T.openThreadDrawer("e11", "e11", "e11");
+  getEl("#td-input").value = "抽屉里回复一条";
+  getEl("#td-composer").dispatch("submit");
+  await wait(40);
+  assert.equal(serverLastRead, "e" + saySeq, "thread drawer reply when main chat is at bottom must advance read cursor");
+  T.closeThreadDrawer({ immediate: true });
+
+  // 18b) Scroll-past watermark advance while reading long unread batch (stopped above bottom).
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setView("collie");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e4" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  // Simulate user manually scrolling down past e7 and e8, stopping at e9 (still well above bottom).
+  scroller.dispatch("wheel", { deltaY: 300 });
+  T.clearProgScroll();
+  const e9Node18 = layoutNodes.find((x) => x.id === "e9");
+  scroller.scrollTop = e9Node18.y;
+  T.maybeAdvanceReadByScroll();
+  await wait(520);
+  assert.equal(serverLastRead, "e8", "scrolling past e7 & e8 must advance server read cursor to e8");
+  assert.equal(getEl("#super-jump-badge").textContent, "4", "remaining unread badge drops 6 -> 4 (e9..e12)");
+
+  // 19) P1-1: Clicking #super-jump then scrolling up + new SSE unreads migrates sessionUnreadMarkerId forward.
+  fetchCalls.length = 0;
+  serverLastRead = "e4";
+  T.resetReadState("", "");
+  T.setView("collie");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e4" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  assert.ok(threadBox.innerHTML.includes('data-first-unread="e7"'));
+  getEl("#super-jump").dispatch("click");
+  await wait(30);
+  assert.equal(serverLastRead, "e12");
+  // User scrolls up slightly and new unreads e13..e15 arrive via SSE.
+  scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 300);
+  const batch19 = [...manyEntries, mkEntry(13, "collie", "round2-1"), mkEntry(14, "collie", "round2-2"), mkEntry(15, "collie", "round2-3")];
+  T.setSup({ router: { status: "idle" }, entries: batch19, workers: [], pending: [], pinned: [], last_read_entry_id: "e12" });
+  T.renderSuper();
+  assert.ok(threadBox.innerHTML.includes('data-first-unread="e13"'), "sessionUnreadMarkerId must advance to e13 instead of staying stuck on old e7");
+
+  // 20) P1-2: Delayed image load expanding unread region from fitsAtBottom=true to fitsAtBottom=false
+  // inside the 2.5s window must flip back to #unread-sep (14px) and NOT mark read.
+  fetchCalls.length = 0;
+  curRowHeight = 90;
+  serverLastRead = "e10";
+  T.resetReadState("", "");
+  T.setView("collie");
+  T.setSup({ router: { status: "idle" }, entries: manyEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e10" });
+  T.renderSuper({ force: true, unreadAnchor: true });
+  const sep20 = layoutNodes.find((x) => x.isSep);
+  assert.ok(sep20, "divider rendered for e11..e12");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "before images load, e11..e12 fit at bottom");
+  // Simulate delayed images in e11 & e12 expanding total height below #unread-sep by +500px (now > 600px viewport!).
+  for (const n of layoutNodes) {
+    if (!n.isSep && (n.id === "e11" || n.id === "e12")) {
+      n.h += 260;
+      if (n.id === "e12") n.y += 260;
+    }
+  }
+  scroller.scrollHeight += 520;
+  threadBox.dispatch("load", { target: { tagName: "IMG" } });
+  await wait(520);
+  assert.equal(sep20.y - scroller.scrollTop, 14, "after images expand unread region >1 screen, viewport must flip back to #unread-sep at 14px");
+  assert.equal(serverLastRead, "e10", "flipped unread region must cancel pending deferred read and keep serverLastRead at e10");
+  assert.equal(T.getReadState().readCursorId, "e10", "readCursorId must remain e10 after flip");
+
+  // 21) Wave 1: Safari 30ms post-IME Enter guard prevents premature submit on confirming Enter.
+  fetchCalls.length = 0;
+  const superIn = getEl("#super-input");
+  const superForm = getEl("#super-composer");
+  let superSubmits = 0;
+  superForm.addEventListener("submit", () => { superSubmits++; });
+  superIn.value = "你好世界";
+  // 21a) Confirming Enter arriving 5ms after compositionend is swallowed (preventDefault + no submit).
+  superIn.dispatch("compositionstart", { timeStamp: 900 });
+  superIn.dispatch("compositionend", { timeStamp: 1000 });
+  const evPostIme = superIn.dispatch("keydown", { key: "Enter", shiftKey: false, isComposing: false, keyCode: 13, timeStamp: 1005 });
+  assert.equal(evPostIme.defaultPrevented, true, "Safari post-IME Enter within 30ms must call preventDefault()");
+  assert.equal(superSubmits, 0, "Safari post-IME Enter within 30ms must NOT submit form");
+  // 21b) Safari inverted timestamp (keydown timeStamp slightly earlier than compositionend, delta -4ms) is also swallowed.
+  const evInverted = superIn.dispatch("keydown", { key: "Enter", shiftKey: false, isComposing: false, keyCode: 13, timeStamp: 996 });
+  assert.equal(evInverted.defaultPrevented, true, "Safari inverted timestamp within 30ms must call preventDefault()");
+  assert.equal(superSubmits, 0, "Safari inverted timestamp within 30ms must NOT submit form");
+  // 21c) Active IME composition (isComposing=true) is ignored without preventDefault().
+  const evActive = superIn.dispatch("keydown", { key: "Enter", shiftKey: false, isComposing: true, keyCode: 229, timeStamp: 1080 });
+  assert.equal(evActive.defaultPrevented, false, "active IME Enter must not preventDefault()");
+  assert.equal(superSubmits, 0, "active IME Enter must NOT submit");
+  // 21d) Real Enter >30ms after compositionend submits normally.
+  const evReal = superIn.dispatch("keydown", { key: "Enter", shiftKey: false, isComposing: false, keyCode: 13, timeStamp: 1050 });
+  assert.equal(evReal.defaultPrevented, true, "normal Enter prevents newline");
+  assert.equal(superSubmits, 1, "normal Enter >30ms after compositionend submits form");
 
   console.log("OK: all unread anchor & chat read JS regression checks passed");
 })().catch((err) => {

@@ -3,10 +3,13 @@ package collie
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -242,5 +245,145 @@ func TestMemoryUpFrontSplitAnd10KBBudget(t *testing.T) {
 	mustWrite("tasks/huge.md", strings.Repeat("超长活跃任务内容\n", 900)) // pushes upFrontSize > 20 KB
 	if s := sp.sessionStart(); !strings.Contains(s, "bring them to ~10 KB") {
 		t.Fatalf("expected ~10 KB sessionStart warning above 20 KB, got:\n%s", s)
+	}
+}
+
+func TestNightlyDreamFailureAdvancesWatermarkAndManualDoesNot(t *testing.T) {
+	sp, _, _ := newPendingTestEnv(t)
+	now := time.Now()
+	yesterday := now.AddDate(0, 0, -1)
+	sp.setLastDream(yesterday)
+
+	// 1) Manual dream failure must NOT advance last_dream, but must clear active_dream.
+	manualAt := now.Add(-5 * time.Minute)
+	sp.setActiveDream(manualAt, "manual")
+	sp.mu.Lock()
+	sp.dream = &dreamRun{at: manualAt, started: true, reason: "manual"}
+	sp.mu.Unlock()
+	sp.finishDream(context.Background(), &dreamRun{at: manualAt, reason: "manual"}, false)
+
+	if _, active := sp.loadActiveDream(); active {
+		t.Fatal("active_dream marker must be cleared after failed manual dream")
+	}
+	if got := sp.lastDream(); !got.Equal(yesterday.Truncate(time.Second)) && got.After(yesterday.Add(time.Minute)) {
+		t.Fatalf("failed manual dream unexpectedly advanced last_dream to %v (was %v)", got, yesterday)
+	}
+
+	// 2) Nightly dream failure MUST advance last_dream so nextDream moves to tomorrow (no 2-min spin loop).
+	sp.mu.Lock()
+	sp.st.Settings.DreamAt = fmt.Sprintf("%02d:%02d", now.Hour(), now.Minute())
+	sp.mu.Unlock()
+	nightlyAt := now.Add(-2 * time.Minute)
+	sp.setActiveDream(nightlyAt, "nightly")
+	sp.mu.Lock()
+	sp.dream = &dreamRun{at: nightlyAt, started: true, reason: "nightly"}
+	sp.mu.Unlock()
+	sp.finishDream(context.Background(), &dreamRun{at: nightlyAt, reason: "nightly"}, false)
+
+	if _, active := sp.loadActiveDream(); active {
+		t.Fatal("active_dream marker must be cleared after failed nightly dream")
+	}
+	if got := sp.lastDream(); got.Before(now.Add(-5 * time.Second)) {
+		t.Fatalf("failed nightly dream did not advance last_dream: got %v, now %v", got, now)
+	}
+	next := sp.nextDream(now)
+	if !next.After(now.Add(12 * time.Hour)) {
+		t.Fatalf("nextDream(%v) = %v, want tomorrow after failed nightly dream", now, next)
+	}
+}
+
+func TestRecoverActiveDreamClosesOrphanWorkspaceOnHubRestart(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "herd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	st, err := loadState(db, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake herdr unix socket serving workspace.list (with one orphan dream workspace + one normal workspace)
+	// and recording workspace.close calls.
+	sockPath := filepath.Join(dir, "herdr.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var closedIDs []string
+	var closedMu sync.Mutex
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				dec := json.NewDecoder(conn)
+				enc := json.NewEncoder(conn)
+				for {
+					var req struct {
+						ID     string         `json:"id"`
+						Method string         `json:"method"`
+						Params map[string]any `json:"params"`
+					}
+					if err := dec.Decode(&req); err != nil {
+						return
+					}
+					switch req.Method {
+					case "workspace.list":
+						_ = enc.Encode(map[string]any{
+							"id": req.ID,
+							"ok": true,
+							"result": map[string]any{
+								"workspaces": []map[string]any{
+									{"workspace_id": "ws-dream-1", "label": dreamLabel},
+									{"workspace_id": "ws-normal-1", "label": "user-work"},
+								},
+							},
+						})
+					case "workspace.close":
+						wsID, _ := req.Params["workspace_id"].(string)
+						closedMu.Lock()
+						closedIDs = append(closedIDs, wsID)
+						closedMu.Unlock()
+						_ = enc.Encode(map[string]any{"id": req.ID, "ok": true, "result": map[string]any{}})
+					default:
+						_ = enc.Encode(map[string]any{"id": req.ID, "ok": true, "result": map[string]any{}})
+					}
+				}
+			}(c)
+		}
+	}()
+
+	herdr := newHerdr(sockPath, "hub", dir)
+	srv := &Server{herdr: herdr, home: dir}
+	sp := &Super{s: srv, db: db, dir: dir, st: st, subs: map[chan struct{}]bool{}, activeDreamPending: true}
+	srv.sup = sp
+
+	startedAt := time.Now().Add(-10 * time.Minute)
+	sp.setActiveDream(startedAt, "nightly")
+	sp.setLastDream(time.Now().AddDate(0, 0, -1))
+
+	sp.recoverActiveDream(context.Background())
+
+	closedMu.Lock()
+	gotClosed := append([]string(nil), closedIDs...)
+	closedMu.Unlock()
+	if !slices.Equal(gotClosed, []string{"ws-dream-1"}) {
+		t.Fatalf("closed workspaces = %v, want [ws-dream-1]", gotClosed)
+	}
+	if _, active := sp.loadActiveDream(); active {
+		t.Fatal("active_dream marker should be cleared after recovery")
+	}
+	if sp.activeDreamPending {
+		t.Fatal("activeDreamPending should be false after recovery")
+	}
+	if sp.lastDream().Before(startedAt) {
+		t.Fatalf("nightly recovery should advance last_dream past %v, got %v", startedAt, sp.lastDream())
 	}
 }

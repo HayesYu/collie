@@ -12,40 +12,94 @@ try {
   if (t === "light" || t === "dark") document.querySelector('meta[name="color-scheme"]').content = t;
 } catch (e) {}
 </script>
-<title>Collie · Add a Friend's Collie</title>
+<title>Collie · Peer Collie Invite</title>
 <meta name="description" content="Open a friend's Collie business card locally in your own Collie Hub—parsed 100% in your browser from the URL hash with zero server relay.">
 <link rel="icon" href="../icon.svg" type="image/svg+xml">
 <style>
 :root {
-  --bg-light: #ffffff; --bg-2-light: #f7f7f6; --bg-3-light: #efefed;
-  --line-light: #e8e8e5; --line-2-light: #d6d6d0;
-  --fg-light: #111111; --fg-2-light: #52524c; --fg-3-light: #6e6e67;
-  --accent-light: #111111; --on-accent-light: #ffffff;
-  --ok-light: #15803d; --ok-soft-light: #eef8f1; --ok-line-light: #c5e6d0;
-  --attn-light: #b45309; --attn-soft-light: #fbf3e8; --attn-line-light: #ebd2b0;
-  --err-light: #b42318; --err-soft-light: #fef2f2; --err-line-light: #f5c2c0;
-  --shadow-light: 0 1px 2px rgba(0,0,0,.04), 0 16px 40px -12px rgba(0,0,0,.08);
+  --canvas-light: #f8f8f7;
+  --surface-light: #ffffff;
+  --surface-2-light: #f5f5f3;
+  --surface-3-light: #ecece9;
+  --line-light: rgba(17, 17, 17, .085);
+  --line-2-light: rgba(17, 17, 17, .15);
+  --fg-light: #111111;
+  --fg-2-light: #575751;
+  --fg-3-light: #6e6e67;
+  --accent-light: #111111;
+  --accent-hover-light: #262626;
+  --on-accent-light: #ffffff;
+  --ok-light: #15803d;
+  --ok-dot-light: #22c55e;
+  --ok-ring-light: rgba(34, 197, 94, .18);
+  --attn-light: #b45309;
+  --attn-dot-light: #f59e0b;
+  --attn-ring-light: rgba(245, 158, 11, .2);
+  --err-light: #b42318;
+  --err-soft-light: #fef2f2;
+  --err-dot-light: #ef4444;
+  --err-ring-light: rgba(239, 68, 68, .18);
+  --glow-light: radial-gradient(ellipse 75% 45% at 50% -8%, rgba(17, 17, 17, .035), transparent 72%);
+  --card-shadow-light: 0 1px 1px rgba(0, 0, 0, .025), 0 4px 12px -2px rgba(0, 0, 0, .04), 0 24px 52px -14px rgba(0, 0, 0, .08);
+  --btn-shadow-light: 0 1px 2px rgba(0, 0, 0, .14), 0 4px 12px -2px rgba(0, 0, 0, .12), inset 0 1px 0 rgba(255, 255, 255, .14);
+  --avatar-shadow-light: 0 1px 2px rgba(0, 0, 0, .05), 0 8px 20px -6px rgba(0, 0, 0, .08);
 
-  --bg-dark: #0b0b0c; --bg-2-dark: #131315; --bg-3-dark: #1c1c1f;
-  --line-dark: #232327; --line-2-dark: #34343b;
-  --fg-dark: #ededeb; --fg-2-dark: #a6a6a0; --fg-3-dark: #888882;
-  --accent-dark: #f2f2f0; --on-accent-dark: #0b0b0c;
-  --ok-dark: #4ade80; --ok-soft-dark: #112218; --ok-line-dark: #214a32;
-  --attn-dark: #f0a35e; --attn-soft-dark: #2a1f12; --attn-line-dark: #4f3820;
-  --err-dark: #f87171; --err-soft-dark: #2a1416; --err-line-dark: #5c262a;
-  --shadow-dark: 0 1px 2px rgba(0,0,0,.45), 0 20px 52px -12px rgba(0,0,0,.58);
+  --canvas-dark: #09090b;
+  --surface-dark: #121215;
+  --surface-2-dark: #19191d;
+  --surface-3-dark: #232329;
+  --line-dark: rgba(255, 255, 255, .085);
+  --line-2-dark: rgba(255, 255, 255, .16);
+  --fg-dark: #f2f2f0;
+  --fg-2-dark: #a5a59f;
+  --fg-3-dark: #8c8c86;
+  --accent-dark: #f4f4f2;
+  --accent-hover-dark: #ffffff;
+  --on-accent-dark: #09090b;
+  --ok-dark: #4ade80;
+  --ok-dot-dark: #4ade80;
+  --ok-ring-dark: rgba(74, 222, 128, .22);
+  --attn-dark: #fbbf24;
+  --attn-dot-dark: #fbbf24;
+  --attn-ring-dark: rgba(251, 191, 36, .22);
+  --err-dark: #f87171;
+  --err-soft-dark: #2a1416;
+  --err-dot-dark: #f87171;
+  --err-ring-dark: rgba(248, 113, 113, .22);
+  --glow-dark: radial-gradient(ellipse 70% 42% at 50% -6%, rgba(255, 255, 255, .055), transparent 72%);
+  --card-shadow-dark: inset 0 1px 0 rgba(255, 255, 255, .06), 0 1px 2px rgba(0, 0, 0, .45), 0 28px 68px -16px rgba(0, 0, 0, .72);
+  --btn-shadow-dark: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 18px -4px rgba(255, 255, 255, .1);
+  --avatar-shadow-dark: inset 0 1px 0 rgba(255, 255, 255, .08), 0 8px 24px -6px rgba(0, 0, 0, .6);
 
-  --bg: var(--bg-light); --bg-2: var(--bg-2-light); --bg-3: var(--bg-3-light);
-  --line: var(--line-light); --line-2: var(--line-2-light);
-  --fg: var(--fg-light); --fg-2: var(--fg-2-light); --fg-3: var(--fg-3-light);
-  --accent: var(--accent-light); --on-accent: var(--on-accent-light);
-  --ok: var(--ok-light); --ok-soft: var(--ok-soft-light); --ok-line: var(--ok-line-light);
-  --attn: var(--attn-light); --attn-soft: var(--attn-soft-light); --attn-line: var(--attn-line-light);
-  --err: var(--err-light); --err-soft: var(--err-soft-light); --err-line: var(--err-line-light);
-  --shadow: var(--shadow-light);
+  --canvas: var(--canvas-light);
+  --surface: var(--surface-light);
+  --surface-2: var(--surface-2-light);
+  --surface-3: var(--surface-3-light);
+  --line: var(--line-light);
+  --line-2: var(--line-2-light);
+  --fg: var(--fg-light);
+  --fg-2: var(--fg-2-light);
+  --fg-3: var(--fg-3-light);
+  --accent: var(--accent-light);
+  --accent-hover: var(--accent-hover-light);
+  --on-accent: var(--on-accent-light);
+  --ok: var(--ok-light);
+  --ok-dot: var(--ok-dot-light);
+  --ok-ring: var(--ok-ring-light);
+  --attn: var(--attn-light);
+  --attn-dot: var(--attn-dot-light);
+  --attn-ring: var(--attn-ring-light);
+  --err: var(--err-light);
+  --err-soft: var(--err-soft-light);
+  --err-dot: var(--err-dot-light);
+  --err-ring: var(--err-ring-light);
+  --glow: var(--glow-light);
+  --card-shadow: var(--card-shadow-light);
+  --btn-shadow: var(--btn-shadow-light);
+  --avatar-shadow: var(--avatar-shadow-light);
 
-  --target-size: 28px;
-  --sans: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
+  --target-size: 32px;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   color-scheme: light dark;
 }
@@ -54,65 +108,92 @@ try {
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: var(--bg-dark); --bg-2: var(--bg-2-dark); --bg-3: var(--bg-3-dark);
-    --line: var(--line-dark); --line-2: var(--line-2-dark);
-    --fg: var(--fg-dark); --fg-2: var(--fg-2-dark); --fg-3: var(--fg-3-dark);
-    --accent: var(--accent-dark); --on-accent: var(--on-accent-dark);
-    --ok: var(--ok-dark); --ok-soft: var(--ok-soft-dark); --ok-line: var(--ok-line-dark);
-    --attn: var(--attn-dark); --attn-soft: var(--attn-soft-dark); --attn-line: var(--attn-line-dark);
-    --err: var(--err-dark); --err-soft: var(--err-soft-dark); --err-line: var(--err-line-dark);
-    --shadow: var(--shadow-dark);
+    --canvas: var(--canvas-dark);
+    --surface: var(--surface-dark);
+    --surface-2: var(--surface-2-dark);
+    --surface-3: var(--surface-3-dark);
+    --line: var(--line-dark);
+    --line-2: var(--line-2-dark);
+    --fg: var(--fg-dark);
+    --fg-2: var(--fg-2-dark);
+    --fg-3: var(--fg-3-dark);
+    --accent: var(--accent-dark);
+    --accent-hover: var(--accent-hover-dark);
+    --on-accent: var(--on-accent-dark);
+    --ok: var(--ok-dark);
+    --ok-dot: var(--ok-dot-dark);
+    --ok-ring: var(--ok-ring-dark);
+    --attn: var(--attn-dark);
+    --attn-dot: var(--attn-dot-dark);
+    --attn-ring: var(--attn-ring-dark);
+    --err: var(--err-dark);
+    --err-soft: var(--err-soft-dark);
+    --err-dot: var(--err-dot-dark);
+    --err-ring: var(--err-ring-dark);
+    --glow: var(--glow-dark);
+    --card-shadow: var(--card-shadow-dark);
+    --btn-shadow: var(--btn-shadow-dark);
+    --avatar-shadow: var(--avatar-shadow-dark);
   }
 }
 @supports (color: light-dark(white, black)) {
   :root {
-    --bg: light-dark(var(--bg-light), var(--bg-dark));
-    --bg-2: light-dark(var(--bg-2-light), var(--bg-2-dark));
-    --bg-3: light-dark(var(--bg-3-light), var(--bg-3-dark));
+    --canvas: light-dark(var(--canvas-light), var(--canvas-dark));
+    --surface: light-dark(var(--surface-light), var(--surface-dark));
+    --surface-2: light-dark(var(--surface-2-light), var(--surface-2-dark));
+    --surface-3: light-dark(var(--surface-3-light), var(--surface-3-dark));
     --line: light-dark(var(--line-light), var(--line-dark));
     --line-2: light-dark(var(--line-2-light), var(--line-2-dark));
     --fg: light-dark(var(--fg-light), var(--fg-dark));
     --fg-2: light-dark(var(--fg-2-light), var(--fg-2-dark));
     --fg-3: light-dark(var(--fg-3-light), var(--fg-3-dark));
     --accent: light-dark(var(--accent-light), var(--accent-dark));
+    --accent-hover: light-dark(var(--accent-hover-light), var(--accent-hover-dark));
     --on-accent: light-dark(var(--on-accent-light), var(--on-accent-dark));
     --ok: light-dark(var(--ok-light), var(--ok-dark));
-    --ok-soft: light-dark(var(--ok-soft-light), var(--ok-soft-dark));
-    --ok-line: light-dark(var(--ok-line-light), var(--ok-line-dark));
+    --ok-dot: light-dark(var(--ok-dot-light), var(--ok-dot-dark));
+    --ok-ring: light-dark(var(--ok-ring-light), var(--ok-ring-dark));
     --attn: light-dark(var(--attn-light), var(--attn-dark));
-    --attn-soft: light-dark(var(--attn-soft-light), var(--attn-soft-dark));
-    --attn-line: light-dark(var(--attn-line-light), var(--attn-line-dark));
+    --attn-dot: light-dark(var(--attn-dot-light), var(--attn-dot-dark));
+    --attn-ring: light-dark(var(--attn-ring-light), var(--attn-ring-dark));
     --err: light-dark(var(--err-light), var(--err-dark));
     --err-soft: light-dark(var(--err-soft-light), var(--err-soft-dark));
-    --err-line: light-dark(var(--err-line-light), var(--err-line-dark));
+    --err-dot: light-dark(var(--err-dot-light), var(--err-dot-dark));
+    --err-ring: light-dark(var(--err-ring-light), var(--err-ring-dark));
   }
 }
 :root:has(> head > meta[name="color-scheme"][content="dark"]) {
   color-scheme: dark;
-  --shadow: var(--shadow-dark);
+  --glow: var(--glow-dark);
+  --card-shadow: var(--card-shadow-dark);
+  --btn-shadow: var(--btn-shadow-dark);
+  --avatar-shadow: var(--avatar-shadow-dark);
 }
 :root:has(> head > meta[name="color-scheme"][content="light"]) {
   color-scheme: light;
-  --shadow: var(--shadow-light);
+  --glow: var(--glow-light);
+  --card-shadow: var(--card-shadow-light);
+  --btn-shadow: var(--btn-shadow-light);
+  --avatar-shadow: var(--avatar-shadow-light);
 }
 @supports not (color: light-dark(white, black)) {
   :root:has(> head > meta[name="color-scheme"][content="dark"]) {
-    --bg: var(--bg-dark); --bg-2: var(--bg-2-dark); --bg-3: var(--bg-3-dark);
+    --canvas: var(--canvas-dark); --surface: var(--surface-dark); --surface-2: var(--surface-2-dark); --surface-3: var(--surface-3-dark);
     --line: var(--line-dark); --line-2: var(--line-2-dark);
     --fg: var(--fg-dark); --fg-2: var(--fg-2-dark); --fg-3: var(--fg-3-dark);
-    --accent: var(--accent-dark); --on-accent: var(--on-accent-dark);
-    --ok: var(--ok-dark); --ok-soft: var(--ok-soft-dark); --ok-line: var(--ok-line-dark);
-    --attn: var(--attn-dark); --attn-soft: var(--attn-soft-dark); --attn-line: var(--attn-line-dark);
-    --err: var(--err-dark); --err-soft: var(--err-soft-dark); --err-line: var(--err-line-dark);
+    --accent: var(--accent-dark); --accent-hover: var(--accent-hover-dark); --on-accent: var(--on-accent-dark);
+    --ok: var(--ok-dark); --ok-dot: var(--ok-dot-dark); --ok-ring: var(--ok-ring-dark);
+    --attn: var(--attn-dark); --attn-dot: var(--attn-dot-dark); --attn-ring: var(--attn-ring-dark);
+    --err: var(--err-dark); --err-soft: var(--err-soft-dark); --err-dot: var(--err-dot-dark); --err-ring: var(--err-ring-dark);
   }
   :root:has(> head > meta[name="color-scheme"][content="light"]) {
-    --bg: var(--bg-light); --bg-2: var(--bg-2-light); --bg-3: var(--bg-3-light);
+    --canvas: var(--canvas-light); --surface: var(--surface-light); --surface-2: var(--surface-2-light); --surface-3: var(--surface-3-light);
     --line: var(--line-light); --line-2: var(--line-2-light);
     --fg: var(--fg-light); --fg-2: var(--fg-2-light); --fg-3: var(--fg-3-light);
-    --accent: var(--accent-light); --on-accent: var(--on-accent-light);
-    --ok: var(--ok-light); --ok-soft: var(--ok-soft-light); --ok-line: var(--ok-line-light);
-    --attn: var(--attn-light); --attn-soft: var(--attn-soft-light); --attn-line: var(--attn-line-light);
-    --err: var(--err-light); --err-soft: var(--err-soft-light); --err-line: var(--err-line-light);
+    --accent: var(--accent-light); --accent-hover: var(--accent-hover-light); --on-accent: var(--on-accent-light);
+    --ok: var(--ok-light); --ok-dot: var(--ok-dot-light); --ok-ring: var(--ok-ring-light);
+    --attn: var(--attn-light); --attn-dot: var(--attn-dot-light); --attn-ring: var(--attn-ring-light);
+    --err: var(--err-light); --err-soft: var(--err-soft-light); --err-dot: var(--err-dot-light); --err-ring: var(--err-ring-light);
   }
 }
 
@@ -122,32 +203,34 @@ try {
 @media (prefers-color-scheme: dark) {
   :root:has(> head > meta[name="color-scheme"][content="light dark"]) .ic-to-dark { display: none; }
   :root:has(> head > meta[name="color-scheme"][content="light dark"]) .ic-to-light { display: block; }
-  :root:has(> head > meta[name="color-scheme"][content="light dark"]) .brand img,
-  :root:has(> head > meta[name="color-scheme"][content="light dark"]) .card-mark img { filter: invert(1); }
 }
 :root:has(> head > meta[name="color-scheme"][content="dark"]) .ic-to-dark { display: none; }
 :root:has(> head > meta[name="color-scheme"][content="dark"]) .ic-to-light { display: block; }
-:root:has(> head > meta[name="color-scheme"][content="dark"]) .brand img,
-:root:has(> head > meta[name="color-scheme"][content="dark"]) .card-mark img { filter: invert(1); }
 
-* { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   min-block-size: 100svh;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background-color: var(--canvas);
+  background-image: var(--glow);
+  background-repeat: no-repeat;
   color: var(--fg);
-  font: 0.9375rem/1.65 var(--sans);
+  font: 0.9375rem/1.6 var(--sans);
   font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow-wrap: break-word;
 }
 a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--line-2); overflow-wrap: anywhere; }
 a:hover { text-decoration-color: currentColor; }
-:where(a:any-link, button, input, textarea):focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+:where(a:any-link, button, input, textarea, summary):focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
 code, pre { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
-img { max-inline-size: 100%; block-size: auto; display: block; }
 h1, h2, h3 { text-wrap: balance; }
 p { text-wrap: pretty; }
 [hidden] { display: none !important; }
@@ -164,336 +247,824 @@ p { text-wrap: pretty; }
   white-space: nowrap !important;
 }
 
-.wrap {
-  width: 100%;
-  max-width: 680px;
-  margin: 0 auto;
-  padding-inline: max(20px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
-}
-
-/* Header */
+/* Minimal top bar */
 header.top {
-  position: sticky; top: 0; z-index: 20;
+  width: 100%;
   padding-top: env(safe-area-inset-top, 0px);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: saturate(1.4) blur(14px);
-  -webkit-backdrop-filter: saturate(1.4) blur(14px);
-  border-bottom: 1px solid var(--line);
+  flex: none;
 }
-header.top .wrap {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; min-block-size: 56px; padding-block: 6px;
+.top-inner {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 16px max(24px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .brand {
-  display: inline-flex; align-items: center; gap: 9px;
-  font-weight: 650; font-size: 0.95rem; letter-spacing: -.01em;
-  text-decoration: none; flex: none; min-block-size: var(--target-size);
-}
-.brand img { width: 24px; height: 24px; }
-.nav-right { display: inline-flex; align-items: center; gap: 14px; }
-.nav-link {
-  display: inline-flex; align-items: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 620;
+  font-size: 0.92rem;
+  letter-spacing: -.015em;
+  text-decoration: none;
+  color: var(--fg);
   min-block-size: var(--target-size);
-  color: var(--fg-2); text-decoration: none; font-size: 0.85rem;
+  flex: none;
 }
-.nav-link:hover { color: var(--fg); }
-.controls { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.brand-ic {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: block;
+}
+.nav-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--target-size);
+  color: var(--fg-3);
+  text-decoration: none;
+  font-size: 0.8125rem;
+  font-weight: 480;
+  transition: color .15s ease;
+}
+.nav-link:hover { color: var(--fg); text-decoration: none; }
+.controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
 .ctrl {
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  min-block-size: max(30px, var(--target-size)); min-inline-size: max(30px, var(--target-size));
-  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line-2);
-  background: transparent; color: var(--fg-2);
-  font: 0.78rem/1 var(--sans); font-weight: 500; cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-block-size: max(30px, var(--target-size));
+  min-inline-size: max(30px, var(--target-size));
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--fg-3);
+  font: 0.76rem/1 var(--sans);
+  font-weight: 500;
+  cursor: pointer;
   transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
-.ctrl:hover { background: var(--bg-3); color: var(--fg); border-color: var(--fg-3); }
-.lang-btn .sep { opacity: .4; margin: 0 1px; }
+.ctrl:hover {
+  background: var(--surface);
+  color: var(--fg);
+  border-color: var(--line-2);
+}
+.lang-btn .sep { opacity: .35; margin: 0 1px; }
 .lang-btn[data-lang="en"] .lang-en,
-.lang-btn[data-lang="zh"] .lang-zh { color: var(--fg); font-weight: 650; }
+.lang-btn[data-lang="zh"] .lang-zh { color: var(--fg); font-weight: 600; }
 .lang-btn[data-lang="en"] .lang-zh,
 .lang-btn[data-lang="zh"] .lang-en { color: var(--fg-3); }
 .theme-btn { padding: 4px; }
-.theme-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-
-/* Main layout */
-main { flex: 1; padding: 36px 0 48px; }
-.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
-
-/* Primary business card surface */
-.card {
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: var(--bg);
-  box-shadow: var(--shadow);
-  padding: 26px 26px 24px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 20px;
-  min-width: 0;
+.theme-btn svg {
+  width: 14px; height: 14px;
+  stroke: currentColor; fill: none; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
 }
 
-.card-head {
+/* Centered invitation stage */
+main {
+  flex: 1;
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(16px, 4vh, 44px) max(16px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)) clamp(36px, 7vh, 72px);
+  width: 100%;
+}
+.stage {
+  width: 100%;
+  max-width: 452px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+/* Invitation card */
+.card {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+  padding: 40px 32px 22px;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
-.card-mark {
-  width: 46px; height: 46px; border-radius: 13px; flex: none;
-  display: grid; place-items: center;
-  border: 1px solid var(--line); background: var(--bg-2);
+
+/* Hero identity block */
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
 }
-.card-mark img { width: 26px; height: 26px; }
-.card-ident { min-width: 0; flex: 1; display: grid; gap: 5px; }
-.eyebrow-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.status-badge {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.76rem; font-weight: 560; line-height: 1.25;
-  padding: 3px 9px; border-radius: 999px;
-  border: 1px solid var(--ok-line); background: var(--ok-soft); color: var(--ok);
+.avatar-wrap {
+  position: relative;
+  width: 62px;
+  height: 62px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  box-shadow: var(--avatar-shadow);
+  display: grid;
+  place-items: center;
+  margin-bottom: 22px;
+  color: var(--fg);
 }
-.status-badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
-.status-badge.is-warn { border-color: var(--attn-line); background: var(--attn-soft); color: var(--attn); }
-.status-badge.is-err { border-color: var(--err-line); background: var(--err-soft); color: var(--err); }
-.status-badge.is-neutral { border-color: var(--line-2); background: var(--bg-2); color: var(--fg-2); }
+.avatar-wrap svg {
+  width: 36px;
+  height: 36px;
+  display: block;
+}
+.avatar-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--ok-dot);
+  border: 2.5px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--ok-ring);
+}
+.avatar-dot.is-warn {
+  background: var(--attn-dot);
+  box-shadow: 0 0 0 2px var(--attn-ring);
+}
+.avatar-dot.is-err {
+  background: var(--err-dot);
+  box-shadow: 0 0 0 2px var(--err-ring);
+}
 
 .card-title {
   margin: 0;
-  font-size: clamp(1.32rem, 1.12rem + 0.7vw, 1.65rem);
-  line-height: 1.22; letter-spacing: -.022em; font-weight: 700;
+  font-size: clamp(1.24rem, 1.12rem + 0.45vw, 1.44rem);
+  line-height: 1.32;
+  letter-spacing: -.026em;
+  font-weight: 660;
+  color: var(--fg);
+  max-width: 24ch;
 }
 .card-sub {
-  margin: 0; font-size: 0.875rem; color: var(--fg-2); line-height: 1.55;
+  margin: 10px 0 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--fg-2);
+  max-width: 100%;
 }
+.status-note {
+  margin: 12px 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78125rem;
+  line-height: 1.35;
+  color: var(--fg-3);
+}
+.status-note .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok-dot);
+  flex: none;
+}
+.status-note.is-warn { color: var(--attn); }
+.status-note.is-warn .dot { background: var(--attn-dot); }
+.status-note.is-err { color: var(--err); }
+.status-note.is-err .dot { background: var(--err-dot); }
 
-.meta-box {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--bg-2);
-  padding: 12px 14px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+/* Action stack — sole visual hero */
+.open-section {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
-.meta-row {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 10px; flex-wrap: wrap; font-size: 0.8125rem; min-width: 0;
+.hub-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
-.meta-label { color: var(--fg-3); flex: none; }
-.meta-val {
-  color: var(--fg); font-family: var(--mono); font-size: 0.78125rem;
-  overflow-wrap: anywhere; text-align: right; min-width: 0;
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  border-radius: 12px;
+  font-family: var(--sans);
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform .15s ease, background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
 }
-.addr-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; min-width: 0; max-width: 100%; }
-.addr-chip {
-  font: 500 0.76rem/1.3 var(--mono); color: var(--fg-2);
-  padding: 2px 8px; border-radius: 6px;
-  border: 1px solid var(--line-2); background: var(--bg);
-  max-width: 100%; overflow-wrap: anywhere;
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.btn.primary {
+  min-block-size: 48px;
+  padding: 12px 20px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.9375rem;
+  font-weight: 580;
+  letter-spacing: -.012em;
+  box-shadow: var(--btn-shadow);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+.btn.primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+.btn.primary .arrow-ic {
+  transition: transform .16s ease;
+}
+.btn.primary:hover:not(:disabled) .arrow-ic {
+  transform: translateX(2px);
+}
+.btn.secondary {
+  min-block-size: 42px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-2);
+  font-size: 0.84375rem;
+  font-weight: 500;
+}
+.btn.secondary:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--line-2);
+  color: var(--fg);
+}
+.btn.secondary.done {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+  background: color-mix(in srgb, var(--ok) 7%, transparent);
+}
+.btn.secondary .ic-check { display: none; }
+.btn.secondary.done .ic-copy { display: none; }
+.btn.secondary.done .ic-check { display: block; }
+
+/* Smooth native <details> disclosure animation (progressive enhancement) */
+details::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+details:not([open])::details-content {
+  block-size: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  details::details-content {
+    transition: block-size .24s cubic-bezier(.22, 1, .36, 1), content-visibility .24s ease, display .24s ease;
+    transition-behavior: allow-discrete;
+  }
 }
 
-.notice {
-  display: flex; align-items: flex-start; gap: 9px;
-  padding: 10px 12px; border-radius: 11px;
-  border: 1px solid var(--line); background: var(--bg-2);
-  font-size: 0.8125rem; line-height: 1.55; color: var(--fg-2);
+/* Address summary & collapsible preset switcher */
+.addr-details {
+  margin-top: 10px;
+  min-width: 0;
 }
-.notice svg { width: 15px; height: 15px; flex: none; margin-top: 3px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.notice.is-ok svg { color: var(--ok); }
-.notice.is-warn { border-color: var(--attn-line); background: var(--attn-soft); color: var(--fg); }
-.notice.is-warn svg { color: var(--attn); }
-.notice.is-err { border-color: var(--err-line); background: var(--err-soft); color: var(--fg); }
-.notice.is-err svg { color: var(--err); }
+.addr-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-block-size: 28px;
+  padding: 3px 6px;
+  border-radius: 8px;
+  font-size: 0.78125rem;
+  line-height: 1.45;
+  color: var(--fg-3);
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+  transition: color .15s ease;
+}
+.addr-summary::-webkit-details-marker { display: none; }
+.addr-summary:hover { color: var(--fg-2); }
+.addr-current {
+  color: var(--fg-2);
+  font-weight: 500;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.addr-current .addr-host {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  font-weight: 460;
+  color: var(--fg-3);
+}
+.addr-sep { opacity: .45; }
+.addr-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--fg-2);
+  font-weight: 500;
+}
+.addr-summary:hover .addr-action { color: var(--fg); }
+.chev {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: rotate .2s ease;
+}
+details[open] > summary .chev { rotate: 180deg; }
 
-/* Divider */
-.sep-line { border: 0; border-top: 1px solid var(--line); margin: 0; }
+.addr-saved-flash {
+  color: var(--ok);
+  font-weight: 520;
+}
 
-/* Hub URL form */
-.hub-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
-.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
-.field-head {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 8px; flex-wrap: wrap;
+/* Ultra-light direct PWA launch line */
+.pwa-quick-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: -2px;
 }
-.field label { font-size: 0.875rem; font-weight: 600; color: var(--fg); }
-.saved-tag {
-  font-size: 0.75rem; color: var(--ok); font-weight: 500;
+.pwa-quick-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-block-size: 28px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-3);
+  font: 0.76rem/1.4 var(--sans);
+  cursor: pointer;
+  transition: color .15s ease, background-color .15s ease;
 }
-.field-hint {
-  margin: 0; font-size: 0.8rem; color: var(--fg-3); line-height: 1.5;
+.pwa-quick-btn:hover {
+  color: var(--fg);
+  background: var(--surface-2);
 }
-.field-hint code {
-  background: var(--bg-3); padding: 1px 5px; border-radius: 4px;
-  font-size: 0.76rem; color: var(--fg-2);
+.pwa-quick-btn code {
+  font-size: 0.72rem;
+  color: var(--fg-3);
+  opacity: .85;
+}
+.pwa-quick-btn:hover code { color: var(--fg-2); opacity: 1; }
+.pwa-hint {
+  margin: 0;
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.addr-panel {
+  margin-top: 10px;
+  padding: 6px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.addr-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+  inline-size: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.addr-opt {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  min-block-size: 42px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color .14s ease, border-color .14s ease, box-shadow .14s ease;
+}
+.addr-opt:hover {
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+.addr-opt:has(input:checked) {
+  background: var(--surface);
+  border-color: var(--line);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+}
+.addr-opt:has(input:focus-visible) {
+  outline: 2px solid var(--fg);
+  outline-offset: -2px;
+}
+.addr-opt-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.radio-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-2);
+  background: var(--surface);
+  flex: none;
+  display: grid;
+  place-items: center;
+  transition: border-color .14s ease, background-color .14s ease;
+}
+.radio-dot::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--on-accent);
+  transform: scale(0);
+  transition: transform .14s ease;
+}
+.addr-opt input:checked + .addr-opt-left .radio-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.addr-opt input:checked + .addr-opt-left .radio-dot::after {
+  transform: scale(1);
+}
+.addr-opt-title {
+  font-size: 0.825rem;
+  font-weight: 520;
+  color: var(--fg);
+  line-height: 1.3;
+}
+.addr-opt-code {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--fg-3);
+  flex: none;
+}
+.addr-opt:has(input:checked) .addr-opt-code {
+  color: var(--fg-2);
+}
+
+/* Custom URL reveal area */
+.custom-wrap {
+  padding: 6px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.custom-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
 }
 .text-input {
-  width: 100%;
-  min-block-size: 44px;
-  padding: 10px 13px;
-  border-radius: 11px;
+  flex: 1 1 0%;
+  width: 0;
+  min-width: 0;
+  min-block-size: 40px;
+  padding: 8px 11px;
+  border-radius: 9px;
   border: 1px solid var(--line-2);
-  background: var(--bg);
+  background: var(--surface);
   color: var(--fg);
-  font: 0.875rem/1.4 var(--mono);
+  font: 0.84rem/1.35 var(--mono);
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-.text-input::placeholder { color: var(--fg-3); opacity: .85; }
+.text-input::placeholder { color: var(--fg-3); opacity: .8; }
 .text-input:focus {
   outline: none;
   border-color: var(--fg);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 10%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 9%, transparent);
 }
 :is(.text-input:user-invalid, .text-input.user-invalid-fallback) {
   border-color: var(--err);
   background: var(--err-soft);
 }
+.save-btn {
+  flex: none;
+  min-block-size: 40px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 540 0.8125rem/1 var(--sans);
+  cursor: pointer;
+  transition: background-color .14s ease, opacity .14s ease;
+}
+.save-btn:hover { background: var(--accent-hover); }
+.custom-hint {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--fg-3);
+}
 .error-msg {
   display: none;
   margin: 0;
-  font-size: 0.8rem;
-  color: var(--err);
+  font-size: 0.76rem;
   line-height: 1.45;
+  color: var(--err);
 }
-:is(.text-input:user-invalid, .text-input.user-invalid-fallback) + .error-msg,
+:is(.text-input:user-invalid, .text-input.user-invalid-fallback) ~ .error-msg,
 .error-msg.is-shown {
   display: block;
 }
 
-.presets {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+/* Manual paste fallback (only for empty / invalid / expired state) */
+.manual-box {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.preset-lbl { font-size: 0.76rem; color: var(--fg-3); margin-inline-end: 2px; }
-.preset-btn {
-  display: inline-flex; align-items: center; gap: 4px;
-  min-block-size: 28px; padding: 4px 10px;
-  border-radius: 999px; border: 1px solid var(--line-2);
-  background: var(--bg-2); color: var(--fg-2);
-  font: 0.76rem/1.2 var(--sans); cursor: pointer;
-  transition: background .14s ease, color .14s ease, border-color .14s ease;
+.manual-box label {
+  font-size: 0.8125rem;
+  font-weight: 560;
+  color: var(--fg-2);
 }
-.preset-btn code { font-size: 0.72rem; color: var(--fg-3); }
-.preset-btn:hover { background: var(--bg-3); color: var(--fg); border-color: var(--fg-3); }
-.preset-btn:hover code { color: var(--fg); }
-
-/* Action buttons */
-.actions {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-}
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  min-block-size: 44px; padding: 10px 18px;
-  border-radius: 999px; border: 1px solid var(--line-2);
-  background: var(--bg); color: var(--fg);
-  font: 560 0.9rem/1.2 var(--sans); text-decoration: none; cursor: pointer;
-  transition: transform .14s ease, background .14s ease, border-color .14s ease, opacity .14s ease;
-}
-.btn:hover:not(:disabled) { background: var(--bg-3); border-color: var(--fg-3); transform: translateY(-1px); }
-.btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn.primary {
-  flex: 1 1 220px;
-  background: var(--accent); color: var(--on-accent); border-color: var(--accent);
-}
-.btn.primary:hover:not(:disabled) { background: var(--accent); opacity: .9; }
-.btn.ghost { background: transparent; color: var(--fg-2); }
-.btn.ghost:hover:not(:disabled) { color: var(--fg); background: var(--bg-2); }
-.btn.done { color: var(--ok); border-color: var(--ok); }
-.btn svg { width: 15px; height: 15px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-
-/* Manual paste fallback (shown on empty/error state) */
-.manual-box { display: grid; gap: 10px; }
 .manual-box textarea {
-  width: 100%; min-block-size: 76px; padding: 10px 12px;
-  border-radius: 11px; border: 1px solid var(--line-2);
-  background: var(--bg-2); color: var(--fg);
-  font: 0.8rem/1.5 var(--mono); resize: vertical; word-break: break-all;
+  width: 100%;
+  min-block-size: 76px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--line-2);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: 0.8rem/1.5 var(--mono);
+  resize: vertical;
+  word-break: break-all;
+  transition: border-color .15s ease, background-color .15s ease;
 }
-.manual-box textarea:focus { outline: none; border-color: var(--fg); background: var(--bg); }
+.manual-box textarea::placeholder { color: var(--fg-3); }
+.manual-box textarea:focus {
+  outline: none;
+  border-color: var(--fg);
+  background: var(--surface);
+}
 
-/* Light promo card for new users */
-.promo {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--bg-2);
-  padding: 20px 22px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+/* Bottom technical details & security disclosure */
+.tech-details {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.tech-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-block-size: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 0.78125rem;
+  color: var(--fg-3);
+  cursor: pointer;
+  user-select: none;
+  transition: color .15s ease;
+}
+.tech-summary::-webkit-details-marker { display: none; }
+.tech-summary:hover { color: var(--fg-2); }
+.shield-ic {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .85;
+}
+.tech-body {
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-width: 0;
 }
-.promo-head { display: grid; gap: 4px; }
-.promo-kicker {
-  font-size: 0.75rem; font-weight: 600; color: var(--attn);
-  letter-spacing: .02em; margin: 0;
+.meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
 }
-.promo h2 {
-  margin: 0; font-size: 1.05rem; line-height: 1.3; font-weight: 650; letter-spacing: -.012em;
+.meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.78125rem;
+  min-width: 0;
 }
-.promo p {
-  margin: 0; font-size: 0.84rem; color: var(--fg-2); line-height: 1.6;
+.meta-label {
+  color: var(--fg-3);
+  flex: none;
 }
-.cmd {
-  display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 100%;
-  border: 1px solid var(--line-2); border-radius: 11px;
-  background: var(--bg); padding: 9px 10px 9px 13px;
+.meta-val {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  text-align: right;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
-.cmd pre {
-  margin: 0; flex: 1; min-width: 0; overflow-x: auto;
-  scrollbar-width: none;
+.addr-chips {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
-.cmd pre::-webkit-scrollbar { display: none; }
-.cmd code { white-space: nowrap; font-size: 0.78rem; color: var(--fg); }
-.copy-btn {
-  flex: none; min-block-size: 32px; padding: 5px 12px;
-  border-radius: 8px; border: 1px solid var(--line-2);
-  background: var(--bg-2); color: var(--fg-2);
-  font: 500 0.78rem/1 var(--sans); cursor: pointer;
-  transition: background .14s ease, color .14s ease, border-color .14s ease;
+.addr-chip {
+  font: 460 0.73rem/1.4 var(--mono);
+  color: var(--fg-2);
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
-.copy-btn:hover { background: var(--bg-3); color: var(--fg); border-color: var(--fg-3); }
-.copy-btn.done { color: var(--ok); border-color: var(--ok); }
-.promo-links {
-  display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap;
-  font-size: 0.8125rem; color: var(--fg-2);
-}
-.promo-links a { font-weight: 500; text-decoration: none; }
-.promo-links a:hover { color: var(--fg); text-decoration: underline; }
-.promo-links .dot-sep { color: var(--line-2); }
-
-/* Footer */
-footer {
+.tech-sep {
+  border: 0;
   border-top: 1px solid var(--line);
-  padding: 18px 0 calc(28px + env(safe-area-inset-bottom, 0px));
-  color: var(--fg-3); font-size: 0.78rem;
+  margin: 0;
 }
-footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
-footer .f-links { display: inline-flex; gap: 14px; flex-wrap: wrap; }
-footer a { color: var(--fg-2); text-decoration: none; }
-footer a:hover { color: var(--fg); text-decoration: underline; }
+.security-note {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.77rem;
+  line-height: 1.6;
+  color: var(--fg-2);
+}
+.security-note svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 3px;
+  stroke: var(--ok);
+  fill: none;
+  stroke-width: 1.85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Restrained single-line bottom strip */
+.promo-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 2px 8px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--fg-3);
+  text-align: center;
+}
+.promo-strip a {
+  color: var(--fg-2);
+  font-weight: 500;
+  text-decoration: none;
+  transition: color .14s ease;
+}
+.promo-strip a:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.promo-strip .dot-sep {
+  opacity: .45;
+}
+
+/* Quiet footer */
+footer {
+  flex: none;
+  padding: 0 max(20px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px));
+  text-align: center;
+  font-size: 0.74rem;
+  color: var(--fg-3);
+  opacity: .85;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .btn, .ctrl, .preset-btn, .copy-btn, .text-input { transition: none; }
+  .btn, .btn .arrow-ic, .ctrl, .nav-link, .addr-summary, .tech-summary, .chev, .addr-opt, .radio-dot, .radio-dot::after, .text-input, .save-btn, .pwa-quick-btn {
+    transition: none;
+  }
 }
-@media (max-width: 600px) {
-  .wrap { padding-inline: max(16px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)); }
-  main { padding: 20px 0 36px; }
-  .card { padding: 20px 18px 18px; border-radius: 16px; gap: 16px; }
-  .card-mark { width: 40px; height: 40px; border-radius: 11px; }
-  .card-mark img { width: 22px; height: 22px; }
-  .meta-row { flex-direction: column; gap: 3px; }
-  .meta-val { text-align: left; }
-  .addr-chips { justify-content: flex-start; }
-  .actions { flex-direction: column; align-items: stretch; }
-  .btn, .btn.primary { width: 100%; flex: 0 0 auto; }
-  .promo { padding: 18px 16px; }
+@media (pointer: coarse), (max-width: 600px) {
+  .text-input, .manual-box textarea {
+    font-size: 1rem;
+  }
+}
+@media (max-width: 520px) {
+  .top-inner {
+    padding: 12px max(16px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
+  }
   .nav-link.hide-xs { display: none; }
+  .card {
+    padding: 32px 20px 18px;
+    border-radius: 20px;
+  }
+  .avatar-wrap {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    margin-bottom: 18px;
+  }
+  .avatar-wrap svg { width: 32px; height: 32px; }
+  .open-section { margin-top: 24px; }
+  .addr-summary {
+    font-size: 0.74rem;
+    gap: 3px 4px;
+    padding: 3px 2px;
+  }
+  .addr-current .addr-host { font-size: 0.71rem; }
+  .addr-opt {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .addr-opt-title { font-size: 0.8rem; }
+  .addr-opt-code { font-size: 0.71rem; }
+  .meta-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .meta-val { text-align: left; }
+  .addr-chips { align-items: flex-start; }
 }
 </style>
 </head>
 <body>
 <header class="top">
-  <div class="wrap">
-    <a class="brand" href="../"><img src="../icon.svg" width="24" height="24" alt="">Collie</a>
+  <div class="top-inner">
+    <a class="brand" href="../">
+      <svg class="brand-ic" viewBox="0 0 64 64" width="22" height="22" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.5 31.5c6.5-1.4 12-3.2 17-6.2 2.6-3 5.2-5 8.4-5.9L38.4 10l6.4 10.4c4.6 3.2 7.2 8.4 7.4 14.6.2 3.6 1.4 6 2.8 8.2-1.6 1.4-2.4 3.4-2.4 5.8 0 2.2-.6 4-1.6 5.6"/>
+          <path d="M38.4 10l-3.6 3.2"/>
+          <path d="M9.5 31.5c1.2 2.6 4.6 4 10 4 3.4 0 6.4 1 8.8 3"/>
+          <path d="M28.3 38.5c-.4 2.8.6 4.6 2.6 5.8-.8 2.2-.2 4.2 1.8 5.6-.2 1.8.4 3.2 1.6 4.4"/>
+          <path d="M37 37c2 2.4 2.6 5.2 2 8.4M44 35c2.2 2.6 3 5.6 2.4 9"/>
+        </g>
+        <circle cx="30.6" cy="26.2" r="1.7" fill="currentColor"/>
+        <circle cx="10" cy="31.6" r="2.1" fill="currentColor"/>
+      </svg>
+      <span>Collie</span>
+    </a>
     <div class="nav-right">
       <a class="nav-link hide-xs" href="../" data-i18n="nav_home">Homepage</a>
       <a class="nav-link" href="https://github.com/lihuanyu0w0/collie">GitHub</a>
@@ -517,122 +1088,182 @@ footer a:hover { color: var(--fg); text-decoration: underline; }
 </header>
 
 <main>
-  <div class="wrap stack">
+  <div class="stage">
     <section class="card" aria-labelledby="card-title">
-      <div class="card-head">
-        <div class="card-mark" aria-hidden="true"><img src="../icon.svg" width="26" height="26" alt=""></div>
-        <div class="card-ident">
-          <div class="eyebrow-row">
-            <span class="status-badge" id="status-badge"><i aria-hidden="true"></i><span id="status-text"></span></span>
-          </div>
-          <h1 class="card-title" id="card-title"></h1>
-          <p class="card-sub" id="card-sub"></p>
+      <div class="hero">
+        <div class="avatar-wrap" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="36" height="36">
+            <g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.5 31.5c6.5-1.4 12-3.2 17-6.2 2.6-3 5.2-5 8.4-5.9L38.4 10l6.4 10.4c4.6 3.2 7.2 8.4 7.4 14.6.2 3.6 1.4 6 2.8 8.2-1.6 1.4-2.4 3.4-2.4 5.8 0 2.2-.6 4-1.6 5.6"/>
+              <path d="M38.4 10l-3.6 3.2"/>
+              <path d="M9.5 31.5c1.2 2.6 4.6 4 10 4 3.4 0 6.4 1 8.8 3"/>
+              <path d="M28.3 38.5c-.4 2.8.6 4.6 2.6 5.8-.8 2.2-.2 4.2 1.8 5.6-.2 1.8.4 3.2 1.6 4.4"/>
+              <path d="M37 37c2 2.4 2.6 5.2 2 8.4M44 35c2.2 2.6 3 5.6 2.4 9"/>
+            </g>
+            <circle cx="30.6" cy="26.2" r="1.55" fill="currentColor"/>
+            <circle cx="10" cy="31.6" r="1.9" fill="currentColor"/>
+          </svg>
+          <span class="avatar-dot" id="avatar-dot" hidden></span>
         </div>
+        <h1 class="card-title" id="card-title"></h1>
+        <p class="card-sub" id="card-sub"></p>
+        <p class="status-note" id="status-note" hidden>
+          <span class="dot" aria-hidden="true"></span>
+          <span id="status-note-text"></span>
+        </p>
       </div>
 
-      <!-- Parsed card metadata (shown when a valid card payload is present) -->
-      <div class="meta-box" id="meta-box" hidden>
-        <div class="meta-row">
-          <span class="meta-label" data-i18n="meta_hub_id">Hub ID</span>
-          <span class="meta-val" id="meta-hub-id"></span>
-        </div>
-        <div class="meta-row">
-          <span class="meta-label" data-i18n="meta_addrs">Direct address</span>
-          <div class="addr-chips" id="meta-addrs"></div>
-        </div>
-      </div>
-
-      <!-- Contextual privacy or error/expiry notice -->
-      <div class="notice is-ok" id="state-notice">
-        <svg id="notice-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
-        <span id="notice-text"></span>
-      </div>
-
-      <!-- Manual paste fallback for empty / invalid state -->
-      <div class="manual-box" id="manual-box" hidden>
-        <label for="manual-input" style="font-size:0.84rem;font-weight:600" data-i18n="manual_label">Paste a friend's card link or invite code</label>
-        <textarea id="manual-input" rows="2" spellcheck="false" data-i18n-placeholder="manual_ph" placeholder="https://lihuanyu0w0.github.io/collie/join/#... or collie-peer://v1/..."></textarea>
-        <div class="actions">
-          <button type="button" class="btn primary" id="manual-parse-btn" data-i18n="manual_btn">Parse business card</button>
-        </div>
-      </div>
-
-      <!-- Installed Collie user flow: enter/remember Hub URL & 1-click open -->
-      <div id="open-section" hidden>
-        <hr class="sep-line" style="margin-bottom:18px">
+      <!-- Primary invite flow (zero input exposed by default) -->
+      <div class="open-section" id="open-section" hidden>
         <form class="hub-form" id="hub-form" novalidate>
-          <div class="field">
-            <div class="field-head">
-              <label for="hub-url" data-i18n="hub_label">My Collie URL</label>
-              <span class="saved-tag" id="saved-tag" hidden data-i18n="hub_saved">Remembered on this browser</span>
-            </div>
-            <p class="field-hint" id="hub-url-hint" data-i18n-html="hub_hint">Enter your own Collie Hub URL (e.g. local <code>http://127.0.0.1:17788</code> or your LAN / Tailscale <code>http://your-hub:7788</code>). Stored only in this browser.</p>
-            <input
-              id="hub-url"
-              name="hub_url"
-              type="url"
-              inputmode="url"
-              autocomplete="url"
-              autocorrect="off"
-              autocapitalize="none"
-              spellcheck="false"
-              required
-              class="text-input"
-              placeholder="http://127.0.0.1:17788"
-              aria-describedby="hub-url-hint"
-              aria-invalid="false"
-              data-error="hub-url-error"
-            >
-            <p id="hub-url-error" class="error-msg"></p>
-            <div class="presets">
-              <span class="preset-lbl" data-i18n="preset_lbl">Quick fill:</span>
-              <button type="button" class="preset-btn" data-preset="http://127.0.0.1:17788"><span data-i18n="preset_local_pwa">Local app</span> <code>127.0.0.1:17788</code></button>
-              <button type="button" class="preset-btn" data-preset="http://127.0.0.1:7788"><span data-i18n="preset_local_hub">Local hub</span> <code>127.0.0.1:7788</code></button>
-            </div>
-          </div>
+          <button type="submit" class="btn primary" id="open-btn">
+            <span id="open-btn-text" data-i18n="open_btn">Open in my Collie &amp; Request</span>
+            <svg class="arrow-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
 
-          <div class="actions">
-            <button type="submit" class="btn primary" id="open-btn">
-              <span id="open-btn-text" data-i18n="open_btn">Open in my Collie &amp; Request</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          <button type="button" class="btn secondary" id="copy-code-btn">
+            <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="ic-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <span id="copy-code-text" data-i18n="copy_code">Copy invite code</span>
+          </button>
+
+          <!-- Compact target indicator + collapsible one-click switcher -->
+          <details class="addr-details" id="addr-details">
+            <summary class="addr-summary" id="addr-summary">
+              <span data-i18n="opens_prefix">Opens:</span>
+              <span class="addr-current" id="addr-current"></span>
+              <span class="addr-saved-flash" id="addr-saved-flash" hidden></span>
+              <span class="addr-sep" aria-hidden="true">·</span>
+              <span class="addr-action">
+                <span data-i18n="switch_addr">Switch</span>
+                <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </span>
+            </summary>
+
+            <div class="addr-panel">
+              <fieldset class="addr-fieldset">
+                <legend class="visually-hidden" data-i18n="addr_legend">Choose your Collie address</legend>
+
+                <label class="addr-opt" for="mode-node">
+                  <input type="radio" class="visually-hidden" id="mode-node" name="hub_mode" value="node" checked>
+                  <span class="addr-opt-left">
+                    <span class="radio-dot" aria-hidden="true"></span>
+                    <span class="addr-opt-title" data-i18n="opt_node">Local Node Proxy</span>
+                  </span>
+                  <span class="addr-opt-code">127.0.0.1:17788</span>
+                </label>
+
+                <label class="addr-opt" for="mode-hub">
+                  <input type="radio" class="visually-hidden" id="mode-hub" name="hub_mode" value="hub">
+                  <span class="addr-opt-left">
+                    <span class="radio-dot" aria-hidden="true"></span>
+                    <span class="addr-opt-title" data-i18n="opt_hub">Local Hub</span>
+                  </span>
+                  <span class="addr-opt-code">127.0.0.1:7788</span>
+                </label>
+
+                <label class="addr-opt" for="mode-pwa">
+                  <input type="radio" class="visually-hidden" id="mode-pwa" name="hub_mode" value="pwa">
+                  <span class="addr-opt-left">
+                    <span class="radio-dot" aria-hidden="true"></span>
+                    <span class="addr-opt-title" data-i18n="opt_pwa">Installed Collie App</span>
+                  </span>
+                  <span class="addr-opt-code">web+collie://</span>
+                </label>
+
+                <label class="addr-opt" for="mode-custom">
+                  <input type="radio" class="visually-hidden" id="mode-custom" name="hub_mode" value="custom">
+                  <span class="addr-opt-left">
+                    <span class="radio-dot" aria-hidden="true"></span>
+                    <span class="addr-opt-title" data-i18n="opt_custom">Custom LAN / Tailscale URL</span>
+                  </span>
+                </label>
+
+                <div class="custom-wrap" id="custom-wrap" hidden>
+                  <label for="hub-url" class="visually-hidden" data-i18n="hub_label">Custom Collie URL</label>
+                  <div class="custom-row">
+                    <input
+                      id="hub-url"
+                      name="hub_url"
+                      type="url"
+                      inputmode="url"
+                      autocomplete="url"
+                      autocorrect="off"
+                      autocapitalize="none"
+                      spellcheck="false"
+                      enterkeyhint="done"
+                      class="text-input"
+                      placeholder="http://your-hub:7788"
+                      aria-describedby="hub-url-hint"
+                      aria-invalid="false"
+                      data-error="hub-url-error"
+                    >
+                    <button type="button" class="save-btn" id="save-custom-btn" data-i18n="save_addr">Save</button>
+                  </div>
+                  <p id="hub-url-hint" class="custom-hint" data-i18n="custom_hint">Saved only in this browser. Press Enter or Save to apply.</p>
+                  <p id="hub-url-error" class="error-msg"></p>
+                </div>
+              </fieldset>
+            </div>
+          </details>
+
+          <!-- Ultra-light direct PWA protocol launch (hidden once web+collie:// is already selected) -->
+          <div class="pwa-quick-row" id="pwa-quick-row">
+            <button type="button" class="pwa-quick-btn" id="pwa-direct-btn">
+              <span data-i18n="pwa_direct">Launch Collie App directly</span>
+              <code>(web+collie://)</code>
             </button>
-            <button type="button" class="btn ghost" id="copy-code-btn" data-i18n="copy_code">Copy invite code</button>
+            <p class="pwa-hint" id="pwa-hint" hidden></p>
           </div>
         </form>
       </div>
+
+      <!-- Manual paste fallback (shown only on empty / invalid / expired state) -->
+      <div class="manual-box" id="manual-box" hidden>
+        <label for="manual-input" data-i18n="manual_label">Paste a friend's card link or invite code</label>
+        <textarea id="manual-input" rows="2" spellcheck="false" data-i18n-placeholder="manual_ph" placeholder="https://lihuanyu0w0.github.io/collie/join/#2.... or collie-peer://v2/..."></textarea>
+        <button type="button" class="btn primary" id="manual-parse-btn" data-i18n="manual_btn">Open business card</button>
+      </div>
+
+      <!-- Technical details & security disclosure (collapsed by default) -->
+      <details class="tech-details" id="tech-details">
+        <summary class="tech-summary">
+          <svg class="shield-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
+          <span data-i18n="details_toggle">Connection details &amp; security</span>
+          <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+        <div class="tech-body">
+          <div class="meta-list" id="meta-box" hidden>
+            <div class="meta-row">
+              <span class="meta-label" data-i18n="meta_hub_id">Hub ID</span>
+              <span class="meta-val" id="meta-hub-id"></span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label" data-i18n="meta_addrs">Direct addresses</span>
+              <div class="addr-chips" id="meta-addrs"></div>
+            </div>
+          </div>
+          <hr class="tech-sep" id="tech-sep" hidden>
+          <p class="security-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
+            <span id="security-text" data-i18n="notice_privacy">Parsed 100% locally from the URL # hash—never sent to GitHub or any third-party server. Peer tokens stay isolated with 0 terminal, file, or memory access.</span>
+          </p>
+        </div>
+      </details>
     </section>
 
-    <!-- Restrained light promo for users who haven't installed Collie yet -->
-    <aside class="promo" aria-labelledby="promo-title">
-      <div class="promo-head">
-        <p class="promo-kicker" data-i18n="promo_kicker">New to Collie?</p>
-        <h2 id="promo-title" data-i18n="promo_title">Don't have your own border collie yet?</h2>
-      </div>
-      <p data-i18n="promo_desc">Turn your 20x AI subscription quota into real 20x output. Collie is an open-source, self-hosted super-agent for Claude Code, Codex, Antigravity, and Cursor—one pure Web UI across phone and desktop, ready in 30 seconds.</p>
-      <div class="cmd">
-        <pre><code id="install-cmd">curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh</code></pre>
-        <button type="button" class="copy-btn" id="copy-install-btn" data-i18n="copy">Copy</button>
-      </div>
-      <div class="promo-links">
-        <a href="../" data-i18n="promo_home">Explore Collie homepage →</a>
-        <span class="dot-sep" aria-hidden="true">·</span>
-        <a href="../demo/" data-i18n="promo_demo">10-second live demo</a>
-        <span class="dot-sep" aria-hidden="true">·</span>
-        <a href="https://github.com/lihuanyu0w0/collie" data-i18n="promo_gh">GitHub source</a>
-      </div>
+    <!-- Restrained lightweight strip for newcomers -->
+    <aside class="promo-strip" aria-label="About Collie">
+      <span data-i18n="promo_kicker">New to Collie?</span>
+      <a href="../" data-i18n="promo_home">Explore Collie →</a>
+      <span class="dot-sep" aria-hidden="true">·</span>
+      <a href="../demo/" data-i18n="promo_demo">Live demo</a>
     </aside>
   </div>
 </main>
 
 <footer>
-  <div class="wrap">
-    <span data-i18n="footer_privacy">100% client-side · Hash fragment never leaves your browser</span>
-    <div class="f-links">
-      <a href="../" data-i18n="footer_home">Collie</a>
-      <a href="../demo/" data-i18n="footer_demo">Live Demo</a>
-      <a href="https://github.com/lihuanyu0w0/collie">GitHub</a>
-    </div>
-  </div>
+  <span data-i18n="footer_privacy">100% client-side · # hash never leaves your browser</span>
 </footer>
 
 <script>
@@ -642,114 +1273,128 @@ footer a:hover { color: var(--fg); text-decoration: underline; }
 const HUB_URL_KEY = "collie-join-hub-url";
 const THEME_KEY = "collie-theme";
 const LANG_KEY = "collie-lang";
-const PREFIX = "collie-peer://v1/";
+const PREFIX_V1 = "collie-peer://v1/";
+const PREFIX_V2 = "collie-peer://v2/";
+const PRESET_NODE = "http://127.0.0.1:17788";
+const PRESET_HUB = "http://127.0.0.1:7788";
+const PRESET_PWA = "web+collie://";
 
 const COPY = {
   en: {
     _lang: "en",
-    _title: "Collie · Add a Friend's Collie",
-    _titleWithName: (n) => `${n} · Collie Business Card`,
+    _title: "Collie · Peer Collie Invite",
+    _titleWithName: (n) => `${n} · Collie Invite`,
     _langAria: "EN / 中文 — Switch to Chinese",
     nav_home: "Homepage",
     theme_to_dark: "Switch to dark theme",
     theme_to_light: "Switch to light theme",
-    badge_perm: "Permanent card · Approval required",
-    badge_legacy: (rem) => `Legacy invite · ${rem} left`,
-    badge_expired: "Legacy invite expired",
-    badge_empty: "Peer Collie Business Card",
-    badge_invalid: "Invalid card link",
-    title_card: (name) => `Add "${name}" as a peer Collie`,
-    sub_perm: "Send a friend request from your own Collie Hub. Direct inbox collaboration activates only after they tap Approve.",
-    sub_legacy: "This is a legacy time-limited invite. Open it in your Collie Hub before it expires.",
-    sub_expired: "This legacy invite link has expired. Ask your friend to share their permanent Collie business card instead.",
-    title_empty: "Connect two private Collie Hubs",
-    sub_empty: "Open a friend's /join/# link or scan their Collie card QR code to request peer collaboration with zero third-party relay.",
-    title_invalid: "Couldn't read this business card",
-    sub_invalid: "The link looks incomplete or truncated. Ask your friend to copy their card link again, or paste it below.",
-    meta_hub_id: "Hub ID",
-    meta_addrs: "Direct address",
-    notice_privacy: "Parsed 100% locally in your browser from the # hash—nothing is sent to GitHub or any third-party server. Peer tokens stay isolated with 0 terminal, file, or memory access.",
-    notice_expired: "Expired legacy invite cannot be used to pair. Newer Collie cards never expire and only connect once the owner approves.",
-    notice_empty: "Tip: in Collie, open Automation → Integrations → Peer Collie → My Card to copy a clickable link or show your QR code.",
-    notice_invalid: "Check that the full #... fragment wasn't cut off when copied.",
-    manual_label: "Paste a friend's card link or invite code",
-    manual_ph: "https://lihuanyu0w0.github.io/collie/join/#... or collie-peer://v1/...",
-    manual_btn: "Parse business card",
-    hub_label: "My Collie URL",
-    hub_saved: "Remembered on this browser",
-    hub_hint: 'Enter your own Collie Hub URL (e.g. local <code>http://127.0.0.1:17788</code> or your LAN / Tailscale <code>http://your-hub:7788</code>). Stored only in this browser.',
-    preset_lbl: "Quick fill:",
-    preset_local_pwa: "Local app",
-    preset_local_hub: "Local hub",
+    title_card: (name) => `${name} invited you to be peer Collies`,
+    title_expired: (name) => `Invite from ${name} expired`,
+    sub_perm: "Send a friend request from your Collie — direct collaboration begins once approved.",
+    sub_once: "Open in your Collie to accept this one-time direct connection invite.",
+    sub_legacy: "Open in your Collie before this time-limited invite expires.",
+    sub_expired: "This invite has expired. Ask them to share their permanent Collie card instead.",
+    title_empty: "Connect a peer Collie",
+    sub_empty: "Open a friend's /join/# link or paste their invite code below to pair directly.",
+    title_invalid: "Couldn't read this invite card",
+    sub_invalid: "The # card fragment looks incomplete. Ask your friend to copy it again, or paste below.",
+    note_once: "One-time invite",
+    note_once_exp: (rem) => `One-time invite · ${rem} left`,
+    note_legacy: (rem) => `Time-limited invite · ${rem} left`,
+    note_expired: "Invite expired",
+    note_invalid: "Incomplete or truncated # link",
     open_btn: "Open in my Collie & Request",
     copy_code: "Copy invite code",
-    copied: "Copied",
-    copy: "Copy",
-    err_url_empty: "Error: Enter your Collie Hub URL first (e.g. http://127.0.0.1:17788 or http://your-hub:7788).",
-    err_url_invalid: "Error: Enter a valid http:// or https:// URL for your Collie Hub (e.g. http://127.0.0.1:17788).",
-    err_url_self: "Error: Enter your own self-hosted Collie Hub URL, not this static landing page.",
+    copied: "Invite code copied",
+    opens_prefix: "Opens:",
+    switch_addr: "Switch",
+    addr_legend: "Choose your Collie address",
+    opt_node: "Local Node Proxy",
+    opt_hub: "Local Hub",
+    opt_pwa: "Installed Collie App",
+    opt_custom: "Custom LAN / Tailscale URL",
+    pwa_direct: "Launch Collie App directly",
+    pwa_no_handler: "App not detected — use the button above or switch address.",
+    hub_label: "Custom Collie URL",
+    save_addr: "Save",
+    saved_flash: "Saved",
+    custom_hint: "Saved only in this browser. Press Enter or Save to apply.",
+    target_node_name: "Local Collie",
+    target_hub_name: "Local Hub",
+    target_pwa_name: "Collie App",
+    target_custom_empty: "Custom URL not set",
+    err_url_empty: "Enter your Collie URL first (e.g. http://your-hub:7788).",
+    err_url_invalid: "Enter a valid http:// or https:// Collie URL (e.g. http://your-hub:7788).",
+    err_url_self: "Enter your own Collie Hub URL, not this static invite page.",
+    manual_label: "Paste a friend's card link or invite code",
+    manual_ph: "https://lihuanyu0w0.github.io/collie/join/#2.... or collie-peer://v2/...",
+    manual_btn: "Open business card",
+    details_toggle: "Connection details & security",
+    meta_hub_id: "Hub ID",
+    meta_addrs: "Direct addresses",
+    notice_privacy: "Parsed 100% locally from the URL # hash—never sent to GitHub or any third-party server. Peer tokens stay isolated with 0 terminal, file, or memory access.",
     promo_kicker: "New to Collie?",
-    promo_title: "Don't have your own border collie yet?",
-    promo_desc: "Turn your 20x AI subscription quota into real 20x output. Collie is an open-source, self-hosted super-agent for Claude Code, Codex, Antigravity, and Cursor—one pure Web UI across phone and desktop, ready in 30 seconds.",
-    promo_home: "Explore Collie homepage →",
-    promo_demo: "10-second live demo",
-    promo_gh: "GitHub source",
-    footer_privacy: "100% client-side · Hash fragment never leaves your browser",
-    footer_home: "Collie",
-    footer_demo: "Live Demo"
+    promo_home: "Explore Collie →",
+    promo_demo: "Live demo",
+    footer_privacy: "100% client-side · # hash never leaves your browser"
   },
   zh: {
     _lang: "zh-CN",
-    _title: "Collie · 加好友边牧名片",
-    _titleWithName: (n) => `${n} · Collie 好友边牧名片`,
+    _title: "Collie · 好友边牧邀请",
+    _titleWithName: (n) => `${n} · Collie 好友邀请`,
     _langAria: "EN / 中文 — 切换到英文",
     nav_home: "官网首页",
     theme_to_dark: "切换到深色主题",
     theme_to_light: "切换到浅色主题",
-    badge_perm: "长期有效 · 需对方通过后接通",
-    badge_legacy: (rem) => `旧版限时邀请 · 剩余 ${rem}`,
-    badge_expired: "旧版邀请已过期",
-    badge_empty: "Collie 好友边牧名片",
-    badge_invalid: "名片链接格式无效",
-    title_card: (name) => `添加「${name}」为好友边牧`,
-    sub_perm: "点击下方按钮在你的 Collie 中一键发起好友申请，对方点击「通过」后即刻开启内网 / Tailscale 直连协作。",
-    sub_legacy: "这是旧版限时邀请链接，请在倒计时结束前在你的 Collie 中打开配对。",
-    sub_expired: "该旧版邀请链接已过期，请让对方分享新版长期有效的边牧名片链接或二维码。",
-    title_empty: "两只私有边牧，一键直连协作",
-    sub_empty: "点击好友发来的 /join/# 名片链接，或直接用系统相机 / 微信 / 飞书扫对方的边牧名片二维码，即可跳转自己的 Collie 发起申请。",
-    title_invalid: "无法解析这张边牧名片",
-    sub_invalid: "链接中的名片信息似乎不完整或被截断，请让对方重新复制分享链接，或在下方手动粘贴完整内容。",
-    meta_hub_id: "Hub 标识",
-    meta_addrs: "直连地址",
-    notice_privacy: "纯前端解析：名片信息只保存在 URL 的 # 锚点中，绝不发往 GitHub 或任何第三方服务器；好友令牌物理隔离，0 终端 / 0 文件 / 0 记忆权限。",
-    notice_expired: "旧版限时邀请已过期，无法再用于配对。升级后的 Collie 个人名片长期有效，且须对方点通过才接通。",
-    notice_empty: "提示：在自己的 Collie 打开「自动化 → 接入 → 好友边牧 → 我的边牧名片」，即可复制可点击的名片链接或展示二维码。",
-    notice_invalid: "请确认复制时没有漏掉 # 后面的完整名片串。",
-    manual_label: "粘贴好友的名片链接或邀请码",
-    manual_ph: "粘贴整段分享文案、https://lihuanyu0w0.github.io/collie/join/#... 或 collie-peer://v1/...",
-    manual_btn: "解析边牧名片",
-    hub_label: "我的 Collie 地址",
-    hub_saved: "已记住上次地址",
-    hub_hint: '填写你自己运行的 Collie Hub 地址（例如本机 <code>http://127.0.0.1:17788</code> 或局域网 / Tailscale <code>http://your-hub:7788</code>），仅保存在当前浏览器本地。',
-    preset_lbl: "快捷填入：",
-    preset_local_pwa: "本机代理",
-    preset_local_hub: "本机 Hub",
+    title_card: (name) => `${name} 邀请你成为好友边牧`,
+    title_expired: (name) => `${name} 的邀请已过期`,
+    sub_perm: "发起好友申请，对方通过后即开启直连协作。",
+    sub_once: "在你的 Collie 中打开此一次性邀请，确认后即刻建立直连协作。",
+    sub_legacy: "这是限时邀请，请在倒计时结束前打开你的 Collie 配对。",
+    sub_expired: "该邀请已过期，请让对方分享长期有效的边牧名片链接。",
+    title_empty: "添加好友边牧",
+    sub_empty: "打开好友的 /join/# 名片链接，或在下方粘贴分享文案与邀请码发起直连协作。",
+    title_invalid: "无法读取这张边牧名片",
+    sub_invalid: "链接中的 # 名片信息不完整或被截断，请让对方重新复制或在下方粘贴。",
+    note_once: "一次性邀请",
+    note_once_exp: (rem) => `一次性邀请 · 剩余 ${rem}`,
+    note_legacy: (rem) => `限时邀请 · 剩余 ${rem}`,
+    note_expired: "邀请已过期",
+    note_invalid: "名片链接格式无效或被截断",
     open_btn: "在我的 Collie 中打开并申请",
     copy_code: "复制邀请码",
-    copied: "已复制",
-    copy: "复制",
-    err_url_empty: "请先填写你的 Collie 地址（例如 http://127.0.0.1:17788 或 http://your-hub:7788）。",
-    err_url_invalid: "请输入有效的 http:// 或 https:// Collie 地址（例如 http://127.0.0.1:17788）。",
-    err_url_self: "请填写你自己运行的 Collie Hub 地址，而不是当前静态引导页地址。",
+    copied: "已复制邀请码",
+    opens_prefix: "将打开：",
+    switch_addr: "切换地址",
+    addr_legend: "选择你的 Collie 地址",
+    opt_node: "本机代理（Node）",
+    opt_hub: "本机 Hub",
+    opt_pwa: "已安装的 Collie 应用",
+    opt_custom: "自定义局域网 / Tailscale 地址",
+    pwa_direct: "直接唤起 Collie App",
+    pwa_no_handler: "未检测到已安装的 Collie 应用，可直接点击上方主按钮或切换地址。",
+    hub_label: "自定义 Collie 地址",
+    save_addr: "保存",
+    saved_flash: "已保存",
+    custom_hint: "仅保存在当前浏览器本地，回车或点击保存生效。",
+    target_node_name: "本机 Collie",
+    target_hub_name: "本机 Hub",
+    target_pwa_name: "Collie 应用",
+    target_custom_empty: "未填写自定义地址",
+    err_url_empty: "请先输入你的 Collie 地址（例如 http://your-hub:7788）。",
+    err_url_invalid: "请输入有效的 http:// 或 https:// Collie 地址（例如 http://your-hub:7788）。",
+    err_url_self: "请填写你自己运行的 Collie 地址，而不是当前邀请落地页。",
+    manual_label: "粘贴好友的名片链接或邀请码",
+    manual_ph: "粘贴整段分享文案、https://lihuanyu0w0.github.io/collie/join/#2.... 或 collie-peer://v2/...",
+    manual_btn: "打开边牧名片",
+    details_toggle: "查看连接详情与安全说明",
+    meta_hub_id: "Hub 标识",
+    meta_addrs: "直连地址",
+    notice_privacy: "纯前端解析：名片仅保存在 URL 的 # 锚点中，绝不发往 GitHub 或任何第三方服务器；好友令牌物理隔离，0 终端 / 0 文件 / 0 记忆权限。",
     promo_kicker: "还没养自己的边牧？",
-    promo_title: "把 20x AI 订阅额度，真正跑成 20x 产出",
-    promo_desc: "Collie 是开源自托管 Super Agent——并行指挥 Claude Code、Codex、Antigravity 与 Cursor，纯 Web UI 手机电脑一致，30 秒一行装好。",
-    promo_home: "了解 Collie 官网 →",
-    promo_demo: "10 秒在线体验",
-    promo_gh: "GitHub 源码",
-    footer_privacy: "纯前端零服务器 · # 锚点数据永不离开浏览器",
-    footer_home: "Collie 官网",
-    footer_demo: "在线体验"
+    promo_home: "了解 Collie →",
+    promo_demo: "在线体验",
+    footer_privacy: "纯前端零服务器 · # 锚点永不离开浏览器"
   }
 };
 
@@ -758,21 +1403,26 @@ const readStored = (k) => { try { return localStorage.getItem(k); } catch { retu
 const writeStored = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
 
 let currentLang = "en";
-let cardState = { status: "empty", inviteCode: "", rawPayload: "", payload: null };
+let cardState = { status: "empty", version: 0, kind: "card", inviteCode: "", hashPayload: "", rawPayload: "", payload: null };
 let legacyTimer = null;
+let selectedMode = "node"; // "node" | "hub" | "pwa" | "custom"
+let customSavedUrl = "";
+let copyTimer = null;
+let flashTimer = null;
+let pwaHintTimer = null;
 
-/* Polite live region announcer for accessible deferred validation errors */
+/* Polite live region announcer for accessible validation & copy feedback */
 const announcer = document.createElement("div");
 announcer.setAttribute("aria-live", "polite");
 announcer.className = "visually-hidden";
 document.body.append(announcer);
 let announceTimer = 0;
 
-function announceError(msg) {
+function announce(msg) {
   clearTimeout(announceTimer);
   announcer.textContent = "";
   if (!msg) return;
-  announceTimer = setTimeout(() => { announcer.textContent = msg; }, 250);
+  announceTimer = setTimeout(() => { announcer.textContent = msg; }, 180);
 }
 
 function detectInitialLang() {
@@ -781,40 +1431,75 @@ function detectInitialLang() {
   return /^zh(?:[-_]|$)/i.test(navigator.language || "") ? "zh" : "en";
 }
 
-function sanitizeHttpUrl(raw) {
-  const s = String(raw || "").trim().replace(/\/+$/, "");
+function sanitizeHttpUrl(raw, { defaultHttp = false } = {}) {
+  let s = String(raw || "").trim().replace(/\/+$/, "");
   if (!s || s.length > 256) return "";
+  if (defaultHttp && !s.includes("://")) {
+    s = "http://" + s;
+  }
   try {
     const u = new URL(s);
-    if ((u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname) return "";
-    return u.origin;
+    if ((u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname || u.username || u.password) return "";
+    const cleanPath = u.pathname === "/" ? "" : u.pathname.replace(/\/+$/, "");
+    return u.origin + cleanPath;
   } catch {
     return "";
   }
 }
 
-/* Extract raw base64url payload from hash, /join/# link, ?peer_invite=, or collie-peer://v1/ */
-function extractPayloadFromInput(raw) {
+/* Extract { ver: 1|2, b64 } from hash, /join/# link, web+collie://join/, ?peer_invite=, or collie-peer://v1|v2/ */
+function extractInviteFromInput(raw) {
   let s = String(raw || "").trim();
-  if (!s) return "";
-  const direct = s.match(/collie-peer:\/\/v1\/([A-Za-z0-9_-]{16,4096}=*)/);
-  if (direct) return direct[1];
-  const joinMatch = s.match(/\/join\/?#(?:collie-peer:\/\/v1\/)?([A-Za-z0-9_%-]{16,4096}=*)/i);
-  if (joinMatch) {
-    try { return decodeURIComponent(joinMatch[1]).replace(/^collie-peer:\/\/v1\//, ""); } catch { return joinMatch[1]; }
+  if (!s) return null;
+
+  const directV2 = s.match(/collie-peer:\/\/v2\/([A-Za-z0-9_-]{16,4096}=*)/i);
+  if (directV2) return { ver: 2, b64: directV2[1].replace(/=+$/, "") };
+
+  const directV1 = s.match(/collie-peer:\/\/v1\/([A-Za-z0-9_-]{16,4096}=*)/i);
+  if (directV1) return { ver: 1, b64: directV1[1].replace(/=+$/, "") };
+
+  const pwaMatch = s.match(/web\+collie:\/\/join\/(2\.|collie-peer:\/\/v[12]\/)?([A-Za-z0-9_%-]{16,4096}=*)/i);
+  if (pwaMatch) {
+    const pref = String(pwaMatch[1] || "").toLowerCase();
+    let b64 = pwaMatch[2];
+    try { b64 = decodeURIComponent(b64); } catch {}
+    if (pref === "2." || pref === "collie-peer://v2/") return { ver: 2, b64: b64.replace(/=+$/, "") };
+    if (b64.startsWith("2.")) return { ver: 2, b64: b64.slice(2).replace(/=+$/, "") };
+    return { ver: 1, b64: b64.replace(/=+$/, "") };
   }
+
+  const joinMatch = s.match(/\/join\/?#((?:2\.|collie-peer:\/\/v[12]\/)?[A-Za-z0-9_%-]{16,4096}=*)/i);
+  if (joinMatch) {
+    return extractInviteFromInput("#" + joinMatch[1]);
+  }
+
   const paramMatch = s.match(/[?&#]peer_invite=([^&\s]+)/i);
   if (paramMatch) {
     try {
       const dec = decodeURIComponent(paramMatch[1]).trim();
-      return dec.startsWith(PREFIX) ? dec.slice(PREFIX.length) : dec;
+      return extractInviteFromInput(dec);
     } catch {}
   }
+
   if (s.startsWith("#")) s = s.slice(1).trim();
   try { s = decodeURIComponent(s).trim(); } catch {}
-  if (s.startsWith(PREFIX)) s = s.slice(PREFIX.length).trim();
-  if (/^[A-Za-z0-9_-]{16,4096}=*$/.test(s)) return s;
-  return "";
+  if (s.toLowerCase().startsWith(PREFIX_V2)) {
+    const b = s.slice(PREFIX_V2.length).trim();
+    if (/^[A-Za-z0-9_-]{16,4096}=*$/.test(b)) return { ver: 2, b64: b.replace(/=+$/, "") };
+    return null;
+  }
+  if (s.toLowerCase().startsWith(PREFIX_V1)) {
+    const b = s.slice(PREFIX_V1.length).trim();
+    if (/^[A-Za-z0-9_-]{16,4096}=*$/.test(b)) return { ver: 1, b64: b.replace(/=+$/, "") };
+    return null;
+  }
+  if (/^2\.[A-Za-z0-9_-]{16,4096}=*$/.test(s)) {
+    return { ver: 2, b64: s.slice(2).replace(/=+$/, "") };
+  }
+  if (/^[A-Za-z0-9_-]{16,4096}=*$/.test(s)) {
+    return { ver: 1, b64: s.replace(/=+$/, "") };
+  }
+  return null;
 }
 
 function decodeBase64UrlJSON(b64url) {
@@ -826,39 +1511,93 @@ function decodeBase64UrlJSON(b64url) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
+function buildInvalidState() {
+  return { status: "invalid", version: 0, kind: "card", inviteCode: "", hashPayload: "", rawPayload: "", payload: null };
+}
+
 function parseCardFromHash(hashStr) {
   const raw = String(hashStr || "").replace(/^#/, "").trim();
-  if (!raw) return { status: "empty", inviteCode: "", rawPayload: "", payload: null };
-  const payloadB64 = extractPayloadFromInput("#" + raw);
-  if (!payloadB64) return { status: "invalid", inviteCode: "", rawPayload: "", payload: null };
+  if (!raw) return { status: "empty", version: 0, kind: "card", inviteCode: "", hashPayload: "", rawPayload: "", payload: null };
+  const extracted = extractInviteFromInput("#" + raw);
+  if (!extracted) return buildInvalidState();
   try {
-    const obj = decodeBase64UrlJSON(payloadB64);
-    if (!obj || obj.v !== 1 || typeof obj.code !== "string" || !obj.code.trim() ||
-        typeof obj.hub_id !== "string" || !obj.hub_id.trim() || !Array.isArray(obj.addrs)) {
-      return { status: "invalid", inviteCode: "", rawPayload: "", payload: null };
+    const obj = decodeBase64UrlJSON(extracted.b64);
+    if (!obj || typeof obj !== "object") return buildInvalidState();
+
+    // Compact v2 format: { h, n, a, t, k?, e? }
+    const isV2 = extracted.ver === 2 || (obj.v === undefined && typeof obj.h === "string" && typeof obj.t === "string");
+    if (isV2) {
+      if (typeof obj.h !== "string" || !obj.h.trim() ||
+          typeof obj.t !== "string" || !obj.t.trim() || !Array.isArray(obj.a)) {
+        return buildInvalidState();
+      }
+      const cleanAddrs = obj.a.map((addr) => sanitizeHttpUrl(addr, { defaultHttp: true })).filter(Boolean).slice(0, 4);
+      if (!cleanAddrs.length) return buildInvalidState();
+      const kind = obj.k === "once" ? "once" : "card";
+      const exp = Number(obj.e) > 0 ? Number(obj.e) : 0;
+      const cleanPayload = {
+        v: 2,
+        code: obj.t.trim(),
+        hub_id: obj.h.trim(),
+        hub_name: String(obj.n || obj.h).trim().slice(0, 40),
+        addrs: cleanAddrs,
+        kind,
+        exp
+      };
+      const isExpired = exp > 0 && Date.now() / 1000 > exp;
+      const status = isExpired ? "expired" : (exp > 0 ? "legacy" : (kind === "once" ? "once" : "permanent"));
+      return {
+        status,
+        version: 2,
+        kind,
+        rawPayload: extracted.b64,
+        hashPayload: "2." + extracted.b64,
+        inviteCode: PREFIX_V2 + extracted.b64,
+        payload: cleanPayload
+      };
     }
-    const cleanAddrs = obj.addrs.map(sanitizeHttpUrl).filter(Boolean).slice(0, 4);
-    if (!cleanAddrs.length) return { status: "invalid", inviteCode: "", rawPayload: "", payload: null };
+
+    // Legacy / v1 format: { v: 1, code, hub_id, hub_name, addrs, exp? }
+    if (obj.v !== 1 || typeof obj.code !== "string" || !obj.code.trim() ||
+        typeof obj.hub_id !== "string" || !obj.hub_id.trim() || !Array.isArray(obj.addrs)) {
+      return buildInvalidState();
+    }
+    const cleanAddrs = obj.addrs.map((addr) => sanitizeHttpUrl(addr, { defaultHttp: false })).filter(Boolean).slice(0, 4);
+    if (!cleanAddrs.length) return buildInvalidState();
+    const exp = Number(obj.exp) > 0 ? Number(obj.exp) : 0;
     const cleanPayload = {
       v: 1,
       code: obj.code.trim(),
       hub_id: obj.hub_id.trim(),
       hub_name: String(obj.hub_name || obj.hub_id).trim().slice(0, 40),
       addrs: cleanAddrs,
-      exp: Number(obj.exp) > 0 ? Number(obj.exp) : 0
+      kind: exp > 0 ? "once" : "card",
+      exp
     };
-    const isExpired = cleanPayload.exp > 0 && Date.now() / 1000 > cleanPayload.exp;
-    const status = isExpired ? "expired" : (cleanPayload.exp > 0 ? "legacy" : "permanent");
-    const cleanB64 = payloadB64.replace(/=+$/, "");
+    const isExpired = exp > 0 && Date.now() / 1000 > exp;
+    const status = isExpired ? "expired" : (exp > 0 ? "legacy" : "permanent");
     return {
       status,
-      rawPayload: cleanB64,
-      inviteCode: PREFIX + cleanB64,
+      version: 1,
+      kind: cleanPayload.kind,
+      rawPayload: extracted.b64,
+      hashPayload: extracted.b64,
+      inviteCode: PREFIX_V1 + extracted.b64,
       payload: cleanPayload
     };
   } catch {
-    return { status: "invalid", inviteCode: "", rawPayload: "", payload: null };
+    return buildInvalidState();
   }
+}
+
+function buildPwaLaunchUrl(state) {
+  if (!state || !state.hashPayload) return "";
+  return `${PRESET_PWA}join/${state.hashPayload}`;
+}
+
+function buildHttpLaunchUrl(baseUrl, state) {
+  if (!baseUrl || !state || !state.inviteCode) return "";
+  return `${baseUrl}/?peer_invite=${encodeURIComponent(state.inviteCode)}`;
 }
 
 function formatRemain(expSec) {
@@ -867,7 +1606,6 @@ function formatRemain(expSec) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-/* Validate & normalize user's Hub URL using Origin API (with URL fallback) to reject opaque/self/non-HTTP origins */
 function isSameOriginAsPage(candidateUrl) {
   try {
     if ("Origin" in globalThis && typeof Origin.from === "function") {
@@ -885,6 +1623,9 @@ function normalizeUserHubUrl(raw) {
   const dict = COPY[currentLang];
   let s = String(raw || "").trim();
   if (!s) return { ok: false, error: dict.err_url_empty };
+  if (s.toLowerCase() === PRESET_PWA) {
+    return { ok: true, normalized: PRESET_PWA };
+  }
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
     s = "http://" + s;
   }
@@ -911,6 +1652,10 @@ function normalizeUserHubUrl(raw) {
   return { ok: true, normalized: u.origin + cleanPath };
 }
 
+function compactUrlLabel(urlStr) {
+  return String(urlStr || "").replace(/^http:\/\//i, "").replace(/\/+$/, "");
+}
+
 function linkErrorAria(input, show) {
   const errId = input.dataset.error;
   if (!errId) return;
@@ -920,10 +1665,22 @@ function linkErrorAria(input, show) {
   else input.removeAttribute("aria-describedby");
 }
 
-let hubInputDirty = false;
-let hubInputBlurred = false;
+let customDirty = false;
+let customBlurred = false;
 
-function validateHubField({ force = false, announce = false, normalizeDisplay = false } = {}) {
+function clearCustomError() {
+  const input = $("hub-url");
+  const errEl = $("hub-url-error");
+  if (!input || !errEl) return;
+  input.setCustomValidity("");
+  input.classList.remove("user-invalid-fallback");
+  input.setAttribute("aria-invalid", "false");
+  errEl.textContent = "";
+  errEl.classList.remove("is-shown");
+  linkErrorAria(input, false);
+}
+
+function validateCustomField({ force = false, shouldAnnounce = false, normalizeDisplay = false } = {}) {
   const input = $("hub-url");
   const errEl = $("hub-url-error");
   if (!input || !errEl) return { ok: false };
@@ -932,71 +1689,183 @@ function validateHubField({ force = false, announce = false, normalizeDisplay = 
     if (normalizeDisplay && input.value.trim() !== res.normalized) {
       input.value = res.normalized;
     }
-    input.setCustomValidity("");
-    input.classList.remove("user-invalid-fallback");
-    input.setAttribute("aria-invalid", "false");
-    errEl.textContent = "";
-    errEl.classList.remove("is-shown");
-    linkErrorAria(input, false);
-    announceError("");
+    clearCustomError();
     return res;
   }
   input.setCustomValidity(res.error);
-  const shouldShow = force || (hubInputDirty && hubInputBlurred);
+  const shouldShow = force || (customDirty && customBlurred);
   if (shouldShow) {
     input.classList.add("user-invalid-fallback");
     input.setAttribute("aria-invalid", "true");
     errEl.textContent = res.error;
     errEl.classList.add("is-shown");
     linkErrorAria(input, true);
-    if (announce) announceError(res.error);
+    if (shouldAnnounce) announce(res.error);
   }
   return res;
+}
+
+function renderTargetSummary() {
+  const dict = COPY[currentLang];
+  const el = $("addr-current");
+  const pwaRow = $("pwa-quick-row");
+  if (pwaRow) pwaRow.hidden = selectedMode === "pwa";
+  if (!el) return;
+  el.textContent = "";
+
+  if (selectedMode === "node") {
+    el.append(document.createTextNode(dict.target_node_name + " "));
+    const host = document.createElement("span");
+    host.className = "addr-host";
+    host.textContent = "(127.0.0.1:17788)";
+    el.append(host);
+  } else if (selectedMode === "hub") {
+    el.append(document.createTextNode(dict.target_hub_name + " "));
+    const host = document.createElement("span");
+    host.className = "addr-host";
+    host.textContent = "(127.0.0.1:7788)";
+    el.append(host);
+  } else if (selectedMode === "pwa") {
+    el.append(document.createTextNode(dict.target_pwa_name + " "));
+    const host = document.createElement("span");
+    host.className = "addr-host";
+    host.textContent = "(web+collie://)";
+    el.append(host);
+  } else {
+    const active = $("hub-url").value.trim() || customSavedUrl;
+    if (active) {
+      const host = document.createElement("span");
+      host.className = "addr-host";
+      host.textContent = compactUrlLabel(active);
+      el.append(host);
+    } else {
+      el.textContent = dict.target_custom_empty;
+    }
+  }
+}
+
+function flashSaved() {
+  const el = $("addr-saved-flash");
+  if (!el) return;
+  clearTimeout(flashTimer);
+  el.textContent = "· " + COPY[currentLang].saved_flash;
+  el.hidden = false;
+  flashTimer = setTimeout(() => { el.hidden = true; }, 1800);
+}
+
+function applyHubMode(mode, { persist = false, focusCustom = false } = {}) {
+  selectedMode = mode;
+  $("mode-node").checked = mode === "node";
+  $("mode-hub").checked = mode === "hub";
+  $("mode-pwa").checked = mode === "pwa";
+  $("mode-custom").checked = mode === "custom";
+  $("custom-wrap").hidden = mode !== "custom";
+  $("pwa-hint").hidden = true;
+
+  if (mode === "node") {
+    clearCustomError();
+    if (persist) {
+      writeStored(HUB_URL_KEY, PRESET_NODE);
+      flashSaved();
+    }
+  } else if (mode === "hub") {
+    clearCustomError();
+    if (persist) {
+      writeStored(HUB_URL_KEY, PRESET_HUB);
+      flashSaved();
+    }
+  } else if (mode === "pwa") {
+    clearCustomError();
+    if (persist) {
+      writeStored(HUB_URL_KEY, PRESET_PWA);
+      flashSaved();
+    }
+  } else if (mode === "custom") {
+    if (customSavedUrl && !$("hub-url").value.trim()) {
+      $("hub-url").value = customSavedUrl;
+    }
+    if (focusCustom) {
+      requestAnimationFrame(() => $("hub-url").focus());
+    }
+  }
+  renderTargetSummary();
+}
+
+function initStoredHub() {
+  const saved = readStored(HUB_URL_KEY);
+  if (!saved || saved === PRESET_NODE) {
+    applyHubMode("node");
+  } else if (saved === PRESET_HUB) {
+    applyHubMode("hub");
+  } else if (saved === PRESET_PWA) {
+    applyHubMode("pwa");
+  } else {
+    customSavedUrl = saved;
+    $("hub-url").value = saved;
+    applyHubMode("custom");
+  }
 }
 
 function clearLegacyTimer() {
   if (legacyTimer) { clearInterval(legacyTimer); legacyTimer = null; }
 }
 
+function isActionableStatus(st) {
+  return st === "permanent" || st === "once" || st === "legacy";
+}
+
 function renderCard() {
   clearLegacyTimer();
   const dict = COPY[currentLang];
-  const badge = $("status-badge");
-  const statusText = $("status-text");
+  const dot = $("avatar-dot");
   const titleEl = $("card-title");
   const subEl = $("card-sub");
-  const metaBox = $("meta-box");
-  const notice = $("state-notice");
-  const noticeText = $("notice-text");
-  const manualBox = $("manual-box");
+  const noteEl = $("status-note");
+  const noteText = $("status-note-text");
   const openSection = $("open-section");
+  const manualBox = $("manual-box");
+  const metaBox = $("meta-box");
+  const techSep = $("tech-sep");
   const openBtn = $("open-btn");
-  const copyCodeBtn = $("copy-code-btn");
 
-  badge.className = "status-badge";
-  notice.className = "notice is-ok";
+  dot.className = "avatar-dot";
+  noteEl.className = "status-note";
+  noteEl.hidden = true;
 
-  if (cardState.status === "permanent" || cardState.status === "legacy") {
+  if (isActionableStatus(cardState.status)) {
     const p = cardState.payload;
     document.title = dict._titleWithName(p.hub_name);
+    titleEl.textContent = dict.title_card(p.hub_name);
+    dot.hidden = false;
+
     if (cardState.status === "permanent") {
-      statusText.textContent = dict.badge_perm;
       subEl.textContent = dict.sub_perm;
+    } else if (cardState.status === "once") {
+      subEl.textContent = dict.sub_once;
+      noteEl.classList.add("is-warn");
+      noteText.textContent = dict.note_once;
+      noteEl.hidden = false;
     } else {
-      badge.classList.add("is-warn");
-      statusText.textContent = dict.badge_legacy(formatRemain(p.exp));
-      subEl.textContent = dict.sub_legacy;
+      dot.classList.add("is-warn");
+      subEl.textContent = cardState.kind === "once" ? dict.sub_once : dict.sub_legacy;
+      noteEl.classList.add("is-warn");
+      const fmt = cardState.kind === "once" ? dict.note_once_exp : dict.note_legacy;
+      noteText.textContent = fmt(formatRemain(p.exp));
+      noteEl.hidden = false;
       legacyTimer = setInterval(() => {
         if (Date.now() / 1000 > p.exp) {
           cardState.status = "expired";
           renderCard();
         } else {
-          statusText.textContent = COPY[currentLang].badge_legacy(formatRemain(p.exp));
+          const d = COPY[currentLang];
+          const fn = cardState.kind === "once" ? d.note_once_exp : d.note_legacy;
+          noteText.textContent = fn(formatRemain(p.exp));
         }
       }, 1000);
     }
-    titleEl.textContent = dict.title_card(p.hub_name);
+
     metaBox.hidden = false;
+    techSep.hidden = false;
     $("meta-hub-id").textContent = p.hub_id;
     const addrsWrap = $("meta-addrs");
     addrsWrap.textContent = "";
@@ -1006,19 +1875,23 @@ function renderCard() {
       chip.textContent = a;
       addrsWrap.append(chip);
     });
-    noticeText.textContent = dict.notice_privacy;
-    manualBox.hidden = true;
+
     openSection.hidden = false;
     openBtn.disabled = false;
-    copyCodeBtn.hidden = false;
+    manualBox.hidden = true;
   } else if (cardState.status === "expired") {
     const p = cardState.payload;
     document.title = dict._title;
-    badge.classList.add("is-err");
-    statusText.textContent = dict.badge_expired;
-    titleEl.textContent = dict.title_card(p.hub_name);
+    dot.hidden = false;
+    dot.classList.add("is-err");
+    titleEl.textContent = dict.title_expired(p.hub_name);
     subEl.textContent = dict.sub_expired;
+    noteEl.classList.add("is-err");
+    noteText.textContent = dict.note_expired;
+    noteEl.hidden = false;
+
     metaBox.hidden = false;
+    techSep.hidden = false;
     $("meta-hub-id").textContent = p.hub_id;
     const addrsWrap = $("meta-addrs");
     addrsWrap.textContent = "";
@@ -1028,32 +1901,33 @@ function renderCard() {
       chip.textContent = a;
       addrsWrap.append(chip);
     });
-    notice.className = "notice is-warn";
-    noticeText.textContent = dict.notice_expired;
-    manualBox.hidden = false;
+
     openSection.hidden = true;
+    manualBox.hidden = false;
   } else if (cardState.status === "invalid") {
     document.title = dict._title;
-    badge.classList.add("is-err");
-    statusText.textContent = dict.badge_invalid;
+    dot.hidden = false;
+    dot.classList.add("is-err");
     titleEl.textContent = dict.title_invalid;
     subEl.textContent = dict.sub_invalid;
+    noteEl.classList.add("is-err");
+    noteText.textContent = dict.note_invalid;
+    noteEl.hidden = false;
+
     metaBox.hidden = true;
-    notice.className = "notice is-err";
-    noticeText.textContent = dict.notice_invalid;
-    manualBox.hidden = false;
+    techSep.hidden = true;
     openSection.hidden = true;
+    manualBox.hidden = false;
   } else {
     document.title = dict._title;
-    badge.classList.add("is-neutral");
-    statusText.textContent = dict.badge_empty;
+    dot.hidden = true;
     titleEl.textContent = dict.title_empty;
     subEl.textContent = dict.sub_empty;
+
     metaBox.hidden = true;
-    notice.className = "notice";
-    noticeText.textContent = dict.notice_empty;
-    manualBox.hidden = false;
+    techSep.hidden = true;
     openSection.hidden = true;
+    manualBox.hidden = false;
   }
 }
 
@@ -1069,26 +1943,27 @@ function applyLang(lang) {
     const k = el.dataset.i18n;
     if (k in dict) el.textContent = dict[k];
   });
-  document.querySelectorAll("[data-i18n-html]").forEach((el) => {
-    const k = el.dataset.i18nHtml;
-    if (k in dict) el.innerHTML = dict[k];
-  });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
     const k = el.dataset.i18nPlaceholder;
     if (k in dict) el.placeholder = dict[k];
   });
+
   renderCard();
+  renderTargetSummary();
   if ($("hub-url-error")?.classList.contains("is-shown")) {
-    validateHubField({ force: true, announce: false });
+    validateCustomField({ force: true, shouldAnnounce: false });
   }
 }
 
-async function copyText(text, btn, origKey) {
+async function copyInviteCode() {
+  if (!cardState.inviteCode) return;
+  const btn = $("copy-code-btn");
+  const label = $("copy-code-text");
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(cardState.inviteCode);
   } catch {
     const ta = document.createElement("textarea");
-    ta.value = text;
+    ta.value = cardState.inviteCode;
     ta.style.position = "fixed";
     ta.style.opacity = "0";
     document.body.append(ta);
@@ -1096,13 +1971,49 @@ async function copyText(text, btn, origKey) {
     document.execCommand("copy");
     ta.remove();
   }
-  const orig = COPY[currentLang][origKey];
-  btn.textContent = COPY[currentLang].copied;
+  clearTimeout(copyTimer);
   btn.classList.add("done");
-  setTimeout(() => {
-    btn.textContent = COPY[currentLang][origKey] || orig;
+  label.textContent = COPY[currentLang].copied;
+  announce(COPY[currentLang].copied);
+  copyTimer = setTimeout(() => {
     btn.classList.remove("done");
-  }, 1600);
+    label.textContent = COPY[currentLang].copy_code;
+  }, 1800);
+}
+
+function launchPwaDirect({ rememberOnHandoff = true } = {}) {
+  const pwaUrl = buildPwaLaunchUrl(cardState);
+  if (!pwaUrl) return;
+  const hint = $("pwa-hint");
+  clearTimeout(pwaHintTimer);
+  if (hint) hint.hidden = true;
+
+  if (rememberOnHandoff) {
+    let handedOff = false;
+    const onHandoff = () => {
+      if (handedOff) return;
+      handedOff = true;
+      cleanup();
+      applyHubMode("pwa", { persist: true });
+    };
+    const onVisibility = () => { if (document.hidden) onHandoff(); };
+    const cleanup = () => {
+      clearTimeout(pwaHintTimer);
+      window.removeEventListener("blur", onHandoff);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+    window.addEventListener("blur", onHandoff, { once: true });
+    document.addEventListener("visibilitychange", onVisibility);
+    pwaHintTimer = setTimeout(() => {
+      cleanup();
+      if (!handedOff && hint) {
+        hint.textContent = COPY[currentLang].pwa_no_handler;
+        hint.hidden = false;
+      }
+    }, 1600);
+  }
+
+  location.href = pwaUrl;
 }
 
 /* Theme toggle (shared with docs/index.html via collie-theme + <meta name="color-scheme">) */
@@ -1137,73 +2048,124 @@ $("lang-toggle").addEventListener("click", () => {
 window.addEventListener("storage", (e) => {
   if (e.key === THEME_KEY) syncSchemeMeta();
   if (e.key === LANG_KEY) applyLang(detectInitialLang());
+  if (e.key === HUB_URL_KEY) initStoredHub();
 });
 
-/* Restore remembered Hub URL */
-const hubInput = $("hub-url");
-const savedHub = readStored(HUB_URL_KEY);
-if (savedHub) {
-  hubInput.value = savedHub;
-  $("saved-tag").hidden = false;
+/* Address preset radio controls */
+document.querySelectorAll('input[name="hub_mode"]').forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (!radio.checked) return;
+    if (radio.value === "custom") {
+      applyHubMode("custom", { persist: false, focusCustom: true });
+    } else {
+      applyHubMode(radio.value, { persist: true });
+    }
+  });
+});
+
+function saveCustomUrl({ collapse = true } = {}) {
+  customDirty = true;
+  customBlurred = true;
+  const res = validateCustomField({ force: true, shouldAnnounce: true, normalizeDisplay: true });
+  if (!res.ok) {
+    $("hub-url").focus();
+    return null;
+  }
+  if (res.normalized === PRESET_NODE) {
+    customSavedUrl = "";
+    applyHubMode("node", { persist: true });
+  } else if (res.normalized === PRESET_HUB) {
+    customSavedUrl = "";
+    applyHubMode("hub", { persist: true });
+  } else if (res.normalized === PRESET_PWA) {
+    customSavedUrl = "";
+    applyHubMode("pwa", { persist: true });
+  } else {
+    customSavedUrl = res.normalized;
+    writeStored(HUB_URL_KEY, res.normalized);
+    renderTargetSummary();
+    flashSaved();
+    announce(COPY[currentLang].saved_flash);
+  }
+  if (collapse) {
+    $("addr-details").open = false;
+  }
+  return res.normalized;
 }
 
+const hubInput = $("hub-url");
 hubInput.addEventListener("input", () => {
-  hubInputDirty = true;
-  $("saved-tag").hidden = true;
-  if (hubInputBlurred || $("hub-url-error").classList.contains("is-shown")) {
-    validateHubField({ force: false, announce: false });
+  customDirty = true;
+  if (selectedMode === "custom") renderTargetSummary();
+  if (customBlurred || $("hub-url-error").classList.contains("is-shown")) {
+    validateCustomField({ force: false, shouldAnnounce: false });
   }
 });
 hubInput.addEventListener("blur", () => {
-  hubInputBlurred = true;
-  if (hubInputDirty || hubInput.value.trim()) {
-    validateHubField({ force: false, announce: true, normalizeDisplay: true });
+  customBlurred = true;
+  if (customDirty || hubInput.value.trim()) {
+    validateCustomField({ force: false, shouldAnnounce: true, normalizeDisplay: true });
   }
 });
-
-document.querySelectorAll("[data-preset]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    hubInput.value = btn.dataset.preset;
-    hubInputDirty = true;
-    hubInputBlurred = true;
-    $("saved-tag").hidden = true;
-    validateHubField({ force: true, announce: false });
-    hubInput.focus();
-  });
+hubInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.isComposing) {
+    e.preventDefault();
+    saveCustomUrl({ collapse: true });
+  }
+});
+$("save-custom-btn").addEventListener("click", () => {
+  saveCustomUrl({ collapse: true });
 });
 
 $("hub-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  if (cardState.status !== "permanent" && cardState.status !== "legacy") return;
-  hubInputDirty = true;
-  hubInputBlurred = true;
-  const res = validateHubField({ force: true, announce: true, normalizeDisplay: true });
-  if (!res.ok) {
-    hubInput.focus();
+  if (!isActionableStatus(cardState.status)) return;
+
+  if (selectedMode === "pwa") {
+    writeStored(HUB_URL_KEY, PRESET_PWA);
+    location.href = buildPwaLaunchUrl(cardState);
     return;
   }
-  writeStored(HUB_URL_KEY, res.normalized);
-  $("saved-tag").hidden = false;
-  const target = `${res.normalized}/?peer_invite=${encodeURIComponent(cardState.inviteCode)}`;
-  location.href = target;
+
+  let targetBase = PRESET_NODE;
+  if (selectedMode === "hub") {
+    targetBase = PRESET_HUB;
+    writeStored(HUB_URL_KEY, targetBase);
+  } else if (selectedMode === "custom") {
+    const saved = saveCustomUrl({ collapse: false });
+    if (!saved) {
+      $("addr-details").open = true;
+      $("custom-wrap").hidden = false;
+      $("hub-url").focus();
+      return;
+    }
+    if (saved === PRESET_PWA) {
+      location.href = buildPwaLaunchUrl(cardState);
+      return;
+    }
+    targetBase = saved;
+  } else {
+    targetBase = PRESET_NODE;
+    writeStored(HUB_URL_KEY, targetBase);
+  }
+
+  location.href = buildHttpLaunchUrl(targetBase, cardState);
 });
 
-$("copy-code-btn").addEventListener("click", () => {
-  if (!cardState.inviteCode) return;
-  copyText(cardState.inviteCode, $("copy-code-btn"), "copy_code");
+$("pwa-direct-btn").addEventListener("click", () => {
+  if (!isActionableStatus(cardState.status)) return;
+  launchPwaDirect({ rememberOnHandoff: true });
 });
 
-$("copy-install-btn").addEventListener("click", () => {
-  copyText($("install-cmd").textContent.trim(), $("copy-install-btn"), "copy");
-});
+$("copy-code-btn").addEventListener("click", copyInviteCode);
 
 $("manual-parse-btn").addEventListener("click", () => {
   const raw = $("manual-input").value.trim();
-  const b64 = extractPayloadFromInput(raw);
-  if (b64) {
-    location.hash = "#" + b64.replace(/=+$/, "");
+  const extracted = extractInviteFromInput(raw);
+  if (extracted) {
+    location.hash = "#" + (extracted.ver === 2 ? "2." + extracted.b64 : extracted.b64);
   } else {
-    cardState = { status: "invalid", inviteCode: "", rawPayload: "", payload: null };
+    cardState = buildInvalidState();
     renderCard();
   }
 });
@@ -1214,6 +2176,7 @@ function syncFromHash() {
 }
 
 window.addEventListener("hashchange", syncFromHash);
+initStoredHub();
 applyLang(detectInitialLang());
 syncFromHash();
 })();

@@ -214,28 +214,70 @@
     }
     return res;
   }
+  const apiEtags = new Map();
+  const API_NOT_MODIFIED = Object.freeze({ _notModified: true });
   async function api(path, opts = {}) {
     const r = routeReq(path, opts.body, opts.hub);
+    const method = (opts.method || (opts.body ? "POST" : "GET")).toUpperCase();
     const headers = opts.body ? { "Content-Type": "application/json" } : {};
     if (r.hub) headers.Authorization = "Bearer " + r.hub.token;
+    const etagKey = !r.hub && method === "GET" && opts.etagKey ? String(opts.etagKey) : "";
+    if (etagKey && apiEtags.has(etagKey)) {
+      headers["If-None-Match"] = apiEtags.get(etagKey);
+    }
     const t = timeoutSignal(opts.timeout);
+    let signal = t.signal;
+    let combinedAbort = null;
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        t.clear();
+        const abErr = new Error("aborted");
+        abErr.name = "AbortError";
+        abErr.aborted = true;
+        throw abErr;
+      }
+      if (typeof AbortController !== "undefined") {
+        const ac = new AbortController();
+        const onExt = () => ac.abort(opts.signal.reason);
+        const onTmo = () => ac.abort(t.signal?.reason);
+        opts.signal.addEventListener("abort", onExt, { once: true });
+        if (t.signal) t.signal.addEventListener("abort", onTmo, { once: true });
+        signal = ac.signal;
+        combinedAbort = () => {
+          opts.signal.removeEventListener("abort", onExt);
+          if (t.signal) t.signal.removeEventListener("abort", onTmo);
+        };
+      } else {
+        signal = opts.signal;
+      }
+    }
     let res;
     try {
       res = await fetch(r.url, {
-        method: opts.method || (opts.body ? "POST" : "GET"),
+        method,
         headers, body: r.body,
         credentials: r.hub ? "omit" : "same-origin",
-        signal: t.signal,
+        signal,
       });
     } catch (err) {
+      if (opts.signal?.aborted) {
+        const abErr = new Error("aborted", { cause: err });
+        abErr.name = "AbortError";
+        abErr.aborted = true;
+        throw abErr;
+      }
       if (err?.name === "TimeoutError" || err?.name === "AbortError") {
         throw new Error(opts.timeoutMessage || "请求超时，请检查网络后重试", { cause: err });
       }
       throw new Error(opts.networkMessage || "网络连接中断，请检查服务是否在线后重试", { cause: err });
     } finally {
+      if (combinedAbort) combinedAbort();
       t.clear();
     }
     if (!r.hub) noteBuild(res.headers?.get?.("X-Collie-Web"));
+    if (res.status === 304 && etagKey) {
+      return API_NOT_MODIFIED;
+    }
     let raw = "", data = {};
     if (typeof res.text === "function") {
       raw = await res.text();
@@ -253,6 +295,13 @@
     if (!res.ok) {
       const fallback = raw && !/^\s*</.test(raw) ? raw.trim().slice(0, 240) : "";
       throw new Error(data.error || fallback || res.statusText || `HTTP ${res.status}`);
+    }
+    if (etagKey) {
+      const et = res.headers?.get?.("ETag");
+      if (et) apiEtags.set(etagKey, et);
+    }
+    if (!r.hub && method !== "GET" && (String(path).startsWith("/api/super/") || String(path).startsWith("/api/memory/"))) {
+      apiEtags.clear();
     }
     return r.hub ? tagIds(data, r.hub.key) : data;
   }
@@ -6515,6 +6564,7 @@
     return m?.label || def.split("/").pop();
   }
   const modelInfo = {};
+  const modelInfoResolved = {};
   async function modelsFor(kind, machine) {
     const key = kind + "@" + (machine || "");
     if (!modelInfo[key]) {
@@ -6523,7 +6573,10 @@
       modelInfo[key] = api("/api/models?" + q).catch(() => ({
         models: [],
         efforts: kind === "agy" || kind === "antigravity" || kind === "cursor" ? [] : ["low", "medium", "high", "xhigh", "max"],
-      }));
+      })).then((info) => {
+        modelInfoResolved[key] = info;
+        return info;
+      });
     }
     return modelInfo[key];
   }
@@ -7103,19 +7156,191 @@
   });
 
   let autoOpenRAF = 0;
+  let autoLoadSeq = 0;
+  let inboxRenderLimit = 40;
+  const autoCache = {
+    memory: null,
+    timers: null,       // { timers, activeCount, endedCount, endedHasMore, endedList, endedLoaded }
+    inbox: null,        // { triggers, threads }
+    integrations: null, // { intData, peersData }
+    settings: null,     // { data }
+  };
+  let intWarmPromise = null;
+  let larkCache = { at: 0, data: null, promise: null };
+
+  function applyAutoBodyMode(body, tab) {
+    if (!body) return;
+    body.classList.toggle("is-integrations", tab === "integrations");
+  }
+
+  function warmAutoIntegrations() {
+    if (autoCache.integrations) return Promise.resolve(autoCache.integrations);
+    if (intWarmPromise) return intWarmPromise;
+    intWarmPromise = Promise.all([
+      api("/api/super/integrations", { etagKey: "integrations" }).catch(() => null),
+      api("/api/super/peers", { etagKey: "peers" }).catch(() => null),
+    ]).then(([r, pr]) => {
+      const nextInt = r && !r._notModified ? r : intPayload;
+      const nextPeers = pr && !pr._notModified ? pr : peersPayload;
+      if (nextInt) {
+        intPayload = nextInt;
+        if (nextPeers) peersPayload = nextPeers;
+        autoCache.integrations = { intData: nextInt, peersData: peersPayload };
+      }
+      return autoCache.integrations;
+    }).finally(() => {
+      intWarmPromise = null;
+    });
+    return intWarmPromise;
+  }
+
+  function scheduleAutoWarmup() {
+    if (autoCache.integrations || intWarmPromise) return;
+    const run = () => {
+      if (!document.hidden && $("#login")?.hidden && !autoCache.integrations) {
+        warmAutoIntegrations();
+      }
+    };
+    if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 1200 });
+    else setTimeout(run, 350);
+  }
+
+  function formatLarkStatusText(l, mode) {
+    if (!l) return "";
+    if (mode === "integrations") {
+      return l.ready ? `已就绪：发给 ${l.who || "本机登录用户"}（以机器人身份）` : `${l.problem}，当前不可用`;
+    }
+    return l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
+  }
+
+  function loadLarkStatus(sel, mode, fresh = false) {
+    const apply = (l) => {
+      const el = $(sel);
+      if (el && l) el.textContent = formatLarkStatusText(l, mode);
+    };
+    if (!fresh && larkCache.data && Date.now() - larkCache.at < 60000) {
+      apply(larkCache.data);
+      return;
+    }
+    if (!fresh && larkCache.promise) {
+      larkCache.promise.then(apply).catch(() => {});
+      return;
+    }
+    const p = api(fresh ? "/api/super/lark?fresh" : "/api/super/lark").then((l) => {
+      larkCache = { at: Date.now(), data: l, promise: null };
+      apply(l);
+      return l;
+    }).catch(() => {
+      larkCache.promise = null;
+      return null;
+    });
+    if (!fresh) larkCache.promise = p;
+  }
+
+  function renderAutoTabFromCache(body, tab, restore = null) {
+    if (!body) return false;
+    if (tab === "memory" && autoCache.memory) {
+      const r = autoCache.memory;
+      memData = r;
+      applyAutoBodyMode(body, "memory");
+      body._memSig = computeMemorySig(r);
+      body._renderedTab = "memory";
+      body._tabRendered = true;
+      renderMemoryView(body, r, { preserveOpen: false });
+      if (restore) restoreSimpleScroll(body, restore);
+      return true;
+    }
+    if (tab === "timers" && autoCache.timers) {
+      const c = autoCache.timers;
+      applyAutoBodyMode(body, "timers");
+      body._timersSig = computeTimersSig(c);
+      body._renderedTab = "timers";
+      body._tabRendered = true;
+      body.innerHTML = timersHTML(c.timers, c);
+      if (restore) restoreSimpleScroll(body, restore);
+      return true;
+    }
+    if (tab === "inbox" && autoCache.inbox) {
+      const c = autoCache.inbox;
+      applyAutoBodyMode(body, "inbox");
+      body._inboxSig = computeInboxSig(c.triggers, c.threads);
+      body._inboxRendered = true;
+      body._renderedTab = "inbox";
+      body._tabRendered = true;
+      body.innerHTML = inboxHTML(c.triggers, c.threads);
+      syncInboxOverflow(body);
+      if (restore) restoreSimpleScroll(body, restore);
+      return true;
+    }
+    if (tab === "integrations" && autoCache.integrations) {
+      const c = autoCache.integrations;
+      intPayload = c.intData;
+      if (c.peersData) peersPayload = c.peersData;
+      applyAutoBodyMode(body, "integrations");
+      body._intSig = JSON.stringify({ r: c.intData, p: peersPayload });
+      body._renderedTab = "integrations";
+      body._tabRendered = true;
+      body.innerHTML = integrationsHTML(c.intData, peersPayload);
+      if (restore) restoreSimpleScroll(body, restore);
+      return true;
+    }
+    if (tab === "settings" && autoCache.settings) {
+      const r = autoCache.settings.data;
+      applyAutoBodyMode(body, "settings");
+      body._settingsSig = JSON.stringify(r);
+      body._renderedTab = "settings";
+      body._tabRendered = true;
+      body.innerHTML = settingsHTML(r);
+      if (restore) restoreSimpleScroll(body, restore);
+      loadLarkStatus("#lark-who", "settings", false);
+      return true;
+    }
+    return false;
+  }
+
   function openAuto(restore = null) {
     autoTab = normalizeAutoTab(autoTab);
     store.set("autoTab", autoTab);
     memEditing = false;
     if (autoTab !== "memory") {
       clearMemoryHighlights();
+      cancelMemorySearch();
       memQuery = "";
       memPreSearchOpen = null;
+      memSearchRemote = null;
       clearMemInsUndo();
     }
     const body = $("#auto-body");
     const sameTabCached = body._renderedTab === autoTab && !!body._tabRendered;
-    if (!sameTabCached) {
+    $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
+    clearInterval(autoTimer);
+    if (autoOpenRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(autoOpenRAF);
+      autoOpenRAF = 0;
+    }
+    if (sameTabCached) {
+      applyAutoBodyMode(body, autoTab);
+      if (restore) restoreSimpleScroll(body, restore);
+      if (typeof requestAnimationFrame === "function") {
+        autoOpenRAF = requestAnimationFrame(() => {
+          autoOpenRAF = 0;
+          if (view === "auto") loadAuto(null);
+        });
+      } else {
+        loadAuto(null);
+      }
+    } else if (renderAutoTabFromCache(body, autoTab, restore)) {
+      if (typeof requestAnimationFrame === "function") {
+        autoOpenRAF = requestAnimationFrame(() => {
+          autoOpenRAF = 0;
+          if (view === "auto") loadAuto(null);
+        });
+      } else {
+        loadAuto(null);
+      }
+    } else {
+      // Cold first load: keep existing layout width steady (do NOT toggle .is-integrations
+      // before the new tab's DOM mounts) to guarantee zero cross-tab width jolt/flash.
       body._memSig = "";
       body._inboxSig = "";
       body._inboxRendered = false;
@@ -7123,26 +7348,14 @@
       body._intSig = "";
       body._settingsSig = "";
       body._tabRendered = false;
-    }
-    body.classList.toggle("is-integrations", autoTab === "integrations");
-    $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
-    if (restore) restoreSimpleScroll(body, restore);
-    clearInterval(autoTimer);
-    if (autoOpenRAF && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(autoOpenRAF);
-      autoOpenRAF = 0;
-    }
-    if (sameTabCached && typeof requestAnimationFrame === "function") {
-      autoOpenRAF = requestAnimationFrame(() => {
-        autoOpenRAF = 0;
-        if (view === "auto") loadAuto(null);
-      });
-    } else {
       loadAuto(restore);
     }
-    if (autoTab === "inbox") autoTimer = setInterval(() => loadAuto(), 4000);
-    if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
-    if (autoTab === "integrations") autoTimer = setInterval(() => { if (!$("#int-modal")?.open) loadAuto(); }, 6000);
+    if (autoTab !== "integrations" && !autoCache.integrations) {
+      scheduleAutoWarmup();
+    }
+    if (autoTab === "inbox") autoTimer = setInterval(() => { if (!document.hidden) loadAuto(); }, 4000);
+    if (autoTab === "memory") autoTimer = setInterval(() => { if (!document.hidden && !memEditing) loadAuto(); }, 5000);
+    if (autoTab === "integrations") autoTimer = setInterval(() => { if (!document.hidden && !$("#int-modal")?.open) loadAuto(); }, 6000);
   }
 
   function inboxTextId(id) {
@@ -7209,7 +7422,28 @@
   }
   function syncInboxOverflow(root = $("#auto-body")) {
     if (!root) return;
-    root.querySelectorAll(".inbox-row").forEach((row) => syncInboxRow(row));
+    const rows = [...root.querySelectorAll(".inbox-row")];
+    if (!rows.length) return;
+    // Two-phase read-then-write batching prevents O(N) forced synchronous layout thrashing.
+    const measured = [];
+    for (const row of rows) {
+      const id = String(row.dataset?.inboxId || "");
+      const textEl = row.querySelector(".inbox-text");
+      const btn = row.querySelector(".inbox-toggle");
+      if (!id || !textEl || !btn) continue;
+      const expanded = inboxExpanded.has(id);
+      const truncated = !expanded && textEl.clientHeight > 0 && textEl.scrollHeight > textEl.clientHeight + 1;
+      measured.push({ row, id, btn, expanded, expandable: expanded || truncated });
+    }
+    for (const m of measured) {
+      m.row.classList.toggle("is-expanded", m.expanded);
+      m.row.classList.toggle("is-expandable", m.expandable);
+      m.btn.hidden = !m.expandable;
+      m.btn.setAttribute("aria-expanded", m.expanded ? "true" : "false");
+      m.btn.setAttribute("aria-label", `${m.expanded ? "收起" : "展开"} #${m.id}`);
+      const lbl = m.btn.querySelector(".inbox-toggle-lbl");
+      if (lbl) lbl.textContent = m.expanded ? "收起" : "展开";
+    }
   }
   function toggleInboxRow(row, id, { animate = true } = {}) {
     const key = String(id ?? row?.dataset?.inboxId ?? "");
@@ -7269,44 +7503,76 @@
     }).observe($("#auto-body"));
   }
 
+  function computeInboxSig(triggers, threads) {
+    const activeWorkers = (sup.workers || []).filter((w) => !w.ended).map((w) => w.name);
+    return JSON.stringify({
+      t: triggers,
+      th: threads,
+      f: inboxThread,
+      lim: inboxRenderLimit,
+      w: activeWorkers,
+      tm: triggers.map((x) => when(x.at)),
+      thm: threads.map((x) => when(x.last_at)),
+    });
+  }
+  function computeMemoryWorkerSig() {
+    return (sup.workers || []).map((w) => w.name + ":" + (w.label || "") + ":" + workerStatus(w)).join("|");
+  }
+  function computeMemorySig(r) {
+    const base = r?.version ? `${r.version}|dc=${r.done_count || 0}` : JSON.stringify(r);
+    return base + "|" + computeMemoryWorkerSig();
+  }
+  function computeTimersSig(c) {
+    return JSON.stringify({
+      t: c?.timers || [],
+      ec: c?.endedCount || 0,
+      el: c?.endedList || [],
+      em: !!c?.endedHasMore,
+    });
+  }
+
   async function loadAuto(restore = null) {
     const body = $("#auto-body");
-    body.classList.toggle("is-integrations", autoTab === "integrations");
+    const targetTab = autoTab;
+    const seq = ++autoLoadSeq;
     const keepTop = !restore && body.clientHeight > 0 ? { scrollTop: body.scrollTop, atBottom: body.scrollHeight - body.scrollTop - body.clientHeight <= AT_BOTTOM_PX } : null;
     const applyAfter = () => {
       if (restore) restoreSimpleScroll(body, restore);
       else if (keepTop && !keepTop.atBottom) { markProgrammaticScroll(); body.scrollTop = keepTop.scrollTop; }
     };
     try {
-      if (autoTab === "inbox") {
+      if (targetTab === "inbox") {
         // Avoid tearing down the inbox DOM while the user is interacting with its dropdown.
         if (pickOpen && body.contains(pickOpen)) return;
-        const seq = ++inboxLoadSeq;
-        const r = await api("/api/super/triggers");
-        if (seq !== inboxLoadSeq || view !== "auto" || autoTab !== "inbox") return;
+        const iSeq = ++inboxLoadSeq;
+        const r = await api("/api/super/triggers", { etagKey: "inbox" });
+        if (seq !== autoLoadSeq || iSeq !== inboxLoadSeq || view !== "auto" || autoTab !== "inbox") return;
         if (pickOpen && body.contains(pickOpen)) return;
-        const triggers = r.triggers || [];
-        const threads = r.threads || [];
-        const activeWorkers = (sup.workers || []).filter((w) => !w.ended).map((w) => w.name);
-        const sig = JSON.stringify({
-          t: triggers,
-          th: threads,
-          f: inboxThread,
-          w: activeWorkers,
-          tm: triggers.map((x) => when(x.at)),
-          thm: threads.map((x) => when(x.last_at)),
-        });
-        if (sig === body._inboxSig && body._inboxRendered) {
+        let triggers, threads;
+        if (r?._notModified && autoCache.inbox) {
+          triggers = autoCache.inbox.triggers;
+          threads = autoCache.inbox.threads;
+        } else if (!r || r._notModified) {
+          return;
+        } else {
+          triggers = r.triggers || [];
+          threads = r.threads || [];
+          autoCache.inbox = { triggers, threads };
+        }
+        const sameInbox = !!body._inboxRendered && (!body._renderedTab || body._renderedTab === "inbox");
+        const sig = computeInboxSig(triggers, threads);
+        if (sig === body._inboxSig && sameInbox) {
           if (restore) restoreSimpleScroll(body, restore);
           return;
         }
         // Preserve active user text selection during background refreshes.
-        if (!restore && body._inboxRendered && hasSelectionInside(body)) return;
-        const subsOpen = !!body.querySelector(".inbox-subs-fold[open]");
-        const focusToggleId = document.activeElement && body.contains(document.activeElement)
+        if (!restore && sameInbox && hasSelectionInside(body)) return;
+        const subsOpen = sameInbox && !!body.querySelector(".inbox-subs-fold[open]");
+        const focusToggleId = sameInbox && document.activeElement && body.contains(document.activeElement)
           ? document.activeElement.closest?.("[data-inbox-toggle]")?.dataset?.inboxToggle || ""
           : "";
-        const anchor = !restore ? captureInboxScrollAnchor(body) : null;
+        const anchor = !restore && sameInbox ? captureInboxScrollAnchor(body) : null;
+        applyAutoBodyMode(body, "inbox");
         body._inboxSig = sig;
         body._inboxRendered = true;
         body._renderedTab = "inbox";
@@ -7321,58 +7587,109 @@
           if (btn && !btn.hidden) btn.focus?.({ preventScroll: true });
         }
         return;
-      } else if (autoTab === "memory") {
-        const r = await api("/api/super/memory");
-        if (view !== "auto" || autoTab !== "memory" || memEditing) return;
-        // Workers' states count too: the task cards show them.
-        const sig = JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + (w.label || "") + ":" + workerStatus(w)).join();
-        memData = r;
-        if (sig !== body._memSig || !body.querySelector("#mem-content")) {
-          const first = !body._memSig;
+      } else if (targetTab === "memory") {
+        const r = await api("/api/super/memory?summary=1&include_done=0", { etagKey: "memory" });
+        if (seq !== autoLoadSeq || view !== "auto" || autoTab !== "memory" || memEditing) return;
+        let nextData = r;
+        if (r?._notModified) {
+          if (!autoCache.memory) return;
+          nextData = autoCache.memory;
+        } else {
+          // If server version changed, refresh cached files/done list cleanly.
+          if (autoCache.memory?.version && nextData.version && autoCache.memory.version !== nextData.version) {
+            memFileCache.clear();
+            if (memDoneState.loaded) {
+              memDoneState.version = "";
+            }
+          }
+          autoCache.memory = nextData;
+        }
+        const sig = computeMemorySig(nextData);
+        memData = nextData;
+        if (sig !== body._memSig || body._renderedTab !== "memory" || !body.querySelector("#mem-content")) {
+          const first = !body._memSig || body._renderedTab !== "memory";
+          applyAutoBodyMode(body, "memory");
           body._memSig = sig;
           body._renderedTab = "memory";
           body._tabRendered = true;
-          renderMemoryView(body, r, { preserveOpen: !first && !memQuery.trim() });
+          renderMemoryView(body, memQuery.trim() && memSearchRemote ? buildRemoteSearchMemoryView(nextData, memSearchRemote) : nextData, {
+            preserveOpen: !first && !memQuery.trim(),
+          });
+          if (!memQuery.trim() && memDoneState.loaded && nextData.version && memDoneState.version !== nextData.version) {
+            const doneFold = body.querySelector?.("details.mem-done[open]");
+            if (doneFold) loadMoreDoneMemory(doneFold, { reset: true });
+          }
           applyAfter();
         } else if (restore) {
           restoreSimpleScroll(body, restore);
         }
         return;
-      } else if (autoTab === "timers") {
-        const r = await api("/api/super/timers");
-        if (view !== "auto" || autoTab !== "timers") return;
-        const timers = r.timers || [];
-        const sig = JSON.stringify(timers);
+      } else if (targetTab === "timers") {
+        const r = await api("/api/super/timers?ended_limit=0", { etagKey: "timers" });
+        if (seq !== autoLoadSeq || view !== "auto" || autoTab !== "timers") return;
+        let cacheObj = autoCache.timers;
+        if (r?._notModified) {
+          if (!cacheObj) return;
+        } else {
+          const prevEndedLoaded = !!cacheObj?.endedLoaded;
+          const prevEndedList = prevEndedLoaded && cacheObj.endedCount === (r.ended_count ?? 0) ? (cacheObj.endedList || []) : [];
+          const hasEndedMeta = typeof r.ended_count === "number";
+          cacheObj = {
+            timers: r.timers || [],
+            activeCount: typeof r.active_count === "number" ? r.active_count : null,
+            endedCount: hasEndedMeta ? r.ended_count : null,
+            endedHasMore: hasEndedMeta ? (prevEndedList.length > 0 ? prevEndedList.length < r.ended_count : !!r.ended_has_more) : false,
+            endedList: prevEndedList,
+            endedLoaded: prevEndedList.length > 0,
+          };
+          autoCache.timers = cacheObj;
+        }
+        const sig = computeTimersSig(cacheObj);
         if (sig === body._timersSig && body._renderedTab === "timers" && body._tabRendered) {
           if (restore) restoreSimpleScroll(body, restore);
           return;
         }
-        const endedOpen = !!body.querySelector("details[data-ended-timers][open]");
+        const endedOpen = body._renderedTab === "timers" && !!body.querySelector("details[data-ended-timers][open]");
+        applyAutoBodyMode(body, "timers");
         body._timersSig = sig;
         body._renderedTab = "timers";
         body._tabRendered = true;
-        body.innerHTML = timersHTML(timers);
-        if (endedOpen) { const d = body.querySelector("details[data-ended-timers]"); if (d) d.open = true; }
+        body.innerHTML = timersHTML(cacheObj.timers, cacheObj);
+        if (endedOpen) {
+          const d = body.querySelector("details[data-ended-timers]");
+          if (d) d.open = true;
+        }
         applyAfter();
-      } else if (autoTab === "integrations") {
-        const [r, pr] = await Promise.all([
-          api("/api/super/integrations"),
-          api("/api/super/peers").catch(() => null),
-        ]);
-        if (view !== "auto" || autoTab !== "integrations") return;
-        const advOpen = !!body.querySelector("#int-adv-fold[open]");
+      } else if (targetTab === "integrations") {
+        const [r, pr] = intWarmPromise
+          ? await intWarmPromise.then((c) => [c?.intData || API_NOT_MODIFIED, c?.peersData || API_NOT_MODIFIED])
+          : await Promise.all([
+              api("/api/super/integrations", { etagKey: "integrations" }),
+              api("/api/super/peers", { etagKey: "peers" }).catch(() => null),
+            ]);
+        if (seq !== autoLoadSeq || view !== "auto" || autoTab !== "integrations") return;
+        const nextInt = r?._notModified ? (autoCache.integrations?.intData || intPayload) : r;
+        const nextPeers = pr?._notModified ? (autoCache.integrations?.peersData || peersPayload) : (pr || peersPayload);
+        if (!nextInt) return;
+        const advOpen = body._renderedTab === "integrations" && !!body.querySelector("#int-adv-fold[open]");
         const focusedWebhook = document.activeElement?.id === "int-adv-webhook";
         const draftWebhook = focusedWebhook ? document.activeElement.value : null;
-        intPayload = r;
-        if (pr) peersPayload = pr;
-        const sig = JSON.stringify({ r, p: peersPayload });
+        intPayload = nextInt;
+        if (nextPeers) peersPayload = nextPeers;
+        autoCache.integrations = { intData: nextInt, peersData: peersPayload };
+        const sig = JSON.stringify({ r: nextInt, p: peersPayload });
         if (!focusedWebhook) {
           if (sig !== body._intSig || body._renderedTab !== "integrations" || !body._tabRendered) {
+            applyAutoBodyMode(body, "integrations");
             body._intSig = sig;
             body._renderedTab = "integrations";
             body._tabRendered = true;
-            body.innerHTML = integrationsHTML(r, peersPayload);
-            if (advOpen) { const d = body.querySelector("#int-adv-fold"); if (d) d.open = true; }
+            body.innerHTML = integrationsHTML(nextInt, peersPayload);
+            if (advOpen) {
+              const d = body.querySelector("#int-adv-fold");
+              if (d) d.open = true;
+              loadLarkStatus("#int-adv-lark-who", "integrations", false);
+            }
             applyAfter();
           } else if (restore) {
             restoreSimpleScroll(body, restore);
@@ -7380,29 +7697,30 @@
         } else if (draftWebhook !== null && $("#int-adv-webhook")) {
           $("#int-adv-webhook").value = draftWebhook;
         }
-        api("/api/super/lark?fresh").then((l) => {
-          const el = $("#int-adv-lark-who");
-          if (el) el.textContent = l.ready ? `已就绪：发给 ${l.who || "本机登录用户"}（以机器人身份）` : `${l.problem}，当前不可用`;
-        }).catch(() => {});
       } else {
-        const r = await api("/api/super/settings");
-        if (view !== "auto" || autoTab !== "settings") return;
-        const sig = JSON.stringify(r);
+        const r = await api("/api/super/settings", { etagKey: "settings" });
+        if (seq !== autoLoadSeq || view !== "auto" || autoTab !== "settings") return;
+        const nextSet = r?._notModified ? autoCache.settings?.data : r;
+        if (!nextSet) return;
+        autoCache.settings = { data: nextSet };
+        const sig = JSON.stringify(nextSet);
         if (sig !== body._settingsSig || body._renderedTab !== "settings" || !body._tabRendered) {
+          applyAutoBodyMode(body, "settings");
           body._settingsSig = sig;
           body._renderedTab = "settings";
           body._tabRendered = true;
-          body.innerHTML = settingsHTML(r);
+          body.innerHTML = settingsHTML(nextSet);
           applyAfter();
         } else if (restore) {
           restoreSimpleScroll(body, restore);
         }
-        api("/api/super/lark?fresh").then((l) => {
-          const el = $("#lark-who");
-          if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
-        }).catch(() => {});
+        loadLarkStatus("#lark-who", "settings", false);
       }
-    } catch (err) { body._inboxSig = ""; body._inboxRendered = false; body._tabRendered = false; body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
+    } catch (err) {
+      if (err?.aborted) return;
+      body._inboxSig = ""; body._inboxRendered = false; body._tabRendered = false;
+      body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`;
+    }
   }
 
   // ───────────────────────────── integrations store & centered modal
@@ -10334,7 +10652,22 @@
   let memPreSearchOpen = null;
   let memDreamExpanded = false;
   let memInsUndo = null;
+  const memFileCache = new Map(); // path -> { text, size, mod, preview }
+  const memDoneState = { files: [], total: 0, loaded: false, loading: false, hasMore: false, version: "" };
+  let memSearchTimer = 0;
+  let memSearchAbort = null;
+  let memSearchRemote = null; // { query, files, dreams, totalFiles, totalHits, truncated, loading }
+  const MEM_SEARCH_OPEN_CAP = 12;
+  const MEM_DONE_PAGE = 60;
   const MEM_SEARCH_HL = "mem-search";
+  function cancelMemorySearch() {
+    clearTimeout(memSearchTimer);
+    memSearchTimer = 0;
+    if (memSearchAbort) {
+      try { memSearchAbort.abort(); } catch {}
+      memSearchAbort = null;
+    }
+  }
   const kb = (n) => (n / 1024).toFixed(1) + " KB";
   const kbNum = (n) => (n / 1024).toFixed(1);
   const kbCap = (n) => (n % 1024 === 0 ? String(n / 1024) : (n / 1024).toFixed(1)) + " KB";
@@ -10795,6 +11128,276 @@
     return list;
   }
 
+  let _crewIdxWorkers = null;
+  let _crewIdxCache = null;
+  function getCrewIndex() {
+    const ws = sup.workers || [];
+    if (_crewIdxWorkers === ws && _crewIdxCache) return _crewIdxCache;
+    const latest = new Map();
+    const latestTs = new Map();
+    for (const w of ws) {
+      if (!w?.name) continue;
+      const ts = Date.parse(w.created_at) || 0;
+      if (!latest.has(w.name) || ts > (latestTs.get(w.name) || 0)) {
+        latest.set(w.name, w);
+        latestTs.set(w.name, ts);
+      }
+    }
+    const wordMap = new Map();
+    const special = [];
+    for (const [name, w] of latest) {
+      if (/^[\w-]+$/.test(name)) {
+        wordMap.set(name, w);
+      } else {
+        special.push({ w, re: new RegExp(`(^|[^\\w-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`) });
+      }
+    }
+    _crewIdxWorkers = ws;
+    _crewIdxCache = { wordMap, special };
+    return _crewIdxCache;
+  }
+
+  function renderMemCrewHTML(text) {
+    if (!text) return "";
+    const { wordMap, special } = getCrewIndex();
+    if (!wordMap.size && !special.length) return "";
+    const matched = [];
+    const seen = new Set();
+    if (wordMap.size) {
+      const tokens = String(text).match(/[\w-]+/g);
+      if (tokens) {
+        for (const tok of tokens) {
+          if (seen.has(tok)) continue;
+          const w = wordMap.get(tok);
+          if (w) {
+            seen.add(tok);
+            matched.push(w);
+          }
+        }
+      }
+    }
+    for (const sp of special) {
+      if (!seen.has(sp.w.name) && sp.re.test(text)) {
+        seen.add(sp.w.name);
+        matched.push(sp.w);
+      }
+    }
+    if (!matched.length) return "";
+    return `<span class="mem-crew">${matched.map((w) => {
+      const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
+      const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+      const st = workerStatus(w);
+      const disp = workerDisplayName(w);
+      const tip = [w.name, KIND_LABEL[w.kind] || w.kind, STATUS_LABEL[st] || st].filter(Boolean).join(" · ");
+      return `<a ${href ? `href="${href}"` : ""} title="${esc(tip)}"><span class="dot ${esc(st)}"></span>${esc(disp)}</a>`;
+    }).join("")}</span>`;
+  }
+
+  function memToolsHTML(f, wantCrew) {
+    return `<div class="mem-tools">${wantCrew ? renderMemCrewHTML(f.text) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button type="button" class="btn small" data-act="mem-edit">编辑</button></div>`;
+  }
+
+  function resolveCachedMemFile(path, kind = "file") {
+    const key = kind === "dream" ? `dreams/${path}` : path;
+    const cached = memFileCache.get(key);
+    if (kind === "dream") {
+      const d = (memData?.dreams || []).find((x) => x.name === path)
+        || (memSearchRemote?.dreams || []).find((x) => x.name === path);
+      if (cached) return { ...(d || { name: path }), ...cached, name: path, summary_only: false };
+      return d || null;
+    }
+    const f = (memData?.files || []).find((x) => x.name === path)
+      || (memDoneState.files || []).find((x) => x.name === path)
+      || (memSearchRemote?.files || []).find((x) => x.name === path);
+    if (cached) return { ...(f || { name: path }), ...cached, name: path, summary_only: false };
+    return f || null;
+  }
+
+  async function ensureMemFileText(path, kind = "file") {
+    const existing = resolveCachedMemFile(path, kind);
+    if (existing && !existing.summary_only && typeof existing.text === "string" && (existing.text.length > 0 || existing.size === 0)) {
+      return existing;
+    }
+    const reqPath = kind === "dream" ? `dreams/${path}` : path;
+    const res = await api(`/api/super/memory/file?path=${encodeURIComponent(reqPath)}`);
+    const f = res?.file;
+    if (!f) throw new Error("未找到记忆文件");
+    const entry = { text: f.text || "", size: f.size ?? existing?.size ?? 0, mod: f.mod || existing?.mod, preview: f.preview || existing?.preview || "" };
+    memFileCache.set(reqPath, entry);
+    if (existing) {
+      existing.text = entry.text;
+      existing.size = entry.size;
+      existing.mod = entry.mod;
+      existing.preview = entry.preview;
+      existing.summary_only = false;
+    }
+    return { ...(existing || f), ...entry, name: kind === "dream" ? path : (f.name || path), summary_only: false };
+  }
+
+  function ensureMemoryEditForm(box, text) {
+    if (!box) return null;
+    let form = box.querySelector?.("form.mem-edit");
+    if (!form) {
+      form = document.createElement("form");
+      form.className = "mem-edit";
+      form.hidden = true;
+      form.innerHTML = `<textarea name="text" spellcheck="false"></textarea>
+        <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div>`;
+      box.append(form);
+    }
+    const ta = form.querySelector?.("textarea");
+    if (ta && typeof text === "string") ta.value = text;
+    return form;
+  }
+
+  async function hydrateMemoryFold(detailsEl) {
+    if (!detailsEl || !detailsEl.open) return;
+    const viewEl = detailsEl.querySelector?.('[data-view][data-mem-lazy="1"]');
+    if (!viewEl) return;
+    const kind = viewEl.dataset?.memKind === "dream" ? "dream" : "file";
+    const path = kind === "dream"
+      ? String(detailsEl.dataset?.memKey || "").replace(/^dream:/, "")
+      : String(detailsEl.dataset?.path || "");
+    if (!path) return;
+    const wantCrew = viewEl.dataset?.memCrew === "1";
+    const wantEdit = viewEl.dataset?.memEdit === "1";
+    if (viewEl.dataset.memLoading === "1") return;
+    const cached = resolveCachedMemFile(path, kind);
+    const hasBody = cached && !cached.summary_only && (typeof cached.text === "string") && (cached.text.length > 0 || cached.size === 0);
+    if (!hasBody) {
+      viewEl.dataset.memLoading = "1";
+      viewEl.innerHTML = `<div class="mem-lazy-hint muted">加载正文…</div>`;
+    }
+    let file = cached;
+    try {
+      if (!hasBody) file = await ensureMemFileText(path, kind);
+    } catch (err) {
+      delete viewEl.dataset.memLoading;
+      if (detailsEl.isConnected) viewEl.innerHTML = `<div class="mem-lazy-hint muted">${esc(err.message || "加载失败")}</div>`;
+      return;
+    }
+    delete viewEl.dataset.memLoading;
+    if (!detailsEl.isConnected || !file) return;
+    viewEl.removeAttribute("data-mem-lazy");
+    viewEl.innerHTML = md(file.text || "");
+    if (wantEdit && !detailsEl.querySelector?.(".mem-tools")) {
+      viewEl.insertAdjacentHTML?.("afterend", memToolsHTML(file, wantCrew));
+    }
+    const terms = memQueryTerms(memQuery);
+    if (terms.length) applyMemoryHighlights($("#mem-content"), terms);
+  }
+
+  function renderDoneBucketsInnerHTML(doneItems, doneTotal, hasMore, searching, terms, cardFn) {
+    const doneBuckets = bucketDoneMemoryItems(doneItems);
+    const bucketsHtml = doneBuckets.map((b, bi) => {
+      const openBucket = searching || (bi === 0 && b.kind === "day");
+      return `<details class="mem-done-bucket" ${openBucket ? "open" : ""} data-mem-key="${esc(b.key)}" data-done-bucket="${esc(b.kind)}"><summary><span class="mem-done-bname">${esc(b.label)}</span><span class="mem-done-bcnt">${b.items.length} 件</span></summary><div class="mem-done-blist">${b.items.map(({ f, hit }) => cardFn(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>`;
+    }).join("");
+    const moreHtml = !searching && hasMore && doneTotal > doneItems.length
+      ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="mem-done-more">加载更早归档（已显示 ${doneItems.length} / ${doneTotal} 件）</button></div>`
+      : "";
+    return bucketsHtml + moreHtml;
+  }
+
+  async function loadMoreDoneMemory(detailsEl, { reset = false } = {}) {
+    if (memDoneState.loading) return;
+    memDoneState.loading = true;
+    const container = detailsEl?.querySelector?.(".mem-done-buckets");
+    const moreBtn = container?.querySelector?.('[data-act="mem-done-more"]');
+    if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = "加载中…"; }
+    else if (reset && container && !memDoneState.files.length) {
+      container.innerHTML = `<div class="mem-lazy-hint muted">加载归档列表…</div>`;
+    }
+    const offset = reset ? 0 : memDoneState.files.length;
+    try {
+      const res = await api(`/api/super/memory/done?offset=${offset}&limit=${MEM_DONE_PAGE}`);
+      const batch = Array.isArray(res?.files) ? res.files : [];
+      if (reset) {
+        memDoneState.files = batch;
+      } else {
+        const seen = new Set(memDoneState.files.map((x) => x.name));
+        for (const f of batch) {
+          if (!seen.has(f.name)) {
+            seen.add(f.name);
+            memDoneState.files.push(f);
+          }
+        }
+      }
+      memDoneState.total = Math.max(Number(res?.total) || 0, memDoneState.files.length);
+      memDoneState.hasMore = !!res?.has_more;
+      memDoneState.loaded = true;
+      memDoneState.version = memData?.version || "";
+      if (detailsEl?.isConnected && container && view === "auto" && autoTab === "memory" && !memQuery.trim()) {
+        detailsEl.removeAttribute("data-done-lazy");
+        const prevOpen = snapshotOpenMemoryKeys(container);
+        const firstLoad = reset && offset === 0 && !prevOpen.size;
+        const doneItems = memDoneState.files.map((f) => ({ f, hit: null }));
+        const renderDoneCard = (f, o) => renderMemoryCardHTML(f, o, null, [], { searching: false, forceOpen: false });
+        container.innerHTML = renderDoneBucketsInnerHTML(doneItems, memDoneState.total, memDoneState.hasMore, false, [], renderDoneCard);
+        if (!firstLoad && prevOpen.size) {
+          restoreOpenMemoryKeys(container, prevOpen);
+          // Re-hydrate any already-open card inside the preserved buckets.
+          for (const openFold of container.querySelectorAll?.("details.mem-fold[open]") || []) {
+            hydrateMemoryFold(openFold);
+          }
+        }
+      }
+    } catch (err) {
+      if (container && reset && !memDoneState.files.length) {
+        container.innerHTML = `<div class="mem-lazy-hint muted">${esc(err.message || "加载失败")}</div>`;
+      } else {
+        toast(err.message || "加载归档失败", "attn");
+      }
+    } finally {
+      memDoneState.loading = false;
+      const btn = detailsEl?.querySelector?.('[data-act="mem-done-more"]');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = `加载更早归档（已显示 ${memDoneState.files.length} / ${memDoneState.total} 件）`;
+      }
+    }
+  }
+
+  function buildRemoteSearchMemoryView(base, remote) {
+    return {
+      ...base,
+      files: remote.files || [],
+      dreams: remote.dreams || [],
+      done_count: (remote.files || []).filter((f) => f.name.startsWith("tasks/done/")).length,
+      _searchTotalFiles: remote.totalFiles,
+      _searchTotalHits: remote.totalHits,
+      _searchTruncated: remote.truncated,
+    };
+  }
+
+  const memFirstLine = (t, dflt) => String(t || "").split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || dflt;
+
+  function renderMemoryCardHTML(f, o = {}, hit = null, terms = [], ctx = {}) {
+    const searching = !!ctx.searching;
+    const edit = !f.legacy && o.edit !== false;
+    const label = o.label || f.name;
+    const resolved = memFileCache.get(f.name);
+    const fUse = resolved ? { ...f, ...resolved, name: f.name, summary_only: false } : f;
+    const subText = o.sub ?? (fUse.preview != null && fUse.preview !== "" ? fUse.preview : memFirstLine(fUse.text || "", ""));
+    const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(fUse.text || "", terms) : "";
+    const subHtml = snipHtml ? snipHtml : esc(subText);
+    const labelHtml = searching ? highlightEscapedText(label, terms) : esc(label);
+    const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
+    const isOpen = ctx.forceOpen !== undefined ? !!ctx.forceOpen : (searching ? true : !!o.open);
+    if (isOpen) {
+      const bodyHtml = o.customBody ? o.customBody(fUse) : md(fUse.text || "");
+      return `<details class="mem-fold" open data-path="${esc(fUse.name)}" data-mem-key="file:${esc(fUse.name)}"><summary>
+          <span class="mem-name">${labelHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span><span class="mem-meta-r">${hitBadge}<span class="muted mem-size">${kb(fUse.size)}</span></span></summary>
+        <div class="mem-body msg assistant" data-view>${bodyHtml}</div>
+        ${edit ? memToolsHTML(fUse, !!o.crew) : ""}
+      </details>`;
+    }
+    return `<details class="mem-fold" data-path="${esc(fUse.name)}" data-mem-key="file:${esc(fUse.name)}"><summary>
+        <span class="mem-name">${labelHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span><span class="mem-meta-r">${hitBadge}<span class="muted mem-size">${kb(fUse.size)}</span></span></summary>
+      <div class="mem-body msg assistant" data-view data-mem-lazy="1" data-mem-crew="${o.crew ? "1" : ""}" data-mem-edit="${edit ? "1" : ""}" data-mem-kind="file"></div>
+    </details>`;
+  }
+
   function renderMemoryHTML(r, query = "") {
     const files = r.files || [];
     const dreams = r.dreams || [];
@@ -10803,52 +11406,33 @@
     const by = (f) => files.filter(f);
     const dream = r.dreaming ? `<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。`
       : `上次做梦：${r.last_dream ? dayTime(r.last_dream) : "还没有"}　·　下次：${r.next_dream ? dayTime(r.next_dream) + "（当天有新对话才会做）" : "已关闭"}`;
-    const firstLine = (t, dflt) => t.split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || dflt;
-    // A task names the workers on it: show them live, and open their session.
-    const crew = (f) => {
-      const latest = new Map(); // a name can be reused: the newest one
-      for (const w of sup.workers) if (!latest.has(w.name) || new Date(w.created_at) > new Date(latest.get(w.name).created_at)) latest.set(w.name, w);
-      const ws = [...latest.values()].filter((w) => new RegExp(`(^|[^\\w-])${w.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(f.text));
-      if (!ws.length) return "";
-      return `<span class="mem-crew">${ws.map((w) => {
-        const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
-        const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
-        const st = workerStatus(w);
-        const disp = workerDisplayName(w);
-        const tip = [w.name, KIND_LABEL[w.kind] || w.kind, STATUS_LABEL[st] || st].filter(Boolean).join(" · ");
-        return `<a ${href ? `href="${href}"` : ""} title="${esc(tip)}"><span class="dot ${esc(st)}"></span>${esc(disp)}</a>`;
-      }).join("")}</span>`;
-    };
     let matchedFiles = 0;
     let totalHits = 0;
+    let searchOpenRemaining = MEM_SEARCH_OPEN_CAP;
     const card = (f, o = {}, hit = null) => {
-      const edit = !f.legacy && o.edit !== false;
-      const label = o.label || f.name;
-      const subText = o.sub ?? firstLine(f.text, "");
-      const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(f.text, terms) : "";
-      const subHtml = snipHtml ? snipHtml : esc(subText);
-      const labelHtml = searching ? highlightEscapedText(label, terms) : esc(label);
-      const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
-      const bodyHtml = o.customBody ? o.customBody(f) : md(f.text);
-      const isOpen = searching ? true : !!o.open;
-      return `<details class="mem-fold" ${isOpen ? "open" : ""} data-path="${esc(f.name)}" data-mem-key="file:${esc(f.name)}"><summary>
-          <span class="mem-name">${labelHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span><span class="mem-meta-r">${hitBadge}<span class="muted mem-size">${kb(f.size)}</span></span></summary>
-        <div class="mem-body msg assistant" data-view>${bodyHtml}</div>
-        ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button type="button" class="btn small" data-act="mem-edit">编辑</button></div>
-        <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
-          <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div></form>` : ""}
-      </details>`;
+      let forceOpen;
+      if (searching) {
+        if (searchOpenRemaining > 0) {
+          searchOpenRemaining--;
+          forceOpen = true;
+        } else {
+          forceOpen = false;
+        }
+      }
+      return renderMemoryCardHTML(f, o, hit, terms, { searching, forceOpen });
     };
     const filterFiles = (list, labelOf) => {
       if (!searching) return list.map((f) => ({ f, hit: null }));
       const out = [];
       for (const f of list) {
         const lbl = labelOf ? labelOf(f) : f.name;
-        const hit = matchMemoryItem(lbl, f.name, f.text, terms);
+        const cached = memFileCache.get(f.name);
+        const text = cached ? cached.text : (f.text || f.preview || "");
+        const hit = matchMemoryItem(lbl, f.name, text, terms);
         if (hit.matched) {
           matchedFiles++;
           totalHits += hit.hits;
-          out.push({ f, hit });
+          out.push({ f: cached ? { ...f, ...cached, name: f.name } : f, hit });
         }
       }
       return out;
@@ -10868,7 +11452,12 @@
     const ins = by((f) => f.name === "instructions.md");
     const tasks = by((f) => /^tasks\/[^/]+\.md$/.test(f.name));
     const notes = by((f) => f.name.startsWith("notes/")).sort((a, b) => (a.name === "notes/index.md" ? -1 : b.name === "notes/index.md" ? 1 : a.name.localeCompare(b.name)));
-    const done = by((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
+    let done = by((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
+    const usingLazyDone = !searching && !done.length && r === memData && memDoneState.loaded && memDoneState.files.length > 0;
+    if (usingLazyDone) {
+      done = memDoneState.files;
+    }
+    const doneTotal = Math.max(done.length, Number(r.done_count) || 0, usingLazyDone ? memDoneState.total : 0);
     const msgs = by((f) => f.name === "messages.md");
     const legacy = by((f) => f.legacy);
     const msgBytes = r.messages ?? msgs.reduce((s, f) => s + (f.size || 0), 0);
@@ -10906,30 +11495,40 @@
     const dreamItems = searching
       ? dreams.map((d) => {
           const title = formatDreamStamp(d.name);
-          const hit = matchMemoryItem(title, "dreams/" + d.name, d.text, terms);
+          const cached = memFileCache.get("dreams/" + d.name);
+          const dUse = cached ? { ...d, ...cached, name: d.name } : d;
+          const hit = matchMemoryItem(title, "dreams/" + d.name, dUse.text || dUse.preview || "", terms);
           if (!hit.matched) return null;
           matchedFiles++;
           totalHits += hit.hits;
-          return { d, title, hit };
+          return { d: dUse, title, hit };
         }).filter(Boolean)
       : dreams.map((d) => ({ d, title: formatDreamStamp(d.name), hit: null }));
     const dreamSection = dreamItems.length ? `<h4 class="mem-h">做梦日志<span class="muted">${searching ? `命中 ${dreamItems.length} 篇` : `${dreams.length} 篇 · 夜间回顾与跨会话整理`}</span></h4>
       <div class="card">${dreamItems.map(({ d, title, hit }) => {
-        const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(d.text, terms) : "";
-        const subHtml = snipHtml || esc(firstLine(d.text, d.name));
+        const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(d.text || "", terms) : "";
+        const subHtml = snipHtml || esc(d.preview != null && d.preview !== "" ? d.preview : memFirstLine(d.text || "", d.name));
         const nameHtml = searching ? highlightEscapedText(title, terms) : esc(title);
         const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
-        return `<details class="mem-fold" ${searching ? "open" : ""} data-mem-key="dream:${esc(d.name)}"><summary><span class="muted mem-name">${nameHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span>${hitBadge ? `<span class="mem-meta-r">${hitBadge}</span>` : ""}</summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`;
+        const openDream = searching && searchOpenRemaining > 0;
+        if (openDream) {
+          searchOpenRemaining--;
+          return `<details class="mem-fold" open data-mem-key="dream:${esc(d.name)}"><summary><span class="muted mem-name">${nameHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span>${hitBadge ? `<span class="mem-meta-r">${hitBadge}</span>` : ""}</summary><div class="mem-body msg assistant" data-view>${md(d.text || "")}</div></details>`;
+        }
+        return `<details class="mem-fold" data-mem-key="dream:${esc(d.name)}"><summary><span class="muted mem-name">${nameHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span>${hitBadge ? `<span class="mem-meta-r">${hitBadge}</span>` : ""}</summary><div class="mem-body msg assistant" data-view data-mem-lazy="1" data-mem-kind="dream"></div></details>`;
       }).join("")}</div>` : "";
 
     // Completed tasks (已结束) — progressive time buckets: near 7d by day, earlier this month by week, older by month
     const doneItems = filterFiles(done, (f) => f.name.replace(/^tasks\/done\//, ""));
-    const doneBuckets = bucketDoneMemoryItems(doneItems);
-    const doneSection = doneItems.length ? `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">已结束<span class="muted">${searching ? `命中 ${doneItems.length} / ${done.length} 件` : `${done.length} 件 · 做完或放弃的事，不再先读`}</span></summary>
-        <div class="mem-done-buckets">${doneBuckets.map((b, bi) => {
-          const openBucket = searching || (bi === 0 && b.kind === "day");
-          return `<details class="mem-done-bucket" ${openBucket ? "open" : ""} data-mem-key="${esc(b.key)}" data-done-bucket="${esc(b.kind)}"><summary><span class="mem-done-bname">${esc(b.label)}</span><span class="mem-done-bcnt">${b.items.length} 件</span></summary><div class="mem-done-blist">${b.items.map(({ f, hit }) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>`;
-        }).join("")}</div></details>` : "";
+    let doneSection = "";
+    if (!searching && doneTotal > 0 && doneItems.length === 0) {
+      doneSection = `<details class="mem-done" data-path="tasks/done/" data-mem-key="group:done" data-done-lazy="1"><summary class="mem-h">已结束<span class="muted">${doneTotal} 件 · 做完或放弃的事，不再先读</span></summary>
+        <div class="mem-done-buckets"><div class="mem-lazy-hint muted">展开后按时间分组加载归档…</div></div></details>`;
+    } else if (doneItems.length) {
+      const hasMoreDone = usingLazyDone ? memDoneState.hasMore : (doneTotal > doneItems.length);
+      doneSection = `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">已结束<span class="muted">${searching ? `命中 ${doneItems.length} / ${doneTotal} 件` : `${doneTotal} 件 · 做完或放弃的事，不再先读`}</span></summary>
+        <div class="mem-done-buckets">${renderDoneBucketsInnerHTML(doneItems, doneTotal, hasMoreDone, searching, terms, card)}</div></details>`;
+    }
 
     const bodySections = [
       legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : "",
@@ -10959,8 +11558,9 @@
 
     return {
       html: statusCard + (emptySearch || bodySections),
-      matchedFiles,
-      totalHits,
+      matchedFiles: typeof r._searchTotalFiles === "number" ? r._searchTotalFiles : matchedFiles,
+      totalHits: typeof r._searchTotalHits === "number" ? r._searchTotalHits : totalHits,
+      truncated: !!r._searchTruncated,
       searching,
     };
   }
@@ -11030,7 +11630,12 @@
     const meta = wrap?.querySelector?.("#mem-search-meta");
     if (meta) {
       if (res.searching) {
-        meta.textContent = res.matchedFiles ? `${res.matchedFiles} 项 · ${res.totalHits} 处` : "0 项";
+        if (opts.remotePending) {
+          meta.textContent = res.matchedFiles ? `${res.matchedFiles} 项 · 全量检索中…` : "全量检索中…";
+        } else {
+          const capNote = res.truncated ? "（显示前 60 项）" : "";
+          meta.textContent = res.matchedFiles ? `${res.matchedFiles} 项 · ${res.totalHits} 处${capNote}` : "0 项";
+        }
         meta.hidden = false;
       } else {
         meta.textContent = "";
@@ -11045,7 +11650,21 @@
     } else if (prevOpen && !res.searching) {
       restoreOpenMemoryKeys(content, prevOpen);
     }
+    if (!res.searching) {
+      for (const openFold of content.querySelectorAll?.("details.mem-fold[open]") || []) {
+        hydrateMemoryFold(openFold);
+      }
+    }
     applyMemoryHighlights(content, memQueryTerms(memQuery));
+  }
+  function needsRemoteMemorySearch(data) {
+    if (!data) return false;
+    if (data.summary_mode) return true;
+    const files = data.files || [];
+    if (files.some((f) => f.summary_only)) return true;
+    if ((data.dreams || []).some((d) => d.summary_only)) return true;
+    const loadedDone = files.filter((f) => f.name.startsWith("tasks/done/")).length;
+    return (Number(data.done_count) || 0) > loadedDone;
   }
   function setMemoryQuery(q, { syncInput = false, focus = false } = {}) {
     const body = $("#auto-body");
@@ -11053,19 +11672,61 @@
     const wasSearching = !!memQuery.trim();
     const next = String(q ?? "");
     const nowSearching = !!next.trim();
+    cancelMemorySearch();
     if (!wasSearching && nowSearching && content) {
       memPreSearchOpen = snapshotOpenMemoryKeys(content);
     }
     memQuery = next;
+    if (!nowSearching) memSearchRemote = null;
     const inp = body?.querySelector?.("#mem-search-input");
     if (inp && syncInput && inp.value !== memQuery) inp.value = memQuery;
     if (inp && focus) inp.focus?.();
-    if (memData && body) {
-      renderMemoryView(body, memData, {
-        preserveOpen: !wasSearching && !nowSearching,
-        restorePreSearch: wasSearching && !nowSearching,
-      });
+    if (!memData || !body) return;
+
+    if (nowSearching && needsRemoteMemorySearch(memData)) {
+      const trimmed = next.trim();
+      renderMemoryView(body, memData, { remotePending: true });
+      memSearchTimer = setTimeout(async () => {
+        memSearchTimer = 0;
+        if (memQuery.trim() !== trimmed || view !== "auto" || autoTab !== "memory") return;
+        const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+        memSearchAbort = ac;
+        try {
+          const res = await api(`/api/super/memory/search?q=${encodeURIComponent(trimmed)}&limit=60`, { signal: ac?.signal });
+          if (memQuery.trim() !== trimmed || view !== "auto" || autoTab !== "memory") return;
+          memSearchRemote = {
+            query: trimmed,
+            files: res.files || [],
+            dreams: res.dreams || [],
+            totalFiles: Number(res.total_files) || 0,
+            totalHits: Number(res.total_hits) || 0,
+            truncated: !!res.truncated,
+          };
+          for (const f of memSearchRemote.files) {
+            if (typeof f.text === "string" && !f.summary_only) {
+              memFileCache.set(f.name, { text: f.text, size: f.size, mod: f.mod, preview: f.preview || "" });
+            }
+          }
+          for (const d of memSearchRemote.dreams) {
+            if (typeof d.text === "string" && !d.summary_only) {
+              memFileCache.set("dreams/" + d.name, { text: d.text, size: d.size, mod: d.mod, preview: d.preview || "" });
+            }
+          }
+          renderMemoryView(body, buildRemoteSearchMemoryView(memData, memSearchRemote));
+        } catch (err) {
+          if (err?.aborted) return;
+          if (memQuery.trim() === trimmed) renderMemoryView(body, memData);
+        } finally {
+          if (memSearchAbort === ac) memSearchAbort = null;
+        }
+      }, 120);
+      return;
     }
+
+    renderMemoryView(body, memData, {
+      preserveOpen: !wasSearching && !nowSearching,
+      restorePreSearch: wasSearching && !nowSearching,
+    });
   }
 
   function inboxHTML(ts, ths = []) {
@@ -11102,8 +11763,10 @@
         ${selTh ? subsChips(selTh) : ""}
       </div>${allSubsFold}`;
     }
+    const visible = shown.slice(0, inboxRenderLimit);
+    const moreCount = Math.max(0, shown.length - visible.length);
     return `${threadBar}
-      <div class="card"><ul class="rows">${shown.length ? shown.map((t) => {
+      <div class="card"><ul class="rows">${visible.length ? visible.map((t) => {
         const id = String(t.id ?? "");
         const expanded = inboxExpanded.has(id);
         const textId = inboxTextId(id);
@@ -11113,7 +11776,7 @@
         <div class="text inbox-text" id="${esc(textId)}">${esc(t.text)}</div>
         <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${expanded ? "收起" : "展开"} #${esc(id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${expanded ? "收起" : "展开"}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
         <span class="right">${when(t.at)}</span></li>`;
-      }).join("") : `<li class="empty-row">${inboxThread ? "这条线程里还没有事件" : "收件箱是空的"}</li>`}</ul></div>`;
+      }).join("") : `<li class="empty-row">${inboxThread ? "这条线程里还没有事件" : "收件箱是空的"}</li>`}</ul></div>${moreCount > 0 ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="inbox-more">加载更早 ${Math.min(40, moreCount)} 条（已显示 ${visible.length} / ${shown.length} 条）</button></div>` : ""}`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -11282,7 +11945,27 @@
     });
   }
 
-  function timersHTML(ts = []) {
+  const TIMERS_ENDED_PAGE = 40;
+  let timersEndedLoading = false;
+  function renderTimerRowHTML(t) {
+    const meta = [
+      t.enabled ? `下次 ${when(t.next_run)}` : t.last_run ? `上次 ${when(t.last_run)}` : "已结束",
+      t.owner ? (t.owner === "you" ? "你设的" : `${t.owner} 设的`) : "",
+    ].filter(Boolean);
+    return `<li class="tm-row${t.enabled ? "" : " is-ended"}">
+      <div class="tm-row-head">
+        <span class="sdot ${t.enabled ? "connected" : "disabled"}" aria-hidden="true"></span>
+        <b class="tm-spec" title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b>
+        <span class="tm-target-tag">→ ${esc(t.target || "Collie")}</span>
+        <button type="button" class="icon-btn tm-del" data-del-timer="${esc(t.id)}" title="删除定时" aria-label="删除定时">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>
+        </button>
+      </div>
+      <div class="tm-row-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join('<span class="tm-sep" aria-hidden="true">·</span>')}</div>
+      <div class="tm-row-text">${esc(t.text)}</div>
+    </li>`;
+  }
+  function timersHTML(ts = [], opts = {}) {
     const idN = (id) => +(/\d+$/.exec(id || "")?.[0] || 0);
     const ms = (s) => { const n = s ? Date.parse(s) : NaN; return n > 0 ? n : NaN; };
     const endMs = (t) => { const l = ms(t.last_run); return isNaN(l) ? ms(t.next_run) : l; };
@@ -11291,29 +11974,15 @@
       if (isNaN(ta) !== isNaN(tb)) return isNaN(ta) ? 1 : -1;
       return (ta - tb) || (idN(a.id) - idN(b.id));
     });
-    const ended = ts.filter((t) => !t.enabled).sort((a, b) => {
+    const inlineEnded = ts.filter((t) => !t.enabled).sort((a, b) => {
       const ta = endMs(a), tb = endMs(b);
       if (isNaN(ta) !== isNaN(tb)) return isNaN(ta) ? 1 : -1;
       return (tb - ta) || (idN(b.id) - idN(a.id));
     });
-    const timerRow = (t) => {
-      const meta = [
-        t.enabled ? `下次 ${when(t.next_run)}` : t.last_run ? `上次 ${when(t.last_run)}` : "已结束",
-        t.owner ? (t.owner === "you" ? "你设的" : `${t.owner} 设的`) : "",
-      ].filter(Boolean);
-      return `<li class="tm-row${t.enabled ? "" : " is-ended"}">
-        <div class="tm-row-head">
-          <span class="sdot ${t.enabled ? "connected" : "disabled"}" aria-hidden="true"></span>
-          <b class="tm-spec" title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b>
-          <span class="tm-target-tag">→ ${esc(t.target || "Collie")}</span>
-          <button type="button" class="icon-btn tm-del" data-del-timer="${esc(t.id)}" title="删除定时" aria-label="删除定时">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>
-          </button>
-        </div>
-        <div class="tm-row-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join('<span class="tm-sep" aria-hidden="true">·</span>')}</div>
-        <div class="tm-row-text">${esc(t.text)}</div>
-      </li>`;
-    };
+    const endedList = opts.endedLoaded && Array.isArray(opts.endedList) ? opts.endedList : inlineEnded;
+    const endedTotal = typeof opts.endedCount === "number" ? Math.max(opts.endedCount, endedList.length) : endedList.length;
+    const endedLazy = endedTotal > 0 && endedList.length === 0;
+    const endedHasMore = opts.endedHasMore || endedTotal > endedList.length;
     return `<div class="tm-bar">
         <span class="tm-bar-stat">${active.length ? `启用中 · ${active.length}` : "定时任务"}</span>
         <button type="button" class="btn primary small tm-new-btn" id="tm-open-btn" data-act="timer-open">
@@ -11321,9 +11990,58 @@
           <span>新建定时</span>
         </button>
       </div>
-      <div class="card"><ul class="rows">${active.length ? active.map(timerRow).join("") : `<li class="empty-row">${ended.length ? "没有启用中的定时" : "还没有定时，点右上角新建"}</li>`}</ul></div>
-      ${ended.length ? `<details class="mem-done" data-ended-timers><summary class="mem-h">已结束<span class="muted">${ended.length} 个</span></summary>
-        <div class="card"><ul class="rows">${ended.map(timerRow).join("")}</ul></div></details>` : ""}`;
+      <div class="card"><ul class="rows">${active.length ? active.map(renderTimerRowHTML).join("") : `<li class="empty-row">${endedTotal ? "没有启用中的定时" : "还没有定时，点右上角新建"}</li>`}</ul></div>
+      ${endedTotal ? `<details class="mem-done" data-ended-timers${endedLazy ? ' data-ended-lazy="1"' : ""}><summary class="mem-h">已结束<span class="muted">${endedTotal} 个</span></summary>
+        <div class="card"><ul class="rows tm-ended-list">${endedLazy ? `<li class="empty-row mem-lazy-hint">展开后加载已结束定时…</li>` : endedList.map(renderTimerRowHTML).join("")}</ul></div>${!endedLazy && endedHasMore ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="timers-ended-more">加载更多（已显示 ${endedList.length} / ${endedTotal} 个）</button></div>` : ""}</details>` : ""}`;
+  }
+  async function loadMoreEndedTimers(detailsEl, { reset = false } = {}) {
+    if (timersEndedLoading || !autoCache.timers) return;
+    timersEndedLoading = true;
+    const ul = detailsEl?.querySelector?.(".tm-ended-list");
+    const moreBtn = detailsEl?.querySelector?.('[data-act="timers-ended-more"]');
+    if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = "加载中…"; }
+    else if (reset && ul) { ul.innerHTML = `<li class="empty-row mem-lazy-hint">加载中…</li>`; }
+    const c = autoCache.timers;
+    const offset = reset ? 0 : (c.endedList || []).length;
+    try {
+      const res = await api(`/api/super/timers?ended_only=1&ended_offset=${offset}&ended_limit=${TIMERS_ENDED_PAGE}`);
+      const batch = Array.isArray(res?.ended) ? res.ended : [];
+      if (reset) {
+        c.endedList = batch;
+      } else {
+        const seen = new Set((c.endedList || []).map((x) => x.id));
+        c.endedList = [...(c.endedList || [])];
+        for (const it of batch) {
+          if (!seen.has(it.id)) { seen.add(it.id); c.endedList.push(it); }
+        }
+      }
+      c.endedCount = Math.max(Number(res?.ended_count) || 0, c.endedList.length);
+      c.endedHasMore = !!res?.ended_has_more;
+      c.endedLoaded = true;
+      if (detailsEl?.isConnected && ul && view === "auto" && autoTab === "timers") {
+        detailsEl.removeAttribute("data-ended-lazy");
+        ul.innerHTML = c.endedList.map(renderTimerRowHTML).join("") || `<li class="empty-row">空</li>`;
+        const oldMore = detailsEl.querySelector(".mem-more-row");
+        if (oldMore) oldMore.remove();
+        if (c.endedHasMore && c.endedCount > c.endedList.length) {
+          detailsEl.insertAdjacentHTML("beforeend", `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="timers-ended-more">加载更多（已显示 ${c.endedList.length} / ${c.endedCount} 个）</button></div>`);
+        }
+        $("#auto-body")._timersSig = computeTimersSig(c);
+      }
+    } catch (err) {
+      if (ul && reset && !(c.endedList || []).length) {
+        ul.innerHTML = `<li class="empty-row mem-lazy-hint">${esc(err.message || "加载失败")}</li>`;
+      } else {
+        toast(err.message || "加载定时失败", "attn");
+      }
+    } finally {
+      timersEndedLoading = false;
+      const btn = detailsEl?.querySelector?.('[data-act="timers-ended-more"]');
+      if (btn && autoCache.timers) {
+        btn.disabled = false;
+        btn.textContent = `加载更多（已显示 ${(autoCache.timers.endedList || []).length} / ${autoCache.timers.endedCount || 0} 个）`;
+      }
+    }
   }
 
   // ───────────────────────────── settings: grouped by what they are about
@@ -11334,14 +12052,22 @@
     const machine = who === "worker" && form.worker_machine ? form.worker_machine.value : "";
     const seq = (modelSel._seq = (modelSel._seq || 0) + 1);
     const want = modelSel.dataset.value ?? modelSel.value;
-    modelSel.dataset.loading = "1";
-    modelSel.dataset.pendingValue = want || "";
-    modelSel.innerHTML = `<option value="">读取中…</option>`;
-    syncPick(modelSel);
-    const info = await modelsFor(kindSel.value, machine);
-    if (seq !== modelSel._seq) return;
-    delete modelSel.dataset.loading;
-    delete modelSel.dataset.pendingValue;
+    const key = kindSel.value + "@" + (machine || "");
+    const cachedInfo = modelInfoResolved[key];
+    let info = cachedInfo;
+    if (!info) {
+      modelSel.dataset.loading = "1";
+      modelSel.dataset.pendingValue = want || "";
+      // Keep the current model label visible while fetching to prevent a "读取中…" flash.
+      if (!modelSel.options?.length) {
+        modelSel.innerHTML = `<option value="${esc(want || "")}" selected>${esc(want || "默认")}</option>`;
+        syncPick(modelSel);
+      }
+      info = await modelsFor(kindSel.value, machine);
+      if (seq !== modelSel._seq) return;
+      delete modelSel.dataset.loading;
+      delete modelSel.dataset.pendingValue;
+    }
     const list = [...(info.models || [])];
     if (want && !list.some((m) => m.id === want)) list.unshift({ id: want });
     const sub = (m) => [m.label && m.label !== m.id ? m.id : "", m.note && m.note !== m.id && !(m.label && m.note.startsWith(m.label)) ? m.note : ""].filter(Boolean).join(" · ");
@@ -11640,12 +12366,35 @@
     </form>`;
   }
 
+  $("#auto-body").addEventListener("toggle", (e) => {
+    const d = e.target;
+    if (!d || d.tagName !== "DETAILS" || !d.open) return;
+    if (d.classList.contains("mem-done") && d.hasAttribute("data-done-lazy")) {
+      loadMoreDoneMemory(d, { reset: true });
+      return;
+    }
+    if (d.classList.contains("mem-fold")) {
+      hydrateMemoryFold(d);
+      return;
+    }
+    if (d.hasAttribute("data-ended-timers") && d.hasAttribute("data-ended-lazy")) {
+      loadMoreEndedTimers(d, { reset: true });
+      return;
+    }
+    if (d.id === "int-adv-fold") {
+      loadLarkStatus("#int-adv-lark-who", "integrations", false);
+    }
+  }, true);
+
   $("#auto-body").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target;
     try {
       if (f.classList.contains("mem-edit")) {
-        await api("/api/super/memory", { body: { path: f.closest("[data-path]").dataset.path, text: f.text.value } });
+        const path = f.closest("[data-path]").dataset.path;
+        const text = f.text.value;
+        await api("/api/super/memory", { body: { path, text } });
+        memFileCache.set(path, { text, size: new Blob([text]).size, mod: new Date().toISOString(), preview: memFirstLine(text, "") });
         memEditing = false;
         $("#auto-body")._memSig = "";
         toast("已保存");
@@ -11659,8 +12408,19 @@
   $("#auto-body").addEventListener("change", async (e) => {
     if (e.target.id === "inbox-thread-filter") {
       inboxThread = e.target.value;
+      inboxRenderLimit = 40;
       $("#auto-body")._inboxRendered = false;
-      loadAuto();
+      if (autoCache.inbox) {
+        const body = $("#auto-body");
+        body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
+        body._inboxRendered = true;
+        body._renderedTab = "inbox";
+        body._tabRendered = true;
+        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
+        syncInboxOverflow(body);
+      } else {
+        loadAuto();
+      }
       return;
     }
     if (e.target.id === "inbox-sub-add") {
@@ -11779,6 +12539,31 @@
       } catch (err) { toast(err.message, "attn"); }
       return;
     }
+    if (t.dataset.act === "mem-done-more") {
+      const box = t.closest("details.mem-done");
+      if (box) loadMoreDoneMemory(box, { reset: false });
+      return;
+    }
+    if (t.dataset.act === "timers-ended-more") {
+      const box = t.closest("details[data-ended-timers]");
+      if (box) loadMoreEndedTimers(box, { reset: false });
+      return;
+    }
+    if (t.dataset.act === "inbox-more") {
+      inboxRenderLimit += 40;
+      const body = $("#auto-body");
+      if (autoCache.inbox && body) {
+        const prevTop = body.scrollTop;
+        body._inboxSig = computeInboxSig(autoCache.inbox.triggers, autoCache.inbox.threads);
+        body.innerHTML = inboxHTML(autoCache.inbox.triggers, autoCache.inbox.threads);
+        syncInboxOverflow(body);
+        markProgrammaticScroll();
+        body.scrollTop = prevTop;
+      } else {
+        loadAuto();
+      }
+      return;
+    }
     if (t.dataset.act === "mem-search-clear") {
       setMemoryQuery("", { syncInput: true, focus: true });
       return;
@@ -11791,13 +12576,18 @@
     if (t.dataset.act === "mem-ins-edit") {
       const box = t.closest("[data-path]");
       if (!box) return;
+      const path = box.dataset.path || "instructions.md";
+      const file = resolveCachedMemFile(path, "file");
       clearMemInsUndo();
       box.open = true;
       memEditing = true;
-      box.querySelector(".mem-edit").hidden = false;
-      box.querySelector("[data-view]").hidden = true;
-      box.querySelector(".mem-tools").hidden = true;
-      const ta = box.querySelector("textarea");
+      const form = ensureMemoryEditForm(box, file?.text || "");
+      if (form) form.hidden = false;
+      const viewEl = box.querySelector("[data-view]");
+      if (viewEl) viewEl.hidden = true;
+      const toolsEl = box.querySelector(".mem-tools");
+      if (toolsEl) toolsEl.hidden = true;
+      const ta = form?.querySelector("textarea") || box.querySelector("textarea");
       if (ta) {
         const sLine = Number(t.dataset.line);
         const eLine = Number(t.dataset.endLine ?? t.dataset.line);
@@ -11865,13 +12655,32 @@
     }
     if (t.dataset.act === "mem-edit" || t.dataset.act === "mem-cancel") {
       const box = t.closest("[data-path]");
+      if (!box) return;
       memEditing = t.dataset.act === "mem-edit";
-      if (memEditing) clearMemInsUndo();
-      box.querySelector(".mem-edit").hidden = !memEditing;
-      box.querySelector("[data-view]").hidden = memEditing;
-      box.querySelector(".mem-tools").hidden = memEditing;
-      if (memEditing) box.querySelector("textarea").focus();
-      else { $("#auto-body")._memSig = ""; loadAuto(); }
+      if (memEditing) {
+        clearMemInsUndo();
+        const path = box.dataset.path;
+        let file = resolveCachedMemFile(path, "file");
+        if (!file || file.summary_only) {
+          try { file = await ensureMemFileText(path, "file"); } catch (err) { memEditing = false; toast(err.message, "attn"); return; }
+        }
+        const form = ensureMemoryEditForm(box, file?.text || "");
+        if (form) form.hidden = false;
+        const viewEl = box.querySelector("[data-view]");
+        if (viewEl) viewEl.hidden = true;
+        const toolsEl = box.querySelector(".mem-tools");
+        if (toolsEl) toolsEl.hidden = true;
+        form?.querySelector("textarea")?.focus();
+      } else {
+        const form = box.querySelector(".mem-edit");
+        if (form) form.hidden = true;
+        const viewEl = box.querySelector("[data-view]");
+        if (viewEl) viewEl.hidden = false;
+        const toolsEl = box.querySelector(".mem-tools");
+        if (toolsEl) toolsEl.hidden = false;
+        $("#auto-body")._memSig = "";
+        loadAuto();
+      }
       return;
     }
     if (t.dataset.act === "timer-open") {
@@ -21299,6 +22108,7 @@
     view = undefined;
     route();
     booted = true;
+    scheduleAutoWarmup();
     loadExternal();
     clearInterval(extTimer);
     loadHistory();

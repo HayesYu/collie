@@ -4,6 +4,32 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## Unreleased
+
+### Highlights
+
+- **Instant Memory & Automation Secondary Pages + Zero-Flash Integrations Switching (`internal/collie/{memapi.go,superapi.go,super.go,memory_io.go,peer_api.go}`, `web/{app.js,app.css}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - **Memory Page (`记忆`)**: Added lightweight summary mode (`GET /api/super/memory?summary=1&include_done=0`) with mtime/size-keyed 1-line preview caching, on-demand single-file loading (`GET /api/super/memory/file`), paginated archived tasks (`GET /api/super/memory/done`), and server-side full-text multi-term search (`GET /api/super/memory/search`). Deferred Markdown rendering, edit `<textarea>` creation, and O(|text|) worker-crew matching until cards are actually expanded or edited, cutting initial DOM nodes by >95% at 350–1,000+ archived files.
+  - **Timers (`定时`) & Inbox (`收件箱`)**: Added optional server-side ended-timer pagination (`GET /api/super/timers?ended_limit=0` / `ended_only=1`), lazy-loaded ended timers, 40-row progressive Inbox pagination, and 2-phase read-then-write `syncInboxOverflow()` batching to eliminate O(N) layout thrashing.
+  - **Zero-Flash Integrations (`接入`) & Instant Tab Switching**: Added per-tab in-memory stale-while-revalidate caching (`autoCache`), atomic `.is-integrations` width-class toggling coupled strictly to DOM commit (eliminating the 800px ↔ 940px cross-tab layout jolt), idle integrations pre-warming, HTTP `ETag` / `304 Not Modified` conditional polling across all automation endpoints, lazy `/api/super/lark` checks (removing the 6-second `?fresh` subprocess loop), and flicker-free Settings model selects.
+
+### Client / API Changes
+
+- **`GET /api/super/memory`** (backward compatible):
+  - Default response (no query params) keeps full file bodies unchanged and adds optional `"done_count": number`, `"version": string`, and HTTP `ETag` / `If-None-Match` (`304 Not Modified`).
+  - New optional query params: `summary=1` (returns full `text` only for up-front files `instructions.md`, `notes/index.md`, open `tasks/*.md`, `messages.md`, legacy files, and latest `dreams[0]`; deferred notes/dreams return `"summary_only": true` + `"preview": string` with empty `"text"`) and `include_done=0` (omits `tasks/done/*.md` from `files` while preserving accurate `"done_count"`).
+- **New HTTP endpoints (standard `s.auth`)**:
+  - `GET /api/super/memory/file?path=<relpath>`: reads a single `.md` file under `memory/`, `dreams/`, or legacy `memory.md` / `memory-archive.md`; returns `200 { file }` (`400` on invalid/traversal path, `404` if missing).
+  - `GET /api/super/memory/done?offset=0&limit=60`: returns newest-first paginated `tasks/done/*.md` metadata (`summary_only: true`, `preview`) with `{ files, total, offset, limit, has_more }`.
+  - `GET /api/super/memory/search?q=<query>&limit=60`: full-text multi-term AND search across `memory/**/*.md`, legacy files, and `dreams/*.md`; returns `{ query, files, dreams, total_files, total_hits, truncated }`.
+- **`GET /api/super/timers`** (backward compatible):
+  - Default response (no query params) unchanged; adds optional `ended_limit`, `ended_offset`, and `ended_only=1` query params returning `active_count`, `ended_count`, `ended_has_more` (and `ended` slice when `ended_only=1`).
+- **HTTP `ETag` / `304 Not Modified`**:
+  - Added `ETag` + `If-None-Match` (`304 Not Modified`) support to `GET /api/super/memory`, `GET /api/super/timers`, `GET /api/super/triggers`, `GET /api/super/integrations`, `GET /api/super/peers`, and `GET /api/super/settings`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.9 (2026-11-28)
 
 ### Highlights

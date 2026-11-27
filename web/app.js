@@ -2266,7 +2266,7 @@
     if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1000px)").matches)) closeFilePane();
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
-    if (view === "auto" && next !== "auto") clearInterval(autoTimer);
+    if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); }
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
     if (prevView === "collie" && next !== "collie") {
       if (activeThreadRoot) {
@@ -5625,6 +5625,12 @@
     autoTab = normalizeAutoTab(autoTab);
     store.set("autoTab", autoTab);
     memEditing = false;
+    if (autoTab !== "memory") {
+      clearMemoryHighlights();
+      memQuery = "";
+      memPreSearchOpen = null;
+      clearMemInsUndo();
+    }
     const body = $("#auto-body");
     body._memSig = "";
     body._inboxSig = "";
@@ -5818,11 +5824,11 @@
         if (view !== "auto" || autoTab !== "memory" || memEditing) return;
         // Workers' states count too: the task cards show them.
         const sig = JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + workerStatus(w)).join();
-        if (sig !== body._memSig) {
-          const open = new Set([...body.querySelectorAll("details[open]")].map((d) => d.dataset.path || d.querySelector("summary")?.textContent));
+        memData = r;
+        if (sig !== body._memSig || !body.querySelector("#mem-content")) {
           const first = !body._memSig;
-          body._memSig = sig; body.innerHTML = memoryHTML(r);
-          if (!first) body.querySelectorAll("details").forEach((d) => d.open = open.has(d.dataset.path || d.querySelector("summary")?.textContent));
+          body._memSig = sig;
+          renderMemoryView(body, r, { preserveOpen: !first && !memQuery.trim() });
           applyAfter();
         } else if (restore) {
           restoreSimpleScroll(body, restore);
@@ -7486,6 +7492,12 @@
 
   // ───────────────────────────── memory: what Collie keeps between sessions
   let memEditing = false;
+  let memData = null;
+  let memQuery = "";
+  let memPreSearchOpen = null;
+  let memDreamExpanded = false;
+  let memInsUndo = null;
+  const MEM_SEARCH_HL = "mem-search";
   const kb = (n) => (n / 1024).toFixed(1) + " KB";
   const kbNum = (n) => (n / 1024).toFixed(1);
   const kbCap = (n) => (n % 1024 === 0 ? String(n / 1024) : (n / 1024).toFixed(1)) + " KB";
@@ -7494,8 +7506,405 @@
     const hm = d.toTimeString().slice(0, 5);
     return d.toDateString() === today ? "今天 " + hm : d.toDateString() === tmr ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   };
-  function memoryHTML(r) {
+
+  function clearMemoryHighlights() {
+    try {
+      if (typeof CSS !== "undefined" && CSS.highlights) CSS.highlights.delete(MEM_SEARCH_HL);
+    } catch {}
+  }
+  function clearMemInsUndo() {
+    if (memInsUndo?.timer) clearTimeout(memInsUndo.timer);
+    memInsUndo = null;
+  }
+  function memQueryTerms(q) {
+    return String(q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+  function countTermHits(haystackLower, terms) {
+    let total = 0;
+    for (const term of terms) {
+      let pos = haystackLower.indexOf(term);
+      while (pos !== -1) {
+        total++;
+        pos = haystackLower.indexOf(term, pos + term.length);
+      }
+    }
+    return total;
+  }
+  function matchMemoryItem(title, path, text, terms) {
+    if (!terms.length) return { matched: true, hits: 0, titleHit: false, bodyHit: false };
+    const titleLower = String(title || "").toLowerCase();
+    const pathLower = String(path || "").toLowerCase();
+    const bodyLower = String(text || "").toLowerCase();
+    const combined = titleLower + "\n" + pathLower + "\n" + bodyLower;
+    for (const term of terms) {
+      if (!combined.includes(term)) return { matched: false, hits: 0, titleHit: false, bodyHit: false };
+    }
+    const titleHits = countTermHits(titleLower, terms) + (pathLower !== titleLower ? countTermHits(pathLower, terms) : 0);
+    const bodyHits = countTermHits(bodyLower, terms);
+    return {
+      matched: true,
+      hits: Math.max(1, titleHits + bodyHits),
+      titleHit: titleHits > 0,
+      bodyHit: bodyHits > 0,
+    };
+  }
+  function mergeTextRanges(ranges) {
+    if (ranges.length <= 1) return ranges;
+    ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+    const out = [ranges[0]];
+    for (let i = 1; i < ranges.length; i++) {
+      const prev = out[out.length - 1], cur = ranges[i];
+      if (cur[0] <= prev[1]) prev[1] = Math.max(prev[1], cur[1]);
+      else out.push(cur);
+    }
+    return out;
+  }
+  function findTermRanges(str, terms) {
+    const low = String(str || "").toLowerCase();
+    const ranges = [];
+    for (const term of terms) {
+      if (!term) continue;
+      let pos = low.indexOf(term);
+      while (pos !== -1) {
+        ranges.push([pos, pos + term.length]);
+        pos = low.indexOf(term, pos + term.length);
+      }
+    }
+    return mergeTextRanges(ranges);
+  }
+  function highlightEscapedText(str, terms) {
+    const raw = String(str || "");
+    if (!terms.length || !raw) return esc(raw);
+    const ranges = findTermRanges(raw, terms);
+    if (!ranges.length) return esc(raw);
+    let out = "", last = 0;
+    for (const [s, e] of ranges) {
+      out += esc(raw.slice(last, s)) + `<mark class="mem-hl">${esc(raw.slice(s, e))}</mark>`;
+      last = e;
+    }
+    return out + esc(raw.slice(last));
+  }
+  function buildMemorySnippet(text, terms) {
+    if (!terms.length) return "";
+    const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+    let bestLine = "", bestScore = 0;
+    for (const rawLine of lines) {
+      const clean = rawLine.replace(/^\s*(?:[#>*\-+]|\d+[.)])\s+/, "").replace(/`|\*\*|__/g, "").trim();
+      if (!clean) continue;
+      const low = clean.toLowerCase();
+      let distinct = 0, total = 0;
+      for (const term of terms) {
+        let p = low.indexOf(term);
+        if (p !== -1) {
+          distinct++;
+          while (p !== -1) { total++; p = low.indexOf(term, p + term.length); }
+        }
+      }
+      if (distinct > 0) {
+        const score = distinct * 100 + Math.min(total, 20);
+        if (score > bestScore) { bestScore = score; bestLine = clean; }
+      }
+    }
+    if (!bestLine) return "";
+    const ranges = findTermRanges(bestLine, terms);
+    const maxLen = 110;
+    let slice = bestLine;
+    if (bestLine.length > maxLen && ranges.length) {
+      const first = ranges[0][0];
+      const start = Math.max(0, first - 28);
+      const end = Math.min(bestLine.length, start + maxLen);
+      slice = (start > 0 ? "…" : "") + bestLine.slice(start, end) + (end < bestLine.length ? "…" : "");
+    } else if (bestLine.length > maxLen) {
+      slice = bestLine.slice(0, maxLen) + "…";
+    }
+    return highlightEscapedText(slice, terms);
+  }
+  function applyMemoryHighlights(root, terms) {
+    clearMemoryHighlights();
+    if (!root || !terms.length) return;
+    if (typeof document.createTreeWalker !== "function" || typeof NodeFilter === "undefined") return;
+    const targets = root.querySelectorAll?.(".mem-body, .mem-ins-list, .mem-dream-sum") || [];
+    const useCustom = typeof CSS !== "undefined" && !!CSS.highlights && typeof Highlight === "function" && typeof Range === "function";
+    const cssRanges = [];
+    const MAX_RANGES = 500;
+    for (const el of targets) {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const p = n.parentElement;
+        if (!p || p.closest?.("form.mem-edit, textarea, button, mark.mem-hl, .mem-ins-acts, .mem-ins-tag, .katex-mathml")) continue;
+        if (n.nodeValue && n.nodeValue.trim()) nodes.push(n);
+      }
+      for (const textNode of nodes) {
+        const ranges = findTermRanges(textNode.nodeValue, terms);
+        if (!ranges.length) continue;
+        if (useCustom) {
+          for (const [s, e] of ranges) {
+            if (cssRanges.length >= MAX_RANGES) break;
+            const r = new Range();
+            r.setStart(textNode, s);
+            r.setEnd(textNode, e);
+            cssRanges.push(r);
+          }
+        } else {
+          const frag = document.createDocumentFragment();
+          const val = textNode.nodeValue;
+          let last = 0;
+          for (const [s, e] of ranges) {
+            if (s > last) frag.append(val.slice(last, s));
+            const mark = document.createElement("mark");
+            mark.className = "mem-hl";
+            mark.textContent = val.slice(s, e);
+            frag.append(mark);
+            last = e;
+          }
+          if (last < val.length) frag.append(val.slice(last));
+          textNode.replaceWith(frag);
+        }
+      }
+    }
+    if (useCustom && cssRanges.length) {
+      try { CSS.highlights.set(MEM_SEARCH_HL, new Highlight(...cssRanges)); } catch {}
+    }
+  }
+
+  // Parse instructions.md list items without altering file format:
+  // ordinary items = explicit rules from the human; items tagged (inferred) = inferred by Collie.
+  const INS_INF_PREFIX = /^(?:\*\*|__|`|\s)*[(（\[]\s*inferred\s*[)）\]](?:\*\*|__|`)?\s*[:：\-—–]?\s*/i;
+  const INS_INF_SUFFIX = /\s*(?:\*\*|__|`)?[(（\[]\s*inferred\s*[)）\]](?:\*\*|__|`)?\s*([。.;；]?)$/i;
+  function stripInferredMarker(text) {
+    const s = String(text || "");
+    if (INS_INF_PREFIX.test(s)) {
+      return { inferred: true, clean: s.replace(INS_INF_PREFIX, "").trim() };
+    }
+    const m = INS_INF_SUFFIX.exec(s);
+    if (m) {
+      const punct = m[1] || "";
+      const head = s.slice(0, m.index).trimEnd();
+      return { inferred: true, clean: (head + (punct && !/[。.;；]$/.test(head) ? punct : "")).trim() };
+    }
+    return { inferred: false, clean: s.trim() };
+  }
+  function parseInstructions(src) {
+    const raw = String(src || "").replace(/\r\n?/g, "\n");
+    const lines = raw.split("\n");
+    const explicit = [];
+    const inferred = [];
+    const extraBlocks = [];
+    let inFence = false;
+    let curSection = "";
+    let sectionIsInferred = false;
+    let curProse = [];
+    const flushProse = () => {
+      const joined = curProse.join("\n").trim();
+      if (joined) extraBlocks.push(joined);
+      curProse = [];
+    };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (/^```/.test(trimmed)) {
+        inFence = !inFence;
+        curProse.push(line);
+        continue;
+      }
+      if (inFence) {
+        curProse.push(line);
+        continue;
+      }
+      if (!trimmed) {
+        flushProse();
+        continue;
+      }
+      if (/^#\s+/.test(trimmed)) {
+        flushProse();
+        continue;
+      }
+      const hm = /^#{2,6}\s+(.*)$/.exec(trimmed);
+      if (hm) {
+        flushProse();
+        curSection = hm[1].trim();
+        sectionIsInferred = /\binferred\b|推断/i.test(curSection);
+        continue;
+      }
+      const lm = /^(\s{0,1})([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+      if (lm) {
+        flushProse();
+        const baseIndent = lm[1].length;
+        const headRaw = lm[3];
+        const subLines = [];
+        let endLine = i;
+        for (let j = i + 1; j < lines.length; j++) {
+          const next = lines[j];
+          if (!next.trim()) {
+            let k = j + 1;
+            while (k < lines.length && !lines[k].trim()) k++;
+            if (k < lines.length && /^\s{2,}/.test(lines[k]) && !/^#{1,6}\s/.test(lines[k].trim())) {
+              subLines.push("");
+              continue;
+            }
+            break;
+          }
+          const nextIndent = next.match(/^(\s*)/)[1].length;
+          if (nextIndent > baseIndent && !/^#{1,6}\s/.test(next.trim())) {
+            subLines.push(next);
+            endLine = j;
+          } else {
+            break;
+          }
+        }
+        const parsed = stripInferredMarker(headRaw);
+        const isInf = parsed.inferred || sectionIsInferred;
+        const cleanHead = parsed.clean || headRaw.trim();
+        const bodyMd = subLines.length
+          ? cleanHead + "\n" + subLines.map((sl) => sl.replace(/^\s{2}/, "")).join("\n")
+          : cleanHead;
+        const item = {
+          startLine: i,
+          endLine,
+          inferred: isInf,
+          section: curSection,
+          text: cleanHead,
+          md: bodyMd,
+          raw: lines.slice(i, endLine + 1).join("\n"),
+        };
+        if (isInf) inferred.push(item);
+        else explicit.push(item);
+        i = endLine;
+        continue;
+      }
+      curProse.push(line);
+    }
+    flushProse();
+    return { explicit, inferred, extraBlocks, total: explicit.length + inferred.length };
+  }
+  function removeInstructionLines(src, startLine, endLine) {
+    const raw = String(src || "").replace(/\r\n?/g, "\n");
+    const lines = raw.split("\n");
+    const s = Number(startLine);
+    const e = Number(endLine);
+    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s >= lines.length || e < s) return raw;
+    const clampedEnd = Math.min(lines.length - 1, e);
+    const next = [...lines.slice(0, s), ...lines.slice(clampedEnd + 1)];
+    const collapsed = [];
+    let blankRun = 0;
+    for (const l of next) {
+      if (!l.trim()) {
+        blankRun++;
+        if (blankRun <= 1) collapsed.push(l);
+      } else {
+        blankRun = 0;
+        collapsed.push(l);
+      }
+    }
+    const out = collapsed.join("\n").replace(/\n+$/, "");
+    return out ? out + "\n" : "";
+  }
+  function lineRangeOffsets(src, startLine, endLine) {
+    const raw = String(src || "").replace(/\r\n?/g, "\n");
+    const lines = raw.split("\n");
+    let offset = 0, start = 0, end = raw.length;
+    for (let i = 0; i < lines.length; i++) {
+      if (i === startLine) start = offset;
+      const lineEnd = offset + lines[i].length;
+      if (i === endLine) { end = lineEnd; break; }
+      offset = lineEnd + 1;
+    }
+    return { start, end };
+  }
+
+  function formatDreamStamp(name) {
+    const base = String(name || "").replace(/\.md$/i, "");
+    const m = /^(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})$/.exec(base);
+    return m ? `${m[1]} ${m[2]}:${m[3]}` : base;
+  }
+  function extractDreamSummary(dream) {
+    if (!dream || !dream.text) return null;
+    const lines = String(dream.text).replace(/\r\n?/g, "\n").split("\n");
+    let headline = "";
+    const points = [];
+    const extraProse = [];
+    let meaningfulLines = 0;
+    let inFence = false;
+    for (const raw of lines) {
+      const t = raw.trim();
+      if (/^```/.test(t)) { inFence = !inFence; continue; }
+      if (inFence || !t || /^#{1,6}\s+/.test(t) || /^[-*_]{3,}$/.test(t)) continue;
+      meaningfulLines++;
+      const bulletM = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(t);
+      if (bulletM) {
+        const clean = bulletM[1].replace(/^>\s*/, "").trim();
+        if (!clean) continue;
+        if (!headline && points.length === 0) headline = clean;
+        else if (points.length < 3) points.push(clean);
+        continue;
+      }
+      const prose = t.replace(/^>\s*/, "").trim();
+      if (!prose) continue;
+      if (!headline) headline = prose;
+      else if (extraProse.length < 2) extraProse.push(prose);
+    }
+    const items = points.length ? points : extraProse;
+    if (!headline && !items.length) return null;
+    const shownCount = (headline ? 1 : 0) + items.length;
+    return {
+      name: dream.name,
+      stamp: formatDreamStamp(dream.name),
+      headline,
+      points: items.slice(0, 3),
+      hasMore: meaningfulLines > shownCount || /```|^#{1,6}\s/m.test(dream.text) || dream.text.length > 260,
+    };
+  }
+
+  function instructionsPreviewHTML(f, terms) {
+    const parsed = parseInstructions(f.text);
+    const undoBar = memInsUndo ? `<div class="mem-ins-undo" role="status">
+        <span class="mem-ins-undo-msg">已移除「${esc(memInsUndo.label)}」</span>
+        <button type="button" class="mem-ins-btn" data-act="mem-ins-undo">撤销</button>
+      </div>` : "";
+    if (!parsed.total) {
+      if (parsed.extraBlocks.length) return undoBar + md(f.text);
+      return `${undoBar}<div class="mem-ins-empty muted">还没有长期约定。聊天里直接告诉 Collie「以后都……」，它会记在这里；也可以点下方「编辑」直接写。</div>`;
+    }
+    const renderItem = (item) => {
+      const itemHit = terms.length > 0 && matchMemoryItem("", "", item.raw, terms).matched;
+      const secTag = item.section && !/\binferred\b|推断/i.test(item.section)
+        ? `<span class="mem-ins-sec">${esc(item.section)}</span>`
+        : "";
+      return `<li class="mem-ins-item${item.inferred ? " is-inferred" : ""}${itemHit ? " is-match" : ""}" data-line="${item.startLine}" data-end-line="${item.endLine}">
+        ${item.inferred ? `<span class="mem-ins-tag">推断</span>` : `<span class="mem-ins-bullet" aria-hidden="true"></span>`}
+        <div class="mem-ins-main">
+          <div class="mem-ins-text">${md(item.md)}</div>
+          ${secTag}
+        </div>
+        <div class="mem-ins-acts">
+          <button type="button" class="mem-ins-btn" data-act="mem-ins-edit" data-line="${item.startLine}" data-end-line="${item.endLine}" title="在原文中定位编辑">编辑</button>
+          ${item.inferred ? `<button type="button" class="mem-ins-btn is-del" data-act="mem-ins-del" data-line="${item.startLine}" data-end-line="${item.endLine}" title="删除这条推断习惯并保存">删掉</button>` : ""}
+        </div>
+      </li>`;
+    };
+    const explicitBlock = parsed.explicit.length ? `<section class="mem-ins-group" data-ins-group="explicit">
+        <div class="mem-ins-gh"><span>你亲口说的<span class="mem-ins-gh-cnt">${parsed.explicit.length}</span></span></div>
+        <ul class="mem-ins-list">${parsed.explicit.map(renderItem).join("")}</ul>
+      </section>` : "";
+    const inferredBlock = parsed.inferred.length ? `<section class="mem-ins-group" data-ins-group="inferred">
+        <div class="mem-ins-gh">
+          <span>Collie 从对话中推断的<span class="mem-ins-gh-cnt">${parsed.inferred.length}</span></span>
+          <span class="mem-ins-gh-note">原文标有 <code>(inferred)</code> · 猜错可一键删掉或编辑</span>
+        </div>
+        <ul class="mem-ins-list">${parsed.inferred.map(renderItem).join("")}</ul>
+      </section>` : "";
+    const extraBlock = parsed.extraBlocks.length
+      ? `<div class="mem-ins-extra">${md(parsed.extraBlocks.join("\n\n"))}</div>`
+      : "";
+    return `<div class="mem-ins-wrap">${undoBar}${explicitBlock}${inferredBlock}${extraBlock}</div>`;
+  }
+
+  function renderMemoryHTML(r, query = "") {
     const files = r.files || [];
+    const dreams = r.dreams || [];
+    const terms = memQueryTerms(query);
+    const searching = terms.length > 0;
     const by = (f) => files.filter(f);
     const dream = r.dreaming ? `<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。`
       : `上次做梦：${r.last_dream ? dayTime(r.last_dream) : "还没有"}　·　下次：${r.next_dream ? dayTime(r.next_dream) + "（当天有新对话才会做）" : "已关闭"}`;
@@ -7513,19 +7922,52 @@
         return `<a ${href ? `href="${href}"` : ""} title="${esc((KIND_LABEL[w.kind] || w.kind) + " · " + (STATUS_LABEL[st] || st))}"><span class="dot ${esc(st)}"></span>${esc(w.name)}</a>`;
       }).join("")}</span>`;
     };
-    const card = (f, o = {}) => {
+    let matchedFiles = 0;
+    let totalHits = 0;
+    const card = (f, o = {}, hit = null) => {
       const edit = !f.legacy && o.edit !== false;
-      const sub = o.sub ?? firstLine(f.text, "");
-      return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
-          <span class="mem-name">${esc(o.label || f.name)}</span><span class="grow mem-sub">${esc(sub)}</span><span class="muted mem-size">${kb(f.size)}</span></summary>
-        <div class="mem-body msg assistant" data-view>${md(f.text)}</div>
-        ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button class="btn small" data-act="mem-edit">编辑</button></div>
+      const label = o.label || f.name;
+      const subText = o.sub ?? firstLine(f.text, "");
+      const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(f.text, terms) : "";
+      const subHtml = snipHtml ? snipHtml : esc(subText);
+      const labelHtml = searching ? highlightEscapedText(label, terms) : esc(label);
+      const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
+      const bodyHtml = o.customBody ? o.customBody(f) : md(f.text);
+      const isOpen = searching ? true : !!o.open;
+      return `<details class="mem-fold" ${isOpen ? "open" : ""} data-path="${esc(f.name)}" data-mem-key="file:${esc(f.name)}"><summary>
+          <span class="mem-name">${labelHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span><span class="mem-meta-r">${hitBadge}<span class="muted mem-size">${kb(f.size)}</span></span></summary>
+        <div class="mem-body msg assistant" data-view>${bodyHtml}</div>
+        ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button type="button" class="btn small" data-act="mem-edit">编辑</button></div>
         <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
           <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div></form>` : ""}
       </details>`;
     };
-    const group = (title, note, list, o = {}) => list.length || o.always ? `<h4 class="mem-h">${title}<span class="muted">${note}</span></h4>
-      <div class="card">${list.length ? list.map((f, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {})).join("") : `<div class="empty-row">${o.empty || "空"}</div>`}</div>` : "";
+    const filterFiles = (list, labelOf) => {
+      if (!searching) return list.map((f) => ({ f, hit: null }));
+      const out = [];
+      for (const f of list) {
+        const lbl = labelOf ? labelOf(f) : f.name;
+        const hit = matchMemoryItem(lbl, f.name, f.text, terms);
+        if (hit.matched) {
+          matchedFiles++;
+          totalHits += hit.hits;
+          out.push({ f, hit });
+        }
+      }
+      return out;
+    };
+    const group = (title, note, list, o = {}) => {
+      const labelOf = (f, i) => {
+        const cfg = typeof o.card === "function" ? o.card(f, i) : o.card || {};
+        return cfg.label || f.name;
+      };
+      const items = filterFiles(list, labelOf);
+      if (searching && !items.length) return "";
+      if (!items.length && !o.always) return "";
+      const noteText = searching ? `命中 ${items.length} 项` : note;
+      return `<h4 class="mem-h">${title}<span class="muted">${noteText}</span></h4>
+      <div class="card">${items.length ? items.map(({ f, hit }, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {}, hit)).join("") : `<div class="empty-row">${o.empty || "空"}</div>`}</div>`;
+    };
     const ins = by((f) => f.name === "instructions.md");
     const tasks = by((f) => /^tasks\/[^/]+\.md$/.test(f.name));
     const notes = by((f) => f.name.startsWith("notes/")).sort((a, b) => (a.name === "notes/index.md" ? -1 : b.name === "notes/index.md" ? 1 : a.name.localeCompare(b.name)));
@@ -7536,24 +7978,200 @@
     const upFront = r.up_front ?? Math.max(0, (r.loaded || 0) - msgBytes);
     const budget = r.budget || (10 << 10);
     const over = upFront > budget;
-    return `<div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
-        <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
-        <div class="mem-load">
-          <div class="mem-load-row">
-            <span class="mem-load-main" id="mem-front-label">前置记忆 <b class="${over ? "warn" : ""}">${kbNum(upFront)}</b> / ${kbCap(budget)}${over ? `<span class="mem-warn-note">超出预算，做梦时会精简</span>` : ""}</span>
-            <span class="mem-load-msg">近期消息 <b>${kb(msgBytes)}</b><span class="muted"> · 自动记录</span></span>
+
+    // Top Dream Status Card + Latest Dream Summary
+    let statusCard = "";
+    if (!searching) {
+      const latestDream = dreams[0] || null;
+      const latestSum = latestDream ? extractDreamSummary(latestDream) : null;
+      const dreamSumHtml = latestSum ? `<div class="mem-dream-sum" data-dream-name="${esc(latestDream.name)}">
+          <div class="mem-dream-sum-head">
+            <span class="mem-dream-sum-title">最近做梦摘要<span class="mem-dream-sum-stamp">${esc(latestSum.stamp)}</span></span>
+            <button type="button" class="mem-dream-toggle" data-act="dream-sum-toggle" aria-expanded="${memDreamExpanded ? "true" : "false"}" aria-controls="mem-dream-full">
+              <span>${memDreamExpanded ? "收起日志" : "查看完整日志"}</span>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg>
+            </button>
           </div>
-          <progress class="mem-meter${over ? " warn" : ""}" max="${budget}" value="${Math.min(upFront, budget)}" aria-labelledby="mem-front-label"></progress>
-          <div class="mem-load-sub muted">仅指令、笔记索引与进行中任务计入 ${kbCap(budget)} 预算；<code>messages.md</code> 由 hub 自动维护，不占预算</div>
-        </div></div>
-      ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
-      ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "没有进行中的任务" })}
-      ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
-      ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
-      ${group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
-      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow mem-sub">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
-      ${done.length ? `<details class="mem-done" data-path="tasks/done/"><summary class="mem-h">已完成<span class="muted">${done.length} 件 · 做完或放弃的任务，不再先读</span></summary>
-        <div class="card">${done.map((f) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true })).join("")}</div></details>` : ""}`;
+          ${memDreamExpanded
+            ? `<div id="mem-dream-full" class="mem-dream-full msg assistant">${md(latestDream.text)}</div>`
+            : `<div id="mem-dream-full" class="mem-dream-brief">
+                ${latestSum.headline ? `<div class="mem-dream-lead">${md(latestSum.headline)}</div>` : ""}
+                ${latestSum.points.length ? `<ul class="mem-dream-pts">${latestSum.points.map((pt) => `<li>${md(pt)}</li>`).join("")}</ul>` : ""}
+              </div>`}
+        </div>` : "";
+      statusCard = `<div class="card mem-status-card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
+          <button type="button" class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
+          ${dreamSumHtml}
+          <div class="mem-load">
+            <div class="mem-load-row">
+              <span class="mem-load-main" id="mem-front-label">前置记忆 <b class="${over ? "warn" : ""}">${kbNum(upFront)}</b> / ${kbCap(budget)}${over ? `<span class="mem-warn-note">超出预算，做梦时会精简</span>` : ""}</span>
+              <span class="mem-load-msg">近期消息 <b>${kb(msgBytes)}</b><span class="muted"> · 自动记录</span></span>
+            </div>
+            <progress class="mem-meter${over ? " warn" : ""}" max="${budget}" value="${Math.min(upFront, budget)}" aria-labelledby="mem-front-label"></progress>
+            <div class="mem-load-sub muted">仅你的约定、笔记索引与进行中的事计入 ${kbCap(budget)} 预算；<code>messages.md</code> 由 hub 自动维护，不占预算</div>
+          </div></div>`;
+    }
+
+    // Dream journal archive
+    const dreamItems = searching
+      ? dreams.map((d) => {
+          const title = formatDreamStamp(d.name);
+          const hit = matchMemoryItem(title, "dreams/" + d.name, d.text, terms);
+          if (!hit.matched) return null;
+          matchedFiles++;
+          totalHits += hit.hits;
+          return { d, title, hit };
+        }).filter(Boolean)
+      : dreams.map((d) => ({ d, title: formatDreamStamp(d.name), hit: null }));
+    const dreamSection = dreamItems.length ? `<h4 class="mem-h">做梦日志<span class="muted">${searching ? `命中 ${dreamItems.length} 篇` : `${dreams.length} 篇 · 夜间回顾与跨会话整理`}</span></h4>
+      <div class="card">${dreamItems.map(({ d, title, hit }) => {
+        const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(d.text, terms) : "";
+        const subHtml = snipHtml || esc(firstLine(d.text, d.name));
+        const nameHtml = searching ? highlightEscapedText(title, terms) : esc(title);
+        const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
+        return `<details class="mem-fold" ${searching ? "open" : ""} data-mem-key="dream:${esc(d.name)}"><summary><span class="muted mem-name">${nameHtml}</span><span class="grow mem-sub${snipHtml ? " is-snip" : ""}">${subHtml}</span>${hitBadge ? `<span class="mem-meta-r">${hitBadge}</span>` : ""}</summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`;
+      }).join("")}</div>` : "";
+
+    // Completed tasks (已结束)
+    const doneItems = filterFiles(done, (f) => f.name.replace(/^tasks\/done\//, ""));
+    const doneSection = doneItems.length ? `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">已结束<span class="muted">${searching ? `命中 ${doneItems.length} / ${done.length} 件` : `${done.length} 件 · 做完或放弃的事，不再先读`}</span></summary>
+        <div class="card">${doneItems.map(({ f, hit }) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>` : "";
+
+    const bodySections = [
+      legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : "",
+      group("进行中的事", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: !searching, empty: "没有进行中的事" }),
+      group("你的约定", "每次都读 · 长期要求和偏好", ins, {
+        card: {
+          open: true,
+          label: "instructions.md",
+          sub: "",
+          customBody: (f) => instructionsPreviewHTML(f, terms),
+        },
+        always: !searching,
+        empty: "还没有",
+      }),
+      group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) }),
+      group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } }),
+      dreamSection,
+      doneSection,
+    ].filter(Boolean).join("");
+
+    const emptySearch = searching && matchedFiles === 0 ? `<div class="card mem-empty">
+        <svg class="mem-empty-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <div class="mem-empty-title">未找到包含「${esc(query.trim())}」的记忆</div>
+        <div class="mem-empty-sub">试试换个关键词，可按标题、文件路径或正文检索约定、任务、笔记、已结束事项和做梦日志。</div>
+        <button type="button" class="btn small" data-act="mem-search-clear">清空搜索</button>
+      </div>` : "";
+
+    return {
+      html: statusCard + (emptySearch || bodySections),
+      matchedFiles,
+      totalHits,
+      searching,
+    };
+  }
+  function memoryHTML(r, query = "") {
+    return renderMemoryHTML(r, query).html;
+  }
+
+  function snapshotOpenMemoryKeys(root) {
+    const out = new Set();
+    if (!root) return out;
+    for (const d of root.querySelectorAll?.("details[open]") || []) {
+      const k = d.dataset?.memKey || d.dataset?.path || d.querySelector?.("summary")?.textContent;
+      if (k) out.add(k);
+    }
+    return out;
+  }
+  function restoreOpenMemoryKeys(root, openSet) {
+    if (!root || !openSet) return;
+    for (const d of root.querySelectorAll?.("details") || []) {
+      const k = d.dataset?.memKey || d.dataset?.path || d.querySelector?.("summary")?.textContent;
+      if (k) d.open = openSet.has(k);
+    }
+  }
+  function ensureMemoryShell(body) {
+    let wrap = body.querySelector?.(".mem-search-wrap");
+    let content = body.querySelector?.("#mem-content");
+    if (!wrap || !content) {
+      body.innerHTML = `<div class="mem-search-wrap" role="search">
+          <label for="mem-search-input" class="visually-hidden">搜索记忆</label>
+          <svg class="mem-search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="mem-search-input" class="mem-search-input" type="search" placeholder="搜索约定、任务、笔记、做梦日志…" autocomplete="off" spellcheck="false" value="${esc(memQuery)}">
+          <span id="mem-search-meta" class="mem-search-meta" aria-live="polite" hidden></span>
+          <button type="button" id="mem-search-clear" class="mem-search-clear" data-act="mem-search-clear" aria-label="清空搜索" title="清空搜索"${memQuery ? "" : " hidden"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div id="mem-content"></div>`;
+      wrap = body.querySelector?.(".mem-search-wrap");
+      content = body.querySelector?.("#mem-content");
+      const inp = wrap?.querySelector?.("#mem-search-input");
+      if (inp) {
+        const ime = trackIME(inp);
+        inp.addEventListener("input", () => setMemoryQuery(inp.value));
+        inp.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            if (isIMEComposing(ev, ime) || isPostCompositionSafariEnter(ev, ime)) return;
+            ev.preventDefault();
+          } else if (ev.key === "Escape") {
+            if (isIMEComposing(ev, ime)) return;
+            if (memQuery) {
+              ev.preventDefault();
+              setMemoryQuery("", { syncInput: true, focus: true });
+            } else {
+              inp.blur?.();
+            }
+          }
+        });
+      }
+    }
+    return { wrap, content };
+  }
+  function renderMemoryView(body, r, opts = {}) {
+    if (!body || !r) return;
+    const { wrap, content } = ensureMemoryShell(body);
+    if (!content) return;
+    const prevOpen = opts.preserveOpen ? snapshotOpenMemoryKeys(content) : null;
+    const res = renderMemoryHTML(r, memQuery);
+    content.innerHTML = res.html;
+    const meta = wrap?.querySelector?.("#mem-search-meta");
+    if (meta) {
+      if (res.searching) {
+        meta.textContent = res.matchedFiles ? `${res.matchedFiles} 项 · ${res.totalHits} 处` : "0 项";
+        meta.hidden = false;
+      } else {
+        meta.textContent = "";
+        meta.hidden = true;
+      }
+    }
+    const clearBtn = wrap?.querySelector?.("#mem-search-clear");
+    if (clearBtn) clearBtn.hidden = !memQuery;
+    if (opts.restorePreSearch && memPreSearchOpen && !res.searching) {
+      restoreOpenMemoryKeys(content, memPreSearchOpen);
+      memPreSearchOpen = null;
+    } else if (prevOpen && !res.searching) {
+      restoreOpenMemoryKeys(content, prevOpen);
+    }
+    applyMemoryHighlights(content, memQueryTerms(memQuery));
+  }
+  function setMemoryQuery(q, { syncInput = false, focus = false } = {}) {
+    const body = $("#auto-body");
+    const content = body?.querySelector?.("#mem-content");
+    const wasSearching = !!memQuery.trim();
+    const next = String(q ?? "");
+    const nowSearching = !!next.trim();
+    if (!wasSearching && nowSearching && content) {
+      memPreSearchOpen = snapshotOpenMemoryKeys(content);
+    }
+    memQuery = next;
+    const inp = body?.querySelector?.("#mem-search-input");
+    if (inp && syncInput && inp.value !== memQuery) inp.value = memQuery;
+    if (inp && focus) inp.focus?.();
+    if (memData && body) {
+      renderMemoryView(body, memData, {
+        preserveOpen: !wasSearching && !nowSearching,
+        restorePreSearch: wasSearching && !nowSearching,
+      });
+    }
   }
 
   function inboxHTML(ts, ths = []) {
@@ -8131,6 +8749,7 @@
       if (f.classList.contains("mem-edit")) {
         await api("/api/super/memory", { body: { path: f.closest("[data-path]").dataset.path, text: f.text.value } });
         memEditing = false;
+        $("#auto-body")._memSig = "";
         toast("已保存");
         loadAuto();
       } else if (f.id === "settings-form") {
@@ -8247,9 +8866,94 @@
       } catch (err) { toast(err.message, "attn"); }
       return;
     }
+    if (t.dataset.act === "mem-search-clear") {
+      setMemoryQuery("", { syncInput: true, focus: true });
+      return;
+    }
+    if (t.dataset.act === "dream-sum-toggle") {
+      memDreamExpanded = !memDreamExpanded;
+      if (memData) renderMemoryView($("#auto-body"), memData, { preserveOpen: true });
+      return;
+    }
+    if (t.dataset.act === "mem-ins-edit") {
+      const box = t.closest("[data-path]");
+      if (!box) return;
+      clearMemInsUndo();
+      box.open = true;
+      memEditing = true;
+      box.querySelector(".mem-edit").hidden = false;
+      box.querySelector("[data-view]").hidden = true;
+      box.querySelector(".mem-tools").hidden = true;
+      const ta = box.querySelector("textarea");
+      if (ta) {
+        const sLine = Number(t.dataset.line);
+        const eLine = Number(t.dataset.endLine ?? t.dataset.line);
+        ta.focus();
+        if (Number.isInteger(sLine) && sLine >= 0) {
+          const { start, end } = lineRangeOffsets(ta.value, sLine, Number.isInteger(eLine) ? eLine : sLine);
+          ta.setSelectionRange?.(start, end);
+          const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 21;
+          ta.scrollTop = Math.max(0, (sLine - 3) * lineH);
+        }
+      }
+      return;
+    }
+    if (t.dataset.act === "mem-ins-del") {
+      const box = t.closest("[data-path]");
+      const path = box?.dataset.path || "instructions.md";
+      const file = (memData?.files || []).find((x) => x.name === path);
+      if (!file) return;
+      const sLine = Number(t.dataset.line);
+      const eLine = Number(t.dataset.endLine ?? t.dataset.line);
+      const prevText = file.text || "";
+      const nextText = removeInstructionLines(prevText, sLine, eLine);
+      if (nextText === prevText) return;
+      const rowText = (t.closest(".mem-ins-item")?.querySelector(".mem-ins-text")?.textContent || "").trim();
+      const label = rowText.length > 26 ? rowText.slice(0, 26) + "…" : (rowText || "该条推断");
+      t.disabled = true;
+      try {
+        await api("/api/super/memory", { body: { path, text: nextText } });
+        clearMemInsUndo();
+        memInsUndo = {
+          prevText,
+          label,
+          timer: setTimeout(() => {
+            memInsUndo = null;
+            if (view === "auto" && autoTab === "memory" && !memEditing && memData) {
+              renderMemoryView($("#auto-body"), memData, { preserveOpen: true });
+            }
+          }, 12000),
+        };
+        file.text = nextText;
+        $("#auto-body")._memSig = "";
+        toast("已删掉并保存");
+        await loadAuto();
+      } catch (err) {
+        t.disabled = false;
+        toast(err.message, "attn");
+      }
+      return;
+    }
+    if (t.dataset.act === "mem-ins-undo") {
+      if (!memInsUndo) return;
+      const prevText = memInsUndo.prevText;
+      t.disabled = true;
+      try {
+        await api("/api/super/memory", { body: { path: "instructions.md", text: prevText } });
+        clearMemInsUndo();
+        $("#auto-body")._memSig = "";
+        toast("已恢复");
+        await loadAuto();
+      } catch (err) {
+        t.disabled = false;
+        toast(err.message, "attn");
+      }
+      return;
+    }
     if (t.dataset.act === "mem-edit" || t.dataset.act === "mem-cancel") {
       const box = t.closest("[data-path]");
       memEditing = t.dataset.act === "mem-edit";
+      if (memEditing) clearMemInsUndo();
       box.querySelector(".mem-edit").hidden = !memEditing;
       box.querySelector("[data-view]").hidden = memEditing;
       box.querySelector(".mem-tools").hidden = memEditing;

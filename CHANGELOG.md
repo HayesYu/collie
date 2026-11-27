@@ -4,6 +4,29 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.2.91 (2026-11-27)
+
+### Highlights
+
+- **Memory Tab Full-Text Search & Highlighting (`web/app.js`, `web/app.css`)**:
+  - Added a minimalist search bar at the top of `自动化 → 记忆` with instant filtering, a one-click clear button, IME-safe `Enter`/`Escape` handling, and a live match summary (`N 项 · M 处`).
+  - Searches across titles, paths, and full Markdown content for `你的约定`, `进行中的事`, `笔记`, `已结束`, `做梦日志`, and `最近说过的话`; auto-expands matching `<details>` sections (restoring prior open/closed state when cleared), displays per-card hit counts and highlighted context snippets, highlights matched ranges in place via the CSS Custom Highlight API (`::highlight(mem-search)`) with a `<mark>` fallback, and renders a clean empty state with a quick reset button when nothing matches.
+- **Explicit vs. `(inferred)` Instructions Split & One-Click Correction**:
+  - Parsed `instructions.md` in read-only preview into two calm monochrome groups — `你亲口说的` (explicit rules) and `Collie 从对话中推断的` (entries tagged `(inferred)`, supporting prefix/suffix ASCII and full-width variants and multi-line sub-bullets) — without modifying `instructions.md` format or Agent/Router behavior.
+  - Added lightweight inline actions on every item (`编辑` jumps into the raw Markdown editor with the corresponding line pre-selected; `删掉` on inferred items removes only those exact lines and saves back to `instructions.md` immediately with a 12-second inline `撤销` recovery bar).
+- **Top Dream Status Card Summary & Inline Expand**:
+  - Surfaced a concise summary of the latest `dreams/*.md` journal (lead headline + up to 3 bullet points) inside the top Dream status card alongside last/next dream timestamps, with a one-click `查看完整日志` / `收起日志` toggle to inspect the full rendered dream journal inline.
+- **Static Demo Sync (`scripts/demo/demo.js`, `docs/demo/`)**:
+  - Updated demo memory fixtures with sample `(inferred)` instructions and multi-day dream logs and regenerated `docs/demo/`.
+
+### Client / API Changes
+
+- **HTTP API / SSE / CLI**: None.
+- **Memory file format (`memory/`, `dreams/`)**: Unchanged; all enhancements are read-side UI rendering plus existing `POST /api/super/memory` writes.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.90 (2026-11-27)
 
 ### Highlights

@@ -346,10 +346,11 @@
   const memFile = (name, text, min, size) => ({ name, text, size: size ?? text.length * 2, mod: ago(min) });
   const memory = {
     dir: "~/.collie", up_front: 5734, messages: 2867, loaded: 8601, budget: 10240, dreaming: false, last_dream: ago(60 * 9), next_dream: later(60 * 15), dreams: [
-      { name: "2026-11-18.md", text: "从 fix-flaky-test 里记下了分页测试的坑，写进 shop-api.md；合并了两条重复的笔记\n\n- shop-api.md：同一秒内的订单按 created_at 排序不稳定，要加 id 兜底\n- agents.md：Codex 在 devbox 上跑 shop-api 的测试更稳\n- 你更喜欢先在 devbox 上跑测试，再在 Mac 上看界面（inferred）" },
+      { name: "2026-11-18-0400.md", text: "从 fix-flaky-test 里记下了分页测试的坑，写进 shop-api.md；合并了两条重复的笔记，并沉淀出两条跨会话习惯\n\n- shop-api.md：同一秒内的订单按 created_at 排序不稳定，要加 id 兜底\n- agents.md：Codex 在 devbox 上跑 shop-api 的测试更稳\n- instructions.md：补充 2 条从近期对话识别的偏好（标记为 `(inferred)`），方便在记忆页随时核对或删掉\n- 归档已完成任务：dark-mode-fix.md 已移入 tasks/done/" },
+      { name: "2026-11-16-0400.md", text: "归档了 CI 缓存提速任务，精简了 notes/machines.md 里过期的版本号\n\n- tasks/done/ci-cache.md：记录构建耗时从 9 分钟降到 4 分钟\n- notes/machines.md：更新 devbox 与 macbook 的可用工具清单" },
     ],
     files: [
-      memFile("instructions.md", "# 指令\n- 发布说明用中文，每条一句话\n- 跑测试优先用 devbox，界面相关的活放 macbook\n- 动生产数据库前先问我", 60 * 24, 1843),
+      memFile("instructions.md", "# 你的约定\n- 发布说明用中文，每条一句话\n- 跑测试优先用 devbox，界面相关的活放 macbook\n- 动生产数据库前先问我\n- (inferred) 排查接口问题时先给根因和复现命令，再贴代码改动\n- (inferred) 合并 PR 前希望同步确认单元测试和明暗主题截图", 60 * 24, 1843),
       memFile("tasks/v1.4-release.md", "# v1.4 发布\n目标：整理 v1.3 以来的 27 个提交写发布说明（重点提醒配置项改名与 Node 22 起步），定位并修复 /orders 分页同一秒内记录重复的偶发失败（fix-flaky-test），回归通过后一起开 PR。\n- [x] 发布说明（release-notes）\n- [ ] 分页测试修复（fix-flaky-test）\n- [ ] 开 PR", 6, 2253),
       memFile("tasks/done/dark-mode-fix.md", "# 首页暗色模式修复\n- [x] 定位对比度问题\n- [x] 合入修复（ux-polish）\n已完成：11 月 18 日合入。", 50),
       memFile("tasks/done/ci-cache.md", "# CI 缓存提速\n- [x] 缓存依赖目录\n已完成：构建从 9 分钟降到 4 分钟。", 90),

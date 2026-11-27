@@ -175,6 +175,8 @@ func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	re := fs.String("re", "", "the event (#t123) this answers, shown to the human as a quote")
 	var opts flagList
 	fs.Var(&opts, "opt", "quick-reply choice button for the human (repeatable)")
+	var files flagList
+	fs.Var(&files, "file", "deliverable file path to attach as a preview chip (repeatable)")
 	check := fs.Bool("check", false, "mark as an external human todo (no --opt; silently checkable)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -193,6 +195,9 @@ func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	body := map[string]any{"text": t, "thread": *thread, "re": *re}
 	if len(opts) > 0 {
 		body["options"] = []string(opts)
+	}
+	if len(files) > 0 {
+		body["files"] = []string(files)
 	}
 	if *check {
 		body["check"] = true
@@ -627,7 +632,7 @@ notes/index.md, open tasks; messages.md is maintained separately by the hub) und
 sessions and tidies memory/. Its journal is in dreams/.
 
 ## Tools (run in your shell)
-- ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... [--check] \"text\"`" + ` — message the human (add --thread X for another thread).
+- ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... [--file PATH]... [--check] \"text\"`" + ` — message the human (add --thread X for another thread).
   - Plain updates, finished deliverables, reports, or FYIs: pass neither ` + "`--opt`" + ` nor ` + "`--check`" + `
     (the chat's cross-device unread marker already keeps them from being missed).
   - Need a decision, reply, or follow-up action from the human — including whenever you

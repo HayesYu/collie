@@ -62,6 +62,13 @@ type Worker struct {
 	Session string `json:"session,omitempty"`
 }
 
+// DecisionPick records how the human resolved a Collie --opt decision card.
+type DecisionPick struct {
+	State string    `json:"state"`          // picked | custom | dismissed
+	Text  string    `json:"text,omitempty"` // picked option label or custom reply text
+	At    time.Time `json:"at"`
+}
+
 // Entry is one line of the human-facing super-agent conversation.
 type Entry struct {
 	ID     string    `json:"id"`
@@ -76,6 +83,10 @@ type Entry struct {
 	Re *Quote `json:"re,omitempty"`
 	// Quick-reply choices Collie offered with its question; tapped to answer.
 	Options []string `json:"options,omitempty"`
+	// Resolved receipt for a Collie --opt decision card (pure click, custom note, or dismissed).
+	Pick *DecisionPick `json:"pick,omitempty"`
+	// Structured deliverable paths attached via `collie reply --file`.
+	Files []string `json:"files,omitempty"`
 	// Marked by Collie (--check) when a reply without options still awaits the human's review or action.
 	Check bool `json:"check,omitempty"`
 	// External chat channel that originated this entry (e.g. "feishu"), empty for Web UI.

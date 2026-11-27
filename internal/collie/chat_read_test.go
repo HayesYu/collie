@@ -576,8 +576,13 @@ const ctx = vm.createContext({
           text: async () => JSON.stringify({ error: "发送失败" }),
         };
       }
-      const id = "e" + (++saySeq);
-      return okJSON({ entry: id, trigger: "t" + saySeq });
+      const p = JSON.parse(init.body || "{}");
+      const seq = ++saySeq;
+      if (p.pick && p.re) {
+        return okJSON({ entry: p.re, trigger: "t" + seq, picked: true });
+      }
+      const id = "e" + seq;
+      return okJSON({ entry: id, trigger: "t" + seq });
     }
     if (u.startsWith("/api/super/settings")) return okJSON({ settings: { router_kind: "claude", worker_kind: "claude" } });
     if (u.startsWith("/api/models")) return okJSON({ models: [], efforts: [] });
@@ -919,7 +924,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   // 14) #t8739 Clicking --opt option while unread / scrolled above bottom MUST NOT jump to bottom or mark lower unreads as read.
   // Drain any pending async /api/chat/read microtasks from earlier synchronous subtests before resetting state.
   await wait(20);
-  assert.ok(cssSrc.includes(".reply-opts.reply-picked") && cssSrc.includes(".reply-picked-tag"), "CSS must style inline settled .reply-picked feedback");
+  assert.ok(cssSrc.includes(".reply-receipt") && cssSrc.includes(".rr-lbl"), "CSS must style inline collapsible .reply-receipt feedback");
   const makeOptClickTarget = (entryId, optText) => {
     const grp = makeEl("opt-grp-" + entryId);
     grp.dataset.entry = entryId;
@@ -962,6 +967,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(sayCalls14a.length, 1, "option click posts /api/super/say once");
   assert.equal(JSON.parse(sayCalls14a[0].body).text, "按方案 A 推进");
   assert.equal(JSON.parse(sayCalls14a[0].body).re, "e7");
+  assert.equal(JSON.parse(sayCalls14a[0].body).pick, true, "pure option click sends pick=true");
   assert.equal(scroller.scrollTop, scrollBeforeOpt, "clicking --opt with unreads below must keep 0px scroll drift");
   assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "clicking --opt above bottom must NOT POST /api/chat/read");
   assert.equal(serverLastRead, "e4", "server read cursor stays at e4");
@@ -969,17 +975,14 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.ok(threadBox.innerHTML.includes('id="unread-sep" data-first-unread="e7"'), "unread divider stays intact above e7");
   assert.equal(getEl("#super-jump").hidden, false, "jump pill stays visible after off-bottom opt click");
   assert.equal(getEl("#super-jump-badge").textContent, "6", "unread count remains 6 until user reads lower messages");
-  assert.ok(threadBox.innerHTML.includes('class="reply-opts reply-picked') && threadBox.innerHTML.includes("已选择：") && threadBox.innerHTML.includes("按方案 A 推进"), "e7 shows settled inline 已选择 feedback");
+  assert.ok(threadBox.innerHTML.includes('class="reply-receipt') && threadBox.innerHTML.includes("已选：") && threadBox.innerHTML.includes("按方案 A 推进"), "e7 shows settled inline receipt");
   assert.ok(!threadBox.innerHTML.includes('data-opt="按方案 A 推进"'), "e7 option buttons collapse after selection");
 
-  // SSE delivers persisted user message + new Collie reply below viewport: still 0px scroll drift and badge ticks 6 -> 7.
-  const sentId14a = "e" + saySeq;
-  const collieFollowId = "e" + (saySeq + 1);
-  saySeq += 1;
+  // SSE delivers persisted e7.pick + new Collie follow-up below viewport (no user bubble): still 0px scroll drift and badge ticks 6 -> 7.
+  const collieFollowId = "e" + (++saySeq);
   const afterSseEntries = [
-    ...optUnreadEntries,
-    mkEntry(parseInt(sentId14a.slice(1), 10), "user", "按方案 A 推进", { re: { entry: "e7", who: "Collie", text: "first unread collie reply" } }),
-    mkEntry(parseInt(collieFollowId.slice(1), 10), "collie", "收到，已按方案 A 启动处理。"),
+    ...optUnreadEntries.map((x) => (x.id === "e7" ? { ...x, pick: { state: "picked", text: "按方案 A 推进", at: new Date().toISOString() } } : x)),
+    mkEntry(parseInt(collieFollowId.slice(1), 10), "collie", "收到，已按方案 A 启动处理。", { re: { entry: "e7", who: "你选择了", text: "「按方案 A 推进」" } }),
   ];
   T.setSup({
     router: { status: "idle", alive: true },
@@ -994,7 +997,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(scroller.scrollTop, scrollBeforeOpt, "SSE echo + Collie follow-up keep 0px scroll drift");
   assert.equal(serverLastRead, "e4", "SSE echo does not advance read cursor");
   assert.equal(getEl("#super-jump-badge").textContent, "7", "new Collie reply increments unread badge 6 -> 7");
-  assert.ok(threadBox.innerHTML.includes("reply-picked") && threadBox.innerHTML.includes("按方案 A 推进"), "inline 已选择 feedback persists cleanly after SSE");
+  assert.ok(threadBox.innerHTML.includes("reply-receipt") && threadBox.innerHTML.includes("按方案 A 推进"), "inline receipt persists cleanly after SSE");
 
   // Clicking jump button afterwards scrolls to bottom and advances read cursor to the latest reply.
   getEl("#super-jump").dispatch("click");
@@ -1025,7 +1028,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   await wait(40);
   assert.equal(scroller.scrollTop, scroll14b, "0-unread scrolled-up history opt click keeps 0px drift");
   assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "0-unread scrolled-up opt click does not advance read cursor");
-  assert.ok(threadBox.innerHTML.includes("先观望") && threadBox.innerHTML.includes("reply-picked"), "0-unread scrolled-up opt click shows inline 已选择 feedback");
+  assert.ok(threadBox.innerHTML.includes("先观望") && threadBox.innerHTML.includes("reply-receipt"), "0-unread scrolled-up opt click shows inline receipt");
 
   // 14c) Partially above-top clicked message (e7.top < -4) anchors to e7 itself (0px drift even as e7 height shrinks by 20px!).
   fetchCalls.length = 0;
@@ -1071,9 +1074,9 @@ const mkEntry = (n, role, text, extra = {}) => ({
   sayFail = false;
   assert.equal(scroller.scrollTop, scroll14d, "failed off-bottom opt click keeps 0px scroll drift");
   assert.ok(threadBox.innerHTML.includes('data-opt="按方案 A 推进"'), "failed opt click restores clickable buttons");
-  assert.ok(!threadBox.innerHTML.includes("reply-picked"), "failed opt click clears inline 已选择 feedback");
+  assert.ok(!threadBox.innerHTML.includes("reply-receipt"), "failed opt click clears inline receipt");
 
-  // 14e) Already at bottom (atBottom): clicking --opt sticks naturally to bottom, advances read cursor, and omits redundant .reply-picked badge.
+  // 14e) Already at bottom (atBottom): clicking --opt sticks naturally to bottom, advances read cursor to e12, and collapses to silent .reply-receipt (no user bubble).
   fetchCalls.length = 0;
   serverLastRead = "e11";
   T.resetReadState("", "");
@@ -1093,12 +1096,11 @@ const mkEntry = (n, role, text, extra = {}) => ({
   const click14e = makeOptClickTarget("e12", "立刻发布");
   threadBox.dispatch("click", { target: click14e.btn });
   await wait(40);
-  const expectedBotRead = "e" + saySeq;
   assert.equal(scroller.scrollTop, scroller.scrollHeight, "at-bottom opt click sticks smoothly to bottom");
-  assert.equal(serverLastRead, expectedBotRead, "at-bottom opt click advances read cursor to sent message");
-  assert.ok(!threadBox.innerHTML.includes("reply-picked"), "at-bottom opt click omits duplicate inline 已选择 tag");
+  assert.equal(serverLastRead, "e12", "at-bottom silent opt click advances read cursor to the decision entry e12");
+  assert.ok(threadBox.innerHTML.includes("reply-receipt") && threadBox.innerHTML.includes("立刻发布"), "at-bottom opt click collapses to silent receipt without adding a user bubble");
 
-  // 14f) Inside 1v1 topic focus drawer (#td-list) while main chat has unreads below: drawer sticks to bottom,
+  // 14f) Inside 1v1 topic focus drawer (#td-list) while main chat has unreads below: card collapses in-place to .reply-receipt,
   // main chat stays anchored at 0px drift and unread cursor stays untouched.
   fetchCalls.length = 0;
   serverLastRead = "e4";
@@ -1121,10 +1123,9 @@ const mkEntry = (n, role, text, extra = {}) => ({
   const click14f = makeOptClickTarget("e7", "按方案 A 推进");
   getEl("#td-list").dispatch("click", { target: click14f.btn });
   await wait(40);
-  assert.equal(tdBody.scrollTop, tdBody.scrollHeight, "clicking --opt inside focus drawer sticks drawer to bottom");
   assert.equal(scroller.scrollTop, mainScrollBeforeDrawerOpt, "clicking --opt inside focus drawer keeps main stream anchored at 0px drift");
   assert.equal(serverLastRead, "e4", "clicking --opt inside focus drawer does not advance main unread cursor");
-  assert.ok(!getEl("#td-list").innerHTML.includes("reply-picked"), "focus drawer omits duplicate reply-picked pill above live reply");
+  assert.ok(getEl("#td-list").innerHTML.includes("reply-receipt") && getEl("#td-list").innerHTML.includes("按方案 A 推进"), "focus drawer collapses card in-place into receipt");
   T.closeThreadDrawer({ immediate: true });
 
   // 14g) Quoting an older message via bottom composer still scrolls to bottom as expected when user types & sends.

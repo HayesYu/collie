@@ -11,8 +11,8 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.53", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.53", agents: ["claude", "codex"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.2.93", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.93", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -57,7 +57,7 @@
     entry("event", "release-notes 回报：CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。", { tone: "done", ref: "release-notes", at: ago(6) }),
     entry("event", "fix-flaky-test 回报：已定位 TestOrdersPagination 偶发失败根因并补齐第二排序键与压测。", { tone: "done", ref: "fix-flaky-test", at: ago(5.8) }),
     entry("collie", "发布说明写好了：6 条改动，其中 **配置项改名** 和 **Node 22 起步** 需要在升级说明里提醒。要我直接开 PR 吗？升级指南放在团队文档（https://docs.example.com/shop-web/upgrade-guide-v1-4#node-22，第 2 节）。详见 ~/code/shop-web/CHANGELOG.md\n\n顺带附上首页明暗主题验收宽截图与架构图：~/code/shop-web/docs/preview-dark.png 、~/code/shop-web/docs/preview-light.png 、~/code/shop-web/docs/architecture.svg\n\n分页测试那边还在跑，初步看是按 `created_at` 排序时同一秒内的订单顺序不稳定。首屏慢的事等它跑完我再派人看。", { at: ago(5.5), re: { worker: "release-notes", who: "release-notes", text: "CHANGELOG 已更新：6 条改动，2 条需要注意的升级事项。" }, options: ["直接开 PR", "我先看一眼改动", "先不用"] }),
-    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 `~/code/shop-api/internal/orders/list.go:362-385` 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：`~/code/shop-api/bench-pagination.html`，全接口压测与索引复盘长报告已整理到 `~/code/shop-api/docs/perf-audit-v1.4.md`（含 8 列宽表，支持顶栏下载、复制原文或新标签宽屏阅读），压测看板见 `https://metrics.example.com/shop-api/run-1020`，暗色首屏基准图见 `~/code/shop-web/docs/preview-dark.png`。\n\n另外冷备归档路径 `hdfs://cluster-east/warehouse/shop_orders/dt=2026-11-20`、`/api/orders` 路由签名与本地复现命令 `go test -count=1 ./...` 均保持不变；顺带扫到已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5) }),
+    entry("collie", "**fix-flaky-test** 找到根因了：同一秒创建的订单只按 `created_at` 排序，顺序不稳定。已在 `~/code/shop-api/internal/orders/list.go:362-385` 补上 `id DESC` 作为第二排序键：\n\n```go\nconst listSQL = `\n\tSELECT id, user_id, status, total_cents, created_at\n\tFROM orders\n\tWHERE user_id = $1\n\tORDER BY created_at DESC, id DESC\n\tLIMIT $2 OFFSET $3`\n```\n\n200 轮压测对比图表：`~/code/shop-api/bench-pagination.html`，原始分位明细表：`~/code/shop-api/docs/orders-benchmark.csv`，全接口压测与索引复盘长报告已整理到 `~/code/shop-api/docs/perf-audit-v1.4.md`（含 8 列宽表，支持顶栏下载、复制原文或新标签宽屏阅读），压测看板见 `https://metrics.example.com/shop-api/run-1020`，暗色首屏基准图见 `~/code/shop-web/docs/preview-dark.png`。\n\n另外冷备归档路径 `hdfs://cluster-east/warehouse/shop_orders/dt=2026-11-20`、`/api/orders` 路由签名与本地复现命令 `go test -count=1 ./...` 均保持不变；顺带扫到已取消（`cancelled`）的订单目前仍计入列表页眉的 `total_count`，不确定前端是不是故意这样展示的，你空了看一眼。", { at: ago(2.5), files: ["~/code/shop-api/bench-pagination.html", "~/code/shop-api/docs/orders-benchmark.csv"] }),
     entry("user", "先把 `orders` 复合索引的上线窗口排到今晚 23:00，用 `CONCURRENTLY` 建索引避免锁表。", { at: ago(2.0) }),
     entry("collie", "明白，已经按 `CREATE INDEX CONCURRENTLY` 整理进今晚 23:00 的变更单，建完自动跑一遍 200 轮翻页回归。", { at: ago(1.8) }),
     entry("user", "另外把旧的单列索引先留 3 天观察慢查询，确认 P99 稳在 30ms 内再下线。", { at: ago(1.4) }),
@@ -95,16 +95,16 @@
     const out = [];
     for (let i = 0; i < all.length; i++) {
       const e = all[i];
-      if (e.role !== "collie" || (!e.options?.length && !e.check) || dismissed.has(e.id)) continue;
-      const hasOpts = !!e.options?.length;
-      let resolved = false, otherCollie = false;
+      if (e.role !== "collie" || (!e.options?.length && !e.check) || dismissed.has(e.id) || e.pick) continue;
+      let resolved = false;
+      const chain = new Set([e.id]);
       for (let j = i + 1; j < all.length; j++) {
         const next = all[j];
+        const reId = next.re?.entry || "";
         if (next.role === "user") {
-          const reId = next.re?.entry || "";
-          if (reId === e.id || (hasOpts && !reId && !otherCollie)) { resolved = true; break; }
-        } else if (next.role === "collie") {
-          otherCollie = true;
+          if (reId && chain.has(reId)) { resolved = true; break; }
+        } else if (next.role === "collie" && reId && chain.has(reId)) {
+          chain.add(next.id);
         }
       }
       if (!resolved) out.push({ id: e.id, at: e.at, summary: pendingSummary(e.text), ...(e.options?.length ? { options: e.options } : {}), ...(e.check ? { check: true } : {}) });
@@ -448,13 +448,33 @@
   // ───────────────────────────── scripted replies
   let demoN = 0;
   const seenSayIds = new Map();
-  function collieSay(text, re, clientMsgId) {
+  function collieSay(text, re, clientMsgId, pick = false) {
     if (clientMsgId && seenSayIds.has(clientMsgId)) return seenSayIds.get(clientMsgId);
-    const q = re && [...earlierEntries, ...entries].find((e) => e.id === re && (e.role === "collie" || e.role === "user"));
+    const all = [...earlierEntries, ...entries];
+    const q = re && all.find((e) => e.id === re && (e.role === "collie" || e.role === "user"));
+    if (pick && q && q.role === "collie" && q.options?.length) {
+      q.pick = { state: "picked", text, at: new Date().toISOString() };
+      if (clientMsgId) seenSayIds.set(clientMsgId, q.id);
+      routerStatus = "working";
+      pushAll();
+      colliePickAnswer(text, q);
+      return q.id;
+    }
+    if (q && q.role === "collie" && q.options?.length && !q.pick) {
+      q.pick = { state: "custom", text, at: new Date().toISOString() };
+    }
     const mine = entry("user", text, q ? { re: { entry: q.id, who: q.role === "user" ? "你" : "Collie", text: q.text } } : {});
     if (clientMsgId) seenSayIds.set(clientMsgId, mine.id);
     entries.push(mine); routerStatus = "working"; pushAll(); collieAnswer(text, mine);
     return mine.id;
+  }
+  async function colliePickAnswer(choice, targetEntry) {
+    await wait(900);
+    entries.push(entry("collie", `收到，已按「${choice}」推进处理；有新进展我会第一时间同步给你。`, {
+      re: { entry: targetEntry.id, who: "你选择了", text: `「${choice}」` },
+    }));
+    routerStatus = "idle";
+    pushAll();
   }
   async function collieAnswer(text, fromEntry) {
     await wait(1400);
@@ -585,6 +605,37 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
 }
 `;
 
+  const ordersBenchmarkCsv = [
+    "route,scenario,v1_3_p50_ms,v1_3_p99_ms,v1_4_p50_ms,v1_4_p99_ms,throughput_gain,notes",
+    "GET /api/orders,\"同秒多单翻页, 含状态过滤\",18.4,146.2,7.9,28.5,+118%,\"复合索引 (user_id, created_at DESC, id DESC)\"",
+    "POST /api/coupons/check,\"空购物车 + \"\"历史券码\"\"校验\",11.2,84.0,6.1,19.4,+64%,补齐 SCHEMA_AND_ID 默认值兜底",
+    "GET /api/catalog/home,首页首屏商品流,24.6,162.8,12.0,49.1,+92%,折叠区懒加载 + Redis 热键预热",
+    "POST /api/checkout/quote,运费与预计送达试算,15.8,112.5,9.3,34.7,+57%,合并区域费率批量查询",
+    "GET /api/orders/export,\"月度账单流式导出\n(>5 万行)\",42.0,310.0,29.5,118.0,+41%,游标分页流式写出",
+    "GET /api/orders/:id,单笔订单详情,5.2,21.4,4.8,16.2,+18%,主键点查保持平稳",
+  ].join("\n") + "\n";
+
+  const demoNotebook = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      date: today,
+      tasks: [
+        { id: "v1.4-release", title: "v1.4 发布与 /orders 分页修复", note: "fix-flaky-test 已定位，待开 PR", tone: "live", worker: "fix-flaky-test" },
+        { id: "migrations-cleanup", title: "旧回滚脚本处理待拍板", note: "等待你确认归档或删除", tone: "attn", entry_id: entries[5]?.id || "" },
+        { id: "mobile-lcp", title: "手机端首屏 LCP 与资源瀑布图", note: "排在分页索引上线后启动", tone: "idle" },
+        { id: "dark-mode", title: "首页暗色模式适配", note: "claude-1 在 macbook 编写 Header 切换", tone: "live", worker: "claude-1" },
+      ],
+      artifacts: [
+        { path: "~/code/shop-api/bench-pagination.html", name: "bench-pagination.html", title: "200 轮分页压测对比", ext: "html", at: ago(2.5) },
+        { path: "~/code/shop-api/docs/orders-benchmark.csv", name: "orders-benchmark.csv", title: "orders-benchmark.csv", ext: "csv", at: ago(2.5) },
+        { path: "~/code/shop-api/docs/perf-audit-v1.4.md", name: "perf-audit-v1.4.md", title: "v1.4 压测与索引复盘", ext: "md", at: ago(2.5) },
+      ],
+      timers: timers.filter((t) => t.enabled).slice().sort((a, b) => new Date(a.next_run) - new Date(b.next_run)).map((t) => ({
+        id: t.id, spec: t.spec, text: t.text, next_run: t.next_run,
+      })),
+    };
+  };
+
   // ───────────────────────────── the API
   const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
   const demoUploads = new Map();
@@ -602,6 +653,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/session") return json({ ok: true });
     if (p === "/api/state") return json(state());
     if (p === "/api/super") return json(sup());
+    if (p === "/api/super/notebook") return json(demoNotebook());
     if (p === "/api/super/settings") {
       if (method === "POST") {
         if (body.settings) settings.settings = { ...settings.settings, ...body.settings };
@@ -906,12 +958,12 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       demoUploads.set(path, { blob, name: rawName, size: blob.size || 0 });
       return json({ path, name: rawName, size: blob.size || 0 });
     }
-    if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "", body.re, body.client_msg_id) });
+    if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "", body.re, body.client_msg_id, !!body.pick), picked: !!body.pick });
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
     if (p === "/api/version") return json({
-      version: "v0.2.53", latest: "v0.2.53", outdated: null,
+      version: "v0.2.93", latest: "v0.2.93", outdated: null,
       machines: machines.map((x) => ({ id: x.id, name: x.name, version: x.version, local: !!x.local, online: !!x.online, outdated: false })),
     });
     if (p === "/api/local-app") return json({ url: "" });
@@ -942,6 +994,9 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
         const html = await (await realFetch(new URL("bench-pagination.html", location.href))).text();
         const isHtml = !dl && q.get("as") === "html";
         return new Response(html, { headers: { "Content-Type": isHtml ? "text/html; charset=utf-8" : "application/octet-stream", "X-File-Kind": dl ? "download" : (isHtml ? "html" : "text"), "X-File-Size": String(new Blob([html]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/bench-pagination.html"), ...dlHead("bench-pagination.html") } });
+      }
+      if (!mach && /orders-benchmark\.csv$/i.test(fp)) {
+        return new Response(ordersBenchmarkCsv, { headers: { "X-File-Kind": dl ? "download" : "text", "X-File-Size": String(new Blob([ordersBenchmarkCsv]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/docs/orders-benchmark.csv"), ...dlHead("orders-benchmark.csv") } });
       }
       if (!mach && /perf-audit-v1\.4\.md$/.test(fp)) {
         return new Response(perfAuditMd, { headers: { "X-File-Kind": dl ? "download" : "text", "X-File-Size": String(new Blob([perfAuditMd]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/docs/perf-audit-v1.4.md"), ...dlHead("perf-audit-v1.4.md") } });
@@ -1030,11 +1085,11 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.53", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.93", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
         { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.53", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.53",
+      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.93", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.93",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

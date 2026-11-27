@@ -2290,6 +2290,7 @@
       hideSearchPanel();
       closeCollieThreadsPop();
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
+      syncNotebookVisibility();
     }
     view = next; current = next === "ext" ? null : id;
     liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
@@ -2334,6 +2335,8 @@
         renderSuper({ force: needRebuild, unreadAnchor: true });
       }
       renderTarget(true);
+      loadNotebook(true);
+      syncNotebookVisibility();
       if (wantThread?.rootId) {
         openThreadDrawer(wantThread.rootId, wantThread.focusId || "", wantThread.focusId || wantThread.rootId);
       } else if (savedThread?.rootId) {
@@ -2658,10 +2661,17 @@
     };
     return reaches(startId, targetId) || reaches(targetId, startId);
   }
+  let openInlineDecisionId = null;
+  const ICON_EDIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+  const ICON_RECEIPT_CHK = `<svg class="rr-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
+  const ICON_SPLIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M13 4v16"/></svg>`;
+  const ICON_DOC_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>`;
   function entryPendingNow(allEntries, idx, id, pendIds = null) {
     if (!id) return false;
+    if (dismissedLocal.has(id) || pickedReplyOpts.has(id)) return false;
+    const entry = allEntries?.[idx];
+    if (entry?.pick) return false;
     if (sup.hasPending) return (pendIds || new Set(activePending().map((p) => p.id))).has(id);
-    if (dismissedLocal.has(id)) return false;
     for (let j = idx + 1; j < allEntries.length; j++) {
       const next = allEntries[j];
       if (next.role === "user") {
@@ -2671,17 +2681,68 @@
     }
     return true;
   }
+  function resolveDecisionInfo(e, idx, allEntries) {
+    if (!e || !e.id) return null;
+    const localPick = pickedReplyOpts.get(e.id);
+    if (localPick) {
+      return {
+        state: localPick.state || "picked",
+        text: localPick.text || "",
+        at: localPick.at || "",
+        sending: !!localPick.sending,
+      };
+    }
+    if (e.pick && e.pick.state) {
+      return {
+        state: e.pick.state,
+        text: e.pick.text || "",
+        at: e.pick.at || "",
+        sending: false,
+      };
+    }
+    if (dismissedLocal.has(e.id)) {
+      return { state: "dismissed", text: "", at: "", sending: false };
+    }
+    if (Array.isArray(allEntries) && idx >= 0) {
+      for (let j = idx + 1; j < allEntries.length; j++) {
+        const next = allEntries[j];
+        if (!next || next.role !== "user") continue;
+        const reId = next.re?.entry || "";
+        if (reId === e.id || (reId && inEntryReplyChain(reId, e.id, allEntries))) {
+          const txt = threadEntryPlainText(next).trim();
+          const matchedOpt = (e.options || []).some((o) => o === txt);
+          return {
+            state: matchedOpt ? "picked" : "custom",
+            text: txt,
+            at: next.at || "",
+            sending: false,
+          };
+        }
+      }
+    }
+    return { state: "dismissed", text: "", at: "", sending: false };
+  }
   function replyOptsMarkup(e, idx, allEntries, pendIds = null, opts = null) {
     if (!e || e.role !== "collie" || !e.id) return "";
     const optList = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
     if (optList.length) {
       if (entryPendingNow(allEntries, idx, e.id, pendIds, true)) {
-        return `<div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
-          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
+        const inlineOpen = openInlineDecisionId === e.id;
+        return `<div class="decision-wrap" data-decision="${esc(e.id)}"><div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen ? "true" : "false"}">${ICON_EDIT_MINI}<span>补充一句</span></button></div><div class="reply-inline" data-inline-box="${esc(e.id)}"${inlineOpen ? "" : " hidden"}><input type="text" data-inline-input="${esc(e.id)}" placeholder="补充一句发给 Collie，自动关联这条决策…" autocomplete="off"><button type="button" class="reply-inline-send" data-inline-send="${esc(e.id)}" disabled>发送</button><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="收起" aria-label="收起输入框">${ICON_X}</button></div></div>`;
       }
-      const picked = !opts?.inDrawer ? pickedReplyOpts.get(e.id) : null;
-      if (picked) {
-        return `<div class="reply-opts reply-picked${picked.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}" role="status" aria-live="polite"><span class="reply-picked-tag"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span class="reply-picked-text"><span class="reply-picked-lbl">已选择：</span><span class="reply-picked-val">${esc(picked.text)}</span></span></span></div>`;
+      const res = resolveDecisionInfo(e, idx, allEntries);
+      if (res) {
+        const isDismissed = res.state === "dismissed";
+        const isCustom = res.state === "custom";
+        const lbl = isDismissed ? "已划掉" : isCustom ? "已补充：" : "已选：";
+        const val = isDismissed ? "暂不处理" : (res.text || "");
+        const atStr = res.at ? hhmm(res.at) : "";
+        const origHtml = optList.map((o) => {
+          const hit = !isDismissed && !isCustom && o === res.text;
+          return `<span class="rr-orig-opt${hit ? " is-picked" : ""}">${hit ? "✓ " : ""}${esc(o)}</span>`;
+        }).join("");
+        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span><span class="rr-val">${esc(val)}</span>${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div>${isCustom && res.text ? `<div class="rr-custom-note">你的附言：${esc(res.text)}</div>` : ""}</div></details>`;
       }
       return "";
     }
@@ -2689,6 +2750,60 @@
       return `<div class="reply-opts reply-check" data-entry="${esc(e.id)}"><button type="button" class="reply-ack" data-ack="${esc(e.id)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已处理</button></div>`;
     }
     return "";
+  }
+  const SNAP_PATH_RE = /(?:^|[\s（(【\[「『"'`,:;：；、])((?:~\/|\/[A-Za-z0-9._-]+\/)[A-Za-z0-9._/@+\-\u4e00-\u9fff]+\.(?:html?|csv|tsv))(?::\d+(?:-\d+)?)?/gi;
+  function extractEntryArtifacts(e) {
+    if (!e || e.role !== "collie") return [];
+    const seen = new Set();
+    const out = [];
+    const add = (raw) => {
+      const p = String(raw || "").trim();
+      if (!p || /^https?:\/\//i.test(p)) return;
+      if (/\/\.collie\/(?:uploads|images|router\/memory|router\/dreams)\//i.test(p)) return;
+      const key = p.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      const name = p.split("/").pop() || p;
+      const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
+      if (!ext) return;
+      out.push({
+        path: p,
+        name,
+        ext,
+        isHtml: ext === "html" || ext === "htm",
+        isCsv: ext === "csv" || ext === "tsv",
+      });
+    };
+    if (Array.isArray(e.files)) {
+      for (const fp of e.files) add(fp);
+    }
+    if (e.text) {
+      for (const m of String(e.text).matchAll(SNAP_PATH_RE)) {
+        if (m[1]) add(m[1]);
+      }
+    }
+    return out;
+  }
+  function renderEntryArtifacts(e) {
+    const items = extractEntryArtifacts(e);
+    if (!items.length) return "";
+    const openPath = !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "";
+    const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
+    const hasExplicit = Array.isArray(e.files) && e.files.length > 0;
+    const renderChip = (it) => {
+      const act = openPath === it.path;
+      const actLbl = act ? "预览中" : it.isHtml ? "分屏预览" : it.isCsv ? "表格预览" : "预览";
+      return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-act">${actLbl}</span></button>`;
+    };
+    if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
+      return `<div class="msg-files">${renderChip(primary)}</div>`;
+    }
+    const primaryAct = openPath === primary.path;
+    const btnLbl = primaryAct ? "预览中" : primary.isHtml ? "分屏预览" : primary.isCsv ? "表格预览" : "预览文件";
+    const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
+    const rest = items.filter((it) => it.path !== primary.path);
+    const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
+    return `<section class="snap-card" aria-label="${esc(primary.name)}"><div class="snap-head"><div class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><div class="snap-titles"><div class="snap-title">${esc(primary.name)}</div><div class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</div></div></div><button type="button" class="snap-open-btn${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}">${ICON_SPLIT_MINI}<span>${btnLbl}</span></button></div>${extraChips}</section>`;
   }
   function threadEntryPlainText(e) {
     let t = String(e?.text || "");
@@ -2873,6 +2988,14 @@
       if (e.check) h = Math.imul(h ^ 37, 16777619);
       if (e.pending) h = Math.imul(h ^ 41, 16777619);
       if (e.picked || e.resolved || e.dismissed) h = Math.imul(h ^ 43, 16777619);
+      if (e.pick) {
+        h = fnvHashStr(h, e.pick.state || "");
+        h = fnvHashStr(h, e.pick.text || "");
+        h = fnvHashStr(h, e.pick.at || "");
+      }
+      if (Array.isArray(e.files) && e.files.length) {
+        h = fnvHashStr(h, e.files.join("\x1f"));
+      }
       if (Array.isArray(e.options)) h = Math.imul(h ^ (e.options.length + 53), 16777619);
       if (e.text) {
         const s = e.text, len = s.length;
@@ -4451,6 +4574,11 @@
     const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew._html ?? crew.innerHTML;
     const r = sup.router || {};
     const allEntries = chatEntries();
+    for (const e of allEntries) {
+      if (e.id && e.pick && pickedReplyOpts.has(e.id) && !pickedReplyOpts.get(e.id)?.sending) {
+        pickedReplyOpts.delete(e.id);
+      }
+    }
     setText($("#router-kind"), KIND_LABEL[r.kind] || r.kind || "");
     const st = $("#router-status");
     const stCls = "status " + collieDot(r.status);
@@ -4483,7 +4611,9 @@
     if (view === "collie") renderTarget();
     const crewHTML = active.map((w) => {
       const pane = paneOf(w.name);
-      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
+      const kindLbl = KIND_LABEL[w.kind] || w.kind;
+      const stLbl = STATUS_LABEL[workerStatus(w)] || "";
+      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""} title="${esc([w.name, kindLbl, stLbl].filter(Boolean).join(" · "))}"><span class="dot ${esc(workerStatus(w))}" aria-hidden="true"></span><span class="chip-name">${esc(w.name)}</span><span class="k">${esc(kindLbl)}</span></a>`;
     }).join("");
     const crewWillChange = crewHTML !== prevCrew;
     if (crewWillChange) ensureLiveAnchor();
@@ -4492,6 +4622,7 @@
     if (crewChanged) {
       if (prevCrewScroll > 0) crew.scrollLeft = prevCrewScroll;
       crew._syncScrollFade?.();
+      syncCollieTopHeight();
     }
 
     const isEmptyChat = !sup.entries.length && !pendingSays.length;
@@ -4533,13 +4664,24 @@
       sup.hasPending ? 1 : 0,
       pendList.map((p) => p.id).join(","),
       dismissedLocal.size ? [...dismissedLocal].join(",") : "",
-      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.text}`).join(",") : "",
+      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.state || "picked"}:${v.text}`).join(",") : "",
+      openInlineDecisionId || "",
+      !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "",
       pinList.map((p) => p.id).join(","),
       workerStateFingerprint(),
       superAsksGen,
     ].join("|");
 
     renderPendingBar();
+    if (view === "collie") {
+      const nbSig = [
+        sup.entries.length,
+        sup.entries[sup.entries.length - 1]?.id || "",
+        workerStateFingerprint(),
+        pendList.map((p) => p.id).join(","),
+      ].join("|");
+      scheduleNotebookRefresh(nbSig);
+    }
 
     if (!force && nextBodyKey === superBodyKey && (!canPatchSuperDom(box) || box.firstElementChild)) {
       if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
@@ -4685,7 +4827,8 @@
             const qSig = qi ? qi.sig : "";
             const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
             const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
-            const sig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${qSig}|${optsHtml}|${e.text || ""}`;
+            const artifactsHtml = renderEntryArtifacts(e);
+            const sig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${e.text || ""}`;
             items.push({
               key: eKey,
               sig,
@@ -4695,7 +4838,7 @@
                 const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
                 const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot);
                 const foot = entryBtn ? `<div class="msg-foot">${entryBtn}${acts}</div>` : acts;
-                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${optsHtml}${foot}</div></div>`;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${artifactsHtml}${optsHtml}${foot}</div></div>`;
               },
             });
             sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
@@ -5408,7 +5551,8 @@
     : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
   async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID(), opts = {}) {
-    const scrollBottom = opts.scrollBottom !== false;
+    const isPick = !!opts.pick;
+    const scrollBottom = isPick ? !!opts.scrollBottom : opts.scrollBottom !== false;
     const shouldCommitRead = scrollBottom || !!opts.commitRead;
     const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
     const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
@@ -5416,19 +5560,23 @@
     // follows memory preferences and configured defaults.
     const t = targetNow(), ov = targetOverrideFlags(), p = ov.any ? (target || {}) : {};
     const { model, effort } = modelNow(t);
-    // Your message shows at once; the hub's copy takes its place seamlessly when it arrives.
-    const mine = {
-      id: "",
-      _localId: "_p" + (++pendingSaySeq),
-      client_msg_id: clientMsgID,
-      _afterNum: entryIdNum(latestPersistedEntryId()),
-      role: "user",
-      text,
-      at: new Date().toISOString(),
-      pending: true,
-      re: normRe,
-    };
-    pendingSays.push(mine);
+    // Normal messages show optimistically as user bubbles; pure --opt picks
+    // collapse the decision card in-place without emitting a user bubble.
+    let mine = null;
+    if (!isPick) {
+      mine = {
+        id: "",
+        _localId: "_p" + (++pendingSaySeq),
+        client_msg_id: clientMsgID,
+        _afterNum: entryIdNum(latestPersistedEntryId()),
+        role: "user",
+        text,
+        at: new Date().toISOString(),
+        pending: true,
+        re: normRe,
+      };
+      pendingSays.push(mine);
+    }
     if (scrollBottom) {
       pendingUnreadAnchorOnVisible = false;
       clearScrollReadTimer();
@@ -5447,14 +5595,22 @@
     try {
       const info = await modelsFor(t.kind, t.machine);
       const sendEffort = effortsFor(info, t.kind, model).includes(effort) ? effort : "";
-      r = await api("/api/super/say", { body: { text, re: normRe?.entry || "", client_msg_id: clientMsgID,
-      machine: "machine" in p ? (t.machine || "local") : "",
-      kind: "kind" in p ? t.kind : "",
-      model: "model" in p || "kind" in p ? model : "",
-      effort: "effort" in p || "kind" in p ? sendEffort : "" } });
+      const payload = {
+        text,
+        re: normRe?.entry || "",
+        client_msg_id: clientMsgID,
+        machine: "machine" in p ? (t.machine || "local") : "",
+        kind: "kind" in p ? t.kind : "",
+        model: "model" in p || "kind" in p ? model : "",
+        effort: "effort" in p || "kind" in p ? sendEffort : "",
+      };
+      if (isPick) payload.pick = true;
+      r = await api("/api/super/say", { body: payload });
     } catch (err) {
-      const idx = pendingSays.indexOf(mine);
-      if (idx >= 0) pendingSays.splice(idx, 1);
+      if (mine) {
+        const idx = pendingSays.indexOf(mine);
+        if (idx >= 0) pendingSays.splice(idx, 1);
+      }
       if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry));
       opts.onRollback?.();
       const errSc = !scrollBottom && view === "collie" ? viewScroller("collie") : null;
@@ -5466,23 +5622,100 @@
       renderSuper(errRestore ? { restore: errRestore } : undefined);
       throw err;
     }
-    // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
-    mine.id = r?.entry || mine.id || "";
-    if (mine.id && shouldCommitRead) commitChatRead(mine.id, { immediate: true });
-    const idx = pendingSays.indexOf(mine);
-    if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
-      if (mine.id) rememberPromotedPending(mine.id, mine._localId);
-      pendingSays.splice(idx, 1);
-      renderSide();
-      renderSuper();
+    if (mine) {
+      // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
+      mine.id = r?.entry || mine.id || "";
+      if (mine.id && shouldCommitRead) commitChatRead(mine.id, { immediate: true });
+      const idx = pendingSays.indexOf(mine);
+      if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
+        if (mine.id) rememberPromotedPending(mine.id, mine._localId);
+        pendingSays.splice(idx, 1);
+        renderSide();
+        renderSuper();
+      }
+    } else if (r?.entry && shouldCommitRead) {
+      commitChatRead(r.entry, { immediate: true });
     }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }
 
   const busyReplyOpts = new Set();
+  async function submitInlineDecision(id, rawText, opts = {}) {
+    const text = String(rawText || "").trim();
+    if (!id || !text || busyReplyOpts.has(id)) return;
+    busyReplyOpts.add(id);
+    if (openInlineDecisionId === id) openInlineDecisionId = null;
+    if (replyTo?.entry === id) setReply(null);
+    const e = chatEntries().find((x) => x.id === id);
+    pickedReplyOpts.set(id, { state: "custom", text, at: new Date().toISOString(), sending: true });
+    try {
+      await sendSuper(
+        text,
+        e ? { entry: e.id, who: "Collie", text: e.text } : { entry: id, who: "Collie", text: "" },
+        false,
+        undefined,
+        {
+          scrollBottom: !opts.inDrawer,
+          commitRead: true,
+          onRollback: () => { pickedReplyOpts.delete(id); },
+        },
+      );
+      const picked = pickedReplyOpts.get(id);
+      if (picked) {
+        picked.sending = false;
+        document.querySelectorAll(`.reply-receipt[data-entry="${CSS.escape(id)}"]`).forEach((el) => el.classList.remove("is-sending"));
+      }
+    } catch (err) {
+      pickedReplyOpts.delete(id);
+      toast(err.message, "attn");
+    } finally {
+      busyReplyOpts.delete(id);
+    }
+  }
   async function handleQuickOptionClick(ev, opts = {}) {
+    const openFileBtn = ev.target.closest("[data-open-file]");
+    if (openFileBtn) {
+      ev.preventDefault();
+      openFile(openFileBtn.dataset.openFile);
+      return true;
+    }
     const ack = ev.target.closest(".reply-ack[data-ack]");
     if (ack) { ev.preventDefault(); dismissPending(ack.dataset.ack); return true; }
+    const tog = ev.target.closest("[data-toggle-inline]");
+    if (tog) {
+      ev.preventDefault();
+      const id = tog.dataset.toggleInline;
+      openInlineDecisionId = openInlineDecisionId === id ? null : id;
+      renderSuper();
+      if (activeThreadRoot) syncThreadDrawer();
+      if (openInlineDecisionId) {
+        requestAnimationFrame(() => {
+          const scope = opts.inDrawer ? $("#td-list") : $("#super-thread");
+          const inp = scope?.querySelector?.(`[data-inline-input="${CSS.escape(openInlineDecisionId)}"]`);
+          inp?.focus?.({ preventScroll: true });
+        });
+      }
+      return true;
+    }
+    const cancel = ev.target.closest("[data-inline-cancel]");
+    if (cancel) {
+      ev.preventDefault();
+      if (openInlineDecisionId === cancel.dataset.inlineCancel) {
+        openInlineDecisionId = null;
+        renderSuper();
+        if (activeThreadRoot) syncThreadDrawer();
+      }
+      return true;
+    }
+    const sendBtn = ev.target.closest("[data-inline-send]");
+    if (sendBtn) {
+      ev.preventDefault();
+      const id = sendBtn.dataset.inlineSend;
+      const box = sendBtn.closest("[data-inline-box]");
+      const inp = box?.querySelector?.("[data-inline-input]");
+      if (inp?.value?.trim()) await submitInlineDecision(id, inp.value, opts);
+      return true;
+    }
     const b = ev.target.closest(".reply-opt[data-opt]");
     if (!b) return false;
     const grp = b.closest(".reply-opts[data-entry]");
@@ -5492,27 +5725,22 @@
     grp.dataset.busy = "1";
     grp.querySelectorAll("button").forEach((x) => { x.disabled = true; });
     const text = b.dataset.opt;
+    if (openInlineDecisionId === id) openInlineDecisionId = null;
     if (replyTo?.entry === id) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
     const sc = viewScroller("collie");
-    const shouldScrollBottom = typeof opts.scrollBottom === "boolean"
-      ? opts.scrollBottom
-      : (!opts.inDrawer && isCollieNearBottom(sc));
-    const shouldCommitRead = shouldScrollBottom
-      || (!!opts.inDrawer && (isCollieNearBottom(sc) || computeUnreadInfo().count === 0));
+    const nearBot = isCollieNearBottom(sc);
+    const shouldCommitRead = nearBot || (!!opts.inDrawer && computeUnreadInfo().count === 0);
     let keepSnap = null;
-    if (opts.inDrawer) {
-      tdForceScroll = true;
-      tdAutoStickUntil = performance.now() + 1200;
-    } else if (!shouldScrollBottom) {
+    if (!opts.inDrawer && !nearBot) {
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
       unreadAnchorApplied = true;
       keepSnap = captureEntryAnchor(sc, id) || captureColliePos(sc);
       if (keepSnap) keepSnap.atBottom = false;
-      pickedReplyOpts.set(id, { text, sending: true });
     }
+    pickedReplyOpts.set(id, { state: "picked", text, at: new Date().toISOString(), sending: true });
     try {
       await sendSuper(
         text,
@@ -5520,7 +5748,8 @@
         false,
         undefined,
         {
-          scrollBottom: shouldScrollBottom,
+          pick: true,
+          scrollBottom: nearBot && !opts.inDrawer,
           commitRead: shouldCommitRead,
           restore: keepSnap,
           onRollback: () => { pickedReplyOpts.delete(id); },
@@ -5529,8 +5758,7 @@
       const picked = pickedReplyOpts.get(id);
       if (picked) {
         picked.sending = false;
-        const box = $("#super-thread");
-        box?.querySelector(`.reply-picked[data-entry="${CSS.escape(id)}"]`)?.classList.remove("is-sending");
+        document.querySelectorAll(`.reply-receipt[data-entry="${CSS.escape(id)}"]`).forEach((el) => el.classList.remove("is-sending"));
       }
     } catch (err) {
       pickedReplyOpts.delete(id);
@@ -5543,6 +5771,29 @@
     return true;
   }
   $("#super-thread").addEventListener("click", (ev) => { handleQuickOptionClick(ev); });
+  document.addEventListener("input", (ev) => {
+    const inp = ev.target?.closest?.("[data-inline-input]");
+    if (!inp) return;
+    const box = inp.closest("[data-inline-box]");
+    const btn = box?.querySelector?.("[data-inline-send]");
+    if (btn) btn.disabled = !String(inp.value || "").trim();
+  });
+  document.addEventListener("keydown", (ev) => {
+    const inp = ev.target?.closest?.("[data-inline-input]");
+    if (!inp) return;
+    const id = inp.dataset.inlineInput;
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) {
+      ev.preventDefault();
+      if (String(inp.value || "").trim()) submitInlineDecision(id, inp.value, { inDrawer: !!inp.closest("#thread-drawer") });
+    } else if (ev.key === "Escape" && !ev.isComposing) {
+      ev.preventDefault();
+      if (openInlineDecisionId === id) {
+        openInlineDecisionId = null;
+        renderSuper();
+        if (activeThreadRoot) syncThreadDrawer();
+      }
+    }
+  });
 
   $("#pending-wrap").addEventListener("click", (ev) => {
     const dis = ev.target.closest("[data-dismiss]");
@@ -7847,10 +8098,12 @@
     const items = points.length ? points : extraProse;
     if (!headline && !items.length) return null;
     const shownCount = (headline ? 1 : 0) + items.length;
+    const plainOne = stripThreadMarkdownLine(headline || items[0] || "");
     return {
       name: dream.name,
       stamp: formatDreamStamp(dream.name),
       headline,
+      oneLine: plainOne,
       points: items.slice(0, 3),
       hasMore: meaningfulLines > shownCount || /```|^#{1,6}\s/m.test(dream.text) || dream.text.length > 260,
     };
@@ -7979,25 +8232,18 @@
     const budget = r.budget || (10 << 10);
     const over = upFront > budget;
 
-    // Top Dream Status Card + Latest Dream Summary
+    // Top Dream Status Card + Slim 1-Line Latest Dream Summary (click to expand full journal)
     let statusCard = "";
     if (!searching) {
       const latestDream = dreams[0] || null;
       const latestSum = latestDream ? extractDreamSummary(latestDream) : null;
       const dreamSumHtml = latestSum ? `<div class="mem-dream-sum" data-dream-name="${esc(latestDream.name)}">
-          <div class="mem-dream-sum-head">
+          <button type="button" class="mem-dream-row" data-act="dream-sum-toggle" aria-expanded="${memDreamExpanded ? "true" : "false"}" aria-controls="mem-dream-full">
             <span class="mem-dream-sum-title">最近做梦摘要<span class="mem-dream-sum-stamp">${esc(latestSum.stamp)}</span></span>
-            <button type="button" class="mem-dream-toggle" data-act="dream-sum-toggle" aria-expanded="${memDreamExpanded ? "true" : "false"}" aria-controls="mem-dream-full">
-              <span>${memDreamExpanded ? "收起日志" : "查看完整日志"}</span>
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg>
-            </button>
-          </div>
-          ${memDreamExpanded
-            ? `<div id="mem-dream-full" class="mem-dream-full msg assistant">${md(latestDream.text)}</div>`
-            : `<div id="mem-dream-full" class="mem-dream-brief">
-                ${latestSum.headline ? `<div class="mem-dream-lead">${md(latestSum.headline)}</div>` : ""}
-                ${latestSum.points.length ? `<ul class="mem-dream-pts">${latestSum.points.map((pt) => `<li>${md(pt)}</li>`).join("")}</ul>` : ""}
-              </div>`}
+            <span class="mem-dream-one" title="${esc(latestSum.oneLine)}">${esc(latestSum.oneLine)}</span>
+            <span class="mem-dream-chev"><span>${memDreamExpanded ? "收起" : "展开详情"}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></span>
+          </button>
+          ${memDreamExpanded ? `<div id="mem-dream-full" class="mem-dream-full msg assistant">${md(latestDream.text)}</div>` : ""}
         </div>` : "";
       statusCard = `<div class="card mem-status-card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
           <button type="button" class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
@@ -11619,6 +11865,12 @@
   const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
   const MD_EXT = /\.(md|markdown|mdx)$/i;
   const HTML_EXT = /\.html?$/i;
+  const CSV_EXT = /\.(csv|tsv)$/i;
+  const TSV_EXT = /\.tsv$/i;
+  const HTML_SANDBOX_ATTR = "allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+  const CSV_MAX_PARSE_ROWS = 5000;
+  const CSV_PAGE_SIZE = 100;
+  const CSV_NUM_RE = /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$/;
   const htmlFileURL = (path, machine = "") => {
     if (typeof window.__collieDemoHtmlUrl === "function") {
       const u = window.__collieDemoHtmlUrl(path);
@@ -11627,10 +11879,118 @@
     return `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=html`;
   };
   const fileLinkAttrs = (rawPath, escapedPath, titleText) => HTML_EXT.test(rawPath)
-    ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" target="_blank" rel="noopener" data-path="${escapedPath}" title="${esc("在新标签页打开 " + rawPath)}"`
+    ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" data-path="${escapedPath}" title="${esc("预览 HTML：" + rawPath)}"`
     : IMG_EXT.test(rawPath)
     ? `class="fpath img-link" href="#" data-path="${escapedPath}" title="${esc("查看大图 " + (rawPath.split("/").pop() || rawPath))}"`
     : `class="fpath" href="#" data-path="${escapedPath}" title="${titleText}"`;
+  // Strict RFC 4180 parser for CSV / TSV: handles quoted commas/tabs, escaped "" quotes,
+  // and embedded CR/LF newlines inside quoted fields, with a row cap for huge files.
+  function parseDelimitedTable(rawText, delimiter = ",", maxRows = CSV_MAX_PARSE_ROWS) {
+    let text = String(rawText ?? "");
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    const len = text.length;
+    if (!len) return { headers: [], rows: [], colCount: 0, capped: false };
+    const allRows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    let atFieldStart = true;
+    let capped = false;
+    let i = 0;
+    const pushRow = () => {
+      row.push(field);
+      field = "";
+      allRows.push(row);
+      row = [];
+      atFieldStart = true;
+    };
+    while (i < len) {
+      const ch = text[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (i + 1 < len && text[i + 1] === '"') {
+            field += '"';
+            i += 2;
+          } else {
+            inQuotes = false;
+            i++;
+          }
+        } else if (ch === "\r") {
+          field += "\n";
+          i += (i + 1 < len && text[i + 1] === "\n") ? 2 : 1;
+        } else {
+          field += ch;
+          i++;
+        }
+        continue;
+      }
+      if (atFieldStart && ch === '"') {
+        inQuotes = true;
+        atFieldStart = false;
+        i++;
+        continue;
+      }
+      if (ch === delimiter) {
+        row.push(field);
+        field = "";
+        atFieldStart = true;
+        i++;
+        continue;
+      }
+      if (ch === "\r" || ch === "\n") {
+        pushRow();
+        i += (ch === "\r" && i + 1 < len && text[i + 1] === "\n") ? 2 : 1;
+        if (allRows.length >= maxRows + 1) {
+          if (i < len && text.slice(i).trim() !== "") capped = true;
+          break;
+        }
+        continue;
+      }
+      field += ch;
+      atFieldStart = false;
+      i++;
+    }
+    if (!capped && (!atFieldStart || row.length > 0)) {
+      pushRow();
+    }
+    if (!allRows.length) return { headers: [], rows: [], colCount: 0, capped: false };
+    let colCount = 0;
+    for (let r = 0; r < allRows.length; r++) {
+      if (allRows[r].length > colCount) colCount = allRows[r].length;
+    }
+    const rawHead = allRows[0];
+    const headers = [];
+    for (let c = 0; c < colCount; c++) {
+      const h = (rawHead[c] ?? "").trim();
+      headers.push(h || `列 ${c + 1}`);
+    }
+    const rows = allRows.slice(1).map((r) => {
+      if (r.length === colCount) return r;
+      const padded = r.slice();
+      while (padded.length < colCount) padded.push("");
+      return padded;
+    });
+    return { headers, rows, colCount, capped };
+  }
+  async function fetchHtmlFile(path, tries = fileTries()) {
+    for (const m of tries) {
+      const q = `/api/file?path=${encodeURIComponent(path)}${m ? "&machine=" + encodeURIComponent(m) : ""}&as=html`;
+      const r = routeReq(q);
+      const res = await authFetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" }, !!r.hub);
+      if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
+      if (res.status === 404) continue;
+      if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || "打不开这个 HTML 文件"); }
+      const htmlText = await res.text();
+      return {
+        kind: "html",
+        size: +res.headers.get("X-File-Size") || new Blob([htmlText]).size,
+        path: decodeURIComponent(res.headers.get("X-File-Path") || path),
+        htmlText,
+        machine: m,
+      };
+    }
+    return null;
+  }
   const IMG_TYPE = { svg: "image/svg+xml", jpg: "image/jpeg", jpeg: "image/jpeg", ico: "image/x-icon" };
   const imgMime = (p) => {
     const ext = String(p || "").split(".").pop().toLowerCase();
@@ -11743,10 +12103,28 @@
     cur.truncated = false;
     return full;
   }
-  function syncFileBar(prefix, { langLabel = "", copyable = false, copyTitle = "复制全文", downloadable = false, wideHref = "" }) {
+  function syncFileBar(prefix, { langLabel = "", isHtml = false, modeSeg = false, activeMode = "table", copyable = false, copyTitle = "复制全文", downloadable = false, wideHref = "" }) {
     const lEl = $("#" + prefix + "-lang"), cWrap = $("#" + prefix + "-copy-wrap"), cBtn = $("#" + prefix + "-copy");
     const dlBtn = $("#" + prefix + "-dl"), wideBtn = prefix === "fv" ? $("#fv-wide") : null;
-    if (lEl) { lEl.hidden = !langLabel; lEl.textContent = langLabel; }
+    const segEl = $("#" + prefix + "-mode-seg");
+    const sbTag = prefix === "fv" ? $("#fv-sandbox-tag") : null;
+    if (lEl) {
+      lEl.hidden = !langLabel;
+      lEl.textContent = langLabel;
+      lEl.classList.toggle("is-html", !!isHtml);
+    }
+    if (sbTag) sbTag.hidden = !isHtml;
+    if (segEl) {
+      segEl.hidden = !modeSeg;
+      if (modeSeg) {
+        segEl.querySelectorAll("button").forEach((b) => {
+          const m = b.dataset[prefix + "Mode"] || "";
+          const on = m === activeMode;
+          b.classList.toggle("on", on);
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+      }
+    }
     if (dlBtn) dlBtn.hidden = !downloadable;
     if (cWrap) cWrap.hidden = !copyable;
     if (cBtn) {
@@ -11758,8 +12136,55 @@
     }
     if (wideBtn) {
       wideBtn.hidden = !wideHref;
-      if (wideHref) wideBtn.href = wideHref;
+      if (wideHref) {
+        wideBtn.href = wideHref;
+        const lbl = isHtml ? "在新标签打开 HTML" : "新标签宽屏阅读";
+        wideBtn.title = lbl;
+        wideBtn.setAttribute("aria-label", lbl);
+      }
     }
+  }
+  function renderDelimitedStage(prefix, cur, body, cut) {
+    const srcId = prefix + "-code-src";
+    body.classList.remove("is-code", "is-html", "is-csv");
+    if (cur.viewMode === "raw") {
+      renderCodeBody(body, cur.reqPath, cur.rawText || "", cut, srcId, prefix === "rv");
+      return;
+    }
+    body.classList.add("is-csv");
+    const parsed = cur.csvParsed || (cur.csvParsed = parseDelimitedTable(cur.rawText || "", cur.csvDelimiter || ","));
+    const totalRows = parsed.rows.length;
+    const totalCols = parsed.colCount;
+    const totalPages = Math.max(1, Math.ceil(totalRows / CSV_PAGE_SIZE));
+    const page = Math.max(0, Math.min(totalPages - 1, cur.csvPage || 0));
+    cur.csvPage = page;
+    const start = page * CSV_PAGE_SIZE;
+    const end = Math.min(totalRows, start + CSV_PAGE_SIZE);
+    const slice = parsed.rows.slice(start, end);
+    const kindTag = cur.csvDelimiter === "\t" ? "TSV" : "CSV";
+    const moreSign = (parsed.capped || cur.truncated) ? "+" : "";
+    const metaInfo = `${kindTag} · ${totalRows}${moreSign} 行 · ${totalCols} 列${totalRows > CSV_PAGE_SIZE ? ` · 显示第 ${start + 1}–${end} 行` : ""}${parsed.capped ? `（已安全限行前 ${CSV_MAX_PARSE_ROWS} 行）` : ""}`;
+    const pagerHtml = totalPages > 1
+      ? `<div class="csv-pager"><button type="button" data-csv-page="${page - 1}"${page <= 0 ? " disabled" : ""}>上一页</button><span>第 ${page + 1} / ${totalPages} 页</span><button type="button" data-csv-page="${page + 1}"${page >= totalPages - 1 ? " disabled" : ""}>下一页</button></div>`
+      : "";
+    if (!totalCols) {
+      body.innerHTML = `<div class="csv-stage"><div class="csv-meta-bar"><span class="csv-meta-info">${esc(metaInfo)}</span></div><div class="csv-empty">表格为空</div>${cut}</div>`;
+      return;
+    }
+    const thHtml = `<th class="csv-rn" scope="col">#</th>` + parsed.headers.map((h) => `<th scope="col" title="${esc(h)}">${esc(h)}</th>`).join("");
+    const trHtml = slice.length
+      ? slice.map((r, ri) => {
+          const rn = start + ri + 1;
+          const tds = r.map((cell) => {
+            const val = cell ?? "";
+            const trimmed = val.trim();
+            const cls = !trimmed ? " is-empty" : (!val.includes("\n") && CSV_NUM_RE.test(trimmed) ? " is-num" : "");
+            return `<td class="${cls.trim()}">${esc(val)}</td>`;
+          }).join("");
+          return `<tr><th class="csv-rn" scope="row">${rn}</th>${tds}</tr>`;
+        }).join("")
+      : `<tr><td colspan="${totalCols + 1}" class="csv-empty">仅有表头，暂无数据行</td></tr>`;
+    body.innerHTML = `<div class="csv-stage"><div class="csv-meta-bar"><span class="csv-meta-info" title="${esc(metaInfo)}">${esc(metaInfo)}</span>${pagerHtml}</div><div class="csv-wrap" tabindex="0" role="region" aria-label="${esc(baseFileName(cur.path || cur.reqPath))} 表格预览"><table class="csv-table"><thead><tr>${thHtml}</tr></thead><tbody>${trHtml}</tbody></table></div>${cut}</div>`;
   }
   function renderCodeBody(body, path, text, cut, srcId, wrapCard = false) {
     const lang = detectCodeLang(path, true);
@@ -11787,14 +12212,34 @@
     if (IMG_EXT.test(path)) { openLightbox([{ path }], 0); return; }
     const body = $("#fv-body"), seq = ++fileSeq;
     fvCur = null;
-    body.classList.remove("is-code");
+    body.classList.remove("is-code", "is-html", "is-csv");
     const initMachine = fileContextMachine() || "";
-    syncFileBar("fv", { wideHref: HTML_EXT.test(path) ? "" : wideFileHash(path, initMachine) });
+    const isHtml = HTML_EXT.test(path);
+    syncFileBar("fv", { isHtml, langLabel: isHtml ? "HTML" : "", wideHref: isHtml ? htmlFileURL(path, initMachine) : wideFileHash(path, initMachine) });
     $("#fv-name").textContent = path.split("/").pop();
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
     showFilePane();
     const tries = fileTries();
+    if (isHtml) {
+      let hf = null;
+      try {
+        hf = await fetchHtmlFile(path, tries);
+      } catch (e) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+      if (seq !== fileSeq) return;
+      if (!hf) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+      const where = (state.machines || []).length > 1 || hf.machine ? machineName(hf.machine) + " · " : "";
+      $("#fv-path").textContent = where + hf.path + " · " + fmtSize(hf.size);
+      const canDl = hf.size <= FILE_DL_MAX;
+      fvCur = { reqPath: path, path: hf.path, machine: hf.machine || "", kind: "html", size: hf.size, rawText: hf.htmlText, truncated: false };
+      syncFileBar("fv", { langLabel: "HTML", isHtml: true, copyable: true, copyTitle: "复制 HTML 源码", downloadable: canDl, wideHref: htmlFileURL(path, hf.machine || "") });
+      body.classList.add("is-html");
+      body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(baseFileName(hf.path))}"></iframe>`;
+      const frame = body.querySelector("iframe");
+      if (frame) frame.srcdoc = hf.htmlText;
+      if (view === "collie") renderSuper();
+      return;
+    }
     let f = null;
     try {
       f = await findFile(path, tries);
@@ -11805,7 +12250,7 @@
     $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
     if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
     const canDl = f.size <= FILE_DL_MAX;
-    const wHref = HTML_EXT.test(path) ? "" : wideFileHash(path, f.machine || "");
+    const wHref = wideFileHash(path, f.machine || "");
     fvCur = { reqPath: path, path: f.path, machine: f.machine || "", kind: f.kind, size: f.size, blob: f.blob, rawText: "", truncated: false };
     if (f.kind === "image") {
       syncFileBar("fv", { downloadable: canDl, wideHref: wHref });
@@ -11825,15 +12270,30 @@
     fvCur.rawText = text;
     fvCur.truncated = truncated;
     const cut = truncated ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只预览前 1 MB（点右上角下载可获取完整原件）。</p>` : "";
+    fvCur.cutHtml = cut;
+    if (CSV_EXT.test(path)) {
+      const isTsv = TSV_EXT.test(path);
+      fvCur.isCsv = true;
+      fvCur.csvDelimiter = isTsv ? "\t" : ",";
+      fvCur.viewMode = "table";
+      fvCur.csvPage = 0;
+      fvCur.csvParsed = null;
+      syncFileBar("fv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: "复制完整原文", downloadable: canDl, wideHref: wHref });
+      renderDelimitedStage("fv", fvCur, body, cut);
+      if (view === "collie") renderSuper();
+      return;
+    }
     if (MD_EXT.test(path)) {
       syncFileBar("fv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl, wideHref: wHref });
       body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
       body.scrollTop = body.scrollLeft = 0;
+      if (view === "collie") renderSuper();
       return;
     }
     const lang = renderCodeBody(body, path, text, cut, "fv-code-src", false);
     syncFileBar("fv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl, wideHref: wHref });
     body.scrollTop = body.scrollLeft = 0;
+    if (view === "collie") renderSuper();
   }
   async function openWideFile(rawQuery, restore = null) {
     const q = new URLSearchParams(String(rawQuery || "").replace(/^\?/, ""));
@@ -11841,7 +12301,7 @@
     const machineHint = (q.get("machine") || "").trim();
     const body = $("#rv-body"), sc = $("#rv-scroller"), seq = ++wideSeq;
     rvCur = null;
-    body.classList.remove("is-code");
+    body.classList.remove("is-code", "is-html", "is-csv");
     syncFileBar("rv", {});
     if (!path) {
       $("#rv-name").textContent = "文件阅读";
@@ -11856,6 +12316,24 @@
     document.title = `${name} · Collie`;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
     const tries = [...new Set([machineHint, ...fileTries()])];
+    if (HTML_EXT.test(path)) {
+      let hf = null;
+      try {
+        hf = await fetchHtmlFile(path, tries);
+      } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+      if (seq !== wideSeq || view !== "file") return;
+      if (!hf) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+      const where = (state.machines || []).length > 1 || hf.machine ? machineName(hf.machine) + " · " : "";
+      $("#rv-path").textContent = where + hf.path + " · " + fmtSize(hf.size);
+      const canDl = hf.size <= FILE_DL_MAX;
+      rvCur = { reqPath: path, path: hf.path, machine: hf.machine || "", kind: "html", size: hf.size, rawText: hf.htmlText, truncated: false };
+      syncFileBar("rv", { langLabel: "HTML", isHtml: true, copyable: true, copyTitle: "复制 HTML 源码", downloadable: canDl });
+      body.classList.add("is-html");
+      body.innerHTML = `<iframe class="fv-html-sandbox" style="min-height:calc(var(--vh) - 120px);border:1px solid var(--line);border-radius:12px;" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(name)}"></iframe>`;
+      const frame = body.querySelector("iframe");
+      if (frame) frame.srcdoc = hf.htmlText;
+      return;
+    }
     let f = null;
     try {
       f = await findFile(path, tries);
@@ -11886,7 +12364,17 @@
     rvCur.rawText = text;
     rvCur.truncated = truncated;
     const cut = truncated ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB（点右上角下载可获取完整原件）。</p>` : "";
-    if (MD_EXT.test(path)) {
+    rvCur.cutHtml = cut;
+    if (CSV_EXT.test(path)) {
+      const isTsv = TSV_EXT.test(path);
+      rvCur.isCsv = true;
+      rvCur.csvDelimiter = isTsv ? "\t" : ",";
+      rvCur.viewMode = "table";
+      rvCur.csvPage = 0;
+      rvCur.csvParsed = null;
+      syncFileBar("rv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: "复制完整原文", downloadable: canDl });
+      renderDelimitedStage("rv", rvCur, body, cut);
+    } else if (MD_EXT.test(path)) {
       syncFileBar("rv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl });
       body.innerHTML = `<article class="msg assistant rv-md" id="rv-code-src">${md(text)}</article>${cut}`;
     } else {
@@ -11898,6 +12386,40 @@
   }
   $("#fv-dl")?.addEventListener("click", () => downloadCurFile(fvCur));
   $("#rv-dl")?.addEventListener("click", () => downloadCurFile(rvCur));
+  function bindDelimitedControls(prefix, getCur, bodySel) {
+    $("#" + prefix + "-mode-seg")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button");
+      const cur = getCur();
+      if (!btn || !cur?.isCsv) return;
+      const mode = btn.dataset[prefix + "Mode"] === "raw" ? "raw" : "table";
+      if (cur.viewMode === mode) return;
+      cur.viewMode = mode;
+      const body = $(bodySel);
+      const isTsv = cur.csvDelimiter === "\t";
+      syncFileBar(prefix, {
+        langLabel: isTsv ? "TSV" : "CSV",
+        modeSeg: true,
+        activeMode: mode,
+        copyable: true,
+        copyTitle: "复制完整原文",
+        downloadable: cur.size <= FILE_DL_MAX,
+        wideHref: prefix === "fv" ? wideFileHash(cur.reqPath, cur.machine || "") : "",
+      });
+      if (body) renderDelimitedStage(prefix, cur, body, cur.cutHtml || "");
+    });
+    $(bodySel)?.addEventListener("click", (ev) => {
+      const pbtn = ev.target.closest("[data-csv-page]");
+      const cur = getCur();
+      if (!pbtn || !cur?.isCsv || cur.viewMode !== "table") return;
+      const nextPage = parseInt(pbtn.dataset.csvPage, 10);
+      if (Number.isNaN(nextPage) || nextPage < 0) return;
+      cur.csvPage = nextPage;
+      const body = $(bodySel);
+      if (body) renderDelimitedStage(prefix, cur, body, cur.cutHtml || "");
+    });
+  }
+  bindDelimitedControls("fv", () => fvCur, "#fv-body");
+  bindDelimitedControls("rv", () => rvCur, "#rv-body");
   $("#rv-home")?.addEventListener("click", (ev) => {
     if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     if (navCur > 0) {
@@ -12590,18 +13112,28 @@
     if (a) {
       const path = a.dataset.path || "";
       if (HTML_EXT.test(path)) {
+        const modClick = e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
         const ctxMachine = (view === "file" ? rvCur?.machine : fileContextMachine()) || "";
         const hub = hubOf(ctxMachine);
-        if (!hub && (!window.__collieDemo || window.__collieDemoHtmlUrl?.(path))) {
-          a.href = htmlFileURL(path, ctxMachine);
-          a.target = "_blank";
-          a.rel = "noopener";
+        if (modClick) {
+          if (!hub && (!window.__collieDemo || window.__collieDemoHtmlUrl?.(path))) {
+            a.href = htmlFileURL(path, ctxMachine);
+            a.target = "_blank";
+            a.rel = "noopener";
+            return;
+          }
+          e.preventDefault();
+          const win = window.open("", "_blank");
+          if (win) { try { win.opener = null; } catch {} }
+          openSandboxedHtmlRemote(path, win);
           return;
         }
         e.preventDefault();
-        const win = window.open("", "_blank");
-        if (win) { try { win.opener = null; } catch {} }
-        openSandboxedHtmlRemote(path, win);
+        if (view === "file") {
+          location.hash = wideFileHash(path, rvCur?.machine || "");
+          return;
+        }
+        openFile(path);
         return;
       }
       e.preventDefault();
@@ -12634,19 +13166,34 @@
     }
   });
   // Wide screens: a panel to the right of the conversation, which stays
-  // usable; its width is dragged and remembered. Narrow ones: full screen.
+  // usable; its width is dragged and remembered. Narrow ones: smooth bottom drawer.
   const pane = $("#file-view");
+  const fileScrim = $("#file-scrim");
+  const fvWidenBtn = $("#fv-widen");
+  let fileWide = false;
   const setFileW = (w) => document.documentElement.style.setProperty("--file-w", Math.round(w) + "px");
-  // The widest the panel may be: the conversation keeps at least 420px.
-  const fileMax = () => innerWidth - $(".side").offsetWidth - 420;
+  // The widest the panel may be: the conversation keeps at least 360px.
+  const fileMax = () => Math.max(420, innerWidth - ($(".side")?.offsetWidth || 0) - 360);
+  const fileWideW = () => Math.min(Math.max(600, Math.round((innerWidth - ($(".side")?.offsetWidth || 0)) * 0.56)), fileMax());
   let paneTimer;
+  function syncFileWidenUI() {
+    if (!fvWidenBtn) return;
+    const on = !!(fileWide && innerWidth > 1000 && !pane?.hidden);
+    fvWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    const lbl = on ? "还原宽度" : "拓宽预览";
+    fvWidenBtn.title = lbl;
+    fvWidenBtn.setAttribute("aria-label", lbl);
+  }
   function showFilePane() {
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: view === "collie" });
     clearTimeout(paneTimer);
-    // Until it has been dragged: a little under half the window.
-    setFileW(Math.max(Math.min(store.get("fileW", 0) || innerWidth * 0.45, fileMax()), 360));
+    const baseW = fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || Math.min(innerWidth * 0.45, 580), fileMax()), 380);
+    setFileW(baseW);
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
+    if (fileScrim) fileScrim.hidden = false;
     $("#app").classList.add("has-file");
+    syncFileWidenUI();
+    syncNotebookVisibility();
   }
   function closeFilePane() {
     $("#app").classList.remove("has-file");
@@ -12654,18 +13201,30 @@
     clearTimeout(paneTimer);
     paneTimer = setTimeout(() => {
       pane.hidden = true;
+      if (fileScrim) fileScrim.hidden = true;
       if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
-    }, 360);
+      if (view === "collie") renderSuper();
+    }, 340);
+    syncFileWidenUI();
+    syncNotebookVisibility();
   }
-  pane.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
+  pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
+  $("#fv-handle")?.addEventListener("click", () => closeFilePane());
+  fileScrim?.addEventListener("click", () => closeFilePane());
+  fvWidenBtn?.addEventListener("click", () => {
+    if (innerWidth <= 1000 || pane?.hidden) return;
+    fileWide = !fileWide;
+    setFileW(fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || 540, fileMax()), 380));
+    syncFileWidenUI();
+  });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pane.hidden && !document.querySelector("dialog[open]")) closeFilePane(); });
-  $("#fv-grip").addEventListener("pointerdown", (e) => {
+  $("#fv-grip")?.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
     document.body.classList.add("dragging");
     const max = fileMax();
-    const move = (ev) => setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360));
+    const move = (ev) => { fileWide = false; setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360)); syncFileWidenUI(); };
     const up = () => {
       grip.removeEventListener("pointermove", move);
       document.body.classList.remove("dragging");
@@ -12673,6 +13232,299 @@
     };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up, { once: true });
+  });
+
+  // ───────────────────────────── Floating White-Paper「小本本」(compact + one-click expand)
+  const NOTES_WIDE_MIN = 1360;
+  const NOTES_COMPACT_TASKS = 3;
+  const NOTES_COMPACT_FILES = 2;
+  const NOTES_COMPACT_TIMERS = 1;
+  const notesPane = $("#notes-pane");
+  const notesScrim = $("#notes-scrim");
+  const notesBtn = $("#open-notes-btn");
+  const notesExpandBtn = $("#np-expand");
+  let notebookData = null;
+  let notebookFetching = false;
+  let notebookRefreshTimer = 0;
+  let notebookLastRefreshSig = "";
+  let notesUserClosed = !!store.get("notesClosed", false);
+  let notesOpen = false;
+  let notesExpanded = false;
+  let notesManualOverlay = false;
+
+  const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
+  function syncCollieTopHeight() {
+    const col = $("#v-collie");
+    const topEl = col?.querySelector?.(".collie-top");
+    if (!col || !topEl) return;
+    const h = topEl.offsetHeight || 98;
+    col.style.setProperty("--collie-top-h", Math.round(h) + "px");
+  }
+  function formatNotebookDate(isoDate) {
+    const d = isoDate ? new Date(isoDate + "T00:00:00") : new Date();
+    if (Number.isNaN(d.getTime())) return "";
+    return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  }
+  function formatNotebookTimerClock(nextRunIso) {
+    const d = new Date(nextRunIso);
+    if (Number.isNaN(d.getTime())) return "";
+    const now = new Date();
+    const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+      return hm;
+    }
+    const tmr = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    if (d.getFullYear() === tmr.getFullYear() && d.getMonth() === tmr.getMonth() && d.getDate() === tmr.getDate()) {
+      return `明 ${hm}`;
+    }
+    return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  }
+  function formatNotebookTimerFreq(spec) {
+    const f = String(spec || "").trim().split(/\s+/);
+    switch (f[0]) {
+      case "daily": return "每天";
+      case "weekdays": return "工作日";
+      case "weekly": return "每周";
+      case "every": return "循环";
+      case "in":
+      case "at": return "单次";
+      default: return "";
+    }
+  }
+  function renderNotebook() {
+    if (!notesPane) return;
+    const data = notebookData || { date: "", tasks: [], artifacts: [], timers: [] };
+    const dateEl = $("#np-date");
+    if (dateEl) dateEl.textContent = formatNotebookDate(data.date);
+    const showFull = notesExpanded || !isWideNotesViewport();
+    notesPane.classList.toggle("is-expanded", !!showFull);
+    $("#v-collie")?.classList.toggle("notes-expanded", !!(notesOpen && isWideNotesViewport() && notesExpanded));
+    if (notesExpandBtn) {
+      notesExpandBtn.setAttribute("aria-expanded", notesExpanded ? "true" : "false");
+      const lbl = notesExpanded ? "收起为简态" : "展开完整便签";
+      notesExpandBtn.title = lbl;
+      notesExpandBtn.setAttribute("aria-label", lbl);
+      const lblEl = notesExpandBtn.querySelector(".np-exp-lbl");
+      if (lblEl) lblEl.textContent = notesExpanded ? "收起" : "展开";
+    }
+
+    // 1. 进行中
+    const allTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const shownTasks = showFull ? allTasks : allTasks.slice(0, NOTES_COMPACT_TASKS);
+    const taskMoreEl = $("#np-tasks-more");
+    if (taskMoreEl) {
+      const rem = allTasks.length - shownTasks.length;
+      taskMoreEl.hidden = showFull || rem <= 0;
+      if (rem > 0) { taskMoreEl.textContent = `+${rem}`; taskMoreEl.title = `展开查看全部 ${allTasks.length} 项`; }
+    }
+    const tasksListEl = $("#np-tasks-list");
+    if (tasksListEl) {
+      tasksListEl.innerHTML = shownTasks.length
+        ? shownTasks.map((tk) => {
+            const dotCls = tk.tone === "attn" ? "is-attn" : tk.tone === "idle" ? "is-idle" : "";
+            const noteHtml = tk.note ? `<span class="np-item-note">${esc(tk.note)}</span>` : "";
+            return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span>${noteHtml}</button></li>`;
+          }).join("")
+        : `<li class="np-empty">暂无进行中事项</li>`;
+    }
+
+    // 2. 今日产物
+    const allFiles = Array.isArray(data.artifacts) ? data.artifacts : [];
+    const shownFiles = showFull ? allFiles : allFiles.slice(0, NOTES_COMPACT_FILES);
+    const filesMoreEl = $("#np-files-more");
+    if (filesMoreEl) {
+      const rem = allFiles.length - shownFiles.length;
+      filesMoreEl.hidden = showFull || rem <= 0;
+      if (rem > 0) { filesMoreEl.textContent = `+${rem}`; filesMoreEl.title = `展开查看全部 ${allFiles.length} 个产物`; }
+    }
+    const filesListEl = $("#np-files-list");
+    if (filesListEl) {
+      filesListEl.innerHTML = shownFiles.length
+        ? shownFiles.map((f) => {
+            const ext = String(f.ext || "").toLowerCase();
+            const isHtml = ext === "html" || ext === "htm";
+            const atStr = f.at ? hhmm(f.at) : "";
+            const sub = [f.name, atStr].filter(Boolean).join(" · ");
+            return `<li><button type="button" class="np-file" data-np-file="${esc(f.path)}" title="${esc(f.path)}"><svg class="np-file-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><span class="np-file-title">${esc(f.title || f.name)}</span><span class="np-file-ext${isHtml ? " is-html" : ""}">${esc(ext.toUpperCase())}</span><span class="np-file-sub">${esc(sub)}</span></button></li>`;
+          }).join("")
+        : `<li class="np-empty">今日暂无新产物</li>`;
+    }
+
+    // 3. 下一条定时
+    const allTimers = Array.isArray(data.timers) ? data.timers : [];
+    const shownTimers = showFull ? allTimers : allTimers.slice(0, NOTES_COMPACT_TIMERS);
+    const timersMoreEl = $("#np-timers-more");
+    if (timersMoreEl) {
+      const rem = allTimers.length - shownTimers.length;
+      timersMoreEl.hidden = showFull || rem <= 0;
+      if (rem > 0) { timersMoreEl.textContent = `+${rem}`; timersMoreEl.title = `展开查看全部 ${allTimers.length} 条定时`; }
+    }
+    const timersListEl = $("#np-timers-list");
+    if (timersListEl) {
+      timersListEl.innerHTML = shownTimers.length
+        ? shownTimers.map((tm) => {
+            const clk = formatNotebookTimerClock(tm.next_run);
+            const freq = formatNotebookTimerFreq(tm.spec);
+            return `<li class="np-timer" title="${esc((clk ? clk + " " : "") + tm.text)}"><span class="np-timer-at">${esc(clk)}</span><span class="np-timer-txt">${esc(tm.text)}${freq ? `<span class="np-timer-freq">${esc(freq)}</span>` : ""}</span></li>`;
+          }).join("")
+        : `<li class="np-empty">暂无待跑定时</li>`;
+    }
+  }
+  function syncNotebookVisibility() {
+    const col = $("#v-collie");
+    if (!col || !notesPane) return;
+    const appEl = $("#app");
+    const blockedByDrawer = !!(activeThreadRoot || appEl?.classList?.contains("has-file") || appEl?.classList?.contains("has-thread"));
+    let wantOpen = false;
+    if (view === "collie" && !blockedByDrawer) {
+      if (isWideNotesViewport()) {
+        notesManualOverlay = false;
+        wantOpen = !notesUserClosed;
+      } else {
+        wantOpen = notesManualOverlay;
+      }
+    } else if (blockedByDrawer) {
+      notesManualOverlay = false;
+    }
+    notesOpen = wantOpen;
+    col.classList.toggle("has-notes", wantOpen);
+    col.classList.toggle("notes-expanded", !!(wantOpen && isWideNotesViewport() && notesExpanded));
+    notesPane.hidden = !wantOpen;
+    notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
+    if (notesScrim) notesScrim.hidden = !(wantOpen && !isWideNotesViewport());
+    if (notesBtn) {
+      notesBtn.classList.toggle("on", wantOpen);
+      notesBtn.setAttribute("aria-pressed", wantOpen ? "true" : "false");
+    }
+    if (wantOpen) {
+      syncCollieTopHeight();
+      renderNotebook();
+    }
+  }
+  async function loadNotebook(force = false) {
+    if (notebookFetching && !force) return;
+    notebookFetching = true;
+    try {
+      const r = await api("/api/super/notebook");
+      if (r && typeof r === "object") {
+        notebookData = r;
+        if (notesOpen) renderNotebook();
+      }
+    } catch {
+      // Quiet read-only failure: never disrupt main chat.
+    } finally {
+      notebookFetching = false;
+    }
+  }
+  function scheduleNotebookRefresh(sig = "") {
+    if (sig && sig === notebookLastRefreshSig && notebookData) return;
+    if (sig) notebookLastRefreshSig = sig;
+    if (notebookRefreshTimer) return;
+    notebookRefreshTimer = setTimeout(() => {
+      notebookRefreshTimer = 0;
+      if (view === "collie") loadNotebook(false);
+    }, 900);
+  }
+  notesBtn?.addEventListener("click", () => {
+    if (view !== "collie") return;
+    if (notesOpen) {
+      if (isWideNotesViewport()) {
+        notesUserClosed = true;
+        store.set("notesClosed", true);
+      } else {
+        notesManualOverlay = false;
+      }
+      syncNotebookVisibility();
+    } else {
+      if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
+      if ($("#app")?.classList?.contains("has-file")) closeFilePane();
+      if (isWideNotesViewport()) {
+        notesUserClosed = false;
+        store.set("notesClosed", false);
+      } else {
+        notesManualOverlay = true;
+      }
+      loadNotebook(true);
+      syncNotebookVisibility();
+    }
+  });
+  notesExpandBtn?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    notesExpanded = !notesExpanded;
+    renderNotebook();
+  });
+  const hideNotebookFromCard = (ev) => {
+    ev?.stopPropagation?.();
+    if (isWideNotesViewport()) {
+      notesUserClosed = true;
+      store.set("notesClosed", true);
+    } else {
+      notesManualOverlay = false;
+    }
+    syncNotebookVisibility();
+  };
+  $("#np-close")?.addEventListener("click", hideNotebookFromCard);
+  $("#np-back")?.addEventListener("click", hideNotebookFromCard);
+  $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
+  notesScrim?.addEventListener("click", hideNotebookFromCard);
+  notesPane?.addEventListener("click", (ev) => {
+    if (ev.target.closest("#np-close, #np-back, #np-handle, #np-expand")) return;
+    const fBtn = ev.target.closest("[data-np-file]");
+    if (fBtn) {
+      ev.preventDefault();
+      const fp = fBtn.dataset.npFile;
+      if (!isWideNotesViewport()) notesManualOverlay = false;
+      if (fp) openFile(fp);
+      return;
+    }
+    if (ev.target.closest("[data-np-expand]") || (isWideNotesViewport() && !notesExpanded)) {
+      ev.preventDefault();
+      notesExpanded = true;
+      renderNotebook();
+      return;
+    }
+    const tBtn = ev.target.closest("[data-np-task]");
+    if (tBtn) {
+      ev.preventDefault();
+      const entryId = tBtn.dataset.npEntry || "";
+      const worker = tBtn.dataset.npWorker || "";
+      if (!isWideNotesViewport()) {
+        notesManualOverlay = false;
+        syncNotebookVisibility();
+      }
+      if (entryId) {
+        jumpToEntry(entryId);
+      } else if (worker) {
+        const p = paneOf(worker);
+        if (p) location.hash = `#/p/${encodeURIComponent(p)}`;
+        else location.hash = "#/auto";
+      } else {
+        autoTab = "memory";
+        store.set("autoTab", "memory");
+        location.hash = "#/auto";
+      }
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && notesOpen && !document.querySelector("dialog[open]")) {
+      if (!isWideNotesViewport()) {
+        notesManualOverlay = false;
+        syncNotebookVisibility();
+      } else if (notesExpanded) {
+        notesExpanded = false;
+        renderNotebook();
+      }
+    }
+  });
+  if (typeof ResizeObserver === "function") {
+    const collieTopEl = $("#v-collie .collie-top");
+    if (collieTopEl) new ResizeObserver(() => syncCollieTopHeight()).observe(collieTopEl);
+  }
+  window.addEventListener("resize", () => {
+    if (view === "collie") {
+      syncCollieTopHeight();
+      syncNotebookVisibility();
+    }
   });
 
   // ───────────────────────────── natural reply-chain thread drawer
@@ -13637,7 +14489,9 @@
         const hasOpts = Array.isArray(m.options) && m.options.some((o) => typeof o === "string" && o.trim());
         const hasPendingOpts = m.role === "collie" && !!m.id && (hasOpts || !!m.check) && idx >= 0 && entryPendingNow(allEntries, idx, m.id, pendIds, hasOpts);
         const picked = m.id ? pickedReplyOpts.get(m.id) : null;
-        return [k, m.id || "", m.role, m.text, m.re?.entry || "", m.at || "", hasPendingOpts ? 1 : 0, picked ? `${picked.sending ? 1 : 0}:${picked.text}` : ""];
+        const srvPick = m.pick ? `${m.pick.state || ""}:${m.pick.text || ""}` : "";
+        const filesSig = Array.isArray(m.files) && m.files.length ? m.files.join(",") : "";
+        return [k, m.id || "", m.role, m.text, m.re?.entry || "", m.at || "", hasPendingOpts ? 1 : 0, picked ? `${picked.sending ? 1 : 0}:${picked.state || "picked"}:${picked.text}` : "", srvPick, m.id && m.id === openInlineDecisionId ? 1 : 0, filesSig];
       }),
     ]);
     if (sig !== tdLastSig || opts.force) {
@@ -13684,16 +14538,18 @@
         const hasOpts = Array.isArray(m.options) && m.options.some((o) => typeof o === "string" && o.trim());
         const hasPendingOpts = m.role === "collie" && !!m.id && (hasOpts || !!m.check) && entryIdx >= 0 && entryPendingNow(allEntries, entryIdx, m.id, pendIds, hasOpts);
         const picked = m.id ? pickedReplyOpts.get(m.id) : null;
-        const pickedSig = picked ? `${picked.sending ? 1 : 0}:${picked.text}` : "";
+        const pickedSig = picked ? `${picked.sending ? 1 : 0}:${picked.state || "picked"}:${picked.text}` : "";
+        const srvPickSig = m.pick ? `${m.pick.state || ""}:${m.pick.text || ""}` : "";
+        const filesSig = Array.isArray(m.files) && m.files.length ? m.files.join(",") : "";
         const branchSig = isBranch && parent ? `${entryKey(parent)}|${parent.at || ""}|${threadWhoLabel(parent)}|${parent.text || ""}` : "";
         const rootQuoteSig = hasRootQuote ? `${m.re.who || ""}|${m.re.text}` : "";
         const msgSig = [
           m.role, who, m.text || "", isRoot ? 1 : 0, isBranch ? 1 : 0,
-          branchSig, rootQuoteSig,
+          branchSig, rootQuoteSig, filesSig,
         ].join("\x1f");
         const itemSig = [
           k, m.id || "", at ? sepTime(at) : "", msgSig,
-          hasPendingOpts ? 1 : 0, pickedSig,
+          hasPendingOpts ? 1 : 0, pickedSig, srvPickSig, m.id && m.id === openInlineDecisionId ? 1 : 0,
         ].join("\x1f");
         const renderActs = () => m.id
           ? `<div class="td-node-acts">
@@ -13726,9 +14582,10 @@
               ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
               : "";
             const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
+            const artifactsHtml = renderEntryArtifacts(m);
             const bodyHtml = m.role === "user"
               ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
-              : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}${optsHtml}</div>`;
+              : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}${artifactsHtml}${optsHtml}</div>`;
             return `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
           <div class="td-rail">${avHtml}</div>
           <div class="td-content">
@@ -13816,6 +14673,7 @@
     if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = false; }
     tdDrawer.setAttribute("aria-hidden", "false");
     appEl.classList.add("has-thread");
+    syncNotebookVisibility();
     syncActiveThreadMarks(info);
     const hasRestore = typeof opts.restoreScrollTop === "number";
     renderThreadDrawer({
@@ -13851,6 +14709,7 @@
     appEl.classList.remove("has-thread");
     appEl.classList.remove("thread-wide");
     syncThreadWideUI();
+    syncNotebookVisibility();
     tdDrawer.setAttribute("aria-hidden", "true");
     clearTimeout(tdHideTimer);
     const hideNow = () => {
@@ -13968,7 +14827,7 @@
       tdInput?.focus({ preventScroll: true });
     });
     tdListEl?.addEventListener("click", (e) => {
-      if (e.target.closest(".reply-ack[data-ack], .reply-opt[data-opt]")) {
+      if (e.target.closest(".reply-ack[data-ack], .reply-opt[data-opt], [data-toggle-inline], [data-inline-send], [data-inline-cancel], [data-open-file]")) {
         handleQuickOptionClick(e, { scrollBottom: false, inDrawer: true });
         return;
       }

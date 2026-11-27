@@ -113,6 +113,7 @@
 
     <!-- ── Collie: the super-agent conversation ── -->
     <section class="view" id="v-collie" hidden>
+      <div class="collie-top">
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title">
@@ -138,6 +139,9 @@
               <div class="th-pop-list" id="collie-threads-list" role="list"></div>
             </div>
           </div>
+          <button type="button" class="icon-btn" id="open-notes-btn" aria-label="展开或收起小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12A2.5 2.5 0 0 1 20.5 6v8.5L15 20H6a2.5 2.5 0 0 1-2.5-2.5V6A2.5 2.5 0 0 1 6 3.5Z"/><path d="M14.5 20v-4.5a1.5 1.5 0 0 1 1.5-1.5h4.5"/><path d="M8 9h8M8 13h4.5"/></svg>
+          </button>
           <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
           </button>
@@ -182,11 +186,63 @@
       <div class="router-pending-bar" id="collie-pending-bar" hidden></div>
 
       <div class="crew" id="crew"></div>
+      </div>
 
       <div class="viewer chatbg" tabindex="-1">
         <div class="thread" id="super-thread"></div>
         <div class="working-row" id="super-working" hidden></div>
       </div>
+
+      <div class="notes-scrim" id="notes-scrim" hidden aria-hidden="true"></div>
+      <aside class="notepane" id="notes-pane" hidden aria-label="小本本" aria-hidden="true">
+        <div class="np-inner">
+          <button type="button" class="np-handle" id="np-handle" aria-label="收起小本本" title="收起小本本">
+            <span class="np-handle-pill" aria-hidden="true"></span>
+          </button>
+          <header class="np-head" id="np-head">
+            <button type="button" class="icon-btn np-back" id="np-back" aria-label="返回对话" title="返回对话">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <div class="np-title-row">
+              <h2 class="np-title">小本本</h2>
+              <span class="np-sub" id="np-date"></span>
+            </div>
+            <div class="np-head-acts">
+              <button type="button" class="np-expand-btn" id="np-expand" aria-expanded="false" aria-label="展开完整便签" title="展开完整便签">
+                <span class="np-exp-lbl">展开</span>
+                <svg class="ic-np-exp" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 9.5l5.5 5.5 5.5-5.5"/></svg>
+                <svg class="ic-np-col" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 14.5l5.5-5.5 5.5 5.5"/></svg>
+              </button>
+              <button type="button" class="icon-btn np-act-btn" id="np-close" aria-label="隐藏小本本" title="隐藏到顶栏图标">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+          </header>
+          <div class="np-body" id="np-body">
+            <section class="np-sec" id="np-sec-tasks" aria-labelledby="np-h-tasks">
+              <div class="np-sec-head">
+                <h3 class="np-sec-title" id="np-h-tasks">进行中</h3>
+                <button type="button" class="np-more-pill" id="np-tasks-more" data-np-expand hidden></button>
+              </div>
+              <ul class="np-list" id="np-tasks-list"></ul>
+            </section>
+            <section class="np-sec" id="np-sec-files" aria-labelledby="np-h-files">
+              <div class="np-sec-head">
+                <h3 class="np-sec-title" id="np-h-files">今日产物</h3>
+                <button type="button" class="np-more-pill" id="np-files-more" data-np-expand hidden></button>
+              </div>
+              <ul class="np-list" id="np-files-list"></ul>
+            </section>
+            <section class="np-sec" id="np-sec-timers" aria-labelledby="np-h-timers">
+              <div class="np-sec-head">
+                <h3 class="np-sec-title" id="np-h-timers">下一条定时</h3>
+                <button type="button" class="np-more-pill" id="np-timers-more" data-np-expand hidden></button>
+              </div>
+              <ul class="np-list" id="np-timers-list"></ul>
+            </section>
+          </div>
+        </div>
+      </aside>
 
       <form class="composer" id="super-composer">
         <button type="button" class="super-jump" id="super-jump" title="回到底部" aria-label="回到底部" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5v11M7.25 12.75L12 17.5l4.75-4.75"/></svg><span class="sj-badge" id="super-jump-badge" aria-hidden="true" hidden></span></button>
@@ -374,6 +430,10 @@
             <p class="muted mono rv-meta" id="rv-path"></p>
           </div>
           <div class="rv-actions">
+            <div class="seg fv-mode-seg" id="rv-mode-seg" role="group" aria-label="切换表格或原文" hidden>
+              <button type="button" data-rv-mode="table" class="on" aria-pressed="true">表格</button>
+              <button type="button" data-rv-mode="raw" aria-pressed="false">原文</button>
+            </div>
             <button type="button" class="icon-btn fv-act-btn" id="rv-dl" aria-label="下载完整原件" title="下载完整原件" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
             </button>
@@ -397,14 +457,26 @@
     </section>
   </main>
   <!-- a file a message mentions, read-only, beside the conversation -->
-  <aside class="filepane" id="file-view" hidden>
+  <div class="file-scrim" id="file-scrim" hidden aria-hidden="true"></div>
+  <aside class="filepane" id="file-view" hidden aria-label="文件预览">
     <div class="fv-grip" id="fv-grip" title="拖动调整宽度"></div>
     <div class="fv-inner">
+    <button type="button" class="fv-handle" id="fv-handle" aria-label="收起预览" title="收起预览">
+      <span class="fv-handle-pill" aria-hidden="true"></span>
+    </button>
     <header class="fv-head">
       <button type="button" class="icon-btn fv-back" data-fv-close aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
       <h3 id="fv-name"></h3>
       <span class="fv-lang" id="fv-lang" hidden></span>
       <div class="fv-actions">
+        <div class="seg fv-mode-seg" id="fv-mode-seg" role="group" aria-label="切换表格或原文" hidden>
+          <button type="button" data-fv-mode="table" class="on" aria-pressed="true">表格</button>
+          <button type="button" data-fv-mode="raw" aria-pressed="false">原文</button>
+        </div>
+        <button type="button" class="icon-btn fv-act-btn fv-widen" id="fv-widen" aria-label="拓宽预览" aria-pressed="false" title="拓宽预览">
+          <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
+          <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
+        </button>
         <button type="button" class="icon-btn fv-act-btn" id="fv-dl" aria-label="下载完整原件" title="下载完整原件" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
         </button>
@@ -415,13 +487,16 @@
           </button>
           <span class="fv-copy-tip" role="status"></span>
         </span>
-        <a class="icon-btn fv-act-btn" id="fv-wide" href="#/file" target="_blank" rel="noopener" aria-label="新标签宽屏阅读" title="新标签宽屏阅读" hidden>
+        <a class="icon-btn fv-act-btn" id="fv-wide" href="#/file" target="_blank" rel="noopener" aria-label="新标签打开" title="新标签打开" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
         </a>
         <button type="button" class="icon-btn fv-act-btn fv-x" data-fv-close aria-label="关闭" title="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
     </header>
-    <p class="muted mono" id="fv-path"></p>
+    <div class="fv-subbar">
+      <p class="muted mono" id="fv-path"></p>
+      <span class="fv-sandbox-tag" id="fv-sandbox-tag" hidden><span class="dot ok" aria-hidden="true"></span>只读沙盒</span>
+    </div>
     <div class="fv-body" id="fv-body"></div>
     </div>
   </aside>
@@ -433,6 +508,7 @@
       <button type="button" class="td-handle" id="td-handle" aria-label="下滑或轻点收起话题抽屉" title="收起话题抽屉">
         <span class="td-handle-pill" aria-hidden="true"></span>
       </button>
+      <div class="td-top">
       <header class="td-head">
         <button type="button" class="icon-btn td-back" id="td-back" aria-label="返回主聊天" title="返回主聊天">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
@@ -455,6 +531,7 @@
         </div>
       </header>
       <nav class="td-workers" id="td-workers" aria-label="话题关联的 Agent" hidden></nav>
+      </div>
       <div class="td-body" id="td-body" tabindex="-1">
         <div class="td-list" id="td-list"></div>
       </div>

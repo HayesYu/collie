@@ -1562,7 +1562,12 @@
       if (pageInBackground() && canBrowserNotify()) {
         try {
           const n = new Notification("Collie", { body: msg, icon: "/icon.svg", tag: a.pane_id });
-          n.onclick = () => { try { focus(); } catch {} location.hash = "#/p/" + encodeURIComponent(a.pane_id); };
+          n.onclick = () => {
+            try { focus(); } catch {}
+            location.hash = (isCollieOwned(a) && a.name !== ROUTER)
+              ? "#/w/" + encodeURIComponent(a.name)
+              : "#/p/" + encodeURIComponent(a.pane_id);
+          };
         } catch {}
       }
     }
@@ -2333,7 +2338,7 @@
       : view === "ext" && extCur
         ? (extCur.startsWith("h:") ? "#/h/" + encodeURIComponent(extCur.slice(2)) : "#/x/" + encodeURIComponent(extCur))
         : "";
-    const wantWorker = view === "collie" && activeWorkerKey ? activeWorkerKey : "";
+    const wantWorker = activeWorkerKey && view !== "pane" && view !== "ext" ? activeWorkerKey : "";
     let foundTarget = !wantHref;
     const sideEl = $(".side");
     if (sideEl && typeof sideEl.querySelectorAll === "function") {
@@ -3001,20 +3006,14 @@
     let h = location.hash;
     let next = null, id = null;
     if (h.startsWith("#/w/")) {
-      const wName = decodeURIComponent(h.slice(4));
+      const wName = decodeURIComponent(h.slice(4)).trim();
       const livePane = wName ? paneOf(wName) : "";
       const pastH = !livePane && wName ? (workerHist(wName, 0) || getHistIndex().byName.get(wName)?.[0]?.h || null) : null;
-      if (innerWidth > 1000 && wName) {
-        next = "collie";
-        h = "#/collie";
-        replaceHash(h);
-        queueMicrotask(() => { if (view === "collie") openWorkerDrawer({ worker: wName, paneId: livePane || "", histId: pastH?.id || "" }); });
-      } else if (livePane) {
-        next = "pane"; id = livePane;
-      } else if (pastH?.id) {
-        next = "ext"; id = "h:" + pastH.id;
-      } else {
-        next = "collie";
+      next = "collie";
+      h = "#/collie";
+      replaceHash(h);
+      if (wName) {
+        pendingOpenWorker = { worker: wName, paneId: livePane || "", histId: pastH?.id || "" };
       }
     } else if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
     else if (h.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(h.slice(4)); }
@@ -3038,12 +3037,26 @@
       else next = h.slice(2);
     }
     if (next && next !== "file") store.set("last", h);
-    if (next === view && id === (next === "ext" ? extCur : current)) return;
+    if (next === view && id === (next === "ext" ? extCur : current)) {
+      if (next === "collie" && pendingOpenWorker) {
+        const wantWorker = pendingOpenWorker;
+        pendingOpenWorker = null;
+        openWorkerDrawer(wantWorker);
+      } else if (next === "collie" && pendingOpenThread?.rootId) {
+        const wantThread = pendingOpenThread;
+        pendingOpenThread = null;
+        openThreadDrawer(wantThread.rootId, wantThread.focusId || "", wantThread.focusId || wantThread.rootId);
+      }
+      return;
+    }
     // Snapshot the departing view right before its DOM is hidden/parked.
     if (prevView && performance.now() >= programmaticScrollUntil) {
       captureViewScroll(prevView, prevId, prevIdx);
     }
     if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1180px)").matches)) closeFilePane({ immediate: next === "file" });
+    if (activeWorkerKey && (next !== prevView || id !== prevId) && !(next === "collie" && pendingOpenWorker)) {
+      closeWorkerDrawer({ immediate: true });
+    }
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); disconnectInboxObserver(); }
@@ -3107,6 +3120,8 @@
     }
     if (next === "collie") {
       if (_lastCollieTopH <= 0) syncCollieTopHeight();
+      const wantWorker = pendingOpenWorker;
+      pendingOpenWorker = null;
       const wantThread = pendingOpenThread;
       pendingOpenThread = null;
       const savedThread = !wantThread && wasExistingIdx ? threadByIdx.get(navCur) : null;
@@ -3161,7 +3176,9 @@
         renderTarget(true);
         loadNotebook(false);
       }
-      if (wantThread?.rootId) {
+      if (wantWorker) {
+        openWorkerDrawer(wantWorker);
+      } else if (wantThread?.rootId) {
         openThreadDrawer(wantThread.rootId, wantThread.focusId || "", wantThread.focusId || wantThread.rootId);
       } else if (savedThread?.rootId) {
         openThreadDrawer(savedThread.rootId, "", savedThread.anchorId || savedThread.rootId, {
@@ -3315,6 +3332,7 @@
   let activeThreadAnchor = "";
   let drawerReplyTarget = null;
   let pendingOpenThread = null;
+  let pendingOpenWorker = null;
   let tdLastSig = "";
   let tdLastCount = 0;
   let tdForceScroll = false;
@@ -6713,17 +6731,22 @@
     </div>`;
   }
 
-  function openWorkerFromLink(a, ev, fromThreadRoot = "") {
+  function openWorkerFromLink(a, ev, fromThreadRoot = "", opts = {}) {
     if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return false;
-    if (view !== "collie" || innerWidth <= 1000) return false;
+    if (!opts.allowAnyView && view !== "collie") return false;
     if (a.id === "wd-popout" || a.closest?.("#worker-drawer")) return false;
+    const href = a.getAttribute?.("href") || "";
     const directWorker = String(a.dataset?.openWorker || a.dataset?.worker || "").trim();
     if (directWorker && directWorker !== ROUTER) {
+      const paneId = String(a.dataset?.paneId || "").trim()
+        || (href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)).trim() : "")
+        || paneOf(directWorker) || "";
+      const histId = String(a.dataset?.histId || "").trim()
+        || (href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "");
       ev.preventDefault();
-      openWorkerDrawer({ worker: directWorker, paneId: paneOf(directWorker) || "", fromThreadRoot });
+      openWorkerDrawer({ worker: directWorker, paneId, histId, fromThreadRoot });
       return true;
     }
-    const href = a.getAttribute?.("href") || "";
     if (a.classList?.contains("event")) {
       const ref = String(a.dataset?.ref || "").trim();
       if (ref && ref !== ROUTER && !ref.startsWith("h:") && !ref.startsWith("peer-req:")) {
@@ -6756,7 +6779,7 @@
       const histId = decodeURIComponent(href.slice(4)).trim();
       const hRec = histId ? hist.find((x) => x.id === histId) : null;
       const wName = String(a.dataset?.ref || hRec?.name || "").trim();
-      if (wName && wName !== ROUTER && !wName.startsWith("h:") && (getWorkerLookup().byName.has(wName) || a.classList?.contains("event"))) {
+      if (wName && wName !== ROUTER && !wName.startsWith("h:") && (getWorkerLookup().byName.has(wName) || a.classList?.contains("event") || a.closest?.(".mem-crew"))) {
         ev.preventDefault();
         openWorkerDrawer({ worker: wName, histId, fromThreadRoot });
         return true;
@@ -6772,7 +6795,7 @@
       openPeerModal("list");
       return;
     }
-    const wkLink = e.target.closest('a[data-open-worker], a.event[href], a.need[href], .ask-head a[href], a[href^="#/w/"], a[href^="#/p/"]');
+    const wkLink = e.target.closest('a[data-open-worker], a.event[href], a.need[href], .ask-head a[href], a[href^="#/w/"], a[href^="#/p/"], a[href^="#/h/"]');
     if (wkLink && openWorkerFromLink(wkLink, e, "")) return;
     const idea = e.target.closest("[data-idea]")?.dataset.idea;
     if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); }
@@ -12208,11 +12231,11 @@
     if (!matched.length) return "";
     return `<span class="mem-crew">${matched.map((w) => {
       const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
-      const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+      const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : `#/w/${encodeURIComponent(w.name)}`;
       const st = workerStatus(w);
       const disp = workerDisplayName(w);
       const tip = [w.name, KIND_LABEL[w.kind] || w.kind, STATUS_LABEL[st] || st].filter(Boolean).join(" · ");
-      return `<a ${href ? `href="${href}"` : ""} title="${esc(tip)}"><span class="dot ${esc(st)}"></span>${esc(disp)}</a>`;
+      return `<a href="${href}" data-open-worker="${esc(w.name)}"${pane ? ` data-pane-id="${esc(pane)}"` : ""}${past ? ` data-hist-id="${esc(past.id)}"` : ""} title="${esc(tip)}"><span class="dot ${esc(st)}"></span>${esc(disp)}</a>`;
     }).join("")}</span>`;
   }
 
@@ -13460,6 +13483,8 @@
   });
 
   $("#auto-body").addEventListener("click", async (e) => {
+    const wkLink = e.target.closest('.mem-crew a, a[data-open-worker], a[href^="#/w/"], a[href^="#/p/"], a[href^="#/h/"]');
+    if (wkLink && openWorkerFromLink(wkLink, e, "", { allowAnyView: true })) return;
     const inboxBtn = e.target.closest("button[data-inbox-toggle]");
     if (inboxBtn) {
       const row = inboxBtn.closest(".inbox-row");
@@ -14054,6 +14079,10 @@
       renderHist();
     }
     if (changed && view === "collie") renderSuper();
+    if (changed && activeWorkerKey && !wdPaneId) {
+      syncWorkerDrawerMeta();
+      if (!wdThreadEl?._msgs && resolveWorkerContext().past) openWorkerDrawerStream({ preserve: true });
+    }
     if (view === "ext" && extCur?.startsWith("h:")) renderHistHead(extCur.slice(2));
   }
   const ago = (t) => {
@@ -14379,9 +14408,9 @@
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
     if (ev.target.closest(".item-th-btn")) return;
     const item = ev.target.closest("a.item[data-side-worker]");
-    if (!item || view !== "collie" || innerWidth <= 1000) return;
+    if (!item) return;
     ev.preventDefault();
-    openWorkerDrawer({ worker: item.dataset.sideWorker, paneId: item.dataset.paneId || "" });
+    openWorkerFromAnywhere({ worker: item.dataset.sideWorker, paneId: item.dataset.paneId || "" });
   };
   $("#live-list").addEventListener("click", (ev) => {
     if (ev.target.closest("[data-act=live-more]")) {
@@ -14398,16 +14427,12 @@
   $("#rail-live")?.addEventListener("click", (ev) => {
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
     const a = ev.target.closest("a.sr-agent[data-rail-pane]");
-    if (!a || innerWidth <= 1000) return;
+    if (!a) return;
     const worker = a.dataset.railWorker || "";
     const paneId = a.dataset.railPane || "";
     if (!worker && !paneId) return;
     ev.preventDefault();
-    if (view !== "collie") {
-      location.hash = "#/collie";
-      if (view !== "collie") route();
-    }
-    openWorkerDrawer({ worker, paneId });
+    openWorkerFromAnywhere({ worker, paneId });
   });
   $("#rail-new-btn")?.addEventListener("click", () => openLauncher());
   $("#rail-peers")?.addEventListener("click", () => openPeerModal("auto"));
@@ -19897,8 +19922,12 @@
       return;
     }
     pendingOpenThread = { rootId, focusId };
-    if (location.hash === "#/collie") route();
-    else location.hash = "#/collie";
+    if (location.hash === "#/collie") {
+      route();
+    } else {
+      location.hash = "#/collie";
+      if (view !== "collie") route();
+    }
   }
 
   let _lastMarkedGen = -1, _lastMarkedRoot = null, _lastSideMarkedKey = "";
@@ -21155,7 +21184,10 @@
       if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       if (view !== "collie") return;
       e.preventDefault();
-      openWorkerDrawer({ worker: a.dataset.tdWorker, fromThreadRoot: activeThreadRoot || "" });
+      const href = a.getAttribute?.("href") || "";
+      const paneId = href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)).trim() : "";
+      const histId = href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "";
+      openWorkerDrawer({ worker: a.dataset.tdWorker, paneId, histId, fromThreadRoot: activeThreadRoot || "" });
     });
     tdLocateRootBtn?.addEventListener("click", () => {
       const info = computeReplyThreads(chatEntries());
@@ -22028,14 +22060,32 @@
     return false;
   }
 
+  function openWorkerFromAnywhere(opts = {}) {
+    const worker = String(opts.worker || "").trim();
+    const paneId = String(opts.paneId || "").trim();
+    const histId = String(opts.histId || "").trim();
+    if (!worker && !paneId && !histId) return;
+    if (view === "collie") {
+      openWorkerDrawer({ ...opts, worker, paneId, histId });
+      return;
+    }
+    pendingOpenWorker = { ...opts, worker, paneId, histId };
+    if (location.hash === "#/collie") {
+      route();
+    } else {
+      location.hash = "#/collie";
+      if (view !== "collie") route();
+    }
+  }
   function openWorkerDrawer(opts = {}) {
     if (!wdDrawer) return;
     const worker = String(opts.worker || "").trim();
     const paneHint = String(opts.paneId || "").trim();
-    if (!worker && !paneHint) return;
+    const histHint = String(opts.histId || "").trim();
+    if (!worker && !paneHint && !histHint) return;
     const appEl = $("#app");
     const hadWorker = !!appEl.classList.contains("has-worker");
-    const nextKey = worker || paneHint;
+    const nextKey = worker || paneHint || (histHint ? "h:" + histHint : "");
     const switchedTarget = activeWorkerKey !== nextKey;
     const wantMode = opts.mode && ["chat", "screen", "log"].includes(opts.mode) ? opts.mode : "";
     const modeChanged = !!(wantMode && wantMode !== wdMode);
@@ -22049,19 +22099,31 @@
       return;
     }
     const wasAnyDrawer = isAnyRightDrawerOpen();
+    const closingNotesOverlay = !isWideNotesViewport() && notesOpen;
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
     const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
     const sc = view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc && !hadWorker ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    closePick();
+    closeDirPick(false);
+    if (collieMenuOpen) closeCollieMenus();
+    if (pendingOpen) { pendingOpen = false; renderPendingBar(); }
+    if (superSearchOpen) closeSuperSearchFn?.(false);
     if (appEl.classList.contains("has-file")) closeFilePane({ immediate: true, switching: true });
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
+    if (innerWidth <= THREAD_DESKTOP_MIN) {
+      const ae = document.activeElement;
+      if (ae && (!wdDrawer.contains?.(ae) || (switchedTarget && wdComposerOpen && ae === wdInputEl)) && typeof ae.blur === "function") {
+        ae.blur();
+      }
+    }
     clearTimeout(wdHideTimer);
     if (!hadWorker) resetDrawerMotion(wdDrawer);
     if (switchedTarget) disarmInterrupt("worker");
     activeWorkerKey = nextKey;
     wdWorkerName = worker;
     wdPaneId = paneHint || (worker ? paneOf(worker) || "" : "");
-    wdHistId = opts.histId || "";
+    wdHistId = histHint;
     wdFromThread = opts.fromThreadRoot || "";
     wdTaskTitle = opts.title || "";
     wdTaskNote = opts.note || "";
@@ -22077,14 +22139,22 @@
     if (wdInputEl) wdInputEl.value = "";
     wdSummaryEl?.classList?.remove("is-expanded");
 
+    if (closingNotesOverlay) {
+      sidePaneOverlay = "";
+      syncNotebookVisibility({ immediate: true });
+    }
     applyWorkerWidth();
     const nextW = _lastWorkerW || _lastDrawerW || 480;
+    const handoffScrim = (wasAnyDrawer || closingNotesOverlay) && innerWidth <= THREAD_DESKTOP_MIN;
+    if (wdScrim && !handoffScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
     if (wdDrawer.hidden) { wdDrawer.hidden = false; wdDrawer.offsetWidth; }
-    if (wdScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
     wdDrawer.setAttribute("aria-hidden", "false");
     appEl.classList.add("has-worker");
+    if (wdScrim && handoffScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
     syncWorkerWidenUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && isDesktopDrawerViewport() });
+    if (!closingNotesOverlay) {
+      syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && isDesktopDrawerViewport() });
+    }
     if (!hadWorker) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
@@ -22118,6 +22188,8 @@
     const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && isDesktopDrawerViewport() && !wdDrawer.hidden;
 
     disarmInterrupt("worker");
+    const ae = document.activeElement;
+    if (ae && wdDrawer.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     wdSeq++;
     const prevWdPane = wdPaneId || wdLastLivePaneId;
     wdWasLive = false;
@@ -22211,7 +22283,7 @@
     });
     wdThreadBtn?.addEventListener("click", () => {
       const rootId = wdThreadBtn.dataset.wdThread || "";
-      if (rootId) openThreadDrawer(rootId, "", "");
+      if (rootId) openThreadFromAnywhere(rootId, "");
     });
     wdInterruptBtn?.addEventListener("click", () => {
       if (!wdPaneId) return;
@@ -22221,9 +22293,13 @@
     });
     wdInterjectBtn?.addEventListener("click", () => {
       if (!wdPaneId) return;
+      const wasAtBottom = wdThreadEl && nearBottom(wdThreadEl);
       wdComposerOpen = true;
       syncWorkerComposerUI();
       syncWorkerSendBtn();
+      if (wasAtBottom && wdThreadEl && typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => { if (wdThreadEl) wdThreadEl.scrollTop = wdThreadEl.scrollHeight; });
+      }
       wdInputEl?.focus({ preventScroll: true });
     });
     wdCollapseBtn?.addEventListener("click", () => {
@@ -23998,11 +24074,13 @@
     if (vhChanged) {
       // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
       const screenPinned = curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
-      const pinned = [...document.querySelectorAll(".viewer, #log, #td-body")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
+      const wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
+      const pinned = [...document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
       lastVH = nextVH;
       root.setProperty("--vh", nextVH);
       pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
       if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
+      if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
     }
     if (nextVTop !== lastVTop) {
       lastVTop = nextVTop;

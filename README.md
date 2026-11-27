@@ -3,8 +3,8 @@
 <h1 align="center">Collie</h1>
 
 <p align="center"><sub>One border collie to herd your coding agents</sub><br>
-<b>Stop babysitting 8 AI terminals. Hand work to Collie.</b><br>
-Open-source, self-hosted Super Agent for Antigravity (Gemini), Claude Code, Codex, and Cursor — 3-line briefs and one-tap decisions.</p>
+<b>Stop running a 20x AI plan at 1x. Turn 20x quota into 20x output.</b><br>
+Open-source, self-hosted Super Agent for Antigravity (Gemini), Claude Code, Codex, and Cursor — push a dozen parallel tracks, get 3-line briefs and one-tap decisions.</p>
 
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ Live Demo (10s)</b></a> ·
@@ -28,7 +28,7 @@ Open-source, self-hosted Super Agent for Antigravity (Gemini), Claude Code, Code
 
 > **Solo Antigravity is one agent. Paired with Collie, it becomes your dedicated Gemini command deck** — multi-terminal herding, long-running follow-through, and mobile control (alongside Claude Code, Codex, and Cursor).
 
-Stop bouncing between terminal tabs and separate Antigravity, Claude, Codex, and Cursor desktop apps. **Collie** is an open-source, self-hosted **Super Agent** that brings every coding agent across your Macs, Linux devboxes, and cloud VMs under one unified workspace—while still letting you take over any desktop or CLI session already running. Describe the goal in one chat: Collie dispatches workers in parallel, watches progress, retries stalls, and comes back with **a 3-line summary and 2–4 one-tap options**. Because Collie is **one pure Web UI** (Add to Home Screen as a PWA) with identical full capabilities on phone and desktop—delegate, read briefs, tap decisions, open thread drawers, inspect images and reports—you can **leave your laptop behind** on commutes, trips, or between meetings.
+Paying for **Claude Max 20x** or **Codex Pro 20x** while babysitting one terminal at a time still caps you at 1x output. **Collie** is an open-source, self-hosted **Super Agent** that turns 20x quota into **20x real output**—herding Antigravity, Claude Code, Codex, and Cursor across your Macs, Linux devboxes, and cloud VMs in one unified workspace (no more juggling terminal tabs or separate agent desktop apps, while still letting you take over any session already running). One person can push **a dozen parallel tracks at once**—research, coding, long-running jobs, and releases—while Collie tracks progress, retries stalls, and comes back with **a 3-line summary and 2–4 one-tap options**, so you only step in for the key calls. Because Collie is **one pure Web UI** (Add to Home Screen as a PWA) with identical full capabilities on phone and desktop—delegate, read briefs, tap decisions, open thread drawers, inspect images and reports—you can **leave your laptop behind** on commutes, trips, or between meetings.
 
 > Named after the border collie: [herdr](https://herdr.dev) keeps the terminals alive; Collie herds the agents.
 

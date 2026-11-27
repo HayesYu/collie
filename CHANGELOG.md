@@ -4,6 +4,42 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.11 (2026-11-28)
+
+### Highlights
+
+- **Unified Mobile & Tablet Worker Drawer (`web/{app.css,app.js}`, `docs/demo/`)**:
+  - Removed the `<= 1000px` / `> 1000px` drawer bypass gates across the sidebar (`#live-list`, `#attention`), 54px icon rail (`#rail-live`), chat/event/approval/thread links (`openWorkerFromLink`), Memory `.mem-crew` chips, and `#/w/` deep links so mobile (`<= 760px`) consistently slides up the bottom sheet and tablet (`<= 1000px`) opens the right slide-over drawer while preserving `#wd-popout` for explicit full-screen inspection.
+  - Added `openWorkerFromAnywhere` so tapping a worker from the mobile sidebar (`#/`) cleanly transitions to `#/collie` before opening `#worker-drawer`, and clicking worker chips inside Memory (`#/auto`) opens `#worker-drawer` directly over Memory for both live and ended workers.
+  - Eliminated double scrim overlaps during notebook/drawer handoffs, added `overscroll-behavior: contain` scroll isolation on scrims and drawer panes, anchored `#wd-thread` / `#wd-log` and refit `wdTerm` on mobile keyboard resize (`setVH`), blurred focused inputs on drawer open/close, and aligned mobile composer controls and touch targets with safe-area insets.
+- **Redesigned Peer Hub Modal & Elevated Popovers (`web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Replaced nested Peer Hub sub-tabs with a clean single-level 3-tab layout (`好友 / 我的名片 / 添加好友`), surfacing a restrained amber pending indicator while hiding zero counts.
+  - Decluttered the modal header and footer by moving raw direct addresses, invite codes, hub IDs, and two-step card reset confirmation into a collapsed native `<details>` disclosure (`连接与高级详情`).
+  - Rendered real `/api/qr` PNGs on a warm-gray dark-mode QR plate (`#e5e5e1` with multiply blend) paired with click-to-edit inline nickname auto-save and a primary copy-invite CTA, and introduced custom top-layer popover pickers inside `#int-modal` (`#222229` elevated dark surface, mobile/pending trigger width-matching, narrow-row alignment, and full keyboard navigation).
+- **Antigravity Subagent Isolation & Structured Subagent/Tool Rendering (`internal/collie/{agy.go,chat.go,desktop.go,external.go,fleet.go}`, `web/{app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Eliminated Antigravity subagent session cross-talk across two layers: SQLite metadata filtering (`nesting_depth=0`, `killed=0`, `parent_conversation_id=''`, `agent_name=''`, guarded via `PRAGMA table_info` for older schemas) and transcript line-0 `SYSTEM_MESSAGE` detection across `guessAgy`, `recentAgyCLI`, `agyDesktopRows`, and `locateExternal`.
+  - Read immutable line-0 `created_at` from `transcript.jsonl` in `guessAgy` to eliminate Linux `brain/<id>` directory `mtime` drift, and guarded concurrent same-directory Collie workers/router using remembered pane names (`Herdr.Name`) and line-0 identity markers.
+  - Parsed Antigravity double-encoded tool arguments into structured `SubagentCall` metadata (`invoke_subagent`, Claude `Agent`/`Task`, Codex `spawn_agent`, `swarm(add)`) plus readable summaries and expandable `detail` parameter blocks for generic tools (`generate_image`, `send_message`, `update_steps`, `schedule`, `define_subagent`, `manage_task`, `manage_subagents`, and arbitrary JSON tools), rendered as restrained monochrome collapsible cards (`details.tool.subagent`) with legacy raw-JSON fallback.
+- **Sidebar/Rail Polish, Tablet HTML Drawer Stability, Ended-Worker Auto-Close & 3s Interrupt Confirm (`web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Restored「自动化」directly beneath「和 Collie 对话」in expanded `.side-nav` and placed `#rail-auto` + a dedicated `#rail-collie` home icon in the top navigation section of the 54px rail; restored the expanded `.side-foot` device status bar alongside compact Peer Collies / Preferences buttons and fixed `setConnDotState()` SSE indicator updates.
+  - Eliminated `#notes-pane` horizontal and vertical drift across left-sidebar collapse/expand (`0.00px` max delta via viewport-right `--notes-right` anchoring), and added a 3-second two-click safety arming confirmation before sending `Ctrl-C` from `#wd-interrupt` and `#more-menu [data-act="interrupt"]`.
+  - Stabilized desktop and wide-tablet HTML artifact drawer glides (`#v-collie.has-drawer-col-cap`, gutter-free `composerMetrics` vs gutter-aware `threadMetrics`, `minmax(0, 1fr)` on tablet/mobile `.app`, and `isDesktopDrawerViewport()` resize/rotation cleanup); auto-closed `#worker-drawer` with a subtle completion toast when a live worker finishes, hid the redundant `#wd-gone` banner on read-only ended workers, and always cleared live spinners (`#wd-live` / `wdLiveCache` / `#live`) when a pane ends.
+- **Minimalist Pinned Message Bar & Activity Feed Infinite Scroll (`web/{app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Refined the main-chat pinned/pending floating strip with a unified 14px linear pushpin SVG (dropping the leading dot and redundant `已钉住 ·` prefix in pin-only mode), 10px elevated hairline framing, hover/focus-revealed desktop unpin button (with 32px coarse touch targets on mobile), and a compact multi-pin selector with selection memory and `Esc` focus return.
+  - Replaced machine-translated「线程」copy across the Activity Feed and Forge settings with natural Chinese（「事件来源」/「来源」/「主会话」）, merged the source picker and「订阅路由」toggle into a single-row Linear-style toolbar, and upgraded manual 40-item pagination to native `IntersectionObserver` infinite scroll.
+- **25× Faster Race-Enabled Test Suite & Database Flush Cache (`internal/collie/{db.go,super.go,chat.go,gitforge_cli.go,*_test.go}`)**:
+  - Reduced full `go test -race -count=1 ./...` execution time from ~350s to ~15s via `TestMain` host side-effect isolation, lazy prepared statements with an exact-JSON `flushCache` in `Super.flush()` / `saveState`, a 512 KiB initial `earlierMessages()` window, deterministic virtual timers in JS VM tests, `zip.CreateRaw` fixture reuse, and `t.Parallel()` across isolated test suites (plus `WaitDelay = 1s` hardening in `CLIProvider.runCmdWithInput`).
+
+### Client / API Changes
+
+- **Chat `Message` JSON (`GET /api/panes/{id}/chat`, `GET /api/external/{id}/chat`, `GET /api/panes/{id}/chat/earlier`, `GET /api/panes/{id}/snapshot`, and SSE `chat` streams)** (backward compatible):
+  - Added two optional `omitempty` fields on `kind="tool"` messages:
+    - `detail` (`string`, optional): formatted full tool parameters for expanded view.
+    - `subagent` (`object`, optional): `{ type, role, prompt, model, id }` structured metadata for subagent invocation tools.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.10 (2026-11-28)
 
 ### Highlights

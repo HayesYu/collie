@@ -310,7 +310,7 @@ func (p *CLIProvider) runCmdWithInput(ctx context.Context, argv []string, stdin 
 
 	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
 	configureCLIProcGroup(cmd)
-	cmd.WaitDelay = 200 * time.Millisecond
+	cmd.WaitDelay = time.Second
 	if len(p.spec.Env) > 0 {
 		env := os.Environ()
 		for k, v := range p.spec.Env {

@@ -180,7 +180,6 @@ func TestFeishuOnboardParseExpireIn(t *testing.T) {
 }
 
 func TestFeishuOnboardCreateSuccessAndZeroSecretLeak(t *testing.T) {
-	t.Parallel()
 	const (
 		secretVal  = "sec_top_secret_never_leak_999"
 		deviceCode = "v1:devcode_never_expose_888"

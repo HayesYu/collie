@@ -122,7 +122,6 @@ func TestIntegrationPersistentDedupAcrossRestart(t *testing.T) {
 }
 
 func TestIntegrationBackoffAndAuthCircuitBreaker(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "herd.db"))
 	if err != nil {

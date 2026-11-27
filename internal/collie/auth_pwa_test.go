@@ -299,12 +299,25 @@ func TestPWAAssetsUnauthenticated(t *testing.T) {
 			Sizes string `json:"sizes"`
 			Type  string `json:"type"`
 		} `json:"icons"`
+		LaunchHandler struct {
+			ClientMode []string `json:"client_mode"`
+		} `json:"launch_handler"`
+		ProtocolHandlers []struct {
+			Protocol string `json:"protocol"`
+			URL      string `json:"url"`
+		} `json:"protocol_handlers"`
 	}
 	if err := json.Unmarshal(manRec.Body.Bytes(), &manifest); err != nil {
 		t.Fatalf("parse manifest.webmanifest: %v", err)
 	}
 	if manifest.Name != "Collie" || len(manifest.Icons) < 2 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
+	}
+	if len(manifest.LaunchHandler.ClientMode) < 2 || manifest.LaunchHandler.ClientMode[0] != "focus-existing" {
+		t.Fatalf("manifest missing launch_handler focus-existing: %+v", manifest.LaunchHandler)
+	}
+	if len(manifest.ProtocolHandlers) == 0 || manifest.ProtocolHandlers[0].Protocol != "web+collie" || manifest.ProtocolHandlers[0].URL != "/?peer_invite=%s" {
+		t.Fatalf("manifest missing web+collie protocol_handlers: %+v", manifest.ProtocolHandlers)
 	}
 
 	// 3. GET / (index.html) without auth exposes iOS PWA meta tags & apple-touch-icon link.

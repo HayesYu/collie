@@ -56,9 +56,14 @@
         <img src="icon.svg" alt="">
         <span>Collie</span>
       </a>
-      <button class="icon-btn" id="new-btn" title="新建 Agent" aria-label="新建 Agent">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
+      <div class="side-head-acts">
+        <button type="button" class="icon-btn side-toggle-btn" id="side-collapse-btn" data-toggle-side title="收起侧栏" aria-label="收起侧栏" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
+        </button>
+        <button class="icon-btn" id="new-btn" title="新建 Agent" aria-label="新建 Agent">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
     </header>
 
     <nav class="side-nav">
@@ -115,20 +120,16 @@
       <div class="collie-top">
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn side-expand-btn" id="side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title">
           <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
         <div class="d-head-acts">
           <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
-          <div class="th-pop-wrap" id="collie-threads-wrap" hidden>
-            <button type="button" class="head-text-btn th-head-btn" id="collie-threads-btn" aria-pressed="false" aria-controls="notes-pane" title="当前对话中的话题线">
-              <span class="th-head-lbl">话题线</span>
-              <span class="th-head-dot" id="collie-threads-dot" aria-hidden="true" hidden></span>
-            </button>
-          </div>
           <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" aria-label="展开或收起小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
             <span>小本本</span>
+            <span class="th-head-dot" id="open-notes-dot" aria-hidden="true" hidden></span>
           </button>
           <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
@@ -148,29 +149,6 @@
         </div>
       </header>
 
-      <search class="super-search" id="super-search" hidden>
-        <div class="ss-bar">
-          <div class="ss-field">
-            <label class="ss-ico" for="super-search-input">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
-              <span class="visually-hidden">搜索和 Collie 的对话</span>
-            </label>
-            <input id="super-search-input" name="q" type="search" placeholder="搜索对话历史（多词用空格分隔）…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="super-search-list">
-            <span class="ss-meta" id="super-search-meta" hidden></span>
-            <button type="button" class="ss-clear" id="super-search-clear" title="清空输入" aria-label="清空输入" hidden>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l8 8M16 8l-8 8"/></svg>
-            </button>
-          </div>
-          <button type="button" class="icon-btn ss-close" id="super-search-close" title="关闭搜索 (Esc)" aria-label="关闭搜索">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-        </div>
-        <div class="ss-panel" id="super-search-panel" hidden>
-          <div class="ss-head" id="super-search-head" hidden></div>
-          <div class="ss-list" id="super-search-list" role="listbox" aria-label="搜索结果"></div>
-        </div>
-      </search>
-
       <div class="router-pending-bar" id="collie-pending-bar" hidden></div>
       <div class="router-pending-bar peer-req-bar" id="peer-req-bar" hidden></div>
 
@@ -188,22 +166,26 @@
           <button type="button" class="np-handle" id="np-handle" aria-label="收起侧卡" title="收起侧卡">
             <span class="np-handle-pill" aria-hidden="true"></span>
           </button>
-          <header class="np-head" id="np-head" title="点击切换紧凑或展开">
+          <header class="np-head" id="np-head" title="点击空白处切换紧凑或展开">
             <button type="button" class="icon-btn np-back" id="np-back" aria-label="返回对话" title="返回对话">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
             </button>
-            <div class="np-title-row">
-              <h2 class="np-title" id="np-title">小本本</h2>
+            <div class="np-tabs" id="np-tabs" role="tablist" aria-label="小本本视图切换">
+              <button type="button" class="np-tab on" id="np-tab-notes" role="tab" aria-selected="true" aria-controls="np-body" data-np-tab="notes">事项</button>
+              <button type="button" class="np-tab" id="np-tab-threads" role="tab" aria-selected="false" aria-controls="np-threads-body" data-np-tab="threads"><span>话题</span><span class="np-tab-dot" id="collie-threads-dot" aria-hidden="true" hidden></span></button>
+              <span class="np-tab-ink" id="np-tab-ink" aria-hidden="true"></span>
+            </div>
+            <div class="np-head-meta">
               <span class="np-sub" id="np-date"></span>
               <span class="np-sub" id="collie-threads-sub" hidden></span>
             </div>
             <div class="np-head-acts">
-              <button type="button" class="icon-btn np-act-btn" id="np-close" aria-label="隐藏侧卡" title="隐藏到顶栏">
+              <button type="button" class="icon-btn np-act-btn" id="np-close" aria-label="隐藏小本本" title="隐藏到顶栏">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
               </button>
             </div>
           </header>
-          <div class="np-body" id="np-body">
+          <div class="np-body" id="np-body" role="tabpanel" aria-labelledby="np-tab-notes">
             <section class="np-sec" id="np-sec-tasks" aria-labelledby="np-h-tasks">
               <div class="np-sec-head">
                 <h3 class="np-sec-title" id="np-h-tasks">进行中</h3>
@@ -226,7 +208,7 @@
               <ul class="np-list" id="np-timers-list"></ul>
             </section>
           </div>
-          <div class="np-threads-body" id="np-threads-body" role="region" aria-label="话题线列表" hidden>
+          <div class="np-threads-body" id="np-threads-body" role="tabpanel" aria-labelledby="np-tab-threads" hidden>
             <div class="np-th-list th-pop-list" id="collie-threads-list" role="list"></div>
           </div>
         </div>
@@ -269,6 +251,7 @@
     <section class="view" id="v-auto" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title"><div class="d-name">自动化</div></div>
       </header>
       <div class="tabs" id="auto-tabs">
@@ -285,6 +268,7 @@
     <section class="view" id="v-devices" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title"><div class="d-name">设备</div><div class="d-meta muted">这台 hub 管着哪些电脑，谁能连进来</div></div>
       </header>
       <div class="auto-body" id="devices-body"></div>
@@ -294,6 +278,7 @@
     <section class="view" id="v-ext" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title">
           <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag">只读</span></div>
           <div class="d-meta"><span class="status" id="x-status"></span><span class="muted mono" id="x-cwd"></span></div>
@@ -327,6 +312,7 @@
     <section class="view" id="v-prefs" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title"><div class="d-name">偏好设置</div><div class="d-meta muted">只影响这台设备上的这个浏览器</div></div>
       </header>
       <div class="auto-body" id="prefs-body"></div>
@@ -336,6 +322,7 @@
     <section class="view detail" id="detail" hidden>
       <header class="d-head">
         <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn side-expand-btn" data-toggle-side aria-label="展开侧栏" title="展开侧栏"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
         <div class="d-title">
           <div class="d-name"><span id="d-name"></span><span class="kind" id="d-kind"></span><span class="tag" id="d-worker" hidden></span></div>
           <div class="d-meta"><span class="status" id="d-status"></span><span class="muted mono d-worker-id" id="d-worker-id" hidden></span><span class="muted" id="d-model" hidden></span><span class="muted mono" id="d-cwd"></span></div>
@@ -444,78 +431,85 @@
       </div>
     </section>
   </main>
-  <!-- a file a message mentions, read-only, beside the conversation -->
-  <div class="file-scrim" id="file-scrim" hidden aria-hidden="true"></div>
-  <aside class="filepane" id="file-view" hidden aria-label="文件预览">
-    <div class="fv-grip" id="fv-grip" title="拖动调整宽度"></div>
-    <div class="fv-inner">
-    <button type="button" class="fv-handle" id="fv-handle" aria-label="收起预览" title="收起预览">
-      <span class="fv-handle-pill" aria-hidden="true"></span>
-    </button>
-    <header class="fv-head">
-      <button type="button" class="icon-btn fv-back" data-fv-close aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
-      <h3 id="fv-name"></h3>
-      <span class="fv-lang" id="fv-lang" hidden></span>
-      <div class="fv-actions">
-        <div class="seg fv-mode-seg" id="fv-mode-seg" role="group" aria-label="切换表格或原文" hidden>
-          <button type="button" data-fv-mode="table" class="on" aria-pressed="true">表格</button>
-          <button type="button" data-fv-mode="raw" aria-pressed="false">原文</button>
-        </div>
-        <button type="button" class="icon-btn fv-act-btn fv-widen" id="fv-widen" aria-label="拓宽预览" aria-pressed="false" title="拓宽预览">
-          <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
-          <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
-        </button>
-        <button type="button" class="icon-btn fv-act-btn" id="fv-dl" aria-label="下载完整原件" title="下载完整原件" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
-        </button>
-        <span class="fv-copy" id="fv-copy-wrap" hidden>
-          <button type="button" class="icon-btn fv-act-btn fv-copy-btn" id="fv-copy" command="--copy" commandfor="fv-code-src" aria-label="复制全文" title="复制全文">
-            <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
-            <svg class="ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-          </button>
-          <span class="fv-copy-tip" role="status"></span>
-        </span>
-        <a class="icon-btn fv-act-btn" id="fv-wide" href="#/file" target="_blank" rel="noopener" aria-label="新标签打开" title="新标签打开" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
-        </a>
-        <button type="button" class="icon-btn fv-act-btn fv-x" data-fv-close aria-label="关闭" title="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  <!-- unified three-in-one right drawer: file preview / reply-thread / dispatched worker -->
+  <div class="file-scrim drawer-scrim" id="file-scrim" hidden aria-hidden="true"></div>
+  <aside class="filepane side-drawer" id="file-view" data-drawer-kind="file" hidden aria-label="文件预览" aria-hidden="true">
+    <div class="fv-grip sd-grip" id="fv-grip" title="拖动调整宽度"></div>
+    <div class="fv-inner sd-inner">
+      <button type="button" class="fv-handle sd-handle" id="fv-handle" aria-label="收起预览" title="收起预览">
+        <span class="fv-handle-pill sd-handle-pill" aria-hidden="true"></span>
+      </button>
+      <div class="sd-top fv-top">
+        <header class="fv-head sd-head">
+          <div class="sd-title-wrap">
+            <div class="sd-title-row">
+              <h2 class="sd-title" id="fv-name"></h2>
+              <span class="fv-lang sd-badge" id="fv-lang" hidden></span>
+            </div>
+            <div class="sd-meta fv-meta">
+              <span class="mono fv-path" id="fv-path"></span>
+              <span class="fv-sandbox-tag" id="fv-sandbox-tag" hidden><span class="dot ok" aria-hidden="true"></span>只读沙盒</span>
+            </div>
+          </div>
+          <div class="fv-actions sd-head-acts">
+            <div class="seg fv-mode-seg" id="fv-mode-seg" role="group" aria-label="切换表格或原文" hidden>
+              <button type="button" data-fv-mode="table" class="on" aria-pressed="true">表格</button>
+              <button type="button" data-fv-mode="raw" aria-pressed="false">原文</button>
+            </div>
+            <button type="button" class="icon-btn sd-act-btn fv-act-btn" id="fv-dl" aria-label="下载完整原件" title="下载完整原件" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
+            </button>
+            <span class="fv-copy" id="fv-copy-wrap" hidden>
+              <button type="button" class="icon-btn sd-act-btn fv-act-btn fv-copy-btn" id="fv-copy" command="--copy" commandfor="fv-code-src" aria-label="复制全文" title="复制全文">
+                <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                <svg class="ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+              </button>
+              <span class="fv-copy-tip" role="status"></span>
+            </span>
+            <a class="icon-btn sd-act-btn fv-act-btn" id="fv-wide" href="#/file" target="_blank" rel="noopener" aria-label="新标签打开" title="新标签打开" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
+            </a>
+            <button type="button" class="icon-btn sd-act-btn fv-act-btn sd-widen fv-widen" id="fv-widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
+              <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
+              <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
+            </button>
+            <button type="button" class="icon-btn sd-act-btn fv-act-btn fv-x" data-fv-close aria-label="关闭抽屉" title="关闭 (Esc)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>
+        </header>
       </div>
-    </header>
-    <div class="fv-subbar">
-      <p class="muted mono" id="fv-path"></p>
-      <span class="fv-sandbox-tag" id="fv-sandbox-tag" hidden><span class="dot ok" aria-hidden="true"></span>只读沙盒</span>
-    </div>
-    <div class="fv-body" id="fv-body"></div>
+      <div class="fv-body" id="fv-body"></div>
     </div>
   </aside>
-  <!-- natural reply-chain thread drawer, beside Collie's main stream -->
-  <div class="thread-scrim" id="thread-scrim" hidden aria-hidden="true"></div>
-  <aside class="threadpane" id="thread-drawer" hidden aria-label="话题抽屉" aria-hidden="true">
-    <div class="td-grip" id="td-grip" title="拖动调整宽度"></div>
-    <div class="td-inner">
-      <button type="button" class="td-handle" id="td-handle" aria-label="下滑或轻点收起话题抽屉" title="收起话题抽屉">
-        <span class="td-handle-pill" aria-hidden="true"></span>
+  <!-- natural reply-chain thread drawer, unified right drawer mode -->
+  <div class="thread-scrim drawer-scrim" id="thread-scrim" hidden aria-hidden="true"></div>
+  <aside class="threadpane side-drawer" id="thread-drawer" data-drawer-kind="thread" hidden aria-label="话题抽屉" aria-hidden="true">
+    <div class="td-grip sd-grip" id="td-grip" title="拖动调整宽度"></div>
+    <div class="td-inner sd-inner">
+      <button type="button" class="td-handle sd-handle" id="td-handle" aria-label="下滑或轻点收起话题抽屉" title="收起话题抽屉">
+        <span class="td-handle-pill sd-handle-pill" aria-hidden="true"></span>
       </button>
-      <div class="td-top">
-      <header class="td-head">
-        <div class="td-title-wrap">
-          <h2 class="td-title" id="td-title">话题线</h2>
-          <div class="td-meta" id="td-meta"></div>
-        </div>
-        <div class="td-head-acts">
-          <button type="button" class="icon-btn" id="td-locate-root" aria-label="定位到主聊天" title="定位到主聊天流">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
-          </button>
-          <button type="button" class="icon-btn td-widen" id="td-widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
-            <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
-            <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
-          </button>
-          <button type="button" class="icon-btn" id="td-close" aria-label="关闭抽屉" title="关闭 (Esc)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-        </div>
-      </header>
-      <nav class="td-workers" id="td-workers" aria-label="话题关联的 Agent" hidden></nav>
+      <div class="sd-top td-top">
+        <header class="td-head sd-head">
+          <div class="td-title-wrap sd-title-wrap">
+            <div class="sd-title-row">
+              <h2 class="td-title sd-title" id="td-title">话题线</h2>
+            </div>
+            <div class="td-meta sd-meta" id="td-meta"></div>
+          </div>
+          <div class="td-head-acts sd-head-acts">
+            <button type="button" class="icon-btn sd-act-btn" id="td-locate-root" aria-label="定位到主聊天" title="定位到主聊天流">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+            </button>
+            <button type="button" class="icon-btn sd-act-btn sd-widen td-widen" id="td-widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
+              <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
+              <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
+            </button>
+            <button type="button" class="icon-btn sd-act-btn" id="td-close" aria-label="关闭抽屉" title="关闭 (Esc)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+        </header>
+        <nav class="td-workers" id="td-workers" aria-label="话题关联的 Agent" hidden></nav>
       </div>
       <div class="td-body" id="td-body" tabindex="-1">
         <div class="td-list" id="td-list"></div>
@@ -544,7 +538,135 @@
       </form>
     </div>
   </aside>
+  <!-- Collie-dispatched worker live task drawer, unified right drawer mode -->
+  <div class="worker-scrim drawer-scrim" id="worker-scrim" hidden aria-hidden="true"></div>
+  <aside class="workerpane side-drawer" id="worker-drawer" data-drawer-kind="worker" hidden aria-label="任务抽屉" aria-hidden="true">
+    <div class="wd-grip sd-grip" id="wd-grip" title="拖动调整宽度"></div>
+    <div class="wd-inner sd-inner">
+      <button type="button" class="wd-handle sd-handle" id="wd-handle" aria-label="下滑或轻点收起任务抽屉" title="收起任务抽屉">
+        <span class="wd-handle-pill sd-handle-pill" aria-hidden="true"></span>
+      </button>
+      <div class="sd-top wd-top">
+        <header class="wd-head sd-head">
+          <div class="sd-title-wrap">
+            <div class="sd-title-row">
+              <h2 class="sd-title" id="wd-title">进行中任务</h2>
+              <span class="sd-badge wd-kind" id="wd-kind" hidden></span>
+              <span class="sd-badge wd-role" id="wd-role" hidden>Collie 派出</span>
+            </div>
+            <div class="sd-meta wd-meta">
+              <span class="status" id="wd-status"></span>
+              <span class="muted" id="wd-model" hidden></span>
+              <span class="muted mono wd-cwd" id="wd-cwd"></span>
+            </div>
+          </div>
+          <div class="wd-head-acts sd-head-acts">
+            <a class="icon-btn sd-act-btn" id="wd-popout" href="#/collie" aria-label="独立全屏打开" title="独立全屏打开" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
+            </a>
+            <button type="button" class="icon-btn sd-act-btn sd-widen wd-widen" id="wd-widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
+              <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
+              <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
+            </button>
+            <button type="button" class="icon-btn sd-act-btn" id="wd-close" aria-label="关闭抽屉" title="关闭 (Esc)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+        </header>
+        <div class="wd-summary" id="wd-summary" hidden>
+          <div class="wd-summary-text" id="wd-summary-text"></div>
+        </div>
+        <div class="wd-bar" id="wd-bar">
+          <div class="seg wd-mode-seg" id="wd-mode-seg" role="group" aria-label="切换任务视图">
+            <button type="button" data-wd-mode="chat" class="on" aria-pressed="true">对话</button>
+            <button type="button" data-wd-mode="screen" aria-pressed="false">屏幕</button>
+            <button type="button" data-wd-mode="log" aria-pressed="false">日志</button>
+          </div>
+          <div class="wd-bar-acts">
+            <button type="button" class="wd-pill-btn" id="wd-thread-btn" hidden>关联话题</button>
+            <button type="button" class="wd-pill-btn" id="wd-interrupt" title="发送 Ctrl-C 中断当前执行" hidden>中断 ^C</button>
+          </div>
+        </div>
+      </div>
+      <div class="viewer wd-viewer" id="wd-viewer" data-mode="chat">
+        <div class="chat wd-chat" id="wd-chat">
+          <div class="thread wd-thread" id="wd-thread"></div>
+          <div class="live wd-live" id="wd-live" hidden></div>
+        </div>
+        <div class="screen wd-screen" id="wd-screen" tabindex="-1"></div>
+        <pre class="log wd-log" id="wd-log" tabindex="-1"></pre>
+        <button type="button" class="jump wd-jump" id="wd-jump" title="回到最新" aria-label="回到最新" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+        </button>
+        <div class="gone wd-gone" id="wd-gone" hidden>这个任务会话已经结束。</div>
+      </div>
+      <div class="keys wd-keys" id="wd-keys">
+        <button type="button" data-k="esc">Esc</button>
+        <button type="button" data-k="ctrl+c">^C</button>
+        <button type="button" data-k="tab">Tab</button>
+        <button type="button" data-k="up">↑</button>
+        <button type="button" data-k="down">↓</button>
+        <button type="button" data-k="enter">↵</button>
+        <button type="button" data-t="1">1</button>
+        <button type="button" data-t="2">2</button>
+        <button type="button" data-t="3">3</button>
+      </div>
+      <div class="wd-peek-foot" id="wd-peek-foot" hidden>
+        <span class="wd-peek-note" id="wd-peek-note">由 Collie 持续盯控</span>
+        <button type="button" class="wd-pill-btn wd-interject-btn" id="wd-interject-btn">直接插话</button>
+      </div>
+      <form class="td-foot wd-foot" id="wd-composer" hidden>
+        <div class="td-cbox wd-cbox">
+          <div class="files td-files wd-files" hidden></div>
+          <label for="wd-input" class="visually-hidden">给这个任务 Agent 发消息</label>
+          <textarea class="td-ta wd-ta" id="wd-input" rows="1" placeholder="直接给这个 Agent 插话…" enterkeyhint="send"></textarea>
+          <div class="td-cbar wd-cbar">
+            <button type="button" class="icon-btn attach td-attach" title="添加图片或文件" aria-label="添加图片或文件">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button type="button" class="icon-btn wd-kbd-toggle" id="wd-kbd-toggle" title="快捷按键" aria-label="快捷按键" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>
+            </button>
+            <span class="td-hint" id="wd-hint">Enter 发送 · 直达该任务会话</span>
+            <button type="button" class="wd-collapse-btn" id="wd-composer-collapse" title="收起输入框">收起</button>
+            <button class="send" id="wd-send" type="submit" title="发送 (Enter)" aria-label="发送" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </div>
+        </div>
+        <input type="file" multiple hidden>
+      </form>
+    </div>
+  </aside>
 </div>
+
+<!-- ───────────── centered command search palette (Cmd/Ctrl+K) ───────────── -->
+<search class="super-search" id="super-search" hidden role="dialog" aria-modal="true" aria-label="搜索和 Collie 的对话">
+  <div class="ss-card" id="super-search-card">
+    <div class="ss-bar">
+      <div class="ss-field">
+        <label class="ss-ico" for="super-search-input">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
+          <span class="visually-hidden">搜索和 Collie 的对话</span>
+        </label>
+        <input id="super-search-input" name="q" type="search" placeholder="搜索对话历史（多词用空格分隔）…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="super-search-list">
+        <span class="ss-meta" id="super-search-meta" hidden></span>
+        <button type="button" class="ss-clear" id="super-search-clear" title="清空输入" aria-label="清空输入" hidden>清空</button>
+        <button type="button" class="icon-btn ss-close" id="super-search-close" title="关闭搜索 (Esc)" aria-label="关闭搜索">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="ss-panel" id="super-search-panel" hidden>
+      <div class="ss-head" id="super-search-head" hidden></div>
+      <div class="ss-list" id="super-search-list" role="listbox" aria-label="搜索结果"></div>
+    </div>
+    <footer class="ss-foot" id="super-search-foot">
+      <span class="ss-foot-hint" id="super-search-hint">多词用空格分隔</span>
+      <span class="ss-foot-keys" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 定位</span><span><kbd>Esc</kbd> 关闭</span></span>
+    </footer>
+  </div>
+</search>
 
 <!-- ───────────── launcher ───────────── -->
 <dialog class="sheet" id="launch">

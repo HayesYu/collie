@@ -457,15 +457,35 @@ function makeFakeFile({ name, type, bytes, failRead = false, readOnce = false, s
   assert.equal(toastHost.children.length, 0);
   assert.equal(toastHost._popoverOpen, false, "popover hides when last toast dismissed");
 
-  // Modal dialog open -> toast deferred until close
+  // Modal dialog open -> toast shows IMMEDIATELY and re-promotes #toasts above <dialog> in Top Layer (#t12623)
   openDialog = makeEl("dialog");
   openDialog.open = true;
+  let hideCalls = 0, showCalls = 0;
+  const origHide = toastHost.hidePopover, origShow = toastHost.showPopover;
+  toastHost.hidePopover = () => { hideCalls++; toastHost._popoverOpen = false; };
+  toastHost.showPopover = () => { showCalls++; toastHost._popoverOpen = true; };
+  toastHost._popoverOpen = true; // simulate already-open popover underneath the modal dialog
   toastLog.length = 0;
-  ctx.__test.toast("后台完成", "");
-  assert.equal(toastLog.length, 0, "toast deferred while modal dialog is open");
+  ctx.__test.toast("已复制邀请链接", "");
+  assert.equal(toastLog.length, 1, "toast inside open modal dialog must appear immediately without waiting for dialog close");
+  assert.equal(hideCalls, 1, "already-open toast popover must hidePopover() before re-promoting above open <dialog>");
+  assert.equal(showCalls, 1, "toast popover must showPopover() to sit on top of open <dialog> in Top Layer");
+  assert.equal(toastHost._popoverOpen, true);
+  // Fallback when Popover API is unavailable: reparent #toasts into open <dialog> and restore on close
+  while (toastHost.children.length) toastHost.firstElementChild.remove();
+  toastHost.hidePopover = undefined;
+  toastHost.showPopover = undefined;
+  doc.body.appendChild = (c) => { c.parentNode = doc.body; return c; };
+  openDialog.appendChild = (c) => { c.parentNode = openDialog; return c; };
+  toastLog.length = 0;
+  ctx.__test.toast("回退弹窗提示", "");
+  assert.equal(toastLog.length, 1, "non-popover fallback still shows toast immediately inside open dialog");
+  assert.equal(toastHost.parentNode, openDialog, "non-popover fallback mounts #toasts inside open <dialog>");
   openDialog.open = false;
   openDialog.dispatch("close");
-  assert.equal(toastLog.length, 1, "deferred toast shown after modal dialog closes");
+  assert.equal(toastHost.parentNode, doc.body, "closing dialog restores #toasts back to document.body");
+  toastHost.hidePopover = origHide;
+  toastHost.showPopover = origShow;
   openDialog = null;
 
   // 11) All pasted files unreadable (e.g. macOS sandboxed temp .jpg path) -> falls back to navigator.clipboard.read() bitmap Blob

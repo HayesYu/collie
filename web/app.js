@@ -887,24 +887,54 @@
   toastHost?.addEventListener("focusin", (e) => {
     if (e.relatedTarget && !toastHost.contains?.(e.relatedTarget)) toastPriorFocus = e.relatedTarget;
   });
-  function syncToastPopover(host) {
+  function syncToastPopover(host, opts = {}) {
     if (!host) return;
     const count = host.children?.length ?? 0;
+    const openDlg = document.querySelector("dialog[open]");
+    const dlgOpen = !!(openDlg && openDlg.open === true);
+    const hasPopover = typeof host.showPopover === "function";
     if (count > 0) {
-      if (typeof host.showPopover === "function") {
-        try { if (!host.matches?.(":popover-open")) host.showPopover(); } catch {}
+      if (hasPopover) {
+        if (document.body && host.parentNode && host.parentNode !== document.body) {
+          try { document.body.appendChild(host); } catch {}
+        }
+        try {
+          const isOpen = !!host.matches?.(":popover-open");
+          // Re-promote #toasts above any open modal <dialog> in the browser Top Layer.
+          if (isOpen && (opts.promoteTopLayer || dlgOpen)) {
+            if (typeof host.hidePopover === "function") host.hidePopover();
+            host.showPopover();
+          } else if (!isOpen) {
+            host.showPopover();
+          }
+        } catch {}
+      } else if (dlgOpen) {
+        if (host.parentNode !== openDlg) {
+          try { openDlg.appendChild(host); } catch {}
+          if (!openDlg._toastRestoreBound) {
+            openDlg._toastRestoreBound = true;
+            openDlg.addEventListener("close", () => {
+              openDlg._toastRestoreBound = false;
+              if (host.parentNode === openDlg && document.body) {
+                try { document.body.appendChild(host); } catch {}
+              }
+            }, { once: true });
+          }
+        }
+      } else if (document.body && host.parentNode && host.parentNode !== document.body) {
+        try { document.body.appendChild(host); } catch {}
       }
-    } else if (typeof host.hidePopover === "function") {
-      try { if (!host.matches || host.matches(":popover-open")) host.hidePopover(); } catch {}
+    } else {
+      if (typeof host.hidePopover === "function") {
+        try { if (!host.matches || host.matches(":popover-open")) host.hidePopover(); } catch {}
+      }
+      if (document.body && host.parentNode && host.parentNode !== document.body) {
+        try { document.body.appendChild(host); } catch {}
+      }
     }
   }
   function toast(msg, kind = "") {
     const text = String(msg ?? "");
-    const openDlg = document.querySelector("dialog[open]");
-    if (openDlg && openDlg.open === true) {
-      openDlg.addEventListener("close", () => toast(text, kind), { once: true });
-      return;
-    }
     const host = $("#toasts");
     if (!host) return;
     const t = document.createElement("div");
@@ -953,7 +983,7 @@
     });
     while ((host.children?.length ?? 0) >= 4) host.firstElementChild?.remove();
     host.append(t);
-    syncToastPopover(host);
+    syncToastPopover(host, { promoteTopLayer: true });
     if (hasAriaNotify) {
       try { document.ariaNotify(text, { priority: kind === "attn" ? "high" : "normal" }); } catch {}
     }
@@ -1085,6 +1115,7 @@
     state = m;
     renderSide();
     if (view === "pane") renderHead();
+    if (activeWorkerKey) syncWorkerDrawerMeta();
   }
   function connectHub(h) {
     let r = remote.get(h.key);
@@ -1217,6 +1248,7 @@
     if (mask & LIVE_PENDING_BARS) renderRouterPendingBars();
     if (mask & LIVE_UPDATE_ENTRY) renderUpdateEntry();
     if ((mask & LIVE_HEAD) && view === "pane") renderHead();
+    if ((mask & LIVE_HEAD || mask & LIVE_SIDE || mask & LIVE_SUPER) && activeWorkerKey) syncWorkerDrawerMeta();
     if ((mask & LIVE_SUPER) && view === "collie") renderSuper();
   }
   function scheduleLiveUpdates(mask) {
@@ -2730,7 +2762,7 @@
     if (prevView && performance.now() >= programmaticScrollUntil) {
       captureViewScroll(prevView, prevId, prevIdx);
     }
-    if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1000px)").matches)) closeFilePane();
+    if ($("#app").classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1180px)").matches)) closeFilePane({ immediate: next === "file" });
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (view === "auto" && next !== "auto") { clearInterval(autoTimer); clearMemoryHighlights(); }
@@ -2764,6 +2796,7 @@
       closeCollieMenus();
       closeCollieThreadsPop({ sync: false });
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
+      if (activeWorkerKey) closeWorkerDrawer({ immediate: true });
     }
     view = next; current = next === "ext" ? null : id;
     liveRevealTarget = next === "pane" || (next === "ext" && !id.startsWith("h:")) ? id : null;
@@ -2854,7 +2887,7 @@
           immediate: true,
         });
       }
-      if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot) $("#super-input").focus({ preventScroll: true });
+      if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot && !activeWorkerKey) $("#super-input").focus({ preventScroll: true });
     }
     if (next === "auto") openAuto(saved);
     if (next === "devices") openDevices(saved);
@@ -4538,10 +4571,11 @@
   }
   let searchQuery = "", searchHits = [], searchTotal = 0, searchHasMore = false, searchIdx = -1;
   {
-    const btn = $("#super-search-btn"), wrap = $("#super-search"), input = $("#super-search-input");
+    const btn = $("#super-search-btn"), wrap = $("#super-search"), card = $("#super-search-card"), input = $("#super-search-input");
     const clearBtn = $("#super-search-clear"), closeBtn = $("#super-search-close");
     const metaEl = $("#super-search-meta"), panel = $("#super-search-panel");
     const headEl = $("#super-search-head"), listEl = $("#super-search-list");
+    const hintEl = $("#super-search-hint");
     const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
     if (btn && matchMedia("(pointer: fine)").matches) {
       btn.title = `搜索对话 (${isMac ? "⌘K" : "Ctrl+K"})`;
@@ -4590,10 +4624,11 @@
       searchHits = hits;
       searchTotal = total;
       searchHasMore = hasMore;
+      if (headEl) headEl.hidden = true;
       if (!q) {
         metaEl.hidden = true;
         metaEl.textContent = "";
-        headEl.hidden = true;
+        if (hintEl) hintEl.textContent = "多词用空格分隔";
         listEl.innerHTML = "";
         searchIdx = -1;
         window.__collieHideSearchPanel();
@@ -4602,15 +4637,14 @@
       metaEl.hidden = false;
       metaEl.textContent = hasMore ? `${hits.length}/${total} 条` : `${total} 条`;
       if (!hits.length) {
-        headEl.hidden = true;
+        if (hintEl) hintEl.textContent = "换个关键词或减少筛选词试试";
         listEl.innerHTML = `<div class="ss-empty">没有找到包含「${esc(q)}」的对话</div>`;
         searchIdx = -1;
         showSearchPanel();
         input.removeAttribute("aria-activedescendant");
         return;
       }
-      headEl.hidden = false;
-      headEl.innerHTML = `<span>${hasMore ? `找到 ${total} 条，显示最近 ${hits.length} 条` : `找到 ${total} 条相关消息`}</span><span class="ss-hint">↑↓ 选择 · ↵ 定位</span>`;
+      if (hintEl) hintEl.textContent = hasMore ? `共 ${total} 条命中，展示最近 ${hits.length} 条` : "回车或点击直接定位到消息";
       searchIdx = 0;
       listEl.innerHTML = hits.map((h, i) => {
         const who = h.role === "user" ? "你" : "Collie";
@@ -4661,6 +4695,7 @@
       input.focus({ preventScroll: true });
       if (selectExisting && !wasHidden && input.value) input.select();
       const q = input.value.trim();
+      if (clearBtn) clearBtn.hidden = !input.value.length;
       if (q) {
         if (q === searchQuery && (searchHits.length || !panel.hidden)) showSearchPanel();
         else runSuperSearch(q);
@@ -4685,7 +4720,7 @@
     closeSuperSearchFn = closeSuperSearch;
     const selectSearchHit = (id) => {
       if (!id) return;
-      window.__collieHideSearchPanel();
+      closeSuperSearch(false);
       if (narrow()) input?.blur();
       jumpToEntry(id);
     };
@@ -4704,6 +4739,9 @@
       input.focus({ preventScroll: true });
     });
     closeBtn?.addEventListener("click", () => closeSuperSearch(true));
+    wrap?.addEventListener("mousedown", (e) => {
+      if (e.target === wrap) closeSuperSearch(false);
+    });
     input?.addEventListener("input", () => {
       const raw = input.value;
       clearBtn.hidden = !raw.length;
@@ -4765,9 +4803,8 @@
     });
     document.addEventListener("mousedown", (e) => {
       if (!wrap || wrap.hidden) return;
-      if (wrap.contains(e.target) || btn?.contains(e.target)) return;
-      if (!input.value.trim()) closeSuperSearch(false);
-      else window.__collieHideSearchPanel();
+      if ((card && card.contains(e.target)) || btn?.contains(e.target)) return;
+      closeSuperSearch(false);
     });
     document.addEventListener("keydown", (e) => {
       if (view !== "collie" || document.querySelector("dialog[open]")) return;
@@ -4777,7 +4814,7 @@
         return;
       }
       if (e.key === "Escape" && wrap && !wrap.hidden && !e.isComposing && e.keyCode !== 229) {
-        if (pickOpen || pendingOpen || !$("#file-view")?.hidden || activeThreadRoot) return;
+        if (pickOpen || pendingOpen) return;
         e.preventDefault();
         closeSuperSearch(true);
       }
@@ -6064,10 +6101,70 @@
         else snapCollieStickBottom(sc);
       }
     }, true);
+    let collieResizeW = sc?.clientWidth || 0;
+    let collieResizeH = sc?.clientHeight || 0;
+    let collieResizeWasBottom = true;
+    let collieResizeAnchor = null;
+    let collieResizeGraceUntil = 0;
+    let collieResizeAnchorTimer = 0;
+    let collieResizeRestoreRAF = 0;
+    const captureCollieResizeMidAnchor = () => {
+      collieResizeAnchorTimer = 0;
+      if (view !== "collie" || !sc || sc.clientHeight <= 0) return;
+      if (collieResizeWasBottom || isCollieNearBottom(sc)) {
+        collieResizeWasBottom = true;
+        collieResizeAnchor = null;
+        return;
+      }
+      collieResizeAnchor = captureCollieAnchor(sc);
+    };
+    const handleCollieScrollResize = () => {
+      if (!sc || view !== "collie" || sc.clientWidth <= 0 || sc.clientHeight <= 0) return;
+      const w = sc.clientWidth, h = sc.clientHeight;
+      if (collieResizeW === 0 && collieResizeH === 0) {
+        collieResizeW = w;
+        collieResizeH = h;
+        collieResizeWasBottom = isCollieNearBottom(sc) || collieStickBottom;
+        return;
+      }
+      if (w === collieResizeW && h === collieResizeH) return;
+      const widthChanged = w !== collieResizeW;
+      collieResizeW = w;
+      collieResizeH = h;
+      if (collieInitialAnchor || collieLayoutLock) return;
+      collieResizeGraceUntil = performance.now() + 200;
+      markProgrammaticScroll(200);
+      const restoreNow = () => {
+        if (view !== "collie" || !sc || sc.clientHeight <= 0 || collieInitialAnchor || collieLayoutLock) return;
+        if (collieResizeWasBottom || collieStickBottom) {
+          collieStickBottom = true;
+          collieResizeWasBottom = true;
+          markProgrammaticScroll(140);
+          sc.scrollTop = sc.scrollHeight;
+          updateSuperJump();
+        } else if (widthChanged && collieResizeAnchor) {
+          applyCollieAnchor(sc, collieResizeAnchor);
+          updateSuperJump();
+        }
+      };
+      restoreNow();
+      if (typeof requestAnimationFrame === "function") {
+        if (collieResizeRestoreRAF) cancelAnimationFrame(collieResizeRestoreRAF);
+        collieResizeRestoreRAF = requestAnimationFrame(() => {
+          collieResizeRestoreRAF = 0;
+          restoreNow();
+        });
+      }
+    };
+    if (sc && typeof ResizeObserver === "function") {
+      new ResizeObserver(handleCollieScrollResize).observe(sc);
+    }
+    addEventListener("resize", handleCollieScrollResize, { passive: true });
     sc?.addEventListener("wheel", (e) => {
       if (e.deltaY < 0) {
         collieForceBottomUntil = 0;
         collieStickBottom = false;
+        collieResizeWasBottom = false;
       }
     }, { passive: true });
     let touchStartY = 0;
@@ -6079,6 +6176,7 @@
       if (touchStartY && y > touchStartY + 6) {
         collieForceBottomUntil = 0;
         collieStickBottom = false;
+        collieResizeWasBottom = false;
       }
     }, { passive: true });
     let superJumpScrollRAF = 0;
@@ -6096,10 +6194,20 @@
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
       noteCollieScrollAnimPause();
-      if (performance.now() >= programmaticScrollUntil) {
+      const now = performance.now();
+      const sizeStable = sc.clientWidth === collieResizeW && sc.clientHeight === collieResizeH;
+      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil && sizeStable) {
         const nearB = isCollieNearBottom(sc);
         collieStickBottom = nearB;
-        if (!nearB) collieForceBottomUntil = 0;
+        collieResizeWasBottom = nearB;
+        if (nearB) {
+          collieResizeAnchor = null;
+          if (collieResizeAnchorTimer) { clearTimeout(collieResizeAnchorTimer); collieResizeAnchorTimer = 0; }
+        } else {
+          collieForceBottomUntil = 0;
+          if (collieResizeAnchorTimer) clearTimeout(collieResizeAnchorTimer);
+          collieResizeAnchorTimer = setTimeout(captureCollieResizeMidAnchor, 120);
+        }
       }
       if (superJumpScrollRAF) return;
       const run = () => {
@@ -6123,7 +6231,10 @@
             endCollieUserScroll(false);
           }, 80);
         }
-        if (performance.now() >= programmaticScrollUntil) scheduleScrollReadCheck(120);
+        if (performance.now() >= programmaticScrollUntil && performance.now() >= collieResizeGraceUntil) {
+          scheduleScrollReadCheck(120);
+          captureCollieResizeMidAnchor();
+        }
         maybePrefetchOlder();
       }, { passive: true });
     }
@@ -6209,6 +6320,13 @@
     {
       const crewEl = $("#crew");
       if (crewEl) {
+        crewEl.addEventListener("click", (e) => {
+          const a = e.target.closest("a.chip[data-worker]");
+          if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+          if (view !== "collie") return;
+          e.preventDefault();
+          openWorkerDrawer({ worker: a.dataset.worker });
+        });
         let crewFitRAF = 0;
         const scheduleCrewFit = () => {
           if (crewFitRAF) return;
@@ -8982,27 +9100,53 @@
   }
 
   // ───────────────────────────── Peer Hub controlled inbox modal (permanent QR card, /join/# & approval flow)
+  const PEER_INVITE_V1_PREFIX = "collie-peer://v1/";
+  const PEER_INVITE_V2_PREFIX = "collie-peer://v2/";
+  const isCanonicalPeerInvite = (s) => typeof s === "string" && (s.startsWith(PEER_INVITE_V2_PREFIX) || s.startsWith(PEER_INVITE_V1_PREFIX));
+  function normalizePeerInviteFrag(frag) {
+    let f = String(frag || "").trim();
+    if (!f) return "";
+    try { f = decodeURIComponent(f).trim(); } catch {}
+    f = f.replace(/^[#/]+/, "").replace(/[.,;!?)"'】》」]+$/, "");
+    const direct = f.match(/collie-peer:\/\/(v[12])\/([A-Za-z0-9_-]{16,}=*)/);
+    if (direct) return (direct[1] === "v2" ? PEER_INVITE_V2_PREFIX : PEER_INVITE_V1_PREFIX) + direct[2];
+    const v2m = f.match(/^2\.([A-Za-z0-9_-]{16,}=*)$/);
+    if (v2m) return PEER_INVITE_V2_PREFIX + v2m[1];
+    if (/^[A-Za-z0-9_-]{16,}=*$/.test(f)) return PEER_INVITE_V1_PREFIX + f;
+    return "";
+  }
   function extractPeerInviteCode(raw) {
     const s = String(raw || "").trim();
     if (!s) return "";
-    const prefix = "collie-peer://v1/";
-    const direct = s.match(/collie-peer:\/\/v1\/([A-Za-z0-9_-]{16,}=*)/);
-    if (direct) return prefix + direct[1];
-    const joinMatch = s.match(/\/join\/?#(?:collie-peer:\/\/v1\/)?([A-Za-z0-9_%-]{16,}=*)/i);
-    if (joinMatch) {
-      let frag = joinMatch[1];
-      try { frag = decodeURIComponent(frag); } catch {}
-      frag = frag.trim().replace(/^collie-peer:\/\/v1\//, "");
-      if (/^[A-Za-z0-9_-]{16,}=*$/.test(frag)) return prefix + frag;
-    }
+    // 1. ?peer_invite=... (including URL-encoded web+collie://join/... from PWA protocol_handlers)
     const paramMatch = s.match(/[?&#]peer_invite=([^&\s]+)/i);
     if (paramMatch) {
-      try {
-        const dec = decodeURIComponent(paramMatch[1]).trim();
-        if (dec.startsWith(prefix)) return dec;
-        if (/^[A-Za-z0-9_-]{16,}=*$/.test(dec)) return prefix + dec;
-      } catch {}
+      let val = paramMatch[1];
+      try { val = decodeURIComponent(val); } catch {}
+      val = val.trim();
+      if (val && val !== s) {
+        const inner = extractPeerInviteCode(val);
+        if (isCanonicalPeerInvite(inner)) return inner;
+      }
     }
+    // 2. web+collie://join/<payload> or web+collie://<payload>
+    const protoMatch = s.match(/web\+collie:\/\/(?:join\/)?([^\s]+)/i);
+    if (protoMatch) {
+      const norm = normalizePeerInviteFrag(protoMatch[1]);
+      if (norm) return norm;
+    }
+    // 3. Direct collie-peer://v2/... or collie-peer://v1/...
+    const direct = s.match(/collie-peer:\/\/(v[12])\/([A-Za-z0-9_-]{16,}=*)/);
+    if (direct) return (direct[1] === "v2" ? PEER_INVITE_V2_PREFIX : PEER_INVITE_V1_PREFIX) + direct[2];
+    // 4. /join/#2.<v2b64>, /join/#<v1b64>, /join/#collie-peer://v[12]/<b64>
+    const joinMatch = s.match(/\/join\/?#([^\s]+)/i);
+    if (joinMatch) {
+      const norm = normalizePeerInviteFrag(joinMatch[1]);
+      if (norm) return norm;
+    }
+    // 5. Bare 2.<v2b64> fragment
+    const v2Frag = s.match(/^2\.([A-Za-z0-9_-]{16,}=*)$/);
+    if (v2Frag) return PEER_INVITE_V2_PREFIX + v2Frag[1];
     return s;
   }
 
@@ -9010,10 +9154,15 @@
     if (!inv) return "";
     if (inv.join_url) return String(inv.join_url).trim();
     const code = String(inv.invite_code || "").trim();
-    const prefix = "collie-peer://v1/";
-    if (!code.startsWith(prefix)) return "";
-    const payload = code.slice(prefix.length).replace(/=+$/, "");
-    return payload ? PEER_JOIN_BASE + payload : "";
+    if (code.startsWith(PEER_INVITE_V2_PREFIX)) {
+      const payload = code.slice(PEER_INVITE_V2_PREFIX.length).replace(/=+$/, "");
+      return payload ? PEER_JOIN_BASE + "2." + payload : "";
+    }
+    if (code.startsWith(PEER_INVITE_V1_PREFIX)) {
+      const payload = code.slice(PEER_INVITE_V1_PREFIX.length).replace(/=+$/, "");
+      return payload ? PEER_JOIN_BASE + payload : "";
+    }
+    return "";
   }
 
   function peerShareText(inv, fallbackName = "我的边牧") {
@@ -9027,8 +9176,10 @@
     const trimmed = String(raw || "").trim();
     if (!trimmed) return null;
     const s = extractPeerInviteCode(trimmed);
-    const prefix = "collie-peer://v1/";
-    if (!s.startsWith(prefix)) return { error: `请粘贴好友分享链接（/join/#...）或 ${prefix}... 邀请码` };
+    const isV2 = s.startsWith(PEER_INVITE_V2_PREFIX);
+    const isV1 = !isV2 && s.startsWith(PEER_INVITE_V1_PREFIX);
+    if (!isV2 && !isV1) return { error: `请粘贴好友分享链接（/join/#...）或 ${PEER_INVITE_V2_PREFIX}... 邀请码` };
+    const prefix = isV2 ? PEER_INVITE_V2_PREFIX : PEER_INVITE_V1_PREFIX;
     const b64 = s.slice(prefix.length).trim().replace(/-/g, "+").replace(/_/g, "/");
     if (!b64) return { error: "邀请码内容为空" };
     try {
@@ -9036,9 +9187,31 @@
       const bin = atob(padded);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const obj = JSON.parse(new TextDecoder().decode(bytes));
-      if (!obj || obj.v !== 1 || !obj.code || !obj.hub_id || !Array.isArray(obj.addrs) || !obj.addrs.length) {
-        return { error: "名片信息缺少必要字段，请检查是否复制完整" };
+      const rawObj = JSON.parse(new TextDecoder().decode(bytes));
+      let obj;
+      if (isV2) {
+        const rawAddrs = Array.isArray(rawObj?.a) ? rawObj.a : [];
+        const addrs = rawAddrs
+          .map((a) => String(a || "").trim())
+          .filter(Boolean)
+          .map((a) => (a.includes("://") ? a : "http://" + a));
+        obj = {
+          v: 2,
+          code: String(rawObj?.t || "").trim(),
+          hub_id: String(rawObj?.h || "").trim(),
+          hub_name: String(rawObj?.n || "").trim(),
+          addrs,
+          kind: String(rawObj?.k || "").trim() || "card",
+          exp: Number(rawObj?.e || 0) || 0,
+        };
+        if (!obj.code || !obj.hub_id || !obj.addrs.length) {
+          return { error: "名片信息缺少必要字段，请检查是否复制完整" };
+        }
+      } else {
+        obj = rawObj;
+        if (!obj || obj.v !== 1 || !obj.code || !obj.hub_id || !Array.isArray(obj.addrs) || !obj.addrs.length) {
+          return { error: "名片信息缺少必要字段，请检查是否复制完整" };
+        }
       }
       if (selfHubId && obj.hub_id === selfHubId) {
         return { error: "不能添加自己的边牧（Hub 标识与本机相同）" };
@@ -9257,7 +9430,7 @@
             for (const c of codes || []) {
               const val = String(c?.rawValue || "").trim();
               const extracted = extractPeerInviteCode(val);
-              if (extracted.startsWith("collie-peer://v1/")) {
+              if (isCanonicalPeerInvite(extracted)) {
                 stopPeerCameraScan();
                 d.pasteRaw = extracted;
                 d.scanNote = "";
@@ -9306,7 +9479,7 @@
         const codes = await detector.detect(bmp);
         const hit = (codes || [])
           .map((c) => extractPeerInviteCode(String(c?.rawValue || "").trim()))
-          .find((v) => v.startsWith("collie-peer://v1/"));
+          .find((v) => isCanonicalPeerInvite(v));
         if (!hit) {
           d.scanNote = "未在图片中识别到有效的 Collie 好友名片二维码，请确认图片清晰或直接粘贴分享链接。";
           renderPeerModal();
@@ -13783,6 +13956,10 @@
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-act=ask-reply]");
     if (!b) return;
+    if (b.closest("#worker-drawer") && wdPaneId) {
+      sendMessageToPane(wdPaneId, b.dataset.text || "").catch((err) => toast(err.message, "attn"));
+      return;
+    }
     const form = b.closest("section.view")?.querySelector("form.composer:not([hidden])");
     const input = form?.querySelector("textarea");
     if (!form || !input) { toast("这里没法发消息，去电脑上回答", "attn"); return; }
@@ -13850,7 +14027,7 @@
           + (m.output ? `<div class="answer">${esc(m.output)}</div>`
             : open && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
               ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
-              : el.id === "thread" ? "" : `<div class="where">在电脑上的会话里回答</div>`) : "")
+              : (el.id === "thread" || el.id === "wd-thread") ? "" : `<div class="where">在电脑上的会话里回答</div>`) : "")
           + `</div>`;
         cut();
         i++;
@@ -14984,8 +15161,8 @@
       }
     } catch { thumbs.delete(p); img.parentElement.classList.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
   }
-  // Under each Collie message, on hover (and persistently when clapped): clap, copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
-  const ICON_CLAP = `<svg class="clap-ico" viewBox="0 0 24 24" aria-hidden="true"><path class="clap-body" d="M12 19.6C8.5 16.9 3.8 13.3 3.8 8.9C3.8 6.1 6 4 8.7 4C10.2 4 11.4 4.8 12 6.2C12.6 4.8 13.8 4 15.3 4C18 4 20.2 6.1 20.2 8.9C20.2 13.3 15.5 16.9 12 19.6Z"/></svg>`;
+  // Under each Collie message, on hover (and persistently when clapped): clap (monochrome fine-line thumbs-up SVG, zero emoji), copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
+  const ICON_CLAP = `<svg class="clap-ico" viewBox="0 0 24 24" aria-hidden="true"><path class="clap-body" d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/><path class="clap-seam" d="M7 10v12"/></svg>`;
   const ICON_COPY = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
   const ICON_QUOTE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/></svg>`;
   const clapActBtn = (id, claps = 0, extraCls = "") => {
@@ -15768,89 +15945,412 @@
       }
     }
   });
-  // Wide screens: a panel to the right of the conversation, which stays
-  // usable; its width is dragged and remembered. Narrow ones: smooth bottom drawer.
+  // ───────────────────────────── Unified Three-in-One Right Drawer Shell (File / Thread / Dispatched Worker)
   const pane = $("#file-view");
   const fileScrim = $("#file-scrim");
   const fvWidenBtn = $("#fv-widen");
   let fileWide = false;
   let _lastFileW = 0;
+  let activeWorkerKey = null; // "" | workerName | paneId when #worker-drawer is open
+  let wdPaneId = "";
+  let wdWorkerName = "";
+  let wdHistId = "";
+  let wdFromThread = "";
+  let wdTaskTitle = "";
+  let wdTaskNote = "";
+  let wdMode = store.get("wdMode", "chat");
+  let wdComposerOpen = false;
+  let workerWide = false;
+  let _lastWorkerW = 0;
+  let _lastDrawerW = 432;
+
+  const currentSideW = () => {
+    if (innerWidth <= 760) return 0;
+    if (innerWidth > 1000 && $("#app")?.classList?.contains("side-collapsed")) return 0;
+    return $(".side")?.offsetWidth || (innerWidth <= 1100 ? 268 : 300);
+  };
+  const isAnyRightDrawerOpen = () => {
+    const appEl = $("#app");
+    return !!(
+      activeThreadRoot || activeWorkerKey ||
+      appEl?.classList?.contains("has-drawer") ||
+      appEl?.classList?.contains("has-file") ||
+      appEl?.classList?.contains("has-thread") ||
+      appEl?.classList?.contains("has-worker")
+    );
+  };
+  const drawerAvail = () => {
+    const sideW = $("#app")?.classList?.contains("side-collapsed") ? 0 : ($(".side")?.offsetWidth || 260);
+    return Math.max(480, innerWidth - sideW);
+  };
+  const setAppDrawerW = (px) => {
+    const w = Math.round(px);
+    _lastDrawerW = w;
+    const appEl = $("#app");
+    if (appEl?.style) appEl.style.setProperty("--drawer-w", w + "px");
+  };
+  const syncAppDrawerClasses = () => {
+    const appEl = $("#app");
+    if (!appEl) return;
+    const hasF = appEl.classList.contains("has-file");
+    const hasT = appEl.classList.contains("has-thread");
+    const hasW = appEl.classList.contains("has-worker");
+    appEl.classList.toggle("has-drawer", hasF || hasT || hasW);
+    const wide = innerWidth > THREAD_DESKTOP_MIN && (
+      (hasT && threadWide) || (hasF && fileWide) || (hasW && workerWide)
+    );
+    appEl.classList.toggle("drawer-wide", wide);
+  };
+  let _drawerGlideRAF = 0;
+  let _drawerGlideFallbackTimer = 0;
+  let _drawerGlideCleanup = null;
+  let _drawerGlideState = null;
+
+  // Exact cubic-bezier(0.22, 1, 0.36, 1) solver so JS rAF glides match CSS side-card / drawer curves 1:1.
+  function easeOutSilk(t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    const cx = 3 * 0.22, bx = 3 * (0.36 - 0.22) - cx, ax = 1 - cx - bx;
+    let u = t;
+    for (let i = 0; i < 5; i++) {
+      const x = ((ax * u + bx) * u + cx) * u - t;
+      const dx = (3 * ax * u + 2 * bx) * u + cx;
+      if (Math.abs(x) < 1e-5 || Math.abs(dx) < 1e-6) break;
+      u = Math.min(1, Math.max(0, u - x / dx));
+    }
+    const inv = 1 - u;
+    return 1 - inv * inv * inv;
+  }
+  function finishDrawerGlide(snapToEnd = true) {
+    if (_drawerGlideRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_drawerGlideRAF);
+      _drawerGlideRAF = 0;
+    }
+    if (_drawerGlideFallbackTimer) {
+      clearTimeout(_drawerGlideFallbackTimer);
+      _drawerGlideFallbackTimer = 0;
+    }
+    const fn = _drawerGlideCleanup;
+    _drawerGlideCleanup = null;
+    _drawerGlideState = null;
+    if (fn) fn(snapToEnd);
+  }
+  function captureCollieVisualShift(wasAnyDrawer, prevOpenW = 0) {
+    if (_drawerGlideState) {
+      const st = _drawerGlideState;
+      let off = st.curChatX;
+      if (st.kind === "widen") off = -st.fromW / 2 + st.curChatX;
+      else if (st.kind === "narrow") off = -st.toW / 2 + st.curChatX;
+      finishDrawerGlide(true);
+      return off;
+    }
+    if (wasAnyDrawer) return -(prevOpenW || _lastDrawerW || 0) / 2;
+    return _collieShiftCur || 0;
+  }
+  // Unified 60 FPS lockstep GPU glide for desktop right-drawer open / close / widen / narrow.
+  // Keeps zero per-frame layout reflow (0ms TBT) and 0.00px handoff jump at every desktop width.
+  function runDesktopDrawerGlide(cfg = {}) {
+    const { kind, drawerEl, fromW = 0, toW = 0, startOffset = 0, targetShift = 0, onDone = null } = cfg;
+    const appEl = $("#app");
+    const col = $("#v-collie");
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || innerWidth <= THREAD_DESKTOP_MIN || typeof requestAnimationFrame !== "function" || !appEl) {
+      finishDrawerGlide(true);
+      if (onDone) onDone();
+      return false;
+    }
+    finishDrawerGlide(true);
+    if (_collieShiftRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_collieShiftRAF);
+      _collieShiftRAF = 0;
+    }
+    const sideW = currentSideW();
+    const canvas = Math.max(480, innerWidth - sideW);
+    const chatEls = view === "collie"
+      ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
+      : [];
+    let chatFrom = 0, chatTo = 0, drawerFrom = 0, drawerTo = 0;
+    let useStaging = false;
+    let fadeDrawer = false;
+    if (kind === "open") {
+      useStaging = true;
+      appEl.style.setProperty("--drawer-stage-w", "0px");
+      appEl.classList.add("is-drawer-opening");
+      if (drawerEl?.style) drawerEl.style.width = Math.round(toW) + "px";
+      if (view === "collie") {
+        syncCollieTopThreadClearance(toW);
+        const targetMainW = Math.max(320, canvas - toW);
+        if (targetMainW < 828 && col) {
+          col.style.setProperty("--drawer-col-cap", Math.min(780, Math.max(280, Math.round(targetMainW - 40))) + "px");
+          col.style.setProperty("--drawer-comp-w", Math.min(804, Math.max(296, Math.round(targetMainW - 24))) + "px");
+          col.classList.add("has-drawer-col-cap");
+        }
+      }
+      chatFrom = startOffset;
+      chatTo = -toW / 2;
+      drawerFrom = toW;
+      drawerTo = 0;
+    } else if (kind === "widen") {
+      const deltaW = Math.max(0, toW - fromW);
+      if (deltaW < 1) { if (onDone) onDone(); return false; }
+      useStaging = true;
+      appEl.style.setProperty("--drawer-stage-w", Math.round(fromW) + "px");
+      appEl.classList.add("is-drawer-opening");
+      if (drawerEl?.style) drawerEl.style.width = Math.round(toW) + "px";
+      if (view === "collie") {
+        syncCollieTopThreadClearance(deltaW);
+        const targetMainW = Math.max(320, canvas - toW);
+        if (targetMainW < 828 && col) {
+          col.style.setProperty("--drawer-col-cap", Math.min(780, Math.max(280, Math.round(targetMainW - 40))) + "px");
+          col.style.setProperty("--drawer-comp-w", Math.min(804, Math.max(296, Math.round(targetMainW - 24))) + "px");
+          col.classList.add("has-drawer-col-cap");
+        }
+      }
+      chatFrom = 0;
+      chatTo = -deltaW / 2;
+      drawerFrom = deltaW;
+      drawerTo = 0;
+    } else if (kind === "narrow") {
+      const deltaW = Math.max(0, fromW - toW);
+      if (deltaW < 1) { if (onDone) onDone(); return false; }
+      chatFrom = -deltaW / 2;
+      chatTo = 0;
+      drawerFrom = 0;
+      drawerTo = 0;
+    } else if (kind === "close") {
+      fadeDrawer = true;
+      chatFrom = startOffset;
+      chatTo = targetShift;
+      drawerFrom = 0;
+      drawerTo = Math.max(0, fromW);
+    } else {
+      if (onDone) onDone();
+      return false;
+    }
+
+    const dur = 240;
+    const t0 = performance.now();
+    const state = { kind, drawerEl, fromW, toW, curChatX: chatFrom, curDrawerX: drawerFrom, targetW: toW };
+    _drawerGlideState = state;
+    const applyFrame = (cx, dx, op) => {
+      state.curChatX = cx;
+      state.curDrawerX = dx;
+      if (chatEls.length) {
+        const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
+        for (const el of chatEls) el.style.transform = ctr;
+      }
+      if (drawerEl?.style && (useStaging || fadeDrawer)) {
+        drawerEl.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`;
+        if (fadeDrawer) drawerEl.style.opacity = op.toFixed(3);
+      }
+    };
+    _drawerGlideCleanup = (snap) => {
+      if (useStaging) {
+        appEl.classList.remove("is-drawer-opening");
+        appEl.style.removeProperty("--drawer-stage-w");
+        if (col) {
+          col.classList.remove("has-drawer-col-cap");
+          col.style.removeProperty("--drawer-col-cap");
+          col.style.removeProperty("--drawer-comp-w");
+        }
+        syncCollieTopThreadClearance(0);
+      }
+      if (drawerEl?.style) {
+        drawerEl.style.transform = "";
+        if (useStaging) drawerEl.style.width = "";
+        if (fadeDrawer) drawerEl.style.opacity = "";
+      }
+      for (const el of chatEls) el.style.transform = "";
+      _collieShiftCur = kind === "close" ? targetShift : 0;
+      if (snap && onDone) onDone();
+    };
+
+    applyFrame(chatFrom, drawerFrom, 1);
+    let sync = true;
+    const step = (now) => {
+      if (sync) {
+        finishDrawerGlide(true);
+        return;
+      }
+      const p = Math.min(1, Math.max(0, (now - t0) / dur));
+      const e = easeOutSilk(p);
+      const cx = chatFrom + (chatTo - chatFrom) * e;
+      const dx = drawerFrom + (drawerTo - drawerFrom) * e;
+      const op = fadeDrawer ? Math.max(0, 1 - 0.35 * e) : 1;
+      if (p >= 1) {
+        finishDrawerGlide(true);
+        return;
+      }
+      applyFrame(cx, dx, op);
+      _drawerGlideRAF = requestAnimationFrame(step);
+    };
+    _drawerGlideRAF = requestAnimationFrame(step);
+    sync = false;
+    if (!_drawerGlideState) return false;
+    _drawerGlideFallbackTimer = setTimeout(() => {
+      if (_drawerGlideState === state) finishDrawerGlide(true);
+    }, dur + 90);
+    return true;
+  }
+
+  const resetDrawerMotion = (el) => {
+    if (!el) return;
+    clearTimeout(el._sdAnimTimer);
+    el._sdAnimTimer = 0;
+    el.classList.remove("is-closing", "is-entering", "is-switching", "is-dragging");
+    el.style?.removeProperty?.("--drawer-close-w");
+    el.style.transform = "";
+    el.style.opacity = "";
+  };
+  const playDrawerTransition = (el, wasDrawerOpen) => {
+    if (!el || innerWidth <= THREAD_DESKTOP_MIN) return;
+    resetDrawerMotion(el);
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    const cls = wasDrawerOpen ? "is-switching" : "is-entering";
+    el.classList.add(cls);
+    const clear = () => {
+      clearTimeout(el._sdAnimTimer);
+      el._sdAnimTimer = 0;
+      el.classList.remove(cls);
+    };
+    el._sdAnimTimer = setTimeout(clear, 230);
+  };
   const setFileW = (w) => {
     const px = Math.round(w);
     _lastFileW = px;
-    if (pane) pane.style.setProperty("--file-w", px + "px");
-    const appEl = $("#app");
-    if (appEl) appEl.style.setProperty("--file-w", px + "px");
+    if (pane) {
+      pane.style.setProperty("--file-w", px + "px");
+      pane.style.setProperty("--drawer-w", px + "px");
+    }
+    setAppDrawerW(px);
   };
   // The widest the panel may be: the conversation keeps at least 360px.
-  const fileMax = () => Math.max(420, innerWidth - ($(".side")?.offsetWidth || 0) - 360);
-  const fileWideW = () => Math.min(Math.max(600, Math.round((innerWidth - ($(".side")?.offsetWidth || 0)) * 0.56)), fileMax());
-  let paneTimer;
+  const fileMax = () => Math.max(420, innerWidth - currentSideW() - 360);
+  const fileWideW = () => {
+    const avail = drawerAvail();
+    return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 320));
+  };
+  let paneTimer = 0;
   function syncFileWidenUI() {
     if (!fvWidenBtn) return;
-    const on = !!(fileWide && innerWidth > 1000 && !pane?.hidden);
+    const on = !!(fileWide && innerWidth > THREAD_DESKTOP_MIN && !pane?.hidden);
     fvWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    const lbl = on ? "还原宽度" : "拓宽预览";
+    const lbl = on ? "还原宽度" : "拓宽抽屉";
     fvWidenBtn.title = lbl;
     fvWidenBtn.setAttribute("aria-label", lbl);
+    syncAppDrawerClasses();
   }
   function showFilePane() {
     const appEl = $("#app");
     const hadFile = !!appEl?.classList?.contains("has-file");
+    const wasAnyDrawer = isAnyRightDrawerOpen();
+    const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
+    const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
     const sc = view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
-    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false });
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
+    if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
     clearTimeout(paneTimer);
-    const baseW = fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || Math.min(innerWidth * 0.45, 580), fileMax()), 380);
+    resetDrawerMotion(pane);
+    const baseW = fileWide
+      ? fileWideW()
+      : Math.max(380, Math.min(store.get("fileW", 0) || Math.min(Math.round(drawerAvail() * 0.44), 560), fileMax()));
     setFileW(baseW);
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
-    if (fileScrim) fileScrim.hidden = false;
+    pane.setAttribute("aria-hidden", "false");
+    if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = false; }
     appEl?.classList?.add("has-file");
     syncFileWidenUI();
-    syncNotebookVisibility();
+    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadFile && innerWidth > THREAD_DESKTOP_MIN });
+    if (!hadFile) {
+      if (!wasAnyDrawer) {
+        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift });
+        if (!glided) playDrawerTransition(pane, false);
+      } else {
+        if (baseW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevOpenW, toW: baseW });
+        else if (baseW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevOpenW, toW: baseW });
+        playDrawerTransition(pane, true);
+      }
+    }
     if (lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: !hadFile && innerWidth > 1000, duration: 500 });
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
   }
-  function closeFilePane() {
+  function closeFilePane(opts = {}) {
     const appEl = $("#app");
     const hadFile = !!appEl?.classList?.contains("has-file");
     const wasOpen = hadFile || (!!pane && !pane.hidden);
-    const sc = wasOpen && view === "collie" ? viewScroller("collie") : null;
+    const switching = !!opts.switching;
+    const sc = wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
-    appEl?.classList?.remove("has-file");
+    const closingW = _lastFileW || _lastDrawerW || 520;
+    const startOffset = !switching && hadFile ? captureCollieVisualShift(true, closingW) : 0;
+    if (switching) finishDrawerGlide(true);
     fileSeq++;
     clearTimeout(paneTimer);
-    syncFileWidenUI();
-    syncNotebookVisibility();
-    if (lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: hadFile && innerWidth > 1000, duration: 500 });
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadFile && innerWidth > THREAD_DESKTOP_MIN && pane && !pane.hidden;
+    if (desktopCloseAnim) {
+      resetDrawerMotion(pane);
+      pane.style.setProperty("--drawer-close-w", closingW + "px");
+      pane.classList.add("is-closing");
     }
-    paneTimer = setTimeout(() => {
-      pane.hidden = true;
-      if (fileScrim) fileScrim.hidden = true;
+    appEl?.classList?.remove("has-file");
+    if (!switching) syncAppDrawerClasses();
+    syncFileWidenUI();
+    pane?.setAttribute?.("aria-hidden", "true");
+    if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim });
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
+    }
+    const hideNow = () => {
+      resetDrawerMotion(pane);
+      if (pane) pane.hidden = true;
+      if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = true; }
       if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
-      if (view === "collie") {
+      if (!switching && view === "collie") {
         const useRestore = lockSnap && collieLayoutLock?.snap === lockSnap ? { restore: lockSnap, once: true } : undefined;
         renderSuper(useRestore);
       }
-    }, 340);
+    };
+    if (opts.immediate || switching || reduced) {
+      hideNow();
+    } else if (desktopCloseAnim) {
+      const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
+        ? computeCollieShiftPx(280) : 0;
+      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: pane, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      if (!glided) paneTimer = setTimeout(hideNow, 170);
+    } else {
+      paneTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 280);
+    }
   }
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
-  $("#fv-handle")?.addEventListener("click", () => closeFilePane());
   fileScrim?.addEventListener("click", () => closeFilePane());
   fvWidenBtn?.addEventListener("click", () => {
-    if (innerWidth <= 1000 || pane?.hidden) return;
+    if (innerWidth <= THREAD_DESKTOP_MIN || pane?.hidden) return;
+    finishDrawerGlide(true);
+    const prevW = _lastFileW || _lastDrawerW || 520;
     const sc = view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     fileWide = !fileWide;
-    setFileW(fileWide ? fileWideW() : Math.max(Math.min(store.get("fileW", 0) || 540, fileMax()), 380));
+    const nextW = fileWide ? fileWideW() : Math.max(380, Math.min(store.get("fileW", 0) || Math.min(Math.round(drawerAvail() * 0.44), 560), fileMax()));
+    setFileW(nextW);
     syncFileWidenUI();
+    if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevW, toW: nextW });
+    else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevW, toW: nextW });
     if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pane.hidden && !document.querySelector("dialog[open]")) closeFilePane(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || pane?.hidden) return;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (superSearchOpen || document.querySelector("dialog[open]") || pickOpen || dirCtx) return;
+    closeFilePane();
+  });
   $("#fv-grip")?.addEventListener("pointerdown", (e) => {
+    if (innerWidth <= THREAD_DESKTOP_MIN) return;
     e.preventDefault();
+    finishDrawerGlide(true);
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
     document.body.classList.add("dragging");
@@ -15859,21 +16359,240 @@
     const max = fileMax();
     const move = (ev) => {
       fileWide = false;
-      setFileW(Math.max(Math.min(innerWidth - ev.clientX, max), 360));
+      const nextW = Math.max(360, Math.min(Math.round(innerWidth - ev.clientX), max));
+      if (nextW === _lastFileW) return;
+      setFileW(nextW);
       syncFileWidenUI();
       if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
     };
     const up = () => {
       grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
       document.body.classList.remove("dragging");
-      store.set("fileW", _lastFileW || parseInt(getComputedStyle(pane || document.documentElement).getPropertyValue("--file-w")) || 520);
+      store.set("fileW", _lastFileW || 520);
       if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
     };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up, { once: true });
+    grip.addEventListener("pointercancel", up, { once: true });
   });
 
-  // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」&「话题线」）
+  // Shared mobile bottom-sheet drag-to-dismiss helper for all three unified right drawers.
+  function bindDrawerSheetDrag(drawerEl, scrimEl, zones, isOpenFn, closeFn) {
+    if (!drawerEl) return;
+    let skipClickUntil = 0;
+    const handleBtn = zones[0];
+    handleBtn?.addEventListener("click", () => {
+      if (performance.now() < skipClickUntil) return;
+      closeFn();
+    });
+    for (const zone of zones) {
+      if (!zone) continue;
+      let startY = 0, startX = 0, startT = 0, lastY = 0, pid = null, dragging = false;
+      const resetDrag = () => {
+        pid = null;
+        dragging = false;
+        drawerEl.classList.remove("is-dragging");
+        drawerEl.style.transform = "";
+        if (scrimEl) scrimEl.style.opacity = "";
+      };
+      zone.addEventListener("pointerdown", (e) => {
+        if (innerWidth > 760 || !isOpenFn()) return;
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        if (e.target.closest("button:not(.sd-handle), a")) return;
+        pid = e.pointerId;
+        startY = lastY = e.clientY;
+        startX = e.clientX;
+        startT = performance.now();
+        dragging = false;
+      });
+      zone.addEventListener("pointermove", (e) => {
+        if (pid !== e.pointerId) return;
+        const dy = e.clientY - startY, dx = e.clientX - startX;
+        lastY = e.clientY;
+        if (!dragging) {
+          if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { pid = null; return; }
+          if (dy <= 8) return;
+          dragging = true;
+          drawerEl.classList.add("is-dragging");
+          try { zone.setPointerCapture(e.pointerId); } catch {}
+        }
+        const offset = Math.max(0, dy);
+        drawerEl.style.transform = `translate3d(0, ${offset}px, 0)`;
+        if (scrimEl) {
+          const ratio = Math.min(1, offset / Math.max(240, (drawerEl.offsetHeight || 600) * 0.5));
+          scrimEl.style.opacity = String(Math.max(0, 1 - ratio));
+        }
+      });
+      const finish = (e, cancelled) => {
+        if (pid !== e.pointerId) return;
+        const wasDragging = dragging;
+        const dy = Math.max(0, lastY - startY);
+        const dt = Math.max(1, performance.now() - startT);
+        const vy = dy / dt;
+        const threshold = Math.min(120, (drawerEl.offsetHeight || 600) * 0.22);
+        resetDrag();
+        if (wasDragging) {
+          skipClickUntil = performance.now() + 80;
+          if (!cancelled && (dy > threshold || (dy > 40 && vy > 0.45))) closeFn();
+        }
+      };
+      zone.addEventListener("pointerup", (e) => finish(e, false));
+      zone.addEventListener("pointercancel", (e) => finish(e, true));
+    }
+  }
+  bindDrawerSheetDrag(pane, fileScrim, [$("#fv-handle"), pane?.querySelector(".fv-head")], () => !!pane && !pane.hidden, () => closeFilePane());
+
+  // ───────────────────────────── Desktop left sidebar collapse / expand with 240ms GPU glide (#t12615, #t12693)
+  let sideCollapsed = !!store.get("sideCollapsed", false);
+  let _sideGlideRAF = 0;
+  let _sideGlideFallbackTimer = 0;
+  let _sideGlideCleanup = null;
+  function finishSideGlide(snap = true) {
+    if (_sideGlideRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_sideGlideRAF);
+      _sideGlideRAF = 0;
+    }
+    if (_sideGlideFallbackTimer) {
+      clearTimeout(_sideGlideFallbackTimer);
+      _sideGlideFallbackTimer = 0;
+    }
+    const fn = _sideGlideCleanup;
+    _sideGlideCleanup = null;
+    if (fn) fn(snap);
+  }
+  function setSideCollapsed(next, opts = {}) {
+    const want = !!next;
+    const appEl = $("#app");
+    const sideEl = $(".side");
+    const col = $("#v-collie");
+    if (!appEl) return;
+    const prevCollapsed = appEl.classList.contains("side-collapsed");
+    sideCollapsed = want;
+    if (!opts.skipPersist) store.set("sideCollapsed", want);
+    const toggleBtn = $("#side-collapse-btn");
+    if (toggleBtn) toggleBtn.setAttribute("aria-pressed", want ? "true" : "false");
+    if (prevCollapsed === want && !opts.force) return;
+
+    finishSideGlide(true);
+    finishDrawerGlide(true);
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const canGlide = !opts.immediate && !reduced && innerWidth > 1000 && typeof requestAnimationFrame === "function" && !!sideEl;
+    const sideW = innerWidth <= 1100 ? 268 : 300;
+    const drawerW = (isAnyRightDrawerOpen() && innerWidth > THREAD_DESKTOP_MIN) ? (_lastDrawerW || 432) : 0;
+    const hasNotes = view === "collie" && !drawerW && isWideNotesViewport() && !!col?.classList?.contains("has-notes");
+    const prevNotesShift = hasNotes ? computeCollieShiftPx(280) : 0;
+
+    appEl.classList.toggle("side-collapsed", want);
+    document.body?.classList?.toggle("side-collapsed", want);
+    const nextNotesShift = hasNotes ? computeCollieShiftPx(280) : 0;
+    if (view === "collie") {
+      syncCollieTopHeight();
+      if (want) {
+        const crewEl = $("#crew");
+        if (crewEl) { syncCrewCompact(crewEl); crewEl._syncScrollFade?.(); }
+      }
+    }
+    if (!canGlide) {
+      if (activeThreadRoot && threadWide) applyThreadWidth();
+      if (activeWorkerKey && workerWide) applyWorkerWidth();
+      if (hasNotes) _collieShiftCur = nextNotesShift;
+      return;
+    }
+
+    const chatEls = view === "collie"
+      ? [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style)
+      : [];
+    if (_collieShiftRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_collieShiftRAF);
+      _collieShiftRAF = 0;
+    }
+
+    let sideFrom = 0, sideTo = 0, chatFrom = 0, chatTo = 0;
+    let isOpening = false;
+    sideEl.style.setProperty("--side-anim-w", sideW + "px");
+    if (want) {
+      // Collapsing left sidebar (sideW -> 0): Column 2 immediately expands to full width (zero clipping)
+      sideEl.classList.add("is-side-closing");
+      sideFrom = 0;
+      sideTo = -sideW;
+      chatFrom = prevNotesShift + sideW / 2;
+      chatTo = nextNotesShift;
+    } else {
+      // Expanding left sidebar (0 -> sideW): stage Column 1 at 0px so Column 2 never clips during 240ms glide
+      isOpening = true;
+      appEl.classList.add("is-side-opening");
+      const targetMainW = Math.max(320, innerWidth - sideW - drawerW);
+      if (view === "collie" && targetMainW < 828 && col) {
+        col.style.setProperty("--drawer-col-cap", Math.min(780, Math.max(280, Math.round(targetMainW - 40))) + "px");
+        col.style.setProperty("--drawer-comp-w", Math.min(804, Math.max(296, Math.round(targetMainW - 24))) + "px");
+        col.classList.add("has-drawer-col-cap");
+      }
+      sideFrom = -sideW;
+      sideTo = 0;
+      chatFrom = prevNotesShift;
+      chatTo = nextNotesShift + sideW / 2;
+    }
+
+    const dur = 240;
+    const t0 = performance.now();
+    const applyFrame = (sx, cx) => {
+      sideEl.style.transform = `translate3d(${sx.toFixed(2)}px, 0, 0)`;
+      if (chatEls.length) {
+        const ctr = `translate3d(${cx.toFixed(2)}px, 0, 0)`;
+        for (const el of chatEls) el.style.transform = ctr;
+      }
+    };
+    _sideGlideCleanup = () => {
+      sideEl.classList.remove("is-side-closing");
+      sideEl.style.transform = "";
+      sideEl.style.removeProperty("--side-anim-w");
+      if (isOpening) {
+        appEl.classList.remove("is-side-opening");
+        if (col) {
+          col.classList.remove("has-drawer-col-cap");
+          col.style.removeProperty("--drawer-col-cap");
+          col.style.removeProperty("--drawer-comp-w");
+        }
+      }
+      for (const el of chatEls) el.style.transform = "";
+      _collieShiftCur = hasNotes ? nextNotesShift : 0;
+      if (view === "collie") syncCollieTopHeight();
+      if (activeThreadRoot && threadWide) applyThreadWidth();
+      if (activeWorkerKey && workerWide) applyWorkerWidth();
+    };
+    applyFrame(sideFrom, chatFrom);
+    let sync = true;
+    const step = (now) => {
+      if (sync) { finishSideGlide(true); return; }
+      const p = Math.min(1, Math.max(0, (now - t0) / dur));
+      if (p >= 1) { finishSideGlide(true); return; }
+      const e = easeOutSilk(p);
+      applyFrame(sideFrom + (sideTo - sideFrom) * e, chatFrom + (chatTo - chatFrom) * e);
+      _sideGlideRAF = requestAnimationFrame(step);
+    };
+    _sideGlideRAF = requestAnimationFrame(step);
+    sync = false;
+    if (_sideGlideCleanup) {
+      _sideGlideFallbackTimer = setTimeout(() => finishSideGlide(true), dur + 90);
+    }
+  }
+  document.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.("[data-toggle-side]");
+    if (!btn || innerWidth <= 1000) return;
+    e.preventDefault();
+    setSideCollapsed(!sideCollapsed);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "\\" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+    if (innerWidth <= 1000 || document.querySelector("dialog[open]")) return;
+    e.preventDefault();
+    setSideCollapsed(!sideCollapsed);
+  });
+  if (sideCollapsed) setSideCollapsed(true, { immediate: true, force: true, skipPersist: true });
+
+  // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」卡内双档：事项 / 话题）
   const NOTES_WIDE_MIN = 1360;
   const NOTES_COMPACT_TASKS = 3;
   const NOTES_COMPACT_FILES = 2;
@@ -15882,13 +16601,14 @@
   const notesPane = $("#notes-pane");
   const notesScrim = $("#notes-scrim");
   const notesBtn = $("#open-notes-btn");
-  const npTitleEl = $("#np-title");
+  const notesBtnDot = $("#open-notes-dot");
+  const npTabNotesBtn = $("#np-tab-notes");
+  const npTabThreadsBtn = $("#np-tab-threads");
+  const npTabInkEl = $("#np-tab-ink");
   const npDateEl = $("#np-date");
   const npHeadEl = $("#np-head");
   const npBodyEl = $("#np-body");
   const npThreadsBodyEl = $("#np-threads-body");
-  const thPopWrap = $("#collie-threads-wrap");
-  const thHeadBtn = $("#collie-threads-btn");
   const thHeadDot = $("#collie-threads-dot");
   const thPopSub = $("#collie-threads-sub");
   const thPopList = $("#collie-threads-list");
@@ -15909,15 +16629,17 @@
   let threadsExpanded = false;
   let _lastCollieTopH = 0;
   let _lastNotebookRenderKey = "";
-  let _collieShiftMode = null; // null | "none" | "notes" | "thread"
+  let _collieShiftMode = null; // null | "none" | "notes"
   let _collieShiftCur = 0;
   let _collieShiftTarget = 0;
   let _collieShiftRAF = 0;
+  let _npModeAnimTimer = 0;
+  const _npScrollByMode = { notes: 0, threads: 0 };
 
   const isWideNotesViewport = () => innerWidth >= NOTES_WIDE_MIN;
   function computeCollieShiftPx(reservePx = 280) {
     if (reservePx <= 0) return 0;
-    const sideW = $(".side")?.offsetWidth || (innerWidth <= 1100 ? 268 : 300);
+    const sideW = currentSideW();
     const canvas = Math.max(0, innerWidth - sideW);
     const free = (canvas - 780) / 2;
     return -Math.min(reservePx / 2, Math.max(0, free - 20));
@@ -15937,18 +16659,14 @@
       if (el?.style) el.style.transform = "";
     }
   }
-  // Smooth 60 FPS rAF matrix glide for the unified left-biased desktop slot without CSS
-  // transition: transform (avoids Blink's 40k-node PrePaint invalidation on transition start/end).
+  // Smooth 60 FPS rAF matrix glide for the floating white-paper side card on wide desktop.
+  // When any right three-in-one drawer is docked in Grid Column 3, .main itself narrows to
+  // (canvas - drawerW) so no translate3d offset is needed (zero double-shift, zero clipping).
   function syncCollieLeftShift(mode, opts = {}) {
-    const nextMode = mode === "thread" && innerWidth > THREAD_DESKTOP_MIN
-      ? "thread"
-      : mode === "notes" && isWideNotesViewport()
-        ? "notes"
-        : "none";
-    const reserve = nextMode === "thread" ? (opts.threadW || _lastThreadW || 432)
-      : nextMode === "notes" ? 280 : 0;
+    const nextMode = mode === "notes" && isWideNotesViewport() ? "notes" : "none";
+    const reserve = nextMode === "notes" ? 280 : 0;
     const targetX = reserve > 0 ? computeCollieShiftPx(reserve) : 0;
-    syncCollieTopThreadClearance(nextMode === "thread" ? reserve : 0);
+    syncCollieTopThreadClearance(0);
     const prevMode = _collieShiftMode;
     const prevTarget = _collieShiftTarget;
     _collieShiftMode = nextMode;
@@ -15956,12 +16674,7 @@
     const els = [$("#super-thread"), $("#super-working"), $("#super-composer")].filter((e) => e?.style);
     const settle = () => {
       _collieShiftCur = targetX;
-      if (nextMode === "thread") {
-        const tr = `translate3d(${targetX.toFixed(2)}px, 0, 0)`;
-        for (const el of els) el.style.transform = tr;
-      } else {
-        for (const el of els) el.style.transform = "";
-      }
+      for (const el of els) el.style.transform = "";
     };
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!opts.immediate && !reduced && prevMode === nextMode && Math.abs(prevTarget - targetX) < 0.5 && _collieShiftRAF) {
@@ -15989,9 +16702,8 @@
       cancelAnimationFrame(_collieShiftRAF);
       _collieShiftRAF = 0;
     }
-    const dur = nextMode !== "none" ? 240 : 180;
+    const dur = 240;
     const t0 = performance.now();
-    // Apply starting transform immediately in the same frame as class toggle so there is 0px snap.
     const startTr = `translate3d(${fromX.toFixed(2)}px, 0, 0)`;
     for (const el of els) el.style.transform = startTr;
     let sync = true;
@@ -16002,8 +16714,7 @@
         return;
       }
       const p = Math.min(1, Math.max(0, (now - t0) / dur));
-      // Smooth cubic ease-out closely matching cubic-bezier(.22, 1, .36, 1)
-      const ease = 1 - Math.pow(1 - p, 3);
+      const ease = easeOutSilk(p);
       const x = fromX + delta * ease;
       _collieShiftCur = x;
       if (p >= 1) {
@@ -16034,6 +16745,19 @@
     if (h === _lastCollieTopH) return;
     _lastCollieTopH = h;
     notesPane.style.setProperty("--collie-top-h", h + "px");
+  }
+  function syncNotebookTabInk(immediate = false) {
+    if (!npTabInkEl) return;
+    const activeTab = sidePaneActiveMode === "threads" ? npTabThreadsBtn : npTabNotesBtn;
+    if (!activeTab) return;
+    const x = activeTab.offsetLeft || 0;
+    const w = activeTab.offsetWidth || 26;
+    if (immediate) npTabInkEl.style.transition = "none";
+    npTabInkEl.style.transform = `translate3d(${x}px, 0, 0) scaleX(${(w / 26).toFixed(4)})`;
+    if (immediate) {
+      void npTabInkEl.offsetWidth;
+      npTabInkEl.style.transition = "";
+    }
   }
   function formatNotebookDate(isoDate) {
     const d = isoDate ? new Date(isoDate + "T00:00:00") : new Date();
@@ -16142,7 +16866,7 @@
       const noteHtml = tk.note
         ? `<div class="np-fold" style="--stagger: 35ms"><div class="np-fold-inner"><div class="np-item-note">${esc(tk.note)}</div></div></div>`
         : "";
-      return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><div class="np-item-main"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span></div>${noteHtml}</button></li>`;
+      return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" data-np-title="${esc(tk.title || "")}" data-np-note="${esc(tk.note || "")}" data-np-path="${esc(tk.path || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><div class="np-item-main"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span></div>${noteHtml}</button></li>`;
     };
     const tasksListEl = $("#np-tasks-list");
     if (tasksListEl) {
@@ -16221,7 +16945,13 @@
     if (!col || !notesPane) return;
     const immediate = !!opts.immediate;
     const appEl = $("#app");
-    const blockedByDrawer = !!(activeThreadRoot || appEl?.classList?.contains("has-file") || appEl?.classList?.contains("has-thread"));
+    const blockedByDrawer = !!(
+      activeThreadRoot || activeWorkerKey ||
+      appEl?.classList?.contains("has-drawer") ||
+      appEl?.classList?.contains("has-file") ||
+      appEl?.classList?.contains("has-thread") ||
+      appEl?.classList?.contains("has-worker")
+    );
     const blockedByPopover = hasTopRightOverlay();
     // On wide desktop, #notes-pane lives inside parked #v-collie (content-visibility: hidden).
     // Leaving #/collie freezes its open/slot state untouched so returning reveals it in-place
@@ -16232,6 +16962,7 @@
       document.body?.classList?.toggle("collie-has-notes", false);
       return;
     }
+    const prevMode = notesPane.getAttribute("data-side-mode") || sidePaneActiveMode;
     let wantOpen = false;
     let keepSlot = false;
     if (view === "collie" && !blockedByDrawer) {
@@ -16252,6 +16983,11 @@
     const wasHidden = notesPane.classList.contains("is-hidden");
     const hadNotes = col.classList.contains("has-notes");
     const stateUnchanged = (wasHidden === !wantOpen) && (hadNotes === keepSlot);
+    const modeChanged = prevMode !== sidePaneActiveMode;
+    if (modeChanged && !wasHidden) {
+      if (prevMode === "notes" && npBodyEl) _npScrollByMode.notes = npBodyEl.scrollTop || 0;
+      else if (prevMode === "threads" && thPopList) _npScrollByMode.threads = thPopList.scrollTop || 0;
+    }
     if (immediate && !stateUnchanged) {
       col.classList.add("no-notes-anim");
       if (_noNotesAnimRAF && typeof cancelAnimationFrame === "function") {
@@ -16263,34 +16999,63 @@
     notesOpen = wantOpen;
     if (hadNotes !== keepSlot) col.classList.toggle("has-notes", keepSlot);
     document.body?.classList?.toggle("collie-has-notes", keepSlot);
-    const hasThreadOpen = !!(activeThreadRoot || appEl?.classList?.contains("has-thread"));
-    const shiftMode = view === "collie" && hasThreadOpen ? "thread" : keepSlot ? "notes" : "none";
-    syncCollieLeftShift(shiftMode, { immediate: immediate || view !== "collie" });
+    const shiftMode = view === "collie" && !blockedByDrawer && keepSlot ? "notes" : "none";
+    if (opts.deferShift) {
+      _collieShiftMode = shiftMode;
+      _collieShiftTarget = shiftMode === "notes" && isWideNotesViewport() ? computeCollieShiftPx(280) : 0;
+    } else {
+      syncCollieLeftShift(shiftMode, { immediate: immediate || view !== "collie" || blockedByDrawer });
+    }
     if (wasHidden !== !wantOpen) notesPane.classList.toggle("is-hidden", !wantOpen);
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
-    notesPane.setAttribute("aria-label", isThreads ? "话题线" : "小本本");
+    notesPane.setAttribute("aria-label", isThreads ? "小本本 · 话题" : "小本本 · 事项");
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
     if ("inert" in notesPane) notesPane.inert = !wantOpen;
-    if (npTitleEl) setText(npTitleEl, isThreads ? "话题线" : "小本本");
+    if (npTabNotesBtn) {
+      npTabNotesBtn.classList.toggle("on", !isThreads);
+      npTabNotesBtn.setAttribute("aria-selected", !isThreads ? "true" : "false");
+    }
+    if (npTabThreadsBtn) {
+      npTabThreadsBtn.classList.toggle("on", isThreads);
+      npTabThreadsBtn.setAttribute("aria-selected", isThreads ? "true" : "false");
+    }
     if (npDateEl) npDateEl.hidden = isThreads;
     if (thPopSub) thPopSub.hidden = !isThreads;
     if (npBodyEl) npBodyEl.hidden = isThreads;
     if (npThreadsBodyEl) npThreadsBodyEl.hidden = !isThreads;
-    if (npHeadEl) npHeadEl.title = "点击切换紧凑或展开";
+    if (npHeadEl) npHeadEl.title = "点击空白处切换紧凑或展开";
     if (notesBtn) {
-      const onNotes = wantOpen && !isThreads;
-      notesBtn.classList.toggle("on", onNotes);
-      notesBtn.setAttribute("aria-pressed", onNotes ? "true" : "false");
-    }
-    if (thHeadBtn) {
-      const onThreads = wantOpen && isThreads;
-      thHeadBtn.classList.toggle("on", onThreads);
-      thHeadBtn.setAttribute("aria-pressed", onThreads ? "true" : "false");
+      notesBtn.classList.toggle("on", wantOpen);
+      notesBtn.setAttribute("aria-pressed", wantOpen ? "true" : "false");
     }
     if (wantOpen) {
       if (!col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
       if (isThreads) renderCollieThreadsMenu();
       else renderNotebook();
+      // Smooth 140ms restrained fade + subtle vertical micro-shift ONLY on explicit in-card tab switch.
+      if (opts.animateModeSwap && modeChanged && !wasHidden && !immediate) {
+        const incoming = isThreads ? npThreadsBodyEl : npBodyEl;
+        const outgoing = isThreads ? npBodyEl : npThreadsBodyEl;
+        outgoing?.classList?.remove("is-mode-entering");
+        if (incoming) {
+          clearTimeout(_npModeAnimTimer);
+          incoming.classList.remove("is-mode-entering");
+          void incoming.offsetWidth;
+          incoming.classList.add("is-mode-entering");
+          _npModeAnimTimer = setTimeout(() => {
+            _npModeAnimTimer = 0;
+            incoming.classList.remove("is-mode-entering");
+          }, 180);
+        }
+        const scTarget = isThreads ? thPopList : npBodyEl;
+        const savedScroll = _npScrollByMode[sidePaneActiveMode] || 0;
+        if (scTarget) scTarget.scrollTop = savedScroll;
+      }
+      const inkImmediate = immediate || wasHidden || !opts.animateModeSwap;
+      syncNotebookTabInk(inkImmediate);
+      if (wasHidden && typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => syncNotebookTabInk(true));
+      }
     }
     syncNotebookExpanded();
     if (immediate && !stateUnchanged) {
@@ -16305,6 +17070,19 @@
         col.classList.remove("no-notes-anim");
       }
     }
+  }
+  function switchNotebookTab(nextTab) {
+    const mode = nextTab === "threads" ? "threads" : "notes";
+    if (sidePaneActiveMode === mode && notesOpen) return;
+    sidePaneActiveMode = mode;
+    if (isWideNotesViewport()) persistSidePanePref(mode);
+    else sidePaneOverlay = mode;
+    if (mode === "notes") loadNotebook(false);
+    else {
+      const entries = chatEntries();
+      renderCollieThreadsMenu(computeReplyThreads(entries), entries);
+    }
+    syncNotebookVisibility({ animateModeSwap: true });
   }
   async function loadNotebook(force = false) {
     if (notebookFetching && !force) return;
@@ -16334,17 +17112,23 @@
 
   notesBtn?.addEventListener("click", () => {
     if (view !== "collie") return;
-    if (notesOpen && sidePaneActiveMode === "notes") {
+    if (notesOpen) {
       if (isWideNotesViewport()) persistSidePanePref("none");
       else sidePaneOverlay = "";
       syncNotebookVisibility();
     } else {
       closeAllColliePopovers();
       if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
-      if ($("#app")?.classList?.contains("has-file")) closeFilePane();
-      if (isWideNotesViewport()) persistSidePanePref("notes");
-      else sidePaneOverlay = "notes";
-      loadNotebook(true);
+      if (activeWorkerKey) closeWorkerDrawer({ immediate: true });
+      if ($("#app")?.classList?.contains("has-file")) closeFilePane({ immediate: true });
+      const targetMode = sidePaneActiveMode === "threads" ? "threads" : "notes";
+      if (isWideNotesViewport()) persistSidePanePref(targetMode);
+      else sidePaneOverlay = targetMode;
+      if (targetMode === "notes") loadNotebook(true);
+      else {
+        const entries = chatEntries();
+        renderCollieThreadsMenu(computeReplyThreads(entries), entries);
+      }
       syncNotebookVisibility();
     }
   });
@@ -16358,8 +17142,25 @@
   $("#np-back")?.addEventListener("click", hideNotebookFromCard);
   $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
+  npTabNotesBtn?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    switchNotebookTab("notes");
+  });
+  npTabThreadsBtn?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    switchNotebookTab("threads");
+  });
   notesPane?.addEventListener("click", (ev) => {
     if (ev.target.closest("#np-close, #np-back, #np-handle")) return;
+    const tabBtn = ev.target.closest("[data-np-tab]");
+    if (tabBtn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      switchNotebookTab(tabBtn.dataset.npTab);
+      return;
+    }
     if (sidePaneActiveMode === "threads") {
       if (ev.target.closest("[data-th-pick]")) return;
       if (!isWideNotesViewport()) return;
@@ -16388,16 +17189,17 @@
       ev.preventDefault();
       const entryId = tBtn.dataset.npEntry || "";
       const worker = tBtn.dataset.npWorker || "";
-      if (!isWideNotesViewport()) {
-        sidePaneOverlay = "";
-        syncNotebookVisibility();
+      const taskTitle = tBtn.dataset.npTitle || "";
+      const taskNote = tBtn.dataset.npNote || "";
+      const taskPath = tBtn.dataset.npPath || "";
+      if (!isWideNotesViewport()) sidePaneOverlay = "";
+      if (worker) {
+        openWorkerDrawer({ worker, title: taskTitle, note: taskNote, entryId, taskPath });
+        return;
       }
+      if (!isWideNotesViewport()) syncNotebookVisibility();
       if (entryId) {
         jumpToEntry(entryId);
-      } else if (worker) {
-        const p = paneOf(worker);
-        if (p) location.hash = `#/p/${encodeURIComponent(p)}`;
-        else location.hash = "#/auto";
       } else {
         autoTab = "memory";
         store.set("autoTab", "memory");
@@ -16417,7 +17219,7 @@
     setNotesExpanded(!notesExpanded);
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && notesOpen && !document.querySelector("dialog[open]")) {
+    if (ev.key === "Escape" && notesOpen && !superSearchOpen && !document.querySelector("dialog[open]")) {
       if (!isWideNotesViewport()) {
         sidePaneOverlay = "";
         syncNotebookVisibility();
@@ -16440,6 +17242,18 @@
       clearCollieShiftInline();
       syncCollieTopHeight();
       syncNotebookVisibility({ immediate: true });
+      if (notesOpen) syncNotebookTabInk(true);
+    }
+    if (pane && !pane.hidden && innerWidth > THREAD_DESKTOP_MIN) {
+      const w = fileWide ? fileWideW() : Math.max(380, Math.min(_lastFileW || store.get("fileW", 0) || 520, fileMax()));
+      setFileW(w);
+      syncFileWidenUI();
+    } else if (pane && !pane.hidden) {
+      syncFileWidenUI();
+    }
+    if (activeWorkerKey) {
+      applyWorkerWidth();
+      fitWdTerm();
     }
   });
 
@@ -16504,18 +17318,18 @@
         }
       }
     }
-    if (thPopWrap && !opts.skipMenu) {
+    if (thPopList && !opts.skipMenu) {
       const entries = chatEntries();
       renderCollieThreadsMenu(threadInfo || computeReplyThreads(entries), entries);
     }
   }
   function closeCollieThreadsPop() {
-    // Threads now live inside the unified #notes-pane side card; no standalone dropdown popover exists.
+    // Threads now live inside #notes-pane's in-card 话题 tab; no standalone dropdown popover exists.
   }
   let _thMenuRowsCache = { key: "", allRows: [], activeRows: [] };
   let _thPopInputSig = "";
   function renderCollieThreadsMenu(threadInfo, allEntries) {
-    if (!thPopWrap || !thHeadBtn || !thPopList) return;
+    if (!thPopList) return;
     const entries = allEntries || chatEntries();
     const info = threadInfo || computeReplyThreads(entries);
     const pendList = activePending();
@@ -16560,17 +17374,10 @@
       _thMenuRowsCache = { key: rowsKey, allRows, activeRows };
     }
     const inactiveRows = allRows.filter((r) => !r.inProgress);
-    const keepThreadsVisible = sidePanePref === "threads" || sidePaneOverlay === "threads";
-    if (!allRows.length && !keepThreadsVisible) {
-      thPopWrap.hidden = true;
-      thPopSig = "";
-      return;
-    }
     const pendingRowsCount = allRows.filter((r) => r.pending).length;
-    thPopWrap.hidden = false;
-    thHeadBtn.classList.toggle("has-active", !!activeThreadRoot);
-    thHeadBtn.classList.toggle("has-pending", pendingRowsCount > 0);
     if (thHeadDot) thHeadDot.hidden = pendingRowsCount === 0;
+    if (notesBtnDot) notesBtnDot.hidden = pendingRowsCount === 0;
+    if (notesBtn) notesBtn.classList.toggle("has-pending", pendingRowsCount > 0);
     const shownActive = activeRows.slice(0, 20);
     const shownInactive = inactiveRows.slice(0, Math.max(0, 30 - shownActive.length));
     if (thPopSub) {
@@ -16669,24 +17476,6 @@
     thPopList.innerHTML = activeSecHtml + inactiveSecHtml;
     syncNotebookExpanded();
   }
-  thHeadBtn?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (view !== "collie") return;
-    if (notesOpen && sidePaneActiveMode === "threads") {
-      if (isWideNotesViewport()) persistSidePanePref("none");
-      else sidePaneOverlay = "";
-      syncNotebookVisibility();
-      return;
-    }
-    closeAllColliePopovers();
-    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: true });
-    if ($("#app")?.classList?.contains("has-file")) closeFilePane();
-    if (isWideNotesViewport()) persistSidePanePref("threads");
-    else sidePaneOverlay = "threads";
-    const entries = chatEntries();
-    renderCollieThreadsMenu(computeReplyThreads(entries), entries);
-    syncNotebookVisibility();
-  });
   thPopList?.addEventListener("click", (e) => {
     const item = e.target.closest("[data-th-pick]");
     if (!item) return;
@@ -16715,23 +17504,24 @@
   const tdCloseBtn = $("#td-close");
   const tdGripEl = $("#td-grip");
   let _lastThreadW = 0;
-  const setThreadW = (w, opts = {}) => {
+  const setThreadW = (w) => {
     const px = Math.round(w);
     _lastThreadW = px;
-    if (tdDrawer) tdDrawer.style.setProperty("--thread-w", px + "px");
-    if (activeThreadRoot && view === "collie" && innerWidth > THREAD_DESKTOP_MIN) {
-      syncCollieLeftShift("thread", { threadW: px, immediate: !!opts.immediate });
+    if (tdDrawer) {
+      tdDrawer.style.setProperty("--thread-w", px + "px");
+      tdDrawer.style.setProperty("--drawer-w", px + "px");
     }
+    setAppDrawerW(px);
   };
   const threadAvail = () => {
-    const sideW = $(".side")?.offsetWidth || 260;
+    const sideW = $("#app")?.classList?.contains("side-collapsed") ? 0 : ($(".side")?.offsetWidth || 260);
     return Math.max(480, innerWidth - sideW);
   };
   const threadWideW = () => {
     const avail = threadAvail();
     return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 200));
   };
-  const threadMax = () => Math.max(360, Math.min(560, innerWidth - ($(".side")?.offsetWidth || 0) - 420, threadWideW() - 24));
+  const threadMax = () => Math.max(360, Math.min(560, innerWidth - currentSideW() - 420, threadWideW() - 24));
   const threadDragMax = () => {
     const avail = threadAvail();
     return Math.max(threadMax(), threadWideW(), Math.min(Math.round(avail * 0.78), avail - 200));
@@ -16740,6 +17530,7 @@
   function syncThreadWideUI() {
     const activeWide = !!(activeThreadRoot && threadWide && innerWidth > THREAD_DESKTOP_MIN);
     $("#app")?.classList.toggle("thread-wide", activeWide);
+    syncAppDrawerClasses();
     if (tdWidenBtn) {
       tdWidenBtn.setAttribute("aria-pressed", activeWide ? "true" : "false");
       const lbl = activeWide ? "还原宽度" : "拓宽抽屉";
@@ -16765,9 +17556,19 @@
       syncThreadWideUI();
       return;
     }
+    finishDrawerGlide(true);
+    const prevW = _lastThreadW || _lastDrawerW || 432;
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     threadWide = wide;
     store.set("threadWide", wide);
     applyThreadWidth();
+    const nextW = _lastThreadW || _lastDrawerW || 432;
+    if (!opts.immediate && activeThreadRoot && innerWidth > THREAD_DESKTOP_MIN) {
+      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
+      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
+    }
+    if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   }
   let tdHideTimer = 0, tdFocusTimer = 0, tdLoadingRoot = false, tdWorkersSig = "";
   let tdComposerCtrl = null, tdAutoStickUntil = 0, tdDraftRoot = null;
@@ -17591,9 +18392,16 @@
     if (!resolved) return;
     const realRoot = resolved.rootId;
     const appEl = $("#app");
-    const hadFile = appEl.classList.contains("has-file");
-    if (hadFile) closeFilePane();
+    const hadThread = !!appEl.classList.contains("has-thread");
+    const wasAnyDrawer = isAnyRightDrawerOpen();
+    const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
+    const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc && !hadThread ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    if (appEl.classList.contains("has-file")) closeFilePane({ immediate: true, switching: true });
+    if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
     clearTimeout(tdHideTimer);
+    resetDrawerMotion(tdDrawer);
     const switched = activeThreadRoot !== realRoot;
     if (tdDraftRoot && tdDraftRoot !== realRoot) tdComposer?._clearFiles?.();
     tdDraftRoot = realRoot;
@@ -17606,13 +18414,24 @@
       tdLastCount = 0;
     }
     applyThreadWidth();
+    const nextW = _lastThreadW || _lastDrawerW || 432;
     if (tdDrawer.hidden) { tdDrawer.hidden = false; tdDrawer.offsetWidth; }
-    tdDrawer.classList.remove("is-dragging");
-    tdDrawer.style.transform = "";
     if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = false; }
     tdDrawer.setAttribute("aria-hidden", "false");
     $("#v-collie")?.classList?.remove("is-main-focused");
     appEl.classList.add("has-thread");
+    syncThreadWideUI();
+    syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadThread && !opts.immediate && innerWidth > THREAD_DESKTOP_MIN });
+    if (!hadThread && !opts.immediate) {
+      if (!wasAnyDrawer) {
+        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: tdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
+        if (!glided) playDrawerTransition(tdDrawer, false);
+      } else {
+        if (nextW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW });
+        else if (nextW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW });
+        playDrawerTransition(tdDrawer, true);
+      }
+    }
     if (innerWidth > THREAD_DESKTOP_MIN) {
       // Quietly hide the main-stream thinking row and clear left focus while side-by-side drawer takes focus.
       const wk = $("#super-working"), st = $("#router-status");
@@ -17621,8 +18440,10 @@
       const ae = document.activeElement;
       if (ae && $("#v-collie")?.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     }
-    syncNotebookVisibility();
     syncActiveThreadMarks(info);
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
+    }
     const hasRestore = typeof opts.restoreScrollTop === "number";
     renderThreadDrawer({
       focusMsgId,
@@ -17639,6 +18460,14 @@
     const appEl = $("#app");
     const wasOpen = !!activeThreadRoot || !tdDrawer.hidden;
     const hadThread = appEl.classList.contains("has-thread");
+    const switching = !!opts.switching;
+    const sc = wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    const closingW = _lastThreadW || _lastDrawerW || 432;
+    const startOffset = !switching && hadThread ? captureCollieVisualShift(true, closingW) : 0;
+    if (switching) finishDrawerGlide(true);
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadThread && innerWidth > THREAD_DESKTOP_MIN && !tdDrawer.hidden;
     activeThreadRoot = null;
     activeThreadAnchor = "";
     drawerReplyTarget = null;
@@ -17646,23 +18475,41 @@
     tdWorkersSig = "";
     tdLastCount = 0;
     if (tdWorkersEl) { tdWorkersEl.hidden = true; tdWorkersEl.innerHTML = ""; }
-    tdDrawer.classList.remove("is-dragging");
-    tdDrawer.style.transform = "";
+    if (desktopCloseAnim) {
+      resetDrawerMotion(tdDrawer);
+      tdDrawer.style.setProperty("--drawer-close-w", closingW + "px");
+      tdDrawer.classList.add("is-closing");
+    } else {
+      resetDrawerMotion(tdDrawer);
+    }
     if (tdScrim) tdScrim.style.opacity = "";
     appEl.classList.remove("has-thread");
     appEl.classList.remove("thread-wide");
+    if (!switching) syncAppDrawerClasses();
     $("#v-collie")?.classList?.remove("is-main-focused");
     syncThreadWideUI();
-    syncNotebookVisibility();
+    if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim });
     tdDrawer.setAttribute("aria-hidden", "true");
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
+    }
     clearTimeout(tdHideTimer);
     const hideNow = () => {
+      resetDrawerMotion(tdDrawer);
       tdDrawer.hidden = true;
-      if (tdScrim) tdScrim.hidden = true;
+      if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = true; }
     };
-    if (opts.immediate) hideNow();
-    else tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 260);
-    if (wasOpen && opts.rerender !== false && view === "collie") {
+    if (opts.immediate || switching || reduced) {
+      hideNow();
+    } else if (desktopCloseAnim) {
+      const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
+        ? computeCollieShiftPx(280) : 0;
+      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: tdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      if (!glided) tdHideTimer = setTimeout(hideNow, 170);
+    } else {
+      tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 260);
+    }
+    if (wasOpen && !switching && opts.rerender !== false && view === "collie") {
       syncActiveThreadMarks();
       if (hadThread && innerWidth > THREAD_DESKTOP_MIN) {
         renderSuper();
@@ -17678,7 +18525,6 @@
   if (tdDrawer) {
     const tdHandleBtn = $("#td-handle");
     const tdHeadEl = tdDrawer.querySelector(".td-head");
-    let tdSkipHandleClickUntil = 0;
     tdWidenBtn?.addEventListener("click", () => {
       if (innerWidth <= THREAD_DESKTOP_MIN || !activeThreadRoot) return;
       setThreadWide(!threadWide);
@@ -17696,72 +18542,20 @@
       setThreadWide(false);
     });
     addEventListener("resize", () => {
+      finishDrawerGlide(true);
       if (activeThreadRoot) applyThreadWidth();
       else syncThreadWideUI();
     });
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
     tdScrim?.addEventListener("click", () => closeThreadDrawer());
-    tdHandleBtn?.addEventListener("click", () => {
-      if (performance.now() < tdSkipHandleClickUntil) return;
-      closeThreadDrawer();
+    bindDrawerSheetDrag(tdDrawer, tdScrim, [tdHandleBtn, tdHeadEl], () => !!activeThreadRoot, () => closeThreadDrawer());
+    tdWorkersEl?.addEventListener("click", (e) => {
+      const a = e.target.closest("a.td-worker[data-td-worker]");
+      if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      if (view !== "collie") return;
+      e.preventDefault();
+      openWorkerDrawer({ worker: a.dataset.tdWorker, fromThreadRoot: activeThreadRoot || "" });
     });
-    // Mobile bottom-sheet drag-to-dismiss on the grabber handle and header area.
-    const bindSheetDrag = (zone) => {
-      if (!zone) return;
-      let startY = 0, startX = 0, startT = 0, lastY = 0, pid = null, dragging = false;
-      const resetDrag = () => {
-        pid = null;
-        dragging = false;
-        tdDrawer.classList.remove("is-dragging");
-        tdDrawer.style.transform = "";
-        if (tdScrim) tdScrim.style.opacity = "";
-      };
-      zone.addEventListener("pointerdown", (e) => {
-        if (innerWidth > 760 || !activeThreadRoot) return;
-        if (e.pointerType === "mouse" && e.button !== 0) return;
-        if (e.target.closest("button:not(#td-handle)")) return;
-        pid = e.pointerId;
-        startY = lastY = e.clientY;
-        startX = e.clientX;
-        startT = performance.now();
-        dragging = false;
-      });
-      zone.addEventListener("pointermove", (e) => {
-        if (pid !== e.pointerId) return;
-        const dy = e.clientY - startY, dx = e.clientX - startX;
-        lastY = e.clientY;
-        if (!dragging) {
-          if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { pid = null; return; }
-          if (dy <= 8) return;
-          dragging = true;
-          tdDrawer.classList.add("is-dragging");
-          try { zone.setPointerCapture(e.pointerId); } catch {}
-        }
-        const offset = Math.max(0, dy);
-        tdDrawer.style.transform = `translateY(${offset}px)`;
-        if (tdScrim) {
-          const ratio = Math.min(1, offset / Math.max(240, tdDrawer.offsetHeight * 0.5));
-          tdScrim.style.opacity = String(Math.max(0, 1 - ratio));
-        }
-      });
-      const finish = (e, cancelled) => {
-        if (pid !== e.pointerId) return;
-        const wasDragging = dragging;
-        const dy = Math.max(0, lastY - startY);
-        const dt = Math.max(1, performance.now() - startT);
-        const vy = dy / dt;
-        const threshold = Math.min(120, (tdDrawer.offsetHeight || 600) * 0.22);
-        resetDrag();
-        if (wasDragging) {
-          tdSkipHandleClickUntil = performance.now() + 80;
-          if (!cancelled && (dy > threshold || (dy > 40 && vy > 0.45))) closeThreadDrawer();
-        }
-      };
-      zone.addEventListener("pointerup", (e) => finish(e, false));
-      zone.addEventListener("pointercancel", (e) => finish(e, true));
-    };
-    bindSheetDrag(tdHandleBtn);
-    bindSheetDrag(tdHeadEl);
     tdLocateRootBtn?.addEventListener("click", () => {
       const info = computeReplyThreads(chatEntries());
       const th = resolveThread(info, activeThreadRoot, activeThreadAnchor);
@@ -17819,6 +18613,26 @@
       if (e.target?.tagName !== "IMG" || !tdBodyEl) return;
       if (performance.now() < tdAutoStickUntil) tdBodyEl.scrollTop = tdBodyEl.scrollHeight;
     }, true);
+    if (tdBodyEl) {
+      let tdWasAtBottom = true, tdPrevW = 0, tdPrevH = 0, tdGraceUntil = 0;
+      tdBodyEl.addEventListener("scroll", () => {
+        if (performance.now() < tdGraceUntil) return;
+        tdWasAtBottom = (tdBodyEl.scrollHeight - tdBodyEl.scrollTop - tdBodyEl.clientHeight) <= 36;
+      }, { passive: true });
+      if (typeof ResizeObserver === "function") {
+        new ResizeObserver(() => {
+          if (!activeThreadRoot || tdDrawer.hidden || tdBodyEl.clientHeight <= 0) return;
+          const w = tdBodyEl.clientWidth, h = tdBodyEl.clientHeight;
+          if (tdPrevW === 0 && tdPrevH === 0) { tdPrevW = w; tdPrevH = h; return; }
+          if (w === tdPrevW && h === tdPrevH) return;
+          tdPrevW = w; tdPrevH = h;
+          if (tdWasAtBottom) {
+            tdGraceUntil = performance.now() + 180;
+            tdBodyEl.scrollTop = tdBodyEl.scrollHeight;
+          }
+        }).observe(tdBodyEl);
+      }
+    }
     if (tdComposer && tdInput) {
       tdComposerCtrl = bindComposer(tdComposer, tdInput, async (text, ctx) => {
         tdForceScroll = true;
@@ -17864,12 +18678,17 @@
     tdGripEl?.addEventListener("pointerdown", (e) => {
       if (innerWidth <= THREAD_DESKTOP_MIN) return;
       e.preventDefault();
+      finishDrawerGlide(true);
       const grip = e.currentTarget;
       grip.setPointerCapture(e.pointerId);
       document.body.classList.add("dragging");
+      const sc = view === "collie" ? viewScroller("collie") : null;
+      const dragSnap = sc ? captureColliePos(sc) : null;
       const max = threadDragMax();
       const move = (ev) => {
-        setThreadW(Math.max(360, Math.min(innerWidth - ev.clientX, max)), { immediate: true });
+        const nextW = Math.max(360, Math.min(Math.round(innerWidth - ev.clientX), max));
+        setThreadW(nextW);
+        if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
       };
       const up = () => {
         grip.removeEventListener("pointermove", move);
@@ -17887,6 +18706,7 @@
           store.set("threadW", finalW);
         }
         syncThreadWideUI();
+        if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
       };
       grip.addEventListener("pointermove", move);
       grip.addEventListener("pointerup", up, { once: true });
@@ -17895,12 +18715,813 @@
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape" || !activeThreadRoot || tdDrawer.hidden) return;
       if (e.isComposing || e.keyCode === 229) return;
-      if (document.querySelector("dialog[open]") || pickOpen || dirCtx) return;
+      if (superSearchOpen || document.querySelector("dialog[open]") || pickOpen || dirCtx) return;
       e.preventDefault();
       closeThreadDrawer();
     });
     syncThreadComposerHint();
     syncThreadSendBtn();
+  }
+
+  // ───────────────────────────── Collie-dispatched worker live task drawer (3rd mode of unified right drawer)
+  const wdDrawer = $("#worker-drawer");
+  const wdScrim = $("#worker-scrim");
+  const wdTitleEl = $("#wd-title");
+  const wdKindEl = $("#wd-kind");
+  const wdRoleEl = $("#wd-role");
+  const wdStatusEl = $("#wd-status");
+  const wdModelEl = $("#wd-model");
+  const wdCwdEl = $("#wd-cwd");
+  const wdPopoutBtn = $("#wd-popout");
+  const wdWidenBtn = $("#wd-widen");
+  const wdCloseBtn = $("#wd-close");
+  const wdGripEl = $("#wd-grip");
+  const wdSummaryEl = $("#wd-summary");
+  const wdSummaryTextEl = $("#wd-summary-text");
+  const wdBarEl = $("#wd-bar");
+  const wdModeSegEl = $("#wd-mode-seg");
+  const wdThreadBtn = $("#wd-thread-btn");
+  const wdInterruptBtn = $("#wd-interrupt");
+  const wdViewerEl = $("#wd-viewer");
+  const wdThreadEl = $("#wd-thread");
+  const wdLiveEl = $("#wd-live");
+  const wdScreenEl = $("#wd-screen");
+  const wdLogEl = $("#wd-log");
+  const wdJumpBtn = $("#wd-jump");
+  const wdGoneEl = $("#wd-gone");
+  const wdKeysEl = $("#wd-keys");
+  const wdKbdToggleBtn = $("#wd-kbd-toggle");
+  const wdPeekFootEl = $("#wd-peek-foot");
+  const wdPeekNoteEl = $("#wd-peek-note");
+  const wdInterjectBtn = $("#wd-interject-btn");
+  const wdComposerEl = $("#wd-composer");
+  const wdInputEl = $("#wd-input");
+  const wdSendBtn = $("#wd-send");
+  const wdHintEl = $("#wd-hint");
+  const wdCollapseBtn = $("#wd-composer-collapse");
+
+  let wdStream = null;
+  let wdHideTimer = 0;
+  let wdSeq = 0;
+  let wdLastLive = null;
+  let wdShowRaw = false;
+  let wdComposerCtrl = null;
+  let wdTerm = null;
+  let wdSize = { cols: 0, rows: 0 };
+  let wdPrevScreenLines = null;
+  let wdPendingScreen = null;
+  let wdScreenFresh = true;
+  let wdScreenSeq = 0;
+  let wdScreenWriting = false;
+  let wdScreenQueuedFrame = null;
+  let wdScreenScrollRAF = 0;
+  let wdScreenBufLines = 0;
+
+  const setWorkerW = (w) => {
+    const px = Math.round(w);
+    _lastWorkerW = px;
+    if (wdDrawer) wdDrawer.style.setProperty("--drawer-w", px + "px");
+    setAppDrawerW(px);
+  };
+  const workerMax = () => Math.max(420, innerWidth - currentSideW() - 340);
+  const workerWideW = () => {
+    const avail = drawerAvail();
+    return Math.min(Math.max(480, Math.round(avail * 0.5)), Math.max(360, avail - 320));
+  };
+  function syncWorkerWidenUI() {
+    if (!wdWidenBtn) return;
+    const on = !!(activeWorkerKey && workerWide && innerWidth > THREAD_DESKTOP_MIN);
+    wdWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    const lbl = on ? "还原宽度" : "拓宽抽屉";
+    wdWidenBtn.title = lbl;
+    wdWidenBtn.setAttribute("aria-label", lbl);
+    syncAppDrawerClasses();
+  }
+  function applyWorkerWidth() {
+    if (innerWidth <= THREAD_DESKTOP_MIN) {
+      syncWorkerWidenUI();
+      return;
+    }
+    const defW = Math.min(Math.max(460, Math.round(drawerAvail() * 0.42)), 540);
+    const w = workerWide
+      ? workerWideW()
+      : Math.max(380, Math.min(store.get("workerW", 0) || defW, workerMax()));
+    setWorkerW(w);
+    syncWorkerWidenUI();
+  }
+  function syncWorkerComposerUI() {
+    const isLive = !!wdPaneId && !!find(wdPaneId);
+    const showComposer = isLive && wdComposerOpen;
+    if (wdComposerEl) wdComposerEl.hidden = !showComposer;
+    if (wdPeekFootEl) wdPeekFootEl.hidden = showComposer;
+    if (wdInterjectBtn) wdInterjectBtn.hidden = !isLive;
+    if (wdKeysEl && !showComposer) {
+      wdKeysEl.classList.remove("open");
+      wdKbdToggleBtn?.classList.remove("on");
+      wdKbdToggleBtn?.setAttribute("aria-pressed", "false");
+    }
+    if (wdPeekNoteEl) {
+      const liveAgent = isLive ? find(wdPaneId) : null;
+      if (!isLive) wdPeekNoteEl.textContent = "任务已结束 · 只读记录";
+      else if (liveAgent?.status === "blocked") wdPeekNoteEl.textContent = "等待你确认 · 请在上方审批";
+      else wdPeekNoteEl.textContent = "由 Collie 持续盯控";
+    }
+    if (wdHintEl) {
+      const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+      const keyLabel = prefs.sendKey() === "mod" ? (isMac ? "⌘Enter" : "Ctrl+Enter") : "Enter";
+      wdHintEl.textContent = `${keyLabel} 发送 · 直达该任务会话`;
+    }
+  }
+  function syncWorkerSendBtn(sending = wdComposerCtrl?.isSending?.() || false) {
+    if (!wdSendBtn || !wdInputEl) return;
+    const hasText = !!String(wdInputEl.value || "").trim();
+    const hasFiles = !!(wdComposerEl?._files?.length);
+    wdSendBtn.disabled = !!sending || (!hasText && !hasFiles);
+  }
+  function resolveWorkerContext() {
+    const { byName, byPane } = getWorkerLookup();
+    const supW = (wdWorkerName ? byName.get(wdWorkerName) : null) || (wdPaneId ? byPane.get(wdPaneId) : null) || null;
+    const livePaneId = (wdPaneId && find(wdPaneId) ? wdPaneId : "")
+      || (wdWorkerName ? (paneOf(wdWorkerName) || "") : "")
+      || (supW && !supW.ended && supW.pane_id && find(supW.pane_id) ? supW.pane_id : "");
+    const liveAgent = livePaneId ? find(livePaneId) : null;
+    const name = wdWorkerName || liveAgent?.name || supW?.name || "";
+    const past = !liveAgent && name
+      ? (workerHist(name, supW?.created_at || 0) || getHistIndex().byName.get(name)?.[0]?.h || (wdHistId ? hist.find((x) => x.id === wdHistId) : null) || null)
+      : (wdHistId ? hist.find((x) => x.id === wdHistId) : null);
+    return { supW, livePaneId, liveAgent, name, past };
+  }
+  function isWdShell() {
+    const v = wdPaneId ? find(wdPaneId) : null;
+    return !!v && !v.is_agent;
+  }
+  function curWdMode() {
+    if (!wdPaneId || !find(wdPaneId)) return "chat";
+    return isWdShell() ? (wdMode === "chat" ? "screen" : wdMode) : wdMode;
+  }
+  function applyWdModeUI() {
+    const m = curWdMode();
+    const isLive = !!wdPaneId && !!find(wdPaneId);
+    if (wdViewerEl) wdViewerEl.dataset.mode = m;
+    if (wdJumpBtn && m === "chat") wdJumpBtn.hidden = true;
+    if (wdModeSegEl) {
+      wdModeSegEl.hidden = !isLive;
+      wdModeSegEl.querySelectorAll("button").forEach((b) => {
+        const bm = b.dataset.wdMode;
+        const on = bm === m;
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        if (bm === "chat") b.hidden = isWdShell();
+      });
+    }
+    if (wdInterruptBtn) wdInterruptBtn.hidden = !isLive;
+    if (wdBarEl) wdBarEl.hidden = !isLive && (wdThreadBtn?.hidden ?? true);
+  }
+  function closeWorkerDrawerStream() {
+    wdScreenSeq++;
+    wdScreenWriting = false;
+    wdScreenQueuedFrame = null;
+    if (wdScreenScrollRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(wdScreenScrollRAF);
+      wdScreenScrollRAF = 0;
+    }
+    wdStream?.close();
+    wdStream = null;
+    wdTerm?.blur?.();
+  }
+  function resetWdChat() {
+    if (!wdThreadEl) return;
+    wdThreadEl.innerHTML = "";
+    wdThreadEl.classList.remove("asking");
+    if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
+    wdThreadEl._sig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._older = null; wdThreadEl._restore = null;
+    wdLastLive = null; wdShowRaw = false;
+  }
+  function resetWdScreen() {
+    wdScreenSeq++;
+    wdScreenWriting = false;
+    wdScreenQueuedFrame = null;
+    if (wdScreenScrollRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(wdScreenScrollRAF);
+      wdScreenScrollRAF = 0;
+    }
+    wdPrevScreenLines = null;
+    wdPendingScreen = null;
+    wdScreenFresh = true;
+    wdScreenBufLines = 0;
+    wdSize = { cols: 0, rows: 0 };
+    if (wdJumpBtn) wdJumpBtn.hidden = true;
+    if (wdTerm) {
+      wdTerm.reset();
+      if (wdScreenEl) { wdScreenEl.scrollTop = 0; wdScreenEl.scrollLeft = 0; }
+    }
+  }
+  const wdScreenNearBottom = () => {
+    const buf = wdTerm?.buffer?.active;
+    if (buf) return (buf.baseY - buf.viewportY) <= 2;
+    return !wdScreenEl || (wdScreenEl.scrollHeight - wdScreenEl.scrollTop - wdScreenEl.clientHeight < 40);
+  };
+  function desiredWdTermRows(el, paneRows, skipCachedCellH = false) {
+    const fallback = Math.max(TERM_MIN_ROWS, Math.min(TERM_MAX_ROWS, paneRows || wdSize.rows || 32));
+    if (!el || !el.clientHeight) return fallback;
+    const cs = typeof getComputedStyle === "function" ? getComputedStyle(el) : null;
+    const padY = cs ? ((parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)) : 0;
+    const avail = el.clientHeight - padY;
+    if (avail <= 0) return fallback;
+    const cellH = skipCachedCellH ? 0 : (wdTerm?._core?._renderService?.dimensions?.css?.cell?.height || 0);
+    const estH = cellH > 4 ? cellH : Math.max(10, Math.ceil((wdTerm?.options?.fontSize || 12) * (wdTerm?.options?.lineHeight || 1.15) * 1.18));
+    return Math.max(TERM_MIN_ROWS, Math.min(TERM_MAX_ROWS, Math.floor(avail / estH)));
+  }
+  function fitWdTerm() {
+    if (!wdTerm || !wdSize.cols || !wdScreenEl || !wdScreenEl.clientWidth) return;
+    const was = wdScreenNearBottom();
+    const cs = typeof getComputedStyle === "function" ? getComputedStyle(wdScreenEl) : null;
+    const pad = cs ? (parseFloat(cs.paddingLeft) || 14) * 2 : 28;
+    const fitW = Math.floor(((wdScreenEl.clientWidth - pad) / wdSize.cols / 0.602) * 2) / 2;
+    const fs = Math.max(7.5, Math.min(13, fitW));
+    const fsChanged = wdTerm.options.fontSize !== fs;
+    if (fsChanged) wdTerm.options.fontSize = fs;
+    const wantRows = desiredWdTermRows(wdScreenEl, wdSize.rows, fsChanged);
+    if (wdTerm.rows !== wantRows && !wdScreenWriting && wdPrevScreenLines) {
+      const replay = { text: wdPrevScreenLines.join("\n"), cols: wdSize.cols, rows: wdSize.rows };
+      wdPrevScreenLines = null;
+      drawWdScreen(replay);
+    } else if (fsChanged && was) {
+      wdTerm.scrollToBottom?.();
+      if (wdJumpBtn) wdJumpBtn.hidden = true;
+    }
+  }
+  function ensureWdTerm() {
+    if (wdTerm || !window.Terminal || !wdScreenEl) return;
+    const css = getComputedStyle(document.documentElement);
+    wdTerm = new Terminal({
+      cols: 120, rows: desiredWdTermRows(wdScreenEl, 32),
+      fontFamily: css.getPropertyValue("--mono"), fontSize: 12, lineHeight: 1.15,
+      cursorBlink: false, scrollback: TERM_SCROLLBACK, allowTransparency: true, theme: termTheme(),
+    });
+    wdTerm.attachCustomWheelEventHandler((e) => {
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return false;
+      if (!wdTerm?.buffer?.active?.baseY) return false;
+      return true;
+    });
+    wdTerm.open(wdScreenEl);
+    wdTerm.onData((data) => { if (wdPaneId) typeIntoSpecificPane(wdPaneId, data); });
+    wdTerm.onScroll(() => {
+      if (curWdMode() !== "screen") return;
+      if (wdScreenNearBottom()) {
+        if (wdJumpBtn) wdJumpBtn.hidden = true;
+        if (wdPendingScreen) { const p = wdPendingScreen; wdPendingScreen = null; drawWdScreen(p); }
+      } else if (wdJumpBtn) wdJumpBtn.hidden = false;
+    });
+    wdScreenEl.addEventListener("click", () => { if (!wdTerm.hasSelection()) wdTerm.focus(); });
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (wdTerm) wdTerm.options.theme = termTheme(); });
+    addEventListener("collie:theme", () => { if (wdTerm) wdTerm.options.theme = termTheme(); });
+    if (typeof ResizeObserver === "function") {
+      let fitRAF = 0;
+      const ro = new ResizeObserver(() => {
+        if (!activeWorkerKey || curWdMode() !== "screen" || !wdSize.cols) return;
+        if (fitRAF) return;
+        fitRAF = requestAnimationFrame(() => { fitRAF = 0; if (activeWorkerKey && curWdMode() === "screen") fitWdTerm(); });
+      });
+      try { ro.observe(wdScreenEl); } catch {}
+    }
+  }
+  function drawWdScreen(f) {
+    if (!wdTerm) return;
+    if (!wdScreenFresh && wdTerm.hasSelection?.()) { wdPendingScreen = f; return; }
+    if (wdScreenWriting) { wdScreenQueuedFrame = f; return; }
+    const stick = wdScreenFresh || wdScreenNearBottom();
+    const raw = (f.text || "").replace(/\r\n/g, "\n").replace(/\r/g, "");
+    const lines = raw ? raw.split("\n") : [""];
+    const cols = f.cols || wdSize.cols || 120;
+    const paneRows = f.rows || wdSize.rows || 32;
+    const dimChanged = cols !== wdSize.cols || paneRows !== wdSize.rows;
+    if (dimChanged) wdSize = { cols, rows: paneRows };
+    const prevFs = wdTerm.options.fontSize;
+    if (dimChanged) fitWdTerm();
+    const visRows = desiredWdTermRows(wdScreenEl, paneRows, wdTerm.options.fontSize !== prevFs);
+    const needResize = cols !== wdTerm.cols || visRows !== wdTerm.rows;
+    const savedBuf = screenBufLines;
+    screenBufLines = wdScreenBufLines;
+    const delta = (!wdPrevScreenLines || needResize)
+      ? { kind: "full", out: "\x1b[?25l\x1b[?7l\x1b[0m" + lines.join("\r\n\x1b[0m"), bufLines: Math.min(visRows + TERM_SCROLLBACK, lines.length) }
+      : computeScreenDelta(wdPrevScreenLines, lines, visRows);
+    screenBufLines = savedBuf;
+    if (delta.kind === "full") {
+      if (wdPrevScreenLines || needResize) wdTerm.reset();
+      if (needResize) wdTerm.resize(cols, visRows);
+    }
+    wdPrevScreenLines = lines;
+    wdScreenFresh = false;
+    wdScreenBufLines = delta.bufLines;
+    const applyScroll = () => {
+      if (stick) {
+        wdTerm.scrollToBottom?.();
+        if (wdJumpBtn) wdJumpBtn.hidden = true;
+      } else if (wdJumpBtn) {
+        wdJumpBtn.hidden = wdScreenNearBottom();
+      }
+    };
+    if (delta.kind === "noop" || !delta.out) { applyScroll(); return; }
+    const seq = wdScreenSeq;
+    wdScreenWriting = true;
+    wdTerm.write(delta.out, () => {
+      if (seq !== wdScreenSeq) return;
+      wdScreenWriting = false;
+      applyScroll();
+      if (wdScreenQueuedFrame) {
+        const nextF = wdScreenQueuedFrame;
+        wdScreenQueuedFrame = null;
+        wdScreenScrollRAF = requestAnimationFrame(() => {
+          wdScreenScrollRAF = 0;
+          if (seq === wdScreenSeq && curWdMode() === "screen") drawWdScreen(nextF);
+        });
+      }
+    });
+  }
+  function drawWdLive(l) {
+    wdLastLive = l;
+    if (!wdLiveEl || !wdThreadEl) return;
+    const was = nearBottom(wdThreadEl);
+    wdThreadEl.classList.toggle("asking", l.status === "blocked" && !!l.approval);
+    let html = "";
+    if (l.status === "working" && l.tail) {
+      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre><span class="meta"></span></div>`;
+    } else if (l.status === "blocked" && l.approval) {
+      const v = wdPaneId ? find(wdPaneId) : null;
+      const savedRaw = showRaw;
+      showRaw = wdShowRaw;
+      html = askHTML(l.approval, v ? title(v) : (wdWorkerName || "agent"));
+      showRaw = savedRaw;
+    }
+    if (html !== wdLiveEl._html) {
+      wdLiveEl._html = html;
+      wdLiveEl.innerHTML = html;
+    }
+    const meta = wdLiveEl.querySelector?.(".live-working .meta");
+    if (meta && meta.textContent !== (l.meta || "")) meta.textContent = l.meta || "";
+    wdLiveEl.hidden = !html;
+    if (wdPeekNoteEl && l.status === "blocked") wdPeekNoteEl.textContent = "等待你确认 · 请在上方审批";
+    stick(wdThreadEl, was);
+  }
+  async function renderWdModel(v, supW) {
+    if (!wdModelEl) return;
+    const run = v?.run || supW?.run;
+    const kind = v?.run ? v.kind : supW?.kind === "antigravity" ? "agy" : supW?.kind;
+    const machine = v?.run ? v.machine : supW?.machine;
+    const key = run ? [v?.pane_id || supW?.name || "", kind, machine, ...run].join("|") : "";
+    if (wdModelEl._key === key) return;
+    wdModelEl._key = key;
+    if (!key) { wdModelEl.hidden = true; wdModelEl.textContent = ""; return; }
+    let [model, effort] = run;
+    const own = !model;
+    const info = (v?.pane_id && hubOf(v.pane_id)) ? {} : await modelsFor(kind, machine || "").catch(() => ({}));
+    if (wdModelEl._key !== key) return;
+    if (own) model = info.default || "";
+    if (!effort && info.default_effort && effortsFor(info, kind, model).includes(info.default_effort)) effort = info.default_effort;
+    let name = (info.models || []).find((m) => m.id === model)?.label || model.split("/").pop();
+    const b = name.match(/^(.*\S)\s*\(([^)]+)\)$/);
+    if (b && EFFORT_LABEL[b[2].toLowerCase()]) { name = b[1]; effort ||= b[2].toLowerCase(); }
+    const parts = [model ? name + (own ? "（默认）" : "") : "默认模型"];
+    if (effort) parts.push("思考 " + (EFFORT_LABEL[effort] || effort));
+    wdModelEl.textContent = parts.join(" · ");
+    wdModelEl.hidden = false;
+  }
+  function syncWorkerDrawerMeta() {
+    if (!activeWorkerKey || !wdDrawer) return;
+    const { supW, livePaneId, liveAgent, name, past } = resolveWorkerContext();
+    if (livePaneId && livePaneId !== wdPaneId) wdPaneId = livePaneId;
+    if (past?.id) wdHistId = past.id;
+    const kind = liveAgent?.kind || supW?.kind || past?.kind || "";
+    const status = liveAgent?.status || (supW?.ended ? (supW.status === "failed" ? "failed" : "gone") : supW?.status) || "gone";
+    const isLive = !!liveAgent;
+    if (wdTitleEl) {
+      const workerLbl = (liveAgent ? agentLabelOf(liveAgent) : "") || workerLabelOf(supW);
+      const dispTitle = workerLbl || name || wdTaskTitle || (liveAgent ? title(liveAgent) : "进行中任务");
+      const fullTip = workerLbl && name && workerLbl !== name ? `${workerLbl} (${name})` : dispTitle;
+      wdTitleEl.textContent = dispTitle;
+      wdTitleEl.title = fullTip;
+    }
+    if (wdKindEl) {
+      const kl = kind ? (KIND_LABEL[kind] || kind) : "";
+      wdKindEl.textContent = kl;
+      wdKindEl.hidden = !kl;
+    }
+    if (wdRoleEl) {
+      const showRole = !!(isWorker(name) || supW);
+      wdRoleEl.hidden = !showRole;
+    }
+    if (wdStatusEl) {
+      wdStatusEl.className = "status " + status;
+      const stLabel = isLive
+        ? (STATUS_LABEL[status] || status)
+        : (status === "failed" ? "执行失败" : "已结束");
+      wdStatusEl.innerHTML = `<span class="dot ${esc(status)}"></span>${esc(stLabel)}`;
+    }
+    if (wdCwdEl) {
+      const rawCwd = liveAgent?.cwd || supW?.cwd || past?.cwd || "";
+      const mach = liveAgent?.machine ?? supW?.machine ?? past?.machine ?? "";
+      const ms = state.machines || [];
+      const home = ms.find((m) => m.id === mach)?.home;
+      const shortCwd = rawCwd ? (home && rawCwd.startsWith(home) ? "~" + rawCwd.slice(home.length) : tilde(rawCwd)) : "";
+      const txt = (ms.length > 1 && mach ? machineName(mach) + (shortCwd ? " · " : "") : "") + shortCwd;
+      wdCwdEl.textContent = txt;
+      wdCwdEl.title = txt;
+    }
+    renderWdModel(liveAgent, supW);
+    if (wdPopoutBtn) {
+      const href = isLive
+        ? `#/p/${encodeURIComponent(liveAgent.pane_id)}`
+        : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+      wdPopoutBtn.hidden = !href;
+      if (href) {
+        wdPopoutBtn.href = href;
+        wdPopoutBtn.title = isLive ? "独立全屏打开会话" : "独立全屏查看记录";
+      }
+    }
+    const wtMap = computeWorkerThreadMap();
+    const linked = wdFromThread || (name ? wtMap.get(name)?.rootId || "" : "");
+    if (wdThreadBtn) {
+      wdThreadBtn.hidden = !linked;
+      wdThreadBtn.dataset.wdThread = linked;
+    }
+    if (wdSummaryEl && wdSummaryTextEl) {
+      const sum = liveAgent ? agentTaskSummary(liveAgent, supW, null, chatEntries()) : { short: "", full: "" };
+      const noteText = (wdTaskTitle && wdTaskTitle !== name)
+        ? (wdTaskNote && !wdTaskTitle.includes(wdTaskNote) ? `${wdTaskTitle} · ${wdTaskNote}` : wdTaskTitle)
+        : (sum.full || sum.short || supW?.task || supW?.last_report || wdTaskNote || "");
+      wdSummaryEl.hidden = !noteText;
+      if (noteText) wdSummaryTextEl.textContent = noteText;
+    }
+    if (wdGoneEl) wdGoneEl.hidden = isLive || !wdPaneId;
+    applyWdModeUI();
+    syncWorkerComposerUI();
+  }
+  async function loadWdHistory(past, supW) {
+    if (!wdThreadEl) return;
+    const seq = ++wdSeq;
+    resetWdChat();
+    if (!past) {
+      const rep = supW?.last_report || supW?.task || "";
+      wdThreadEl.innerHTML = rep
+        ? `<div class="msg assistant">${md(rep)}</div>`
+        : `<div class="thread-empty">该任务已结束，暂无可读取的历史会话记录。</div>`;
+      return;
+    }
+    primeThread(wdThreadEl, "h:" + past.id);
+    try {
+      const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
+      if (past.machine) q.set("machine", past.machine);
+      const r = await api("/api/transcript?" + q);
+      if (seq !== wdSeq || !activeWorkerKey) return;
+      resetEarlier(wdThreadEl, (c) => `/api/transcript?${q}&before=${c}`);
+      wdThreadEl._msgs = r.messages || [];
+      wdThreadEl._liveEarlier = r.earlier || 0;
+      keepThread("h:" + past.id, wdThreadEl._msgs);
+      wdThreadEl._redraw = () => { if (seq === wdSeq && activeWorkerKey) drawThread(threadMsgs(wdThreadEl), wdThreadEl, "这个任务会话没有消息记录。"); };
+      wdThreadEl._redraw();
+    } catch (err) {
+      if (seq !== wdSeq || !activeWorkerKey) return;
+      const rep = supW?.last_report || "";
+      wdThreadEl.innerHTML = rep
+        ? `<div class="msg assistant">${md(rep)}</div>`
+        : `<div class="thread-empty">${esc(err.message || "暂时读不到历史记录")}</div>`;
+    }
+  }
+  function openWorkerDrawerStream() {
+    closeWorkerDrawerStream();
+    const { supW, livePaneId, liveAgent, past } = resolveWorkerContext();
+    wdPaneId = livePaneId;
+    applyWdModeUI();
+    if (!liveAgent || !livePaneId) {
+      loadWdHistory(past, supW);
+      return;
+    }
+    const id = livePaneId;
+    const m = curWdMode();
+    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (m === "chat") {
+      resetWdChat();
+      resetEarlier(wdThreadEl, (c) => paneURL(id, "earlier") + "?before=" + c);
+      primeThread(wdThreadEl, "p:" + id);
+      const alive = () => !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
+      wdThreadEl._redraw = () => alive() && drawThread(threadMsgs(wdThreadEl), wdThreadEl, "等待任务输出…");
+      wdStream = openES(paneURL(id, "chat"));
+      const showPane = (msgs) => { keepThread("p:" + id, msgs); drawThread(msgs, wdThreadEl, "等待任务输出…"); };
+      wdStream.addEventListener("reset", () => alive() && resetWdChat());
+      wdStream.addEventListener("patch", (e) => alive() && showPane(applyPatch(wdThreadEl, JSON.parse(e.data))));
+      wdStream.addEventListener("messages", (e) => alive() && drawThread(JSON.parse(e.data), wdThreadEl, "等待任务输出…"));
+      wdStream.addEventListener("log", (e) => {
+        if (!alive()) return;
+        const txt = JSON.parse(e.data).text || "";
+        const was = nearBottom(wdThreadEl) || !wdThreadEl.childElementCount;
+        wdThreadEl.innerHTML = `<div class="fallback-note">暂无结构化对话记录，显示实时终端输出</div><pre class="termcard">${esc(cleanLog(txt))}</pre>`;
+        stick(wdThreadEl, was);
+      });
+      wdStream.addEventListener("live", (e) => alive() && drawWdLive(JSON.parse(e.data)));
+      wdStream.addEventListener("gone", () => {
+        if (wdGoneEl) wdGoneEl.hidden = false;
+        closeWorkerDrawerStream();
+        syncWorkerDrawerMeta();
+      });
+      return;
+    }
+    if (m === "screen") {
+      ensureWdTerm();
+      resetWdScreen();
+    } else if (wdLogEl) {
+      wdLogEl.textContent = "";
+    }
+    wdStream = openES(paneURL(id, "stream") + "?mode=" + m);
+    wdStream.addEventListener("frame", (e) => {
+      if (!activeWorkerKey || wdPaneId !== id) return;
+      const f = JSON.parse(e.data);
+      if (m === "screen") drawWdScreen(f);
+      else if (wdLogEl) {
+        const atBottom = wdLogEl.scrollHeight - wdLogEl.scrollTop - wdLogEl.clientHeight < 40;
+        wdLogEl.textContent = cleanLog(f.text || "");
+        if (atBottom) { wdLogEl.scrollTop = wdLogEl.scrollHeight; if (wdJumpBtn) wdJumpBtn.hidden = true; }
+        else if (wdJumpBtn) wdJumpBtn.hidden = false;
+      }
+    });
+    wdStream.addEventListener("gone", () => {
+      if (wdGoneEl) wdGoneEl.hidden = false;
+      closeWorkerDrawerStream();
+      syncWorkerDrawerMeta();
+    });
+  }
+  function openWorkerDrawer(opts = {}) {
+    if (!wdDrawer) return;
+    const worker = String(opts.worker || "").trim();
+    const paneHint = String(opts.paneId || "").trim();
+    if (!worker && !paneHint) return;
+    const appEl = $("#app");
+    const hadWorker = !!appEl.classList.contains("has-worker");
+    const wasAnyDrawer = isAnyRightDrawerOpen();
+    const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
+    const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc && !hadWorker ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    if (appEl.classList.contains("has-file")) closeFilePane({ immediate: true, switching: true });
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
+    clearTimeout(wdHideTimer);
+    resetDrawerMotion(wdDrawer);
+    const nextKey = worker || paneHint;
+    const switchedTarget = activeWorkerKey !== nextKey;
+    activeWorkerKey = nextKey;
+    wdWorkerName = worker;
+    wdPaneId = paneHint || (worker ? paneOf(worker) || "" : "");
+    wdHistId = opts.histId || "";
+    wdFromThread = opts.fromThreadRoot || "";
+    wdTaskTitle = opts.title || "";
+    wdTaskNote = opts.note || "";
+    if (opts.mode && ["chat", "screen", "log"].includes(opts.mode)) wdMode = opts.mode;
+    // Default read-only peek mode: never keep bottom composer permanently open on open/switch (#t12601).
+    wdComposerOpen = false;
+    wdComposerEl?._clearFiles?.();
+    if (wdInputEl) wdInputEl.value = "";
+    wdSummaryEl?.classList?.remove("is-expanded");
+    if (wdModelEl) wdModelEl._key = "";
+
+    applyWorkerWidth();
+    const nextW = _lastWorkerW || _lastDrawerW || 480;
+    if (wdDrawer.hidden) { wdDrawer.hidden = false; wdDrawer.offsetWidth; }
+    if (wdScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
+    wdDrawer.setAttribute("aria-hidden", "false");
+    appEl.classList.add("has-worker");
+    syncWorkerWidenUI();
+    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && innerWidth > THREAD_DESKTOP_MIN });
+    if (!hadWorker || switchedTarget) {
+      if (!wasAnyDrawer && !hadWorker) {
+        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
+        if (!glided) playDrawerTransition(wdDrawer, false);
+      } else {
+        if (wasAnyDrawer && nextW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW });
+        else if (wasAnyDrawer && nextW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW });
+        playDrawerTransition(wdDrawer, true);
+      }
+    }
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
+    }
+    syncWorkerDrawerMeta();
+    syncWorkerSendBtn();
+    openWorkerDrawerStream();
+  }
+  function closeWorkerDrawer(opts = {}) {
+    if (!wdDrawer) return;
+    const appEl = $("#app");
+    const hadWorker = appEl.classList.contains("has-worker");
+    const wasOpen = !!activeWorkerKey || !wdDrawer.hidden;
+    const switching = !!opts.switching;
+    const sc = wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
+    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    const closingW = _lastWorkerW || _lastDrawerW || 480;
+    const startOffset = !switching && hadWorker ? captureCollieVisualShift(true, closingW) : 0;
+    if (switching) finishDrawerGlide(true);
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && innerWidth > THREAD_DESKTOP_MIN && !wdDrawer.hidden;
+
+    wdSeq++;
+    closeWorkerDrawerStream();
+    activeWorkerKey = null;
+    wdPaneId = "";
+    wdWorkerName = "";
+    wdHistId = "";
+    wdFromThread = "";
+    wdTaskTitle = "";
+    wdTaskNote = "";
+    wdComposerOpen = false;
+    if (desktopCloseAnim) {
+      resetDrawerMotion(wdDrawer);
+      wdDrawer.style.setProperty("--drawer-close-w", closingW + "px");
+      wdDrawer.classList.add("is-closing");
+    } else {
+      resetDrawerMotion(wdDrawer);
+    }
+    if (wdScrim) wdScrim.style.opacity = "";
+    appEl.classList.remove("has-worker");
+    if (!switching) syncAppDrawerClasses();
+    syncWorkerWidenUI();
+    if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim });
+    wdDrawer.setAttribute("aria-hidden", "true");
+    if (lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
+    }
+    clearTimeout(wdHideTimer);
+    const hideNow = () => {
+      resetDrawerMotion(wdDrawer);
+      wdDrawer.hidden = true;
+      if (wdScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = true; }
+    };
+    if (opts.immediate || switching || reduced) {
+      hideNow();
+    } else if (desktopCloseAnim) {
+      const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
+        ? computeCollieShiftPx(280) : 0;
+      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: wdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      if (!glided) wdHideTimer = setTimeout(hideNow, 170);
+    } else {
+      wdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 260);
+    }
+  }
+
+  if (wdDrawer) {
+    wdCloseBtn?.addEventListener("click", () => closeWorkerDrawer());
+    wdScrim?.addEventListener("click", () => closeWorkerDrawer());
+    bindDrawerSheetDrag(wdDrawer, wdScrim, [$("#wd-handle"), wdDrawer.querySelector(".wd-head")], () => !!activeWorkerKey, () => closeWorkerDrawer());
+    wdWidenBtn?.addEventListener("click", () => {
+      if (innerWidth <= THREAD_DESKTOP_MIN || !activeWorkerKey) return;
+      finishDrawerGlide(true);
+      const prevW = _lastWorkerW || _lastDrawerW || 480;
+      const sc = view === "collie" ? viewScroller("collie") : null;
+      const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+      workerWide = !workerWide;
+      applyWorkerWidth();
+      const nextW = _lastWorkerW || _lastDrawerW || 480;
+      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
+      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
+      if (curWdMode() === "screen") requestAnimationFrame(() => fitWdTerm());
+      if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
+    });
+    wdPopoutBtn?.addEventListener("click", (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      closeWorkerDrawer({ immediate: true });
+    });
+    wdSummaryTextEl?.addEventListener("click", () => {
+      wdSummaryEl?.classList?.toggle("is-expanded");
+    });
+    wdModeSegEl?.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-wd-mode]");
+      if (!b || !activeWorkerKey) return;
+      const nextM = b.dataset.wdMode;
+      if (!nextM || nextM === curWdMode()) return;
+      wdMode = nextM;
+      store.set("wdMode", nextM);
+      applyWdModeUI();
+      openWorkerDrawerStream();
+    });
+    wdThreadBtn?.addEventListener("click", () => {
+      const rootId = wdThreadBtn.dataset.wdThread || "";
+      if (rootId) openThreadDrawer(rootId, "", "");
+    });
+    wdInterruptBtn?.addEventListener("click", () => {
+      if (wdPaneId) sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+    });
+    wdInterjectBtn?.addEventListener("click", () => {
+      if (!wdPaneId) return;
+      wdComposerOpen = true;
+      syncWorkerComposerUI();
+      syncWorkerSendBtn();
+      wdInputEl?.focus({ preventScroll: true });
+    });
+    wdCollapseBtn?.addEventListener("click", () => {
+      wdComposerOpen = false;
+      syncWorkerComposerUI();
+    });
+    wdKbdToggleBtn?.addEventListener("click", () => {
+      const on = wdKeysEl?.classList.toggle("open");
+      wdKbdToggleBtn.classList.toggle("on", !!on);
+      wdKbdToggleBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    wdKeysEl?.addEventListener("mousedown", (e) => e.preventDefault());
+    wdKeysEl?.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b || !wdPaneId) return;
+      if (b.dataset.k) sendToTargetPane(wdPaneId, "keys", { keys: [b.dataset.k] });
+      else if (b.dataset.t) sendToTargetPane(wdPaneId, "text", { text: b.dataset.t });
+    });
+    wdLiveEl?.addEventListener("mousedown", (e) => { if (e.target.closest(".ask button")) e.preventDefault(); });
+    wdLiveEl?.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b || !wdPaneId) return;
+      if (b.hasAttribute("data-raw")) { wdShowRaw = !wdShowRaw; if (wdLastLive) drawWdLive(wdLastLive); return; }
+      const ask = b.closest(".ask");
+      if (ask?.dataset.busy) return;
+      let p;
+      if (b.dataset.choice != null) {
+        const c = wdLastLive?.approval?.choices?.[+b.dataset.choice];
+        if (!c) return;
+        if (c.keys?.length) p = sendToTargetPane(wdPaneId, "keys", { keys: c.keys });
+        else if (c.text) p = sendToTargetPane(wdPaneId, "text", { text: c.text });
+        else p = sendToTargetPane(wdPaneId, "keys", { keys: ["enter"] });
+      } else if (b.dataset.k) {
+        p = sendToTargetPane(wdPaneId, "keys", { keys: [b.dataset.k] });
+      } else return;
+      if (ask) {
+        ask.dataset.busy = "1";
+        ask.style.opacity = ".5";
+        Promise.resolve(p).finally(() => setTimeout(() => { if (wdLiveEl) wdLiveEl._html = ""; }, 600));
+      }
+    });
+    wdLogEl?.addEventListener("scroll", () => {
+      if (curWdMode() !== "log" || !wdJumpBtn) return;
+      wdJumpBtn.hidden = wdLogEl.scrollHeight - wdLogEl.scrollTop - wdLogEl.clientHeight < 40;
+    }, { passive: true });
+    wdJumpBtn?.addEventListener("click", () => {
+      if (curWdMode() === "screen") {
+        if (wdTerm?.scrollToBottom) wdTerm.scrollToBottom();
+        else if (wdScreenEl) wdScreenEl.scrollTop = wdScreenEl.scrollHeight;
+        wdJumpBtn.hidden = true;
+        if (wdPendingScreen) { const p = wdPendingScreen; wdPendingScreen = null; drawWdScreen(p); }
+      } else if (wdLogEl) {
+        wdLogEl.scrollTop = wdLogEl.scrollHeight;
+        wdJumpBtn.hidden = true;
+      }
+    });
+    if (wdComposerEl && wdInputEl) {
+      wdComposerCtrl = bindComposer(wdComposerEl, wdInputEl, async (text) => {
+        if (!wdPaneId) return;
+        await sendMessageToPane(wdPaneId, text);
+      }, () => (wdPaneId || "").includes("@") ? wdPaneId.slice(wdPaneId.lastIndexOf("@") + 1) : "", {
+        sendBtn: wdSendBtn,
+        syncSendBtn: syncWorkerSendBtn,
+        trim: true,
+      });
+    }
+    wdGripEl?.addEventListener("pointerdown", (e) => {
+      if (innerWidth <= THREAD_DESKTOP_MIN) return;
+      e.preventDefault();
+      finishDrawerGlide(true);
+      const grip = e.currentTarget;
+      grip.setPointerCapture(e.pointerId);
+      document.body.classList.add("dragging");
+      const sc = view === "collie" ? viewScroller("collie") : null;
+      const dragSnap = sc ? captureColliePos(sc) : null;
+      const max = workerMax();
+      const move = (ev) => {
+        workerWide = false;
+        const nextW = Math.max(380, Math.min(Math.round(innerWidth - ev.clientX), max));
+        if (nextW === _lastWorkerW) return;
+        setWorkerW(nextW);
+        syncWorkerWidenUI();
+        if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
+      };
+      const up = () => {
+        grip.removeEventListener("pointermove", move);
+        grip.removeEventListener("pointerup", up);
+        grip.removeEventListener("pointercancel", up);
+        document.body.classList.remove("dragging");
+        store.set("workerW", _lastWorkerW || 480);
+        if (curWdMode() === "screen") requestAnimationFrame(() => fitWdTerm());
+        if (dragSnap && sc && view === "collie") applyColliePos(sc, dragSnap);
+      };
+      grip.addEventListener("pointermove", move);
+      grip.addEventListener("pointerup", up, { once: true });
+      grip.addEventListener("pointercancel", up, { once: true });
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !activeWorkerKey || wdDrawer.hidden) return;
+      if (e.isComposing || e.keyCode === 229) return;
+      if (superSearchOpen || document.querySelector("dialog[open]") || pickOpen || dirCtx) return;
+      e.preventDefault();
+      if (wdComposerOpen && document.activeElement === wdInputEl && !String(wdInputEl?.value || "").trim()) {
+        wdComposerOpen = false;
+        syncWorkerComposerUI();
+        return;
+      }
+      closeWorkerDrawer();
+    });
   }
 
   // Minimal, safe Markdown: escape first, then add a little structure.
@@ -18354,18 +19975,22 @@
     "\x1b[H": "home", "\x1b[F": "end", "\x1b[3~": "delete", "\x1b[5~": "pageup", "\x1b[6~": "pagedown",
     "\x1bOA": "up", "\x1bOB": "down", "\x1bOC": "right", "\x1bOD": "left",
   };
+  function typeIntoSpecificPane(paneId, data) {
+    if (!paneId) return;
+    if (SEQ[data]) return sendToTargetPane(paneId, "keys", { keys: [SEQ[data]] });
+    if (data.length === 1 && data.charCodeAt(0) < 27) return sendToTargetPane(paneId, "keys", { keys: ["ctrl+" + String.fromCharCode(data.charCodeAt(0) + 96)] });
+    sendToTargetPane(paneId, "text", { text: data });
+  }
   function typeIntoPane(data) {
     if (!current) return;
-    if (SEQ[data]) return sendKeys([SEQ[data]]);
-    if (data.length === 1 && data.charCodeAt(0) < 27) return sendKeys(["ctrl+" + String.fromCharCode(data.charCodeAt(0) + 96)]);
-    sendText(data);
+    typeIntoSpecificPane(current, data);
   }
   // Keystrokes go out one request at a time, in order; text typed while one
   // is on its way rides along in the next.
   let sendChain = Promise.resolve(), sendTail = null;
-  function sendToPane(kind, body) {
-    if (!current) return;
-    const url = paneURL(current, kind);
+  function sendToTargetPane(paneId, kind, body) {
+    if (!paneId) return;
+    const url = paneURL(paneId, kind);
     if (kind === "text" && sendTail && sendTail.url === url && !sendTail.started) {
       sendTail.body.text += body.text;
       return sendTail.done;
@@ -18378,6 +20003,24 @@
     }).catch((e) => toast(e.message));
     sendTail = kind === "text" ? op : null;
     return op.done;
+  }
+  function sendToPane(kind, body) {
+    return sendToTargetPane(current, kind, body);
+  }
+  async function sendMessageToPane(paneId, text) {
+    if (!paneId) return;
+    let v = find(paneId);
+    if (!v) {
+      try { setLocalState(await api("/api/state")); renderSide(); } catch {}
+      v = find(paneId) || { pane_id: paneId, is_agent: false };
+    }
+    if (!text.trim()) { sendToTargetPane(paneId, "keys", { keys: ["enter"] }); return; }
+    try {
+      if (v.is_agent) await api(`/api/agents/${encodeURIComponent(paneId)}/prompt`, { body: { text } });
+      else await api(paneURL(paneId, "text"), { body: { text, enter: true } });
+    } catch (err) {
+      throw new Error(err.message.includes("blocked") ? "agent 正在等你确认，先处理上面的确认卡片" : err.message);
+    }
   }
   const sendKeys = (keys) => sendToPane("keys", { keys });
   const sendText = (text) => sendToPane("text", { text });
@@ -19459,7 +21102,11 @@
     if (dirty) {
       history.replaceState(history.state, "", location.pathname + nextSearch + nextHash);
     }
-    if (found) pendingPeerInvite = found;
+    if (found) {
+      const norm = extractPeerInviteCode(found);
+      found = isCanonicalPeerInvite(norm) ? norm : found;
+      pendingPeerInvite = found;
+    }
     return found;
   }
   addEventListener("hashchange", () => {

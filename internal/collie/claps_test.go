@@ -393,9 +393,11 @@ const cssSrc = fs.readFileSync("web/app.css", "utf8");
 const appSrc = fs.readFileSync("web/app.js", "utf8");
 const demoSrc = fs.readFileSync("scripts/demo/demo.js", "utf8");
 
-// 1) Strict monochrome SVG aesthetic audit: zero colored system emoji in clap icon/UI.
+// 1) Strict monochrome SVG aesthetic audit: fine-line thumbs-up SVG (zero heart, zero colored system emoji).
 const clapSection = appSrc.slice(appSrc.indexOf("const ICON_CLAP"), appSrc.indexOf("const ICON_COPY"));
 assert.ok(clapSection.includes("<svg") && clapSection.includes('class="clap-ico"'), "ICON_CLAP must be an original monochrome inline SVG");
+assert.ok(clapSection.includes('class="clap-body"') && clapSection.includes('class="clap-seam"') && clapSection.includes("M7 10v12"), "ICON_CLAP must use crisp fine-line thumbs-up SVG with cuff seam");
+assert.ok(!clapSection.includes("M12 19.6C8.5 16.9"), "ICON_CLAP must not use legacy heart SVG path");
 for (const forbidden of ["👍", "👏", "❤️", "❤", "🎉", "🔥"]) {
   assert.ok(!clapSection.includes(forbidden), "clap icon must not contain emoji " + forbidden);
 }

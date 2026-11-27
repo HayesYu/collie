@@ -52,6 +52,14 @@
   --swatch-pine: #156f49;
   --swatch-ink: #18181b;
   --pin: #475569;
+  --pin-bar-bg: #f7f7f6;
+  --pin-bar-bg-hover: #f1f1ef;
+  --pin-bar-line: rgba(17, 17, 17, .07);
+  --pin-bar-line-hover: rgba(17, 17, 17, .125);
+  --pin-bar-shadow: 0 1px 2px rgba(0, 0, 0, .035), inset 0 1px 0 rgba(255, 255, 255, .72);
+  --pin-list-bg: #ffffff;
+  --pin-list-line: rgba(17, 17, 17, .09);
+  --pin-list-shadow: 0 8px 26px rgba(0, 0, 0, .085), 0 1px 3px rgba(0, 0, 0, .05);
   --ok: #15803d;
   --term-bg: #fbfbfa;
   --term-fg: #1b1b1b;
@@ -114,6 +122,14 @@
     --swatch-pine: #4eb889;
     --swatch-ink: #dcdcd9;
     --pin: #8f9fb3;
+    --pin-bar-bg: #18181c;
+    --pin-bar-bg-hover: #1e1e23;
+    --pin-bar-line: rgba(255, 255, 255, .075);
+    --pin-bar-line-hover: rgba(255, 255, 255, .13);
+    --pin-bar-shadow: 0 1px 2px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .035);
+    --pin-list-bg: #1a1a1f;
+    --pin-list-line: rgba(255, 255, 255, .09);
+    --pin-list-shadow: 0 10px 30px rgba(0, 0, 0, .52), 0 2px 6px rgba(0, 0, 0, .32), inset 0 1px 0 rgba(255, 255, 255, .04);
     --ok: #58c285;
     --term-bg: #131316;
     --term-fg: #e6e6e3;
@@ -166,6 +182,14 @@
   --swatch-pine: #4eb889;
   --swatch-ink: #dcdcd9;
   --pin: #8f9fb3;
+  --pin-bar-bg: #18181c;
+  --pin-bar-bg-hover: #1e1e23;
+  --pin-bar-line: rgba(255, 255, 255, .075);
+  --pin-bar-line-hover: rgba(255, 255, 255, .13);
+  --pin-bar-shadow: 0 1px 2px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .035);
+  --pin-list-bg: #1a1a1f;
+  --pin-list-line: rgba(255, 255, 255, .09);
+  --pin-list-shadow: 0 10px 30px rgba(0, 0, 0, .52), 0 2px 6px rgba(0, 0, 0, .32), inset 0 1px 0 rgba(255, 255, 255, .04);
   --ok: #58c285;
   --term-bg: #131316;
   --term-fg: #e6e6e3;
@@ -1054,8 +1078,9 @@ html.is-idle .working-row .wk-t {
 .msg-acts button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
 .msg-acts button:hover { background: var(--bg-2, rgba(127,127,127,.12)); color: var(--fg); }
 .msg-acts button:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 35%, transparent); outline-offset: 1px; }
+.msg-acts button.pin-btn svg { stroke-width: 1.6; }
 .msg-acts button.pin-btn.on { color: var(--pin); }
-.msg-acts button.pin-btn.on .pin-body { fill: color-mix(in srgb, currentColor 22%, transparent); }
+.msg-acts button.pin-btn.on .pin-body { fill: color-mix(in srgb, currentColor 18%, transparent); }
 .msg-acts button.focus-btn.active { color: var(--fg); background: var(--bg-3); }
 .msg-acts svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .msg-acts .t { margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -1269,11 +1294,11 @@ html.is-idle .working-row .wk-t {
 }
 .pin-ind {
   display: inline-flex; align-items: center; gap: 4px; margin: 0 0 4px;
-  font-size: 11.5px; line-height: 16px; color: var(--pin); user-select: none;
+  font-size: 11.5px; font-weight: 500; line-height: 16px; color: var(--pin); user-select: none;
 }
 #v-collie .mine > .pin-ind { margin: 0 4px 3px 0; }
-.pin-ind svg { width: 12.5px; height: 12.5px; stroke-width: 1.85; }
-.pin-ind .pin-body { fill: color-mix(in srgb, currentColor 18%, transparent); }
+.pin-ind svg { width: 13px; height: 13px; stroke-width: 1.6; }
+.pin-ind .pin-body { fill: none; }
 @media (hover: none) {
   .msg-acts, #v-collie .mine .msg-acts { display: none; margin-bottom: 0; }
   #v-collie .msg.show-time .msg-acts, #v-collie .mine .msg.show-time + .msg-acts,
@@ -1927,84 +1952,155 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   .super-jump:focus-visible { outline-color: Highlight; }
   .super-jump .sj-badge { background: Highlight; color: HighlightText; border: 1px solid Canvas; }
 }
-.pending-wrap { position: relative; margin-bottom: 6px; min-width: 0; }
+.pending-wrap { position: relative; margin-bottom: 8px; min-width: 0; }
 .pending-bar {
-  display: flex; align-items: center; min-width: 0; height: 32px;
-  border: 1px solid var(--line); border-radius: 11px;
-  background: color-mix(in oklab, var(--bg-2) 55%, var(--bg)); box-shadow: var(--shadow-sm);
-  overflow: hidden; transition: border-color .15s, background .15s;
+  display: flex; align-items: center; gap: 2px; min-width: 0; min-height: 34px;
+  padding: 0 4px 0 0;
+  border: 1px solid var(--pin-bar-line); border-radius: 10px;
+  background: var(--pin-bar-bg); box-shadow: var(--pin-bar-shadow);
+  transition: border-color .15s ease, background-color .15s ease;
 }
 .pending-bar:hover, .pending-wrap.open .pending-bar {
-  border-color: var(--line-2);
-  background: var(--bg-2);
+  border-color: var(--pin-bar-line-hover);
+  background: var(--pin-bar-bg-hover);
 }
-.pending-wrap.pin-only .pending-label { color: var(--fg-2); font-weight: 500; }
 .pending-pin-ico, .pending-both-pin {
   display: inline-grid; place-items: center; flex: none; color: var(--pin);
 }
-.pending-pin-ico svg { width: 13px; height: 13px; stroke-width: 1.85; }
-.pending-both-pin svg { width: 12px; height: 12px; stroke-width: 1.85; margin-left: -2px; }
-.pending-pin-ico .pin-body, .pending-both-pin .pin-body { fill: color-mix(in srgb, currentColor 20%, transparent); }
+.pending-pin-ico svg { width: 14px; height: 14px; stroke-width: 1.6; }
+.pending-both-pin svg { width: 13px; height: 13px; stroke-width: 1.6; margin-left: -1px; }
+.pending-pin-ico .pin-body, .pending-both-pin .pin-body { fill: none; }
 .pending-main {
-  flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px;
-  padding: 0 10px 0 11px; border: 0; background: none; text-align: left; font-size: 12.5px; color: var(--fg-2);
+  flex: 1; min-width: 0; min-height: 32px; display: flex; align-items: center; gap: 8px;
+  padding: 0 6px 0 11px; border: 0; border-radius: 9px; background: none;
+  text-align: left; font-size: 12.5px; line-height: 1.35; color: var(--fg-2);
+  transition: color .14s ease;
 }
 .pending-dot {
-  width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--attn);
+  width: 6.5px; height: 6.5px; border-radius: 50%; flex: none; background: var(--attn);
   box-shadow: 0 0 0 2.5px color-mix(in oklab, var(--attn) 18%, transparent);
 }
-.pending-dot.neutral {
-  background: var(--fg-3);
-  box-shadow: none;
+.pending-label { flex: none; font-weight: 550; color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pending-sep { flex: none; color: var(--fg-3); margin: 0 -2px; }
+.pending-sum {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: color-mix(in oklab, var(--fg) 42%, var(--fg-2));
+  transition: color .14s ease;
 }
-.pending-label { flex: none; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pending-sep { flex: none; color: var(--fg-3); }
-.pending-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
 .pending-main:hover .pending-sum { color: var(--fg); }
-.pending-chev { width: 14px; height: 14px; flex: none; color: var(--fg-3); stroke-width: 1.8; margin-left: 2px; transition: transform .16s ease, color .15s; }
-.pending-wrap.open .pending-chev { transform: rotate(180deg); color: var(--fg-2); }
-.pending-x {
-  flex: none; width: 30px; height: 100%; display: grid; place-items: center;
-  border: 0; border-left: 1px solid var(--line);
-  background: none; color: var(--fg-3); padding: 0; transition: background .12s, color .12s;
+.pending-main:hover .pending-pin-ico { color: color-mix(in oklab, var(--pin) 78%, var(--fg)); }
+.pending-more {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+  min-width: 26px; min-height: 26px; padding: 0 7px 0 8px;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--fg-3); font: 500 12px/1 var(--sans); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: background-color .14s ease, color .14s ease, transform .12s ease;
 }
-.pending-x svg { width: 13px; height: 13px; stroke-width: 1.9; }
-.pending-x:hover { background: var(--bg-3); color: var(--fg); }
+.pending-more:hover, .pending-wrap.open .pending-more {
+  background: color-mix(in oklab, var(--fg) 7%, transparent);
+  color: var(--fg);
+}
+.pending-count { line-height: 1; }
+.pending-chev {
+  width: 13px; height: 13px; flex: none; color: currentColor; stroke-width: 1.7;
+  opacity: .78; transition: transform .16s ease, opacity .14s ease;
+}
+.pending-wrap.open .pending-chev { transform: rotate(180deg); opacity: 1; }
+.pending-x {
+  flex: none; min-width: 26px; min-height: 26px; width: 26px; height: 26px;
+  display: grid; place-items: center; padding: 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--fg-3);
+  opacity: .38;
+  transition: opacity .15s ease, background-color .14s ease, color .14s ease, transform .12s ease;
+}
+.pending-x svg { width: 13px; height: 13px; stroke-width: 1.7; }
+.pending-bar:hover .pending-x,
+.pending-bar:focus-within .pending-x {
+  opacity: .8;
+  color: var(--fg-2);
+}
+.pending-bar .pending-x:hover,
+.pending-bar .pending-x:focus-visible {
+  opacity: 1;
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
 .pending-list {
   position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 25;
-  max-height: min(172px, 36vh); overflow-y: auto; overscroll-behavior: contain;
-  background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px;
-  box-shadow: var(--shadow-lg); padding: 4px; animation: pending-up .14s ease-out;
+  max-height: min(184px, 36vh); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--pin-list-bg); border: 1px solid var(--pin-list-line); border-radius: 10px;
+  box-shadow: var(--pin-list-shadow); padding: 4px;
+  transform-origin: bottom center;
 }
-@keyframes pending-up { from { opacity: 0; transform: translateY(4px); } }
-.pending-item { display: flex; align-items: center; min-width: 0; border-radius: 8px; transition: background .12s; }
-.pending-item:hover { background: var(--bg-2); }
+.pending-list-sep {
+  height: 1px; margin: 4px 8px;
+  background: var(--pin-bar-line);
+}
+@keyframes pending-up {
+  from { opacity: 0; transform: translateY(4px) scale(.985); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pending-list { animation: pending-up .14s ease-out; }
+  .pending-x:active, .pending-more:active { transform: scale(.93); }
+}
+.pending-item {
+  display: flex; align-items: center; gap: 2px; min-width: 0; padding-right: 3px;
+  border-radius: 7px; transition: background-color .12s ease;
+}
+.pending-item:hover { background: color-mix(in oklab, var(--fg) 5%, transparent); }
+.pending-item.is-active { background: color-mix(in oklab, var(--fg) 4.5%, transparent); }
+.pending-item.is-active:hover { background: color-mix(in oklab, var(--fg) 6.5%, transparent); }
 .pending-jump {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
-  padding: 8px 6px 8px 10px; border: 0; background: none; text-align: left; font-size: 13px; color: var(--fg);
+  padding: 7px 6px 7px 9px; border: 0; border-radius: 7px; background: none;
+  text-align: left; font-size: 12.5px; line-height: 1.35; color: var(--fg);
 }
-.pending-jump .pending-dot { width: 6px; height: 6px; box-shadow: none; opacity: .85; }
-.pending-jump .pending-sum { color: var(--fg); }
-.pending-time { flex: none; font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pending-item .pending-x { width: 28px; height: 28px; margin-right: 3px; border: 0; border-radius: 6px; }
-.pending-item .pending-x:hover { background: var(--bg-3); color: var(--fg); }
-.pending-main:focus-visible, .pending-jump:focus-visible, .pending-x:focus-visible {
-  outline: none; box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--fg) 20%, transparent);
+.pending-jump .pending-dot { width: 6px; height: 6px; box-shadow: none; opacity: .88; }
+.pending-jump .pending-sum { color: color-mix(in oklab, var(--fg) 62%, var(--fg-2)); }
+.pending-item:hover .pending-jump .pending-sum,
+.pending-item.is-active .pending-jump .pending-sum { color: var(--fg); }
+.pending-time { flex: none; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pending-item .pending-x { width: 26px; height: 26px; opacity: .34; }
+.pending-item:hover .pending-x,
+.pending-item:focus-within .pending-x { opacity: .8; color: var(--fg-2); }
+.pending-item .pending-x:hover,
+.pending-item .pending-x:focus-visible {
+  opacity: 1;
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+.pending-main:focus-visible,
+.pending-more:focus-visible,
+.pending-jump:focus-visible,
+.pending-x:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--fg) 42%, transparent);
+  outline-offset: -2px;
+}
+@media (hover: none) and (pointer: coarse), (max-width: 760px) {
+  .pending-x,
+  .pending-item .pending-x { opacity: .84; color: var(--fg-2); }
 }
 @media (forced-colors: active) {
+  .pending-bar, .pending-list { border-color: ButtonBorder; }
   .pending-dot { background: Highlight; box-shadow: none; forced-color-adjust: none; }
-  .pending-dot.neutral { background: GrayText; }
+  .pending-pin-ico, .pending-both-pin { color: CanvasText; }
+  .pending-main:focus-visible,
+  .pending-more:focus-visible,
+  .pending-jump:focus-visible,
+  .pending-x:focus-visible { outline-color: Highlight; }
 }
-@media (pointer: coarse) {
-  .pending-bar { height: 36px; border-radius: 12px; }
-  .pending-main { font-size: 13px; padding: 0 10px 0 12px; }
-  .pending-x { width: 36px; }
-  .pending-list { max-height: min(196px, 38vh); }
-  .pending-jump { padding: 10px 6px 10px 10px; font-size: 13.5px; }
-  .pending-item .pending-x { width: 32px; height: 32px; }
+@media (pointer: coarse), (max-width: 760px) {
+  .pending-bar { min-height: 38px; border-radius: 10px; padding: 0 4px 0 0; }
+  .pending-main { min-height: 36px; font-size: 13px; padding: 0 6px 0 12px; gap: 8px; }
+  .pending-more { min-height: 32px; padding: 0 8px 0 9px; border-radius: 7px; font-size: 12.5px; }
+  .pending-x { min-width: 32px; min-height: 32px; width: 32px; height: 32px; border-radius: 7px; }
+  .pending-list { max-height: min(204px, 38vh); }
+  .pending-jump { padding: 9px 6px 9px 10px; font-size: 13px; }
+  .pending-item .pending-x { min-width: 32px; min-height: 32px; width: 32px; height: 32px; border-radius: 7px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pending-chev { transition: none; }
+  .pending-bar, .pending-main, .pending-sum, .pending-more, .pending-chev, .pending-x, .pending-item { transition: none; }
   .pending-list { animation: none; }
 }
 .cbox {

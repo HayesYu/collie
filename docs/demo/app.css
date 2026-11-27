@@ -831,20 +831,16 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 .time-sep { margin: 18px 0 6px; text-align: center; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .unread-sep {
   display: flex; align-items: center; gap: 10px;
-  color: var(--attn);
+  color: color-mix(in srgb, var(--fg-3) 76%, var(--fg-2));
   font: 500 11.5px/1.2 var(--sans); letter-spacing: .02em;
   user-select: none;
 }
 .unread-sep::before, .unread-sep::after {
   content: ""; flex: 1; height: 1px;
-  background: linear-gradient(to right, transparent, color-mix(in oklab, var(--attn) 36%, transparent) 22%, color-mix(in oklab, var(--attn) 36%, transparent));
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--line-2) 68%, var(--line)) 22%, color-mix(in srgb, var(--line-2) 68%, var(--line)));
 }
 .unread-sep::after {
-  background: linear-gradient(to left, transparent, color-mix(in oklab, var(--attn) 36%, transparent) 22%, color-mix(in oklab, var(--attn) 36%, transparent));
-}
-@media (forced-colors: active) {
-  .unread-sep { color: Highlight; }
-  .unread-sep::before, .unread-sep::after { background: Highlight; }
+  background: linear-gradient(to left, transparent, color-mix(in srgb, var(--line-2) 68%, var(--line)) 22%, color-mix(in srgb, var(--line-2) 68%, var(--line)));
 }
 .unread-sep span { flex: none; padding: 0 2px; }
 .thread > .unread-sep { margin-top: 22px; }
@@ -1339,10 +1335,63 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .cbar .spacer { flex: 1; }
 /* The dispatch chips scroll sideways on narrow screens; send stays put. */
 .cbar .chips { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none; }
-@media (max-width: 760px) { .cbar .chips { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); } }
+.cbar .chips.is-collapsed { overflow: visible; }
+@media (max-width: 760px) {
+  .cbar .chips:not(.is-collapsed) { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
+}
 .cbar .chips::-webkit-scrollbar { display: none; }
 .cbar .chips > * { flex: none; }
+.cbar .chips.is-collapsed > .dispatch-pill { flex: 0 1 auto; min-inline-size: 0; }
 .cbar > .send, .cbar > .attach { flex: none; }
+.dispatch-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-block-size: 28px; max-inline-size: min(260px, 56vw); min-inline-size: 0;
+  padding: 0 8px 0 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--fg-2);
+  font: 500 12px/1 var(--sans); cursor: pointer; white-space: nowrap;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.dispatch-pill:hover { background: var(--bg-3); border-color: var(--line-2); color: var(--fg); }
+.dispatch-pill:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 42%, transparent); outline-offset: -2px; }
+.dispatch-pill[aria-expanded="true"] {
+  background: var(--bg-3); border-color: var(--line-2); color: var(--fg);
+}
+.dispatch-pill.is-override {
+  background: var(--bg-3); border-color: color-mix(in srgb, var(--fg-3) 55%, var(--line-2)); color: var(--fg);
+}
+.dispatch-pill .dp-lbl {
+  min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dispatch-pill .dp-chev {
+  width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; opacity: .7;
+  transition: transform .16s ease;
+}
+.dispatch-pill[aria-expanded="true"] .dp-chev { transform: rotate(180deg); opacity: .95; }
+.dispatch-controls { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.dispatch-controls[hidden] { display: none !important; }
+.dispatch-reset {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-block-size: 26px; padding: 0 8px; border-radius: 999px; flex: none;
+  border: 1px solid transparent; background: transparent; color: var(--fg-3);
+  font: 500 11.5px/1 var(--sans); cursor: pointer; white-space: nowrap;
+  transition: background .14s, color .14s, border-color .14s;
+}
+.dispatch-reset:hover { background: var(--bg-2); border-color: var(--line); color: var(--fg); }
+.dispatch-reset:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 42%, transparent); outline-offset: -2px; }
+.dispatch-reset[hidden] { display: none !important; }
+.cbar .chips .pick.chip:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 42%, transparent); outline-offset: -2px; }
+@media (max-width: 760px) {
+  .dispatch-pill { max-inline-size: calc(100vw - 178px); padding: 0 7px 0 9px; }
+  .dispatch-reset { padding: 0 6px; }
+}
+@media (pointer: coarse) {
+  .dispatch-pill { min-block-size: 32px; }
+  .dispatch-reset { min-block-size: 30px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dispatch-pill, .dispatch-pill .dp-chev, .dispatch-reset { transition: none; }
+}
 .cbar .icon-btn { width: 32px; height: 32px; }
 .files { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 10px 0; }
 .file {
@@ -3842,7 +3891,12 @@ dialog.int-sheet .seg button {
 
 .int-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; min-width: 0; }
 .int-sec + .int-sec { padding-top: 12px; border-top: 1px solid var(--line); }
-.int-sec-title { margin: 0; font-size: 12px; font-weight: 600; color: var(--fg-3); letter-spacing: .03em; }
+.int-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.int-sec-title { margin: 0; font-size: 12px; font-weight: 600; color: var(--fg-3); letter-spacing: .03em; min-width: 0; }
+.int-swap-btn { flex: none; height: 26px; padding: 0 9px; font-size: 12px; color: var(--fg-2); border: 1px solid var(--line); background: var(--bg); }
+.int-swap-btn:hover { color: var(--fg); border-color: var(--line-2); background: var(--bg-2); }
+.int-swap-btn[aria-expanded="true"] { color: var(--fg); border-color: var(--line-2); background: var(--bg-2); }
+.int-swap-card { margin-top: 2px; }
 .int-field { display: grid; gap: 4px; min-width: 0; }
 .int-field textarea { min-height: 54px; }
 .int-field-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 500; color: var(--fg); }

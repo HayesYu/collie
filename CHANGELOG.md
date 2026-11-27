@@ -4,6 +4,36 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.2.90 (2026-11-27)
+
+### Highlights
+
+- **Feishu `merge_forward` Image/File Auto-Download & Readable Sender Labels**:
+  - Fixed `code=234003` ("File not in msg") failures when downloading images nested inside `merge_forward` messages (`internal/collie/feishu_ws.go`): sub-message image downloads now fall back across enclosing `merge_forward` container `message_id`s and then `im/v1/images/:image_key` so forwarded screenshots land cleanly under `附件：`.
+  - Added safe automatic file attachment downloads (`case "file"`) for standalone messages, `merge_forward` sub-messages (with outer-container fallback), and quoted parent files, enforcing a 25 MiB per-file limit, per-forward count cap, and strict filename/path-traversal sanitization (`0600` temp-dir storage).
+  - Replaced masked raw `ou_…` identifiers inside expanded `merge_forward` transcripts with readable labels: allowlisted owners render as `你`, resolved contacts use their display name, and remaining senders receive stable per-forward labels (`成员 A`, `成员 B`, …).
+- **Feishu Configured-State「更换机器人」Light Entry**:
+  - Added an inline「更换机器人」action in the configured Feishu modal's「应用凭据」section header (`web/app.js`, `web/app.css`), opening the unified one-click wizard (`新建应用` with Border Collie persona presets or `绑定已有应用`).
+  - Swapping bots is strictly atomic (`internal/collie/feishu_onboard.go`, `internal/collie/feishu_ws.go`): credentials (`app_id`, `app_secret`, `region`) and the WebSocket session are replaced only after QR confirmation, preserving existing `allow_open_ids` and `feedback_chat_ids` (prepending the newly confirmed app-scoped owner `open_id` when switching apps), while cancelling, denying, or expiring leaves the active bot completely untouched.
+- **Dispatch Default Clarity & Collapsible Bottom-Bar Override Capsule**:
+  - Clarified `偏好设置 → 派活默认` copy to explicitly state it serves as the fallback when no task-specific routing preference is stored in memory.
+  - Collapsed the main composer's bottom-bar dispatch chips (`web/index.html`, `web/app.css`, `web/app.js`) into a restrained `派活 · 默认` pill when no single-message override is active (with hover/ARIA description summarizing memory-first routing and current fallback), expanding on click to override machine/agent/model/effort and showing the active override summary alongside a one-click `恢复默认` button when overridden.
+- **`herdr` Restart Self-Healing Without Manual Approval**:
+  - Hardened `herdr` connection and supervisor recovery (`internal/collie/herdr.go`, `fleet.go`, `node.go`, `server.go`, `super.go`): concurrent callers share the per-socket boot-wait window, previously connected sockets wait briefly through daemon restarts, and idempotent read RPCs retry once across mid-flight EOF/reset while mutating RPCs never retry.
+  - Guarded supervisor ticks and launch-metadata pruning with `MachineHerdrOK` so transient `herdr` outages never falsely mark healthy workers `gone` or clear metadata; upon local `herdr` recovery, Collie automatically wakes a previously alive router and auto-confirms trust dialogs for the router and bypass-enabled workers without manual intervention.
+- **Unquoted New Topics Preserve Unanswered `--opt` Cards**:
+  - Updated pending-item resolution (`internal/collie/super.go`, `web/app.js`): sending a plain unquoted message (from Web UI or Feishu) no longer auto-clears unanswered `--opt` decision cards; cards resolve only on explicit option selection, an explicit quote targeting the card or its reply chain, or manual dismiss.
+- **Restrained Neutral Unread Divider**:
+  - Restored `.unread-sep` (`以下为未读消息` text and flanking gradient rules) in `web/app.css` and `docs/demo/` back to restrained neutral gray instead of orange `--attn`.
+
+### Client / API Changes
+
+- **`GET /api/super` & SSE `super` (`pending`)**: Unquoted user messages (`POST /api/super/say` without `re` or unquoted Feishu messages) no longer clear unanswered `--opt` pending cards; cards now clear only on explicit option click, an explicit quote referencing the card or an entry in its reply chain, or `POST /api/super/dismiss`. Payload schema is unchanged.
+- **`POST /api/super/integrations/feishu/onboard`**: Now supports initiating an atomic bot swap when Feishu is already configured; active credentials and WebSocket connections remain unchanged until QR confirmation, and existing `allow_open_ids` and `feedback_chat_ids` are preserved on swap.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.89 (2026-11-27)
 
 ### Highlights

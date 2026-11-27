@@ -33,8 +33,9 @@ function cssBlock(selector) {
   return m[1];
 }
 
-// Neutral monochrome thread navigation & active states (no --attn tint)
+// Neutral monochrome thread navigation, unread divider & active states (no --attn tint)
 for (const sel of [
+  ".unread-sep",
   ".th-head-btn.has-active",
   ".th-head-btn.has-active .th-head-cnt",
   ".thread-entry.active",
@@ -48,6 +49,12 @@ for (const sel of [
 ]) {
   assert.ok(!cssBlock(sel).includes("--attn"), sel + " must stay neutral monochrome without --attn");
 }
+assert.ok(
+  cssBlock(".unread-sep").includes("var(--fg-3)") &&
+  cssBlock(".unread-sep::before, .unread-sep::after").includes("var(--line-2)") &&
+  !cssBlock(".unread-sep::before, .unread-sep::after").includes("--attn"),
+  ".unread-sep text and hairline gradient must stay restrained neutral gray"
+);
 
 // Neutral pending tray surface, border, label, dismiss; only .pending-dot lights up with --attn
 for (const sel of [".pending-bar", ".pending-label", ".pending-x"]) {
@@ -60,7 +67,7 @@ assert.ok(
 );
 
 // True attention anchors use --attn cleanly
-for (const sel of [".unread-sep", ".count-pill.attn", ".count-pill.unread", ".super-jump .sj-badge", "#router-ctx.warn"]) {
+for (const sel of [".count-pill.attn", ".count-pill.unread", ".super-jump .sj-badge", "#router-ctx.warn"]) {
   assert.ok(cssBlock(sel).includes("--attn"), sel + " must use --attn");
 }
 assert.ok(

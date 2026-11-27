@@ -2640,18 +2640,33 @@
     }
     return null;
   }
-  function entryPendingNow(allEntries, idx, id, pendIds = null, hasOpts = true) {
+  function inEntryReplyChain(startId, targetId, entries) {
+    if (!startId || !targetId) return false;
+    if (startId === targetId) return true;
+    const parentOf = new Map();
+    for (let i = 0; i < (entries?.length || 0); i++) {
+      const x = entries[i];
+      if (x?.id && x.re?.entry) parentOf.set(x.id, x.re.entry);
+    }
+    const reaches = (from, want) => {
+      let cur = from;
+      for (let step = 0; step < 64 && cur; step++) {
+        if (cur === want) return true;
+        cur = parentOf.get(cur) || "";
+      }
+      return false;
+    };
+    return reaches(startId, targetId) || reaches(targetId, startId);
+  }
+  function entryPendingNow(allEntries, idx, id, pendIds = null) {
     if (!id) return false;
     if (sup.hasPending) return (pendIds || new Set(activePending().map((p) => p.id))).has(id);
     if (dismissedLocal.has(id)) return false;
-    let otherCollie = false;
     for (let j = idx + 1; j < allEntries.length; j++) {
       const next = allEntries[j];
       if (next.role === "user") {
         const reId = next.re?.entry || "";
-        if (reId === id || (hasOpts && !reId && !otherCollie)) return false;
-      } else if (next.role === "collie") {
-        otherCollie = true;
+        if (reId && inEntryReplyChain(reId, id, allEntries)) return false;
       }
     }
     return true;
@@ -2799,15 +2814,11 @@
     }
     const idx = idxByEntry ? (idxByEntry.get(e) ?? -1) : allEntries.indexOf(e);
     if (idx < 0) return entryHasConfirmMarker(e);
-    const hasOpts = entryConfirmOptions(e).length > 0;
-    let otherCollie = false;
     for (let j = idx + 1; j < allEntries.length; j++) {
       const next = allEntries[j];
       if (next.role === "user") {
         const reId = next.re?.entry || "";
-        if ((id && reId === id) || (hasOpts && !reId && !otherCollie)) return false;
-      } else if (next.role === "collie") {
-        otherCollie = true;
+        if (id && reId && inEntryReplyChain(reId, id, allEntries)) return false;
       }
     }
     return true;
@@ -3310,19 +3321,7 @@
     if (!id) return false;
     if (dismissedLocal.has(id)) return true;
     if (!pendingSays.length) return false;
-    if (pendingSays.some((m) => m.re?.entry === id)) return true;
-    // Pure --check external todos do not auto-resolve on an unquoted message.
-    const hasOpts = typeof p === "object"
-      ? entryConfirmOptions(p).length > 0
-      : true;
-    if (!hasOpts) return false;
-    if (!pendingSays.some((m) => !m.re?.entry)) return false;
-    const idx = list.findIndex((e) => e.id === id);
-    if (idx < 0) return false;
-    for (let j = idx + 1; j < list.length; j++) {
-      if (list[j].role === "collie") return false;
-    }
-    return true;
+    return pendingSays.some((m) => m.re?.entry && inEntryReplyChain(m.re.entry, id, list));
   }
   function activePending() {
     const list = sup.pending || [];
@@ -5210,10 +5209,74 @@
     }
     return modelInfo[key];
   }
-  // "派到": where this message's work runs. Shows the defaults from
-  // 自动化 → 设置 (read again whenever this view opens); target holds only
-  // what was picked here, so a message never carries a stale default.
-  let target = null, targetDefault = null, _renderTargetSig = "";
+  // "派活": one-shot dispatch target override. Collapsed to a calm "派活 · 默认"
+  // capsule unless expanded or manually overridden, so Collie's memory-based
+  // routing stays clear while single-message overrides remain one click away.
+  let target = null, targetDefault = null, targetExpanded = false, _renderTargetSig = "";
+  let lastTargetEffState = { hideEff: false, eff: "", defOwn: "", modelLabel: "", machineName: "", manyMachines: false };
+  function targetOverrideFlags() {
+    const d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
+    const t = targetNow();
+    const { model, effort, d: md } = modelNow(t);
+    const machineChanged = t.machine !== d.machine;
+    const kindChanged = t.kind !== d.kind;
+    const modelChanged = (model || "") !== (md.model || "");
+    const eff = lastTargetEffState.hideEff ? "" : (effort || "");
+    const defOwn = lastTargetEffState.hideEff ? "" : (md.effort || "");
+    const effortChanged = !lastTargetEffState.hideEff && eff !== defOwn && eff !== "";
+    return {
+      any: machineChanged || kindChanged || modelChanged || effortChanged,
+      machineChanged, kindChanged, modelChanged, effortChanged,
+      t, d, model, eff,
+    };
+  }
+  function updateDispatchBar() {
+    const bar = $("#t-bar"), toggle = $("#t-toggle"), lbl = $("#t-toggle-lbl"), controls = $("#t-controls"), reset = $("#t-reset");
+    if (!bar || !toggle || !controls) return;
+    const ov = targetOverrideFlags();
+    const expanded = targetExpanded;
+    bar.classList.toggle("is-collapsed", !expanded);
+    controls.hidden = !expanded;
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.classList.toggle("is-override", ov.any);
+    if (reset) reset.hidden = !ov.any;
+
+    const d = ov.d;
+    const ms = (state.machines || []).filter((m) => !m.hub);
+    const defMachineObj = ms.find((m) => m.id === d.machine);
+    const defMachineName = defMachineObj ? defMachineObj.name : (d.machine || "本机");
+    const defKindLabel = KIND_LABEL[d.kind] || d.kind || "Claude";
+    const defModelShort = d.model ? d.model.split("/").pop() : "默认模型";
+    const defParts = [ms.length > 1 ? defMachineName : "", defKindLabel, defModelShort].filter(Boolean);
+    const fallbackDesc = `按记忆偏好优先，未命中时兜底：${defParts.join(" · ")}（点击可临时指定本次派活目标）`;
+
+    if (expanded) {
+      if (lbl) lbl.textContent = ov.any ? "本次派活" : "派活";
+      toggle.title = "收起本次派活选项";
+      toggle.setAttribute("aria-description", fallbackDesc);
+    } else if (ov.any) {
+      const chosen = [];
+      if (ov.machineChanged && lastTargetEffState.machineName) chosen.push(lastTargetEffState.machineName);
+      if (ov.kindChanged || ov.modelChanged || ov.effortChanged) chosen.push(KIND_LABEL[ov.t.kind] || ov.t.kind);
+      if (ov.modelChanged && lastTargetEffState.modelLabel) chosen.push(lastTargetEffState.modelLabel);
+      if (ov.effortChanged && ov.eff) chosen.push("思考:" + (EFFORT_LABEL[ov.eff] || ov.eff));
+      if (lbl) lbl.textContent = "本次 · " + (chosen.filter(Boolean).join(" · ") || "已指定");
+      const tip = `已临时覆盖本次派活：${chosen.filter(Boolean).join(" · ")}（点击展开调整，或点右侧恢复默认）`;
+      toggle.title = tip;
+      toggle.setAttribute("aria-description", tip);
+    } else {
+      if (lbl) lbl.textContent = "派活 · 默认";
+      toggle.title = fallbackDesc;
+      toggle.setAttribute("aria-description", fallbackDesc);
+    }
+  }
+  function resetTargetOverride() {
+    target = null;
+    targetExpanded = false;
+    _renderTargetSig = "";
+    closePick();
+    renderTarget();
+  }
   async function renderTarget(fresh) {
     if (!targetDefault || fresh) {
       _renderTargetSig = "";
@@ -5227,7 +5290,10 @@
     const t = targetNow();
     const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
     const sig = `${t.machine}|${t.kind}|${t.model ?? ""}|${t.effort ?? ""}|${targetDefault.machine}|${targetDefault.kind}|${targetDefault.model}|${targetDefault.effort}|${state.ok}|${ms.map((m) => `${m.id}:${m.name}:${m.online}:${(m.agents || []).join(",")}`).join(";")}`;
-    if (!fresh && sig === _renderTargetSig) return;
+    if (!fresh && sig === _renderTargetSig) {
+      updateDispatchBar();
+      return;
+    }
     _renderTargetSig = sig;
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
@@ -5244,6 +5310,9 @@
     syncPick(mSel); syncPick(kSel);
     mSel._pick?.classList.toggle("changed", t.machine !== targetDefault.machine);
     kSel._pick?.classList.toggle("changed", t.kind !== targetDefault.kind);
+    lastTargetEffState.machineName = ms.find((m) => m.id === t.machine)?.name || (t.machine || "本机");
+    lastTargetEffState.manyMachines = ms.length > 1;
+    updateDispatchBar();
     renderModelChips();
   }
   // The default model and effort belong to the default kind of agent; any
@@ -5280,8 +5349,26 @@
     syncPick(mSel); syncPick(eSel);
     mSel._pick?.classList.toggle("changed", model !== d.model);
     eSel._pick?.classList.toggle("changed", !hideEff && eff !== defOwn && eff !== "");
+    const pickedModelObj = list.find((m) => m.id === model);
+    lastTargetEffState.hideEff = hideEff;
+    lastTargetEffState.eff = eff;
+    lastTargetEffState.defOwn = defOwn;
+    lastTargetEffState.modelLabel = model ? (pickedModelObj?.label && pickedModelObj.label.length <= 24 ? pickedModelObj.label : short(model)) : "";
+    updateDispatchBar();
   }
   const pick = (o) => { target = { ...(target || {}), ...o }; };
+  $("#t-toggle")?.addEventListener("click", () => {
+    targetExpanded = !targetExpanded;
+    if (!targetExpanded) closePick();
+    updateDispatchBar();
+  });
+  $("#t-reset")?.addEventListener("click", () => resetTargetOverride());
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && targetExpanded && !pickOpen && !document.querySelector("dialog[open]")) {
+      targetExpanded = false;
+      updateDispatchBar();
+    }
+  });
   $("#t-machine").addEventListener("change", (e) => { pick({ machine: e.target.value }); renderTarget(); });
   $("#t-kind").addEventListener("change", (e) => { pick({ kind: e.target.value, model: undefined, effort: undefined }); renderTarget(); });
   $("#t-model").addEventListener("change", (e) => { pick({ model: e.target.value, effort: undefined }); renderModelChips(); });
@@ -5325,8 +5412,9 @@
     const shouldCommitRead = scrollBottom || !!opts.commitRead;
     const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
     const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
-    // Only what was picked here goes along; the hub fills in its current defaults.
-    const t = targetNow(), p = target || {};
+    // Only what was actively overridden goes along; otherwise the hub/Collie
+    // follows memory preferences and configured defaults.
+    const t = targetNow(), ov = targetOverrideFlags(), p = ov.any ? (target || {}) : {};
     const { model, effort } = modelNow(t);
     // Your message shows at once; the hub's copy takes its place seamlessly when it arrives.
     const mine = {
@@ -6060,6 +6148,9 @@
         onboardDeadlineMs: 0,
         onboardDoneTitle: "",
         onboardDoneMsg: "",
+        onboardSource: "",
+        swapOpen: false,
+        swapRegion: cfg.region || "cn",
         manualOpen: false,
         testState: null,
         testMsg: "",
@@ -6191,7 +6282,17 @@
       if (res && (res.state === "waiting" || res.state === "domain_switched")) {
         intModalDraft.onboard = res;
         intModalDraft.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec) || 0) * 1000;
-        if (res.region) intModalDraft.region = res.region;
+        const isRepair = !!(intModalDraft.configured && res.mode === "existing" && res.client_id && res.client_id === intModalDraft.app_id);
+        if (intModalDraft.configured) {
+          intModalDraft.onboardSource = isRepair ? "repair" : "swap";
+          if (!isRepair) {
+            intModalDraft.swapOpen = true;
+            if (res.region) intModalDraft.swapRegion = res.region;
+          }
+        } else {
+          intModalDraft.onboardSource = "onboard";
+          if (res.region) intModalDraft.region = res.region;
+        }
         if (res.mode === "existing" || res.mode === "create") intModalDraft.onboardMode = res.mode;
         if (res.avatar) intModalDraft.onboardAvatar = res.avatar;
         if (res.name && res.name !== intModalDraft.onboardPresets?.name_template) intModalDraft.onboardName = res.name;
@@ -6227,7 +6328,10 @@
           const prevRegion = d.onboard?.region;
           d.onboard = res;
           d.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec) || 0) * 1000;
-          if (res.region) d.region = res.region;
+          if (res.region) {
+            if (d.onboardSource === "swap") d.swapRegion = res.region;
+            else if (!d.configured) d.region = res.region;
+          }
           if (st !== prevSt || res.region !== prevRegion) {
             renderIntModal(item);
           } else {
@@ -6238,9 +6342,22 @@
         }
         stopOnboardTimers();
         if (st === "completed") {
-          const wasExisting = res.mode === "existing" || d.configured;
+          const prevAppID = d.app_id;
+          const wasSwap = d.onboardSource === "swap" || (d.configured && (res.mode === "create" || (res.app_id && prevAppID && res.app_id !== prevAppID)));
+          const wasExisting = res.mode === "existing";
           d.onboard = null;
           d.onboardDeadlineMs = 0;
+          d.swapOpen = false;
+          d.onboardSource = "";
+          const doneTitle = wasSwap
+            ? (wasExisting ? "已更换并绑定新的飞书机器人" : "已新建并切换为新的飞书机器人")
+            : (wasExisting || d.configured ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入");
+          const doneMsg = wasSwap
+            ? "已原子替换应用凭据并重载长连接，原有安全白名单与只读监听群已自动保留；可点下方「测试连通 · 发验证卡片」校验。"
+            : "凭据已按 0600 权限安全保存并自动拉起长连接，可点下方「测试连通 · 发验证卡片」校验；若企业开启应用发布审批，待管理员通过后即可收发消息。";
+          const toastMsg = wasSwap
+            ? "已更换飞书机器人并重载长连接"
+            : (wasExisting || d.configured ? "已补齐飞书应用权限并重载长连接" : "飞书机器人已自动配置并启动长连接");
           try {
             const r = await api("/api/super/integrations");
             intPayload = r;
@@ -6250,26 +6367,27 @@
             d.secret_set = !!fresh.secret_set;
             d.enabled = !!fresh.enabled;
             d.region = fc.region || res.region || d.region;
+            d.swapRegion = d.region;
             d.app_id = fc.app_id || res.app_id || d.app_id;
             d.app_secret = "";
             d.allow_open_id = fc.allow_open_id || (Array.isArray(fc.allow_open_ids) ? fc.allow_open_ids.join(", ") : (res.open_id || d.allow_open_id));
             d.feedback_chat_ids = fc.feedback_chat_id || (Array.isArray(fc.feedback_chat_ids) ? fc.feedback_chat_ids.join(", ") : d.feedback_chat_ids);
             d.health = fresh.health || d.health;
-            d.onboardDoneTitle = wasExisting ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入";
-            d.onboardDoneMsg = "凭据已按 0600 权限安全保存并自动拉起长连接，可点下方「测试连通 · 发验证卡片」校验；若企业开启应用发布审批，待管理员通过后即可收发消息。";
+            d.onboardDoneTitle = doneTitle;
+            d.onboardDoneMsg = doneMsg;
             renderIntModal(fresh);
             $("#int-modal-body").scrollTop = 0;
-            toast(wasExisting ? "已补齐飞书应用权限并重载长连接" : "飞书机器人已自动配置并启动长连接");
+            toast(toastMsg);
             if (view === "auto" && autoTab === "integrations") loadAuto();
           } catch {
             d.configured = true;
             d.secret_set = true;
             d.enabled = true;
             if (res.app_id) d.app_id = res.app_id;
-            if (res.region) d.region = res.region;
+            if (res.region) { d.region = res.region; d.swapRegion = res.region; }
             if (res.open_id && !d.allow_open_id) d.allow_open_id = res.open_id;
-            d.onboardDoneTitle = wasExisting ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入";
-            d.onboardDoneMsg = "凭据已安全保存并自动拉起长连接，可点击下方「测试连通 · 发验证卡片」校验。";
+            d.onboardDoneTitle = doneTitle;
+            d.onboardDoneMsg = doneMsg;
             renderIntModal(item);
           }
           return;
@@ -6316,7 +6434,8 @@
     const presets = d.onboardPresets || getFeishuOnboardPresets(item);
     const avatars = presets.avatars || FEISHU_ONBOARD_FALLBACK_PRESETS.avatars;
     const activeAvatar = avatars.find((a) => a.id === d.onboardAvatar) || avatars[0];
-    const limits = (d.region === "intl" ? presets.limits?.intl : presets.limits?.cn) || { name_min: 2, name_max: 32, desc_max: 120 };
+    const wizardRegion = isConfigured ? (d.swapRegion || d.region || "cn") : (d.region || "cn");
+    const limits = (wizardRegion === "intl" ? presets.limits?.intl : presets.limits?.cn) || { name_min: 2, name_max: 32, desc_max: 120 };
     const safeAvatarSrc = (av) => {
       const src = String(av?.preview || av?.url || "");
       return /^(?:\/?avatars\/[a-z0-9_-]+\.png|https:\/\/lihuanyu0w0\.github\.io\/collie\/avatars\/[a-z0-9_-]+\.png)$/i.test(src) ? src : "";
@@ -6398,7 +6517,7 @@
                 <textarea id="fs-ob-desc" name="feishu_bot_desc" rows="2" maxlength="${limits.desc_max}" placeholder="${esc(presets.default_desc)}" aria-describedby="fs-ob-desc-help${d.onboardDescErr ? " fs-ob-desc-err" : ""}" ${d.onboardDescErr ? `aria-invalid="true"` : ""}>${esc(descVal)}</textarea>
                 ${d.onboardDescErr ? `<p class="int-field-err" id="fs-ob-desc-err" role="alert">${esc(d.onboardDescErr)}</p>` : ""}
                 <div class="int-persona-edit-foot">
-                  <p class="int-field-help" id="fs-ob-desc-help">默认附带 Collie 主页链接，${d.region === "intl" ? "海外 Lark 上限 240 字" : "国内飞书上限 120 字"}。</p>
+                  <p class="int-field-help" id="fs-ob-desc-help">默认附带 Collie 主页链接，${wizardRegion === "intl" ? "海外 Lark 上限 240 字" : "国内飞书上限 120 字"}。</p>
                   <button type="button" class="btn ghost small" id="fs-ob-persona-reset">恢复默认</button>
                 </div>
               </div>
@@ -6518,36 +6637,38 @@
         <button type="button" class="switch" id="fs-sync-sw" role="switch" aria-checked="${d.instant_chat_sync ? "true" : "false"}" aria-label="飞书对话立即同步卡片"></button>
       </div>`;
 
-    if (!isConfigured) {
-      $("#int-modal-body").innerHTML = `
-        ${st === "error" && d.health?.last_error ? `
-          <div class="int-modal-alert" role="alert">
-            <span class="sdot error" aria-hidden="true"></span>
-            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
-          </div>` : ""}
-
-        <section class="int-onboard-card" aria-label="飞书一键开通向导">
+    const isSwapObActive = isConfigured && d.onboardSource === "swap";
+    const isRepairObActive = isConfigured && d.onboardSource === "repair";
+    const renderOnboardWizard = (isSwap = false) => {
+      const showWait = isObWaiting && (!isSwap || isSwapObActive);
+      const showTerm = isObTerminalErr && (!isSwap || isSwapObActive);
+      const regAttr = isSwap ? "data-fs-swap-region" : "data-fs-region";
+      const curReg = isSwap ? wizardRegion : d.region;
+      return `
+        <section class="int-onboard-card${isSwap ? " int-swap-card" : ""}" ${isSwap ? `id="fs-swap-panel" ` : ""}aria-label="${isSwap ? "更换飞书机器人向导" : "飞书一键开通向导"}">
           <div class="int-onboard-head">
             <div class="int-onboard-title-row">
-              <span class="int-onboard-title">一键接入飞书机器人</span>
-              <span class="int-onboard-badge">推荐</span>
+              <span class="int-onboard-title">${isSwap ? "更换飞书机器人" : "一键接入飞书机器人"}</span>
+              <span class="int-onboard-badge">${isSwap ? "无缝换绑" : "推荐"}</span>
             </div>
-            <p class="int-onboard-desc">扫码或在浏览器确认，自动完成创建或绑定应用、开启机器人、配置最小消息权限、启用事件与卡片双长连接，并自动锁定你的安全白名单。</p>
+            <p class="int-onboard-desc">${isSwap
+              ? "新机器人扫码确认后才原子替换凭据并重载长连接，自动保留原有安全白名单与只读监听群；中途取消不影响当前机器人。"
+              : "扫码或在浏览器确认，自动完成创建或绑定应用、开启机器人、配置最小消息权限、启用事件与卡片双长连接，并自动锁定你的安全白名单。"}</p>
           </div>
 
-          ${isObWaiting ? renderOnboardWaiting() : `
+          ${showWait ? renderOnboardWaiting() : `
             <div class="int-onboard-opts">
               <div class="int-onboard-row">
                 <div class="int-field">
                   <span class="int-field-label">平台区域</span>
                   <div class="seg" role="group" aria-label="平台区域">
-                    <button type="button" class="${d.region === "cn" ? "on" : ""}" data-fs-region="cn">国内飞书</button>
-                    <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">海外 Lark</button>
+                    <button type="button" class="${curReg === "cn" ? "on" : ""}" ${regAttr}="cn">国内飞书</button>
+                    <button type="button" class="${curReg === "intl" ? "on" : ""}" ${regAttr}="intl">海外 Lark</button>
                   </div>
                 </div>
                 <div class="int-field">
-                  <span class="int-field-label">开通方式</span>
-                  <div class="seg" role="group" aria-label="飞书开通方式">
+                  <span class="int-field-label">${isSwap ? "换绑方式" : "开通方式"}</span>
+                  <div class="seg" role="group" aria-label="${isSwap ? "飞书换绑方式" : "飞书开通方式"}">
                     <button type="button" class="${d.onboardMode === "create" ? "on" : ""}" data-fs-ob-mode="create">新建应用</button>
                     <button type="button" class="${d.onboardMode === "existing" ? "on" : ""}" data-fs-ob-mode="existing">绑定已有应用</button>
                   </div>
@@ -6559,14 +6680,27 @@
                   <input id="fs-ob-client-id" value="${esc(d.onboardClientId)}" placeholder="留空可在飞书确认页直接选择已有应用，或填入 cli_…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
                 </div>` : renderPersonaBox()}
               <div class="int-onboard-cta">
-                <button type="button" class="btn primary" id="fs-ob-start-btn" ${d.onboardStarting ? "disabled" : ""}>
-                  ${d.onboardStarting ? "正在生成确认码…" : (d.onboardMode === "existing" ? "一键绑定并补齐权限" : "一键开通飞书")}
+                <button type="button" class="btn primary" id="fs-ob-start-btn" ${d.onboardStarting || (isSwap && isRepairObActive && isObWaiting) ? "disabled" : ""}>
+                  ${d.onboardStarting ? "正在生成确认码…" : (isSwap
+                    ? (d.onboardMode === "existing" ? "扫码绑定并替换" : "扫码新建并替换")
+                    : (d.onboardMode === "existing" ? "一键绑定并补齐权限" : "一键开通飞书"))}
                 </button>
-                <span class="int-onboard-hint">零公网地址 · 自动配好双长连接与白名单</span>
+                <span class="int-onboard-hint">${isSwap ? "确认前原机器人持续在线 · 自动保留白名单与监听群" : "零公网地址 · 自动配好双长连接与白名单"}</span>
               </div>
-              ${renderOnboardTerminal()}
+              ${showTerm ? renderOnboardTerminal() : ""}
             </div>`}
-        </section>
+        </section>`;
+    };
+
+    if (!isConfigured) {
+      $("#int-modal-body").innerHTML = `
+        ${st === "error" && d.health?.last_error ? `
+          <div class="int-modal-alert" role="alert">
+            <span class="sdot error" aria-hidden="true"></span>
+            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+          </div>` : ""}
+
+        ${renderOnboardWizard(false)}
 
         <details class="int-manual-fold" id="fs-manual-fold" ${d.manualOpen ? "open" : ""}>
           <summary>
@@ -6611,7 +6745,13 @@
           </div>` : ""}
 
         <section class="int-sec">
-          <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+          <div class="int-sec-head">
+            <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+            <button type="button" class="btn ghost small int-swap-btn" id="fs-swap-toggle-btn" aria-expanded="${d.swapOpen ? "true" : "false"}" aria-controls="fs-swap-panel" ${d.saving ? "disabled" : ""}>
+              ${d.swapOpen ? "收起" : "更换机器人"}
+            </button>
+          </div>
+          ${d.swapOpen ? renderOnboardWizard(true) : ""}
           ${credentialsFieldsHTML(true)}
         </section>
 
@@ -6626,11 +6766,11 @@
             <div class="int-test-head">
               <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
               <button type="button" class="btn" id="fs-ob-repair-btn" ${d.onboardStarting || isObWaiting ? "disabled" : ""} title="带当前 App ID 唤起飞书确认页，一键补齐最小 IM 权限与事件/卡片双长连接">
-                ${d.onboardStarting ? "生成确认码…" : "一键补齐权限/回调"}
+                ${d.onboardStarting && isRepairObActive ? "生成确认码…" : "一键补齐权限/回调"}
               </button>
             </div>
             ${testRow()}
-            ${isObWaiting || isObTerminalErr ? `<div class="int-onboard-inline" id="fs-ob-inline">${isObWaiting ? renderOnboardWaiting() : renderOnboardTerminal()}</div>` : ""}
+            ${isRepairObActive && (isObWaiting || isObTerminalErr) ? `<div class="int-onboard-inline" id="fs-ob-inline">${isObWaiting ? renderOnboardWaiting() : renderOnboardTerminal()}</div>` : ""}
           </div>
         </section>
       `;
@@ -6692,15 +6832,17 @@
       return true;
     };
 
-    const startOnboardFlow = async (mode, clientID) => {
+    const startOnboardFlow = async (mode, clientID, source = isConfigured ? "swap" : "onboard") => {
       if (mode === "create" && !validatePersona(true)) return;
+      d.onboardSource = source;
       d.onboardStarting = true;
       d.onboardDoneMsg = "";
       d.onboardDoneTitle = "";
       d.manualOpen = false;
       renderIntModal(item);
       try {
-        const payload = { region: d.region, mode, client_id: clientID || "" };
+        const targetRegion = source === "swap" ? (d.swapRegion || d.region || "cn") : (d.region || "cn");
+        const payload = { region: targetRegion, mode, client_id: clientID || "" };
         if (mode === "create") {
           const trimmedName = String(d.onboardName || "").trim();
           const trimmedDesc = String(d.onboardDesc || "").trim();
@@ -6715,8 +6857,10 @@
         d.onboardDeadlineMs = Date.now() + Math.max(0, Number(res.remaining_sec ?? res.expire_in) || 600) * 1000;
         renderIntModal(item);
         startOnboardPoll(item);
-        if (isConfigured) {
+        if (source === "repair") {
           $("#fs-ob-inline")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } else if (source === "swap") {
+          $("#fs-swap-panel")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
         }
       } catch (err) {
         if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
@@ -6727,10 +6871,51 @@
       }
     };
 
+    const cancelActiveOnboard = async () => {
+      stopOnboardTimers();
+      try {
+        await api("/api/super/integrations/feishu/onboard", { method: "DELETE" });
+      } catch {}
+      if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+      d.onboard = null;
+      d.onboardDeadlineMs = 0;
+      d.onboardSource = "";
+    };
+
+    $("#fs-swap-toggle-btn")?.addEventListener("click", async () => {
+      if (d.swapOpen) {
+        if (d.onboardSource === "swap" && isObWaiting) {
+          await cancelActiveOnboard();
+          if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
+        } else if (d.onboardSource === "swap" && isObTerminalErr) {
+          d.onboard = null;
+          d.onboardSource = "";
+        }
+        d.swapOpen = false;
+        renderIntModal(item);
+      } else {
+        d.swapOpen = true;
+        d.swapRegion = d.region || "cn";
+        d.onboardDoneMsg = "";
+        d.onboardDoneTitle = "";
+        d.onboardNameErr = "";
+        d.onboardDescErr = "";
+        renderIntModal(item);
+      }
+    });
+
     intModal.querySelectorAll("[data-fs-region]").forEach((b) => {
       b.addEventListener("click", () => {
         if ($("#fs-manual-fold")) d.manualOpen = !!$("#fs-manual-fold").open;
         d.region = b.dataset.fsRegion;
+        d.onboardNameErr = "";
+        d.onboardDescErr = "";
+        renderIntModal(item);
+      });
+    });
+    intModal.querySelectorAll("[data-fs-swap-region]").forEach((b) => {
+      b.addEventListener("click", () => {
+        d.swapRegion = b.dataset.fsSwapRegion;
         d.onboardNameErr = "";
         d.onboardDescErr = "";
         renderIntModal(item);
@@ -6826,24 +7011,21 @@
     $("#fs-ob-client-id")?.addEventListener("input", (ev) => { d.onboardClientId = ev.target.value; });
     $("#fs-ob-start-btn")?.addEventListener("click", () => {
       const cid = d.onboardMode === "existing" ? d.onboardClientId.trim() : "";
-      startOnboardFlow(d.onboardMode, cid);
+      startOnboardFlow(d.onboardMode, cid, isConfigured ? "swap" : "onboard");
     });
     $("#fs-ob-repair-btn")?.addEventListener("click", () => {
-      startOnboardFlow("existing", d.app_id.trim());
+      d.swapOpen = false;
+      startOnboardFlow("existing", d.app_id.trim(), "repair");
     });
     $("#fs-ob-retry-btn")?.addEventListener("click", () => {
-      const mode = isConfigured ? "existing" : (d.onboard?.mode || d.onboardMode || "create");
-      const cid = isConfigured ? d.app_id.trim() : (mode === "existing" ? (d.onboard?.client_id || d.onboardClientId.trim()) : "");
-      startOnboardFlow(mode, cid);
+      const src = isConfigured ? (d.onboardSource || (d.swapOpen ? "swap" : "repair")) : "onboard";
+      const mode = src === "repair" ? "existing" : (d.onboard?.mode || d.onboardMode || "create");
+      const cid = src === "repair" ? d.app_id.trim() : (mode === "existing" ? (d.onboard?.client_id || d.onboardClientId.trim()) : "");
+      startOnboardFlow(mode, cid, src);
     });
     $("#fs-ob-cancel-btn")?.addEventListener("click", async () => {
-      stopOnboardTimers();
-      try {
-        await api("/api/super/integrations/feishu/onboard", { method: "DELETE" });
-      } catch {}
+      await cancelActiveOnboard();
       if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
-      d.onboard = null;
-      d.onboardDeadlineMs = 0;
       renderIntModal(item);
     });
     $("#fs-manual-fold")?.addEventListener("toggle", (ev) => {
@@ -7891,7 +8073,7 @@
       </section>
 
       <section class="card set-sec">
-        <header><h4>派活默认</h4><p>派发任务的默认配置，对话中可随时口头指定。</p></header>
+        <header><h4>派活默认</h4><p>默认兜底配置；想按任务分模型（如写文档用某模型），对话里告诉 Collie 一次即会长期记住。</p></header>
         <div class="set-grid three">
           <label>Agent<select name="worker_kind" data-title="派活默认用">${workerKindOpts(s.worker_kind)}</select></label>
           ${modelPick("worker", s.worker_kind, s.worker_model, s.worker_effort)}

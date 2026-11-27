@@ -1031,10 +1031,25 @@ func (o *feishuOnboarder) applyCredentials(appID, appSecret, region, openID stri
 	}
 	snap := o.mgr.ConfigSnapshot(feishuKind)
 	fc := parseFeishuConfig(snap.Config)
+	prevAppID := strings.TrimSpace(fc.AppID)
 	fc.Region = normalizeFeishuOnboardRegion(region)
 	fc.AppID = appID
-	if openID != "" && !slices.Contains(fc.AllowOpenIDs, openID) {
-		fc.AllowOpenIDs = append(fc.AllowOpenIDs, openID)
+	if openID != "" {
+		if prevAppID != "" && prevAppID != appID {
+			// Feishu open_ids are app-scoped. When atomically swapping to a
+			// different bot, preserve all previously allowlisted open_ids while
+			// placing the newly confirmed bot's owner open_id first so self-test
+			// and fallback outbound cards target a valid open_id immediately.
+			rest := make([]string, 0, len(fc.AllowOpenIDs))
+			for _, id := range fc.AllowOpenIDs {
+				if id != openID {
+					rest = append(rest, id)
+				}
+			}
+			fc.AllowOpenIDs = append([]string{openID}, rest...)
+		} else if !slices.Contains(fc.AllowOpenIDs, openID) {
+			fc.AllowOpenIDs = append(fc.AllowOpenIDs, openID)
+		}
 	}
 	cfgJSON, err := json.Marshal(fc)
 	if err != nil {

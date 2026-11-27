@@ -463,6 +463,123 @@ func TestFeishuOnboardExistingAppModesAndConfigMerge(t *testing.T) {
 	}
 }
 
+func TestFeishuOnboardAtomicSwapPreservesAllowlistAndFeedbackChats(t *testing.T) {
+	const (
+		oldAppID  = "cli_old_bot_001"
+		oldSecret = "sec_old_bot_secret_001"
+		oldOwner  = "ou_old_bot_owner_001"
+		fbChatID  = "oc_feedback_keep_001"
+		newAppID  = "cli_new_bot_002"
+		newSecret = "sec_new_bot_secret_002"
+		newOwner  = "ou_new_bot_owner_002"
+	)
+
+	var mode atomic.Int32 // 0 = pending, 1 = denied, 2 = complete
+	s, sp, mux := setupOnboardHarness(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			w.Header().Set("Content-Type", "application/json")
+			if r.Form.Get("action") == "begin" {
+				_, _ = w.Write([]byte(`{"device_code":"dev_swap","user_code":"SWAP-01","verification_uri_complete":"https://open.feishu.cn/page/launcher?user_code=SWAP-01","expires_in":600,"interval":1}`))
+				return
+			}
+			switch mode.Load() {
+			case 0:
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+			case 1:
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"access_denied"}`))
+			default:
+				_, _ = w.Write([]byte(`{"client_id":"` + newAppID + `","client_secret":"` + newSecret + `","user_info":{"open_id":"` + newOwner + `","tenant_brand":"feishu"}}`))
+			}
+		},
+		nil,
+	)
+
+	// Pre-populate configured Bot A with allowlist, feedback chat, and preferences.
+	preCfg, _ := json.Marshal(FeishuConfig{
+		Region:           "cn",
+		AppID:            oldAppID,
+		AllowOpenIDs:     []string{oldOwner},
+		FeedbackChatIDs:  []string{fbChatID},
+		GroupMentionOnly: true,
+		InstantChatSync:  false,
+	})
+	en := true
+	if _, err := sp.integrations.Save(feishuKind, SaveRequest{
+		Enabled: &en,
+		Config:  preCfg,
+		Secrets: map[string]string{"app_id": oldAppID, "app_secret": oldSecret},
+	}); err != nil {
+		t.Fatalf("pre-save bot A: %v", err)
+	}
+
+	assertBotAIntact := func(stage string) {
+		t.Helper()
+		snap := sp.integrations.ConfigSnapshot(feishuKind)
+		fc := parseFeishuConfig(snap.Config)
+		if !snap.Enabled || fc.AppID != oldAppID || fc.Region != "cn" || sp.secrets.GetKey(feishuKind, "app_secret") != oldSecret {
+			t.Fatalf("%s mutated original bot A credentials: enabled=%v fc=%+v", stage, snap.Enabled, fc)
+		}
+		if !slices.Equal(fc.AllowOpenIDs, []string{oldOwner}) || !slices.Equal(fc.FeedbackChatIDs, []string{fbChatID}) {
+			t.Fatalf("%s mutated allowlist/feedback: allow=%v fb=%v", stage, fc.AllowOpenIDs, fc.FeedbackChatIDs)
+		}
+	}
+
+	// 1) Start swap and cancel midway -> Bot A must remain untouched.
+	mode.Store(0)
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create","avatar":"pine"}`, s.token))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("start swap 1: %d %s", rec1.Code, rec1.Body.String())
+	}
+	assertBotAIntact("while swap waiting")
+	delRec := httptest.NewRecorder()
+	mux.ServeHTTP(delRec, authedReq(http.MethodDelete, "/api/super/integrations/feishu/onboard", "", s.token))
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("cancel swap: %d", delRec.Code)
+	}
+	assertBotAIntact("after swap cancel")
+
+	// 2) Start swap and get denied -> Bot A must remain untouched.
+	mode.Store(1)
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create"}`, s.token))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("start swap 2: %d", rec2.Code)
+	}
+	waitOnboardState(t, sp.feishuOnboard, feishuOnboardStateDenied)
+	assertBotAIntact("after swap denied")
+
+	// 3) Start swap and confirm -> atomically replaces app_id/app_secret while
+	//    preserving allow_open_ids (new owner first) and feedback_chat_ids.
+	mode.Store(2)
+	rec3 := httptest.NewRecorder()
+	mux.ServeHTTP(rec3, authedReq(http.MethodPost, "/api/super/integrations/feishu/onboard", `{"region":"cn","mode":"create","avatar":"terracotta"}`, s.token))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("start swap 3: %d", rec3.Code)
+	}
+	done := waitOnboardState(t, sp.feishuOnboard, feishuOnboardStateCompleted)
+	if done.AppID != newAppID || done.OpenID != newOwner {
+		t.Fatalf("unexpected swap completion view: %+v", done)
+	}
+	snap := sp.integrations.ConfigSnapshot(feishuKind)
+	fc := parseFeishuConfig(snap.Config)
+	if !snap.Enabled || fc.AppID != newAppID || sp.secrets.GetKey(feishuKind, "app_secret") != newSecret {
+		t.Fatalf("swap did not atomically apply new credentials: enabled=%v fc=%+v", snap.Enabled, fc)
+	}
+	if !slices.Equal(fc.AllowOpenIDs, []string{newOwner, oldOwner}) {
+		t.Fatalf("swap allow_open_ids = %v, want [%s %s]", fc.AllowOpenIDs, newOwner, oldOwner)
+	}
+	if !slices.Equal(fc.FeedbackChatIDs, []string{fbChatID}) {
+		t.Fatalf("swap feedback_chat_ids = %v, want [%s]", fc.FeedbackChatIDs, fbChatID)
+	}
+	if !fc.GroupMentionOnly || fc.InstantChatSync {
+		t.Fatalf("swap overwrote boolean prefs: %+v", fc)
+	}
+}
+
 func TestFeishuOnboardCrossBrandSwitchToLark(t *testing.T) {
 	var cnPolls, larkPolls atomic.Int32
 	var sawSwitched atomic.Bool

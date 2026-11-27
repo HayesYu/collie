@@ -200,12 +200,18 @@
           <textarea id="super-input" rows="1" placeholder="告诉 Collie 你要做什么…" enterkeyhint="send"></textarea>
           <div class="cbar">
             <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-            <div class="chips">
-            <span class="cbar-label" title="Collie 把这条消息里的活派给谁：哪台电脑、哪个 agent、什么模型。Collie 自己用的模型显示在页面顶部">派活</span>
-            <select id="t-machine" data-pick="chip" data-title="这次在哪台电脑上做" title="这次在哪台电脑上做"></select>
-            <select id="t-kind" data-pick="chip" data-title="这次派哪个 agent" title="这次派哪个 agent"></select>
-            <select id="t-model" data-pick="chip" data-title="这次用哪个模型" title="这次用哪个模型"></select>
-            <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
+            <div class="chips is-collapsed" id="t-bar">
+              <button type="button" class="dispatch-pill" id="t-toggle" aria-expanded="false" aria-controls="t-controls" title="按记忆偏好优先；点击可临时指定本次派活目标">
+                <span class="dp-lbl" id="t-toggle-lbl">派活 · 默认</span>
+                <svg class="dp-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+              </button>
+              <div class="dispatch-controls" id="t-controls" hidden>
+                <select id="t-machine" data-pick="chip" data-title="这次在哪台电脑上做" title="这次在哪台电脑上做"></select>
+                <select id="t-kind" data-pick="chip" data-title="这次派哪个 agent" title="这次派哪个 agent"></select>
+                <select id="t-model" data-pick="chip" data-title="这次用哪个模型" title="这次用哪个模型"></select>
+                <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
+              </div>
+              <button type="button" class="dispatch-reset" id="t-reset" title="恢复默认派活" aria-label="恢复默认派活" hidden>恢复默认</button>
             </div>
             <span class="spacer"></span>
             <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>

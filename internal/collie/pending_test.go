@@ -95,8 +95,9 @@ func TestPendingScopeAndFourResolutionRules(t *testing.T) {
 		t.Fatalf("pending after option/quote reply = %v, want empty", got)
 	}
 
-	// Rule ③a: a plain user message right after the option message resolves it,
-	// even when worker/system event lines sit between them.
+	// Rule ③: plain unquoted user messages (starting a new topic from the bottom
+	// composer) MUST NOT silently dismiss unanswered --opt cards, even when no
+	// intervening Collie reply sits between them.
 	e2, _ := sp.Reply(mainThread, "要重跑全量算子还是复用打分表？", "", []string{"复用打分表", "重跑算子"})
 	sp.mu.Lock()
 	sp.addEntryLocked("event", mainThread, "df-check 完成了一轮", "df-check", "done")
@@ -105,15 +106,24 @@ func TestPendingScopeAndFourResolutionRules(t *testing.T) {
 	if got := pendingIDs(t, call); !slices.Equal(got, []string{e2.ID}) {
 		t.Fatalf("pending after events = %v, want [%s]", got, e2.ID)
 	}
-	if rec := call("POST", "/api/super/say", map[string]any{"text": "直接复用现有表就行，别重跑"}); rec.Code != 200 {
+	if rec := call("POST", "/api/super/say", map[string]any{"text": "顺便帮我查下今天线上延迟"}); rec.Code != 200 {
 		t.Fatalf("say status = %d", rec.Code)
 	}
-	if got := pendingIDs(t, call); len(got) != 0 {
-		t.Fatalf("pending after direct plain reply = %v, want empty", got)
+	if got := pendingIDs(t, call); !slices.Equal(got, []string{e2.ID}) {
+		t.Fatalf("unquoted new topic must NOT resolve --opt e2, got %v", got)
 	}
 
-	// Rule ③b: if another Collie reply arrives before the user speaks, a plain
-	// unquoted user message does NOT guess/resolve the earlier option message.
+	// Explicit reply along the SAME reply chain (quoting a follow-up Collie note
+	// that chained onto e2) resolves e2 cleanly.
+	e2Follow, _ := sp.Reply(mainThread, "补充：复用打分表可省 20 分钟。", e2.ID, nil)
+	if rec := call("POST", "/api/super/say", map[string]any{"text": "那就复用打分表", "re": e2Follow.ID}); rec.Code != 200 {
+		t.Fatalf("say quoting chain follow-up = %d", rec.Code)
+	}
+	if got := pendingIDs(t, call); len(got) != 0 {
+		t.Fatalf("pending after quoting follow-up on same reply chain = %v, want empty", got)
+	}
+
+	// Unrelated quote or intervening Collie reply + unquoted message keeps e3 pending.
 	otherCollie, _ := sp.Reply(mainThread, "另一件事：日志清理做完了", "", nil)
 	e3, _ := sp.Reply(mainThread, "旧归档目录要一并删掉吗？", "", []string{"保留归档", "直接删掉"})
 	// Quoting a DIFFERENT Collie message right after e3 also must not resolve e3.
@@ -132,16 +142,21 @@ func TestPendingScopeAndFourResolutionRules(t *testing.T) {
 		t.Fatalf("e3 should stay pending when Collie spoke in between, got %v", got)
 	}
 
-	// Two consecutive option messages in the same turn: an unquoted reply only
-	// resolves the latest one (right above the user's message), keeping earlier ones safe.
+	// Two consecutive option messages in the same turn: an unquoted message keeps
+	// ALL unanswered --opt cards pending until explicitly answered or dismissed.
 	e4, _ := sp.Reply(mainThread, "问题 A：要不要升级依赖？", "", []string{"升", "不升"})
 	e5, _ := sp.Reply(mainThread, "问题 B：要不要顺手发版？", "", []string{"发版", "先不发"})
 	if got := pendingIDs(t, call); !slices.Equal(got, []string{e3.ID, e4.ID, e5.ID}) {
 		t.Fatalf("pending before plain reply to consecutive = %v", got)
 	}
-	call("POST", "/api/super/say", map[string]any{"text": "先不发"})
+	call("POST", "/api/super/say", map[string]any{"text": "先看下另一个仓库的报错"})
+	if got := pendingIDs(t, call); !slices.Equal(got, []string{e3.ID, e4.ID, e5.ID}) {
+		t.Fatalf("unquoted message must keep e3, e4, e5 pending, got %v", got)
+	}
+	// Explicitly clicking/quoting e5 resolves only e5.
+	call("POST", "/api/super/say", map[string]any{"text": "先不发", "re": e5.ID})
 	if got := pendingIDs(t, call); !slices.Equal(got, []string{e3.ID, e4.ID}) {
-		t.Fatalf("plain reply should resolve e5 only, got %v", got)
+		t.Fatalf("quoting e5 should resolve e5 only, got %v", got)
 	}
 
 	// Quoting e3 many turns later resolves e3 (Rule ②).
@@ -161,6 +176,24 @@ func TestPendingScopeAndFourResolutionRules(t *testing.T) {
 	}
 	if got := pendingIDs(t, call); len(got) != 0 {
 		t.Fatalf("pending after dismiss = %v, want empty", got)
+	}
+
+	// Sibling --opt cards under the same user root: quoting one card only resolves that card.
+	rootRec := call("POST", "/api/super/say", map[string]any{"text": "帮我看下两件事"})
+	var rootOut struct {
+		Entry string `json:"entry"`
+	}
+	json.Unmarshal(rootRec.Body.Bytes(), &rootOut)
+	sibA, _ := sp.Reply(mainThread, "第一件：要合入 PR 吗？", rootOut.Entry, []string{"合入", "暂缓"})
+	sibB, _ := sp.Reply(mainThread, "第二件：要清理缓存吗？", rootOut.Entry, []string{"清理", "保留"})
+	call("POST", "/api/super/say", map[string]any{"text": "合入", "re": sibA.ID})
+	if got := pendingIDs(t, call); !slices.Equal(got, []string{sibB.ID}) {
+		t.Fatalf("picking sibA must leave sibling sibB pending, got %v", got)
+	}
+	// Quoting the shared thread root resolves sibB cleanly.
+	call("POST", "/api/super/say", map[string]any{"text": "缓存先保留吧", "re": rootOut.Entry})
+	if got := pendingIDs(t, call); len(got) != 0 {
+		t.Fatalf("replying on thread root should resolve sibB, got %v", got)
 	}
 }
 

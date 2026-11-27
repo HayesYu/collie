@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,9 +29,20 @@ type herdrConn struct {
 	seq  atomic.Uint64
 }
 
+var (
+	herdrBootWait         = 10 * time.Second
+	herdrReconnectWait    = 4 * time.Second
+	herdrDialPollInterval = 200 * time.Millisecond
+	herdrRetryDelay       = 150 * time.Millisecond
+	herdrStartCooldown    = int64(30)
+	herdrRecoveredGuard   = int64(5)
+	startHerdrServerFn    = startHerdrServer
+)
+
 func unixDialer(socket string) func(ctx context.Context) (net.Conn, error) {
+	var everConnected atomic.Bool
 	return func(ctx context.Context) (net.Conn, error) {
-		c, err := dialHerdr(ctx, socket)
+		c, err := dialHerdrWithState(ctx, socket, &everConnected)
 		if err != nil {
 			return nil, fmt.Errorf("herdr socket unavailable (is `herdr server` running?): %w", err)
 		}
@@ -40,31 +54,175 @@ func unixDialer(socket string) func(ctx context.Context) (net.Conn, error) {
 // logout: herdr stopped with the session, Collie's service came back on its
 // own): start herdr's server in the background and try again.
 func dialHerdr(ctx context.Context, socket string) (net.Conn, error) {
+	return dialHerdrWithState(ctx, socket, nil)
+}
+
+func dialHerdrWithState(ctx context.Context, socket string, everConnected *atomic.Bool) (net.Conn, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", socket)
-	if err == nil || !startHerdrServer() {
-		return c, err
+	if err == nil {
+		if everConnected != nil {
+			everConnected.Store(true)
+		}
+		if clearHerdrBootWait(socket) {
+			// A fresh boot succeeded; allow a future crash restart after a brief
+			// anti-thrash guard instead of waiting out the full 30s failure cooldown.
+			relaxHerdrStartCooldown()
+		}
+		return c, nil
 	}
-	for i := 0; i < 40; i++ {
+	if ctx.Err() != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	var waitUntil time.Time
+	launched := startHerdrServerFn()
+	if launched {
+		waitUntil = now.Add(herdrBootWait)
+		setHerdrBootWait(socket, waitUntil)
+	} else if until := activeHerdrBootWait(socket, now); !until.IsZero() {
+		// Another goroutine just launched herdr for this socket; share its boot wait window.
+		waitUntil = until
+	} else if everConnected != nil && everConnected.Load() && isHerdrTransientDialErr(err) {
+		// Socket was healthy before and just dropped (e.g. systemd restarting
+		// herdr-server); wait briefly for the restarted process to re-bind.
+		waitUntil = now.Add(herdrReconnectWait)
+	}
+	if waitUntil.IsZero() {
+		return nil, err
+	}
+
+	poll := herdrDialPollInterval
+	if poll <= 0 {
+		poll = 200 * time.Millisecond
+	}
+	for time.Now().Before(waitUntil) {
 		select {
 		case <-ctx.Done():
 			return nil, err
-		case <-time.After(250 * time.Millisecond):
+		case <-time.After(poll):
 		}
 		if c, err2 := d.DialContext(ctx, "unix", socket); err2 == nil {
+			if everConnected != nil {
+				everConnected.Store(true)
+			}
+			clearHerdrBootWait(socket)
+			if launched {
+				relaxHerdrStartCooldown()
+			}
 			return c, nil
+		} else {
+			err = err2
 		}
 	}
 	return nil, err
 }
 
-var herdrStarted atomic.Int64 // unix seconds of the last start we made
+func relaxHerdrStartCooldown() {
+	if herdrStartCooldown <= herdrRecoveredGuard {
+		return
+	}
+	floor := time.Now().Unix() - (herdrStartCooldown - herdrRecoveredGuard)
+	for {
+		cur := herdrStarted.Load()
+		if cur <= floor {
+			return
+		}
+		if herdrStarted.CompareAndSwap(cur, floor) {
+			return
+		}
+	}
+}
 
-// startHerdrServer runs `herdr server` detached, at most once in 30s.
+func isHerdrTransientDialErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "connection refused") || strings.Contains(low, "no such file") || strings.Contains(low, "connection reset")
+}
+
+func isHerdrIdempotentRead(method string) bool {
+	switch method {
+	case "workspace.list", "pane.list", "agent.list", "agent.get", "pane.get", "pane.read", "pane.layout":
+		return true
+	}
+	return false
+}
+
+func isHerdrTransportErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var he *HerdrError
+	if errors.As(err, &he) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT) {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "eof") || strings.Contains(low, "broken pipe") ||
+		strings.Contains(low, "connection reset") || strings.Contains(low, "connection refused") ||
+		strings.Contains(low, "no such file")
+}
+
+func isHerdrUnavailableErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "herdr socket unavailable") || isHerdrTransportErr(err)
+}
+
+var (
+	herdrStarted    atomic.Int64 // unix seconds of the last start we made
+	herdrBootMu     sync.Mutex
+	herdrBootSocket string
+	herdrBootUntil  time.Time // until which an in-flight start may still be binding
+)
+
+func setHerdrBootWait(socket string, until time.Time) {
+	herdrBootMu.Lock()
+	herdrBootSocket = socket
+	herdrBootUntil = until
+	herdrBootMu.Unlock()
+}
+
+func activeHerdrBootWait(socket string, now time.Time) time.Time {
+	herdrBootMu.Lock()
+	defer herdrBootMu.Unlock()
+	if herdrBootSocket == socket && herdrBootUntil.After(now) {
+		return herdrBootUntil
+	}
+	return time.Time{}
+}
+
+func clearHerdrBootWait(socket string) bool {
+	herdrBootMu.Lock()
+	defer herdrBootMu.Unlock()
+	if herdrBootSocket == socket && !herdrBootUntil.IsZero() {
+		herdrBootSocket = ""
+		herdrBootUntil = time.Time{}
+		return true
+	}
+	return false
+}
+
+// startHerdrServer runs `herdr server` detached, at most once in herdrStartCooldown seconds.
 func startHerdrServer() bool {
 	now := time.Now().Unix()
 	last := herdrStarted.Load()
-	if now-last < 30 || !herdrStarted.CompareAndSwap(last, now) {
+	if now-last < herdrStartCooldown || !herdrStarted.CompareAndSwap(last, now) {
 		return false
 	}
 	home, _ := os.UserHomeDir()
@@ -97,7 +255,25 @@ type HerdrError struct {
 func (e *HerdrError) Error() string { return e.Code + ": " + e.Message }
 
 // call sends one request on a fresh connection and returns the raw result.
+// Safe read-only methods retry once on a mid-flight transport drop so a herdr
+// restart heals transparently without surfacing transient errors.
 func (h *herdrConn) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	res, err := h.callOnce(ctx, method, params)
+	if err == nil || ctx.Err() != nil || !isHerdrIdempotentRead(method) || !isHerdrTransportErr(err) {
+		return res, err
+	}
+	delay := herdrRetryDelay
+	if delay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(delay):
+		}
+	}
+	return h.callOnce(ctx, method, params)
+}
+
+func (h *herdrConn) callOnce(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if params == nil {
 		params = map[string]any{}
 	}

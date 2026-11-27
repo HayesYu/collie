@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -265,6 +266,7 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	defer hs.Close()
 	go func() { <-ctx.Done(); sess.Close() }()
 
+	var nodeHerdrConnected atomic.Bool
 	for {
 		st, err := sess.Accept()
 		if err != nil {
@@ -279,14 +281,21 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 			}
 			switch kind {
 			case "herdr":
-				h, err := dialHerdr(context.Background(), sock)
+				dctx, dcancel := context.WithTimeout(ctx, 12*time.Second)
+				h, err := dialHerdrWithState(dctx, sock, &nodeHerdrConnected)
+				dcancel()
 				if err != nil {
 					log.Printf("herdr: %v", err)
 					st.Close()
 					return
 				}
-				go func() { io.Copy(h, st); h.(*net.UnixConn).CloseWrite() }()
-				io.Copy(st, h)
+				go func() {
+					_, _ = io.Copy(h, st)
+					if uc, ok := h.(*net.UnixConn); ok {
+						_ = uc.CloseWrite()
+					}
+				}()
+				_, _ = io.Copy(st, h)
 				h.Close()
 				st.Close()
 			case "http":

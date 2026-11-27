@@ -118,7 +118,11 @@ func sanitizeUpdateErr(s string) string {
 }
 
 func requestUsesProxy(req *http.Request) bool {
-	if updateProxyFunc == nil || req == nil {
+	return requestUsesProxyWith(req, false)
+}
+
+func requestUsesProxyWith(req *http.Request, disableProxy bool) bool {
+	if disableProxy || updateProxyFunc == nil || req == nil {
 		return false
 	}
 	u, err := updateProxyFunc(req)
@@ -126,8 +130,15 @@ func requestUsesProxy(req *http.Request) bool {
 }
 
 func newUpdateTransport(forceIPv4 bool) *http.Transport {
+	return newUpdateTransportWithProxy(forceIPv4, false)
+}
+
+func newUpdateTransportWithProxy(forceIPv4, disableProxy bool) *http.Transport {
 	dial := updateDialContext
 	proxy := updateProxyFunc
+	if disableProxy {
+		proxy = nil
+	}
 	return &http.Transport{
 		Proxy: proxy,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -143,6 +154,31 @@ func newUpdateTransport(forceIPv4 bool) *http.Transport {
 		ResponseHeaderTimeout: updateHeaderTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+}
+
+func shouldFallbackNoProxy(err error) bool {
+	if err == nil {
+		return false
+	}
+	var oe *updateOpError
+	if !errors.As(err, &oe) || !oe.usedProxy {
+		return false
+	}
+	var fe *updateFileError
+	if errors.As(err, &fe) {
+		return false
+	}
+	if errors.Is(err, errBadChecksum) || errors.Is(err, errExecVerifyFailed) {
+		return false
+	}
+	var he *httpStatusError
+	if errors.As(err, &he) {
+		return he.statusCode >= 500 ||
+			he.statusCode == http.StatusProxyAuthRequired ||
+			he.statusCode == http.StatusRequestTimeout ||
+			he.statusCode == http.StatusTooManyRequests
+	}
+	return true
 }
 
 func isTimeoutErr(err error) bool {
@@ -468,9 +504,13 @@ func fetchLatestTag() string {
 }
 
 func fetchLatestTagErr(ctx context.Context) (string, bool, error) {
+	return fetchLatestTagOpts(ctx, false, false)
+}
+
+func fetchLatestTagOpts(ctx context.Context, preferIPv4, disableProxy bool) (string, bool, error) {
 	maxAttempts := max(1, updateMaxAttempts)
-	forceIPv4 := false
-	triedIPv4 := false
+	forceIPv4 := preferIPv4
+	triedIPv4 := preferIPv4
 	var lastErr error
 	lastUsesProxy := false
 
@@ -478,7 +518,7 @@ func fetchLatestTagErr(ctx context.Context) (string, bool, error) {
 		if forceIPv4 {
 			triedIPv4 = true
 		}
-		tag, usedProxy, err := fetchLatestTagOnce(ctx, forceIPv4)
+		tag, usedProxy, err := fetchLatestTagOnceOpts(ctx, forceIPv4, disableProxy)
 		lastUsesProxy = usedProxy
 		if err == nil {
 			return tag, forceIPv4, nil
@@ -504,6 +544,10 @@ func fetchLatestTagErr(ctx context.Context) (string, bool, error) {
 }
 
 func fetchLatestTagOnce(parentCtx context.Context, forceIPv4 bool) (string, bool, error) {
+	return fetchLatestTagOnceOpts(parentCtx, forceIPv4, false)
+}
+
+func fetchLatestTagOnceOpts(parentCtx context.Context, forceIPv4, disableProxy bool) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, updateTagAttemptTimeout)
 	defer cancel()
 
@@ -511,8 +555,8 @@ func fetchLatestTagOnce(parentCtx context.Context, forceIPv4 bool) (string, bool
 	if err != nil {
 		return "", false, err
 	}
-	usedProxy := requestUsesProxy(req)
-	tr := newUpdateTransport(forceIPv4)
+	usedProxy := requestUsesProxyWith(req, disableProxy)
+	tr := newUpdateTransportWithProxy(forceIPv4, disableProxy)
 	defer tr.CloseIdleConnections()
 	c := &http.Client{
 		Transport:     tr,
@@ -1418,6 +1462,10 @@ func downloadRelease(ctx context.Context, tag, exe string) error {
 }
 
 func downloadReleaseWithHint(ctx context.Context, tag, exe string, preferIPv4 bool) error {
+	return downloadReleaseOpts(ctx, tag, exe, preferIPv4, false)
+}
+
+func downloadReleaseOpts(ctx context.Context, tag, exe string, preferIPv4, disableProxy bool) error {
 	dir := filepath.Dir(exe)
 	if probe, err := os.CreateTemp(dir, ".collie.new.*"); err != nil {
 		return &updateFileError{dir: dir, err: err}
@@ -1430,11 +1478,11 @@ func downloadReleaseWithHint(ctx context.Context, tag, exe string, preferIPv4 bo
 	asset := "collie-" + runtime.GOOS + "-" + runtime.GOARCH
 	base := releaseRepoURL + "/releases/download/" + tag + "/"
 
-	want, usedIPv4, err := downloadChecksums(ctx, base, tag, asset, preferIPv4)
+	want, usedIPv4, err := downloadChecksumsOpts(ctx, base, tag, asset, preferIPv4, disableProxy)
 	if err != nil {
 		return err
 	}
-	tmp, err := downloadAsset(ctx, base, asset, exe, want, usedIPv4)
+	tmp, err := downloadAssetOpts(ctx, base, asset, exe, want, usedIPv4, disableProxy)
 	if err != nil {
 		return err
 	}
@@ -1455,6 +1503,10 @@ func downloadReleaseWithHint(ctx context.Context, tag, exe string, preferIPv4 bo
 }
 
 func downloadChecksums(ctx context.Context, base, tag, asset string, preferIPv4 bool) (string, bool, error) {
+	return downloadChecksumsOpts(ctx, base, tag, asset, preferIPv4, false)
+}
+
+func downloadChecksumsOpts(ctx context.Context, base, tag, asset string, preferIPv4, disableProxy bool) (string, bool, error) {
 	maxAttempts := max(1, updateMaxAttempts)
 	forceIPv4 := preferIPv4
 	triedIPv4 := preferIPv4
@@ -1465,7 +1517,7 @@ func downloadChecksums(ctx context.Context, base, tag, asset string, preferIPv4 
 		if forceIPv4 {
 			triedIPv4 = true
 		}
-		data, usedProxy, err := fetchSmallFileOnce(ctx, base+"checksums.txt", "checksums.txt", forceIPv4)
+		data, usedProxy, err := fetchSmallFileOnceOpts(ctx, base+"checksums.txt", "checksums.txt", forceIPv4, disableProxy)
 		lastUsesProxy = usedProxy
 		if err == nil {
 			want := ""
@@ -1504,6 +1556,10 @@ func downloadChecksums(ctx context.Context, base, tag, asset string, preferIPv4 
 }
 
 func fetchSmallFileOnce(parentCtx context.Context, targetURL, name string, forceIPv4 bool) ([]byte, bool, error) {
+	return fetchSmallFileOnceOpts(parentCtx, targetURL, name, forceIPv4, false)
+}
+
+func fetchSmallFileOnceOpts(parentCtx context.Context, targetURL, name string, forceIPv4, disableProxy bool) ([]byte, bool, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, updateFileAttemptTimeout)
 	defer cancel()
 
@@ -1511,8 +1567,8 @@ func fetchSmallFileOnce(parentCtx context.Context, targetURL, name string, force
 	if err != nil {
 		return nil, false, err
 	}
-	usedProxy := requestUsesProxy(req)
-	tr := newUpdateTransport(forceIPv4)
+	usedProxy := requestUsesProxyWith(req, disableProxy)
+	tr := newUpdateTransportWithProxy(forceIPv4, disableProxy)
 	defer tr.CloseIdleConnections()
 	c := &http.Client{
 		Transport: tr,
@@ -1520,7 +1576,7 @@ func fetchSmallFileOnce(parentCtx context.Context, targetURL, name string, force
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			usedProxy = requestUsesProxy(next)
+			usedProxy = requestUsesProxyWith(next, disableProxy)
 			return nil
 		},
 	}
@@ -1545,10 +1601,18 @@ func fetchSmallFileOnce(parentCtx context.Context, targetURL, name string, force
 }
 
 func downloadAsset(ctx context.Context, base, asset, exe, wantSHA string, preferIPv4 bool) (string, error) {
-	return downloadAssetToDir(ctx, base, asset, filepath.Dir(exe), wantSHA, preferIPv4, 0o755)
+	return downloadAssetOpts(ctx, base, asset, exe, wantSHA, preferIPv4, false)
+}
+
+func downloadAssetOpts(ctx context.Context, base, asset, exe, wantSHA string, preferIPv4, disableProxy bool) (string, error) {
+	return downloadAssetToDirOpts(ctx, base, asset, filepath.Dir(exe), wantSHA, preferIPv4, disableProxy, 0o755)
 }
 
 func downloadAssetToDir(ctx context.Context, base, asset, dir, wantSHA string, preferIPv4 bool, mode os.FileMode) (string, error) {
+	return downloadAssetToDirOpts(ctx, base, asset, dir, wantSHA, preferIPv4, false, mode)
+}
+
+func downloadAssetToDirOpts(ctx context.Context, base, asset, dir, wantSHA string, preferIPv4, disableProxy bool, mode os.FileMode) (string, error) {
 	maxAttempts := max(1, updateMaxAttempts)
 	forceIPv4 := preferIPv4
 	triedIPv4 := preferIPv4
@@ -1559,7 +1623,7 @@ func downloadAssetToDir(ctx context.Context, base, asset, dir, wantSHA string, p
 		if forceIPv4 {
 			triedIPv4 = true
 		}
-		tmp, usedProxy, err := downloadAssetOnce(ctx, base+asset, asset, dir, wantSHA, forceIPv4, mode)
+		tmp, usedProxy, err := downloadAssetOnceOpts(ctx, base+asset, asset, dir, wantSHA, forceIPv4, disableProxy, mode)
 		lastUsesProxy = usedProxy
 		if err == nil {
 			return tmp, nil
@@ -1589,6 +1653,10 @@ func downloadAssetToDir(ctx context.Context, base, asset, dir, wantSHA string, p
 }
 
 func downloadAssetOnce(parentCtx context.Context, targetURL, asset, dir, wantSHA string, forceIPv4 bool, mode os.FileMode) (string, bool, error) {
+	return downloadAssetOnceOpts(parentCtx, targetURL, asset, dir, wantSHA, forceIPv4, false, mode)
+}
+
+func downloadAssetOnceOpts(parentCtx context.Context, targetURL, asset, dir, wantSHA string, forceIPv4, disableProxy bool, mode os.FileMode) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, updateBinAttemptTimeout)
 	defer cancel()
 
@@ -1596,8 +1664,8 @@ func downloadAssetOnce(parentCtx context.Context, targetURL, asset, dir, wantSHA
 	if err != nil {
 		return "", false, err
 	}
-	usedProxy := requestUsesProxy(req)
-	tr := newUpdateTransport(forceIPv4)
+	usedProxy := requestUsesProxyWith(req, disableProxy)
+	tr := newUpdateTransportWithProxy(forceIPv4, disableProxy)
 	defer tr.CloseIdleConnections()
 	c := &http.Client{
 		Transport: tr,
@@ -1605,7 +1673,7 @@ func downloadAssetOnce(parentCtx context.Context, targetURL, asset, dir, wantSHA
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			usedProxy = requestUsesProxy(next)
+			usedProxy = requestUsesProxyWith(next, disableProxy)
 			return nil
 		},
 	}

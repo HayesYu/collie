@@ -104,7 +104,7 @@ func TestPeerDualHubEndToEndLoopback(t *testing.T) {
 	hubA := newTestPeerHub(t, "Alice的边牧")
 	hubB := newTestPeerHub(t, "Bob的边牧")
 
-	// 1. Hub A generates a 10-minute one-time invite code & local QR PNG.
+	// 1. Hub A generates a permanent business card & local QR PNG encoding the /join/# URL.
 	resp, raw := hubA.doOwner("POST", "/api/super/peers/invite", map[string]any{"mode": "advise"})
 	if resp.StatusCode != 200 {
 		t.Fatalf("invite status=%d body=%s", resp.StatusCode, raw)
@@ -113,12 +113,12 @@ func TestPeerDualHubEndToEndLoopback(t *testing.T) {
 	if err := json.Unmarshal(raw, &inv); err != nil {
 		t.Fatalf("unmarshal invite: %v", err)
 	}
-	if !strings.HasPrefix(inv.InviteCode, peerInvitePrefix) || inv.Code == "" || len(inv.Addrs) == 0 {
-		t.Fatalf("bad invite result: %+v", inv)
+	if !strings.HasPrefix(inv.InviteCode, peerInvitePrefix) || !strings.HasPrefix(inv.JoinURL, peerJoinBaseURL) || !inv.Permanent || inv.ExpiresAt != nil || inv.Code == "" || len(inv.Addrs) == 0 {
+		t.Fatalf("bad permanent card result: %+v", inv)
 	}
 
-	// Verify built-in local QR code renders valid PNG for the full invite string.
-	qrReq, _ := http.NewRequest("GET", hubA.http.URL+"/api/qr?text="+strings.ReplaceAll(inv.InviteCode, "+", "%2B"), nil)
+	// Verify built-in local QR code renders valid PNG for the full /join/# URL.
+	qrReq, _ := http.NewRequest("GET", hubA.http.URL+"/api/qr?text="+strings.ReplaceAll(strings.ReplaceAll(inv.JoinURL, "#", "%23"), "+", "%2B"), nil)
 	qrReq.Header.Set("Authorization", "Bearer "+hubA.token)
 	qrResp, err := hubA.client.Do(qrReq)
 	if err != nil {
@@ -131,14 +131,15 @@ func TestPeerDualHubEndToEndLoopback(t *testing.T) {
 	}
 
 	// Self-pairing must be rejected.
-	resp, raw = hubA.doOwner("POST", "/api/super/peers/pair", map[string]any{"invite_code": inv.InviteCode})
+	resp, raw = hubA.doOwner("POST", "/api/super/peers/pair", map[string]any{"invite_code": inv.JoinURL})
 	if resp.StatusCode != 400 {
 		t.Fatalf("self-pair expected 400, got %d: %s", resp.StatusCode, raw)
 	}
 
-	// 2. Hub B pairs with Hub A's invite (atomic bidirectional handshake + reverse ping).
+	// 2. Hub B submits a friend request using multi-line share text wrapping the /join/# URL.
+	shareCopy := "来加我的 Collie 好友边牧「Alice的边牧」，点击链接即可发起申请：\n" + inv.JoinURL
 	resp, raw = hubB.doOwner("POST", "/api/super/peers/pair", map[string]any{
-		"invite_code": inv.InviteCode,
+		"invite_code": shareCopy,
 		"name":        "Alice的边牧",
 		"mode":        "advise",
 	})
@@ -146,22 +147,30 @@ func TestPeerDualHubEndToEndLoopback(t *testing.T) {
 		t.Fatalf("pair B->A failed: status=%d body=%s", resp.StatusCode, raw)
 	}
 	var pairRes struct {
-		OK   bool     `json:"ok"`
-		Peer PeerView `json:"peer"`
+		OK      bool     `json:"ok"`
+		Pending bool     `json:"pending"`
+		Peer    PeerView `json:"peer"`
 	}
-	if err := json.Unmarshal(raw, &pairRes); err != nil || !pairRes.OK || pairRes.Peer.ID == "" {
-		t.Fatalf("unexpected pair response: %s", raw)
+	if err := json.Unmarshal(raw, &pairRes); err != nil || !pairRes.OK || !pairRes.Pending || pairRes.Peer.ID == "" || pairRes.Peer.Status != "pending_outgoing" {
+		t.Fatalf("unexpected pending pair response: %s", raw)
 	}
 	peerAOnB := pairRes.Peer.ID
 
-	// Replaying the same one-time invite code must fail with 401.
-	hubC := newTestPeerHub(t, "Charlie的边牧")
-	resp, raw = hubC.doOwner("POST", "/api/super/peers/pair", map[string]any{"invite_code": inv.InviteCode})
-	if resp.StatusCode != 401 {
-		t.Fatalf("replayed invite expected 401, got %d: %s", resp.StatusCode, raw)
+	// Before approval: Hub B has no outbound_token and cannot send to Hub A (403).
+	if hubB.sup.secrets.HasKey("peer:"+peerAOnB, "outbound_token") {
+		t.Fatalf("pending_outgoing peer must NOT hold an outbound_token before approval")
+	}
+	resp, raw = hubB.doOwner("POST", "/api/super/peers/"+peerAOnB+"/send", map[string]any{
+		"topic_id": "before-approve",
+		"kind":     "ask",
+		"body":     "未通过前不允许发信",
+		"confirm":  true,
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("send before approval expected 403, got %d: %s", resp.StatusCode, raw)
 	}
 
-	// Verify Hub A now has Hub B in its peers list (and no secret token leaks in JSON).
+	// Verify Hub A now has Hub B as pending_incoming with ZERO inbound_hash, and exposes pending_incoming=1 in superView.
 	resp, raw = hubA.doOwner("GET", "/api/super/peers", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /api/super/peers A: %d %s", resp.StatusCode, raw)
@@ -173,10 +182,80 @@ func TestPeerDualHubEndToEndLoopback(t *testing.T) {
 		HubID string     `json:"hub_id"`
 		Peers []PeerView `json:"peers"`
 	}
-	if err := json.Unmarshal(raw, &listA); err != nil || len(listA.Peers) != 1 {
-		t.Fatalf("expected 1 peer on A, got %s", raw)
+	if err := json.Unmarshal(raw, &listA); err != nil || len(listA.Peers) != 1 || listA.Peers[0].Status != "pending_incoming" {
+		t.Fatalf("expected 1 pending_incoming peer on A, got %s", raw)
 	}
 	peerBOnA := listA.Peers[0].ID
+
+	var preApproveHash string
+	if err := hubA.sup.db.QueryRow(`SELECT inbound_hash FROM peers WHERE id=?`, peerBOnA).Scan(&preApproveHash); err != nil {
+		t.Fatalf("query A inbound_hash: %v", err)
+	}
+	if preApproveHash != "" {
+		t.Fatalf("pending_incoming peer on A must have empty inbound_hash before approval, got %q", preApproveHash)
+	}
+	// Hub A's handshake token for B MUST NOT be allowed to post to B's /api/peer/inbox before activation.
+	preTokAtoB := hubA.sup.secrets.GetKey("peer:"+peerBOnA, "outbound_token")
+	preInboxEnv, _ := json.Marshal(PeerInboxPayload{
+		MsgID: newPeerMsgID(), TopicID: "pre-act", Kind: "ask", Body: "提前发信应被拒", SentAt: time.Now().Format(time.RFC3339),
+	})
+	preReq, _ := http.NewRequest("POST", hubB.http.URL+"/api/peer/inbox", bytes.NewReader(preInboxEnv))
+	preReq.Header.Set("Authorization", "Bearer "+preTokAtoB)
+	preReq.Header.Set("Content-Type", "application/json")
+	preResp, _ := hubB.client.Do(preReq)
+	preResp.Body.Close()
+	if preResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("inbox call to pending_outgoing Hub B must return 403, got %d", preResp.StatusCode)
+	}
+	// Cannot bypass approval via PATCH status=active.
+	resp, raw = hubA.doOwner("PATCH", "/api/super/peers/"+peerBOnA, map[string]any{"status": "active"})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("PATCH pending_incoming to active expected 409, got %d: %s", resp.StatusCode, raw)
+	}
+
+	// Permanent card is multi-scan: Hub C can also submit a request with the EXACT SAME card!
+	hubC := newTestPeerHub(t, "Charlie的边牧")
+	resp, raw = hubC.doOwner("POST", "/api/super/peers/pair", map[string]any{"invite_code": inv.InviteCode})
+	if resp.StatusCode != 200 {
+		t.Fatalf("second requester C using permanent card expected 200, got %d: %s", resp.StatusCode, raw)
+	}
+	// Hub A rejects Hub C cleanly (never granting credentials).
+	_, raw = hubA.doOwner("GET", "/api/super/peers", nil)
+	var listAC struct{ Peers []PeerView }
+	_ = json.Unmarshal(raw, &listAC)
+	var peerCOnA string
+	for _, x := range listAC.Peers {
+		if x.ID != peerBOnA {
+			peerCOnA = x.ID
+		}
+	}
+	if peerCOnA == "" {
+		t.Fatalf("expected Hub C pending_incoming on Hub A")
+	}
+	resp, raw = hubA.doOwner("POST", "/api/super/peers/"+peerCOnA+"/reject", map[string]any{"block": false})
+	if resp.StatusCode != 200 {
+		t.Fatalf("reject C failed: %d %s", resp.StatusCode, raw)
+	}
+
+	// 2b. Hub A approves Hub B -> activates both sides atomically!
+	resp, raw = hubA.doOwner("POST", "/api/super/peers/"+peerBOnA+"/approve", map[string]any{"mode": "advise"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("approve B failed: %d %s", resp.StatusCode, raw)
+	}
+	var approveRes struct {
+		OK   bool     `json:"ok"`
+		Peer PeerView `json:"peer"`
+	}
+	if err := json.Unmarshal(raw, &approveRes); err != nil || !approveRes.OK || approveRes.Peer.Status != "active" {
+		t.Fatalf("unexpected approve response: %s", raw)
+	}
+	// Hub B must now be active automatically too!
+	_, raw = hubB.doOwner("GET", "/api/super/peers", nil)
+	var listB struct{ Peers []PeerView }
+	_ = json.Unmarshal(raw, &listB)
+	if len(listB.Peers) != 1 || listB.Peers[0].Status != "active" {
+		t.Fatalf("expected Hub B to transition to active after A's approval, got %s", raw)
+	}
 
 	// Verify SQLite isolation: inbound_hash is SHA-256 (64 hex), no plaintext clp_, Auth.devices empty, secrets.json is 0600.
 	var storedHash string
@@ -493,7 +572,7 @@ func TestPeerOutboundSecretLeakBlocked(t *testing.T) {
 		t.Fatalf("update secret: %v", err)
 	}
 
-	// Pair A <-> B.
+	// Pair A <-> B (request + approve).
 	_, raw := hubA.doOwner("POST", "/api/super/peers/invite", map[string]any{"mode": "advise"})
 	var inv PeerInviteResult
 	_ = json.Unmarshal(raw, &inv)
@@ -505,6 +584,10 @@ func TestPeerOutboundSecretLeakBlocked(t *testing.T) {
 	var listA struct{ Peers []PeerView }
 	_ = json.Unmarshal(raw, &listA)
 	peerB := listA.Peers[0].ID
+	resp, raw = hubA.doOwner("POST", "/api/super/peers/"+peerB+"/approve", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("approve: %d %s", resp.StatusCode, raw)
+	}
 
 	leaks := []struct {
 		name string
@@ -542,7 +625,7 @@ func TestPeerInboundValidationRateLimitAndRedirectBlock(t *testing.T) {
 	hubA := newTestPeerHub(t, "Alice")
 	hubB := newTestPeerHub(t, "Bob")
 
-	// Pair A <-> B.
+	// Pair A <-> B (request + approve).
 	_, raw := hubA.doOwner("POST", "/api/super/peers/invite", map[string]any{"mode": "notify"})
 	var inv PeerInviteResult
 	_ = json.Unmarshal(raw, &inv)
@@ -554,6 +637,10 @@ func TestPeerInboundValidationRateLimitAndRedirectBlock(t *testing.T) {
 	var listA struct{ Peers []PeerView }
 	_ = json.Unmarshal(raw, &listA)
 	peerBOnA := listA.Peers[0].ID
+	resp, raw = hubA.doOwner("POST", "/api/super/peers/"+peerBOnA+"/approve", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("approve: %d %s", resp.StatusCode, raw)
+	}
 	tokAtoB := hubA.sup.secrets.GetKey("peer:"+peerBOnA, "outbound_token")
 
 	postInbox := func(env PeerInboxPayload) (*http.Response, []byte) {
@@ -671,5 +758,161 @@ func TestPeerCLIAndRouterDoc(t *testing.T) {
 		if !strings.Contains(routerDoc, want) {
 			t.Fatalf("routerDoc missing %q", want)
 		}
+	}
+}
+
+func TestPeerPermanentCardResetAndLegacyCompat(t *testing.T) {
+	disableAuthDelaysForTest(t)
+
+	hubA := newTestPeerHub(t, "AliceCard")
+	hubB := newTestPeerHub(t, "BobCard")
+	hubC := newTestPeerHub(t, "CharlieCard")
+
+	// 1. Permanent card persists same code across repeated fetches and mode changes, and rotates on reset=true.
+	_, raw1 := hubA.doOwner("POST", "/api/super/peers/invite", map[string]any{"mode": "advise"})
+	var card1 PeerInviteResult
+	_ = json.Unmarshal(raw1, &card1)
+
+	_, raw2 := hubA.doOwner("POST", "/api/super/peers/invite", map[string]any{"mode": "notify"})
+	var card2 PeerInviteResult
+	_ = json.Unmarshal(raw2, &card2)
+	if card1.Code != card2.Code || card2.Mode != "notify" {
+		t.Fatalf("non-reset card fetch should keep code stable: card1=%+v card2=%+v", card1, card2)
+	}
+
+	_, raw3 := hubA.doOwner("POST", "/api/super/peers/invite", map[string]any{"reset": true})
+	var card3 PeerInviteResult
+	_ = json.Unmarshal(raw3, &card3)
+	if card3.Code == card1.Code || !strings.HasPrefix(card3.JoinURL, peerJoinBaseURL) {
+		t.Fatalf("reset=true must rotate card secret: old=%s new=%s", card1.Code, card3.Code)
+	}
+
+	// Old card1 must now be rejected with 401.
+	resp, raw := hubB.doOwner("POST", "/api/super/peers/pair", map[string]any{"invite_code": card1.JoinURL})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("reset card old link expected 401, got %d: %s", resp.StatusCode, raw)
+	}
+
+	// Legacy expired invite (exp in the past) must still be rejected by decodePeerInvite.
+	expiredLegacy, _ := encodePeerInvite(PeerInvitePayload{
+		V: 1, Code: card3.Code, HubID: card3.HubID, HubName: "Old", Addrs: card3.Addrs,
+		Exp: time.Now().Add(-5 * time.Minute).Unix(),
+	})
+	if _, err := decodePeerInvite(expiredLegacy, time.Now()); err == nil {
+		t.Fatalf("expected expired legacy invite to fail decodePeerInvite")
+	}
+	// Extraction supports /join/#<b64>, /join/#collie-peer://v1/<b64>, and ?peer_invite=.
+	b64Only := strings.TrimPrefix(card3.InviteCode, peerInvitePrefix)
+	for _, sample := range []string{
+		card3.JoinURL,
+		"https://lihuanyu0w0.github.io/collie/join/#collie-peer://v1/" + b64Only,
+		"http://127.0.0.1:17788/?peer_invite=collie-peer%3A%2F%2Fv1%2F" + b64Only,
+		"加我好友\n" + card3.JoinURL + "\n谢谢",
+	} {
+		if _, err := decodePeerInvite(sample, time.Now()); err != nil {
+			t.Fatalf("decodePeerInvite(%q) failed: %v", sample, err)
+		}
+	}
+
+	// 2. Legacy v0.3.0-v0.3.2 requester (request_approval=false) -> New Hub A:
+	//    still lands in pending_incoming and gated token is 403-blocked until Hub A approves.
+	tokCIn := newPeerToken()
+	hubC.sup.peers.registerPendingToken(tokCIn, card3.HubID)
+	legacyBody, _ := json.Marshal(peerPairAcceptReq{
+		Code:              card3.Code,
+		HubID:             "hub_legacy_c",
+		HubName:           "LegacyC",
+		Addrs:             []string{hubC.http.URL},
+		OutboundTokenForA: tokCIn,
+		ProtocolVer:       1,
+		RequestApproval:   false,
+	})
+	req, _ := http.NewRequest("POST", hubA.http.URL+"/api/peer/pair/accept", bytes.NewReader(legacyBody))
+	req.Header.Set("Content-Type", "application/json")
+	lr, err := hubA.client.Do(req)
+	if err != nil {
+		t.Fatalf("legacy accept: %v", err)
+	}
+	lraw, _ := io.ReadAll(lr.Body)
+	lr.Body.Close()
+	var acc peerPairAcceptResp
+	_ = json.Unmarshal(lraw, &acc)
+	if lr.StatusCode != 200 || !acc.OK || !isValidPeerTokenFormat(acc.OutboundTokenForB) {
+		t.Fatalf("legacy accept expected gated token, got %d: %s", lr.StatusCode, lraw)
+	}
+
+	// Before approval, gated token MUST get 403 on Hub A's /api/peer/inbox and /api/peer/ping.
+	pingReq, _ := http.NewRequest("GET", hubA.http.URL+"/api/peer/ping", nil)
+	pingReq.Header.Set("Authorization", "Bearer "+acc.OutboundTokenForB)
+	pr, _ := hubA.client.Do(pingReq)
+	pr.Body.Close()
+	if pr.StatusCode != http.StatusForbidden {
+		t.Fatalf("legacy gated token before approval expected 403 on /ping, got %d", pr.StatusCode)
+	}
+	inboxBody, _ := json.Marshal(PeerInboxPayload{
+		MsgID: newPeerMsgID(), TopicID: "legacy-gate", Kind: "ask", Body: "blocked", SentAt: time.Now().Format(time.RFC3339),
+	})
+	inReq, _ := http.NewRequest("POST", hubA.http.URL+"/api/peer/inbox", bytes.NewReader(inboxBody))
+	inReq.Header.Set("Authorization", "Bearer "+acc.OutboundTokenForB)
+	inReq.Header.Set("Content-Type", "application/json")
+	ir, _ := hubA.client.Do(inReq)
+	ir.Body.Close()
+	if ir.StatusCode != http.StatusForbidden {
+		t.Fatalf("legacy gated token before approval expected 403 on /inbox, got %d", ir.StatusCode)
+	}
+
+	// Once Hub A approves, legacy gated token immediately works!
+	_, listRaw := hubA.doOwner("GET", "/api/super/peers", nil)
+	var listA struct{ Peers []PeerView }
+	_ = json.Unmarshal(listRaw, &listA)
+	if len(listA.Peers) != 1 || listA.Peers[0].Status != "pending_incoming" {
+		t.Fatalf("expected legacy peer pending_incoming on A, got %s", listRaw)
+	}
+	resp, raw = hubA.doOwner("POST", "/api/super/peers/"+listA.Peers[0].ID+"/approve", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("approve legacy peer failed: %d %s", resp.StatusCode, raw)
+	}
+	pingReq2, _ := http.NewRequest("GET", hubA.http.URL+"/api/peer/ping", nil)
+	pingReq2.Header.Set("Authorization", "Bearer "+acc.OutboundTokenForB)
+	pr2, _ := hubA.client.Do(pingReq2)
+	pr2.Body.Close()
+	if pr2.StatusCode != 200 {
+		t.Fatalf("legacy gated token after approval expected 200 on /ping, got %d", pr2.StatusCode)
+	}
+
+	// 3. New Hub B -> Legacy v0.3.0-v0.3.2 Hub A (no status:"pending", returns outbound_token_for_b immediately):
+	//    New Hub B falls back cleanly to immediate active pairing.
+	legacyTok := newPeerToken()
+	legacyHubA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/peer/pair/accept" {
+			writeJSON(w, 200, map[string]any{
+				"ok":                   true,
+				"hub_id":               "hub_old_v031",
+				"hub_name":             "OldV031",
+				"addrs":                []string{},
+				"chosen_addr":          hubB.http.URL,
+				"outbound_token_for_b": legacyTok,
+				"protocol_ver":         1,
+			})
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer legacyHubA.Close()
+	oldInv, _ := encodePeerInvite(PeerInvitePayload{
+		V: 1, Code: "OLDV031CODE1", HubID: "hub_old_v031", HubName: "OldV031",
+		Addrs: []string{legacyHubA.URL}, Exp: time.Now().Add(5 * time.Minute).Unix(),
+	})
+	resp, raw = hubB.doOwner("POST", "/api/super/peers/pair", map[string]any{"invite_code": oldInv})
+	if resp.StatusCode != 200 {
+		t.Fatalf("new B -> legacy A expected 200, got %d: %s", resp.StatusCode, raw)
+	}
+	var legPair struct {
+		OK      bool     `json:"ok"`
+		Pending bool     `json:"pending"`
+		Peer    PeerView `json:"peer"`
+	}
+	if err := json.Unmarshal(raw, &legPair); err != nil || !legPair.OK || legPair.Pending || legPair.Peer.Status != "active" {
+		t.Fatalf("expected immediate active fallback for legacy A, got %s", raw)
 	}
 }

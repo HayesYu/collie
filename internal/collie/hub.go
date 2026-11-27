@@ -732,7 +732,7 @@ func (s *Server) qr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	level := qrcode.Medium
-	if len(text) > 256 {
+	if len(text) > 180 {
 		level = qrcode.Low
 	}
 	png, err := qrcode.Encode(text, level, 512)

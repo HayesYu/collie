@@ -4,6 +4,63 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.4 (2026-11-27)
+
+### Highlights
+
+- **Native `collie update` (Alias: `collie upgrade`) CLI Self-Update (`internal/collie/{update_cli.go,updates.go,cli.go,main.go,server.go}`)**:
+  - Added native `collie update` (and friendly alias `collie upgrade`) reusing Collie's hardened self-update pipeline (`selfUpdateMu`, 3x retry with IPv4 fallback, automatic proxy-failure direct IPv4 fallback, `checksums.txt` SHA-256 verification, `<tmp> version` executability check, and atomic `os.Rename` binary replacement).
+  - **Local update (`collie update` / `collie update --force`)**: Compares current version against GitHub `releases/latest`, prints a friendly message when already up to date (`--force` reinstalls or switches a `dev` source build to the latest official release), atomically replaces the running binary, and automatically detects and smoothly restarts active managed services pointing to that binary (Linux `systemd --user` `collie-hub` / `collie-node`; macOS `launchd` `com.collie.node` / `com.collie.hub` with built-in `LWCR / EX_CONFIG` `bootout + bootstrap` fallback; or prints a clean manual restart hint when unmanaged).
+  - **Read-only version check (`collie update --check`)**: Prints a clear current-vs-latest comparison (and supports `--all --check` to inspect the entire connected fleet) with exit code `0` and zero downloads or file changes.
+  - **One-command fleet rolling update (`collie update --all`)**: Talks to the connected Hub's `/api/version` and `/api/update`, upgrading all outdated online remote nodes first (automatically leveraging Hub `yamux` relay fallback when remote nodes cannot reach GitHub directly), skipping offline/up-to-date nodes cleanly, upgrading the Hub last, and printing a structured per-machine summary.
+  - Added comprehensive race-checked unit tests (`internal/collie/update_cli_test.go`) covering mock GitHub releases, checksum & broken-binary blocking, proxy-to-direct IPv4 fallback, Linux/macOS service restarts, fleet update ordering, and machine-token auth; updated `collie --help`, bilingual READMEs, and the homepage Quick Start & Upgrade docs.
+
+### Client / API Changes
+
+- **Paired machine token auth scope (`GET /api/version`, `POST /api/update`)**:
+  - Paired computer (`kind: "machine"`) Bearer tokens are now permitted to call `GET /api/version` and `POST /api/update` so `collie update --all` works from joined nodes as well as the Hub machine. Web-only routes (`POST /api/login`, `GET /api/devices`, etc.) remain restricted (`401 Unauthorized`).
+- **Breaking changes**: None.
+
+---
+
+## v0.3.3 (2026-11-27)
+
+### Highlights
+
+- **Zero-Server HTTPS Click-to-Add Landing Page (`docs/join/index.html`)**:
+  - Added bilingual (EN / 中文), light/dark adaptive static landing page at `https://lihuanyu0w0.github.io/collie/join/#<payload>` that parses the friend's Collie business card 100% client-side from `location.hash` with zero outbound network requests (`no-referrer`, never leaves the browser).
+  - Remembers the visitor's own Collie Hub URL in `localStorage` (with one-tap local presets `http://127.0.0.1:17788` / `http://127.0.0.1:7788` and custom LAN / Tailscale input validation), jumping directly to `<myHub>/?peer_invite=...` with a fallback invite-code copy button and a restrained new-user onboarding card below.
+- **Permanent Personal Business Cards & Direct `/join/#` QR Codes (`internal/collie/{peer.go,peer_api.go,hub.go,cli.go}`, `web/app.js`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Replaced the 10-minute one-time peer invite with a permanent, reusable personal business card secret persisted in SQLite (`peer_card_secret`) — safe to drop into group chats or scan hours later, paired with a manual「重置名片」action (`reset: true`) that immediately invalidates old links and QR codes without affecting already-paired friends.
+  - Encoded `https://lihuanyu0w0.github.io/collie/join/#<payload>` directly inside the「我的边牧名片」QR code (and lowered QR low-EC threshold to `> 180` bytes for crisper mobile scanning), so system cameras, WeChat, and Feishu open the `/join/#` page immediately; updated the primary action to「一键复制邀请链接」while keeping the raw `collie-peer://v1/...` line and backwards-compatible scanning/pasting of share copy, `/join/#` links, `?peer_invite=`, and legacy expiring `collie-peer://v1/...` codes.
+- **Approval-First Bidirectional Friend Requests & `?peer_invite=` Auto-Open (`internal/collie/{peer.go,peer_api.go,cli.go}`, `web/{index.html,app.css,app.js}`, `docs/demo/`)**:
+  - Opening Collie Web UI with `?peer_invite=...` (or `#peer_invite=...`) immediately strips the parameter via `history.replaceState`, auto-opens「好友边牧 → 扫码 / 粘贴加好友」with the card prefilled and previewed, and requires just one tap on「发送好友申请」.
+  - Submitting a friend request now creates `pending_incoming` on the inviter (zero inbound inbox credentials granted; all `/api/peer/inbox` calls rejected until approved) and `pending_outgoing` on the requester; the inviter receives a clickable main-chat notification bar (`#peer-req-bar`), a clickable main-chat event, and a top-pinned「待审批好友申请」section in the peer modal with inline reception-mode selection and one-tap「通过 / 拒绝 / 拒绝并拉黑」actions. Approving activates both Hubs atomically via `POST /api/peer/pair/activate` (with seamless fallback for `v0.3.0–v0.3.2` Hubs).
+- **Threads Side Card Visual Alignment with「小本本」(`web/app.css`, `docs/demo/`)**:
+  - Unified the「话题线」side card interior inside `#notes-pane` with「小本本」's calm white-paper checklist language: matching 13px inset, delicate `10.5px` filter tabs, borderless rows with soft hover/active fill, calm 5px status dot without glow halo, and airy 2-line title + faint metadata layout.
+
+### Client / API Changes
+
+- **`POST /api/super/peers/invite`**:
+  - Request body adds optional `reset?: boolean` (defaults to `false`; when `true`, rotates the permanent business card secret and invalidates previously shared links/QR codes).
+  - Response adds `join_url: string` (`https://lihuanyu0w0.github.io/collie/join/#<payload>`) and `permanent: boolean` (`true`); `expires_at` is now optional/omitted for permanent cards (kept only if an expiring invite is returned).
+- **`POST /api/super/peers/pair`**:
+  - `invite_code` now accepts raw `collie-peer://v1/...`, `/join/#<payload>` URLs, `?peer_invite=...` URLs, or multi-line share text.
+  - Response adds `pending: boolean` (`true` when remote Hub requires approval and local peer enters `status: "pending_outgoing"`; `false` on legacy `v0.3.0–v0.3.2` immediate pairing).
+- **New owner peer-approval HTTP endpoints (standard `s.auth`)**:
+  - `POST /api/super/peers/{id}/approve`: Accepts optional `{ name?, mode? }`, activates a `pending_incoming` friend request on both Hubs, and returns `{ ok: true, peer }`.
+  - `POST /api/super/peers/{id}/reject`: Accepts optional `{ block?: boolean }` (or `?block=1`), permanently deletes the `pending_incoming` request without issuing credentials, optionally adds `hub_id` to `peer_blocklist`, notifies the requester, and returns `{ ok: true, blocked }`.
+- **New narrow peer-to-peer HTTP endpoint (`peerAuth`, Bearer `clp_` token)**:
+  - `POST /api/peer/pair/activate`: Called by the inviter upon approval to deliver `outbound_token_for_b` and transition the requester's `pending_outgoing` peer record to `active`.
+  - `POST /api/peer/pair/accept`: Request adds optional `request_approval?: boolean`; response adds `status?: "pending"` and omits `outbound_token_for_b` when `request_approval: true`.
+- **`PeerView.status` & `PeersSummary` (`GET /api/super`, SSE `event: super`, `GET /api/super/peers`)**:
+  - `PeerView.status` adds `"pending_incoming"` and `"pending_outgoing"` (in addition to `"active"`, `"paused"`, `"revoked_by_peer"`).
+  - `PeersSummary` adds optional `pending_incoming?: number` and `pending_outgoing?: number` (omitted when zero; backwards-compatible).
+- **`GET /api/qr`**: Lowered EC Low threshold from `> 256` to `> 180` bytes for higher scannability on `/join/#` business card QR codes.
+- **Breaking changes**: None (`v0.3.0–v0.3.2` Hubs remain bidirectionally compatible).
+
+---
+
 ## v0.3.2 (2026-11-27)
 
 ### Highlights

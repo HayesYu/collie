@@ -120,7 +120,7 @@ node 会主动出站连上 hub（不开端口、不配 SSH），把地址和独�
 
 > **集成与安全说明**：安装脚本会为未安装项自动补装 Claude Code 与 Antigravity 的 herdr 集成，不会覆写已有配置；**Codex 默认跳过全局 hook**（Collie 无需改动 `~/.codex/hooks.json` 即可正常发现、对话和恢复 Codex，如确需安装可传 `COLLIE_INSTALL_CODEX_HOOK=1`）。局域网默认明文 HTTP，跨网络使用请置于 Tailscale / VPN 或 HTTPS 反向代理后（配合 `--url https://…`）。
 
-**一键全端更新**：有新版本发布时，侧栏底部和「设备」页会出现升级提示，点击**一键更新**即按「先远端 node、后 hub」顺序校验并原地重启，不打断正在跑的 Agent。
+**一键全端更新**：有新版本发布时，点击侧栏底部或「设备」页的**一键更新**，或在终端直接运行 `collie update`（支持别名 `collie upgrade`）：`collie update --check` 只读检查版本，`collie update` 原子更新本机并平滑重启后台服务，`collie update --all` 按「先远端 node（自动复用 Hub 隧道中转兜底）、后 hub」顺序更新全端，不打断正在跑的 Agent。
 
 ## 架构
 
@@ -172,9 +172,17 @@ node 会主动出站连上 hub（不开端口、不配 SSH），把地址和独�
 
 加入了 hub 的电脑会在本机 `http://127.0.0.1:17788` 提供同一套界面（转发到 hub）。浏览器视 `127.0.0.1` 为安全来源，用 Chrome 打开并配对一次后，点地址栏右侧「安装 Collie」即可放进 Dock 并开启桌面通知。换端口：`collie node --ui 127.0.0.1:<端口>`；关闭：`--ui off`。
 
-### 手动升级与从源码安装
+### 命令行升级与从源码安装
 
-手动升级只需重跑安装命令（node 无需重新配对；hub 如曾传过 `--url` 等参数请一并带上）。
+终端直接原地升级（自动校验 SHA-256、原子替换二进制，并平滑重启正在运行的 `systemd --user` / `launchd` 服务）：
+
+```bash
+collie update --check   # 只读检查当前版本与最新版本
+collie update           # 更新本机（支持 collie upgrade 别名；加 --force 可强制重装）
+collie update --all     # 一键先升级所有在线远端节点，最后升级 hub
+```
+
+也可以重跑安装脚本手动升级（node 无需重新配对；hub 如曾传过 `--url` 等参数请一并带上）。
 
 从源码构建安装（需要 **Go 1.25+** 和 `git`）：
 
@@ -237,6 +245,7 @@ collie say "…"                                               # 以你的身份
 collie hook <source> "…"                                     # 模拟注入一个外部事件
 collie pair [--computer]                                     # 打印手机配对二维码 / 电脑加入命令
 collie node [--hub URL --code CODE] [--name mac]             # 把这台电脑接到 hub
+collie update [--check | --all | --force]                    # 检查或更新 collie（支持 upgrade 别名）
 ```
 
 </details>

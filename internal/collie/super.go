@@ -177,8 +177,8 @@ func (sp *Super) addEntryReLocked(role, thread, text, ref, tone string, re *Quot
 	return sp.addEntryReplyLocked(role, thread, text, ref, tone, re, nil, false)
 }
 
-func (sp *Super) addEntryReplyLocked(role, thread, text, ref, tone string, re *Quote, opts []string, check bool) *Entry {
-	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re, Options: opts, Check: check}
+func (sp *Super) addEntryReplyLocked(role, thread, text, ref, tone string, re *Quote, opts []string, check bool, files ...string) *Entry {
+	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re, Options: opts, Files: files, Check: check}
 	sp.st.Entries = append(sp.st.Entries, e)
 	if role == "collie" || tone == "blocked" || tone == "error" {
 		sp.queueNotifyLocked(role, text, tone, re, check, opts...)
@@ -193,6 +193,7 @@ func (sp *Super) addEntryReplyLocked(role, thread, text, ref, tone string, re *Q
 const (
 	maxReplyOptions     = 6
 	maxReplyOptionRunes = 240
+	maxReplyFiles       = 12
 	sayDedupTTL         = 2 * time.Minute
 	maxSayDedup         = 512
 )
@@ -209,6 +210,21 @@ func cleanOptions(raw []string) []string {
 		}
 		out = append(out, s)
 		if len(out) >= maxReplyOptions {
+			break
+		}
+	}
+	return out
+}
+
+func cleanFiles(raw []string) []string {
+	var out []string
+	for _, s := range raw {
+		s = strings.TrimSpace(s)
+		if s == "" || strings.ContainsAny(s, "\r\n\x00") || slices.Contains(out, s) {
+			continue
+		}
+		out = append(out, s)
+		if len(out) >= maxReplyFiles {
 			break
 		}
 	}
@@ -261,12 +277,18 @@ func (sp *Super) recordSayDedupLocked(id, entryID, triggerID string, now time.Ti
 // Reply posts Collie's message to a conversation thread, with optional quote,
 // quick-reply buttons or --check review flag, and returns any soft warning for the CLI.
 func (sp *Super) Reply(thread, text, reID string, options []string, check ...bool) (*Entry, string) {
+	chk := len(check) > 0 && check[0]
+	return sp.ReplyFiles(thread, text, reID, options, chk, nil)
+}
+
+// ReplyFiles posts Collie's message with optional attached deliverable file paths.
+func (sp *Super) ReplyFiles(thread, text, reID string, options []string, check bool, files []string) (*Entry, string) {
 	text = strings.TrimSpace(text)
 	if thread == "" {
 		thread = mainThread
 	}
 	opts := cleanOptions(options)
-	chk := len(check) > 0 && check[0]
+	fs := cleanFiles(files)
 	sp.mu.Lock()
 	limit := sp.st.Settings.ReplyChars
 	re := sp.quoteLocked(reID)
@@ -280,7 +302,7 @@ func (sp *Super) Reply(thread, text, reID string, options []string, check ...boo
 			reFromFeishu = true
 		}
 	}
-	e := sp.addEntryReplyLocked("collie", thread, text, "", "", re, opts, chk)
+	e := sp.addEntryReplyLocked("collie", thread, text, "", "", re, opts, check, fs...)
 	instant := sp.feishu != nil && sp.feishu.ShouldInstantSync(e, reFromFeishu)
 	if instant && len(sp.notifyBuf) > 0 && sp.notifyBuf[len(sp.notifyBuf)-1].entryID == e.ID {
 		sp.notifyBuf[len(sp.notifyBuf)-1].instantSent = true
@@ -1959,6 +1981,9 @@ func (sp *Super) quoteLocked(id string) *Quote {
 		if q := entryQuote(t.Ref, false); q != nil {
 			return q
 		}
+		if e := sp.findEntryLocked(t.Ref); e != nil && e.Role == "collie" && e.Pick != nil && e.Pick.State == "picked" && e.Pick.Text != "" {
+			return &Quote{Entry: e.ID, Who: "你选择了", Text: "「" + e.Pick.Text + "」"}
+		}
 		return &Quote{Who: "你", Text: humanText(t.Text)}
 	case "timer":
 		return &Quote{Who: "定时", Text: t.Text}
@@ -2227,6 +2252,10 @@ func (sp *Super) dismiss(id string, syncExternal bool) {
 		sp.st.Dismissed = map[string]bool{}
 	}
 	changed := !sp.st.Dismissed[id]
+	if e := sp.findEntryLocked(id); e != nil && e.Role == "collie" && len(e.Options) > 0 && e.Pick == nil {
+		e.Pick = &DecisionPick{State: "dismissed", At: time.Now()}
+		changed = true
+	}
 	if changed {
 		sp.st.Dismissed[id] = true
 		sp.changed()
@@ -2278,7 +2307,7 @@ func (sp *Super) pendingLocked(now time.Time) []PendingItem {
 		if e.Role != "collie" || (e.Thread != "" && e.Thread != mainThread) || (len(e.Options) == 0 && !e.Check) || e.ID == "" {
 			continue
 		}
-		if sp.st.Dismissed[e.ID] {
+		if sp.st.Dismissed[e.ID] || e.Pick != nil {
 			continue
 		}
 		if !now.IsZero() && !e.At.IsZero() && now.Sub(e.At) > pendingMaxAge {

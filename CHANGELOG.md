@@ -4,6 +4,40 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.2.92 (2026-11-27)
+
+### Highlights
+
+- **Seamless Borderless Top Bar, Transparent `#crew` & Ghost `派活 · 默认` (`web/index.html`, `web/app.css`, `web/app.js`)**:
+  - Removed hard top/bottom divider rules from the Collie chat header, `#crew` strip, and thread drawer header, blending them seamlessly into the page surface with a gentle bottom fade veil.
+  - Switched `#crew` worker capsules to a restrained transparent fill with a crisp 1px hairline border and container-query (`@container collie-top`) width adaptation when side drawers narrow the main column.
+  - Lightened the bottom composer's default `派活 · 默认` trigger into borderless ghost gray text at rest, displaying a subtle neutral capsule only when a single-message override is active.
+- **Top-Right Floating White-Paper「小本本」(`internal/collie/notebook.go`, `web/index.html`, `web/app.css`, `web/app.js`)**:
+  - Added a read-only `GET /api/super/notebook` endpoint aggregating ongoing items from `memory/tasks/*.md` (falling back to live workers), today's generated deliverables (`.html`, `.csv`, `.tsv`, `.md`, etc.), and upcoming enabled timers.
+  - On wide desktops (`>= 1360px`), floats a compact white-paper card (`~232px` wide, zero footer chrome) docked at the top-right showing 3 single-line ongoing items, 2 latest today's artifacts (clickable to preview directly), and 1 nearest timer with `+N` overflow hints; one-click expand unfolds all items with status notes, timestamps, and gentle internal scroll without overlapping the conversation.
+  - Optically centers the chat column on wide viewports, automatically yields at `< 1360px` or when opening a right thread/file/HTML drawer (restoring cleanly on close), and stays completely absent from mobile top chrome (accessible on demand via the header icon as a bottom drawer).
+- **Decision Card Silent Receipt & Inline「补充一句」(`internal/collie/store.go`, `super.go`, `superapi.go`, `web/app.js`, `web/app.css`)**:
+  - Clicking an `--opt` choice now sends `pick: true` and collapses the decision card in place into a sleek collapsible `<details class="reply-receipt">` (`✓ 已选：… · HH:MM`) without cluttering the chat stream with a redundant black user bubble; Collie's follow-up reply carries a quiet quote strip (`你选择了「…」`) linking back to the decision.
+  - Clicking「补充一句」opens an inline single-line input; only submitting custom text emits a normal user message bubble while recording `✓ 已补充：… · HH:MM` on the original card.
+- **Light Deliverable Snapshot Cards, Sandboxed HTML Drawer & Native `.csv` / `.tsv` Table Preview (`internal/collie/cli.go`, `super.go`, `web/app.js`, `web/app.css`)**:
+  - Added repeatable `collie reply --file <path>` support and light deliverable snapshot cards in Collie messages for `.html` / `.csv` / `.tsv` outputs.
+  - Opening `.html` artifacts now launches an aligned (`60px` header, 0px step) desktop right split drawer or mobile `93dvh` bottom sheet hosting an opaque-origin sandboxed `<iframe sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads" referrerpolicy="no-referrer">` (`srcdoc`), with one-click widen and open-in-new-tab controls.
+  - Added native RFC 4180 `.csv` and `.tsv` table rendering in both the file preview drawer (`#file-view`) and wide reader (`#/file`), supporting quoted delimiters, escaped `""`, embedded multi-line cells, UTF-8 BOM stripping, sticky headers and row numbers, horizontal scrolling, safe 5,000-row cap with 100-row pagination, and a top-right `表格 / 原文` toggle alongside Download and exact raw Copy.
+- **Memory Tab Dream Summary Slimming (`web/app.js`, `web/app.css`)**:
+  - Collapsed the top Dream status summary in `自动化 → 记忆` into a single truncated muted plain-text line (`最近做梦 · … · 展开详情`), keeping the full rendered dream journal one click away without pushing instructions below the fold.
+- **Static Demo Sync (`scripts/demo/demo.js`, `docs/demo/`)**:
+  - Added demo `/api/super/notebook`, RFC 4180 `.csv` preview fixture, and silent decision-card receipts, and regenerated `docs/demo/`.
+
+### Client / API Changes
+
+- **`GET /api/super/notebook` (new, read-only)**: Returns `{ date, tasks, artifacts, timers }` summarizing active `memory/tasks/*.md` items (or live workers), today's deliverable files, and sorted upcoming enabled timers.
+- **`POST /api/super/say`**: Accepts optional `pick: boolean` (when `true` with `re` pointing to a Collie `--opt` entry, records `Entry.pick` in place without emitting a user bubble and still triggers the router with a `你选择了` quote context).
+- **`POST /api/super/reply` & CLI `collie reply`**: Accepts optional `files: string[]` (repeatable `--file <path>` flag on `collie reply`) to attach deliverable file paths rendered as light snapshot cards.
+- **`Entry` schema (`GET /api/super`, SSE `super`, `GET /api/super/earlier`)**: Adds optional `pick?: { state: "picked" | "custom" | "dismissed", text?: string, at?: string }` and `files?: string[]`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.2.91 (2026-11-27)
 
 ### Highlights

@@ -46,6 +46,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("GET /api/super/lark", s.superLark)
 	api("GET /api/super/earlier", s.superEarlier)
 	api("GET /api/super/search", s.superSearch)
+	api("GET /api/super/notebook", s.superNotebook)
 	api("GET /api/super/memory", s.superMemory)
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("GET /api/memory/export", s.memoryExport)
@@ -267,6 +268,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		Model       string `json:"model"`
 		Effort      string `json:"effort"`
 		Re          string `json:"re"`            // a message of Collie's this answers
+		Pick        bool   `json:"pick"`          // true when tapping a --opt button: collapse card in-place without a user bubble
 		ClientMsgID string `json:"client_msg_id"` // optional client idempotency token
 	}
 	if !decode(w, r, &body) || strings.TrimSpace(body.Text) == "" {
@@ -289,17 +291,37 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	}
 	beforePending := sp.pendingLocked(now)
 	re := sp.sayQuoteLocked(body.Re)
-	e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
-	if cid != "" {
-		e.ClientMsgID = cid
+	var pickTarget *Entry
+	if re != nil && re.Entry != "" {
+		if cand := sp.findEntryLocked(re.Entry); cand != nil && cand.Role == "collie" && len(cand.Options) > 0 {
+			pickTarget = cand
+		}
 	}
-	// The composer's "派到" chip: a one-off choice the router should honour.
+	isSilentPick := body.Pick && pickTarget != nil
+	var entryID string
 	text := body.Text
-	if re != nil { // which message they mean: Collie need not guess
-		if re.Who == "你" {
-			text = "[In reply to what the human said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
-		} else {
-			text = "[In reply to what you said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
+	if isSilentPick {
+		pickedLabel := strings.TrimSpace(body.Text)
+		pickTarget.Pick = &DecisionPick{State: "picked", Text: pickedLabel, At: now}
+		entryID = pickTarget.ID
+		sp.changed()
+		text = "[The human picked option \"" + clip(oneLine(pickedLabel), 300) + "\" in reply to your message \"" + clip(pickTarget.Text, 240) + "\"]\n" + pickedLabel
+	} else {
+		e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
+		if cid != "" {
+			e.ClientMsgID = cid
+		}
+		entryID = e.ID
+		if pickTarget != nil && pickTarget.Pick == nil {
+			pickTarget.Pick = &DecisionPick{State: "custom", Text: strings.TrimSpace(body.Text), At: now}
+			sp.changed()
+		}
+		if re != nil { // which message they mean: Collie need not guess
+			if re.Who == "你" {
+				text = "[In reply to what the human said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
+			} else {
+				text = "[In reply to what you said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
+			}
 		}
 	}
 	st := sp.st.Settings
@@ -344,8 +366,8 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	if len(hint) > 0 {
 		text += "\n\n[The human picked where this runs: spawn with " + strings.Join(hint, " ") + "]"
 	}
-	t := sp.ingestLocked("chat", mainThread, "you", text, "", "", e.ID)
-	sp.recordSayDedupLocked(cid, e.ID, t.ID, now)
+	t := sp.ingestLocked("chat", mainThread, "you", text, "", "", entryID)
+	sp.recordSayDedupLocked(cid, entryID, t.ID, now)
 	afterPending := sp.pendingLocked(now)
 	mgr := sp.integrations
 	sp.mu.Unlock()
@@ -364,14 +386,22 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 			resolvedIDs[re.Entry] = true
 		}
 		if len(resolvedIDs) > 0 {
-			summary := "已在网页端回复：" + clip(oneLine(body.Text), 40)
+			prefix := "已在网页端回复："
+			if isSilentPick {
+				prefix = "已在网页端选择："
+			}
+			summary := prefix + clip(oneLine(body.Text), 40)
 			for rid := range resolvedIDs {
 				id := rid
 				go mgr.SyncResolved(context.Background(), id, summary, "")
 			}
 		}
 	}
-	writeJSON(w, 200, map[string]any{"entry": e.ID, "trigger": t.ID})
+	resp := map[string]any{"entry": entryID, "trigger": t.ID}
+	if isSilentPick {
+		resp["picked"] = true
+	}
+	writeJSON(w, 200, resp)
 }
 
 func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
@@ -380,6 +410,7 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 		Thread  string   `json:"thread"`
 		Re      string   `json:"re"`
 		Options []string `json:"options"`
+		Files   []string `json:"files"`
 		Check   bool     `json:"check"`
 	}
 	if !decode(w, r, &body) {
@@ -389,7 +420,7 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "empty reply"})
 		return
 	}
-	e, warn := s.sup.Reply(body.Thread, body.Text, body.Re, body.Options, body.Check)
+	e, warn := s.sup.ReplyFiles(body.Thread, body.Text, body.Re, body.Options, body.Check, body.Files)
 	res := map[string]any{"ok": true, "entry": e.ID}
 	if warn != "" {
 		res["warning"] = warn

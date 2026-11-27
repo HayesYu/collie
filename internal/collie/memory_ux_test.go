@@ -285,10 +285,11 @@ const dreamEntry = {
 const dSum = T.extractDreamSummary(dreamEntry);
 assert.equal(dSum.stamp, "2026-11-27 04:00");
 assert.equal(dSum.headline, "整理了分页测试笔记并归档 1 个已完成任务。");
+assert.ok(dSum.oneLine.includes("整理了分页测试笔记并归档 1 个已完成任务"), "oneLine must carry clean plain-text lead summary");
 assert.equal(dSum.points.length, 3, "summary points must be capped at 3");
 assert.equal(dSum.hasMore, true, "extra 4th bullet must flag hasMore");
 
-// 2d) renderMemoryHTML: default view (Dream summary card + grouped instructions) vs search view
+// 2d) renderMemoryHTML: default view (slim 1-line Dream summary row + grouped instructions) vs search view
 const nowIso = new Date().toISOString();
 mockMem = {
   dir: "~/.collie",
@@ -310,24 +311,26 @@ mockMem = {
   ],
 };
 
-// Idle view
+// Idle view: dream summary collapses to a single thin truncated plain-text row (no <ul>/<code> dump)
 T.setMemDreamExpanded(false);
 const idle = T.renderMemoryHTML(mockMem, "");
 assert.equal(idle.searching, false);
-assert.ok(idle.html.includes("最近做梦摘要"), "idle view must include dream summary block");
+assert.ok(idle.html.includes("最近做梦"), "idle view must include slim dream summary row");
+assert.ok(idle.html.includes('class="mem-dream-row"') && idle.html.includes('class="mem-dream-one"'), "collapsed dream summary must render single-line row");
 assert.ok(idle.html.includes("2026-11-27 04:00"), "idle view must format dream timestamp");
-assert.ok(idle.html.includes("查看完整日志"), "idle view must include expand toggle button");
+assert.ok(idle.html.includes("展开详情"), "idle view must include expand toggle label");
 assert.ok(idle.html.includes('data-ins-group="explicit"') && idle.html.includes("你亲口说的"), "must show explicit instructions group");
 assert.ok(idle.html.includes('data-ins-group="inferred"') && idle.html.includes("Collie 从对话中推断的"), "must show inferred instructions group");
 assert.ok(idle.html.includes('data-act="mem-ins-del"') && idle.html.includes('data-act="mem-ins-edit"'), "inferred items must offer quick edit and delete actions");
 const idleDreamRegion = idle.html.slice(idle.html.indexOf('class="mem-dream-sum"'), idle.html.indexOf('class="mem-load"'));
-assert.ok(!idleDreamRegion.includes("第 4 条不应挤进前 3 要点"), "collapsed dream summary must not dump 4th point");
+assert.ok(!idleDreamRegion.includes("<ul") && !idleDreamRegion.includes("<code"), "collapsed dream summary must stay plain single-line text without bullet list or code chips");
+assert.ok(!idleDreamRegion.includes("第 4 条不应挤进前 3 要点"), "collapsed dream summary must not dump full journal");
 
 // Expanded dream summary view
 T.setMemDreamExpanded(true);
 const expandedDream = T.renderMemoryHTML(mockMem, "");
 const expDreamRegion = expandedDream.html.slice(expandedDream.html.indexOf('class="mem-dream-sum"'), expandedDream.html.indexOf('class="mem-load"'));
-assert.ok(expandedDream.html.includes("收起日志"), "expanded dream toggle must switch label");
+assert.ok(expandedDream.html.includes("收起"), "expanded dream toggle must switch label");
 assert.ok(expDreamRegion.includes("第 4 条不应挤进前 3 要点"), "expanded dream view must render full journal");
 T.setMemDreamExpanded(false);
 

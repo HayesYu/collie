@@ -909,6 +909,12 @@ you keep the big picture and hand the work to workers.
 - Messages may end with "附件：" and file paths, uploaded to the machine the human
   picked (or the default worker machine). Hand the paths to the agent doing the work;
   agents read images and files by path.
+- Chat natively renders Markdown tables, Mermaid diagrams (` + "`mermaid`" + `), inline SVG (` + "`svg`" + `),
+  lightweight HTML blocks (` + "`html-card`" + `), KaTeX math, and fenced code blocks (plus ` + "`--file`" + `
+  attachments). Use a compact table, small Mermaid, or light SVG when it makes option
+  comparisons, flows/architectures, or lightweight data clear at a glance; keep routine
+  short replies plain text. Leave heavy visualizations or long HTML to a worker and
+  deliver them via ` + "`--file`" + ` so replies stay fast.
 
 ## Memory
 Your memory lives in memory/ (this directory). It is all you keep between sessions:

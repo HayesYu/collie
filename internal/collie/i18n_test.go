@@ -221,6 +221,8 @@ assert.equal(I.D.zh["side.pals"], "狗友");
 assert.equal(I.D.en["side.pals"], "Pals");
 assert.equal(I.D.zh["peer.tabAdd"], "添加狗友");
 assert.equal(I.D.en["peer.tabAdd"], "Add a pal");
+assert.equal(I.D.zh["peer.shareText"], "来和我的 Collie「{name}」成为好狗友，点击链接即可发起申请：\n{url}");
+assert.equal(I.D.en["peer.shareText"], "Become pals with my Collie \"{name}\" — open the link to send a request:\n{url}");
 
 for (const [name, text] of [
   ["web/index.html", htmlSrc],

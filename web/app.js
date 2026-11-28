@@ -11424,7 +11424,7 @@
     const joinUrl = peerInviteJoinURL(inv);
     const name = inv?.hub_name || fallbackName || tx("peer.myCollie", "我的边牧");
     if (!joinUrl) return inv?.invite_code || "";
-    return tx("peer.shareText", "来加我的 Collie 好狗友「{name}」，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
+    return tx("peer.shareText", "来和我的 Collie「{name}」成为好狗友，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
   }
 
   function parsePeerInviteClient(raw, selfHubId = "") {
@@ -17662,7 +17662,7 @@
   function resetChat() {
     $("#thread").innerHTML = "";
     clearDetailLive();
-    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; $("#thread")._restore = null; showRaw = false;
+    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; $("#thread")._restore = null; $("#thread")._expandedPromptKeys = null; showRaw = false;
   }
   function openChat(id, restore = null) {
     stream = openES(paneURL(id, "chat"));
@@ -17779,6 +17779,21 @@
   });
   // An end-of-turn button answers by sending its label from this view's composer.
   document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest?.(".wd-prompt-toggle");
+    if (btn) {
+      const msg = btn.closest?.(".msg.user.is-collapsible");
+      const threadEl = btn.closest?.(".thread");
+      if (!msg) return;
+      const expanded = msg.classList.toggle("is-expanded");
+      btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+      const key = msg.dataset?.promptKey;
+      if (threadEl && key) {
+        if (!threadEl._expandedPromptKeys) threadEl._expandedPromptKeys = new Set();
+        if (expanded) threadEl._expandedPromptKeys.add(key);
+        else threadEl._expandedPromptKeys.delete(key);
+      }
+      return;
+    }
     const b = ev.target.closest("[data-act=ask-reply]");
     if (!b) return;
     if (b.closest("#worker-drawer") && wdPaneId) {
@@ -17978,6 +17993,133 @@
       + body + `</details>`;
   }
 
+  const WORKER_EVENT_WRAP_RE = /^\[collie\]\s+\d+\s+new\s+events?(?:\s*\([^)]*\))?\s*\n+/i;
+  const WORKER_TRIGGER_HEAD_RE = /^#(t\d+)\s*·\s*([^\n]+)\n/;
+  const WORKER_BRIEF_HEAD_RE = /^You are worker "([^"]+)", managed by Collie \([^)]+\)\.\s*Your task:\s*\n*/i;
+  const WORKER_BRIEF_FOOT_RE = /\n+How this works:\s*\n[\s\S]*Collie relays between you and the human[\s\S]*$/i;
+  const WORKER_SPILLED_TAIL_RE = /(?:\s*(?:…|\.\.\.)\s*)?\[spilled;\s*run\s+`?collie\s+show\s+([a-z0-9_-]+)`?\]\s*$/i;
+  const WORKER_MD_SIGNAL_RE = /(?:^|\n)\s*(?:#{1,4}\s|[-*+]\s|\d+\.\s|>\s|```)|`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]]+\]\(https?:\/\//m;
+
+  function cleanSpilledMarkdownTail(src) {
+    let s = String(src || "").replace(/(?:\s*(?:…|\.\.\.))+$/, "").trimEnd();
+    if (!s) return "";
+    const lines = s.split("\n");
+    let last = lines[lines.length - 1];
+    // Close an unmatched inline backtick or strip an unmatched opening bold marker caused by mid-token spill slicing.
+    const ticks = (last.match(/(?<!\\)`/g) || []).length;
+    if (ticks % 2 === 1) {
+      const idx = last.lastIndexOf("`");
+      last = idx === last.length - 1 ? last.slice(0, idx).trimEnd() : (last + "`");
+    }
+    const bolds = (last.match(/(?<!\\)\*\*/g) || []).length;
+    if (bolds % 2 === 1) {
+      const idx = last.lastIndexOf("**");
+      last = last.slice(0, idx) + last.slice(idx + 2);
+    }
+    lines[lines.length - 1] = last.trimEnd();
+    s = lines.join("\n").trimEnd();
+    return s ? (s.endsWith("…") ? s : s + "…") : "";
+  }
+
+  function parseWorkerPromptEnvelope(raw, opts = {}) {
+    let body = String(raw || "").replace(/\r\n/g, "\n").trim();
+    let isEventEnvelope = false;
+    let isTaskBrief = false;
+    let triggerId = "";
+    let time = "";
+    let spilled = false;
+    let spilledId = "";
+    let restoredFull = false;
+
+    if (WORKER_EVENT_WRAP_RE.test(body)) {
+      isEventEnvelope = true;
+      body = body.replace(WORKER_EVENT_WRAP_RE, "").trimStart();
+      const headM = WORKER_TRIGGER_HEAD_RE.exec(body);
+      if (headM) {
+        triggerId = headM[1] || "";
+        const timeM = headM[2].match(/\b(\d{1,2}:\d{2})\b(?:\s*$)/);
+        if (timeM) time = timeM[1];
+        body = body.slice(headM[0].length);
+      }
+      body = body.replace(/^  /gm, "").trim();
+    }
+
+    if (WORKER_BRIEF_HEAD_RE.test(body)) {
+      isTaskBrief = true;
+      body = body.replace(WORKER_BRIEF_HEAD_RE, "").trim();
+      body = body.replace(WORKER_BRIEF_FOOT_RE, "").trim();
+    }
+
+    const spillM = WORKER_SPILLED_TAIL_RE.exec(body);
+    if (spillM) {
+      spilled = true;
+      spilledId = spillM[1] || "";
+      body = body.slice(0, spillM.index).trimEnd();
+    }
+
+    const fullTask = String(opts?.fullTask || "").replace(/\r\n/g, "\n").trim();
+    if (isTaskBrief && spilled && fullTask) {
+      const headA = body.replace(/\s+/g, "").slice(0, 32);
+      const headB = fullTask.replace(/\s+/g, "").slice(0, 32);
+      if (fullTask.length > body.length && (!headA || headB.startsWith(headA.slice(0, 16)))) {
+        body = fullTask;
+        spilled = false;
+        restoredFull = true;
+      }
+    }
+
+    if (spilled) {
+      body = cleanSpilledMarkdownTail(body);
+    }
+
+    const isDispatched = isEventEnvelope || isTaskBrief || spilled || restoredFull;
+    const useMarkdown = isDispatched || WORKER_MD_SIGNAL_RE.test(body);
+    const lines = body ? body.split("\n").length : 0;
+    const collapsible = isTaskBrief
+      ? (body.length > 130 || lines > 3)
+      : (body.length > 190 || lines > 4);
+
+    return { body, isDispatched, isTaskBrief, triggerId, time, spilled, spilledId, restoredFull, useMarkdown, collapsible };
+  }
+
+  function renderWorkerUserBubble(parts, el, idx, isFirstUser, fullTask) {
+    const bodyRaw = parts.bodyRaw || "";
+    const env = parseWorkerPromptEnvelope(bodyRaw, { fullTask: isFirstUser ? fullTask : "" });
+    const useRich = env.useMarkdown || env.collapsible;
+    if (!useRich) {
+      return `<div class="msg user">${parts.textHtml}${parts.attHtml}</div>`;
+    }
+    const renderedHtml = env.body ? (env.useMarkdown ? md(env.body) : linkUserFiles(esc(env.body))) : parts.textHtml;
+    const cls = ["msg", "user"];
+    if (env.useMarkdown) cls.push("is-md");
+    if (env.isTaskBrief || env.isDispatched) cls.push("is-task-brief");
+    if (env.collapsible) cls.push("is-collapsible");
+    const promptKey = `${idx}:${bodyRaw.length}:${bodyRaw.slice(0, 32)}`;
+    const bodyId = `wd-pb-${el.id || "th"}-${idx}`;
+    const kickerHtml = (env.isTaskBrief || env.isDispatched)
+      ? `<div class="wd-prompt-kicker"><span>${esc(env.isTaskBrief ? tx("worker.promptLabel", "任务指令") : tx("worker.promptEventLabel", "派发事件"))}</span>`
+        + (env.time ? `<span class="wd-prompt-time">${esc(env.time)}</span>` : "")
+        + (env.spilled && !env.restoredFull ? `<span class="wd-prompt-trunc">${esc(tx("worker.promptTruncated", "仅显示前段"))}</span>` : "")
+        + `</div>`
+      : "";
+    if (!env.collapsible) {
+      return `<div class="${cls.join(" ")}">${kickerHtml}${renderedHtml}${parts.attHtml}</div>`;
+    }
+    return `<div class="${cls.join(" ")}" data-prompt-key="${esc(promptKey)}">${kickerHtml}<div class="wd-prompt-body" id="${esc(bodyId)}">${renderedHtml}${parts.attHtml}</div><button type="button" class="wd-prompt-toggle" aria-expanded="false" aria-controls="${esc(bodyId)}"><span class="wd-pt-more">${esc(tx("worker.promptExpand", "展开完整指令"))}</span><span class="wd-pt-less">${esc(tx("worker.promptCollapse", "收起指令"))}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>`;
+  }
+
+  function syncExpandedPrompts(el) {
+    const keys = el?._expandedPromptKeys;
+    if (!keys || !keys.size || typeof el.querySelectorAll !== "function") return;
+    for (const node of el.querySelectorAll(".msg.user.is-collapsible[data-prompt-key]")) {
+      const k = node.dataset?.promptKey;
+      if (!k || !keys.has(k)) continue;
+      node.classList.add("is-expanded");
+      const btn = node.querySelector?.(".wd-prompt-toggle");
+      if (btn) btn.setAttribute("aria-expanded", "true");
+    }
+  }
+
   function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。")) {
     const rest = el._restore;
     // Just opened: start at the latest message, unless restoring a scroll position.
@@ -17986,7 +18128,10 @@
     const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
     if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._blocks = null; return; }
     const blocks = [];
-    let html = "", i = 0;
+    let html = "", i = 0, seenUser = false;
+    const fullTask = el.id === "wd-thread"
+      ? (resolveWorkerContext().supW?.task || "")
+      : (el.id === "thread" && current ? (getWorkerLookup().byPane.get(current)?.task || "") : "");
     const cut = () => { blocks.push(html); html = ""; };
     while (i < msgs.length) {
       const m = msgs[i];
@@ -18041,14 +18186,17 @@
         continue;
       }
       if (m.kind === "user") {
+        const isFirstUser = !seenUser;
+        seenUser = true;
         const parts = parseUserParts(m.text);
         const mediaHtml = renderUserMedia(parts.imgs);
+        const bubbleHtml = renderWorkerUserBubble(parts, el, i, isFirstUser, fullTask);
         if (mediaHtml && !parts.hasBubbleContent) {
           html += `<div class="msg user is-media-only">${mediaHtml}</div>`;
         } else if (mediaHtml) {
-          html += `<div class="mine-group">${mediaHtml}<div class="msg user">${parts.textHtml}${parts.attHtml}</div></div>`;
+          html += `<div class="mine-group">${mediaHtml}${bubbleHtml}</div>`;
         } else {
-          html += `<div class="msg user">${parts.textHtml}${parts.attHtml}</div>`;
+          html += bubbleHtml;
         }
       } else {
         html += `<div class="msg assistant">${md(m.text)}</div>`;
@@ -18072,6 +18220,7 @@
       el.innerHTML = sig;
     }
     el._blocks = blocks; el._last = el.lastElementChild;
+    syncExpandedPrompts(el);
     hydrateRichContent(el);
     if (rest && !rest.atBottom) {
       restoreSimpleScroll(scroller(el), rest);
@@ -19870,10 +20019,41 @@
       syncTableCard(card);
     }
   }
+  function syncCodeBlockScroll(block) {
+    if (!block) return;
+    const pre = block.querySelector?.(".md-code-body pre");
+    if (!pre) return;
+    const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
+    const scrollable = maxScroll > 2;
+    block.classList?.toggle("is-scrollable", scrollable);
+    block.classList?.toggle("can-scroll-l", scrollable && (pre.scrollLeft || 0) > 4);
+    block.classList?.toggle("can-scroll-r", scrollable && (pre.scrollLeft || 0) < maxScroll - 4);
+  }
+  const boundCodeScrolls = new WeakSet();
+  let codeRO = null;
+  function observeCodeResize(pre) {
+    if (!pre || typeof ResizeObserver !== "function") return;
+    if (!codeRO) {
+      codeRO = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const block = entry.target?.closest?.("[data-code-block]");
+          if (block) syncCodeBlockScroll(block);
+        }
+      });
+    }
+    try { codeRO.observe(pre); } catch {}
+  }
   function hydrateCodeBlocks(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
-    for (const block of root.querySelectorAll(".md-code[data-foldable]")) {
-      if (block._richHydrated) continue;
+    for (const block of root.querySelectorAll("[data-code-block]")) {
+      const pre = block.querySelector?.(".md-code-body pre");
+      if (pre && !boundCodeScrolls.has(pre)) {
+        boundCodeScrolls.add(pre);
+        pre.addEventListener?.("scroll", () => syncCodeBlockScroll(block), { passive: true });
+        observeCodeResize(pre);
+      }
+      syncCodeBlockScroll(block);
+      if (!block.hasAttribute?.("data-foldable") || block._richHydrated) continue;
       block._richHydrated = true;
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
       if (k && richUiState.has(k)) {
@@ -20206,15 +20386,25 @@
       }
       const mountedSvg = lbSvg.querySelector?.("svg");
       if (mountedSvg) {
+        const natW = parseFloat(mountedSvg.dataset?.rvNatW || "0");
+        const minW = parseFloat(mountedSvg.dataset?.rvMinW || "0");
         mountedSvg.removeAttribute("height");
-        mountedSvg.setAttribute("width", "100%");
+        mountedSvg.removeAttribute("width");
         if (mountedSvg.style) {
-          mountedSvg.style.width = "100%";
-          mountedSvg.style.maxWidth = "100%";
+          if (natW > 0) {
+            mountedSvg.style.setProperty?.("--rv-vb-w", Math.ceil(natW) + "px");
+            mountedSvg.style.setProperty?.("--rv-min-w", (minW > 0 ? Math.ceil(minW) : 0) + "px");
+            mountedSvg.style.width = minW > 0 ? `clamp(${Math.ceil(minW)}px, 100%, ${Math.max(Math.ceil(natW), Math.ceil(minW))}px)` : "100%";
+            mountedSvg.style.maxWidth = "none";
+          } else {
+            mountedSvg.style.width = "100%";
+            mountedSvg.style.maxWidth = "100%";
+          }
           mountedSvg.style.height = "auto";
         }
       }
       lbSvg.hidden = false;
+      lbSvg.classList.toggle("is-scrollable", (lbSvg.scrollWidth || 0) - (lbSvg.clientWidth || 0) > 2);
       const svgRaw = item.svgHtml || (item.svgNode ? item.svgNode.outerHTML : "");
       lbCurMeta = { isSvg: true, width: 0, height: 0, size: svgRaw.length };
       updateLbMeta();
@@ -21728,7 +21918,7 @@
       zone.addEventListener("pointerdown", (e) => {
         if (innerWidth > 760 || !isOpenFn()) return;
         if (e.pointerType === "mouse" && e.button !== 0) return;
-        if (e.target.closest("button:not(.sd-handle):not(.np-handle), a")) return;
+        if (e.target.closest("button:not(.sd-handle):not(.np-handle), a, [popover]")) return;
         cancelFrame();
         pid = e.pointerId;
         startY = lastY = e.clientY;
@@ -24217,6 +24407,7 @@
   const wdScrim = $("#worker-scrim");
   const wdTitleEl = $("#wd-title");
   const wdKindEl = $("#wd-kind");
+  const wdMetaKindEl = $("#wd-meta-kind");
   const wdRoleEl = $("#wd-role");
   const wdStatusEl = $("#wd-status");
   const wdModelEl = $("#wd-model");
@@ -24224,6 +24415,23 @@
   const wdPopoutBtn = $("#wd-popout");
   const wdWidenBtn = $("#wd-widen");
   const wdCloseBtn = $("#wd-close");
+  const wdMoreBtn = $("#wd-more-btn");
+  const wdMoreMenu = $("#wd-more-menu");
+  const wdMpInfo = $("#wd-mp-info");
+  const wdMpMeta = $("#wd-mp-meta");
+  const wdMpSummary = $("#wd-mp-summary");
+  const wdMpCwd = $("#wd-mp-cwd");
+  const wdMpCwdText = $("#wd-mp-cwd-text");
+  const wdMpInfoSep = $("#wd-mp-info-sep");
+  const wdMpThread = $("#wd-mp-thread");
+  const wdMpScreen = $("#wd-mp-screen");
+  const wdMpScreenLabel = $("#wd-mp-screen-label");
+  const wdMpPopout = $("#wd-mp-popout");
+  const wdMpPopoutLabel = $("#wd-mp-popout-label");
+  const wdMpDangerSep = $("#wd-mp-danger-sep");
+  const wdMpDangerGroup = $("#wd-mp-danger-group");
+  const wdMpInterrupt = $("#wd-mp-interrupt");
+  const wdMpInterruptLabel = $("#wd-mp-interrupt-label");
   const wdGripEl = $("#wd-grip");
   const wdSummaryEl = $("#wd-summary");
   const wdSummaryTextEl = $("#wd-summary-text");
@@ -24256,6 +24464,9 @@
   let wdLastLive = null;
   const wdLiveCache = new Map();
   let wdShowRaw = false;
+  let wdPeekMode = "";
+  let wdMoreClosedAt = 0;
+  const wdMoreState = { kindLabel: "", workerName: "", dispTitle: "", modelText: "", cwdText: "", rawCwd: "", summaryText: "" };
   let wdComposerCtrl = null;
   let wdTerm = null;
   let wdSize = { cols: 0, rows: 0 };
@@ -24340,10 +24551,85 @@
     const v = wdPaneId ? find(wdPaneId) : null;
     return !!v && !v.is_agent;
   }
+  function supportsWdMoreAnchor() {
+    return typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("position-area: block-end");
+  }
+  function isWdMoreOpen() {
+    if (!wdMoreMenu) return false;
+    return !!(wdMoreMenu.matches?.(":popover-open") || wdMoreMenu.classList?.contains(":popover-open") || wdMoreMenu.classList?.contains("is-open"));
+  }
+  function clearWdMoreInlinePos() {
+    if (!wdMoreMenu?.style) return;
+    wdMoreMenu.style.top = "";
+    wdMoreMenu.style.right = "";
+    wdMoreMenu.style.left = "";
+  }
+  function positionWdMoreMenuFallback() {
+    if (!wdMoreMenu || !wdMoreBtn) return;
+    if (supportsWdMoreAnchor()) {
+      clearWdMoreInlinePos();
+      return;
+    }
+    const tr = wdMoreBtn.getBoundingClientRect?.();
+    if (!tr || !tr.width) return;
+    const vw = window.innerWidth || 390;
+    const vh = window.innerHeight || 844;
+    const popH = wdMoreMenu.offsetHeight || 220;
+    const right = Math.max(12, Math.round(vw - tr.right));
+    let top = Math.round(tr.bottom + 6);
+    if (top + popH > vh - 12 && tr.top - 6 - popH >= 12) {
+      top = Math.round(tr.top - 6 - popH);
+    } else {
+      top = Math.max(12, Math.min(top, vh - popH - 12));
+    }
+    wdMoreMenu.style.left = "auto";
+    wdMoreMenu.style.right = right + "px";
+    wdMoreMenu.style.top = top + "px";
+  }
+  function closeWdMoreMenu() {
+    if (!wdMoreMenu) return;
+    const wasOpen = isWdMoreOpen();
+    if (typeof wdMoreMenu.hidePopover === "function") {
+      if (wasOpen) {
+        try { wdMoreMenu.hidePopover(); } catch {}
+      }
+    }
+    wdMoreMenu.classList?.remove("is-open");
+    clearWdMoreInlinePos();
+    wdMoreBtn?.setAttribute("aria-expanded", "false");
+    disarmInterrupt("worker-more");
+  }
+  function syncWdMoreMenuInfo() {
+    if (!wdMoreMenu) return;
+    const metaParts = [];
+    if (wdMoreState.kindLabel) metaParts.push(wdMoreState.kindLabel);
+    if (wdMoreState.modelText) metaParts.push(wdMoreState.modelText);
+    if (wdMoreState.workerName && wdMoreState.workerName !== wdMoreState.dispTitle) {
+      metaParts.push(wdMoreState.workerName);
+    }
+    const metaStr = metaParts.join(" · ");
+    if (wdMpMeta) {
+      wdMpMeta.textContent = metaStr;
+      wdMpMeta.hidden = !metaStr;
+    }
+    if (wdMpSummary) {
+      wdMpSummary.textContent = wdMoreState.summaryText || "";
+      wdMpSummary.hidden = !wdMoreState.summaryText;
+    }
+    if (wdMpCwd && wdMpCwdText) {
+      wdMpCwdText.textContent = wdMoreState.cwdText || "";
+      wdMpCwd.dataset.cwd = wdMoreState.rawCwd || "";
+      wdMpCwd.hidden = !wdMoreState.cwdText;
+    }
+    const hasInfo = !!(metaStr || wdMoreState.summaryText || wdMoreState.cwdText);
+    if (wdMpInfo) wdMpInfo.hidden = !hasInfo;
+    if (wdMpInfoSep) wdMpInfoSep.hidden = !hasInfo;
+  }
   function curWdMode() {
     if (!wdPaneId || !find(wdPaneId)) return "chat";
     if (isWdShell()) return prefs.devMode() ? (wdMode === "chat" ? "screen" : wdMode) : "screen";
-    return prefs.devMode() ? wdMode : "chat";
+    if (prefs.devMode()) return wdMode;
+    return wdPeekMode === "screen" ? "screen" : "chat";
   }
   function applyWdModeUI() {
     const m = curWdMode();
@@ -24365,6 +24651,18 @@
       wdInterruptBtn.hidden = !isLive;
       if (!isLive) disarmInterrupt("worker");
     }
+    if (wdMpScreen) {
+      const canToggleScreen = isLive && !isWdShell();
+      wdMpScreen.hidden = !canToggleScreen;
+      if (canToggleScreen && wdMpScreenLabel) {
+        wdMpScreenLabel.textContent = m === "chat"
+          ? tx("worker.moreViewScreen", "查看终端屏幕")
+          : tx("worker.moreViewChat", "返回对话视图");
+      }
+    }
+    if (wdMpDangerSep) wdMpDangerSep.hidden = !isLive;
+    if (wdMpDangerGroup) wdMpDangerGroup.hidden = !isLive;
+    if (!isLive) disarmInterrupt("worker-more");
     if (wdBarEl) wdBarEl.hidden = !showDevTabs;
   }
   function syncDevModeUI() {
@@ -24374,6 +24672,7 @@
     if (view === "pane" && current && viewerEl?.dataset?.mode !== prevPaneMode) {
       closeStream(); resetChat(); resetScreen(); openStream();
     }
+    if (!prefs.devMode()) wdPeekMode = "";
     const prevWdMode = wdViewerEl?.dataset?.mode || "";
     applyWdModeUI();
     if (activeWorkerKey && wdPaneId && wdViewerEl?.dataset?.mode !== prevWdMode) {
@@ -24396,7 +24695,7 @@
   }
   function resetWdChatStateOnly() {
     if (!wdThreadEl) return;
-    wdThreadEl._sig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._older = null; wdThreadEl._restore = null;
+    wdThreadEl._sig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
     wdThreadEl._fresh = true;
     wdLastLive = null; wdShowRaw = false;
   }
@@ -24629,7 +24928,13 @@
     const key = run ? [v?.pane_id || supW?.name || "", kind, machine, ...run].join("|") : "";
     if (wdModelEl._key === key) return;
     wdModelEl._key = key;
-    if (!key) { wdModelEl.hidden = true; wdModelEl.textContent = ""; return; }
+    if (!key) {
+      wdModelEl.hidden = true;
+      wdModelEl.textContent = "";
+      wdMoreState.modelText = "";
+      syncWdMoreMenuInfo();
+      return;
+    }
     let [model, effort] = run;
     const own = !model;
     const info = (v?.pane_id && hubOf(v.pane_id)) ? {} : await modelsFor(kind, machine || "").catch(() => ({}));
@@ -24639,10 +24944,17 @@
     let name = (info.models || []).find((m) => m.id === model)?.label || model.split("/").pop();
     const b = name.match(/^(.*\S)\s*\(([^)]+)\)$/);
     if (b && EFFORT_LABEL[b[2].toLowerCase()]) { name = b[1]; effort ||= b[2].toLowerCase(); }
-    const parts = [model ? name + (own ? tx("common.defaultParen", "（默认）") : "") : tx("common.defaultModel", "默认模型")];
-    if (effort) parts.push(tx("effort.prefix", "思考 {v}", { v: EFFORT_LABEL[effort] || effort }));
-    wdModelEl.textContent = parts.join(" · ");
+    const modelMain = model ? name + (own ? tx("common.defaultParen", "（默认）") : "") : tx("common.defaultModel", "默认模型");
+    const modelEffort = effort ? tx("effort.prefix", "思考 {v}", { v: EFFORT_LABEL[effort] || effort }) : "";
+    const modelStr = modelEffort ? `${modelMain} · ${modelEffort}` : modelMain;
+    if (modelEffort) {
+      setHTML(wdModelEl, `<span class="wd-model-name">${esc(modelMain)}</span><span class="wd-model-effort"> · ${esc(modelEffort)}</span>`);
+    } else {
+      wdModelEl.textContent = modelMain;
+    }
     wdModelEl.hidden = false;
+    wdMoreState.modelText = modelStr;
+    syncWdMoreMenuInfo();
   }
   function syncWorkerDrawerMeta() {
     if (!activeWorkerKey || !wdDrawer) return;
@@ -24671,10 +24983,14 @@
       wdTitleEl.textContent = dispTitle;
       wdTitleEl.title = fullTip;
     }
+    const kl = kind ? (KIND_LABEL[kind] || kind) : "";
     if (wdKindEl) {
-      const kl = kind ? (KIND_LABEL[kind] || kind) : "";
       wdKindEl.textContent = kl;
       wdKindEl.hidden = !kl;
+    }
+    if (wdMetaKindEl) {
+      wdMetaKindEl.textContent = kl;
+      wdMetaKindEl.hidden = !kl;
     }
     if (wdRoleEl) {
       const showRole = !!(isWorker(name) || supW);
@@ -24688,26 +25004,32 @@
         : (status === "failed" ? tx("st.execFailed", "执行失败") : tx("st.ended", "已结束"));
       setHTML(wdStatusEl, `<span class="dot ${esc(status)}"></span>${esc(stLabel)}`);
     }
+    const rawCwd = liveAgent?.cwd || supW?.cwd || past?.cwd || "";
+    const mach = liveAgent?.machine ?? supW?.machine ?? past?.machine ?? "";
+    const ms = state.machines || [];
+    const home = ms.find((m) => m.id === mach)?.home;
+    const shortCwd = rawCwd ? (home && rawCwd.startsWith(home) ? "~" + rawCwd.slice(home.length) : tilde(rawCwd)) : "";
+    const cwdTxt = (ms.length > 1 && mach ? machineName(mach) + (shortCwd ? " · " : "") : "") + shortCwd;
     if (wdCwdEl) {
-      const rawCwd = liveAgent?.cwd || supW?.cwd || past?.cwd || "";
-      const mach = liveAgent?.machine ?? supW?.machine ?? past?.machine ?? "";
-      const ms = state.machines || [];
-      const home = ms.find((m) => m.id === mach)?.home;
-      const shortCwd = rawCwd ? (home && rawCwd.startsWith(home) ? "~" + rawCwd.slice(home.length) : tilde(rawCwd)) : "";
-      const txt = (ms.length > 1 && mach ? machineName(mach) + (shortCwd ? " · " : "") : "") + shortCwd;
-      wdCwdEl.textContent = txt;
-      wdCwdEl.title = txt;
+      wdCwdEl.textContent = cwdTxt;
+      wdCwdEl.title = cwdTxt;
     }
     renderWdModel(liveAgent, supW);
+    const popHref = isLive
+      ? `#/p/${encodeURIComponent(liveAgent.pane_id)}`
+      : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+    const popLabel = isLive ? tx("worker.popoutLive", "独立全屏打开会话") : tx("worker.popoutHist", "独立全屏查看记录");
     if (wdPopoutBtn) {
-      const href = isLive
-        ? `#/p/${encodeURIComponent(liveAgent.pane_id)}`
-        : past ? `#/h/${encodeURIComponent(past.id)}` : "";
-      wdPopoutBtn.hidden = !href;
-      if (href) {
-        wdPopoutBtn.href = href;
-        wdPopoutBtn.title = isLive ? tx("worker.popoutLive", "独立全屏打开会话") : tx("worker.popoutHist", "独立全屏查看记录");
+      wdPopoutBtn.hidden = !popHref;
+      if (popHref) {
+        wdPopoutBtn.href = popHref;
+        wdPopoutBtn.title = popLabel;
       }
+    }
+    if (wdMpPopout) {
+      wdMpPopout.hidden = !popHref;
+      if (popHref) wdMpPopout.href = popHref;
+      if (wdMpPopoutLabel) wdMpPopoutLabel.textContent = popLabel;
     }
     const wtMap = computeWorkerThreadMap();
     const linked = wdFromThread || (name ? wtMap.get(name)?.rootId || "" : "");
@@ -24715,17 +25037,34 @@
       wdThreadBtn.hidden = !linked;
       wdThreadBtn.dataset.wdThread = linked;
     }
+    if (wdMpThread) {
+      wdMpThread.hidden = !linked;
+      wdMpThread.dataset.wdThread = linked;
+    }
+    const sum = liveAgent ? agentTaskSummary(liveAgent, supW, null, chatEntries()) : { short: "", full: "" };
+    const noteText = (wdTaskTitle && wdTaskTitle !== name)
+      ? (wdTaskNote && !wdTaskTitle.includes(wdTaskNote) ? `${wdTaskTitle} · ${wdTaskNote}` : wdTaskTitle)
+      : (sum.full || sum.short || supW?.task || supW?.last_report || wdTaskNote || "");
+    const cleanSummary = noteText && noteText.trim() !== dispTitle.trim() ? noteText : "";
     if (wdSummaryEl && wdSummaryTextEl) {
-      const sum = liveAgent ? agentTaskSummary(liveAgent, supW, null, chatEntries()) : { short: "", full: "" };
-      const noteText = (wdTaskTitle && wdTaskTitle !== name)
-        ? (wdTaskNote && !wdTaskTitle.includes(wdTaskNote) ? `${wdTaskTitle} · ${wdTaskNote}` : wdTaskTitle)
-        : (sum.full || sum.short || supW?.task || supW?.last_report || wdTaskNote || "");
-      wdSummaryEl.hidden = !noteText;
-      if (noteText) {
-        wdSummaryTextEl.textContent = noteText;
-        wdSummaryTextEl.title = noteText;
+      wdSummaryEl.hidden = !cleanSummary;
+      if (cleanSummary) {
+        wdSummaryTextEl.textContent = cleanSummary;
+        wdSummaryTextEl.title = cleanSummary;
       }
     }
+    wdMoreState.kindLabel = kl;
+    wdMoreState.workerName = name;
+    wdMoreState.dispTitle = dispTitle;
+    wdMoreState.cwdText = cwdTxt;
+    wdMoreState.rawCwd = rawCwd;
+    wdMoreState.summaryText = cleanSummary;
+    if (wdModelEl && !wdModelEl.hidden && wdModelEl.textContent) {
+      wdMoreState.modelText = wdModelEl.textContent;
+    } else if (!liveAgent?.run && !supW?.run) {
+      wdMoreState.modelText = "";
+    }
+    syncWdMoreMenuInfo();
     if (wdGoneEl) wdGoneEl.hidden = true;
     applyWdModeUI();
     syncWorkerComposerUI();
@@ -24908,7 +25247,8 @@
       st.btn.removeAttribute("data-armed");
       if (st.defaultTitle !== undefined) st.btn.title = st.defaultTitle;
       if (st.defaultAria !== undefined) st.btn.setAttribute("aria-label", st.defaultAria);
-      if (st.defaultText !== undefined) st.btn.textContent = st.defaultText;
+      const targetTextEl = st.labelEl || st.btn;
+      if (st.defaultText !== undefined) targetTextEl.textContent = st.defaultText;
     }
   }
   function isInterruptArmed(scope, targetId) {
@@ -24927,16 +25267,19 @@
     disarmInterrupt(scope);
     const defaultTitle = btn.title || tx("worker.interruptTitle", "发送 Ctrl-C 中断当前执行");
     const defaultAria = btn.getAttribute("aria-label") || "";
-    const defaultText = opts.replaceText ? btn.textContent : undefined;
+    const labelEl = opts.labelEl || null;
+    const targetTextEl = labelEl || btn;
+    const defaultText = opts.replaceText ? targetTextEl.textContent : undefined;
     btn.classList.add("is-armed");
     btn.setAttribute("data-armed", "true");
     const armAgain = tx("worker.interruptArmAgain", "再点一次确认中断");
     btn.title = armAgain;
     if (defaultAria) btn.setAttribute("aria-label", armAgain);
-    if (opts.replaceText) btn.textContent = armAgain;
+    if (opts.replaceText) targetTextEl.textContent = armAgain;
     const timer = setTimeout(() => disarmInterrupt(scope), INTERRUPT_ARM_MS);
     interruptArms.set(scope, {
       btn,
+      labelEl,
       targetId,
       timer,
       defaultTitle,
@@ -25010,7 +25353,12 @@
     }
     clearTimeout(wdHideTimer);
     if (!hadWorker) resetDrawerMotion(wdDrawer);
-    if (switchedTarget) disarmInterrupt("worker");
+    if (switchedTarget) {
+      disarmInterrupt("worker");
+      disarmInterrupt("worker-more");
+      closeWdMoreMenu();
+      wdPeekMode = "";
+    }
     activeWorkerKey = nextKey;
     wdWorkerName = worker;
     wdPaneId = paneHint || (worker ? paneOf(worker) || "" : "");
@@ -25109,6 +25457,9 @@
     const overlayCloseAnim = !opts.immediate && !switching && !reduced && !desktopMode && wasOpen && !wdDrawer.hidden;
 
     disarmInterrupt("worker");
+    disarmInterrupt("worker-more");
+    closeWdMoreMenu();
+    wdPeekMode = "";
     const ae = document.activeElement;
     if (ae && wdDrawer.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     wdSeq++;
@@ -25243,6 +25594,69 @@
         sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
       });
     });
+    if (wdMoreBtn && wdMoreMenu) {
+      wdMoreBtn.addEventListener("click", () => {
+        if (typeof wdMoreMenu.showPopover === "function") return;
+        const willOpen = !wdMoreMenu.classList.contains("is-open");
+        wdMoreMenu.classList.toggle("is-open", willOpen);
+        wdMoreBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        if (willOpen) positionWdMoreMenuFallback();
+        else { clearWdMoreInlinePos(); disarmInterrupt("worker-more"); }
+      });
+      wdMoreMenu.addEventListener("toggle", (ev) => {
+        const isOpen = ev.newState === "open";
+        wdMoreBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+        if (isOpen) {
+          positionWdMoreMenuFallback();
+        } else {
+          wdMoreClosedAt = performance.now();
+          clearWdMoreInlinePos();
+          disarmInterrupt("worker-more");
+        }
+      });
+      wdMpCwd?.addEventListener("click", async () => {
+        const cwd = wdMpCwd.dataset.cwd || wdMoreState.rawCwd || "";
+        closeWdMoreMenu();
+        if (!cwd) return;
+        try {
+          await copyText(cwd);
+          toast(tx("worker.moreCwdCopied", "已复制工作目录"));
+        } catch {
+          toast(tx("worker.moreCwdCopyFail", "复制工作目录失败"), "attn");
+        }
+      });
+      wdMpThread?.addEventListener("click", () => {
+        const rootId = wdMpThread.dataset.wdThread || wdThreadBtn?.dataset.wdThread || "";
+        closeWdMoreMenu();
+        if (!rootId) return;
+        wdThreadBtn?.click();
+      });
+      wdMpScreen?.addEventListener("click", () => {
+        closeWdMoreMenu();
+        if (!activeWorkerKey || !wdPaneId || isWdShell()) return;
+        const nextM = curWdMode() === "chat" ? "screen" : "chat";
+        if (prefs.devMode()) {
+          wdMode = nextM;
+          store.set("wdMode", nextM);
+        } else {
+          wdPeekMode = nextM === "screen" ? "screen" : "";
+        }
+        applyWdModeUI();
+        openWorkerDrawerStream();
+      });
+      wdMpPopout?.addEventListener("click", (e) => {
+        closeWdMoreMenu();
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        closeWorkerDrawer({ immediate: true });
+      });
+      wdMpInterrupt?.addEventListener("click", () => {
+        if (!wdPaneId) return;
+        triggerArmedInterrupt("worker-more", wdMpInterrupt, wdPaneId, () => {
+          sendToTargetPane(wdPaneId, "keys", { keys: ["ctrl+c"] });
+          closeWdMoreMenu();
+        }, { replaceText: true, labelEl: wdMpInterruptLabel });
+      });
+    }
     wdInterjectBtn?.addEventListener("click", () => {
       if (!wdPaneId) return;
       const wasAtBottom = wdThreadEl && nearBottom(wdThreadEl);
@@ -25353,6 +25767,12 @@
       if (e.key !== "Escape" || !activeWorkerKey || wdDrawer.hidden) return;
       if (e.isComposing || e.keyCode === 229) return;
       if (superSearchOpen || document.querySelector("dialog[open]") || pickOpen || dirCtx) return;
+      if (isWdMoreOpen()) {
+        e.preventDefault();
+        closeWdMoreMenu();
+        return;
+      }
+      if (performance.now() - wdMoreClosedAt < 80) return;
       e.preventDefault();
       if (wdComposerOpen && document.activeElement === wdInputEl && !String(wdInputEl?.value || "").trim()) {
         wdComposerOpen = false;
@@ -26065,21 +26485,147 @@
     root.removeAttribute("height");
     return { node: root, lightCanvas: svgNeedsLightCanvas(root) };
   }
-  function applyResponsiveSvgSizing(svgEl) {
-    if (!svgEl) return;
-    let vbW = 0;
-    const vb = (svgEl.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
-    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) vbW = vb[2];
+  function extractSvgMinFontSize(svgEl) {
+    if (!svgEl || typeof svgEl.querySelectorAll !== "function") return 0;
+    const textEls = svgEl.querySelectorAll("text, tspan");
+    if (!textEls?.length) return 0;
+    let minFs = Infinity;
+    let hasText = false;
+    for (const el of textEls) {
+      if (!(el.textContent || "").trim()) continue;
+      hasText = true;
+      let cur = el;
+      let found = 0;
+      while (cur && cur.nodeType === 1) {
+        const attrFs = parseFloat(cur.getAttribute?.("font-size") || "");
+        if (Number.isFinite(attrFs) && attrFs > 0) { found = attrFs; break; }
+        const st = String(cur.getAttribute?.("style") || "");
+        const m = st.match(/font-size\s*:\s*([0-9.]+)/i);
+        if (m) {
+          const parsed = parseFloat(m[1]);
+          if (Number.isFinite(parsed) && parsed > 0) { found = parsed; break; }
+        }
+        if (cur === svgEl) break;
+        cur = cur.parentElement || cur.parentNode;
+      }
+      if (found >= 6 && found < minFs) minFs = found;
+    }
+    if (!hasText) return 0;
+    return Number.isFinite(minFs) ? minFs : 14;
+  }
+  function computeResponsiveSvgMetrics(svgEl, kind) {
+    let vbW = 0, vbH = 0;
+    const vb = (svgEl?.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) {
+      vbW = vb[2];
+      if (Number.isFinite(vb[3]) && vb[3] > 0) vbH = vb[3];
+    }
     if (!vbW) {
-      const aw = parseFloat(svgEl.getAttribute?.("width") || "");
+      const aw = parseFloat(svgEl?.getAttribute?.("width") || "");
       if (Number.isFinite(aw) && aw > 0) vbW = aw;
     }
+    if (!vbW) return { natW: 0, minW: 0, vbH: 0 };
+    const natW = Math.ceil(vbW);
+    let minScale = 0;
+    if (kind === "mermaid") {
+      // Keep Mermaid 13px node text >= ~11px crisp vector glyphs (never downscaled to 4-7px ants).
+      minScale = 0.85;
+    } else {
+      const minFs = extractSvgMinFontSize(svgEl);
+      if (minFs > 0) {
+        // Keep text-bearing inline SVGs at >= 10.5px effective text size without upscaling past 1:1.
+        minScale = Math.min(1, Math.max(0.65, 10.5 / minFs));
+      }
+    }
+    const minW = minScale > 0 ? Math.min(natW, Math.ceil(vbW * minScale)) : 0;
+    return { natW, minW, vbH: Math.ceil(vbH) };
+  }
+  function applyResponsiveSvgSizing(svgEl, kind = "svg") {
+    if (!svgEl) return;
+    const { natW, minW } = computeResponsiveSvgMetrics(svgEl, kind);
     svgEl.removeAttribute?.("height");
-    svgEl.setAttribute?.("width", "100%");
+    svgEl.removeAttribute?.("width");
+    if (svgEl.dataset) {
+      if (natW > 0) svgEl.dataset.rvNatW = String(natW);
+      else delete svgEl.dataset.rvNatW;
+      if (minW > 0) svgEl.dataset.rvMinW = String(minW);
+      else delete svgEl.dataset.rvMinW;
+    }
     if (svgEl.style) {
-      svgEl.style.width = "100%";
-      svgEl.style.maxWidth = vbW > 0 ? `min(100%, ${Math.ceil(vbW)}px)` : "100%";
+      if (natW > 0) {
+        svgEl.style.setProperty?.("--rv-vb-w", natW + "px");
+        svgEl.style.setProperty?.("--rv-min-w", minW + "px");
+        svgEl.style.width = minW > 0 ? `clamp(${minW}px, 100%, ${natW}px)` : `min(100%, ${natW}px)`;
+        svgEl.style.maxWidth = "none";
+      } else {
+        svgEl.style.width = "100%";
+        svgEl.style.maxWidth = "100%";
+      }
       svgEl.style.height = "auto";
+    }
+  }
+  function syncRichStageScroll(card) {
+    if (!card) return;
+    const stage = card.querySelector?.(".rv-mermaid-stage, .rv-svg-stage");
+    if (!stage) return;
+    const clientW = stage.clientWidth || 0;
+    const scrollW = stage.scrollWidth || 0;
+    const scrollL = stage.scrollLeft || 0;
+    const maxScroll = scrollW - clientW;
+    const scrollable = maxScroll > 2;
+    let effectiveRight = scrollW;
+    if (scrollable && clientW > 0) {
+      const svg = stage.querySelector?.("svg");
+      if (svg && typeof svg.getBBox === "function") {
+        try {
+          const vb = (svg.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+          const sr = svg.getBoundingClientRect?.();
+          if (vb.length === 4 && vb[2] > 0 && sr && sr.width > 0) {
+            const bb = svg.getBBox();
+            if (bb && bb.width > 0) {
+              const scale = sr.width / vb[2];
+              const paintedRight = Math.ceil((bb.x + bb.width - vb[0]) * scale);
+              if (paintedRight > 0 && paintedRight < effectiveRight) effectiveRight = paintedRight;
+            }
+          }
+        } catch {}
+      }
+    }
+    const paintedFits = scrollable && scrollL === 0 && clientW > 0 && effectiveRight <= clientW + 2;
+    const effectiveScrollable = scrollable && !paintedFits;
+    const canScrollR = effectiveScrollable && scrollL < maxScroll - 4 && (scrollL + clientW) < effectiveRight - 4;
+    card.classList?.toggle("is-painted-fit", paintedFits);
+    card.classList?.toggle("is-scrollable", effectiveScrollable);
+    card.classList?.toggle("can-scroll-l", effectiveScrollable && scrollL > 4);
+    card.classList?.toggle("can-scroll-r", canScrollR);
+    if (effectiveScrollable) {
+      stage.setAttribute?.("tabindex", "0");
+    } else {
+      stage.removeAttribute?.("tabindex");
+    }
+  }
+  const boundRvStageScrolls = new WeakSet();
+  let rvStageRO = null;
+  function bindRichStageScroll(card, stage) {
+    if (!card || !stage) return;
+    if (!boundRvStageScrolls.has(stage)) {
+      boundRvStageScrolls.add(stage);
+      stage.addEventListener?.("scroll", () => syncRichStageScroll(card), { passive: true });
+      if (typeof ResizeObserver === "function") {
+        if (!rvStageRO) {
+          rvStageRO = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+              const c = entry.target?.closest?.(".rv-card");
+              if (c) syncRichStageScroll(c);
+            }
+          });
+        }
+        try { rvStageRO.observe(stage); } catch {}
+      }
+    }
+    syncRichStageScroll(card);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => { if (card.isConnected) syncRichStageScroll(card); });
     }
   }
   function applySanitizedSvg(card, entry, hash) {
@@ -26088,7 +26634,7 @@
     const imported = typeof document?.importNode === "function"
       ? document.importNode(entry.node, true)
       : entry.node.cloneNode(true);
-    applyResponsiveSvgSizing(imported);
+    applyResponsiveSvgSizing(imported, "svg");
     if (typeof stage.replaceChildren === "function") stage.replaceChildren(imported);
     else { stage.innerHTML = ""; stage.appendChild(imported); }
     stage.classList.toggle("is-light-canvas", !!entry.lightCanvas);
@@ -26104,6 +26650,7 @@
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
+    bindRichStageScroll(card, stage);
   }
   function fallbackSvgCard(card) {
     card.classList.remove("is-pending", "is-ready", "is-acts-open");
@@ -26176,103 +26723,107 @@
   }
   function mermaidConfig(isDark) {
     const sans = '-apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif';
-    const edgeInk = isDark ? "#a1a1aa" : "#64645e";
-    const strokeCol = isDark ? "#2d2d34" : "#d8d8d3";
-    const linkCol = isDark ? "#71717a" : "#787872";
+    const bgCol = isDark ? "#111113" : "#ffffff";
+    const inkCol = isDark ? "#ececea" : "#18181b";
+    const edgeInk = isDark ? "#a1a1aa" : "#6b6b66";
+    const strokeCol = isDark ? "#28282f" : "#e2e2de";
+    const linkCol = isDark ? "#666670" : "#8e8e88";
     return {
       startOnLoad: false,
       securityLevel: "strict",
       suppressErrorRendering: true,
       logLevel: 5,
       fontFamily: sans,
+      // Native SVG <text>/<tspan> instead of <foreignObject> prevents blurry 1x WebKit/Safari Retina rasterization.
+      htmlLabels: false,
       theme: "base",
       themeVariables: isDark ? {
         darkMode: true,
         background: "#111113",
         fontFamily: sans,
         fontSize: "13px",
-        primaryColor: "#17171a",
+        primaryColor: "#16161a",
         primaryTextColor: "#ececea",
-        primaryBorderColor: "#2d2d34",
-        secondaryColor: "#1d1d22",
+        primaryBorderColor: "#28282f",
+        secondaryColor: "#1b1b20",
         secondaryTextColor: "#ececea",
-        secondaryBorderColor: "#34343c",
+        secondaryBorderColor: "#2f2f37",
         tertiaryColor: "#141417",
         tertiaryTextColor: "#ececea",
-        tertiaryBorderColor: "#26262c",
-        lineColor: "#71717a",
+        tertiaryBorderColor: "#24242a",
+        lineColor: "#666670",
         textColor: "#ececea",
-        mainBkg: "#17171a",
-        nodeBorder: "#2d2d34",
+        mainBkg: "#16161a",
+        nodeBorder: "#28282f",
         clusterBkg: "#141417",
-        clusterBorder: "#26262c",
-        defaultLinkColor: "#71717a",
+        clusterBorder: "#24242a",
+        defaultLinkColor: "#666670",
         titleColor: "#ececea",
         edgeLabelBackground: "#111113",
-        actorBkg: "#17171a",
-        actorBorder: "#2d2d34",
+        actorBkg: "#16161a",
+        actorBorder: "#28282f",
         actorTextColor: "#ececea",
-        actorLineColor: "#27272e",
+        actorLineColor: "#26262c",
         signalColor: "#a1a1aa",
         signalTextColor: "#ececea",
         labelBoxBkgColor: "#141417",
-        labelBoxBorderColor: "#2d2d34",
+        labelBoxBorderColor: "#28282f",
         labelTextColor: "#ececea",
         loopTextColor: "#a1a1aa",
-        noteBkgColor: "#1c1c21",
-        noteBorderColor: "#2d2d34",
+        noteBkgColor: "#1a1a1f",
+        noteBorderColor: "#28282f",
         noteTextColor: "#ececea",
-        activationBkgColor: "#232329",
-        activationBorderColor: "#52525b",
+        activationBkgColor: "#212127",
+        activationBorderColor: "#4b4b54",
         sequenceNumberColor: "#111113",
         pie1: "#dcdcd9", pie2: "#a8a8a3", pie3: "#76767a", pie4: "#4d4d55", pie5: "#34343b", pie6: "#232329",
         pieStrokeColor: "#111113", pieStrokeWidth: "1px", pieOpacity: "0.95",
         pieSectionTextColor: "#111113", pieTitleTextColor: "#ececea", pieLegendTextColor: "#c8c8c3",
-        cScale0: "#17171a", cScale1: "#1d1d22", cScale2: "#24242b", cScale3: "#2d2d34",
+        cScale0: "#16161a", cScale1: "#1b1b20", cScale2: "#222228", cScale3: "#28282f",
         cScaleLabel0: "#ececea", cScaleLabel1: "#ececea", cScaleLabel2: "#ececea", cScaleLabel3: "#ececea",
       } : {
         darkMode: false,
         background: "#ffffff",
         fontFamily: sans,
         fontSize: "13px",
-        primaryColor: "#fafaf9",
+        primaryColor: "#fbfbfa",
         primaryTextColor: "#18181b",
-        primaryBorderColor: "#d8d8d3",
-        secondaryColor: "#f4f4f2",
+        primaryBorderColor: "#e2e2de",
+        secondaryColor: "#f5f5f3",
         secondaryTextColor: "#18181b",
-        secondaryBorderColor: "#d8d8d3",
+        secondaryBorderColor: "#e2e2de",
         tertiaryColor: "#ffffff",
         tertiaryTextColor: "#18181b",
-        tertiaryBorderColor: "#e6e6e2",
-        lineColor: "#787872",
+        tertiaryBorderColor: "#eaeae6",
+        lineColor: "#8e8e88",
         textColor: "#18181b",
-        mainBkg: "#fafaf9",
-        nodeBorder: "#d8d8d3",
-        clusterBkg: "#fafaf9",
-        clusterBorder: "#e4e4e0",
-        defaultLinkColor: "#787872",
+        mainBkg: "#fbfbfa",
+        nodeBorder: "#e2e2de",
+        clusterBkg: "#fbfbfa",
+        clusterBorder: "#eaeae6",
+        defaultLinkColor: "#8e8e88",
         titleColor: "#18181b",
         edgeLabelBackground: "#ffffff",
-        actorBkg: "#fafaf9",
-        actorBorder: "#d8d8d3",
+        actorBkg: "#fbfbfa",
+        actorBorder: "#e2e2de",
         actorTextColor: "#18181b",
-        actorLineColor: "#e2e2dd",
+        actorLineColor: "#e6e6e2",
         signalColor: "#52524c",
         signalTextColor: "#18181b",
         labelBoxBkgColor: "#ffffff",
-        labelBoxBorderColor: "#e4e4e0",
+        labelBoxBorderColor: "#eaeae6",
         labelTextColor: "#18181b",
-        loopTextColor: "#64645e",
+        loopTextColor: "#6b6b66",
         noteBkgColor: "#f7f7f5",
-        noteBorderColor: "#e2e2dd",
+        noteBorderColor: "#e6e6e2",
         noteTextColor: "#18181b",
         activationBkgColor: "#f2f2ef",
-        activationBorderColor: "#a8a8a1",
+        activationBorderColor: "#b4b4ae",
         sequenceNumberColor: "#ffffff",
         pie1: "#27272a", pie2: "#52525b", pie3: "#8e8e88", pie4: "#bdbdb7", pie5: "#dcdcd8", pie6: "#efefed",
         pieStrokeColor: "#ffffff", pieStrokeWidth: "1px", pieOpacity: "0.95",
         pieSectionTextColor: "#ffffff", pieTitleTextColor: "#18181b", pieLegendTextColor: "#3f3f46",
-        cScale0: "#fafaf9", cScale1: "#f4f4f2", cScale2: "#eaeae6", cScale3: "#dcdcd7",
+        cScale0: "#fbfbfa", cScale1: "#f5f5f3", cScale2: "#ecece8", cScale3: "#e2e2de",
         cScaleLabel0: "#18181b", cScaleLabel1: "#18181b", cScaleLabel2: "#18181b", cScaleLabel3: "#18181b",
       },
       themeCSS: [
@@ -26281,16 +26832,17 @@
         `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
         `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
         `.actor-line { stroke-width: 1px !important; }`,
-        `.nodeLabel, .label, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; letter-spacing: -0.005em; }`,
-        `.edgeLabel, .edgeLabel p, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
-        `.cluster-label .nodeLabel { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; }`,
+        `.nodeLabel, .label, .node text, .node tspan, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; fill: ${inkCol} !important; letter-spacing: -0.005em; }`,
+        `.edgeLabel, .edgeLabel p, .edgeLabel text, .edgeLabel tspan, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.edgeLabel rect, .labelBkg { fill: ${bgCol} !important; opacity: 1 !important; rx: 4px; ry: 4px; }`,
+        `.cluster-label .nodeLabel, .cluster-label text, .cluster-label tspan { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
       ].join("\n"),
-      flowchart: { htmlLabels: true, curve: "basis", padding: 12, nodeSpacing: 36, rankSpacing: 44, useMaxWidth: true },
-      sequence: { useMaxWidth: true, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 44, messageMargin: 34, mirrorActors: false },
-      gantt: { useMaxWidth: true },
-      er: { useMaxWidth: true },
-      state: { useMaxWidth: true },
-      class: { useMaxWidth: true },
+      flowchart: { htmlLabels: false, curve: "basis", padding: 10, nodeSpacing: 22, rankSpacing: 34, useMaxWidth: false },
+      sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 40, messageMargin: 32, mirrorActors: false },
+      gantt: { useMaxWidth: false },
+      er: { useMaxWidth: false },
+      state: { useMaxWidth: false },
+      class: { useMaxWidth: false },
     };
   }
   function loadMermaid() {
@@ -26315,13 +26867,48 @@
     });
     return mermaidLoadPromise;
   }
-  function applyMermaidSvg(card, svg, themeKey, hash) {
+  function isMobileMermaidViewport() {
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function mermaidLayoutKey() {
+    return isMobileMermaidViewport() ? "m" : "d";
+  }
+  function rewriteMermaidLrToTd(code) {
+    const lines = String(code || "").split("\n");
+    let inFrontmatter = false;
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (i === 0 && trimmed === "---") { inFrontmatter = true; continue; }
+      if (inFrontmatter) { if (trimmed === "---") inFrontmatter = false; continue; }
+      if (!trimmed || trimmed.startsWith("%%")) continue;
+      const m = lines[i].match(/^(\s*(?:flowchart|graph)\s+)LR(\b.*)$/i);
+      if (!m) return null;
+      lines[i] = m[1] + "TD" + m[2];
+      return lines.join("\n");
+    }
+    return null;
+  }
+  function extractSvgViewBoxWidth(svgHtml) {
+    const s = String(svgHtml || "");
+    const m = s.match(/\bviewBox\s*=\s*["']\s*[-+0-9.eE]+[\s,]+[-+0-9.eE]+[\s,]+([-+0-9.eE]+)[\s,]+[-+0-9.eE]+\s*["']/i);
+    if (m) {
+      const w = parseFloat(m[1]);
+      if (Number.isFinite(w) && w > 0) return w;
+    }
+    const wm = s.match(/<svg\b[^>]*\bwidth\s*=\s*["']\s*([0-9.]+)(?:px)?\s*["']/i);
+    if (wm) {
+      const w = parseFloat(wm[1]);
+      if (Number.isFinite(w) && w > 0) return w;
+    }
+    return 0;
+  }
+  function applyMermaidSvg(card, svg, themeKey, hash, layoutKey = mermaidLayoutKey()) {
     const stage = card.querySelector?.(".rv-mermaid-stage");
     if (!stage) return;
     stage.innerHTML = svg;
     const svgEl = stage.querySelector?.("svg");
     if (svgEl) {
-      applyResponsiveSvgSizing(svgEl);
+      applyResponsiveSvgSizing(svgEl, "mermaid");
       for (const rect of svgEl.querySelectorAll?.(".node rect, rect.actor, .cluster rect") || []) {
         const w = parseFloat(rect.getAttribute?.("width") || "0");
         const h = parseFloat(rect.getAttribute?.("height") || "0");
@@ -26332,8 +26919,9 @@
       }
     }
     stage.style.minHeight = "";
-    card.dataset.rvRendered = `${themeKey}:${hash}`;
+    card.dataset.rvRendered = `${themeKey}:${layoutKey}:${hash}`;
     card.dataset.rvTheme = themeKey;
+    card.dataset.rvLayout = layoutKey;
     card.classList.remove("is-pending", "is-fallback");
     card.classList.add("is-ready");
     const expandBtn = card.querySelector?.('[data-rv-expand="mermaid"]');
@@ -26344,6 +26932,7 @@
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
+    bindRichStageScroll(card, stage);
   }
   function fallbackMermaidCard(card) {
     card.classList.remove("is-pending", "is-ready", "is-acts-open");
@@ -26360,12 +26949,13 @@
     if (!card || card.dataset?.rvKind !== "mermaid") return;
     const hash = card.dataset.rvHash || "";
     const themeKey = currentVisualTheme();
-    const cacheKey = `${themeKey}:${hash}`;
+    const layoutKey = mermaidLayoutKey();
+    const cacheKey = `${themeKey}:${layoutKey}:${hash}`;
     if (!opts.force && card.dataset.rvRendered === cacheKey) return;
     if (!opts.force && card.dataset.rvRendered === "fallback") return;
     const cachedSvg = mermaidSvgCache.get(cacheKey);
     if (cachedSvg) {
-      applyMermaidSvg(card, cachedSvg, themeKey, hash);
+      applyMermaidSvg(card, cachedSvg, themeKey, hash, layoutKey);
       return;
     }
     if (card.dataset.rvRendering === cacheKey) return;
@@ -26380,10 +26970,11 @@
     mermaidQueue = mermaidQueue.then(async () => {
       if (!card.isConnected) return;
       const curTheme = currentVisualTheme();
-      const curKey = `${curTheme}:${hash}`;
+      const curLayout = mermaidLayoutKey();
+      const curKey = `${curTheme}:${curLayout}:${hash}`;
       const hitNow = mermaidSvgCache.get(curKey);
       if (hitNow) {
-        applyMermaidSvg(card, hitNow, curTheme, hash);
+        applyMermaidSvg(card, hitNow, curTheme, hash, curLayout);
         return;
       }
       let m;
@@ -26399,7 +26990,14 @@
         mermaidInitTheme = curTheme;
       }
       const rid = `collie-mmd-${++mermaidRenderSeq}`;
+      let ridTd = "";
       let tempHost = null;
+      const cleanMermaidId = (id) => {
+        if (!id) return;
+        document.getElementById?.("d" + id)?.remove?.();
+        const sEl = document.getElementById?.(id);
+        if (sEl && !sEl.closest?.(".rv-mermaid-stage")) sEl.remove?.();
+      };
       try {
         if (typeof m.parse === "function") {
           const valid = await m.parse(code, { suppressErrors: true });
@@ -26414,29 +27012,46 @@
           document.body.appendChild(tempHost);
         }
         const res = await m.render(rid, code, tempHost || undefined);
-        const svg = typeof res === "string" ? res : (res?.svg || "");
-        if (tempHost) { tempHost.remove(); tempHost = null; }
-        document.getElementById?.("d" + rid)?.remove?.();
-        const stray = document.getElementById?.(rid);
-        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        let svg = typeof res === "string" ? res : (res?.svg || "");
+        cleanMermaidId(rid);
         if (!svg || !svg.includes("<svg")) {
           if (card.isConnected) fallbackMermaidCard(card);
           return;
         }
+        // On narrow mobile viewports, adapt overly wide horizontal flowchart/graph LR into vertical TD so users read cleanly without horizontal panning.
+        if (curLayout === "m") {
+          const tdCode = rewriteMermaidLrToTd(code);
+          if (tdCode) {
+            const lrW = extractSvgViewBoxWidth(svg);
+            const containerW = (stage?.clientWidth > 0 ? stage.clientWidth : 0) || Math.max(280, (typeof innerWidth === "number" ? innerWidth : 390) - 34);
+            if (lrW > containerW * 1.25) {
+              try {
+                ridTd = `collie-mmd-${++mermaidRenderSeq}`;
+                const tdRes = await m.render(ridTd, tdCode, tempHost || undefined);
+                const tdSvg = typeof tdRes === "string" ? tdRes : (tdRes?.svg || "");
+                cleanMermaidId(ridTd);
+                if (tdSvg && tdSvg.includes("<svg")) {
+                  const tdW = extractSvgViewBoxWidth(tdSvg);
+                  if (tdW > 0 && tdW < lrW * 0.9) svg = tdSvg;
+                }
+              } catch {}
+            }
+          }
+        }
+        if (tempHost) { tempHost.remove(); tempHost = null; }
         if (mermaidSvgCache.size >= MERMAID_CACHE_MAX) {
           const oldest = mermaidSvgCache.keys().next().value;
           if (oldest !== undefined) mermaidSvgCache.delete(oldest);
         }
         mermaidSvgCache.set(curKey, svg);
-        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash);
+        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash, curLayout);
       } catch {
         if (card.isConnected) fallbackMermaidCard(card);
       } finally {
         if (card.dataset.rvRendering === cacheKey) delete card.dataset.rvRendering;
         if (tempHost) tempHost.remove();
-        document.getElementById?.("d" + rid)?.remove?.();
-        const stray = document.getElementById?.(rid);
-        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        cleanMermaidId(rid);
+        cleanMermaidId(ridTd);
         if (typeof requestAnimationFrame === "function") {
           await new Promise((r) => requestAnimationFrame(r));
         }
@@ -26664,6 +27279,7 @@
       buckets.get(k).push(oc);
     }
     const curTheme = currentVisualTheme();
+    const curLayout = mermaidLayoutKey();
     for (const nc of newCards) {
       const kind = nc.dataset?.rvKind || "";
       const hash = nc.dataset?.rvHash || "";
@@ -26674,8 +27290,8 @@
         setRichCardMode(nc, "source");
       }
       if (kind === "mermaid") {
-        const svg = mermaidSvgCache.get(`${curTheme}:${hash}`);
-        if (svg) applyMermaidSvg(nc, svg, curTheme, hash);
+        const svg = mermaidSvgCache.get(`${curTheme}:${curLayout}:${hash}`);
+        if (svg) applyMermaidSvg(nc, svg, curTheme, hash, curLayout);
       } else if (kind === "svg") {
         const entry = svgSanitizedCache.get(hash);
         if (entry) applySanitizedSvg(nc, entry, hash);
@@ -26696,6 +27312,7 @@
     const srcEl = card.querySelector?.(".rv-source");
     if (stage) stage.hidden = showSource;
     if (srcEl) srcEl.hidden = !showSource;
+    if (!showSource && isDiagram) syncRichStageScroll(card);
     const btn = card.querySelector?.('[data-rv-toggle="source"]');
     if (btn) {
       btn.setAttribute("aria-pressed", showSource ? "true" : "false");
@@ -26756,13 +27373,14 @@
     }
     if (!cards.length) return;
     const curTheme = currentVisualTheme();
+    const curLayout = mermaidLayoutKey();
     for (const card of cards) {
       const kind = card.dataset.rvKind;
       const hash = card.dataset.rvHash || "";
       if (kind === "mermaid") {
-        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${hash}`);
-        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${hash}`) {
-          applyMermaidSvg(card, cachedSvg, curTheme, hash);
+        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${curLayout}:${hash}`);
+        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${curLayout}:${hash}`) {
+          applyMermaidSvg(card, cachedSvg, curTheme, hash, curLayout);
           card.dataset.rvWatched = "1";
           continue;
         }
@@ -26801,11 +27419,21 @@
       } catch {}
     }
   }
+  function onRichVisualViewportChange() {
+    const nextLayout = mermaidLayoutKey();
+    for (const card of document.querySelectorAll?.(".rv-mermaid.is-ready") || []) {
+      if (card.dataset?.rvLayout !== nextLayout) renderMermaidCard(card, { force: true });
+    }
+  }
   if (typeof addEventListener === "function") {
     rvLastTheme = currentVisualTheme();
     addEventListener("collie:theme", onRichVisualThemeChange);
   }
   darkMQ?.addEventListener?.("change", onRichVisualThemeChange);
+  try {
+    const rvMobileMQ = typeof matchMedia === "function" ? matchMedia("(max-width: 760px)") : null;
+    rvMobileMQ?.addEventListener?.("change", onRichVisualViewportChange);
+  } catch {}
   document.addEventListener?.("click", (ev) => {
     const toggleBtn = ev.target?.closest?.('[data-rv-toggle="source"]');
     if (toggleBtn) {
@@ -27362,7 +27990,7 @@
             return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
           }).join("")}</tr>`).join("");
           const rowCount = bodyRows.length, colCount = head.length;
-          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          out.push(`<div class="md-table-card" data-table-card data-cols="${colCount}"><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
           continue;
         }
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
@@ -28217,7 +28845,7 @@
     const attHtml = rest.length
       ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>`
       : "";
-    return { imgs, textHtml, attHtml, hasBubbleContent: !!(textHtml || attHtml) };
+    return { imgs, bodyRaw, textHtml, attHtml, hasBubbleContent: !!(textHtml || attHtml) };
   }
   function renderUserMedia(imgs) {
     if (!imgs.length) return "";
@@ -29278,7 +29906,11 @@
       try { syncThreadDrawer(); } catch {}
     }
     if (activeWorkerKey) {
-      try { syncWorkerDrawerMeta(); } catch {}
+      try {
+        if (wdModelEl) wdModelEl._key = "";
+        syncWorkerDrawerMeta();
+        if (wdThreadEl?._redraw) wdThreadEl._redraw();
+      } catch {}
     }
     if (sheet?.open) {
       try { suggestName(); } catch {}

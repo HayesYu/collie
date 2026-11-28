@@ -176,7 +176,8 @@ assert.deepEqual(stV2.payload.addrs, [
   "https://collie.example.com",
 ]);
 assert.equal(runV2.J.buildPwaLaunchUrl(stV2), "web+collie://join/2." + v2B64);
-assert.equal(runV2.getEl("card-title").textContent, "Alex的边牧 邀请你成为 Collie 的好狗友");
+assert.equal(runV2.getEl("card-title").textContent, "Alex的边牧 邀请你成为好狗友");
+assert.equal(runV2.ctx.document.title, "Alex的边牧 · Collie 好狗友邀请");
 assert.equal(runV2.getEl("meta-hub-id").textContent, "hub_demo002");
 assert.equal(runV2.getEl("open-section").hidden, false);
 assert.equal(runV2.getEl("mode-node").checked, true, "default preset should be local Node proxy 127.0.0.1:17788");
@@ -227,6 +228,8 @@ assert.equal(stV1.status, "permanent");
 assert.equal(stV1.version, 1);
 assert.equal(stV1.hashPayload, v1B64);
 assert.equal(stV1.inviteCode, "collie-peer://v1/" + v1B64);
+assert.equal(runV1.getEl("card-title").textContent, "Alice's Collie invites you to become pals");
+assert.equal(runV1.ctx.document.title, "Alice's Collie · Collie Pal Invite");
 assert.equal(runV1.getEl("mode-pwa").checked, true, "remembered web+collie:// restores pwa mode");
 assert.equal(runV1.getEl("pwa-quick-row").hidden, true);
 runV1.getEl("hub-form").dispatch("submit", { preventDefault() {} });

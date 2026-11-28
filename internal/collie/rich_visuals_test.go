@@ -94,6 +94,16 @@ assert.ok(cssSrc.includes(".rv-float-acts") && cssSrc.includes(".rv-html-foot") 
 assert.ok(cssSrc.includes(".rv-mermaid.is-fallback") && cssSrc.includes(".rv-svg.is-fallback"), "CSS must style silent fallback for invalid Mermaid/SVG blocks");
 assert.ok(cssSrc.includes(".lb-svg") && cssSrc.includes(".rv-svg-stage.is-light-canvas"), "CSS must style lightbox SVG stage and dark-mode light canvas fallback");
 assert.ok(cssSrc.includes("--rv-html-max, 460px") && cssSrc.includes("--rv-html-max: 380px"), "CSS must clamp desktop/mobile HTML card heights");
+assert.ok(cssSrc.includes("#super-thread > .say {\n    grid-template-columns: minmax(0, 1fr);"), "mobile main chat must reclaim avatar rail for full-width rich blocks");
+assert.ok(cssSrc.includes(".rv-mermaid-stage svg,\n.rv-svg-stage svg {\n  display: block;\n  width: clamp(var(--rv-min-w, 0px), 100%, var(--rv-vb-w, 100%));\n  max-width: none;"), "Mermaid/SVG stages must enforce readable clamp() vector sizing without crushing wide diagrams");
+assert.ok(cssSrc.includes(".md-table-card, .md-math-block,\n    .rv-card,"), "entry blur animation must skip .md-table-card and .rv-card to keep crisp edges");
+assert.ok(cssSrc.includes(".md-code:has(> .md-code-tag) pre"), "code/diff blocks with corner tag must reserve top clearance so +N/lang never overlaps code lines");
+assert.ok(cssSrc.includes(".md-table-vp.can-scroll-l thead th:first-child"), "table sticky divider shadow must appear only when horizontally scrolled");
+assert.ok(cssSrc.includes('.md-table-card:is([data-cols="1"], [data-cols="2"], [data-cols="3"]) table {\n    width: 100%; min-width: 0; table-layout: fixed;'), "mobile <=3-col tables must use 100% fixed auto-wrap layout without horizontal scroll");
+assert.ok(cssSrc.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;") && cssSrc.includes(".md-code.is-diff .diff-line:has(> .diff-sig)"), "mobile code and diff blocks must soft-wrap with hanging +/- indent");
+assert.ok(cssSrc.includes(".md-table-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;"), "Markdown tables must be frameless and blended natively into the canvas");
+assert.ok(cssSrc.includes(".md-code {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 10px;\n  background: var(--code-bg);"), "code/diff blocks must use borderless soft-surface blending");
+assert.ok(cssSrc.includes(".rv-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n  box-shadow: none;"), "Mermaid/SVG containers must remain completely borderless and transparent");
 
 // Minimal DOM harness supporting elements, classes, attributes, dataset, children, querySelector, DOMParser, message & theme events
 let bootFinished = false;
@@ -519,7 +529,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, sanitizeSvgElement, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks };\n})();"
+  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, rewriteMermaidLrToTd, extractSvgViewBoxWidth, onRichVisualViewportChange, sanitizeSvgElement, applyResponsiveSvgSizing, computeResponsiveSvgMetrics, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 bootFinished = true;
@@ -597,9 +607,36 @@ async function testMermaidLifecycle() {
   assert.equal(lightCfg.suppressErrorRendering, true);
   assert.equal(darkCfg.suppressErrorRendering, true);
   assert.equal(lightCfg.startOnLoad, false);
+  assert.equal(lightCfg.htmlLabels, false, "Mermaid must use native SVG text (htmlLabels=false) to prevent blurry Retina foreignObject rasterization");
+  assert.equal(darkCfg.htmlLabels, false, "Dark Mermaid must use native SVG text (htmlLabels=false)");
+  assert.equal(lightCfg.flowchart.htmlLabels, false, "Flowchart htmlLabels must stay false");
+  assert.equal(lightCfg.flowchart.useMaxWidth, false, "Flowchart must not force useMaxWidth shrink");
   assert.equal(lightCfg.themeVariables.background, "#ffffff");
   assert.equal(darkCfg.themeVariables.background, "#111113");
   assert.ok(lightCfg.themeCSS.includes("stroke-width: 1px") && lightCfg.themeCSS.includes("rx: 8px"), "Mermaid themeCSS enforces 1px hairline strokes and 8px rounded corners");
+
+  // Responsive vector sizing floor: never crush wide Mermaid or text-bearing SVG into tiny blurry ants
+  {
+    const wideMmd = makeEl("svg");
+    wideMmd.setAttribute("viewBox", "0 0 960 60");
+    const mMetrics = R.computeResponsiveSvgMetrics(wideMmd, "mermaid");
+    assert.equal(mMetrics.natW, 960);
+    assert.ok(mMetrics.minW >= 800 && mMetrics.minW <= 960, "wide Mermaid enforces >=0.85 readable scale floor: " + mMetrics.minW);
+    R.applyResponsiveSvgSizing(wideMmd, "mermaid");
+    assert.equal(wideMmd.dataset.rvNatW, "960");
+    assert.equal(wideMmd.dataset.rvMinW, String(mMetrics.minW));
+    assert.ok(wideMmd.style.width.startsWith("clamp(") && wideMmd.style.maxWidth === "none", "wide Mermaid uses clamp(minW, 100%, natW) without max-width:100% crush");
+
+    const textSvgRes = R.sanitizeSvgElement('<svg viewBox="0 0 420 92"><text x="0" y="16" font-size="11" fill="currentColor">v0.5.0</text></svg>');
+    const sMetrics = R.computeResponsiveSvgMetrics(textSvgRes.node, "svg");
+    assert.equal(sMetrics.natW, 420);
+    assert.ok(sMetrics.minW >= 395 && sMetrics.minW <= 420, "11px text SVG keeps >=10.5px readable width floor: " + sMetrics.minW);
+
+    const iconSvgRes = R.sanitizeSvgElement('<svg viewBox="0 0 500 120"><rect width="500" height="120" fill="currentColor"/></svg>');
+    const iMetrics = R.computeResponsiveSvgMetrics(iconSvgRes.node, "svg");
+    assert.equal(iMetrics.natW, 500);
+    assert.equal(iMetrics.minW, 0, "pure shape SVG without text scales freely down to container width");
+  }
 
   // Mock global mermaid to test valid render, cache reuse, theme re-render, and silent syntax-error fallback
   let renderCalls = 0;
@@ -682,6 +719,56 @@ async function testMermaidLifecycle() {
   assert.equal(badCard.stage.hidden, true, "fallback hides diagram stage");
   assert.equal(badCard.pre.hidden, false, "fallback shows raw code block");
   assert.equal(warnings.length, 0, "syntax error must produce zero console warnings/errors");
+
+  // Mobile wide flowchart LR -> TD auto-adaptation (leaves compact LR & non-LR untouched, keeps source unmodified)
+  assert.equal(R.rewriteMermaidLrToTd("flowchart LR\n  A --> B"), "flowchart TD\n  A --> B");
+  assert.equal(R.rewriteMermaidLrToTd("%% comment\ngraph LR\n  A --> B"), "%% comment\ngraph TD\n  A --> B");
+  assert.equal(R.rewriteMermaidLrToTd("sequenceDiagram\n  A->>B: hi"), null);
+  assert.equal(R.rewriteMermaidLrToTd("flowchart TD\n  A --> B"), null);
+  assert.equal(R.extractSvgViewBoxWidth('<svg viewBox="0 0 880.5 52"></svg>'), 880.5);
+
+  const prevMermaid = ctx.mermaid;
+  const renderedCodes = [];
+  ctx.mermaid = {
+    initialize() {},
+    async parse() { return true; },
+    async render(_id, code) {
+      renderedCodes.push(code);
+      if (code.includes("WIDE_CHAIN") && /flowchart\s+LR/i.test(code)) {
+        return { svg: '<svg viewBox="0 0 900 54" data-dir="LR"><text>wide-lr</text></svg>' };
+      }
+      if (code.includes("WIDE_CHAIN") && /flowchart\s+TD/i.test(code)) {
+        return { svg: '<svg viewBox="0 0 190 320" data-dir="TD"><text>wide-td</text></svg>' };
+      }
+      return { svg: '<svg viewBox="0 0 310 220" data-dir="LR"><text>compact-lr</text></svg>' };
+    },
+  };
+  ctx.innerWidth = 390;
+  const wideCard = makeMermaidCardDom("flowchart LR\n  A[WIDE_CHAIN] --> B --> C", "hash-wide-lr");
+  wideCard.stage.clientWidth = 356;
+  R.renderMermaidCard(wideCard.card);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.ok(wideCard.stage.innerHTML.includes('data-dir="TD"'), "mobile wide flowchart LR adapts to vertical TD: " + wideCard.stage.innerHTML);
+  assert.ok(wideCard.pre.querySelector("code").textContent.startsWith("flowchart LR"), "source code view preserves original LR syntax");
+
+  const compactCard = makeMermaidCardDom("flowchart LR\n  A[COMPACT] --> B", "hash-compact-lr");
+  compactCard.stage.clientWidth = 356;
+  const callsBeforeCompact = renderedCodes.length;
+  R.renderMermaidCard(compactCard.card);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(renderedCodes.length - callsBeforeCompact, 1, "compact LR diagram fitting mobile width must NOT re-render as TD");
+  assert.ok(compactCard.stage.innerHTML.includes('data-dir="LR"'), "compact LR stays LR on mobile");
+
+  // Switching back to desktop re-renders wide LR as horizontal LR cleanly (separate cache key)
+  ctx.innerWidth = 1440;
+  R.onRichVisualViewportChange();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.ok(wideCard.stage.innerHTML.includes('data-dir="LR"'), "desktop viewport keeps wide flowchart LR horizontal");
+  ctx.mermaid = prevMermaid;
 }
 
 // 3. Inline HTML cards: both triggers, zero false positives, strict sandbox, safe postMessage height
@@ -931,5 +1018,49 @@ async function testSseNoFlicker() {
 	}
 	if !strings.Contains(string(out), "ALL_RICH_VISUALS_TESTS_PASSED") {
 		t.Fatalf("unexpected test output:\n%s", string(out))
+	}
+}
+
+func TestRouterDocIncludesRichReplyGuidance(t *testing.T) {
+	t.Parallel()
+	sp, _, _ := newPendingTestEnv(t)
+	sp.bin = "collie"
+	if err := sp.writeRouterFiles(); err != nil {
+		t.Fatalf("writeRouterFiles: %v", err)
+	}
+	routerBytes, err := os.ReadFile(filepath.Join(sp.routerDir(), "ROUTER.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerStr := string(routerBytes)
+	start := strings.Index(routerStr, "## Talking to the human")
+	end := strings.Index(routerStr, "## Memory")
+	if start < 0 || end <= start {
+		t.Fatalf("ROUTER.md missing expected section boundaries:\n%s", routerStr)
+	}
+	talkingSection := routerStr[start:end]
+	for _, want := range []string{
+		"Markdown tables",
+		"Mermaid diagrams (`mermaid`)",
+		"inline SVG (`svg`)",
+		"lightweight HTML blocks (`html-card`)",
+		"KaTeX math",
+		"fenced code blocks",
+		"`--file`",
+		"plain text",
+		"heavy visualizations or long HTML",
+	} {
+		if !strings.Contains(talkingSection, want) {
+			t.Fatalf("ROUTER.md Talking to the human section missing %q:\n%s", want, talkingSection)
+		}
+	}
+	for _, mirror := range []string{"AGENTS.md", "GEMINI.md", "CLAUDE.md"} {
+		b, err := os.ReadFile(filepath.Join(sp.routerDir(), mirror))
+		if err != nil {
+			t.Fatalf("read %s: %v", mirror, err)
+		}
+		if string(b) != routerStr {
+			t.Fatalf("%s diverged from ROUTER.md", mirror)
+		}
 	}
 }

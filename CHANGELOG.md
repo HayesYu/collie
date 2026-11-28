@@ -4,6 +4,30 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.14 (2026-11-28)
+
+### Highlights
+
+- **Frameless Canvas-Blended Rich Rendering & Zero-Scroll Mobile Ergonomics (`web/{app.css,app.js}`, `internal/collie/{rich_visuals_test.go,chat_render_perf_test.go}`, `docs/demo/`)**:
+  - **Frameless Native Blending (Scheme A)**: Stripped hard outer borders from `.md-table-card`, `.md-code`, and `.rv-card` (Mermaid & inline SVG) so Markdown tables align flush with prose beneath a crisp header rule and subtle row hairlines (with seamless sticky-column canvas blending on `≥4`-column wide tables), code and diff blocks sit on a borderless soft surface (`#f5f5f7` light / `#18181b` dark) with restrained diff row tints and non-overlapping corner tags, and Mermaid/SVG diagrams blend directly into light and Linear dark canvases with calmer stroke contrast.
+  - **Crisp Native Vector Mermaid & Mobile `LR → TD` Auto-Adaptation**: Switched Mermaid to native SVG text (`htmlLabels: false`, `useMaxWidth: false`) to eliminate Retina WebKit `<foreignObject>` raster blur, added readable scale floors (`≥0.85×` Mermaid, `≥10.5px` text-bearing inline SVG) and `getBBox()`-aware painted-bounds fit, and automatically adapted wide `flowchart LR` / `graph LR` diagrams (`>1.25×` container width) to vertical `TD` on mobile (`≤760px`) with separate per-viewport cache keys while keeping source code and desktop `LR` layouts untouched.
+  - **Zero-Scroll Mobile Tables, Code/Diff Soft-Wrap & Full-Width Symmetry**: Emitted `data-cols` on `.md-table-card` so `1–3` column tables render full-width (`table-layout: fixed` with numeric-column ratio tuning) with zero horizontal scroll on mobile while keeping sticky-column horizontal scroll for `≥4`-column tables; added soft-wrap with hanging `+`/`−` gutter indentation for mobile code/diff blocks; reclaimed the `38px` mobile avatar rail and asymmetric `scrollbar-gutter` for symmetric `16px` margins; excluded `.rv-card` and `.md-table-card` from mist entry blur and disabled mobile `backdrop-filter` on floating rich actions.
+- **Decluttered Mobile Worker Sheet Header & Collapsible Markdown Task Brief (`web/{index.html,app.css,app.js,i18n.js}`, `internal/collie/mobile_worker_sheet_ui_test.go`, `docs/demo/`)**:
+  - Streamlined the mobile (`≤760px`) `#worker-drawer` header into a compact two-row band (borderless `<` return button, full-width title, fluid single-line `status · kind · model` subtitle, and at most two right actions: `⋯` overflow popover + `×` close), hiding the duplicate `#wd-summary` strip on mobile while keeping desktop (`>760px`) unchanged.
+  - Added a native Top-Layer `popover="auto"` overflow menu (`#wd-more-menu`) with CSS Anchor Positioning + fixed viewport fallback and compositor-only open/close transition (zero `backdrop-filter`), housing full metadata, tap-to-copy working directory, linked thread, terminal screen toggle, full-screen popout, and 3s double-tap Ctrl-C interrupt.
+  - Cleaned Collie worker dispatch envelopes and `[spilled; run ...]` machine tails in worker threads, restored full task briefs where available, rendered Markdown inside `.msg.user.is-md`, and softly collapsed long task prompts (~4 lines with gradient fade + toggle) so live execution progress stays immediately visible, backed by symmetric zh/en i18n keys.
+- **Light Native Rich-Reply Guidance in Default `ROUTER.md` (`internal/collie/{cli.go,rich_visuals_test.go}`)**:
+  - Added a concise bullet under `Talking to the human` in the default `ROUTER.md` template informing the router that chat natively renders Markdown tables, Mermaid diagrams (`mermaid`), inline SVG (`svg`), lightweight HTML blocks (`html-card`), KaTeX math, and fenced code blocks (plus `--file` attachments), while keeping routine replies plain text and delegating heavy visualizations or long HTML to workers via `--file`.
+- **Tightened Pal Invite & Share Copy (`web/{i18n.js,app.js}`, `docs/join/index.html`, `internal/collie/{i18n_test.go,join_page_test.go,v033_join_card_test.go}`, `docs/demo/`)**:
+  - Fixed subject wording in Chinese and English invite landing pages and share text (e.g., `邀请你成为好狗友` / `invites you to become pals`).
+
+### Client / API Changes
+
+- None (Web UI rendering/layout polish, zh/en copy fixes, default `ROUTER.md` template guidance, and synced static demo only; no HTTP API, SSE event, JSON schema, or agent `kind` changes).
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.13 (2026-11-28)
 
 ### Highlights

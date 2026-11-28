@@ -3575,6 +3575,11 @@ func (f *FeishuAdapter) sdkClientForOutbound() (*larksdk.Client, FeishuConfig, e
 }
 
 func (f *FeishuAdapter) targetForEntry(e *Entry, cfg FeishuConfig) (recvType, recvID, replyMsgID string) {
+	recvType, recvID, replyMsgID, _ = f.routeTargetForEntry(e, cfg)
+	return recvType, recvID, replyMsgID
+}
+
+func (f *FeishuAdapter) routeTargetForEntry(e *Entry, cfg FeishuConfig) (recvType, recvID, replyMsgID, mentionOpenID string) {
 	f.mu.RLock()
 	var origin feishuRoute
 	if e != nil && e.Re != nil && e.Re.Entry != "" {
@@ -3584,25 +3589,33 @@ func (f *FeishuAdapter) targetForEntry(e *Entry, cfg FeishuConfig) (recvType, re
 	lastP2P := f.lastP2P
 	f.mu.RUnlock()
 
+	fallbackOpenID := firstValidFeishuOpenID(cfg.AllowOpenIDs)
+	pickOpenID := func(primary string) string {
+		if id := sanitizeFeishuMentionOpenID(primary); id != "" {
+			return id
+		}
+		return fallbackOpenID
+	}
+
 	if origin.chatID != "" {
 		if origin.chatType == "group" && origin.messageID != "" {
-			return "chat_id", origin.chatID, origin.messageID
+			return "chat_id", origin.chatID, origin.messageID, pickOpenID(origin.openID)
 		}
-		return "chat_id", origin.chatID, ""
+		return "chat_id", origin.chatID, "", pickOpenID(origin.openID)
 	}
 	// Never route fallback replies or unsolicited notices into a group chat:
 	// group chats are ONLY valid when explicitly replying to a tracked group origin.
 	allowLast := last.chatID != "" && last.chatType != "group"
 	if allowLast {
-		return "chat_id", last.chatID, ""
+		return "chat_id", last.chatID, "", pickOpenID(last.openID)
 	}
 	if lastP2P.chatID != "" {
-		return "chat_id", lastP2P.chatID, ""
+		return "chat_id", lastP2P.chatID, "", pickOpenID(lastP2P.openID)
 	}
 	if len(cfg.AllowOpenIDs) > 0 {
-		return "open_id", cfg.AllowOpenIDs[0], ""
+		return "open_id", cfg.AllowOpenIDs[0], "", pickOpenID(cfg.AllowOpenIDs[0])
 	}
-	return "", "", ""
+	return "", "", "", ""
 }
 
 // SendReply mirrors one Collie reply (including --opt buttons and --check) to
@@ -3615,11 +3628,11 @@ func (f *FeishuAdapter) SendReply(ctx context.Context, e *Entry, link string) (O
 	if err != nil {
 		return OutboundReceipt{}, err
 	}
-	recvType, recvID, replyMsgID := f.targetForEntry(e, cfg)
+	recvType, recvID, replyMsgID, mentionOpenID := f.routeTargetForEntry(e, cfg)
 	if recvID == "" {
 		return OutboundReceipt{}, errors.New("no target Feishu chat_id or allow_open_id available")
 	}
-	card := buildFeishuEntryCard(e, link, "")
+	card := buildFeishuEntryCardWithMention(e, link, "", mentionOpenID)
 	msgID, err := f.sendCard(ctx, client, recvType, recvID, replyMsgID, card)
 	if err != nil {
 		return OutboundReceipt{}, err
@@ -3642,7 +3655,7 @@ func (f *FeishuAdapter) SendNotices(ctx context.Context, ns []notice, link strin
 	if err != nil {
 		return err
 	}
-	recvType, recvID, _ := f.targetForEntry(nil, cfg)
+	recvType, recvID, _, mentionOpenID := f.routeTargetForEntry(nil, cfg)
 	if recvID == "" {
 		return errors.New("no target Feishu chat_id or allow_open_id available")
 	}
@@ -3674,7 +3687,7 @@ func (f *FeishuAdapter) SendNotices(ctx context.Context, ns []notice, link strin
 			return nil
 		}
 	}
-	raw := larkCard(ns, link)
+	raw := buildFeishuNoticesCard(ns, link, mentionOpenID)
 	msgID, err := f.sendRawCard(ctx, client, recvType, recvID, "", raw)
 	if err == nil {
 		if msgID != "" {
@@ -3899,7 +3912,99 @@ func marshalCardJSON(card map[string]any) (string, error) {
 	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
+var feishuMentionOpenIDRe = regexp.MustCompile(`^ou_[A-Za-z0-9_-]{1,125}$`)
+
+func sanitizeFeishuMentionOpenID(openID string) string {
+	openID = strings.TrimSpace(openID)
+	if !feishuMentionOpenIDRe.MatchString(openID) {
+		return ""
+	}
+	return openID
+}
+
+func firstValidFeishuOpenID(ids []string) string {
+	for _, id := range ids {
+		if clean := sanitizeFeishuMentionOpenID(id); clean != "" {
+			return clean
+		}
+	}
+	return ""
+}
+
+func feishuMentionTag(openID string) string {
+	id := sanitizeFeishuMentionOpenID(openID)
+	if id == "" {
+		return ""
+	}
+	return "<at id=" + id + "></at>"
+}
+
+func prependFeishuMention(content, mentionTag string) string {
+	if mentionTag == "" || strings.Contains(content, mentionTag) {
+		return content
+	}
+	if content == "" {
+		return mentionTag
+	}
+	return mentionTag + "\n" + content
+}
+
+func entryNeedsFeishuMention(e *Entry, opts []string) bool {
+	if e == nil {
+		return false
+	}
+	return len(opts) > 0 || e.Check || e.Tone == "blocked" || e.Tone == "error"
+}
+
+func noticeNeedsFeishuMention(n notice) bool {
+	return len(cleanOptions(n.options)) > 0 || n.check || n.tone == "blocked" || n.tone == "error"
+}
+
+func noticesNeedFeishuMention(ns []notice) bool {
+	for _, n := range ns {
+		if noticeNeedsFeishuMention(n) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildFeishuNoticesCard(ns []notice, link, mentionOpenID string) string {
+	raw := larkCard(ns, link)
+	if !noticesNeedFeishuMention(ns) {
+		return raw
+	}
+	mentionTag := feishuMentionTag(mentionOpenID)
+	if mentionTag == "" {
+		return raw
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return raw
+	}
+	body, _ := doc["body"].(map[string]any)
+	els, _ := body["elements"].([]any)
+	for _, el := range els {
+		m, ok := el.(map[string]any)
+		if !ok || m["tag"] != "markdown" || m["text_size"] == "notation" {
+			continue
+		}
+		content, _ := m["content"].(string)
+		m["content"] = prependFeishuMention(content, mentionTag)
+		updated, err := marshalCardJSON(doc)
+		if err != nil {
+			return raw
+		}
+		return updated
+	}
+	return raw
+}
+
 func buildFeishuEntryCard(e *Entry, link string, resolvedSummary string) map[string]any {
+	return buildFeishuEntryCardWithMention(e, link, resolvedSummary, "")
+}
+
+func buildFeishuEntryCardWithMention(e *Entry, link, resolvedSummary, mentionOpenID string) map[string]any {
 	link = larkJumpURL(link)
 	opts := cleanOptions(e.Options)
 	needsAction := len(opts) > 0 || e.Check || e.Tone == "blocked"
@@ -3914,8 +4019,16 @@ func buildFeishuEntryCard(e *Entry, link string, resolvedSummary string) map[str
 		title, color = "Collie · 出错了", "red"
 	}
 
+	mentionTag := ""
+	if resolvedSummary == "" && entryNeedsFeishuMention(e, opts) {
+		mentionTag = feishuMentionTag(mentionOpenID)
+	}
+
 	var els []any
 	bodyText := clip(e.Text, 3500)
+	if mentionTag != "" {
+		bodyText = prependFeishuMention(bodyText, mentionTag)
+	}
 	if e.Re != nil {
 		bodyText = "<font color='grey'>↩ " + larkEscape(e.Re.line()) + "</font>\n" + bodyText
 	}

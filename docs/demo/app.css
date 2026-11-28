@@ -370,11 +370,13 @@
 * { box-sizing: border-box; }
 html { background: var(--bg); }
 html, body { margin: 0; height: 100%; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { overflow: hidden; overflow: clip; overscroll-behavior: none; }
 body {
   background: var(--bg); color: var(--fg);
   font: 14px/1.5 var(--sans);
   -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
   overflow: hidden;
+  overflow: clip;
   overscroll-behavior: none;
 }
 [hidden]:not(.super-search, .ss-panel, .side-drawer) { display: none !important; }
@@ -495,7 +497,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   .app { position: fixed; top: 0; left: 0; right: 0; transform: translate3d(0, var(--vtop, 0px), 0); }
 }
 @media (min-width: 761px) {
-  .app { position: relative; height: var(--side-full-h, 100%); overflow: hidden; }
+  .app { position: relative; height: 100%; grid-template-rows: minmax(0, 100%); overflow: hidden; overflow: clip; }
   .app > .side { height: var(--side-full-h, 100%); align-self: start; }
   .app > .main { height: 100%; }
   .app > .main, .side-drawer { padding-top: var(--kb-top, 0px); padding-bottom: var(--kb-inset, 0px); }
@@ -3859,8 +3861,8 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   .filepane,
   .threadpane,
   .workerpane {
-    position: fixed; top: 0; right: 0; bottom: auto; left: auto; z-index: 48;
-    width: min(460px, 92vw); max-width: 92vw; height: var(--side-full-h, 100%);
+    position: fixed; top: 0; right: 0; bottom: 0; left: auto; z-index: 48;
+    width: min(460px, 92vw); max-width: 92vw; height: auto;
     border-left: 1px solid var(--line);
     box-shadow: var(--shadow-lg);
     overscroll-behavior: contain;
@@ -8440,8 +8442,8 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   .notepane,
   .notepane:not(.is-hidden),
   .notepane.is-expanded {
-    position: fixed; top: 0; left: auto; right: 0; bottom: auto; z-index: 48;
-    width: min(316px, 88vw); height: var(--side-full-h, 100%); max-height: none;
+    position: fixed; top: 0; left: auto; right: 0; bottom: 0; z-index: 48;
+    width: min(316px, 88vw); max-height: none;
     border-radius: 0; border: 0; border-left: 1px solid var(--line);
     background: var(--bg); box-shadow: var(--shadow-lg);
     overscroll-behavior: contain;

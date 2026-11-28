@@ -645,7 +645,12 @@ const doc = {
   createElement: (t) => makeEl(t),
   body: { append() {} },
   addEventListener(t, fn) { if (!docListeners.has(t)) docListeners.set(t, []); docListeners.get(t).push(fn); },
+  dispatch(type, ev = {}) {
+    const e = { type, target: null, stopPropagation() {}, preventDefault() {}, ...ev };
+    for (const fn of [...(docListeners.get(type) || [])]) fn(e);
+  },
 };
+const winListeners = new Map();
 const ctx = {
   console, Math, Date, JSON, Set, Map, Array, Object, Number, String, Boolean, URL, Promise,
   setInterval: () => 1, clearInterval() {}, setTimeout: (fn) => { fn(); return 1; }, clearTimeout() {},
@@ -655,7 +660,11 @@ const ctx = {
 };
 ctx.window = {
   innerWidth: 1440, innerHeight: 900,
-  addEventListener() {},
+  addEventListener(t, fn) { if (!winListeners.has(t)) winListeners.set(t, []); winListeners.get(t).push(fn); },
+  dispatch(type, ev = {}) {
+    const e = { type, ...ev };
+    for (const fn of [...(winListeners.get(type) || [])]) fn(e);
+  },
 };
 vm.createContext(ctx);
 vm.runInContext(jsSrc, ctx);
@@ -965,6 +974,105 @@ const expiredSnap = {
 };
 const sumExp = Q.summarizeQuota(expiredSnap, nowMs, { kind: "agy", model: "gemini-4-neon-high" });
 assert.strictEqual(sumExp.min, 48, "expired 0% window must be skipped");
+
+// ─── 4. Native popover="auto" Light-Dismiss + Click Toggle Race Regressions ───
+const navBtn = getEl("#nav-quota");
+const railBtn = getEl("#rail-quota");
+const outsideEl = makeEl("#chat-area");
+narrowMode = false;
+Q.onEvent(normalSnap);
+Q.close();
+
+// Helper simulating browser native light-dismiss sequence on pointer click:
+// pointerdown (popover still open) -> browser light-dismiss hides popover -> pointerup -> click
+function pointerClick(btn, pointerType = "mouse") {
+  btn.dispatch("pointerdown", { pointerType, button: 0, isPrimary: true, target: btn });
+  if (pop.matches(":popover-open")) pop.hidePopover();
+  doc.dispatch("pointerup", { pointerType, button: 0, target: btn });
+  btn.dispatch("click", { detail: 1, target: btn });
+}
+
+// 4a. #nav-quota desktop mouse: click opens -> click again cleanly closes (no flash/reopen) -> click again opens
+pointerClick(navBtn, "mouse");
+assert.strictEqual(pop.matches(":popover-open"), true, "#nav-quota first click must open popover");
+assert.strictEqual(navBtn.getAttribute("aria-expanded"), "true");
+
+pointerClick(navBtn, "mouse");
+assert.strictEqual(pop.matches(":popover-open"), false, "#nav-quota second click after native light-dismiss must stay closed");
+assert.strictEqual(navBtn.getAttribute("aria-expanded"), "false");
+
+pointerClick(navBtn, "mouse");
+assert.strictEqual(pop.matches(":popover-open"), true, "#nav-quota third click must reopen cleanly");
+
+// 4b. Clicking the other trigger (#rail-quota) while #nav-quota opened it must switch cleanly to #rail-quota
+pointerClick(railBtn, "touch");
+assert.strictEqual(pop.matches(":popover-open"), true, "clicking #rail-quota while open on #nav-quota must switch anchor and stay open");
+assert.strictEqual(pop.classList.contains("pos-anchor-rail"), true);
+assert.strictEqual(railBtn.getAttribute("aria-expanded"), "true");
+assert.strictEqual(navBtn.getAttribute("aria-expanded"), "false");
+
+// 4c. Tapping #rail-quota again (touch / iPad) closes cleanly without reopening
+pointerClick(railBtn, "touch");
+assert.strictEqual(pop.matches(":popover-open"), false, "#rail-quota second tap after native light-dismiss must stay closed");
+assert.strictEqual(railBtn.getAttribute("aria-expanded"), "false");
+
+// 4d. Keyboard Enter / Space (no pointerdown) toggles cleanly on both triggers
+navBtn.dispatch("keydown", { key: "Enter" });
+navBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), true, "Enter on #nav-quota must open");
+navBtn.dispatch("keydown", { key: "Enter" });
+navBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), false, "Enter again on #nav-quota must close");
+
+railBtn.dispatch("keydown", { key: " " });
+railBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), true, "Space on #rail-quota must open");
+railBtn.dispatch("keydown", { key: " " });
+railBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), false, "Space again on #rail-quota must close");
+
+// 4e. Abandoned pointerdown (drag-off, pointercancel, right-click, window blur) must not swallow next open
+pointerClick(navBtn, "mouse");
+assert.strictEqual(pop.matches(":popover-open"), true);
+navBtn.dispatch("pointerdown", { pointerType: "mouse", button: 0, isPrimary: true, target: navBtn });
+pop.hidePopover();
+doc.dispatch("pointerup", { pointerType: "mouse", button: 0, target: outsideEl });
+// Next keyboard activation without pointerdown must open immediately
+navBtn.dispatch("keydown", { key: "Enter" });
+navBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), true, "dragged-off pointerdown must not leave stale close intent");
+
+// pointercancel clears pending close intent
+navBtn.dispatch("pointerdown", { pointerType: "touch", isPrimary: true, target: navBtn });
+pop.hidePopover();
+doc.dispatch("pointercancel", {});
+navBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), true, "pointercancel must clear pending close intent");
+
+// right-click does not arm close intent
+navBtn.dispatch("pointerdown", { pointerType: "mouse", button: 2, isPrimary: true, target: navBtn });
+pop.hidePopover();
+navBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), true, "right-click pointerdown must not arm close intent");
+
+// window blur clears pending close intent
+navBtn.dispatch("pointerdown", { pointerType: "mouse", button: 0, isPrimary: true, target: navBtn });
+pop.hidePopover();
+ctx.window.dispatch("blur", {});
+navBtn.dispatch("click", { detail: 0 });
+assert.strictEqual(pop.matches(":popover-open"), true, "window blur must clear pending close intent");
+
+// 4f. Outside click light-dismiss followed by clicking trigger reopens cleanly
+pop.hidePopover();
+assert.strictEqual(pop.matches(":popover-open"), false);
+pointerClick(navBtn, "mouse");
+assert.strictEqual(pop.matches(":popover-open"), true, "click after outside light-dismiss must reopen");
+
+// 4g. Fallback browser (no native light-dismiss between pointerdown and click) still closes cleanly
+navBtn.dispatch("pointerdown", { pointerType: "mouse", button: 0, isPrimary: true, target: navBtn });
+navBtn.dispatch("click", { detail: 1, target: navBtn });
+assert.strictEqual(pop.matches(":popover-open"), false, "click without prior native light-dismiss must still close");
+assert.strictEqual(navBtn.getAttribute("aria-expanded"), "false");
 
 console.log("quota web contracts ok");
 `

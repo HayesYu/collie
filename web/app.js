@@ -1313,10 +1313,29 @@
   let deferredScrollMask = 0;
   let vvTransitioning = false;
   let deferredViewportMask = 0;
+  let deferredSheetMask = 0;
+  let sheetAnimCapTimer = 0;
   let liveUpdateMask = 0;
   let liveUpdateRAF = 0;
   let liveComposeTimer = 0;
   const LIVE_SIDE = 1, LIVE_PENDING_BARS = 2, LIVE_SUPER = 4, LIVE_UPDATE_ENTRY = 8, LIVE_HEAD = 16;
+  function isAnyMobileSheetAnimating() {
+    for (const id of ["#worker-drawer", "#thread-drawer", "#file-view"]) {
+      const el = $(id);
+      if (el && (el.classList?.contains("is-sheet-opening") || (el._slideSettleAt && el._slideSettleAt > performance.now() + 16))) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function flushDeferredSheetUpdates() {
+    if (sheetAnimCapTimer) { clearTimeout(sheetAnimCapTimer); sheetAnimCapTimer = 0; }
+    if (deferredSheetMask) {
+      const pending = deferredSheetMask;
+      deferredSheetMask = 0;
+      scheduleLiveUpdates(pending);
+    }
+  }
   let _lastAnimBg = null, _lastAnimIdle = null;
   function hasActiveWork() {
     const rs = sup.router?.status;
@@ -1415,6 +1434,27 @@
       if (toDefer) {
         deferredViewportMask |= toDefer;
         mask &= ~deferBits;
+      }
+      if (!mask) return;
+    }
+    if (!superComposing && !document.hidden && typeof requestAnimationFrame === "function" && isAnyMobileSheetAnimating()) {
+      const deferBits = LIVE_SUPER | LIVE_SIDE | LIVE_PENDING_BARS | LIVE_HEAD;
+      const toDefer = mask & deferBits;
+      if (toDefer) {
+        deferredSheetMask |= toDefer;
+        mask &= ~deferBits;
+        if (!sheetAnimCapTimer) {
+          sheetAnimCapTimer = setTimeout(() => {
+            sheetAnimCapTimer = 0;
+            if (!isAnyMobileSheetAnimating()) flushDeferredSheetUpdates();
+            else if (deferredSheetMask) {
+              const pending = deferredSheetMask;
+              deferredSheetMask = 0;
+              liveUpdateMask |= pending;
+              flushLiveUpdates();
+            }
+          }, 380);
+        }
       }
       if (!mask) return;
     }
@@ -3117,6 +3157,7 @@
     return applyCollieAnchor(sc, snap);
   }
   let syncCollieResizeBaseline = () => {};
+  let reanchorCollieOnViewportChange = () => {};
   function cancelCollieLayoutLock() {
     const lock = collieLayoutLock;
     if (!lock) return;
@@ -3591,7 +3632,7 @@
           immediate: true,
         });
       }
-      if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot && !activeWorkerKey) $("#super-input").focus({ preventScroll: true });
+      if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot && !activeWorkerKey && !openInlineDecisionId) $("#super-input").focus({ preventScroll: true });
     }
     if (!cachePreAuth) {
       if (next === "auto") openAuto(saved);
@@ -3984,7 +4025,95 @@
     return reaches(startId, targetId) || reaches(targetId, startId);
   }
   let openInlineDecisionId = null;
+  let lastInlineFocusMeta = null;
   const inlineDecisionDrafts = new Map();
+  const isInlineInputEl = (el) => !!(el?.dataset?.inlineInput);
+  const inlineScope = (d) => d ? $("#td-list") : $("#super-thread");
+  const inlineScroller = (d) => d ? $("#td-body") : ($("#super-thread")?.parentElement || null);
+  const isVoidInlineFocus = (ae, sc) => !ae || ae === document.body || ae === sc || ae === $("#super-thread") || ae === $("#td-list");
+  function getActiveInlineFocus() {
+    const ae = document.activeElement;
+    const inp = isInlineInputEl(ae) ? ae : ae?.closest?.("[data-inline-input]");
+    if (!isInlineInputEl(inp) || !inp.isConnected || inp.closest?.("[data-inline-box]")?.hidden) return null;
+    const inDrawer = !!inp.closest?.("#thread-drawer");
+    return { inp, entryId: inp.dataset.inlineInput, inDrawer, scroller: inlineScroller(inDrawer) };
+  }
+  function focusInlineDecisionInput(id, opts = {}) {
+    if (!id) return null;
+    const inDrawer = !!opts.inDrawer;
+    const inp = inlineScope(inDrawer)?.querySelector?.(`[data-inline-input="${CSS.escape(id)}"]`);
+    if (!inp || inp.closest?.("[data-inline-box]")?.hidden) return null;
+    trackIME(inp);
+    bindCompositionGuard(inp);
+    inp.focus?.({ preventScroll: true });
+    const max = String(inp.value || "").length;
+    const hr = typeof opts.selectionStart === "number" && typeof opts.selectionEnd === "number";
+    const s = hr ? Math.max(0, Math.min(max, opts.selectionStart)) : max;
+    const e = hr ? Math.max(0, Math.min(max, opts.selectionEnd)) : max;
+    try { hr && opts.selectionDirection ? inp.setSelectionRange?.(s, e, opts.selectionDirection) : inp.setSelectionRange?.(s, e); }
+    catch { try { inp.setSelectionRange?.(s, e); } catch {} }
+    lastInlineFocusMeta = { id, inDrawer, at: performance.now() };
+    return inp;
+  }
+  function captureInlineInputFocus(scope) {
+    const ae = document.activeElement;
+    if (!scope || !isInlineInputEl(ae) || (typeof scope.contains === "function" && !scope.contains(ae))) return null;
+    return {
+      id: ae.dataset.inlineInput, el: ae, value: String(ae.value || ""),
+      selectionStart: typeof ae.selectionStart === "number" ? ae.selectionStart : null,
+      selectionEnd: typeof ae.selectionEnd === "number" ? ae.selectionEnd : null,
+      selectionDirection: ae.selectionDirection || "none",
+      inDrawer: scope.id === "td-list" || !!scope.closest?.("#thread-drawer"),
+    };
+  }
+  function restoreInlineInputFocus(scope, snap) {
+    if (!snap || !scope || openInlineDecisionId !== snap.id) return false;
+    if (snap.el?.isConnected && document.activeElement === snap.el) return true;
+    const inp = scope.querySelector?.(`[data-inline-input="${CSS.escape(snap.id)}"]`);
+    const box = inp?.closest?.("[data-inline-box]");
+    if (!inp || box?.hidden) return false;
+    if (inp.value !== snap.value) {
+      inp.value = snap.value;
+      if (!window.CSS?.supports?.("field-sizing", "content") && inp.parentElement?.dataset) inp.parentElement.dataset.replicatedValue = snap.value;
+      const sb = box?.querySelector?.("[data-inline-send]");
+      if (sb) sb.disabled = !snap.value.trim();
+    }
+    return !!focusInlineDecisionInput(snap.id, snap);
+  }
+  function patchDecisionWrapInPlace(oldOpts, newOpts) {
+    const id = oldOpts?.dataset?.decision || "";
+    if (!id || id !== newOpts?.dataset?.decision) return null;
+    const oBtns = oldOpts.querySelectorAll?.(".reply-opt") || [];
+    const nBtns = newOpts.querySelectorAll?.(".reply-opt") || [];
+    if (oBtns.length !== nBtns.length || [...oBtns].some((b, i) => b.dataset?.opt !== nBtns[i].dataset?.opt || b.textContent !== nBtns[i].textContent)) return null;
+    const oBtn = oldOpts.querySelector?.("[data-toggle-inline]"), nBtn = newOpts.querySelector?.("[data-toggle-inline]");
+    const oBox = oldOpts.querySelector?.("[data-inline-box]"), nBox = newOpts.querySelector?.("[data-inline-box]");
+    const oInp = oBox?.querySelector?.("[data-inline-input]"), nInp = nBox?.querySelector?.("[data-inline-input]");
+    if (!oBtn || !nBtn || !oBox || !nBox || !oInp || !nInp || oBox.dataset?.inlineBox !== nBox.dataset?.inlineBox || nBox.hidden) return null;
+    const wasOpen = !oBox.hidden;
+    if (oBtn.className !== nBtn.className) oBtn.className = nBtn.className;
+    oBtn.hidden = !!nBtn.hidden;
+    nBtn.hidden ? oBtn.setAttribute?.("hidden", "") : oBtn.removeAttribute?.("hidden");
+    oBtn.setAttribute?.("aria-expanded", nBtn.getAttribute?.("aria-expanded") || "true");
+    oBtn.querySelector?.(".draft-dot")?.remove?.();
+    const ph = nInp.getAttribute?.("placeholder");
+    if (ph != null) oInp.setAttribute?.("placeholder", ph);
+    for (const sel of ["[data-inline-cancel]", "[data-inline-send]"]) {
+      const a = oBox.querySelector?.(sel), b = nBox.querySelector?.(sel);
+      if (a && b) { a.title = b.title; const ar = b.getAttribute?.("aria-label"); if (ar != null) a.setAttribute?.("aria-label", ar); }
+    }
+    if (wasOpen) return { layoutChanged: false };
+    const draft = getInlineDraft(id), pill = inlinePillLayout(draft);
+    oBox.style?.setProperty?.("--ri-w", pill.width + "px");
+    oBox.classList?.toggle?.("is-multiline", pill.multi);
+    if (oInp.value !== draft) oInp.value = draft;
+    if (oInp.parentElement?.dataset) oInp.parentElement.dataset.replicatedValue = draft;
+    const sb = oBox.querySelector?.("[data-inline-send]");
+    if (sb) sb.disabled = !draft.trim();
+    oBox.hidden = false;
+    oBox.removeAttribute?.("hidden");
+    return { layoutChanged: true };
+  }
   const getInlineDraft = (id) => (id ? (inlineDecisionDrafts.get(id) || "") : "");
   const setInlineDraft = (id, val) => {
     if (!id) return;
@@ -3994,9 +4123,10 @@
   };
   const inlineDraftDotsFingerprint = () => {
     if (!inlineDecisionDrafts.size) return "";
+    const supp = replyTo?.mode === "supplement" ? (replyTo.entry || "") : "";
     const ids = [];
     for (const [k, v] of inlineDecisionDrafts) {
-      if (v && v.trim()) ids.push(k);
+      if (v && v.trim() && k !== openInlineDecisionId && k !== supp) ids.push(k);
     }
     return ids.sort().join(",");
   };
@@ -6253,15 +6383,21 @@
       if (item.optsHtml) {
         const newOpts = parseSuperNode(item.optsHtml);
         if (newOpts) {
-          if (oldOpts && oldOpts.parentNode === msgEl) msgEl.replaceChild(newOpts, oldOpts);
-          else if (beforeEl && beforeEl.parentNode === msgEl) msgEl.insertBefore(newOpts, beforeEl);
-          else msgEl.appendChild(newOpts);
+          const patched = patchDecisionWrapInPlace(oldOpts, newOpts);
+          if (patched) {
+            if (patched.layoutChanged) layoutChanged = true;
+          } else {
+            if (oldOpts && oldOpts.parentNode === msgEl) msgEl.replaceChild(newOpts, oldOpts);
+            else if (beforeEl && beforeEl.parentNode === msgEl) msgEl.insertBefore(newOpts, beforeEl);
+            else msgEl.appendChild(newOpts);
+            layoutChanged = true;
+          }
         }
       } else if (oldOpts && oldOpts.parentNode === msgEl) {
         msgEl.removeChild(oldOpts);
+        layoutChanged = true;
       }
       el._collieOptsHtml = item.optsHtml;
-      layoutChanged = true;
     }
     const curEntry = oldFoot?.querySelector?.(".thread-entry");
     const curCount = curEntry?.querySelector?.(".te-count");
@@ -6930,7 +7066,11 @@
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
     const scroller = box.parentElement;
     const drawerSideBySide = isDesktopThreadSideBySide();
-    const drawerFreezeMain = !forceBottom && drawerSideBySide;
+    const activeInlineMain = (() => {
+      const f = getActiveInlineFocus();
+      return f && !f.inDrawer ? f : null;
+    })();
+    const drawerFreezeMain = !forceBottom && (drawerSideBySide || (!restore && !!activeInlineMain));
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
     const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && (collieInitialAnchor?.mode === "bottom" || (collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom))
@@ -7385,6 +7525,7 @@
       superBodyKey = nextBodyKey;
       let domMutated = false;
       let domLayoutChanged = false;
+      const savedInlineFocus = captureInlineInputFocus(box);
       if (canPatchSuperDom(box)) {
         const collieEl = $("#v-collie");
         const collieVisible = view === "collie" && !document.hidden && !collieEl?.classList?.contains("is-parked");
@@ -7406,6 +7547,9 @@
           domMutated = true;
           domLayoutChanged = true;
         }
+      }
+      if (domMutated && savedInlineFocus) {
+        restoreInlineInputFocus(box, savedInlineFocus);
       }
       if (domMutated) {
         hydrateRichContent(box);
@@ -7647,8 +7791,11 @@
     let collieResizeH = sc?.clientHeight || 0;
     let collieResizeAnchor = null;
     let collieResizeGraceUntil = 0;
+    let collieWidthResizeUntil = 0;
     let collieResizeAnchorTimer = 0;
     let collieResizeRestoreRAF = 0;
+    let collieResizeSettleTimer = 0;
+    let lastMidAnchorAt = 0;
     const captureCollieResizeMidAnchor = () => {
       collieResizeAnchorTimer = 0;
       if (view !== "collie" || !sc || sc.clientHeight <= 0) return;
@@ -7660,7 +7807,7 @@
       collieResizeWasBottom = false;
       collieResizeAnchor = captureCollieAnchor(sc);
     };
-    const handleCollieScrollResize = (entries) => {
+    const handleCollieScrollResize = (entries, forceWidth = false) => {
       if (isLayoutGliding()) return;
       if (!sc || view !== "collie") return;
       const cr = Array.isArray(entries) && entries[0]?.contentRect ? entries[0].contentRect : null;
@@ -7671,36 +7818,54 @@
         collieResizeW = w;
         collieResizeH = h;
         collieResizeWasBottom = isCollieNearBottom(sc) && collieStickBottom;
+        if (!collieResizeWasBottom) collieResizeAnchor = captureCollieAnchor(sc);
         return;
       }
-      if (w === collieResizeW && h === collieResizeH) return;
-      const widthChanged = w !== collieResizeW;
-      const heightGrew = !widthChanged && h > collieResizeH;
+      if (!forceWidth && w === collieResizeW && h === collieResizeH) return;
+      const widthChanged = forceWidth || w !== collieResizeW;
+      const now = performance.now();
+      const inWidthSession = widthChanged || now < collieWidthResizeUntil;
+      const heightGrew = !inWidthSession && h > collieResizeH;
       collieResizeW = w;
       collieResizeH = h;
-      if (collieInitialAnchor || collieLayoutLock || (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until)) return;
-      collieResizeGraceUntil = performance.now() + 200;
-      markProgrammaticScroll(200);
+      if (collieInitialAnchor || collieLayoutLock || (activeCollieRestore && !activeCollieRestore.atBottom && now < activeCollieRestore.until)) return;
+      if (widthChanged) {
+        collieWidthResizeUntil = now + 280;
+        collieResizeGraceUntil = Math.max(collieResizeGraceUntil, now + 120);
+        markProgrammaticScroll(120);
+      } else {
+        collieResizeGraceUntil = Math.max(collieResizeGraceUntil, now + 120);
+        markProgrammaticScroll(120);
+      }
       const restoreNow = () => {
         if (view !== "collie" || !sc || sc.clientHeight <= 0 || collieInitialAnchor || collieLayoutLock) return;
         if (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until) return;
-        if (collieResizeWasBottom && collieStickBottom) {
+        const inlineFocus = getActiveInlineFocus();
+        if (inlineFocus && !inlineFocus.inDrawer && inlineFocus.scroller === sc) {
+          ensureInlineCardVisible(sc, inlineFocus.entryId, { instant: true });
+          updateSuperJump();
+          return;
+        }
+        if (collieResizeWasBottom || collieStickBottom) {
           setCollieBottomStick(true);
+          collieResizeWasBottom = true;
+          collieResizeAnchor = null;
           const sh = sc.scrollHeight;
           const dist = sh - sc.scrollTop - sc.clientHeight;
           if (dist > 1) {
-            markProgrammaticScroll(140);
+            markProgrammaticScroll(48);
+            collieResizeGraceUntil = Math.max(collieResizeGraceUntil, performance.now() + 48);
             sc.scrollTop = sh;
           }
           if (!$("#super-jump")?.hidden || dist > 1) updateSuperJump({ dist: dist > 1 ? 0 : dist });
-        } else if (widthChanged && collieResizeAnchor) {
+        } else if (inWidthSession && collieResizeAnchor) {
           applyCollieAnchor(sc, collieResizeAnchor);
           updateSuperJump();
         } else {
           updateSuperJump();
         }
       };
-      // During vertical height expansion (e.g. mobile keyboard dismissing), native
+      // During vertical height expansion (e.g. keyboard dismissing), native
       // scroll clamping keeps bottom-pinned chats glued to bottom with 0px drift.
       if (heightGrew && (collieResizeWasBottom || collieStickBottom)) {
         const sh = sc.scrollHeight;
@@ -7711,13 +7876,24 @@
         }
       }
       restoreNow();
-      if (typeof requestAnimationFrame === "function" && (widthChanged || !heightGrew)) {
+      if (typeof requestAnimationFrame === "function" && (inWidthSession || !heightGrew)) {
         if (collieResizeRestoreRAF) cancelAnimationFrame(collieResizeRestoreRAF);
         collieResizeRestoreRAF = requestAnimationFrame(() => {
           collieResizeRestoreRAF = 0;
           restoreNow();
         });
       }
+      if (widthChanged) {
+        if (collieResizeSettleTimer) clearTimeout(collieResizeSettleTimer);
+        collieResizeSettleTimer = setTimeout(() => {
+          collieResizeSettleTimer = 0;
+          restoreNow();
+          syncCollieResizeBaseline();
+        }, 180);
+      }
+    };
+    reanchorCollieOnViewportChange = (forceWidth = false) => {
+      handleCollieScrollResize(null, forceWidth);
     };
     syncCollieResizeBaseline = () => {
       if (!sc) return;
@@ -7725,6 +7901,12 @@
         cancelAnimationFrame(collieResizeRestoreRAF);
         collieResizeRestoreRAF = 0;
       }
+      if (collieResizeSettleTimer) {
+        clearTimeout(collieResizeSettleTimer);
+        collieResizeSettleTimer = 0;
+      }
+      collieWidthResizeUntil = 0;
+      collieResizeGraceUntil = Math.min(collieResizeGraceUntil, performance.now() + 48);
       const w = sc.clientWidth || 0;
       const h = sc.clientHeight || 0;
       if (w > 0 && h > 0) {
@@ -7751,6 +7933,9 @@
         collieForceBottomUntil = 0;
         collieStickBottom = false;
         collieResizeWasBottom = false;
+        collieWidthResizeUntil = 0;
+      collieResizeGraceUntil = Math.min(collieResizeGraceUntil, performance.now() + 48);
+        if (collieResizeSettleTimer) { clearTimeout(collieResizeSettleTimer); collieResizeSettleTimer = 0; }
       }
     }, { passive: true });
     let touchStartY = 0;
@@ -7763,6 +7948,16 @@
         collieForceBottomUntil = 0;
         collieStickBottom = false;
         collieResizeWasBottom = false;
+        collieWidthResizeUntil = 0;
+      collieResizeGraceUntil = Math.min(collieResizeGraceUntil, performance.now() + 48);
+        if (collieResizeSettleTimer) { clearTimeout(collieResizeSettleTimer); collieResizeSettleTimer = 0; }
+      }
+    }, { passive: true });
+    sc?.addEventListener("touchend", () => {
+      const now = performance.now();
+      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil && now >= collieWidthResizeUntil) {
+        if (collieResizeAnchorTimer) { clearTimeout(collieResizeAnchorTimer); collieResizeAnchorTimer = 0; }
+        captureCollieResizeMidAnchor();
       }
     }, { passive: true });
     let superJumpScrollRAF = 0;
@@ -7780,7 +7975,7 @@
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
       const now = performance.now();
-      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil
+      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil && now >= collieWidthResizeUntil
         && sc.clientWidth === collieResizeW && sc.clientHeight === collieResizeH) {
         const nearB = isCollieNearBottom(sc);
         collieStickBottom = nearB;
@@ -7790,8 +7985,12 @@
           if (collieResizeAnchorTimer) { clearTimeout(collieResizeAnchorTimer); collieResizeAnchorTimer = 0; }
         } else {
           collieForceBottomUntil = 0;
+          if (!collieResizeAnchor || now - lastMidAnchorAt >= 48) {
+            lastMidAnchorAt = now;
+            collieResizeAnchor = captureCollieAnchor(sc);
+          }
           if (collieResizeAnchorTimer) clearTimeout(collieResizeAnchorTimer);
-          collieResizeAnchorTimer = setTimeout(captureCollieResizeMidAnchor, 120);
+          collieResizeAnchorTimer = setTimeout(captureCollieResizeMidAnchor, 60);
         }
       }
       if (superJumpScrollRAF) return;
@@ -8684,24 +8883,33 @@
     if (!sup.router?.alive) toast(tx("collie.waking", "正在唤醒 Collie…"));
   }
 
-  function ensureInlineCardVisible(sc, entryId) {
+  function ensureInlineCardVisible(sc, entryId, opts = {}) {
     if (!sc || !entryId || sc.clientHeight <= 0) return;
-    const card = $("#super-thread")?.querySelector?.(`[data-inline-box="${CSS.escape(entryId)}"]`);
+    const inDrawer = !!opts.inDrawer;
+    const card = inlineScope(inDrawer)?.querySelector?.(`[data-inline-box="${CSS.escape(entryId)}"]`);
     if (!card || card.hidden || typeof card.getBoundingClientRect !== "function" || typeof sc.getBoundingClientRect !== "function") return;
-    const sr = sc.getBoundingClientRect();
-    const cr = card.getBoundingClientRect();
-    let bottomPad = 16;
-    const jump = $("#super-jump");
-    if (jump && !jump.hidden && typeof jump.getBoundingClientRect === "function") {
-      const jr = jump.getBoundingClientRect();
-      if (jr.height > 0 && jr.top < sr.bottom) {
-        bottomPad = Math.max(bottomPad, Math.ceil(sr.bottom - jr.top) + 12);
+    const sr = sc.getBoundingClientRect(), cr = card.getBoundingClientRect();
+    if (sr.height <= 0) return;
+    let bottomPad = 18;
+    if (!inDrawer) {
+      const jump = $("#super-jump");
+      if (jump && !jump.hidden && typeof jump.getBoundingClientRect === "function") {
+        const jr = jump.getBoundingClientRect();
+        if (jr.height > 0 && jr.top < sr.bottom) bottomPad = Math.max(bottomPad, Math.ceil(sr.bottom - jr.top) + 12);
       }
     }
-    const bottomSafe = sr.bottom - bottomPad;
-    if (cr.bottom > bottomSafe) {
-      smartScrollCollie(sc, sc.scrollTop + (cr.bottom - bottomSafe), { markMs: 280 });
-    }
+    const delta = cr.bottom > sr.bottom - bottomPad ? cr.bottom - (sr.bottom - bottomPad) : cr.top < sr.top + 14 ? cr.top - (sr.top + 14) : 0;
+    if (Math.abs(delta) < 2) return;
+    const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const want = Math.max(0, Math.min(maxTop, sc.scrollTop + delta));
+    if (Math.abs(want - sc.scrollTop) < 2) return;
+    if (!inDrawer) {
+      if (superScrollRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(superScrollRAF); superScrollRAF = 0; }
+      if (want < maxTop - AT_BOTTOM_PX) { collieForceBottomUntil = 0; setCollieBottomStick(false); }
+      if (opts.instant) { markProgrammaticScroll(240); sc.scrollTop = want; updateSuperJump(); }
+      else smartScrollCollie(sc, want, { markMs: 280 });
+    } else if (opts.instant || prefersReducedMotion() || typeof sc.scrollTo !== "function") sc.scrollTop = want;
+    else sc.scrollTo({ top: want, behavior: "smooth" });
   }
   function closeInlineDecision(id, opts = {}) {
     if (!id || openInlineDecisionId !== id) return;
@@ -8711,6 +8919,7 @@
       : null;
     if (keepSnap) keepSnap.atBottom = false;
     openInlineDecisionId = null;
+    lastInlineFocusMeta = null;
     renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
     if (activeThreadRoot) syncThreadDrawer();
     if (opts.restoreFocus) {
@@ -8727,6 +8936,7 @@
     const prevDraft = getInlineDraft(id);
     inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
+    if (lastInlineFocusMeta?.id === id) lastInlineFocusMeta = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
     const sc = viewScroller("collie");
@@ -8814,6 +9024,7 @@
         }
         const hadSupplement = replyTo?.mode === "supplement";
         openInlineDecisionId = null;
+        lastInlineFocusMeta = null;
         const target = chatEntries().find((x) => x.id === id);
         if (target) {
           setReply(target, { mode: "supplement", focus: false });
@@ -8842,20 +9053,21 @@
         setReply(null);
       }
       openInlineDecisionId = openInlineDecisionId === id ? null : id;
+      if (!openInlineDecisionId) lastInlineFocusMeta = null;
       renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
       if (activeThreadRoot) syncThreadDrawer();
       if (openInlineDecisionId) {
-        requestAnimationFrame(() => {
-          const scope = opts.inDrawer ? $("#td-list") : $("#super-thread");
-          const inp = scope?.querySelector?.(`[data-inline-input="${CSS.escape(openInlineDecisionId)}"]`);
-          if (inp) {
-            trackIME(inp);
-            inp.focus?.({ preventScroll: true });
-            const end = String(inp.value || "").length;
-            inp.setSelectionRange?.(end, end);
+        const targetId = openInlineDecisionId, inDrawer = !!opts.inDrawer, targetSc = inlineScroller(inDrawer);
+        focusInlineDecisionInput(targetId, { inDrawer });
+        const post = () => {
+          if (openInlineDecisionId !== targetId) return;
+          if (!isInlineInputEl(document.activeElement) && isVoidInlineFocus(document.activeElement, targetSc)) {
+            focusInlineDecisionInput(targetId, { inDrawer });
           }
-          if (!opts.inDrawer && sc) ensureInlineCardVisible(sc, openInlineDecisionId);
-        });
+          if (targetSc) ensureInlineCardVisible(targetSc, targetId, { inDrawer });
+        };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(post);
+        else post();
       }
       return true;
     }
@@ -8885,6 +9097,7 @@
     const text = b.dataset.opt;
     inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
+    if (lastInlineFocusMeta?.id === id) lastInlineFocusMeta = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const canPlayOptSettle = !prefersReducedMotion() && !document.hidden
       && typeof grp.getAnimations === "function" && !!grp.classList && !!b.classList;
@@ -8963,13 +9176,39 @@
       box.style?.setProperty?.("--ri-w", pill.width + "px");
       const isMulti = pill.multi || (pill.width >= 340 && inp.scrollHeight > 30);
       box.classList?.toggle?.("is-multiline", isMulti);
-      if (isMulti && !box.closest?.("#thread-drawer") && view === "collie") {
-        const sc = viewScroller("collie");
-        if (sc) ensureInlineCardVisible(sc, id);
+      if (isMulti) {
+        const inDrawer = !!box.closest?.("#thread-drawer");
+        const sc = inDrawer ? $("#td-body") : (view === "collie" ? viewScroller("collie") : null);
+        if (sc) ensureInlineCardVisible(sc, id, { inDrawer });
       }
     }
     const btn = box?.querySelector?.("[data-inline-send]");
     if (btn) btn.disabled = !String(inp.value || "").trim();
+  });
+  document.addEventListener("focusin", (ev) => {
+    const t = ev.target;
+    if (isInlineInputEl(t)) {
+      trackIME(t);
+      bindCompositionGuard(t);
+      lastInlineFocusMeta = { id: t.dataset.inlineInput, inDrawer: !!t.closest?.("#thread-drawer"), at: performance.now() };
+    } else if (lastInlineFocusMeta && !isVoidInlineFocus(t, viewScroller("collie")) && t !== $("#td-body")) {
+      lastInlineFocusMeta = null;
+    }
+  }, true);
+  document.addEventListener("pointerdown", (ev) => {
+    if (lastInlineFocusMeta && !ev.target?.closest?.("[data-inline-box], [data-toggle-inline]")) lastInlineFocusMeta = null;
+  }, { capture: true, passive: true });
+  document.addEventListener("mousedown", (ev) => {
+    const box = ev.target?.closest?.("form.reply-inline[data-inline-box]");
+    if (!box) {
+      if (lastInlineFocusMeta && !ev.target?.closest?.("[data-toggle-inline]")) lastInlineFocusMeta = null;
+      return;
+    }
+    if (ev.target.closest?.("textarea, button")) return;
+    const inp = box.querySelector?.("[data-inline-input]");
+    if (!inp) return;
+    ev.preventDefault();
+    if (document.activeElement !== inp) focusInlineDecisionInput(inp.dataset.inlineInput, { inDrawer: !!box.closest?.("#thread-drawer") });
   });
   document.addEventListener("keydown", (ev) => {
     const inp = ev.target?.closest?.("[data-inline-input]");
@@ -17632,10 +17871,12 @@
     const nearBot = isCollieNearBottom(sc);
     if (narrowScreen.matches && openInlineDecisionId && !activeThreadRoot) {
       const id = openInlineDecisionId;
+      const wasInlineFocused = isInlineInputEl(document.activeElement) && document.activeElement.dataset.inlineInput === id;
       const target = chatEntries().find((x) => x.id === id);
       const keepSnap = !nearBot ? (captureEntryAnchor(sc, id) || captureColliePos(sc)) : null;
       if (keepSnap) keepSnap.atBottom = false;
       openInlineDecisionId = null;
+      lastInlineFocusMeta = null;
       if (target) {
         setReply(target, { mode: "supplement", focus: false });
         const inp = $("#super-input");
@@ -17645,9 +17886,18 @@
         }
       }
       renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+      if (wasInlineFocused) {
+        const inp = $("#super-input");
+        if (inp) {
+          inp.focus?.({ preventScroll: true });
+          const end = String(inp.value || "").length;
+          inp.setSelectionRange?.(end, end);
+        }
+      }
     } else if (!narrowScreen.matches && replyTo?.mode === "supplement" && replyTo.entry) {
       const id = replyTo.entry;
       const inp = $("#super-input");
+      const wasComposerFocused = !!inp && document.activeElement === inp;
       if (inp) {
         setInlineDraft(id, inp.value);
         inp.value = "";
@@ -17658,6 +17908,9 @@
       setReply(null);
       openInlineDecisionId = id;
       renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+      if (wasComposerFocused) {
+        focusInlineDecisionInput(id, { inDrawer: false });
+      }
     }
   });
   function fitTerm() {
@@ -18020,8 +18273,27 @@
   const stick = (el, was) => {
     if (!was) return;
     const s = scroller(el);
+    if (!s) return;
+    if (s._stickRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(s._stickRAF);
+      s._stickRAF = 0;
+    }
+    markProgrammaticScroll(120);
     s.scrollTop = s.scrollHeight;
-    requestAnimationFrame(() => { s.scrollTop = s.scrollHeight; }); // after images and code lay out
+    const pinnedST = s.scrollTop;
+    if (typeof requestAnimationFrame === "function") {
+      s._stickRAF = requestAnimationFrame(() => {
+        s._stickRAF = 0;
+        if (!s.isConnected) return;
+        // Never yank the user back down if they already started scrolling up during the frame.
+        if (Math.abs(s.scrollTop - pinnedST) > 4) return;
+        const sh = s.scrollHeight;
+        if (sh - s.scrollTop - s.clientHeight > 1) {
+          markProgrammaticScroll(80);
+          s.scrollTop = sh;
+        }
+      });
+    }
   };
 
   // A stream sends {base, from, msgs}: the first (and every reconnect) has
@@ -18565,11 +18837,13 @@
   }
 
   function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。"), drawOpts = null) {
+    const wasChunking = !!el._chunking;
     clearTimeout(el._chunkTimer);
     el._chunkTimer = 0;
+    el._chunking = false;
     const rest = el._restore;
     // Just opened: start at the latest message, unless restoring a scroll position.
-    const was = rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || nearBottom(el));
+    const was = rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || wasChunking || nearBottom(el));
     if (msgs.length) el._fresh = false;
     const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
     if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._rawMsgsSig = ""; el._blocks = null; el._lazyRuns = null; return; }
@@ -18581,12 +18855,15 @@
     el._lazyRuns = lazyRuns;
     bindLazyToolRuns(el);
 
-    const useProgressive = !!(drawOpts?.progressive && groups.length > 2 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
+    // Only use tail-first chunked mount for genuinely huge (>60-group) threads on initial cold open;
+    // normal worker transcripts (<=60 groups) commit atomically in one frame after slide settle so
+    // scrollHeight / scrollTop never thrash and active SSE patches never reset progressive chunks.
+    const useProgressive = !!(drawOpts?.progressive && !wasChunking && groups.length > 60 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
     if (useProgressive) {
-      // True lazy tail-first chunked mount on mobile cold Worker Drawer open:
-      // only run md() on the 2 groups being mounted in each batch so neither frame 0 nor post-slide chunks spike.
+      el._chunking = true;
       const blocks = new Array(groups.length);
-      const tailStart = Math.max(0, groups.length - 2);
+      const tailCount = Math.min(groups.length, 12);
+      const tailStart = Math.max(0, groups.length - tailCount);
       for (let gi = tailStart; gi < groups.length; gi++) {
         blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
       }
@@ -18596,6 +18873,7 @@
       stick(el, true);
       let curStart = tailStart;
       const finishAll = () => {
+        el._chunking = false;
         if (el._loadingEarlier) {
           const rowHtml = `<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`;
           blocks.unshift(rowHtml);
@@ -18615,19 +18893,28 @@
       };
       const prependNext = () => {
         el._chunkTimer = 0;
-        if (drawOpts?.isAlive && !drawOpts.isAlive()) return;
-        const nextStart = Math.max(0, curStart - 2);
+        if (drawOpts?.isAlive && !drawOpts.isAlive()) { el._chunking = false; return; }
+        const nextStart = Math.max(0, curStart - 10);
         for (let gi = nextStart; gi < curStart; gi++) {
           blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
         }
         const chunkHtml = blocks.slice(nextStart, curStart).join("");
         const scEl = scroller(el);
-        const anchor = el.firstElementChild;
-        const anchorTop = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
+        const atBottom = !scEl || (scEl.scrollHeight - scEl.scrollTop - scEl.clientHeight <= 80);
+        const prevSH = scEl ? scEl.scrollHeight : 0;
+        const prevST = scEl ? scEl.scrollTop : 0;
+        const prevOA = scEl?.style ? scEl.style.overflowAnchor : "";
+        if (scEl?.style) scEl.style.overflowAnchor = "none";
         el.insertAdjacentHTML("afterbegin", chunkHtml);
-        if (anchor && anchorTop !== null && anchor.isConnected && scEl && typeof anchor.getBoundingClientRect === "function") {
-          const delta = anchor.getBoundingClientRect().top - anchorTop;
-          if (Math.abs(delta) > 0.5) scEl.scrollTop += delta;
+        if (scEl) {
+          markProgrammaticScroll(80);
+          if (atBottom) {
+            scEl.scrollTop = scEl.scrollHeight;
+          } else {
+            const dh = scEl.scrollHeight - prevSH;
+            if (Math.abs(dh) > 0.5) scEl.scrollTop = prevST + dh;
+          }
+          if (scEl.style) scEl.style.overflowAnchor = prevOA;
         }
         curStart = nextStart;
         if (curStart > 0) {
@@ -18689,25 +18976,37 @@
     const box = $("#live");
     const th = $("#thread");
     const was = nearBottom(th);
+    const wasHidden = !!box.hidden;
     th.classList.toggle("asking", l.status === "blocked" && !!l.approval);
-    let html = "";
     if (l.status === "working" && l.tail) {
-      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre><span class="meta"></span></div>`;
-    } else if (l.status === "blocked" && l.approval) {
+      let row = box.querySelector?.(".live-working");
+      if (!row) {
+        const html = `<div class="live-working"><span class="dot working"></span><pre></pre><span class="meta"></span></div>`;
+        box._html = html;
+        box.innerHTML = html;
+        row = box.querySelector?.(".live-working");
+      }
+      const pre = row?.querySelector?.("pre");
+      const meta = row?.querySelector?.(".meta");
+      if (pre && pre.textContent !== l.tail) pre.textContent = l.tail;
+      if (meta && meta.textContent !== (l.meta || "")) meta.textContent = l.meta || "";
+      box.hidden = false;
+      if (wasHidden) stick(th, was);
+      return;
+    }
+    let html = "";
+    if (l.status === "blocked" && l.approval) {
       const v = find(current);
       html = askHTML(l.approval, v ? title(v) : "agent");
     }
-    // Live updates arrive every second (the agent's clock ticks); redrawing
-    // an unchanged card would replay its entrance and make it jump.
     if (html !== box._html) {
       box._html = html;
       box.innerHTML = html;
     }
-    // The counters tick every second: only their text changes.
-    const meta = box.querySelector(".live-working .meta");
-    if (meta && meta.textContent !== (l.meta || "")) meta.textContent = l.meta || "";
-    box.hidden = !html;
-    stick(th, was);
+    const nextHidden = !html;
+    const changed = nextHidden !== wasHidden || !!html;
+    box.hidden = nextHidden;
+    if (changed) stick(th, was);
   }
 
   // Terminal dialogs arrive hard-wrapped at the terminal's width. Rebuild the
@@ -20202,7 +20501,7 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, textarea, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
+    if (m && e.target.closest("a, button, summary, details, input, textarea, label, .reply-inline, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
@@ -20469,8 +20768,8 @@
     const cols = Number(card?.getAttribute?.("data-cols") || card?.dataset?.cols || 0);
     return cols >= 1 && cols <= 3;
   }
-  function isMobileWrappedCode() {
-    return typeof innerWidth === "number" && innerWidth <= 760;
+  function isWrappedCodeBlock(block) {
+    return !block?.classList?.contains("is-nowrap");
   }
   function syncTablesBatch(cards) {
     if (!cards || !cards.length) return;
@@ -20487,6 +20786,7 @@
       }
       const sw = sc.scrollWidth || 0;
       const cw = sc.clientWidth || 0;
+      if (cw > 0) sc._roLastW = Math.round(cw);
       const sl = sc.scrollLeft || 0;
       const maxScroll = sw - cw;
       const scrollable = maxScroll > 2;
@@ -20518,11 +20818,11 @@
   function scheduleTableSync(cards) {
     if (!cards || !cards.length) return;
     for (const c of cards) if (c) _tablePending.add(c);
-    if (isLayoutGliding()) return;
+    if (isLayoutGliding() || isAnyMobileSheetAnimating()) return;
     if (_tableBatchRAF) return;
     const flush = () => {
       _tableBatchRAF = 0;
-      if (isLayoutGliding()) return;
+      if (isLayoutGliding() || isAnyMobileSheetAnimating()) return;
       const batch = [..._tablePending];
       _tablePending.clear();
       syncTablesBatch(batch);
@@ -20541,7 +20841,7 @@
         for (const entry of entries) {
           const el = entry.target;
           const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
-          if (w <= 0) { el._roLastW = 0; continue; }
+          if (w <= 0) continue;
           if (el._roLastW === w) continue;
           el._roLastW = w;
           const card = el.closest?.("[data-table-card]");
@@ -20583,17 +20883,18 @@
   }
   function syncCodeBlocksBatch(blocks) {
     if (!blocks || !blocks.length) return;
-    const wrapped = isMobileWrappedCode();
     const measured = [];
     for (const block of blocks) {
       if (!block || block.isConnected === false) continue;
-      if (wrapped) {
+      if (isWrappedCodeBlock(block)) {
         measured.push({ block, scrollable: false, canL: false, canR: false });
         continue;
       }
       const pre = block.querySelector?.(".md-code-body pre");
       if (!pre) continue;
-      const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
+      const preCw = pre.clientWidth || 0;
+      if (preCw > 0) pre._roLastW = Math.round(preCw);
+      const maxScroll = (pre.scrollWidth || 0) - preCw;
       const scrollable = maxScroll > 2;
       const sl = pre.scrollLeft || 0;
       measured.push({ block, scrollable, canL: scrollable && sl > 4, canR: scrollable && sl < maxScroll - 4 });
@@ -20614,11 +20915,11 @@
   function scheduleCodeSync(blocks) {
     if (!blocks || !blocks.length) return;
     for (const b of blocks) if (b) _codePending.add(b);
-    if (isLayoutGliding()) return;
+    if (isLayoutGliding() || isAnyMobileSheetAnimating()) return;
     if (_codeBatchRAF) return;
     const flush = () => {
       _codeBatchRAF = 0;
-      if (isLayoutGliding()) return;
+      if (isLayoutGliding() || isAnyMobileSheetAnimating()) return;
       const batch = [..._codePending];
       _codePending.clear();
       syncCodeBlocksBatch(batch);
@@ -20637,7 +20938,7 @@
         for (const entry of entries) {
           const el = entry.target;
           const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
-          if (w <= 0) { el._roLastW = 0; continue; }
+          if (w <= 0) continue;
           if (el._roLastW === w) continue;
           el._roLastW = w;
           const block = el.closest?.("[data-code-block]");
@@ -20650,19 +20951,23 @@
   }
   function hydrateCodeBlocks(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
-    const wrapped = isMobileWrappedCode();
     const toSync = [];
     for (const block of root.querySelectorAll("[data-code-block]")) {
+      const wrapped = isWrappedCodeBlock(block);
       const pre = block.querySelector?.(".md-code-body pre");
-      if (pre && !boundCodeScrolls.has(pre)) {
-        boundCodeScrolls.add(pre);
-        pre.addEventListener?.("scroll", () => {
-          block.classList?.add("is-scroll-ready");
-          syncCodeBlockScroll(block);
-        }, { passive: true });
-        if (!wrapped) observeCodeResize(pre);
+      if (wrapped) {
+        block.classList?.remove("is-scrollable", "can-scroll-l", "can-scroll-r");
+      } else {
+        if (pre && !boundCodeScrolls.has(pre)) {
+          boundCodeScrolls.add(pre);
+          pre.addEventListener?.("scroll", () => {
+            block.classList?.add("is-scroll-ready");
+            syncCodeBlockScroll(block);
+          }, { passive: true });
+          observeCodeResize(pre);
+        }
+        toSync.push(block);
       }
-      if (!wrapped) toSync.push(block);
       if (!block.hasAttribute?.("data-foldable") || block._richHydrated) continue;
       block._richHydrated = true;
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
@@ -20793,7 +21098,7 @@
   const lbName = $("#lb-name"), lbCount = $("#lb-count"), lbMeta = $("#lb-meta"), lbStatus = $("#lb-status");
   const lbZoomBtn = $("#lb-zoom"), lbZoomPct = $("#lb-zoom-pct"), lbOpenLink = $("#lb-open"), lbDlLink = $("#lb-dl");
   const lbPrevBtn = $("#lb-prev"), lbNextBtn = $("#lb-next"), lbCloseBtn = $("#lb-close");
-  let lbItems = [], lbIdx = 0, lbSeq = 0, lbTempUrl = "", lbCurMeta = null;
+  let lbItems = [], lbIdx = 0, lbShown = false, lbSeq = 0, lbTempUrl = "", lbCurMeta = null;
   let lbScale = 1, lbX = 0, lbY = 0, lbSavedScroll = null;
   const lbTabProtected = new Set();
 
@@ -20915,62 +21220,193 @@
     if (lbScale > 1.005) zoomLbTo(1);
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
+  const STREAM_GALLERY_ROOT_SEL = "#super-thread, #td-list, #wd-thread, #thread, #x-thread";
+  const GALLERY_MEDIA_SEL = ".thumb[data-img], .md-img-btn[data-img-url], .gal-hidden-item, a.fpath[data-path], img";
+  const galleryItemKey = (it) => (it?.path ? "p:" + it.path : (it?.url ? "u:" + it.url : ""));
+  const isSameOrDescendant = (ancestor, node) => {
+    if (!ancestor || !node) return false;
+    if (ancestor === node) return true;
+    if (typeof ancestor.contains === "function") return ancestor.contains(node);
+    let cur = node.parentElement || node.parentNode;
+    while (cur) {
+      if (cur === ancestor) return true;
+      cur = cur.parentElement || cur.parentNode;
+    }
+    return false;
+  };
+  function extractGalleryMediaEl(el) {
+    if (!el || el.closest?.(".file-gallery[hidden], .md-gallery[hidden]")) return null;
+    if ((el.classList?.contains("thumb") || el.classList?.contains("gal-hidden-item")) && el.dataset?.img) {
+      return { item: { path: el.dataset.img, alt: el.dataset.imgAlt || "" }, key: "p:" + el.dataset.img, isLink: false };
+    }
+    if ((el.classList?.contains("md-img-btn") || el.classList?.contains("gal-hidden-item")) && el.dataset?.imgUrl) {
+      return { item: { url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" }, key: "u:" + el.dataset.imgUrl, isLink: false };
+    }
+    if (el.matches?.("a.fpath[data-path]")) {
+      const p = el.dataset?.path || "";
+      if (IMG_EXT.test(p)) return { item: { path: p, alt: "" }, key: "p:" + p, isLink: true };
+      return null;
+    }
+    if (el.tagName === "IMG" && !el.closest?.(".thumb, .md-img-btn, .avatar, .td-av, .hello, a[href]")) {
+      const u = el.currentSrc || el.getAttribute?.("src") || "";
+      if (u) return { item: { url: u, alt: el.getAttribute?.("alt") || "" }, key: "u:" + u, isLink: false };
+    }
+    return null;
+  }
+  function collectScopeMediaInto(scope, items, triggerEl, state) {
+    if (!scope) return;
+    const nodes = [];
+    if (scope.matches?.(GALLERY_MEDIA_SEL)) nodes.push(scope);
+    for (const n of scope.querySelectorAll?.(GALLERY_MEDIA_SEL) || []) nodes.push(n);
+    if (!nodes.length) return;
+    const raw = [];
+    const visualKeys = new Set();
+    for (const el of nodes) {
+      const parsed = extractGalleryMediaEl(el);
+      if (!parsed || !parsed.key) continue;
+      raw.push({ el, ...parsed });
+      if (!parsed.isLink) visualKeys.add(parsed.key);
+    }
+    if (!raw.length) return;
+    const seen = new Map();
+    let deferredTriggerKey = "";
+    for (const entry of raw) {
+      const { el, item, key, isLink } = entry;
+      const hitTrigger = isSameOrDescendant(el, triggerEl);
+      if (isLink && visualKeys.has(key)) {
+        if (hitTrigger && state.matchedIdx < 0) {
+          if (seen.has(key)) state.matchedIdx = seen.get(key);
+          else deferredTriggerKey = key;
+        }
+        continue;
+      }
+      if (seen.has(key)) {
+        const existingIdx = seen.get(key);
+        if (!items[existingIdx].alt && item.alt) items[existingIdx].alt = item.alt;
+        if (hitTrigger && state.matchedIdx < 0) state.matchedIdx = existingIdx;
+        continue;
+      }
+      const slotIdx = items.length;
+      seen.set(key, slotIdx);
+      items.push(item);
+      if (state.matchedIdx < 0 && (hitTrigger || (deferredTriggerKey && deferredTriggerKey === key))) {
+        state.matchedIdx = slotIdx;
+      }
+    }
+  }
+  function collectNotebookImageGallery(clickedPath, listEl = $("#np-files-list")) {
+    const targetPath = String(clickedPath || "").trim();
+    const seen = new Set();
+    const items = [];
+    const addPath = (rawPath, alt = "") => {
+      const p = String(rawPath || "").trim();
+      if (!p || !IMG_EXT.test(p) || seen.has(p)) return;
+      seen.add(p);
+      items.push(alt ? { path: p, alt } : { path: p });
+    };
+    const domBtns = listEl?.querySelectorAll?.("[data-np-file]") || [];
+    if (domBtns.length) {
+      for (const btn of domBtns) {
+        const p = btn.dataset?.npFile || btn.getAttribute?.("data-np-file") || "";
+        const titleText = btn.querySelector?.(".np-file-title")?.textContent?.trim() || "";
+        addPath(p, titleText);
+      }
+    } else if (Array.isArray(notebookData?.artifacts)) {
+      for (const f of notebookData.artifacts) {
+        if (!f?.path) continue;
+        addPath(f.path, f.title || f.name || "");
+      }
+    }
+    let index = targetPath ? items.findIndex((it) => it.path === targetPath) : -1;
+    if (index < 0 && targetPath && IMG_EXT.test(targetPath)) {
+      items.push({ path: targetPath });
+      index = items.length - 1;
+    }
+    return { items, index: Math.max(0, index) };
+  }
   function collectGallery(triggerEl, fallbackItem) {
+    const npFilesList = triggerEl?.closest?.("#np-files-list");
+    if (npFilesList) {
+      const fp = triggerEl.dataset?.npFile || fallbackItem?.path || "";
+      return collectNotebookImageGallery(fp, npFilesList);
+    }
+    const streamRoot = triggerEl?.closest?.(STREAM_GALLERY_ROOT_SEL);
+    if (streamRoot) {
+      const items = [];
+      const state = { matchedIdx: -1 };
+      for (const unit of streamRoot.children || []) {
+        collectScopeMediaInto(unit, items, triggerEl, state);
+      }
+      let index = state.matchedIdx;
+      if (index < 0 && fallbackItem) {
+        const wantKey = galleryItemKey(fallbackItem);
+        index = wantKey ? items.findIndex((it) => galleryItemKey(it) === wantKey) : -1;
+        if (index < 0) {
+          items.push(fallbackItem);
+          index = items.length - 1;
+        }
+      }
+      return { items, index: Math.max(0, index) };
+    }
     const gal = triggerEl?.closest?.(".file-gallery, .md-gallery");
     if (gal) {
-      const seen = new Set(), items = [];
-      const add = (it) => {
-        const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
-        if (!key || seen.has(key)) return;
-        seen.add(key);
-        items.push(it);
-      };
+      const items = [];
+      const state = { matchedIdx: -1 };
+      const seen = new Map();
       for (const el of gal.querySelectorAll?.(".gal-tile, .gal-hidden-item") || []) {
-        if (el.dataset?.img) add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
-        else if (el.dataset?.imgUrl) add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
+        const item = el.dataset?.img
+          ? { path: el.dataset.img, alt: el.dataset.imgAlt || "" }
+          : (el.dataset?.imgUrl ? { url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" } : null);
+        const key = galleryItemKey(item);
+        if (!key) continue;
+        const hitTrigger = isSameOrDescendant(el, triggerEl);
+        if (seen.has(key)) {
+          if (hitTrigger && state.matchedIdx < 0) state.matchedIdx = seen.get(key);
+          continue;
+        }
+        const slotIdx = items.length;
+        seen.set(key, slotIdx);
+        items.push(item);
+        if (hitTrigger && state.matchedIdx < 0) state.matchedIdx = slotIdx;
       }
-      const wantKey = fallbackItem.path ? "p:" + fallbackItem.path : "u:" + (fallbackItem.url || "");
-      let index = items.findIndex((it) => (it.path ? "p:" + it.path : "u:" + (it.url || "")) === wantKey);
-      if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
-      return { items, index };
+      let index = state.matchedIdx;
+      if (index < 0 && fallbackItem) {
+        const wantKey = galleryItemKey(fallbackItem);
+        index = wantKey ? items.findIndex((it) => galleryItemKey(it) === wantKey) : -1;
+        if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
+      }
+      return { items, index: Math.max(0, index) };
     }
-    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".mine") || triggerEl?.closest(".mine-group") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    const scope = triggerEl?.closest?.(".rv-md") || triggerEl?.closest?.(".fv-md") || triggerEl?.closest?.(".mem-body") || triggerEl?.closest?.(".td-text") || triggerEl?.closest?.(".mine") || triggerEl?.closest?.(".mine-group") || triggerEl?.closest?.(".msg") || triggerEl?.closest?.(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
-    const seen = new Set(), items = [];
-    const add = (it) => {
-      const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      items.push(it);
-    };
-    for (const el of scope.querySelectorAll(".thumb[data-img], .md-img-btn[data-img-url], .gal-hidden-item, a.fpath[data-path], img")) {
-      if ((el.classList.contains("thumb") || el.classList.contains("gal-hidden-item")) && el.dataset.img) {
-        add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
-      } else if ((el.classList.contains("md-img-btn") || el.classList.contains("gal-hidden-item")) && el.dataset.imgUrl) {
-        add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
-      } else if (el.matches("a.fpath[data-path]")) {
-        const p = el.dataset.path || "";
-        if (IMG_EXT.test(p)) add({ path: p, alt: "" });
-      } else if (el.tagName === "IMG" && !el.closest(".thumb, .md-img-btn, .avatar")) {
-        const u = el.currentSrc || el.getAttribute("src") || "";
-        if (u) add({ url: u, alt: el.getAttribute("alt") || "" });
-      }
+    const items = [];
+    const state = { matchedIdx: -1 };
+    collectScopeMediaInto(scope, items, triggerEl, state);
+    let index = state.matchedIdx;
+    if (index < 0 && fallbackItem) {
+      const wantKey = galleryItemKey(fallbackItem);
+      index = wantKey ? items.findIndex((it) => galleryItemKey(it) === wantKey) : -1;
+      if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
     }
-    const wantKey = fallbackItem.path ? "p:" + fallbackItem.path : "u:" + (fallbackItem.url || "");
-    let index = items.findIndex((it) => (it.path ? "p:" + it.path : "u:" + (it.url || "")) === wantKey);
-    if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
-    return { items, index };
+    return { items, index: Math.max(0, index) };
   }
   async function showLbSlide(idx) {
     if (!lbItems.length) return;
-    lbIdx = ((idx % lbItems.length) + lbItems.length) % lbItems.length;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= lbItems.length) return;
+    if (lbShown && idx === lbIdx) return;
+    lbIdx = idx;
+    lbShown = true;
     const item = lbItems[lbIdx], seq = ++lbSeq;
     releaseLbTempUrl();
     lbScale = 1; lbX = 0; lbY = 0;
     applyLbTransform(true);
     const multi = lbItems.length > 1;
+    const atStart = lbIdx <= 0;
+    const atEnd = lbIdx >= lbItems.length - 1;
     lbPrevBtn.hidden = !multi;
     lbNextBtn.hidden = !multi;
+    lbPrevBtn.disabled = !multi || atStart;
+    lbNextBtn.disabled = !multi || atEnd;
     lbCount.hidden = !multi;
     if (multi) lbCount.textContent = `${lbIdx + 1} / ${lbItems.length}`;
 
@@ -21130,6 +21566,8 @@
     const sc = viewScroller(view);
     lbSavedScroll = sc ? { sc, top: sc.scrollTop } : null;
     lbItems = items;
+    lbShown = false;
+    const clamped = Math.max(0, Math.min(items.length - 1, Number.isFinite(index) ? Math.trunc(index) : 0));
     lightbox.removeAttribute("data-closing");
     if (!lightbox.open) {
       markProgrammaticScroll(150);
@@ -21138,7 +21576,7 @@
         lbSavedScroll.sc.scrollTop = lbSavedScroll.top;
       }
     }
-    showLbSlide(index);
+    showLbSlide(clamped);
   }
   async function closeLightbox() {
     if (!lightbox?.open || lightbox.hasAttribute("data-closing")) return;
@@ -21179,12 +21617,16 @@
       lightbox.removeAttribute("data-closing");
       lightbox.classList.remove("is-zoomed", "is-dragging", "no-anim");
       if (lbSvg) { lbSvg.hidden = true; lbSvg.classList.remove("is-light-canvas"); lbSvg.innerHTML = ""; lbSvg.style.transform = ""; }
+      lbShown = false;
       lbSeq++;
       releaseLbTempUrl();
       lbImg.onload = lbImg.onerror = null;
       lbImg.removeAttribute("src");
+      lbImg.style.transform = "";
       lbImg.hidden = true;
       lbStatus.hidden = true;
+      if (lbPrevBtn) lbPrevBtn.disabled = true;
+      if (lbNextBtn) lbNextBtn.disabled = true;
       lbScale = 1; lbX = 0; lbY = 0;
       if (lbSavedScroll?.sc && lbSavedScroll.sc.scrollTop !== lbSavedScroll.top) {
         markProgrammaticScroll(120);
@@ -21201,12 +21643,12 @@
     lbDlLink?.addEventListener("click", (ev) => {
       if (lbDlLink.getAttribute("aria-disabled") === "true") ev.preventDefault();
     });
-    lbPrevBtn?.addEventListener("click", () => showLbSlide(lbIdx - 1));
-    lbNextBtn?.addEventListener("click", () => showLbSlide(lbIdx + 1));
+    lbPrevBtn?.addEventListener("click", () => { if (!lbPrevBtn.disabled && lbIdx > 0) showLbSlide(lbIdx - 1); });
+    lbNextBtn?.addEventListener("click", () => { if (!lbNextBtn.disabled && lbIdx < lbItems.length - 1) showLbSlide(lbIdx + 1); });
     document.addEventListener("keydown", (ev) => {
       if (!lightbox.open || lightbox.hasAttribute("data-closing") || ev.metaKey || ev.ctrlKey || ev.altKey) return;
-      if (ev.key === "ArrowLeft" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx - 1); }
-      else if (ev.key === "ArrowRight" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx + 1); }
+      if (ev.key === "ArrowLeft" && lbItems.length > 1) { ev.preventDefault(); if (lbIdx > 0) showLbSlide(lbIdx - 1); }
+      else if (ev.key === "ArrowRight" && lbItems.length > 1) { ev.preventDefault(); if (lbIdx < lbItems.length - 1) showLbSlide(lbIdx + 1); }
       else if (ev.key === "+" || ev.key === "=") { ev.preventDefault(); if (lbHasMedia()) zoomLbTo(lbScale * 1.35); }
       else if (ev.key === "-") { ev.preventDefault(); if (lbHasMedia()) zoomLbTo(lbScale / 1.35); }
       else if (ev.key === "0") { ev.preventDefault(); zoomLbTo(1); }
@@ -21226,6 +21668,10 @@
       if (ev.button !== 0 && ev.pointerType === "mouse") return;
       ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
       if (ptrs.size === 2) {
+        if (gesture?.swiping && lbScale <= 1.005 && lbHasMedia()) {
+          const media = lbActiveMedia();
+          if (media) media.style.transform = "";
+        }
         const [a, b] = [...ptrs.values()];
         gesture = {
           kind: "pinch", moved: true,
@@ -21273,7 +21719,10 @@
         applyLbTransform(true);
       } else if (gesture.swiping && lbScale <= 1.005 && lbHasMedia()) {
         const media = lbActiveMedia();
-        const damp = Math.max(-120, Math.min(120, dx * 0.45));
+        const atEdge = (dx > 0 && lbIdx <= 0) || (dx < 0 && lbIdx >= lbItems.length - 1);
+        const damp = atEdge
+          ? Math.max(-48, Math.min(48, dx * 0.25))
+          : Math.max(-120, Math.min(120, dx * 0.45));
         if (media) media.style.transform = `translate3d(${damp.toFixed(1)}px, 0, 0)`;
       }
     });
@@ -21303,7 +21752,8 @@
             closeLightbox();
           }
         } else if (lbScale <= 1.005 && lbItems.length > 1 && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-          showLbSlide(lbIdx + (dx < 0 ? 1 : -1));
+          const targetIdx = lbIdx + (dx < 0 ? 1 : -1);
+          if (targetIdx >= 0 && targetIdx < lbItems.length) showLbSlide(targetIdx);
         }
       }
     };
@@ -21503,6 +21953,7 @@
 
   const SIDE_RAIL_W = 54;
   const expandedSideW = () => Math.max(268, Math.min(300, 108 + innerWidth * 0.16));
+  const isOverlaySidebarViewport = () => typeof innerWidth === "number" && innerWidth > 760 && innerWidth <= 1000;
   const isDesktopDrawerViewport = () => {
     if (innerWidth <= THREAD_DESKTOP_MIN) return false;
     if (typeof matchMedia === "function" && matchMedia("(min-width: 1px)").matches) {
@@ -21512,6 +21963,7 @@
   };
   const currentSideW = () => {
     if (innerWidth <= 760) return 0;
+    if (isOverlaySidebarViewport()) return SIDE_RAIL_W;
     if (innerWidth > 1000 && $("#app")?.classList?.contains("side-collapsed")) return SIDE_RAIL_W;
     return $(".side")?.offsetWidth || expandedSideW();
   };
@@ -22298,7 +22750,12 @@
       el.removeEventListener?.("animationcancel", el._sdOpenOnEnd);
       el._sdOpenOnEnd = null;
     }
+    const wasOpening = !!el.classList?.contains("is-sheet-opening");
     el.classList?.remove("is-sheet-opening", "is-scrim-opening");
+    if (wasOpening && !isAnyMobileSheetAnimating()) {
+      flushDeferredSheetUpdates();
+      if (!isLayoutGliding()) flushPostGlideRichSync();
+    }
   }
   function playMobileSheetOpen(drawerEl, scrimEl) {
     if (!drawerEl) return;
@@ -22311,10 +22768,11 @@
       const cb = drawerEl._onSlideSettled;
       drawerEl._onSlideSettled = null;
       if (cb) cb();
+      if (drawerEl === wdDrawer) flushWdPendingLive();
       return;
     }
-    drawerEl._slideSettleAt = performance.now() + 265;
-    promoteSheetWillChange(drawerEl, "transform", 340);
+    drawerEl._slideSettleAt = performance.now() + 310;
+    promoteSheetWillChange(drawerEl, "transform", 360);
     drawerEl.classList?.add("is-sheet-opening");
     const doneDrawer = (ev) => {
       if (ev && ev.target !== drawerEl) return;
@@ -22323,13 +22781,14 @@
       const cb = drawerEl._onSlideSettled;
       drawerEl._onSlideSettled = null;
       if (cb) cb();
+      if (drawerEl === wdDrawer) flushWdPendingLive();
     };
     drawerEl._sdOpenOnEnd = doneDrawer;
     drawerEl.addEventListener?.("animationend", doneDrawer);
     drawerEl.addEventListener?.("animationcancel", doneDrawer);
-    drawerEl._sdOpenTimer = setTimeout(doneDrawer, 290);
+    drawerEl._sdOpenTimer = setTimeout(doneDrawer, 330);
     if (scrimEl) {
-      promoteSheetWillChange(scrimEl, "opacity", 340);
+      promoteSheetWillChange(scrimEl, "opacity", 360);
       scrimEl.classList?.add("is-scrim-opening");
       const doneScrim = (ev) => {
         if (ev && ev.target !== scrimEl) return;
@@ -22339,7 +22798,7 @@
       scrimEl._sdOpenOnEnd = doneScrim;
       scrimEl.addEventListener?.("animationend", doneScrim);
       scrimEl.addEventListener?.("animationcancel", doneScrim);
-      scrimEl._sdOpenTimer = setTimeout(doneScrim, 320);
+      scrimEl._sdOpenTimer = setTimeout(doneScrim, 350);
     }
   }
   const resetDrawerMotion = (el, opts = {}) => {
@@ -22417,6 +22876,7 @@
       clearCollieShiftInline();
     }
     const mobileSwap = !desktopMode && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
+    if (!desktopMode && rootVHSyncTimer) syncRootVHNow();
     const wasHidden = !!pane.hidden;
     if (wasHidden) pane.hidden = false;
     if ("inert" in pane) pane.inert = false;
@@ -22717,11 +23177,53 @@
   }
   bindDrawerSheetDrag(pane, fileScrim, [$("#fv-handle"), pane?.querySelector(".fv-head")], () => !!pane && !pane.hidden, () => closeFilePane());
 
-  // ───────────────────────────── Desktop left sidebar collapse / expand with 240ms GPU glide (#t12615, #t12693)
+  // ───────────────────────────── Desktop & iPad landscape docked sidebar + tablet portrait (761-1000px) GPU overlay
   let sideCollapsed = !!store.get("sideCollapsed", false);
-  let _sideGlideRAF = 0;
-  let _sideGlideFallbackTimer = 0;
-  let _sideGlideCleanup = null;
+  let sideOverlayOpen = false, lastSideOverlayMode = null, _sideGlideRAF = 0, _sideGlideFallbackTimer = 0, _sideGlideCleanup = null;
+  function syncSideToggleAria(collapsed) {
+    for (const tb of [$("#side-toggle-btn"), $("#side-collapse-btn"), $("#side-expand-btn")]) {
+      if (!tb) continue;
+      tb.setAttribute("aria-pressed", collapsed ? "true" : "false");
+      tb.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
+  }
+  function setSideOverlayOpen(next, opts = {}) {
+    const appEl = $("#app"), sf = $("#side-full") || $(".side .side-full");
+    const ov = isOverlaySidebarViewport(), want = ov && !!next;
+    if (!appEl) return;
+    sideOverlayOpen = want;
+    if (sf) {
+      if (ov && !want && opts.restoreFocus && sf.contains?.(document.activeElement)) $("#side-expand-btn")?.focus?.({ preventScroll: true });
+      sf.inert = ov && !want;
+      const setA = (k, v) => (v == null ? sf.removeAttribute?.(k) : sf.setAttribute?.(k, v));
+      setA("aria-hidden", ov && !want ? "true" : null);
+      setA("role", ov && want ? "dialog" : null);
+      setA("aria-modal", ov && want ? "true" : null);
+      setA("aria-label", ov && want ? tx("side.primaryNav", "主导航") : null);
+    }
+    appEl.classList.toggle("side-overlay-open", want);
+    if (ov) syncSideToggleAria(!want);
+  }
+  function syncSideOverlayMode() {
+    const appEl = $("#app");
+    if (!appEl) return;
+    const nextOv = isOverlaySidebarViewport();
+    const modeChanged = lastSideOverlayMode !== null && lastSideOverlayMode !== nextOv;
+    lastSideOverlayMode = nextOv;
+    if (nextOv) {
+      finishSideGlide(true);
+      setSideOverlayOpen(sideOverlayOpen, { immediate: true });
+    } else {
+      if (sideOverlayOpen || appEl.classList.contains("side-overlay-open") || $("#side-full")?.inert) setSideOverlayOpen(false, { immediate: true });
+      syncSideToggleAria(sideCollapsed);
+    }
+    if (modeChanged && view === "collie") {
+      syncCollieTopHeight();
+      const crewEl = $("#crew");
+      if (crewEl && (nextOv || sideCollapsed)) { syncCrewCompact(crewEl); crewEl._syncScrollFade?.(); }
+      reanchorCollieOnViewportChange(true);
+    }
+  }
   function finishSideGlide(snap = true) {
     if (_sideGlideRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(_sideGlideRAF);
@@ -22741,18 +23243,22 @@
     const sideEl = $(".side");
     const col = $("#v-collie");
     if (!appEl) return;
+    if (isOverlaySidebarViewport() && !opts.skipPersist) {
+      setSideOverlayOpen(!want, opts);
+      return;
+    }
     const prevCollapsed = appEl.classList.contains("side-collapsed");
     sideCollapsed = want;
     if (!opts.skipPersist) store.set("sideCollapsed", want);
-    for (const tb of [$("#side-toggle-btn"), $("#side-collapse-btn"), $("#side-expand-btn")]) {
-      if (tb) tb.setAttribute("aria-pressed", want ? "true" : "false");
+    if (!isOverlaySidebarViewport()) {
+      syncSideToggleAria(want);
     }
     if (prevCollapsed === want && !opts.force) return;
 
     finishSideGlide(true);
     finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const canGlide = !opts.immediate && !reduced && innerWidth > 1000 && typeof requestAnimationFrame === "function" && !!sideEl;
+    const canGlide = !opts.immediate && !reduced && innerWidth > 1000 && !isOverlaySidebarViewport() && typeof requestAnimationFrame === "function" && !!sideEl;
     const sideW = expandedSideW();
     const drawerW = (isAnyRightDrawerOpen() && isDesktopDrawerViewport()) ? (_lastDrawerW || drawerDefaultW()) : 0;
     const hasNotes = view === "collie" && !drawerW && isWideNotesViewport() && !!col?.classList?.contains("has-notes");
@@ -22908,25 +23414,40 @@
       _sideGlideFallbackTimer = setTimeout(() => finishSideGlide(true), dur + 90);
     }
   }
+  $("#side-scrim")?.addEventListener("click", () => { if (sideOverlayOpen) setSideOverlayOpen(false); });
+  ($("#side-full") || $(".side .side-full"))?.addEventListener("click", (e) => {
+    if (sideOverlayOpen && isOverlaySidebarViewport() && e.target?.closest?.("a[href], #new-btn, #nav-peers")) setSideOverlayOpen(false);
+  });
   document.addEventListener("click", (e) => {
-    const btn = e.target?.closest?.("[data-toggle-side]");
-    if (!btn) return;
-    if (innerWidth <= 1000) {
-      e.preventDefault();
+    if (!e.target?.closest?.("[data-toggle-side]")) return;
+    e.preventDefault();
+    if (innerWidth <= 760) {
       if (location.hash !== "#/collie") location.hash = "#/collie";
       else if (view !== "collie") route();
-      return;
-    }
-    e.preventDefault();
-    setSideCollapsed(!sideCollapsed);
+    } else if (isOverlaySidebarViewport()) setSideOverlayOpen(!sideOverlayOpen);
+    else setSideCollapsed(!sideCollapsed);
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "\\" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
-    if (innerWidth <= 1000 || document.querySelector("dialog[open]")) return;
+    if (e.key === "Escape" && sideOverlayOpen && !e.isComposing && e.keyCode !== 229) {
+      const pop = [$("#quota-popover"), $("#wd-more-menu")].some((el) => { try { return el?.matches?.(":popover-open") || el?.classList?.contains?.("is-open"); } catch { return false; } });
+      if (superSearchOpen || document.querySelector("dialog[open]") || pickOpen || dirCtx || pop) return;
+      e.preventDefault(); e.stopImmediatePropagation?.();
+      setSideOverlayOpen(false, { restoreFocus: true });
+      return;
+    }
+    if (e.key !== "\\" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || innerWidth <= 760 || document.querySelector("dialog[open]")) return;
     e.preventDefault();
-    setSideCollapsed(!sideCollapsed);
-  });
+    if (isOverlaySidebarViewport()) setSideOverlayOpen(!sideOverlayOpen);
+    else setSideCollapsed(!sideCollapsed);
+  }, true);
+  if (typeof matchMedia === "function") {
+    for (const q of ["(max-width: 1000px)", "(max-width: 760px)"]) {
+      try { matchMedia(q)?.addEventListener?.("change", syncSideOverlayMode); } catch {}
+    }
+  }
+  addEventListener("resize", syncSideOverlayMode);
   if (sideCollapsed) setSideCollapsed(true, { immediate: true, force: true, skipPersist: true });
+  syncSideOverlayMode();
 
   // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」第一组内联斜杠切换：进行中 / 话题）
   const NOTES_WIDE_MIN = 1360;
@@ -23589,8 +24110,13 @@
       const fp = fBtn.dataset.npFile;
       if (fp) {
         const isImg = IMG_EXT.test(fp);
-        const ret = !isImg ? captureNotesReturnTo() : null;
-        if (!isWideNotesViewport() && !isImg) sidePaneOverlay = "";
+        if (isImg) {
+          const { items, index } = collectNotebookImageGallery(fp, fBtn.closest?.("#np-files-list") || $("#np-files-list"));
+          if (items.length) openLightbox(items, index);
+          return;
+        }
+        const ret = captureNotesReturnTo();
+        if (!isWideNotesViewport()) sidePaneOverlay = "";
         openFile(fp, ret ? { returnTo: ret } : undefined);
       }
       return;
@@ -24564,6 +25090,21 @@
         } else if (it.canPatchClapInPlace && el._tdMsgSig && el._tdMsgSig === it.msgSig && updateTdClapInPlace(el, it)) {
           updated++;
           reused++;
+        } else if (it.canPatchDecisionInPlace && el._tdMsgSig && el._tdMsgSig === it.msgSig && it.optsHtml && (() => {
+          const oldOpts = el.querySelector?.(".decision-wrap");
+          const newOpts = oldOpts ? parseSuperNode(it.optsHtml) : null;
+          if (!oldOpts || !newOpts || !patchDecisionWrapInPlace(oldOpts, newOpts)) return false;
+          const whenEl = el.querySelector?.(".td-when");
+          if (whenEl && it.at) {
+            const nextWhen = sepTime(it.at);
+            if (whenEl.textContent !== nextWhen) whenEl.textContent = nextWhen;
+          }
+          el._tdSig = it.sig;
+          el._tdKey = it.key;
+          return true;
+        })()) {
+          updated++;
+          reused++;
         } else {
           const fresh = parseSuperNode(it.render());
           if (fresh) {
@@ -24727,13 +25268,16 @@
           <button type="button" class="td-act" data-td-locate="${esc(m.id)}" title="${esc(tx("drawer.threadLocateTitle", "在主聊天流中定位"))}" aria-label="${esc(tx("drawer.threadLocateTitle", "在主聊天流中定位"))}">${ICON_TD_LOCATE}<span>${esc(tx("drawer.threadLocateBtn", "定位"))}</span></button>
             </div>`
           : "";
+        const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
         items.push({
           key: k,
           sig: itemSig,
           msgSig,
           entryId: m.id || "",
           at,
+          optsHtml,
           canPromoteInPlace: m.role === "user",
+          canPatchDecisionInPlace: m.role === "collie" && hasPendingOpts && !pickedSig && !srvPickSig,
           renderActs,
           render: () => {
             const avHtml = m.role === "user"
@@ -24751,7 +25295,6 @@
             const rootQuoteHtml = hasRootQuote
               ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
               : "";
-            const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
             const artifactsHtml = renderEntryArtifacts(m);
             const bodyHtml = m.role === "user"
               ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
@@ -24772,6 +25315,7 @@
           },
         });
       }
+      const savedDrawerInlineFocus = captureInlineInputFocus(tdListEl);
       if (canPatchSuperDom(tdListEl)) {
         // Preserve reading scroll position if older messages were prepended while scrolled up.
         let prepAnchor = null, prepTop = 0;
@@ -24795,6 +25339,9 @@
       } else {
         tdListEl.innerHTML = items.map((it) => it.render()).join("");
         observeRichVisuals(tdListEl);
+      }
+      if (savedDrawerInlineFocus) {
+        restoreInlineInputFocus(tdListEl, savedDrawerInlineFocus);
       }
       hydrateRichContent(tdListEl);
     }
@@ -24861,6 +25408,7 @@
       cancelAnimationFrame(tdDrawer._fullRenderRAF);
     }
     tdDrawer._fullRenderRAF = 0;
+    if (!desktopMode && rootVHSyncTimer) syncRootVHNow();
     const wasHidden = !!tdDrawer.hidden;
     if (wasHidden) tdDrawer.hidden = false;
     if ("inert" in tdDrawer) tdDrawer.inert = false;
@@ -25153,7 +25701,7 @@
         focusNodeInDrawer(jumpBtn.dataset.jumpDrawer);
         return;
       }
-      if (e.target.closest("a, button, .thumb, img, pre, code")) return;
+      if (e.target.closest("a, button, input, textarea, select, label, form, .reply-inline, .decision-wrap, details, summary, .thumb, img, pre, code")) return;
       if (window.getSelection?.()?.toString()) return;
       const node = e.target.closest(".td-node[data-entry-id]");
       const eid = node?.dataset.entryId || "";
@@ -25176,6 +25724,12 @@
           if (tdPrevW === 0 && tdPrevH === 0) { tdPrevW = w; tdPrevH = h; return; }
           if (w === tdPrevW && h === tdPrevH) return;
           tdPrevW = w; tdPrevH = h;
+          const inlineFocus = getActiveInlineFocus();
+          if (inlineFocus && inlineFocus.inDrawer && inlineFocus.scroller === tdBodyEl) {
+            tdGraceUntil = performance.now() + 180;
+            ensureInlineCardVisible(tdBodyEl, inlineFocus.entryId, { inDrawer: true, instant: true });
+            return;
+          }
           if (tdWasAtBottom) {
             tdGraceUntil = performance.now() + 180;
             tdBodyEl.scrollTop = tdBodyEl.scrollHeight;
@@ -25331,6 +25885,8 @@
   let wdSkelTimer = 0;
   let wdSeq = 0;
   let wdLastLive = null;
+  let wdPendingLive = null;
+  let wdPrewarmTimer = 0;
   const wdLiveCache = new Map();
   let wdShowRaw = false;
   let wdPeekMode = "";
@@ -25387,14 +25943,17 @@
     }
     if (wdPeekNoteEl) {
       const liveAgent = isLive ? find(wdPaneId) : null;
-      if (!isLive) wdPeekNoteEl.textContent = tx("worker.peekEnded", "任务已结束 · 只读记录");
-    else if (liveAgent?.status === "blocked") wdPeekNoteEl.textContent = tx("worker.peekBlocked", "等待你确认 · 请在上方审批");
-    else wdPeekNoteEl.textContent = tx("worker.peekMonitoring", "由 Collie 持续盯控");
+      const note = !isLive
+        ? tx("worker.peekEnded", "任务已结束 · 只读记录")
+        : liveAgent?.status === "blocked"
+          ? tx("worker.peekBlocked", "等待你确认 · 请在上方审批")
+          : tx("worker.peekMonitoring", "由 Collie 持续盯控");
+      setText(wdPeekNoteEl, note);
     }
     if (wdHintEl) {
       const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
       const keyLabel = prefs.sendKey() === "mod" ? (isMac ? "⌘Enter" : "Ctrl+Enter") : "Enter";
-      wdHintEl.textContent = tx("worker.hint", "{key} 发送 · 直达该任务会话", { key: keyLabel });
+      setText(wdHintEl, tx("worker.hint", "{key} 发送 · 直达该任务会话", { key: keyLabel }));
     }
   }
   function syncWorkerSendBtn(sending = wdComposerCtrl?.isSending?.() || false) {
@@ -25478,21 +26037,21 @@
     }
     const metaStr = metaParts.join(" · ");
     if (wdMpMeta) {
-      wdMpMeta.textContent = metaStr;
-      wdMpMeta.hidden = !metaStr;
+      setText(wdMpMeta, metaStr);
+      if (wdMpMeta.hidden !== !metaStr) wdMpMeta.hidden = !metaStr;
     }
     if (wdMpSummary) {
-      wdMpSummary.textContent = wdMoreState.summaryText || "";
-      wdMpSummary.hidden = !wdMoreState.summaryText;
+      setText(wdMpSummary, wdMoreState.summaryText || "");
+      if (wdMpSummary.hidden !== !wdMoreState.summaryText) wdMpSummary.hidden = !wdMoreState.summaryText;
     }
     if (wdMpCwd && wdMpCwdText) {
-      wdMpCwdText.textContent = wdMoreState.cwdText || "";
-      wdMpCwd.dataset.cwd = wdMoreState.rawCwd || "";
-      wdMpCwd.hidden = !wdMoreState.cwdText;
+      setText(wdMpCwdText, wdMoreState.cwdText || "");
+      if (wdMpCwd.dataset.cwd !== (wdMoreState.rawCwd || "")) wdMpCwd.dataset.cwd = wdMoreState.rawCwd || "";
+      if (wdMpCwd.hidden !== !wdMoreState.cwdText) wdMpCwd.hidden = !wdMoreState.cwdText;
     }
     const hasInfo = !!(metaStr || wdMoreState.summaryText || wdMoreState.cwdText);
-    if (wdMpInfo) wdMpInfo.hidden = !hasInfo;
-    if (wdMpInfoSep) wdMpInfoSep.hidden = !hasInfo;
+    if (wdMpInfo && wdMpInfo.hidden !== !hasInfo) wdMpInfo.hidden = !hasInfo;
+    if (wdMpInfoSep && wdMpInfoSep.hidden !== !hasInfo) wdMpInfoSep.hidden = !hasInfo;
   }
   function curWdMode() {
     if (!wdPaneId || !find(wdPaneId)) return "chat";
@@ -25563,10 +26122,45 @@
     wdStream = null;
     wdTerm?.blur?.();
   }
+  function cancelWdPrewarm() {
+    if (wdPrewarmTimer) { clearTimeout(wdPrewarmTimer); wdPrewarmTimer = 0; }
+  }
+  function prewarmWdThreadMd(msgs, isAlive) {
+    cancelWdPrewarm();
+    if (!msgs || !msgs.length || !isWdSlidePending()) return;
+    // Pre-compile uncached assistant markdown purely in JS (0 DOM access, 0 reflow/repaint)
+    // in <=4ms micro-slices during GPU slide idle frames so post-slide drawThread() hits 100% mdCache.
+    const todo = [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m && m.kind !== "user" && m.kind !== "tool" && m.kind !== "ask" && m.kind !== "compaction" && m.text) {
+        const rawKey = String(m.text);
+        if (!mdCache.has(rawKey)) todo.push(rawKey);
+      }
+    }
+    if (!todo.length) return;
+    let idx = 0;
+    const step = () => {
+      wdPrewarmTimer = 0;
+      if ((isAlive && !isAlive()) || !isWdSlidePending()) return;
+      const t0 = performance.now();
+      if (wdDrawer?._slideSettleAt && t0 >= wdDrawer._slideSettleAt - 28) return;
+      while (idx < todo.length) {
+        md(todo[idx++]);
+        if (performance.now() - t0 >= 4) break;
+      }
+      if (idx < todo.length && isWdSlidePending()) {
+        wdPrewarmTimer = setTimeout(step, 8);
+      }
+    };
+    wdPrewarmTimer = setTimeout(step, 24);
+  }
   function resetWdChatStateOnly() {
     if (!wdThreadEl) return;
+    cancelWdPrewarm();
     clearTimeout(wdThreadEl._chunkTimer);
     wdThreadEl._chunkTimer = 0;
+    wdThreadEl._chunking = false;
     wdThreadEl._sig = ""; wdThreadEl._rawMsgsSig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._lazyRuns = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
     wdThreadEl._renderedCacheKey = "";
     wdThreadEl._fresh = true;
@@ -25578,7 +26172,13 @@
     wdSkelTimer = 0;
     wdThreadEl.innerHTML = "";
     wdThreadEl.classList.remove("asking");
-    if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
+    if (wdLiveEl) {
+      wdLiveEl.hidden = true;
+      wdLiveEl.classList?.remove("is-working");
+      wdLiveEl.innerHTML = "";
+      wdLiveEl._html = "";
+      wdLiveEl._lastTail = "";
+    }
     resetWdChatStateOnly();
   }
   function resetWdScreen() {
@@ -25601,12 +26201,21 @@
       if (wdScreenEl) { wdScreenEl.scrollTop = 0; wdScreenEl.scrollLeft = 0; }
     }
   }
+  const isWdSlidePending = () => !isDesktopDrawerViewport() && !!wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16;
+  const isWdSheetAnimating = () => !isDesktopDrawerViewport() && (!!wdDrawer?.classList?.contains("is-sheet-opening") || isWdSlidePending());
   const wdScreenNearBottom = () => {
     const buf = wdTerm?.buffer?.active;
     if (buf) return (buf.baseY - buf.viewportY) <= 2;
     return !wdScreenEl || (wdScreenEl.scrollHeight - wdScreenEl.scrollTop - wdScreenEl.clientHeight < 40);
   };
-  function desiredWdTermRows(el, paneRows, skipCachedCellH = false) {
+  function computeWdTermFontSize(cols) {
+    if (!wdScreenEl || !wdScreenEl.clientWidth || !cols) return 12;
+    const cs = typeof getComputedStyle === "function" ? getComputedStyle(wdScreenEl) : null;
+    const pad = cs ? ((parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) || 28) : 28;
+    const fitW = Math.floor(((wdScreenEl.clientWidth - pad) / cols / 0.602) * 2) / 2;
+    return Math.max(7.5, Math.min(13, fitW));
+  }
+  function desiredWdTermRows(el, paneRows, skipCachedCellH = false, fontSizeHint = 0) {
     const fallback = Math.max(TERM_MIN_ROWS, Math.min(TERM_MAX_ROWS, paneRows || wdSize.rows || 32));
     if (!el || !el.clientHeight) return fallback;
     const cs = typeof getComputedStyle === "function" ? getComputedStyle(el) : null;
@@ -25614,34 +26223,46 @@
     const avail = el.clientHeight - padY;
     if (avail <= 0) return fallback;
     const cellH = skipCachedCellH ? 0 : (wdTerm?._core?._renderService?.dimensions?.css?.cell?.height || 0);
-    const estH = cellH > 4 ? cellH : Math.max(10, Math.ceil((wdTerm?.options?.fontSize || 12) * (wdTerm?.options?.lineHeight || 1.15) * 1.18));
+    const fs = fontSizeHint || wdTerm?.options?.fontSize || 12;
+    const estH = cellH > 4 ? cellH : Math.max(10, Math.ceil(fs * (wdTerm?.options?.lineHeight || 1.15) * 1.18));
     return Math.max(TERM_MIN_ROWS, Math.min(TERM_MAX_ROWS, Math.floor(avail / estH)));
+  }
+  function applyWdTermFontSize(fs) {
+    if (!wdTerm || wdTerm.options.fontSize === fs) return { fsChanged: false, cellStale: false };
+    const prevCellH = wdTerm._core?._renderService?.dimensions?.css?.cell?.height || 0;
+    wdTerm.options.fontSize = fs;
+    try { wdTerm._core?._charSizeService?.measure?.(); } catch {}
+    const nextCellH = wdTerm._core?._renderService?.dimensions?.css?.cell?.height || 0;
+    const cellStale = !(nextCellH > 4 && nextCellH !== prevCellH);
+    return { fsChanged: true, cellStale };
   }
   function fitWdTerm() {
     if (!wdTerm || !wdSize.cols || !wdScreenEl || !wdScreenEl.clientWidth) return;
+    if (isWdSheetAnimating()) return;
     const was = wdScreenNearBottom();
-    const cs = typeof getComputedStyle === "function" ? getComputedStyle(wdScreenEl) : null;
-    const pad = cs ? (parseFloat(cs.paddingLeft) || 14) * 2 : 28;
-    const fitW = Math.floor(((wdScreenEl.clientWidth - pad) / wdSize.cols / 0.602) * 2) / 2;
-    const fs = Math.max(7.5, Math.min(13, fitW));
-    const fsChanged = wdTerm.options.fontSize !== fs;
-    if (fsChanged) wdTerm.options.fontSize = fs;
-    const wantRows = desiredWdTermRows(wdScreenEl, wdSize.rows, fsChanged);
+    const fs = computeWdTermFontSize(wdSize.cols);
+    const { fsChanged, cellStale } = applyWdTermFontSize(fs);
+    const wantRows = desiredWdTermRows(wdScreenEl, wdSize.rows, cellStale, fs);
     if (wdTerm.rows !== wantRows && !wdScreenWriting && wdPrevScreenLines) {
       const replay = { text: wdPrevScreenLines.join("\n"), cols: wdSize.cols, rows: wdSize.rows };
       wdPrevScreenLines = null;
-      drawWdScreen(replay);
+      drawWdScreen(replay, was ? { atBottom: true } : { atBottom: false, termLine: wdTerm.buffer?.active?.viewportY || 0 });
     } else if (fsChanged && was) {
-      wdTerm.scrollToBottom?.();
+      const buf = wdTerm.buffer?.active;
+      if (!buf || buf.viewportY !== buf.baseY) wdTerm.scrollToBottom?.();
       if (wdJumpBtn) wdJumpBtn.hidden = true;
     }
   }
-  function ensureWdTerm() {
+  function ensureWdTerm(initCols = 0, initPaneRows = 0) {
     if (wdTerm || !window.Terminal || !wdScreenEl) return;
     const css = getComputedStyle(document.documentElement);
+    const cols = initCols || wdSize.cols || 120;
+    const paneRows = initPaneRows || wdSize.rows || 32;
+    const initFs = computeWdTermFontSize(cols);
+    const initRows = desiredWdTermRows(wdScreenEl, paneRows, true, initFs);
     wdTerm = new Terminal({
-      cols: 120, rows: desiredWdTermRows(wdScreenEl, 32),
-      fontFamily: css.getPropertyValue("--mono"), fontSize: 12, lineHeight: 1.15,
+      cols, rows: initRows,
+      fontFamily: css.getPropertyValue("--mono"), fontSize: initFs, lineHeight: 1.15,
       cursorBlink: false, scrollback: TERM_SCROLLBACK, allowTransparency: true, theme: termTheme(),
     });
     wdTerm.attachCustomWheelEventHandler((e) => {
@@ -25650,6 +26271,12 @@
       return true;
     });
     wdTerm.open(wdScreenEl);
+    // Measure real cell height right after open so initial row count matches the first frame cleanly.
+    try { wdTerm._core?._charSizeService?.measure?.(); } catch {}
+    const exactRows = desiredWdTermRows(wdScreenEl, paneRows, false, initFs);
+    if (exactRows !== wdTerm.rows) {
+      try { wdTerm.resize(cols, exactRows); } catch {}
+    }
     wdTerm.onData((data) => { if (wdPaneId) typeIntoSpecificPane(wdPaneId, data); });
     wdTerm.onScroll(() => {
       if (curWdMode() !== "screen") return;
@@ -25662,44 +26289,82 @@
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (wdTerm) wdTerm.options.theme = termTheme(); });
     addEventListener("collie:theme", () => { if (wdTerm) wdTerm.options.theme = termTheme(); });
     if (typeof ResizeObserver === "function") {
-      let fitRAF = 0;
-      const ro = new ResizeObserver(() => {
-        if (isLayoutGliding() || !activeWorkerKey || curWdMode() !== "screen" || !wdSize.cols) return;
+      let fitRAF = 0, lastW = 0, lastH = 0;
+      const ro = new ResizeObserver((entries) => {
+        if (isLayoutGliding() || isWdSheetAnimating() || !activeWorkerKey || curWdMode() !== "screen" || !wdSize.cols) return;
+        const rect = entries?.[0]?.contentRect;
+        const w = Math.round(rect?.width ?? wdScreenEl.clientWidth ?? 0);
+        const h = Math.round(rect?.height ?? wdScreenEl.clientHeight ?? 0);
+        if (w <= 0 || h <= 0) { lastW = 0; lastH = 0; return; }
+        if (Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) return;
+        lastW = w;
+        lastH = h;
         if (fitRAF) return;
-        fitRAF = requestAnimationFrame(() => { fitRAF = 0; if (!isLayoutGliding() && activeWorkerKey && curWdMode() === "screen") fitWdTerm(); });
+        fitRAF = requestAnimationFrame(() => {
+          fitRAF = 0;
+          if (!isLayoutGliding() && !isWdSheetAnimating() && activeWorkerKey && curWdMode() === "screen") fitWdTerm();
+        });
       });
       try { ro.observe(wdScreenEl); } catch {}
     }
   }
-  function drawWdScreen(f) {
+  function drawWdScreen(f, restore = null) {
+    if (isWdSlidePending()) {
+      wdPendingScreen = f;
+      scheduleAfterWdSlide(() => {
+        if (activeWorkerKey && curWdMode() === "screen" && wdPendingScreen) {
+          const pf = wdPendingScreen;
+          wdPendingScreen = null;
+          drawWdScreen(pf);
+        }
+      });
+      return;
+    }
     if (!wdTerm) {
-      if (typeof window !== "undefined" && !window.Terminal) {
+      if (typeof window !== "undefined" && window.Terminal) {
+        ensureWdTerm(f.cols || 120, f.rows || 32);
+      } else if (typeof window !== "undefined" && !window.Terminal) {
         preXtermWdFrame = f;
         ensureXterm().then(() => {
           if (activeWorkerKey && curWdMode() === "screen") {
-            ensureWdTerm();
-            if (wdTerm && preXtermWdFrame) {
-              const pf = preXtermWdFrame;
-              preXtermWdFrame = null;
-              drawWdScreen(pf);
-            }
+            const pf = preXtermWdFrame;
+            preXtermWdFrame = null;
+            ensureWdTerm(pf?.cols || 120, pf?.rows || 32);
+            if (wdTerm && pf) drawWdScreen(pf);
           }
         }).catch(() => {});
       }
-      return;
+      if (!wdTerm) return;
     }
     if (!wdScreenFresh && wdTerm.hasSelection?.()) { wdPendingScreen = f; return; }
-    if (wdScreenWriting) { wdScreenQueuedFrame = f; return; }
-    const stick = wdScreenFresh || wdScreenNearBottom();
+    if (wdScreenWriting && !restore) { wdScreenQueuedFrame = f; return; }
+    const stick = restore ? !!restore.atBottom : (wdScreenFresh || wdScreenNearBottom());
     const raw = (f.text || "").replace(/\r\n/g, "\n").replace(/\r/g, "");
     const lines = raw ? raw.split("\n") : [""];
+    if (!stick && wdPrevScreenLines) {
+      const check = Math.min(6, wdPrevScreenLines.length);
+      const sameHead = lines.length >= wdPrevScreenLines.length &&
+        wdPrevScreenLines.slice(0, check).every((l, i) => lines[i] === l);
+      if (!sameHead) {
+        wdPendingScreen = f;
+        if (wdJumpBtn) wdJumpBtn.hidden = false;
+        return;
+      }
+    }
+    wdPendingScreen = null;
+    const savedLine = restore && !restore.atBottom && typeof restore.termLine === "number"
+      ? restore.termLine
+      : (wdTerm.buffer?.active?.viewportY ?? 0);
     const cols = f.cols || wdSize.cols || 120;
     const paneRows = f.rows || wdSize.rows || 32;
     const dimChanged = cols !== wdSize.cols || paneRows !== wdSize.rows;
     if (dimChanged) wdSize = { cols, rows: paneRows };
-    const prevFs = wdTerm.options.fontSize;
-    if (dimChanged) fitWdTerm();
-    const visRows = desiredWdTermRows(wdScreenEl, paneRows, wdTerm.options.fontSize !== prevFs);
+    let cellStale = false;
+    if (dimChanged && wdScreenEl?.clientWidth) {
+      const fs = computeWdTermFontSize(cols);
+      cellStale = applyWdTermFontSize(fs).cellStale;
+    }
+    const visRows = desiredWdTermRows(wdScreenEl, paneRows, cellStale);
     const needResize = cols !== wdTerm.cols || visRows !== wdTerm.rows;
     const savedBuf = screenBufLines;
     screenBufLines = wdScreenBufLines;
@@ -25715,11 +26380,13 @@
     wdScreenFresh = false;
     wdScreenBufLines = delta.bufLines;
     const applyScroll = () => {
+      const buf = wdTerm?.buffer?.active;
       if (stick) {
-        wdTerm.scrollToBottom?.();
+        if (!buf || buf.viewportY !== buf.baseY) wdTerm.scrollToBottom?.();
         if (wdJumpBtn) wdJumpBtn.hidden = true;
-      } else if (wdJumpBtn) {
-        wdJumpBtn.hidden = wdScreenNearBottom();
+      } else {
+        if (buf && buf.viewportY !== savedLine) wdTerm.scrollToLine?.(savedLine);
+        if (wdJumpBtn) wdJumpBtn.hidden = wdScreenNearBottom();
       }
     };
     if (delta.kind === "noop" || !delta.out) { applyScroll(); return; }
@@ -25741,10 +26408,23 @@
   }
   function clearWdLive(paneId = wdPaneId) {
     wdLastLive = null;
+    wdPendingLive = null;
     if (paneId) wdLiveCache.delete(paneId);
     if (wdLastLivePaneId) wdLiveCache.delete(wdLastLivePaneId);
-    if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
+    if (wdLiveEl) {
+      wdLiveEl.hidden = true;
+      wdLiveEl.classList?.remove("is-working");
+      wdLiveEl.innerHTML = "";
+      wdLiveEl._html = "";
+      wdLiveEl._lastTail = "";
+    }
     wdThreadEl?.classList?.remove("asking");
+  }
+  function flushWdPendingLive() {
+    if (!wdPendingLive) return;
+    const next = wdPendingLive;
+    wdPendingLive = null;
+    if (activeWorkerKey && wdPaneId && curWdMode() === "chat") drawWdLive(next);
   }
   function handleWdLiveEnded(fallbackTitle = "") {
     if (!activeWorkerKey) return false;
@@ -25767,16 +26447,49 @@
     }
     wdLastLive = l;
     if (wdPaneId) {
-      if (l && (l.tail || l.approval)) wdLiveCache.set(wdPaneId, l);
+      if (l && (l.status === "working" || l.tail || l.approval)) wdLiveCache.set(wdPaneId, l);
       else wdLiveCache.delete(wdPaneId);
     }
     if (!wdLiveEl || !wdThreadEl) return;
+    if (isWdSlidePending()) {
+      wdPendingLive = l;
+      return;
+    }
+    wdPendingLive = null;
     const was = nearBottom(wdThreadEl);
-    wdThreadEl.classList.toggle("asking", l.status === "blocked" && !!l.approval);
+    const wasHidden = !!wdLiveEl.hidden;
+    const wasWorking = !!wdLiveEl.classList?.contains("is-working");
+    const isBlockedAsk = l.status === "blocked" && !!l.approval;
+    wdThreadEl.classList.toggle("asking", isBlockedAsk);
+
+    if (l.status === "working") {
+      // Single-line fixed-height status strip: patch text in place without innerHTML churn
+      // and keep the bar mounted across transient empty tail ticks so #wd-thread never pumps.
+      const flatTail = String(l.tail || "").replace(/\s*\n+\s*/g, " · ").trim();
+      if (flatTail) wdLiveEl._lastTail = flatTail;
+      const shownTail = flatTail || wdLiveEl._lastTail || tx("st.working", "工作中…");
+      const metaStr = String(l.meta || "");
+      let row = wdLiveEl.querySelector?.(".live-working");
+      if (!row) {
+        const shell = `<div class="live-working"><span class="dot working"></span><pre></pre><span class="meta"></span></div>`;
+        wdLiveEl._html = shell;
+        wdLiveEl.innerHTML = shell;
+        row = wdLiveEl.querySelector?.(".live-working");
+      }
+      const pre = row?.querySelector?.("pre");
+      const meta = row?.querySelector?.(".meta");
+      if (pre && pre.textContent !== shownTail) pre.textContent = shownTail;
+      if (meta && meta.textContent !== metaStr) meta.textContent = metaStr;
+      wdLiveEl.classList?.add("is-working");
+      wdLiveEl.hidden = false;
+      if (wasHidden || !wasWorking) stick(wdThreadEl, was);
+      return;
+    }
+
+    wdLiveEl.classList?.remove("is-working");
+    wdLiveEl._lastTail = "";
     let html = "";
-    if (l.status === "working" && l.tail) {
-      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre><span class="meta"></span></div>`;
-    } else if (l.status === "blocked" && l.approval) {
+    if (isBlockedAsk) {
       const v = wdPaneId ? find(wdPaneId) : null;
       const savedRaw = showRaw;
       showRaw = wdShowRaw;
@@ -25787,11 +26500,10 @@
       wdLiveEl._html = html;
       wdLiveEl.innerHTML = html;
     }
-    const meta = wdLiveEl.querySelector?.(".live-working .meta");
-    if (meta && meta.textContent !== (l.meta || "")) meta.textContent = l.meta || "";
-    wdLiveEl.hidden = !html;
-    if (wdPeekNoteEl && l.status === "blocked") wdPeekNoteEl.textContent = tx("worker.peekBlocked", "等待你确认 · 请在上方审批");
-    stick(wdThreadEl, was);
+    const nextHidden = !html;
+    wdLiveEl.hidden = nextHidden;
+    if (wdPeekNoteEl && l.status === "blocked") setText(wdPeekNoteEl, tx("worker.peekBlocked", "等待你确认 · 请在上方审批"));
+    if (wasHidden !== nextHidden || wasWorking || isBlockedAsk) stick(wdThreadEl, was);
   }
   async function renderWdModel(v, supW) {
     if (!wdModelEl) return;
@@ -25854,21 +26566,21 @@
     }
     if (wdTitleEl) {
       const fullTip = workerLbl && name && workerLbl !== name ? `${workerLbl} (${name})` : dispTitle;
-      wdTitleEl.textContent = dispTitle;
-      wdTitleEl.title = fullTip;
+      setText(wdTitleEl, dispTitle);
+      if (wdTitleEl.title !== fullTip) wdTitleEl.title = fullTip;
     }
     const kl = kind ? (KIND_LABEL[kind] || kind) : "";
     if (wdKindEl) {
-      wdKindEl.textContent = kl;
-      wdKindEl.hidden = !kl;
+      setText(wdKindEl, kl);
+      if (wdKindEl.hidden !== !kl) wdKindEl.hidden = !kl;
     }
     if (wdMetaKindEl) {
-      wdMetaKindEl.textContent = kl;
-      wdMetaKindEl.hidden = !kl;
+      setText(wdMetaKindEl, kl);
+      if (wdMetaKindEl.hidden !== !kl) wdMetaKindEl.hidden = !kl;
     }
     if (wdRoleEl) {
       const showRole = !!(isWorker(name) || supW);
-      wdRoleEl.hidden = !showRole;
+      if (wdRoleEl.hidden !== !showRole) wdRoleEl.hidden = !showRole;
     }
     if (wdStatusEl) {
       const wantCls = "status " + status;
@@ -25885,8 +26597,8 @@
     const shortCwd = rawCwd ? (home && rawCwd.startsWith(home) ? "~" + rawCwd.slice(home.length) : tilde(rawCwd)) : "";
     const cwdTxt = (ms.length > 1 && mach ? machineName(mach) + (shortCwd ? " · " : "") : "") + shortCwd;
     if (wdCwdEl) {
-      wdCwdEl.textContent = cwdTxt;
-      wdCwdEl.title = cwdTxt;
+      setText(wdCwdEl, cwdTxt);
+      if (wdCwdEl.title !== cwdTxt) wdCwdEl.title = cwdTxt;
     }
     renderWdModel(liveAgent, supW);
     const popHref = isLive
@@ -25894,26 +26606,26 @@
       : past ? `#/h/${encodeURIComponent(past.id)}` : "";
     const popLabel = isLive ? tx("worker.popoutLive", "独立全屏打开会话") : tx("worker.popoutHist", "独立全屏查看记录");
     if (wdPopoutBtn) {
-      wdPopoutBtn.hidden = !popHref;
+      if (wdPopoutBtn.hidden !== !popHref) wdPopoutBtn.hidden = !popHref;
       if (popHref) {
-        wdPopoutBtn.href = popHref;
-        wdPopoutBtn.title = popLabel;
+        if (wdPopoutBtn.getAttribute?.("href") !== popHref) wdPopoutBtn.href = popHref;
+        if (wdPopoutBtn.title !== popLabel) wdPopoutBtn.title = popLabel;
       }
     }
     if (wdMpPopout) {
-      wdMpPopout.hidden = !popHref;
-      if (popHref) wdMpPopout.href = popHref;
-      if (wdMpPopoutLabel) wdMpPopoutLabel.textContent = popLabel;
+      if (wdMpPopout.hidden !== !popHref) wdMpPopout.hidden = !popHref;
+      if (popHref && wdMpPopout.getAttribute?.("href") !== popHref) wdMpPopout.href = popHref;
+      if (wdMpPopoutLabel) setText(wdMpPopoutLabel, popLabel);
     }
     const wtMap = computeWorkerThreadMap();
     const linked = wdFromThread || (name ? wtMap.get(name)?.rootId || "" : "");
     if (wdThreadBtn) {
-      wdThreadBtn.hidden = !linked;
-      wdThreadBtn.dataset.wdThread = linked;
+      if (wdThreadBtn.hidden !== !linked) wdThreadBtn.hidden = !linked;
+      if (wdThreadBtn.dataset.wdThread !== linked) wdThreadBtn.dataset.wdThread = linked;
     }
     if (wdMpThread) {
-      wdMpThread.hidden = !linked;
-      wdMpThread.dataset.wdThread = linked;
+      if (wdMpThread.hidden !== !linked) wdMpThread.hidden = !linked;
+      if (wdMpThread.dataset.wdThread !== linked) wdMpThread.dataset.wdThread = linked;
     }
     const sum = liveAgent ? agentTaskSummary(liveAgent, supW, null, chatEntries()) : { short: "", full: "" };
     const noteText = (wdTaskTitle && wdTaskTitle !== name)
@@ -25921,10 +26633,10 @@
       : (sum.full || sum.short || supW?.task || supW?.last_report || wdTaskNote || "");
     const cleanSummary = noteText && noteText.trim() !== dispTitle.trim() ? noteText : "";
     if (wdSummaryEl && wdSummaryTextEl) {
-      wdSummaryEl.hidden = !cleanSummary;
+      if (wdSummaryEl.hidden !== !cleanSummary) wdSummaryEl.hidden = !cleanSummary;
       if (cleanSummary) {
-        wdSummaryTextEl.textContent = cleanSummary;
-        wdSummaryTextEl.title = cleanSummary;
+        setText(wdSummaryTextEl, cleanSummary);
+        if (wdSummaryTextEl.title !== cleanSummary) wdSummaryTextEl.title = cleanSummary;
       }
     }
     wdDrawer?.querySelector?.(".wd-top")?.classList?.toggle("has-summary", !!cleanSummary);
@@ -25962,13 +26674,19 @@
         clearTimeout(wdDrawer._deferredDrawTimer);
         wdDrawer._deferredDrawTimer = 0;
         wdDrawer._onSlideSettled = null;
+        wdDrawer._slideSettleAt = 0;
+        cancelWdPrewarm();
         fn();
+        flushWdPendingLive();
       };
       wdDrawer._onSlideSettled = runOnce;
-      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(300, Math.ceil(remain)));
+      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(360, Math.ceil(remain) + 25));
       return true;
     }
+    if (wdDrawer) wdDrawer._slideSettleAt = 0;
+    cancelWdPrewarm();
     fn();
+    flushWdPendingLive();
     return false;
   }
   async function loadWdHistory(past, supW, opts = {}) {
@@ -26000,7 +26718,7 @@
       clearWdLive(wdPaneId);
       if (cached) {
         const cachedRawSig = workerMsgsRawSig(cached, 0);
-        const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 4;
+        const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 120;
         const paintCached = () => {
           if (seq !== wdSeq || !activeWorkerKey) return;
           drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
@@ -26009,14 +26727,15 @@
             rawSig: cachedRawSig,
             isAlive: () => seq === wdSeq && !!activeWorkerKey,
           });
-          if (!mobileProgressive) {
+          if (!wdThreadEl._chunking) {
             wdThreadEl._renderedCacheKey = cacheKey;
             wdThreadEl._rawMsgsSig = cachedRawSig;
           }
           wdThreadEl._fresh = true;
         };
-        if (mobileProgressive && wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16) {
+        if (isWdSlidePending()) {
           wdThreadEl.innerHTML = SKELETON;
+          prewarmWdThreadMd(cached, () => seq === wdSeq && !!activeWorkerKey);
           scheduleAfterWdSlide(paintCached);
         } else {
           paintCached();
@@ -26059,7 +26778,8 @@
       if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === nextRawSig && wdThreadEl._sig) {
         return;
       }
-      const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && nextMsgs.length > 4;
+      const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && nextMsgs.length > 120;
+      if (isWdSlidePending()) prewarmWdThreadMd(nextMsgs, () => seq === wdSeq && !!activeWorkerKey);
       scheduleAfterWdSlide(() => {
         if (seq !== wdSeq || !activeWorkerKey) return;
         const allMsgs = threadMsgs(wdThreadEl);
@@ -26073,7 +26793,7 @@
           rawSig: curRawSig,
           isAlive: () => seq === wdSeq && !!activeWorkerKey,
         });
-        if (!mobileProgressive) {
+        if (!wdThreadEl._chunking) {
           wdThreadEl._renderedCacheKey = cacheKey;
           wdThreadEl._rawMsgsSig = curRawSig;
         }
@@ -26116,7 +26836,7 @@
       if (!sameRendered) {
         if (cached) {
           const cachedRawSig = workerMsgsRawSig(cached, 0);
-          const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 4;
+          const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 120;
           const paintCached = () => {
             if (seq !== wdSeq || !activeWorkerKey || wdPaneId !== id) return;
             drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
@@ -26125,14 +26845,15 @@
               rawSig: cachedRawSig,
               isAlive: () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id,
             });
-            if (!mobileProgressive) {
+            if (!wdThreadEl._chunking) {
               wdThreadEl._renderedCacheKey = cacheKey;
               wdThreadEl._rawMsgsSig = cachedRawSig;
             }
             wdThreadEl._fresh = true;
           };
-          if (mobileProgressive && wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16) {
+          if (isWdSlidePending()) {
             wdThreadEl.innerHTML = SKELETON;
+            prewarmWdThreadMd(cached, () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id);
             scheduleAfterWdSlide(paintCached);
           } else {
             paintCached();
@@ -26150,7 +26871,13 @@
       }
       const cachedLive = wdLiveCache.get(id);
       if (cachedLive) drawWdLive(cachedLive);
-      else if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
+      else if (wdLiveEl) {
+        wdLiveEl.hidden = true;
+        wdLiveEl.classList?.remove("is-working");
+        wdLiveEl.innerHTML = "";
+        wdLiveEl._html = "";
+        wdLiveEl._lastTail = "";
+      }
       const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
       wdThreadEl._redraw = () => {
         if (!alive()) return;
@@ -26169,7 +26896,8 @@
         if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
           return;
         }
-        const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && msgs.length > 4;
+        const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && !wdThreadEl._chunking && msgs.length > 120;
+        if (isWdSlidePending()) prewarmWdThreadMd(msgs, alive);
         scheduleAfterWdSlide(() => {
           if (!alive()) return;
           if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
@@ -26181,7 +26909,7 @@
             rawSig: curRawSig,
             isAlive: alive,
           });
-          if (!mobileProgressive) {
+          if (!wdThreadEl._chunking) {
             wdThreadEl._renderedCacheKey = cacheKey;
             wdThreadEl._rawMsgsSig = curRawSig;
           }
@@ -26213,22 +26941,33 @@
       return;
     }
     if (m === "screen") {
-      ensureWdTerm();
       resetWdScreen();
-      if (!wdTerm && !window.Terminal) {
-        ensureXterm().then(() => {
-          if (activeWorkerKey && wdPaneId === id && curWdMode() === "screen") {
-            ensureWdTerm();
-            if (wdTerm && preXtermWdFrame) {
-              const pf = preXtermWdFrame;
-              preXtermWdFrame = null;
-              drawWdScreen(pf);
-            }
+      if (!wdTerm) {
+        const initWdScreen = () => {
+          if (!activeWorkerKey || wdPaneId !== id || curWdMode() !== "screen") return;
+          const pf = wdPendingScreen;
+          wdPendingScreen = null;
+          if (window.Terminal) {
+            ensureWdTerm(pf?.cols || 120, pf?.rows || 32);
+            if (wdTerm && pf) drawWdScreen(pf);
+          } else {
+            if (pf) preXtermWdFrame = pf;
+            ensureXterm().then(() => {
+              if (activeWorkerKey && wdPaneId === id && curWdMode() === "screen") {
+                const nextF = preXtermWdFrame;
+                preXtermWdFrame = null;
+                ensureWdTerm(nextF?.cols || 120, nextF?.rows || 32);
+                if (wdTerm && nextF) drawWdScreen(nextF);
+              }
+            }).catch(() => {});
           }
-        }).catch(() => {});
+        };
+        if (isWdSlidePending()) scheduleAfterWdSlide(initWdScreen);
+        else initWdScreen();
       }
     } else if (wdLogEl && !preserve) {
       wdLogEl.textContent = "";
+      wdLogEl._lastText = "";
     }
     wdStream = openES(paneURL(id, "stream") + "?mode=" + m);
     wdStream.addEventListener("frame", (e) => {
@@ -26236,8 +26975,11 @@
       const f = JSON.parse(e.data);
       if (m === "screen") drawWdScreen(f);
       else if (wdLogEl) {
+        const cleaned = cleanLog(f.text || "");
+        if (cleaned === wdLogEl._lastText) return;
         const atBottom = wdLogEl.scrollHeight - wdLogEl.scrollTop - wdLogEl.clientHeight < 40;
-        wdLogEl.textContent = cleanLog(f.text || "");
+        wdLogEl._lastText = cleaned;
+        wdLogEl.textContent = cleaned;
         if (atBottom) { wdLogEl.scrollTop = wdLogEl.scrollHeight; if (wdJumpBtn) wdJumpBtn.hidden = true; }
         else if (wdJumpBtn) wdJumpBtn.hidden = false;
       }
@@ -26352,9 +27094,9 @@
     const wasAnyDrawer = isAnyRightDrawerOpen();
     const closingNotesOverlay = !isWideNotesViewport() && notesOpen;
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
-    const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
-    const sc = view === "collie" ? viewScroller("collie") : null;
     const desktopMode = isDesktopDrawerViewport();
+    const prevVisualShift = desktopMode ? captureCollieVisualShift(wasAnyDrawer, prevOpenW) : 0;
+    const sc = desktopMode && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = desktopMode && sc && !hadWorker ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     applyDrawerReturnOnOpen(opts);
     closePick();
@@ -26412,6 +27154,7 @@
       if (mobileSwap) holdScrimImmediate(wdScrim);
       wdScrim.hidden = false;
     }
+    if (!desktopMode && rootVHSyncTimer) syncRootVHNow();
     const wasHidden = !!wdDrawer.hidden;
     if (wasHidden) wdDrawer.hidden = false;
     if ("inert" in wdDrawer) wdDrawer.inert = false;
@@ -26490,8 +27233,10 @@
     wdDrawer._deferredDrawTimer = 0;
     wdDrawer._onSlideSettled = null;
     wdDrawer._slideSettleAt = 0;
+    cancelWdPrewarm();
     clearTimeout(wdThreadEl?._chunkTimer);
-    if (wdThreadEl) wdThreadEl._chunkTimer = 0;
+    if (wdThreadEl) { wdThreadEl._chunkTimer = 0; wdThreadEl._chunking = false; }
+    if (wdLogEl) wdLogEl._lastText = "";
     wdSeq++;
     const prevWdPane = wdPaneId || wdLastLivePaneId;
     wdWasLive = false;
@@ -27764,8 +28509,8 @@
     const natW = Math.ceil(vbW);
     let minScale = 0;
     if (kind === "mermaid") {
-      // Keep Mermaid 13px node text >= ~11px crisp vector glyphs (never downscaled to 4-7px ants).
-      minScale = 0.85;
+      // Keep Mermaid 14px node text >= 13px crisp native vector glyphs; wide diagrams scroll smoothly instead of shrinking to tiny text.
+      minScale = 0.93;
     } else {
       const minFs = extractSvgMinFontSize(svgEl);
       if (minFs > 0) {
@@ -27847,11 +28592,11 @@
   function scheduleRichStageSync(card) {
     if (!card) return;
     _rvStagePending.add(card);
-    if (isLayoutGliding()) return;
+    if (isLayoutGliding() || isAnyMobileSheetAnimating()) return;
     if (_rvStageRAF) return;
     const flush = () => {
       _rvStageRAF = 0;
-      if (isLayoutGliding()) return;
+      if (isLayoutGliding() || isAnyMobileSheetAnimating()) return;
       const batch = [..._rvStagePending];
       _rvStagePending.clear();
       for (const c of batch) if (c.isConnected) syncRichStageScroll(c);
@@ -27870,7 +28615,7 @@
             for (const entry of entries) {
               const el = entry.target;
               const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
-              if (w <= 0) { el._roLastW = 0; continue; }
+              if (w <= 0) continue;
               if (el._roLastW === w) continue;
               el._roLastW = w;
               const c = el.closest?.(".rv-card");
@@ -27996,7 +28741,7 @@
         darkMode: true,
         background: "#111113",
         fontFamily: sans,
-        fontSize: "13px",
+        fontSize: "14px",
         primaryColor: "#16161a",
         primaryTextColor: "#ececea",
         primaryBorderColor: "#28282f",
@@ -28040,7 +28785,7 @@
         darkMode: false,
         background: "#ffffff",
         fontFamily: sans,
-        fontSize: "13px",
+        fontSize: "14px",
         primaryColor: "#fbfbfa",
         primaryTextColor: "#18181b",
         primaryBorderColor: "#e2e2de",
@@ -28087,12 +28832,12 @@
         `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
         `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
         `.actor-line { stroke-width: 1px !important; }`,
-        `.nodeLabel, .label, .node text, .node tspan, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; fill: ${inkCol} !important; letter-spacing: -0.005em; }`,
-        `.edgeLabel, .edgeLabel p, .edgeLabel text, .edgeLabel tspan, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.nodeLabel, .label, .node text, .node tspan, text.actor > tspan { font-weight: 500 !important; font-size: 14px !important; fill: ${inkCol} !important; }`,
+        `.edgeLabel, .edgeLabel p, .edgeLabel text, .edgeLabel tspan, .messageText { font-weight: 400 !important; font-size: 12.5px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
         `.edgeLabel rect, .labelBkg { fill: ${bgCol} !important; opacity: 1 !important; rx: 4px; ry: 4px; }`,
-        `.cluster-label .nodeLabel, .cluster-label text, .cluster-label tspan { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.cluster-label .nodeLabel, .cluster-label text, .cluster-label tspan { font-weight: 500 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
       ].join("\n"),
-      flowchart: { htmlLabels: false, curve: "basis", padding: 10, nodeSpacing: 22, rankSpacing: 34, useMaxWidth: false },
+      flowchart: { htmlLabels: false, curve: "basis", padding: 12, nodeSpacing: 24, rankSpacing: 36, useMaxWidth: false },
       sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 40, messageMargin: 32, mirrorActors: false },
       gantt: { useMaxWidth: false },
       er: { useMaxWidth: false },
@@ -28737,12 +29482,6 @@
     const stageClick = !expandBtn ? ev.target?.closest?.(".rv-mermaid.is-ready .rv-mermaid-stage, .rv-svg.is-ready .rv-svg-stage") : null;
     if (expandBtn || stageClick) {
       const card = (expandBtn || stageClick).closest(".rv-mermaid, .rv-svg");
-      if (stageClick && card && isCoarseRvPointer() && !card.classList.contains("is-acts-open")) {
-        ev.preventDefault();
-        closeOtherRvFloatActs(card);
-        card.classList.add("is-acts-open");
-        return;
-      }
       const isSvgCard = card?.dataset?.rvKind === "svg";
       const svgEl = card?.querySelector?.(isSvgCard ? ".rv-svg-stage svg" : ".rv-mermaid-stage svg");
       if (svgEl) {
@@ -30655,7 +31394,8 @@
   const KB_FLIP_MS = 240;
   const KB_FLIP_TRANSITION = `transform ${KB_FLIP_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`;
   let lastVH = "", lastVHNum = 0, lastVWNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
-  let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
+  let lastNarrow = null, lastFH = 0, lastBaseH = 0, lastSideLockH = "", lastKI = -1, lastKT = -1;
+  let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvLastShrankAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
   let kbFlipRAF = 0, kbFlipTimer = 0, kbFlipEls = [], kbFlipPrimary = null, kbFlipOnEnd = null;
   let kbFlipDir = 0, kbFlipFocusedEl = null, kbFlipPendingContent = null;
   function clearKbFlip() {
@@ -30718,10 +31458,12 @@
       if (el && el.style && !el.hidden && el.offsetParent) arr.push(el);
     };
     if (activeThreadRoot) {
+      if (tdDrawer?.classList?.contains("is-sheet-opening")) return null;
       pushVis(bars, $("#td-composer"));
       scroller = $("#td-body");
       contentEls = [$("#td-list")].filter((e) => e?.style && !e.hidden);
     } else if (activeWorkerKey) {
+      if (wdDrawer?.classList?.contains("is-sheet-opening")) return null;
       const wdComp = $("#wd-composer");
       if (wdComp && !wdComp.hidden) pushVis(bars, wdComp);
       else pushVis(bars, $("#wd-peek-foot"));
@@ -30804,12 +31546,57 @@
       || document.querySelector("dialog[open]")
     );
   }
+  function hasWideRootVHOverlayOpen() {
+    return !!(superSearchOpen || pickOpen || dirCtx || $("#lightbox")?.open || document.querySelector("dialog[open]"));
+  }
+  const isCoarsePrimary = () => typeof matchMedia === "function"
+    && (matchMedia("(pointer: coarse)").matches
+      || (matchMedia("(hover: none)").matches && matchMedia("(any-pointer: coarse)").matches));
+  const isIPadTouchDevice = () => {
+    const plat = typeof navigator !== "undefined" ? String(navigator.platform || "") : "";
+    const ua = typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "";
+    const mtp = typeof navigator !== "undefined" ? Number(navigator.maxTouchPoints || 0) : 0;
+    if (/iPad|iPhone|iPod/i.test(plat) || /iPad|iPhone|iPod/i.test(ua)) return true;
+    return /Mac/i.test(plat) && mtp > 1;
+  };
+  const isTabletTouchLockEligible = () => isCoarsePrimary() || isIPadTouchDevice();
+  const isEditableFocused = () => {
+    const ae = document.activeElement;
+    return !!(ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT" || ae.isContentEditable || ae.matches?.("input, textarea, [contenteditable]")));
+  };
+  function applyWideKeyboardInsets(kbTop, kbInset) {
+    for (const sel of [".main", "#v-collie", "#file-view", "#thread-drawer", "#worker-drawer", "#notes-pane"]) {
+      const st = $(sel)?.style;
+      if (typeof st?.setProperty !== "function") continue;
+      if (st.getPropertyValue?.("--kb-top") !== kbTop) st.setProperty("--kb-top", kbTop);
+      if (st.getPropertyValue?.("--kb-inset") !== kbInset) st.setProperty("--kb-inset", kbInset);
+    }
+  }
+  function applyWideBaseHeight(h) {
+    for (const sel of ["#app", ".side", "#side-full", "#file-view", "#thread-drawer", "#worker-drawer", "#notes-pane"]) {
+      const st = $(sel)?.style;
+      if (typeof st?.setProperty !== "function") continue;
+      if (h) {
+        if (st.getPropertyValue?.("--side-full-h") !== h) st.setProperty("--side-full-h", h);
+      } else if (st.getPropertyValue?.("--side-full-h")) {
+        st.removeProperty?.("--side-full-h");
+      }
+    }
+  }
+  const setRootVH = (v) => {
+    const r = document.documentElement?.style;
+    if (typeof r?.setProperty === "function" && r.getPropertyValue?.("--vh") !== v) r.setProperty("--vh", v);
+  };
   function syncRootVHNow() {
     if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
     if (!lastVH) return;
-    const root = document.documentElement?.style;
-    if (root && root.getPropertyValue("--vh") !== lastVH) {
-      root.setProperty("--vh", lastVH);
+    setRootVH((!narrow() && !hasWideRootVHOverlayOpen() && lastBaseH > 0) ? (lastBaseH + "px") : lastVH);
+  }
+  function ensureInlineVisibleAfterViewportSettle() {
+    if (!openInlineDecisionId || !vvLastShrankAt || performance.now() - vvLastShrankAt > 1500) return;
+    const cur = getActiveInlineFocus();
+    if (cur && cur.entryId === openInlineDecisionId && cur.scroller?.isConnected) {
+      ensureInlineCardVisible(cur.scroller, cur.entryId, { inDrawer: cur.inDrawer, instant: true });
     }
   }
   function endViewportTransition() {
@@ -30822,6 +31609,7 @@
       deferredViewportMask = 0;
       scheduleLiveUpdates(pending);
     }
+    ensureInlineVisibleAfterViewportSettle();
   }
   function noteViewportHeightTick() {
     const now = performance.now();
@@ -30840,97 +31628,168 @@
     vvSettleTimer = setTimeout(() => {
       vvSettleTimer = 0;
       if (vvTransitioning) endViewportTransition();
-      else syncRootVHNow();
+      else {
+        syncRootVHNow();
+        ensureInlineVisibleAfterViewportSettle();
+      }
     }, 130);
   }
   function setVH() {
-    const v = window.visualViewport;
+    const v = window.visualViewport, isN = narrow();
     const nextVHNum = Math.round(v ? v.height : innerHeight);
     const nextVWNum = Math.round((v && typeof v.width === "number" && v.width > 0) ? v.width : innerWidth);
     const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
-    const nextVH = nextVHNum + "px";
-    const nextVTop = nextVTopNum + "px";
+    const fh = Math.round((typeof innerHeight === "number" && innerHeight > 0) ? innerHeight : nextVHNum);
+    const zoomed = !!(v && typeof v.scale === "number" && v.scale > 1.02);
     const widthChanged = !!lastVH && lastVWNum > 0 && Math.abs(nextVWNum - lastVWNum) > 2;
-    if (nextVH === lastVH && nextVTop === lastVTop && !widthChanged) return;
-    const root = document.documentElement.style;
-    const appEl = $("#app");
-    const vhChanged = nextVH !== lastVH;
-    const vtopChanged = nextVTop !== lastVTop;
-    const isInitial = !lastVH;
-    const prevVHNum = lastVHNum;
-    const deltaH = isInitial ? 0 : (nextVHNum - prevVHNum);
+    const modeChg = lastNarrow !== null && lastNarrow !== isN;
+
+    // On real iPadOS Safari/PWA (>760px), opening the soft keyboard shrinks BOTH
+    // window.innerHeight (layout viewport) and visualViewport.height, often on staggered frames.
+    // Lock wideBaseH at the keyboard-closed full-screen baseline on touch viewports so:
+    //  1) #app / .side / .side-full / .side-rail stay pinned to full screen height (.side-foot & .sr-foot never lift),
+    //  2) --kb-inset = wideBaseH - min(vv.height, innerHeight) - offsetTop stays strictly monotonic across desync,
+    //  3) :root --vh has 0 writes on keyboard open & dismiss (0 full-document recalc / WebKit flash).
+    const coarsePrimary = !isN && isCoarsePrimary();
+    const tabletTouch = !isN && isTabletTouchLockEligible();
+    const editable = !isN && isEditableFocused();
+    let nextBaseH = 0;
+    let nextSideLockH = "";
+    if (!isN) {
+      const maxCurH = Math.max(fh, nextVHNum);
+      if (!lastBaseH || widthChanged || modeChg) {
+        nextBaseH = maxCurH;
+      } else if (maxCurH >= lastBaseH) {
+        nextBaseH = maxCurH;
+      } else {
+        const drop = lastBaseH - fh;
+        const keepLock = (coarsePrimary && (editable || drop >= 100 || lastKI > 0))
+          || (tabletTouch && (editable || drop >= 100 || lastKI > 0));
+        nextBaseH = keepLock ? lastBaseH : maxCurH;
+      }
+      const kbActive = !zoomed && (Math.min(nextVHNum, fh) < nextBaseH || nextVTopNum > 0);
+      const alwaysLockBase = coarsePrimary || (tabletTouch && typeof matchMedia === "function" && matchMedia("(hover: none)").matches);
+      nextSideLockH = (alwaysLockBase || (tabletTouch && kbActive)) ? (nextBaseH + "px") : "";
+    }
+
+    const visH = (!isN && !zoomed) ? Math.min(nextVHNum, fh) : nextVHNum;
+    const kt = (!isN && !zoomed) ? nextVTopNum : 0;
+    const ki = (!isN && !zoomed) ? Math.max(0, nextBaseH - visH - kt) : 0;
+    const nextVH = visH + "px", nextVTop = nextVTopNum + "px";
+    const vhChanged = nextVH !== lastVH, vtopChanged = nextVTop !== lastVTop;
+    const kbChg = ki !== lastKI || kt !== lastKT;
+    const baseChg = nextBaseH !== lastBaseH, lockChg = nextSideLockH !== lastSideLockH;
+    if (!vhChanged && !vtopChanged && !widthChanged && !modeChg && !kbChg && !baseChg && !lockChg) return;
+    const root = document.documentElement.style, appEl = $("#app");
+    const isInitial = !lastVH, prevVHNum = lastVHNum, deltaH = isInitial ? 0 : (visH - prevVHNum);
     const vhShrank = !isInitial && deltaH < 0;
     const wantKbFlip = vhChanged && !isInitial && !widthChanged
-      && narrow() && !prefersReducedMotion() && !document.hidden
+      && isN && !prefersReducedMotion() && !document.hidden
       && !vvTransitioning && Math.abs(deltaH) >= KB_FLIP_MIN_DELTA;
 
-    // 1) Read phase (strictly before any DOM/style writes).
-    let screenPinned = false;
-    let wdScreenPinned = false;
-    const pinTargets = [];
-    const pinInfo = new Map();
-    let kbFlipPlan = null;
-    if (vhChanged && !isInitial) {
+    // 1) Read phase (strictly before any DOM/style writes — zero forced synchronous reflow).
+    let screenPinned = false, wdScreenPinned = false, kbFlipPlan = null, activeInline = null;
+    const pinTargets = [], pinInfo = new Map();
+    const curScrollY = (!isN && !isInitial && !vhShrank && !ki && !kt) ? (window.scrollY || 0) : 0;
+    const colSc = view === "collie" ? viewScroller("collie") : null;
+    if ((vhChanged || widthChanged) && !isInitial) {
+      if (vhShrank && !widthChanged) {
+        activeInline = getActiveInlineFocus();
+        if (!activeInline && openInlineDecisionId && lastInlineFocusMeta?.id === openInlineDecisionId) {
+          const d = !!lastInlineFocusMeta.inDrawer, sc = inlineScroller(d);
+          if (isVoidInlineFocus(document.activeElement, sc)) {
+            activeInline = { inp: null, entryId: openInlineDecisionId, inDrawer: d, scroller: sc };
+          }
+        }
+      }
       screenPinned = view === "pane" && curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
       wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
-      // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-      // When the viewport grows (keyboard dismissing), native scroll clamping keeps bottom-pinned scrollers
-      // anchored without forcing synchronous layout or extra scrollTop writes.
       if (vhShrank) {
         for (const el of document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")) {
-          if (!el.offsetParent) continue;
-          const sh = el.scrollHeight;
-          const ch = el.clientHeight;
-          const st = el.scrollTop;
-          if (sh - st - ch <= AT_BOTTOM_PX) {
+          if (!el.offsetParent || (activeInline && activeInline.scroller === el)) continue;
+          if (el === colSc && !collieStickBottom) continue;
+          const sh = el.scrollHeight, ch = el.clientHeight, st = el.scrollTop;
+          if (sh - st - ch <= AT_BOTTOM_PX || (widthChanged && el === colSc && collieStickBottom)) {
             pinTargets.push({ el, sh });
             pinInfo.set(el, { sh, ch, st });
           }
         }
+      } else if (widthChanged && colSc && colSc.offsetParent && collieStickBottom && !(activeInline && activeInline.scroller === colSc)) {
+        // Orientation change (e.g. iPad landscape -> portrait where viewport grows taller & narrower):
+        // keep bottom-pinned chat glued to bottom even when vh did not shrink.
+        pinTargets.push({ el: colSc, sh: colSc.scrollHeight });
       }
-      if (wantKbFlip) {
-        kbFlipPlan = readKbFlipPlan(deltaH, pinInfo);
-      }
+      if (wantKbFlip) kbFlipPlan = readKbFlipPlan(deltaH, pinInfo);
     }
 
     // 2) Write phase (style mutations only; zero post-write layout reads).
-    if (vhChanged || widthChanged) {
-      clearKbFlip();
-    }
-    lastVWNum = nextVWNum;
+    if (vhChanged || widthChanged || modeChg) clearKbFlip();
+    lastNarrow = isN; lastVWNum = nextVWNum; lastFH = fh; lastBaseH = nextBaseH; lastSideLockH = nextSideLockH; lastKI = ki; lastKT = kt;
     if (vhChanged) {
-      lastVH = nextVH;
-      lastVHNum = nextVHNum;
-      if (appEl?.style) appEl.style.height = nextVH;
-      if (isInitial || !narrow() || hasViewportOverlayOpen()) {
-        root.setProperty("--vh", nextVH);
-      } else {
-        if (rootVHSyncTimer) clearTimeout(rootVHSyncTimer);
-        rootVHSyncTimer = setTimeout(syncRootVHNow, 140);
+      if (vhShrank && !widthChanged) vvLastShrankAt = performance.now();
+      lastVH = nextVH; lastVHNum = visH;
+    }
+    if (vtopChanged) lastVTop = nextVTop;
+
+    if (isN) {
+      if (modeChg) {
+        applyWideKeyboardInsets("0px", "0px");
+        applyWideBaseHeight("");
       }
-      if (!isInitial) noteViewportHeightTick();
+      if (vhChanged || modeChg) {
+        if (appEl?.style) appEl.style.height = nextVH;
+        if (isInitial || hasViewportOverlayOpen()) root.setProperty("--vh", nextVH);
+        else {
+          if (rootVHSyncTimer) clearTimeout(rootVHSyncTimer);
+          rootVHSyncTimer = setTimeout(syncRootVHNow, 140);
+        }
+        if (!isInitial && vhChanged) noteViewportHeightTick();
+      }
+      if (vtopChanged || modeChg) {
+        if (appEl?.style) appEl.style.setProperty("--vtop", nextVTop);
+        else root.setProperty("--vtop", nextVTop);
+      }
+    } else {
+      if (appEl?.style) {
+        if (appEl.style.height) appEl.style.height = "";
+        if (appEl.style.getPropertyValue?.("--vtop")) appEl.style.removeProperty?.("--vtop");
+      }
+      if (lockChg || modeChg || isInitial) applyWideBaseHeight(nextSideLockH);
+      if (kbChg || modeChg || isInitial) applyWideKeyboardInsets(kt + "px", ki + "px");
+      const ov = hasWideRootVHOverlayOpen();
+      if (isInitial || baseChg || modeChg || ov) {
+        if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
+        setRootVH(ov ? nextVH : (nextBaseH + "px"));
+      }
+      if (!isInitial && vhChanged) noteViewportHeightTick();
+      if (curScrollY > 0) {
+        try { window.scrollTo?.(0, 0); } catch {}
+      }
     }
-    if (vtopChanged) {
-      lastVTop = nextVTop;
-      if (appEl?.style) appEl.style.setProperty("--vtop", nextVTop);
-      else root.setProperty("--vtop", nextVTop);
-    }
-    if (kbFlipPlan) {
-      beginKbFlip(kbFlipPlan);
-    }
+    if (kbFlipPlan) beginKbFlip(kbFlipPlan);
 
     // 3) Post-layout pin phase (deferred to next clean frame; zero forced reflow).
-    if (pinTargets.length || screenPinned || wdScreenPinned) {
+    if (pinTargets.length || screenPinned || wdScreenPinned || (vhShrank && activeInline)) {
       const applyPin = () => {
         setVHPinRAF = 0;
-        markProgrammaticScroll(140);
-        for (const { el } of pinTargets) {
-          if (!el.isConnected) continue;
-          const sh = el.scrollHeight;
-          if (sh - el.scrollTop - el.clientHeight > 1) el.scrollTop = sh;
+        if (pinTargets.length) {
+          markProgrammaticScroll(140);
+          for (const { el } of pinTargets) {
+            if (!el.isConnected) continue;
+            const sh = el.scrollHeight;
+            if (sh - el.scrollTop - el.clientHeight > 1) el.scrollTop = sh;
+          }
         }
         if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
         if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
+        if (vhShrank && activeInline && openInlineDecisionId === activeInline.entryId) {
+          if (!isInlineInputEl(document.activeElement) && isVoidInlineFocus(document.activeElement, activeInline.scroller)) {
+            focusInlineDecisionInput(activeInline.entryId, { inDrawer: activeInline.inDrawer });
+          }
+          if (activeInline.scroller?.isConnected) {
+            ensureInlineCardVisible(activeInline.scroller, activeInline.entryId, { inDrawer: activeInline.inDrawer, instant: true });
+          }
+        }
         if (kbFlipPendingContent) {
           const { els, shiftPx } = kbFlipPendingContent;
           kbFlipPendingContent = null;
@@ -30975,6 +31834,11 @@
   window.visualViewport?.addEventListener("resize", scheduleSetVH);
   window.visualViewport?.addEventListener("scroll", scheduleSetVH);
   addEventListener("resize", scheduleSetVH);
+  addEventListener("orientationchange", () => {
+    scheduleSetVH();
+    syncSideOverlayMode();
+    if (view === "collie") reanchorCollieOnViewportChange(true);
+  });
   setVH();
 
   // ───────────────────────────── boot

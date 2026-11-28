@@ -650,9 +650,14 @@ const doc = {
     for (const fn of [...(docListeners.get(type) || [])]) fn(e);
   },
 };
+const nowMs = Date.parse("2026-11-28T10:00:00Z");
+class FixedDate extends Date {
+  constructor(...args) { super(...(args.length ? args : [nowMs])); }
+  static now() { return nowMs; }
+}
 const winListeners = new Map();
 const ctx = {
-  console, Math, Date, JSON, Set, Map, Array, Object, Number, String, Boolean, URL, Promise,
+  console, Math, Date: FixedDate, JSON, Set, Map, Array, Object, Number, String, Boolean, URL, Promise,
   setInterval: () => 1, clearInterval() {}, setTimeout: (fn) => { fn(); return 1; }, clearTimeout() {},
   CSS: { supports: (q) => q === "position-area: block-start" },
   matchMedia: () => ({ matches: narrowMode }),
@@ -672,7 +677,6 @@ vm.runInContext(jsSrc, ctx);
 const Q = ctx.window.__collieQuota;
 assert.ok(Q, "window.__collieQuota must be registered");
 
-const nowMs = Date.parse("2026-11-28T10:00:00Z");
 const normalSnap = {
   updated_at: "2026-11-28T09:58:00Z",
   agents: [

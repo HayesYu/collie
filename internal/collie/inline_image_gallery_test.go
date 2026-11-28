@@ -34,6 +34,9 @@ assert.ok(cssSrc.includes("object-fit: cover;\n  object-position: top center;"),
 assert.ok(cssSrc.includes(".file-gallery-wrap, .file-gallery, .md-gallery,"), "message entry blur animation must skip .file-gallery to stay crisp & 60 FPS");
 assert.ok(cssSrc.includes("touch-action: none;"), "lightbox stage must disable browser pan hijacking for reliable horizontal touch swipe");
 assert.ok(cssSrc.includes(".lb-nav.prev { left: max(8px, env(safe-area-inset-left)); }") && cssSrc.includes(".lb-nav.next { right: max(8px, env(safe-area-inset-right)); }"), "mobile lightbox nav must respect left/right safe areas");
+assert.ok(cssSrc.includes(".lb-nav:hover:not(:disabled)") && cssSrc.includes(".lb-nav:active:not(:disabled)"), "disabled lightbox nav buttons must not animate hover or press states");
+assert.ok(cssSrc.includes(".lb-nav:disabled { opacity: .28; cursor: default; }"), "disabled lightbox nav buttons must soften visually without passing clicks through to stage backdrop");
+assert.ok(!appSrc.includes("((idx % lbItems.length) + lbItems.length) % lbItems.length"), "showLbSlide must not wrap around via modulo");
 assert.ok(i18nSrc.includes('"file.galMoreAria": "查看大图') && i18nSrc.includes('"file.galMoreAria": "View image'), "zh/en i18n must both define file.galMoreAria");
 
 // 2. Minimal DOM harness supporting querySelector, closest, classList, dataset, events, dialog & fetch
@@ -436,7 +439,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__ig = { renderEntryArtifacts, renderCollieBody, extractEntryArtifacts, loadThumb, degradeFileGalleryTile, collectGallery, openLightbox, closeLightbox, showLbSlide, thumbs, failedFileGalleryImgs, clearFileGalleryImgFailed, getLbState: () => ({ open: lightbox.open, idx: lbIdx, count: lbItems.length, items: lbItems, countText: lbCount.textContent }) };\n})();"
+  "  globalThis.__ig = { renderEntryArtifacts, renderCollieBody, extractEntryArtifacts, loadThumb, degradeFileGalleryTile, collectGallery, openLightbox, closeLightbox, showLbSlide, thumbs, failedFileGalleryImgs, clearFileGalleryImgFailed, getLbState: () => ({ open: lightbox.open, idx: lbIdx, count: lbItems.length, items: lbItems, countText: lbCount.textContent, prevDisabled: lbPrevBtn.disabled, nextDisabled: lbNextBtn.disabled, seq: lbSeq, imgTransform: lbImg.style.transform, dragging: lightbox.classList.contains('is-dragging') }) };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 bootFinished = true;
@@ -548,16 +551,21 @@ async function main() {
   assert.equal(G.getLbState().countText, "1 / 5", "Lightbox header shows 1 / 5 counter");
   assert.equal(lbPrevEl.hidden, false, "prev button visible for multi-image gallery");
   assert.equal(lbNextEl.hidden, false, "next button visible for multi-image gallery");
+  assert.equal(G.getLbState().prevDisabled, true, "prev button disabled on first slide (1 / 5)");
+  assert.equal(G.getLbState().nextDisabled, false, "next button enabled on first slide (1 / 5)");
 
-  // Keyboard ArrowRight -> 2 / 5
+  // Keyboard ArrowRight -> 2 / 5 (both arrows enabled on middle slide)
   doc.dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
   await new Promise((r) => setImmediate(r));
   assert.equal(G.getLbState().idx, 1);
   assert.equal(G.getLbState().countText, "2 / 5", "ArrowRight advances to 2 / 5");
+  assert.equal(G.getLbState().prevDisabled, false, "prev button enabled on middle slide");
+  assert.equal(G.getLbState().nextDisabled, false, "next button enabled on middle slide");
 
   // Touch horizontal swipe left on lbStage -> 3 / 5
   lbStageEl.dispatchEvent({ type: "pointerdown", pointerId: 7, pointerType: "touch", button: 0, clientX: 280, clientY: 400, target: lbImgEl });
   lbStageEl.dispatchEvent({ type: "pointermove", pointerId: 7, pointerType: "touch", clientX: 160, clientY: 405, target: lbImgEl });
+  assert.equal(G.getLbState().imgTransform, "translate3d(-54.0px, 0, 0)", "non-boundary swipe uses normal 0.45 follow factor");
   lbStageEl.dispatchEvent({ type: "pointerup", pointerId: 7, pointerType: "touch", clientX: 160, clientY: 405, target: lbImgEl });
   await new Promise((r) => setImmediate(r));
   assert.equal(G.getLbState().idx, 2, "touch left swipe advances to slide 3");
@@ -576,6 +584,87 @@ async function main() {
   await new Promise((r) => setImmediate(r));
   assert.equal(G.getLbState().open, false, "tapping blank stage backdrop closes Lightbox");
   host5.remove();
+
+  // ─── Case 7b: 2-image boundary no-wrap, rubber-band damping, disabled arrows & clamping ───
+  const items2 = [{ path: "~/shots/m1.png", alt: "first" }, { path: "~/shots/m2.png", alt: "second" }];
+  // Opening with out-of-range negative index clamps to 0
+  G.openLightbox(items2, -4);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().open, true);
+  assert.equal(G.getLbState().idx, 0, "openLightbox clamps negative index to 0");
+  assert.equal(G.getLbState().countText, "1 / 2");
+  assert.equal(G.getLbState().prevDisabled, true, "1/2: prev button must be disabled");
+  assert.equal(G.getLbState().nextDisabled, false, "1/2: next button must be enabled");
+
+  const seqAtFirst = G.getLbState().seq;
+  // Direct out-of-bounds / same-index showLbSlide calls are silent no-ops
+  await G.showLbSlide(-1);
+  await G.showLbSlide(0);
+  await G.showLbSlide(2);
+  assert.equal(G.getLbState().idx, 0, "out-of-bounds and same-index showLbSlide must not change idx");
+  assert.equal(G.getLbState().seq, seqAtFirst, "no-op showLbSlide must not trigger reload or flicker");
+
+  // ArrowLeft and prev button click at 1/2 stay at 1/2 without wrapping
+  doc.dispatchEvent({ type: "keydown", key: "ArrowLeft", preventDefault() {} });
+  lbPrevEl.dispatchEvent({ type: "click" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 0, "ArrowLeft and prev click at 1/2 must not wrap to 2/2");
+  assert.equal(G.getLbState().countText, "1 / 2");
+  assert.equal(G.getLbState().seq, seqAtFirst, "boundary ArrowLeft must not increment lbSeq");
+
+  // Right swipe at 1/2 applies rubber-band damping (0.25x, capped at 48px) and bounces back without wrapping
+  lbStageEl.dispatchEvent({ type: "pointerdown", pointerId: 11, pointerType: "touch", button: 0, clientX: 80, clientY: 400, target: lbImgEl });
+  lbStageEl.dispatchEvent({ type: "pointermove", pointerId: 11, pointerType: "touch", clientX: 240, clientY: 402, target: lbImgEl });
+  assert.equal(G.getLbState().dragging, true);
+  assert.equal(G.getLbState().imgTransform, "translate3d(40.0px, 0, 0)", "1/2 right drag must apply 0.25 rubber-band damping");
+  lbStageEl.dispatchEvent({ type: "pointermove", pointerId: 11, pointerType: "touch", clientX: 380, clientY: 402, target: lbImgEl });
+  assert.equal(G.getLbState().imgTransform, "translate3d(48.0px, 0, 0)", "1/2 right drag must clamp rubber-band displacement at 48px");
+  lbStageEl.dispatchEvent({ type: "pointerup", pointerId: 11, pointerType: "touch", clientX: 380, clientY: 402, target: lbImgEl });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().dragging, false, "is-dragging cleared on release so GPU bounce transition runs");
+  assert.equal(G.getLbState().imgTransform, "", "1/2 right swipe release resets transform to center");
+  assert.equal(G.getLbState().idx, 0, "1/2 right swipe must stay on 1/2");
+  assert.equal(G.getLbState().seq, seqAtFirst, "1/2 right swipe must not reload slide");
+
+  // Advance to 2/2 via next button -> prev enabled, next disabled
+  lbNextEl.dispatchEvent({ type: "click" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 1, "next click advances to 2/2");
+  assert.equal(G.getLbState().countText, "2 / 2");
+  assert.equal(G.getLbState().prevDisabled, false, "2/2: prev button must be enabled");
+  assert.equal(G.getLbState().nextDisabled, true, "2/2: next button must be disabled");
+
+  const seqAtLast = G.getLbState().seq;
+  // ArrowRight and next button click at 2/2 stay at 2/2 without wrapping
+  doc.dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
+  lbNextEl.dispatchEvent({ type: "click" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 1, "ArrowRight and next click at 2/2 must not wrap to 1/2");
+  assert.equal(G.getLbState().countText, "2 / 2");
+  assert.equal(G.getLbState().seq, seqAtLast, "boundary ArrowRight must not increment lbSeq");
+
+  // Left swipe at 2/2 applies rubber-band damping (-0.25x, capped at -48px) and bounces back without wrapping
+  lbStageEl.dispatchEvent({ type: "pointerdown", pointerId: 12, pointerType: "touch", button: 0, clientX: 320, clientY: 400, target: lbImgEl });
+  lbStageEl.dispatchEvent({ type: "pointermove", pointerId: 12, pointerType: "touch", clientX: 160, clientY: 404, target: lbImgEl });
+  assert.equal(G.getLbState().imgTransform, "translate3d(-40.0px, 0, 0)", "2/2 left drag must apply 0.25 rubber-band damping");
+  lbStageEl.dispatchEvent({ type: "pointermove", pointerId: 12, pointerType: "touch", clientX: 20, clientY: 404, target: lbImgEl });
+  assert.equal(G.getLbState().imgTransform, "translate3d(-48.0px, 0, 0)", "2/2 left drag must clamp rubber-band displacement at -48px");
+  lbStageEl.dispatchEvent({ type: "pointerup", pointerId: 12, pointerType: "touch", clientX: 20, clientY: 404, target: lbImgEl });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().dragging, false);
+  assert.equal(G.getLbState().imgTransform, "", "2/2 left swipe release resets transform to center");
+  assert.equal(G.getLbState().idx, 1, "2/2 left swipe must stay on 2/2");
+  assert.equal(G.getLbState().seq, seqAtLast, "2/2 left swipe must not reload slide");
+
+  // Opening with out-of-range positive index clamps to last slide
+  G.openLightbox(items2, 99);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 1, "openLightbox clamps oversized index to last slide");
+  assert.equal(G.getLbState().prevDisabled, false);
+  assert.equal(G.getLbState().nextDisabled, true);
+
+  await G.closeLightbox();
+  assert.equal(G.getLbState().open, false);
 
   // ─── Case 8: Graceful degradation on 404 / 403 / non-image / decode error ───
   // 8a) Single image 404 -> hides gallery, renders clean file chip, zero broken tile

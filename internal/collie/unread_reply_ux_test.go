@@ -208,7 +208,7 @@ const htmlSrc = fs.readFileSync(path.join(root, "web", "index.html"), "utf8");
 // 1) CSS & restrained copy checks (zero prototype jargon; modern field-sizing + fallback).
 assert.ok(cssSrc.includes(".super-jump.stage-unread"), "CSS must style stage 1 compact unread jump pill");
 assert.ok(cssSrc.includes("field-sizing: content") && cssSrc.includes("@supports not (field-sizing: content)"), "CSS must provide field-sizing: content + Grid fallback");
-assert.ok(cssSrc.includes(".reply-inline-send.send") && cssSrc.includes(".inplace-receipt"), "CSS must style circular inline send button & minimal 1-line in-place receipt");
+assert.ok(cssSrc.includes(".reply-inline-send") && cssSrc.includes("max-width: 368px") && cssSrc.includes(".inplace-receipt"), "CSS must style slim subordinate inline bar & minimal 1-line in-place receipt");
 for (const banned of ["原地收口 · 不刷主底", "留在原地记入话题线", "跳到最新 · 余", "落主底 · 0px"]) {
   assert.ok(!appSrc.includes(banned) && !htmlSrc.includes(banned), "UI copy must remain restrained without prototype jargon: " + banned);
 }
@@ -626,15 +626,16 @@ const mkEntry = (num, role, text, extra = {}) => ({
   });
   T.renderSuper({ force: true, unreadAnchor: true });
 
-  // C1) Desktop Plan A: click 补充一句 opens inline <form class="reply-inline"> with minimal placeholder & circular send button
+  // C1) Desktop Plan A: click 补充一句 opens slim single-line <form class="reply-inline"> with lightweight send button
   const togBtn = makeEl("tog-e7");
   togBtn.dataset.toggleInline = "e7";
   togBtn.closest = (sel) => (sel === "[data-toggle-inline]" ? togBtn : null);
   await T.handleQuickOptionClick({ target: togBtn, preventDefault() {} });
-  assert.equal(T.getOpenInline(), "e7", "desktop click opens Plan A inline card");
+  assert.equal(T.getOpenInline(), "e7", "desktop click opens Plan A inline bar");
   assert.equal(T.getReplyTo(), null, "desktop Plan A does not hijack bottom composer");
   assert.ok(threadBox.innerHTML.includes('placeholder="补充一句…"'), "Plan A uses minimal placeholder");
-  assert.ok(threadBox.innerHTML.includes('class="send reply-inline-send"'), "Plan A uses circular .send button");
+  assert.ok(threadBox.innerHTML.includes('rows="1"'), "Plan A starts as compact 1-line input");
+  assert.ok(threadBox.innerHTML.includes('class="reply-inline-send"') && !threadBox.innerHTML.includes('class="send reply-inline-send"'), "Plan A uses subordinate lightweight send button distinct from primary composer .send");
 
   // IME safety + Shift+Enter + Esc draft preservation on Plan A textarea
   const riForm = makeEl("ri-form-e7");

@@ -3588,6 +3588,7 @@
   const ICON_EDIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
   const ICON_RECEIPT_CHK = `<svg class="rr-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
   const ICON_SEND_UP = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
+  const ICON_CLOSE_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
   const ICON_SPLIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M13 4v16"/></svg>`;
   const ICON_DOC_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>`;
   function entryPendingNow(allEntries, idx, id, pendIds = null) {
@@ -3656,7 +3657,7 @@
         const hasDraft = !inlineOpen && !isMobileTarget && savedDraft.trim().length > 0;
         const taId = (inDrawer ? "ri-td-" : "ri-") + e.id;
         return `<div class="decision-wrap" data-decision="${esc(e.id)}"><div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
-          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}">${ICON_EDIT_MINI}<span>补充一句</span>${hasDraft ? `<span class="draft-dot" aria-label="有草稿"></span>` : ""}</button></div><form class="reply-inline" data-inline-box="${esc(e.id)}"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">补充一句</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="2" placeholder="补充一句…" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-bar"><span class="spacer"></span><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="取消 (Esc)" aria-label="取消">取消</button><button type="submit" class="send reply-inline-send" data-inline-send="${esc(e.id)}" title="发送 (Enter)" aria-label="发送"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div>`;
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}">${ICON_EDIT_MINI}<span>补充一句</span>${hasDraft ? `<span class="draft-dot" aria-label="有草稿"></span>` : ""}</button></div><form class="reply-inline" data-inline-box="${esc(e.id)}"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">补充一句</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="1" placeholder="补充一句…" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-acts"><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="取消 (Esc)" aria-label="取消">${ICON_CLOSE_MINI}</button><button type="submit" class="reply-inline-send" data-inline-send="${esc(e.id)}" title="发送 (Enter)" aria-label="发送"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div>`;
       }
       const res = resolveDecisionInfo(e, idx, allEntries);
       if (res) {
@@ -7442,7 +7443,15 @@
     if (!card || card.hidden || typeof card.getBoundingClientRect !== "function" || typeof sc.getBoundingClientRect !== "function") return;
     const sr = sc.getBoundingClientRect();
     const cr = card.getBoundingClientRect();
-    const bottomSafe = sr.bottom - 16;
+    let bottomPad = 16;
+    const jump = $("#super-jump");
+    if (jump && !jump.hidden && typeof jump.getBoundingClientRect === "function") {
+      const jr = jump.getBoundingClientRect();
+      if (jr.height > 0 && jr.top < sr.bottom) {
+        bottomPad = Math.max(bottomPad, Math.ceil(sr.bottom - jr.top) + 12);
+      }
+    }
+    const bottomSafe = sr.bottom - bottomPad;
     if (cr.bottom > bottomSafe) {
       smartScrollCollie(sc, sc.scrollTop + (cr.bottom - bottomSafe), { markMs: 280 });
     }

@@ -86,6 +86,35 @@ func TestParseAgyUsageOutput(t *testing.T) {
 			t.Fatalf("expected degraded API key mode, got %+v", ag)
 		}
 	})
+
+	t.Run("group models metadata preserved and deep-cloned", func(t *testing.T) {
+		raw := `{
+			"status": "SUCCESS",
+			"command": {
+				"name": "usage",
+				"data": {
+					"groups": [
+						{
+							"name": "Gemini 4 Neon",
+							"models": ["gemini-4-neon-xhigh", "gemini-4-neon-high", "gemini-4-neon-xhigh"],
+							"buckets": [
+								{"id":"neon-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":0.42,"reset_time":"2026-11-28T13:00:00Z"}
+							]
+						}
+					]
+				}
+			}
+		}`
+		ag := parseAgyUsageOutput([]byte(raw), "", 0, nowStr)
+		if ag.Status != "ok" || len(ag.Pools) != 1 || len(ag.Pools[0].Models) != 2 {
+			t.Fatalf("expected deduplicated pool models, got %+v", ag.Pools)
+		}
+		cloned := cloneAgentQuota(ag)
+		cloned.Pools[0].Models[0] = "mutated"
+		if ag.Pools[0].Models[0] != "gemini-4-neon-xhigh" {
+			t.Fatalf("cloneAgentQuota did not deep-copy pool models")
+		}
+	})
 }
 
 func TestParseCodexRateLimitsAndRolloutFallback(t *testing.T) {
@@ -131,6 +160,46 @@ func TestParseCodexRateLimitsAndRolloutFallback(t *testing.T) {
 		}
 		if ag.Pools[0].Windows[0].ID != "30d" || ag.Pools[0].Windows[0].Label != "30 天窗口" || ag.Pools[0].Windows[0].RemainingPct != 100 {
 			t.Fatalf("expected 30d 100%%, got %+v", ag.Pools[0].Windows[0])
+		}
+	})
+
+	t.Run("app-server preserves model-specific rateLimitsByLimitId pools alongside default pool", func(t *testing.T) {
+		raw := `{
+			"rateLimits": {
+				"limitId": "codex",
+				"primary": {"usedPercent": 20, "windowDurationMins": 300, "resetsAt": 1795850000},
+				"secondary": {"usedPercent": 45, "windowDurationMins": 10080, "resetsAt": 1796200000},
+				"planType": "plus"
+			},
+			"rateLimitsByLimitId": {
+				"codex": {
+					"limitId": "codex",
+					"primary": {"usedPercent": 20, "windowDurationMins": 300, "resetsAt": 1795850000},
+					"secondary": {"usedPercent": 45, "windowDurationMins": 10080, "resetsAt": 1796200000},
+					"planType": "plus"
+				},
+				"codex_spark": {
+					"limitId": "codex_spark",
+					"limitName": "GPT-5.3-Codex-Spark",
+					"normalModelSlug": "gpt-5.3-codex-spark",
+					"primary": {"usedPercent": 88, "windowDurationMins": 300, "resetsAt": 1795850000},
+					"secondary": {"usedPercent": 10, "windowDurationMins": 10080, "resetsAt": 1796200000},
+					"planType": "plus"
+				}
+			}
+		}`
+		ag := parseCodexAppServerRateLimits([]byte(raw), nowStr)
+		if ag.Status != "ok" || len(ag.Pools) != 2 {
+			t.Fatalf("expected 2 codex pools (default + model-specific), got %+v", ag.Pools)
+		}
+		if ag.Pools[0].Group != "" || ag.Pools[0].Windows[0].RemainingPct != 80 || ag.Pools[0].Windows[1].RemainingPct != 55 {
+			t.Fatalf("unexpected default codex pool: %+v", ag.Pools[0])
+		}
+		if ag.Pools[1].Group != "GPT-5.3-Codex-Spark" || len(ag.Pools[1].Models) != 1 || ag.Pools[1].Models[0] != "gpt-5.3-codex-spark" {
+			t.Fatalf("unexpected model-specific codex pool: %+v", ag.Pools[1])
+		}
+		if ag.Pools[1].Windows[0].RemainingPct != 12 || ag.Pools[1].Windows[1].RemainingPct != 90 {
+			t.Fatalf("unexpected spark windows: %+v", ag.Pools[1].Windows)
 		}
 	})
 
@@ -518,7 +587,15 @@ assert.ok(!htmlSrc.includes('role="menu"') && !htmlSrc.includes('aria-haspopup="
 // Minimal bridge in app.js & demo.js sync
 assert.ok(appSrc.includes('ev.addEventListener("quota"'), "app.js must bridge SSE quota event");
 assert.ok(appSrc.includes('window.__collieQuota?.init?.'), "app.js must initialize quota module on boot");
+assert.ok(appSrc.includes('getContext: resolveActiveQuotaContext') && appSrc.includes('window.__collieQuota?.onContextChange?.()'), "app.js must bridge active agent/model context to quota module");
 assert.ok(demoSrc.includes('"/api/quota"') && demoSrc.includes('"/api/quota/refresh"'), "demo.js must mock /api/quota and /api/quota/refresh");
+
+// i18n bilingual parity for quota keys
+const i18nSrc = fs.readFileSync("web/i18n.js", "utf8");
+for (const k of ["quota.activeMinTag", "quota.minTag", "quota.progressBottleneck"]) {
+  const count = i18nSrc.split('"' + k + '":').length - 1;
+  assert.strictEqual(count, 2, "i18n.js must define both zh and en for " + k);
+}
 
 // ─── 2. Runtime VM Tests for web/quota.js ───
 function makeClassList() {
@@ -675,6 +752,219 @@ Q.onEvent({
 const htmlOut = getEl("#qp-body").innerHTML;
 assert.ok(!htmlOut.includes("javascript:alert"), "unsafe link_url must be rejected");
 assert.ok(!htmlOut.includes("<img src=x"), "agent name must be HTML escaped");
+
+// ─── 3. Model-Aware Bottleneck Selection & Live Switching Regressions ───
+const multiSnap = {
+  updated_at: "2026-11-28T09:59:00Z",
+  agents: [
+    {
+      kind: "agy", name: "Antigravity", plan: "Pro", status: "ok",
+      pools: [
+        {
+          group: "Gemini",
+          windows: [
+            { id: "5h", label: "5 小时", remaining_pct: 86, resets_at: "2026-11-28T12:30:00Z" },
+            { id: "weekly", label: "周额度", remaining_pct: 39, resets_at: "2026-12-03T10:00:00Z" },
+          ],
+        },
+        {
+          group: "Claude / GPT", compact_full: true,
+          windows: [
+            { id: "5h", label: "5 小时", remaining_pct: 100 },
+            { id: "weekly", label: "周额度", remaining_pct: 100 },
+          ],
+        },
+      ],
+    },
+    {
+      kind: "codex", name: "Codex", plan: "Plus", status: "ok",
+      pools: [
+        {
+          group: "",
+          windows: [
+            { id: "5h", label: "5 小时窗口", remaining_pct: 72, resets_at: "2026-11-28T13:15:00Z" },
+            { id: "weekly", label: "周额度", remaining_pct: 55, resets_at: "2026-12-02T10:00:00Z" },
+          ],
+        },
+        {
+          group: "GPT-5.3-Codex-Spark",
+          models: ["gpt-5.3-codex-spark"],
+          windows: [
+            { id: "5h", label: "5 小时窗口", remaining_pct: 8, resets_at: "2026-11-28T11:30:00Z" },
+            { id: "weekly", label: "周额度", remaining_pct: 90, resets_at: "2026-12-02T10:00:00Z" },
+          ],
+        },
+      ],
+    },
+    {
+      kind: "claude", name: "Claude Code", plan: "Max", status: "ok",
+      pools: [
+        {
+          group: "",
+          windows: [
+            { id: "5h", label: "5 小时窗口", remaining_pct: 10, resets_at: "2026-11-28T12:00:00Z" },
+            { id: "weekly", label: "7 天窗口", remaining_pct: 80, resets_at: "2026-12-04T10:00:00Z" },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+// 3a. Antigravity Gemini model (with -xhigh effort suffix) picks Gemini min(86, 39) = 39%, ignoring codex 8% and claude 10%
+const sumAgyGem = Q.summarizeQuota(multiSnap, nowMs, { kind: "antigravity", model: "gemini-4-neon-xhigh" });
+assert.strictEqual(sumAgyGem.min, 39);
+assert.strictEqual(sumAgyGem.level, "normal");
+assert.strictEqual(sumAgyGem.scope, "model");
+assert.strictEqual(sumAgyGem.bottleneck.kind, "agy");
+assert.strictEqual(sumAgyGem.bottleneck.poolIndex, 0);
+assert.strictEqual(sumAgyGem.bottleneck.winIndex, 1);
+assert.ok(sumAgyGem.tooltip.includes("agy") && sumAgyGem.tooltip.includes("Gemini") && sumAgyGem.tooltip.includes("39%"));
+
+// 3b. Antigravity Claude/GPT model (with -medium suffix) picks Claude / GPT pool = 100%
+const sumAgyClaude = Q.summarizeQuota(multiSnap, nowMs, { kind: "agy", model: "claude-opus-5-5-medium" });
+assert.strictEqual(sumAgyClaude.min, 100);
+assert.strictEqual(sumAgyClaude.level, "normal");
+assert.strictEqual(sumAgyClaude.scope, "model");
+assert.strictEqual(sumAgyClaude.bottleneck.poolIndex, 1);
+assert.strictEqual(sumAgyClaude.bottleneck.compact, true);
+
+const sumAgyGpt = Q.summarizeQuota(multiSnap, nowMs, { kind: "agy", model: "gpt-oss-120b-medium" });
+assert.strictEqual(sumAgyGpt.min, 100);
+assert.strictEqual(sumAgyGpt.bottleneck.poolIndex, 1);
+
+// 3c. Per-model pools: exact / effort-stripped / same-series prefix / token subset matching
+const perModelSnap = {
+  updated_at: "2026-11-28T09:59:00Z",
+  agents: [
+    {
+      kind: "agy", name: "Antigravity", status: "ok",
+      pools: [
+        { group: "Gemini 4 Neon", windows: [{ id: "5h", label: "5 小时", remaining_pct: 60 }, { id: "weekly", label: "周额度", remaining_pct: 18 }] },
+        { group: "Gemini 4", windows: [{ id: "5h", label: "5 小时", remaining_pct: 75 }, { id: "weekly", label: "周额度", remaining_pct: 70 }] },
+        { group: "Gemini 3.8 Flash", windows: [{ id: "5h", label: "5 小时", remaining_pct: 95 }] },
+        { group: "Claude Opus", windows: [{ id: "5h", label: "5 小时", remaining_pct: 42 }] },
+      ],
+    },
+  ],
+};
+assert.strictEqual(Q.normalizeModelKey("anthropic/claude-4.6-opus-max"), "claude-4-6-opus");
+assert.strictEqual(Q.normalizeModelKey("gemini-4-neon-xhigh"), "gemini-4-neon");
+assert.strictEqual(Q.normalizeModelKey("openai/gpt-5.4:high"), "gpt-5-4");
+
+const mNeon = Q.summarizeQuota(perModelSnap, nowMs, { kind: "agy", model: "gemini-4-neon-xhigh" });
+assert.strictEqual(mNeon.min, 18, "effort-stripped exact match Gemini 4 Neon must beat broader Gemini 4");
+assert.strictEqual(mNeon.level, "low");
+assert.strictEqual(mNeon.bottleneck.poolIndex, 0);
+assert.strictEqual(mNeon.bottleneck.winIndex, 1);
+
+const mCarbon = Q.summarizeQuota(perModelSnap, nowMs, { kind: "agy", model: "gemini-4-carbon-high" });
+assert.strictEqual(mCarbon.min, 70, "same-series prefix must match Gemini 4");
+assert.strictEqual(mCarbon.bottleneck.poolIndex, 1);
+
+const mFlash = Q.summarizeQuota(perModelSnap, nowMs, { kind: "agy", model: "gemini-3.8-flash-low" });
+assert.strictEqual(mFlash.min, 95, "dot/dash normalized exact match must match Gemini 3.8 Flash");
+assert.strictEqual(mFlash.bottleneck.poolIndex, 2);
+
+const mOpus = Q.summarizeQuota(perModelSnap, nowMs, { kind: "agy", model: "claude-4.6-opus-max" });
+assert.strictEqual(mOpus.min, 42, "token subset match must match Claude Opus");
+assert.strictEqual(mOpus.bottleneck.poolIndex, 3);
+
+// 3d. Unknown model under active agent falls back to min across all valid pools of that agent
+const mUnknown = Q.summarizeQuota(multiSnap, nowMs, { kind: "agy", model: "experimental-v1-high" });
+assert.strictEqual(mUnknown.min, 39, "unmatched model must fall back to current agent's all pools min (not codex/claude)");
+assert.strictEqual(mUnknown.scope, "agent");
+assert.strictEqual(mUnknown.bottleneck.kind, "agy");
+
+// 3e. Claude 5h + 7d multi-window: short-window bottleneck 10% must NOT be masked by 7d 80%
+const sumClaude = Q.summarizeQuota(multiSnap, nowMs, { kind: "claude", model: "sonnet" });
+assert.strictEqual(sumClaude.min, 10);
+assert.strictEqual(sumClaude.level, "low");
+assert.strictEqual(sumClaude.bottleneck.kind, "claude");
+assert.strictEqual(sumClaude.bottleneck.winIndex, 0);
+
+// 3f. Mixed unscoped 5h + model-scoped 7d windows in one pool
+const mixedClaudeSnap = {
+  updated_at: "2026-11-28T09:59:00Z",
+  agents: [{
+    kind: "claude", name: "Claude Code", status: "ok",
+    pools: [{
+      group: "",
+      windows: [
+        { id: "5h", label: "5 小时窗口", remaining_pct: 45 },
+        { id: "7d-sonnet", label: "Sonnet 7 天", remaining_pct: 15 },
+        { id: "7d-opus", label: "Opus 7 天", remaining_pct: 90 },
+      ],
+    }],
+  }],
+};
+assert.strictEqual(Q.summarizeQuota(mixedClaudeSnap, nowMs, { kind: "claude", model: "sonnet" }).min, 15);
+assert.strictEqual(Q.summarizeQuota(mixedClaudeSnap, nowMs, { kind: "claude", model: "claude-opus-4-6" }).min, 45);
+
+// 3g. Codex default pool vs model-specific pool
+const sumCodexSpark = Q.summarizeQuota(multiSnap, nowMs, { kind: "codex", model: "gpt-5.3-codex-spark" });
+assert.strictEqual(sumCodexSpark.min, 8);
+assert.strictEqual(sumCodexSpark.level, "low");
+assert.strictEqual(sumCodexSpark.bottleneck.poolIndex, 1);
+
+const sumCodexMain = Q.summarizeQuota(multiSnap, nowMs, { kind: "codex", model: "gpt-5.4" });
+assert.strictEqual(sumCodexMain.min, 55, "non-spark codex model must use default codex pool min(72, 55)=55, not spark 8%");
+assert.strictEqual(sumCodexMain.level, "normal");
+assert.strictEqual(sumCodexMain.bottleneck.poolIndex, 0);
+assert.strictEqual(sumCodexMain.bottleneck.winIndex, 1);
+
+// 3h. Fallback when active agent has no numeric quota (optin/external/untracked)
+const sumFallbackOptin = Q.summarizeQuota(normalSnap, nowMs, { kind: "claude", model: "sonnet" });
+assert.strictEqual(sumFallbackOptin.min, 62, "optin active agent must safely fall back to global numeric min");
+assert.strictEqual(sumFallbackOptin.scope, "fallback");
+
+const sumFallbackUntracked = Q.summarizeQuota(normalSnap, nowMs, { kind: "doubao", model: "Auto" });
+assert.strictEqual(sumFallbackUntracked.min, 62);
+assert.strictEqual(sumFallbackUntracked.scope, "fallback");
+
+// 3i. Live switching via setContext / onContextChange updates ring, warning dots, and open popover highlight immediately
+narrowMode = false;
+Q.onEvent(multiSnap);
+Q.close();
+Q.open(getEl("#nav-quota"));
+assert.strictEqual(pop.matches(":popover-open"), true, "popover must be open for live switching test");
+Q.setContext({ kind: "agy", model: "gemini-4-neon-xhigh", source: "router" });
+assert.strictEqual(getEl("#nav-quota-ring").style.getPropertyValue("--q-val"), "39");
+assert.strictEqual(getEl("#nav-quota-dot").hidden, true);
+assert.ok(getEl("#qp-body").innerHTML.includes('data-quota-bottleneck="true"'), "popover must mark bottleneck bucket");
+assert.ok(getEl("#qp-body").innerHTML.includes("当前最低"), "popover must label active bottleneck");
+assert.ok(getEl("#qp-body").innerHTML.includes("gemini-4-neon-xhigh"), "active agent header must reflect current model");
+
+// Switch to Claude (5h = 10% -> amber warning dot turns on, bottleneck shifts to Claude 5h)
+Q.setContext({ kind: "claude", model: "sonnet", source: "dispatch" });
+assert.strictEqual(getEl("#nav-quota-ring").style.getPropertyValue("--q-val"), "10");
+assert.strictEqual(getEl("#nav-quota-ring").classList.contains("is-low"), true);
+assert.strictEqual(getEl("#nav-quota-dot").hidden, false);
+assert.strictEqual(getEl("#menu-quota-sub").textContent, "最低 10%");
+
+// Switch to Antigravity Claude/GPT model (compact_full 100% -> warning clears, compact pool highlighted)
+Q.setContext({ kind: "agy", model: "claude-opus-5-5-high", source: "dispatch" });
+assert.strictEqual(getEl("#nav-quota-ring").style.getPropertyValue("--q-val"), "100");
+assert.strictEqual(getEl("#nav-quota-ring").classList.contains("is-low"), false);
+assert.strictEqual(getEl("#nav-quota-dot").hidden, true);
+assert.ok(getEl("#qp-body").innerHTML.includes('class="qm-compact is-bottleneck"'), "matched compact_full pool must be highlighted");
+
+// Expired window inside matched pool is ignored
+const expiredSnap = {
+  updated_at: "2026-11-28T09:59:00Z",
+  agents: [{
+    kind: "agy", name: "Antigravity", status: "ok",
+    pools: [{
+      group: "Gemini",
+      windows: [
+        { id: "5h", label: "5 小时", remaining_pct: 0, resets_at: "2026-11-28T09:30:00Z" },
+        { id: "weekly", label: "周额度", remaining_pct: 48, resets_at: "2026-12-03T10:00:00Z" },
+      ],
+    }],
+  }],
+};
+const sumExp = Q.summarizeQuota(expiredSnap, nowMs, { kind: "agy", model: "gemini-4-neon-high" });
+assert.strictEqual(sumExp.min, 48, "expired 0% window must be skipped");
 
 console.log("quota web contracts ok");
 `

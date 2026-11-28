@@ -6507,20 +6507,44 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-inline-name-input {
 }
 .pm-scan-link:hover { background: var(--pm-surface-hover); color: var(--pm-fg); }
 .pm-scan-link svg { width: 13px; height: 13px; flex: none; }
-dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area {
-  width: 100%; min-height: 70px; padding: 10px 12px;
+.pm-paste-box {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 8px 8px 12px;
   border: 1px solid var(--pm-line-2); border-radius: 10px;
-  background: var(--pm-surface-2); color: var(--pm-fg);
-  font: 12.5px/1.5 var(--sans); resize: none; outline: none;
+  background: var(--pm-surface-2);
   transition: border-color .14s, background .14s, box-shadow .14s;
 }
-dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area:focus {
+.pm-paste-box:focus-within {
   background: var(--pm-surface); border-color: var(--pm-line-strong);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-fg) 7%, transparent);
+}
+dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area {
+  flex: 1; min-width: 0; width: 100%; min-height: 54px; padding: 2px 0;
+  border: 0; border-radius: 0;
+  background: transparent; color: var(--pm-fg);
+  font: 12.5px/1.5 var(--sans); resize: none; outline: none; box-shadow: none;
+}
+dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area:focus {
+  background: transparent; border-color: transparent; box-shadow: none;
 }
 dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area::placeholder { color: var(--pm-fg-3); font-size: 12.5px; }
 dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area.has-code {
   font-family: var(--mono); font-size: 11.5px; word-break: break-all;
+}
+.pm-paste-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-height: 30px; padding: 0 10px;
+  border: 1px solid var(--pm-line-2); border-radius: 7px;
+  background: var(--pm-surface); color: var(--pm-fg);
+  font: 500 12px/1 var(--sans); cursor: pointer; white-space: nowrap;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.pm-paste-btn:hover { background: var(--pm-surface-hover); border-color: var(--pm-line-strong); }
+.pm-paste-btn:active { transform: translateY(.5px); }
+.pm-paste-btn:focus-visible { outline: 2px solid var(--pm-fg); outline-offset: 2px; }
+.pm-paste-btn svg {
+  width: 13px; height: 13px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.85; stroke-linecap: round; stroke-linejoin: round;
 }
 
 .pm-scan-stage {
@@ -6619,7 +6643,9 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   .pm-pick { width: 100%; height: 36px; font-size: 13px; }
   dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input { width: 100%; height: 36px; font-size: 14px; }
   dialog.int-sheet[data-modal-kind="peers"] .pm-inline-name-input { height: 34px; font-size: 15px; }
-  dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area { font-size: 14px; }
+  .pm-paste-box { padding: 8px 8px 8px 12px; gap: 8px; }
+  dialog.int-sheet[data-modal-kind="peers"] .pm-paste-area { font-size: 16px; min-height: 56px; }
+  .pm-paste-btn { min-height: 36px; padding: 0 12px; font-size: 13px; border-radius: 8px; }
 
   .pm-friend-main:not(.is-single-act) { flex-direction: column; align-items: stretch; gap: 9px; }
   .pm-friend-main:not(.is-single-act) .pm-friend-controls { justify-content: space-between; padding-left: 16px; }

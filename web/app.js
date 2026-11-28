@@ -10256,14 +10256,36 @@
     refreshPeerModalData();
   }
 
+  function isPeerSecureContext() {
+    if (typeof window !== "undefined" && typeof window.isSecureContext === "boolean") {
+      return window.isSecureContext;
+    }
+    const proto = String(location?.protocol || "");
+    const host = String(location?.hostname || "");
+    return proto === "https:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  }
+
+  function isPeerMobileClient() {
+    try {
+      if (navigator?.userAgentData && navigator.userAgentData.mobile === true) return true;
+    } catch {}
+    const ua = String(navigator?.userAgent || "");
+    if (/iPhone|iPad|iPod|Android|HarmonyOS|OpenHarmony|Mobile/i.test(ua)) return true;
+    const touchPoints = Number(navigator?.maxTouchPoints || 0);
+    if (/Macintosh/i.test(ua) && touchPoints > 1) return true;
+    return false;
+  }
+
   async function startPeerCameraScan() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers") return;
     stopPeerCameraScan();
-    const isSecure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
-    if (!isSecure) {
-      d.scanNote = "当前通过局域网 HTTP 访问，浏览器安全策略限制直接调用摄像头；请点击「识别图片」或用手机系统相机扫码后粘贴下方邀请码。";
-      patchPeerScanPanel();
+    if (!isPeerSecureContext()) {
+      if (isPeerMobileClient()) {
+        d.scanNote = "";
+        patchPeerScanPanel();
+        $("#peer-scan-capture")?.click();
+      }
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -10816,6 +10838,13 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
     const data = d.data || { hub_id: "" };
+    const secureCtx = isPeerSecureContext();
+    const mobileClient = isPeerMobileClient();
+    const scanBtn = $("#peer-scan-toggle");
+    if (scanBtn) {
+      scanBtn.hidden = !secureCtx && !mobileClient;
+      scanBtn.title = (!secureCtx && mobileClient) ? "拍照识别二维码" : "";
+    }
     setText($("#peer-scan-toggle-lbl"), d.scanning ? "停止扫码" : "扫码");
     const stageSlot = $("#peer-scan-stage-slot");
     if (stageSlot) {
@@ -10882,6 +10911,7 @@
           d.pairName = "";
           d.fromInviteLink = false;
           d.pairErr = "";
+          d.scanNote = "";
           patchPeerScanPanel();
           $("#peer-paste-input")?.focus();
         });
@@ -11236,11 +11266,18 @@
                       <span>识别图片</span>
                     </button>
                     <input id="peer-scan-file" type="file" accept="image/*" class="visually-hidden">
+                    <input id="peer-scan-capture" type="file" accept="image/*" capture="environment" class="visually-hidden">
                   </div>
                 </div>
                 <div id="peer-scan-stage-slot" hidden></div>
                 <div class="pm-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
-                <textarea id="peer-paste-input" class="pm-paste-area" rows="2" spellcheck="false" placeholder="粘贴好友分享的邀请链接、整段文案或名片码">${esc(d.pasteRaw)}</textarea>
+                <div class="pm-paste-box">
+                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="粘贴好友分享的邀请链接、整段文案或名片码">${esc(d.pasteRaw)}</textarea>
+                  <button type="button" class="pm-paste-btn" id="peer-paste-btn" title="从剪贴板粘贴邀请码">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>
+                    <span>粘贴</span>
+                  </button>
+                </div>
               </div>
 
               <div class="pm-parsed-card" id="peer-scan-parsed-slot" hidden></div>
@@ -11451,6 +11488,15 @@
 
     // Add Friend scan / image decode / paste / submit
     $("#peer-scan-toggle")?.addEventListener("click", () => {
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+      if (!isPeerSecureContext()) {
+        if (isPeerMobileClient()) {
+          d.scanNote = "";
+          patchPeerScanPanel();
+          $("#peer-scan-capture")?.click();
+        }
+        return;
+      }
       if (d.scanning) {
         stopPeerCameraScan();
         patchPeerScanPanel();
@@ -11459,21 +11505,72 @@
       }
     });
     $("#peer-scan-img-btn")?.addEventListener("click", () => $("#peer-scan-file")?.click());
-    $("#peer-scan-file")?.addEventListener("change", (ev) => {
+    const onPeerScanFileChange = (ev) => {
       const f = ev.target.files?.[0];
       ev.target.value = "";
       if (f) decodePeerQRImage(f);
-    });
+    };
+    $("#peer-scan-file")?.addEventListener("change", onPeerScanFileChange);
+    $("#peer-scan-capture")?.addEventListener("change", onPeerScanFileChange);
 
-    $("#peer-paste-input")?.addEventListener("input", (ev) => {
-      d.pasteRaw = ev.target.value;
+    const applyPeerPasteRaw = (raw) => {
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return null;
+      d.pasteRaw = String(raw ?? "");
       d.pairErr = "";
-      if (ev.isComposing) return;
+      d.scanNote = "";
       const parsed = parsePeerInviteClient(d.pasteRaw, d.data?.hub_id);
       if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
         d.pairName = parsed.payload.hub_name;
       }
       patchPeerScanPanel();
+      return parsed;
+    };
+
+    const pastePeerFromClipboard = async () => {
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+      const focusFallback = (note, toastMsg) => {
+        d.scanNote = note;
+        patchPeerScanPanel();
+        const inp = $("#peer-paste-input");
+        if (inp) {
+          inp.focus();
+          try { inp.select?.(); } catch {}
+        }
+        toast(toastMsg);
+      };
+      if (typeof navigator === "undefined" || typeof navigator.clipboard?.readText !== "function") {
+        focusFallback("当前浏览器不支持一键读取剪贴板，请长按下方输入框粘贴", "请长按输入框粘贴邀请码");
+        return;
+      }
+      try {
+        const raw = await navigator.clipboard.readText();
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        const text = String(raw || "").trim();
+        if (!text) {
+          focusFallback("剪贴板为空，请先复制好友的邀请链接或名片码", "剪贴板为空，请先复制邀请码");
+          return;
+        }
+        const parsed = applyPeerPasteRaw(text);
+        if (parsed?.ok) {
+          toast(`已粘贴并识别「${parsed.payload.hub_name || parsed.payload.hub_id}」的名片`);
+        } else if (parsed?.error) {
+          $("#peer-paste-input")?.focus();
+        }
+      } catch {
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        focusFallback("未获取剪贴板权限，请长按下方输入框粘贴", "请长按输入框粘贴邀请码");
+      }
+    };
+
+    $("#peer-paste-btn")?.addEventListener("click", pastePeerFromClipboard);
+
+    $("#peer-paste-input")?.addEventListener("input", (ev) => {
+      if (ev.isComposing) {
+        d.pasteRaw = ev.target.value;
+        d.pairErr = "";
+        return;
+      }
+      applyPeerPasteRaw(ev.target.value);
     });
     $("#peer-pair-name")?.addEventListener("input", (ev) => { d.pairName = ev.target.value; });
 

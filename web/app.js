@@ -1210,6 +1210,8 @@
   let collieScrollEndTimer = 0;
   let collieScrollCapTimer = 0;
   let deferredScrollMask = 0;
+  let vvTransitioning = false;
+  let deferredViewportMask = 0;
   let liveUpdateMask = 0;
   let liveUpdateRAF = 0;
   let liveComposeTimer = 0;
@@ -1305,6 +1307,15 @@
       }
       if (!mask) return;
     }
+    if (vvTransitioning && view === "collie" && !superComposing && !document.hidden && typeof requestAnimationFrame === "function") {
+      const deferBits = LIVE_SUPER | (narrow() ? LIVE_SIDE : 0);
+      const toDefer = mask & deferBits;
+      if (toDefer) {
+        deferredViewportMask |= toDefer;
+        mask &= ~deferBits;
+      }
+      if (!mask) return;
+    }
     liveUpdateMask |= mask;
     if (superComposing) {
       if (!liveComposeTimer) {
@@ -1350,6 +1361,12 @@
     el.addEventListener("compositionupdate", onUpdate);
     el.addEventListener("compositionend", onEnd);
     el.addEventListener("blur", onEnd);
+  }
+  function resetCompositionGuard() {
+    if (!superComposing) return;
+    superComposing = false;
+    if (liveComposeTimer) { clearTimeout(liveComposeTimer); liveComposeTimer = 0; }
+    if (liveUpdateMask) scheduleLiveUpdates(0);
   }
   bindCompositionGuard($("#super-input"));
   bindCompositionGuard($("#td-input"));
@@ -2091,15 +2108,21 @@
     // earlier pages are loaded or the viewer is reading above the bottom, so an
     // anchored historical message never vanishes from the DOM on SSE updates.
     if (sup.entries?.length && s.entries.length) {
-      const sc = $("#super-thread")?.parentElement;
-      const keepSpilled = older.length > 0 || !!activeThreadRoot || (view === "collie"
-        ? !!(sc && sc.clientHeight > 0 && sc.scrollHeight - sc.scrollTop - sc.clientHeight > AT_BOTTOM_PX)
-        : scrollByRoute.get("collie")?.atBottom === false);
-      if (keepSpilled) {
-        const nextIds = new Set(s.entries.map((e) => e?.id));
-        const oldIds = new Set(older.map((e) => e?.id));
-        const spilled = sup.entries.filter((e) => e?.id && !nextIds.has(e.id) && !oldIds.has(e.id));
-        if (spilled.length) older = [...older, ...spilled];
+      const firstPrevId = sup.entries[0]?.id || "";
+      const maybeSpilled = !firstPrevId || s.entries[0]?.id !== firstPrevId;
+      if (maybeSpilled) {
+        const sc = $("#super-thread")?.parentElement;
+        const keepSpilled = older.length > 0 || !!activeThreadRoot || (view === "collie"
+          ? (vvTransitioning
+              ? !collieStickBottom
+              : !!(sc && sc.clientHeight > 0 && sc.scrollHeight - sc.scrollTop - sc.clientHeight > AT_BOTTOM_PX))
+          : scrollByRoute.get("collie")?.atBottom === false);
+        if (keepSpilled) {
+          const nextIds = new Set(s.entries.map((e) => e?.id));
+          const oldIds = new Set(older.map((e) => e?.id));
+          const spilled = sup.entries.filter((e) => e?.id && !nextIds.has(e.id) && !oldIds.has(e.id));
+          if (spilled.length) older = [...older, ...spilled];
+        }
       }
     }
     for (const [id, loc] of pinnedLocal) {
@@ -4580,10 +4603,10 @@
     const isStage1 = !fitsAtBottom && (wantTop > sc.scrollTop + UNREAD_STAGE1_TOLERANCE_PX);
     return { anchorEl, isSep, firstUnreadId, count, rawTop, wantTop, fitsAtBottom, isStage1 };
   }
-  function updateSuperJump() {
+  function updateSuperJump(opts = {}) {
     const btn = $("#super-jump"), sc = $("#super-thread")?.parentElement;
     if (!btn || !sc) return;
-    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    const dist = typeof opts.dist === "number" ? opts.dist : (sc.scrollHeight - sc.scrollTop - sc.clientHeight);
     if (dist <= 24) superJumpHiding = false;
     const unreadCount = view === "collie" ? computeUnreadInfo().count : 0;
     const threshold = unreadCount > 0 ? AT_BOTTOM_PX : SUPER_JUMP_DIST;
@@ -4781,7 +4804,7 @@
       toast(err.message, "attn");
     }
   }
-  function renderPendingBar() {
+  function renderPendingBar(opts = {}) {
     const wrap = $("#pending-wrap"), bar = $("#pending-bar"), listEl = $("#pending-list");
     if (!wrap) return;
     const pend = activePending(), pinsAll = activePinned();
@@ -4796,7 +4819,7 @@
       listEl.hidden = true;
       pendingBarSig = pendingListSig = "";
       activePinId = lastPinTopId = "";
-      updateSuperJump();
+      if (!opts.skipJump) updateSuperJump();
       return;
     }
     wrap.hidden = false;
@@ -4878,7 +4901,7 @@
         pendingListSig = "";
       }
     }
-    updateSuperJump();
+    if (!opts.skipJump) updateSuperJump();
   }
   async function dismissPending(id) {
     if (!id || dismissedLocal.has(id)) return;
@@ -6352,12 +6375,13 @@
     const drawerSideBySide = isDesktopThreadSideBySide();
     const drawerFreezeMain = !forceBottom && drawerSideBySide;
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
-    const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && (collieInitialAnchor?.mode === "bottom" || (collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom))
       && performance.now() <= collieInitialAnchor.until;
     const stickBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && performance.now() < collieForceBottomUntil;
+    const needDistRead = !forceBottom && !drawerFreezeMain && !holdRestore && !initialBottomLock && !stickBottomLock;
+    const distBefore = needDistRead ? (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight) : 0;
     const atBottom = forceBottom ? true : drawerFreezeMain ? false : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || stickBottomLock || distBefore <= AT_BOTTOM_PX);
     if (forceBottom) {
       setCollieBottomStick(true);
@@ -6379,7 +6403,7 @@
       liveAnchor = captureCollieAnchor(scroller);
       return liveAnchor;
     };
-    const prevScrollTop = scroller.scrollTop;
+    const prevScrollTop = needLiveAnchor ? scroller.scrollTop : 0;
     const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "";
     const r = sup.router || {};
     const allEntries = chatEntries();
@@ -6503,7 +6527,7 @@
     }
 
     if (!force && nextBodyKey === superBodyKey && (!canPatchSuperDom(box) || box.firstElementChild)) {
-      renderPendingBar();
+      renderPendingBar({ skipJump: true });
       syncActiveFileMarks(box, openFilePathNow);
       if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
@@ -6824,9 +6848,8 @@
       }
       if (domMutated) {
         hydrateRichContent(box);
-        renderPendingBar();
+        renderPendingBar({ skipJump: true });
         syncActiveFileMarks(box, openFilePathNow);
-        observeRichVisuals(box);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (flashEntry.until > Date.now() && flashEntry.id) {
           const fid = CSS.escape(flashEntry.id);
@@ -6839,14 +6862,14 @@
           return;
         }
       } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
-        renderPendingBar();
+        renderPendingBar({ skipJump: true });
         syncActiveFileMarks(box, openFilePathNow);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
         updateSuperJump();
         return;
       } else {
-        renderPendingBar();
+        renderPendingBar({ skipJump: true });
         syncActiveFileMarks(box, openFilePathNow);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
@@ -6983,23 +7006,30 @@
       }
       setCollieBottomStick(true);
       activeCollieRestore = null;
+      // Finish all composer/jump DOM updates before the single scroll-to-bottom commit.
+      updateSuperJump({ dist: 0 });
       markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
       const set = scroller.scrollTop;
       if (typeof requestAnimationFrame === "function") {
         if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
         superScrollRAF = requestAnimationFrame(() => {
-          if (collieInitialAnchor?.mode === "bottom" || collieStickBottom || scroller.scrollTop === set) {
+          const sh = scroller.scrollHeight;
+          const dist = sh - scroller.scrollTop - scroller.clientHeight;
+          let finalDist = dist;
+          if (dist > 1 && (collieInitialAnchor?.mode === "bottom" || collieStickBottom || scroller.scrollTop === set)) {
             markProgrammaticScroll();
-            scroller.scrollTop = scroller.scrollHeight;
+            scroller.scrollTop = sh;
+            finalDist = 0;
           }
           captureViewScroll("collie", null, navCur);
-          updateSuperJump();
+          updateSuperJump({ dist: finalDist });
           maybeScheduleReadAtBottom();
         });
       } else {
         maybeScheduleReadAtBottom();
       }
+      return;
     } else {
       setCollieBottomStick(false);
       collieForceBottomUntil = 0;
@@ -7069,10 +7099,13 @@
       collieResizeWasBottom = false;
       collieResizeAnchor = captureCollieAnchor(sc);
     };
-    const handleCollieScrollResize = () => {
+    const handleCollieScrollResize = (entries) => {
       if (isLayoutGliding()) return;
-      if (!sc || view !== "collie" || sc.clientWidth <= 0 || sc.clientHeight <= 0) return;
-      const w = sc.clientWidth, h = sc.clientHeight;
+      if (!sc || view !== "collie") return;
+      const cr = Array.isArray(entries) && entries[0]?.contentRect ? entries[0].contentRect : null;
+      const w = cr ? Math.round(cr.width) : sc.clientWidth;
+      const h = cr ? Math.round(cr.height) : sc.clientHeight;
+      if (w <= 0 || h <= 0) return;
       if (collieResizeW === 0 && collieResizeH === 0) {
         collieResizeW = w;
         collieResizeH = h;
@@ -7081,6 +7114,7 @@
       }
       if (w === collieResizeW && h === collieResizeH) return;
       const widthChanged = w !== collieResizeW;
+      const heightGrew = !widthChanged && h > collieResizeH;
       collieResizeW = w;
       collieResizeH = h;
       if (collieInitialAnchor || collieLayoutLock || (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until)) return;
@@ -7091,16 +7125,32 @@
         if (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until) return;
         if (collieResizeWasBottom && collieStickBottom) {
           setCollieBottomStick(true);
-          markProgrammaticScroll(140);
-          sc.scrollTop = sc.scrollHeight;
-          updateSuperJump();
+          const sh = sc.scrollHeight;
+          const dist = sh - sc.scrollTop - sc.clientHeight;
+          if (dist > 1) {
+            markProgrammaticScroll(140);
+            sc.scrollTop = sh;
+          }
+          if (!$("#super-jump")?.hidden || dist > 1) updateSuperJump({ dist: dist > 1 ? 0 : dist });
         } else if (widthChanged && collieResizeAnchor) {
           applyCollieAnchor(sc, collieResizeAnchor);
           updateSuperJump();
+        } else {
+          updateSuperJump();
         }
       };
+      // During vertical height expansion (e.g. mobile keyboard dismissing), native
+      // scroll clamping keeps bottom-pinned chats glued to bottom with 0px drift.
+      if (heightGrew && (collieResizeWasBottom || collieStickBottom)) {
+        const sh = sc.scrollHeight;
+        const dist = sh - sc.scrollTop - sc.clientHeight;
+        if (dist <= 1) {
+          if (!$("#super-jump")?.hidden) updateSuperJump({ dist: 0 });
+          return;
+        }
+      }
       restoreNow();
-      if (typeof requestAnimationFrame === "function") {
+      if (typeof requestAnimationFrame === "function" && (widthChanged || !heightGrew)) {
         if (collieResizeRestoreRAF) cancelAnimationFrame(collieResizeRestoreRAF);
         collieResizeRestoreRAF = requestAnimationFrame(() => {
           collieResizeRestoreRAF = 0;
@@ -7110,8 +7160,9 @@
     };
     if (sc && typeof ResizeObserver === "function") {
       new ResizeObserver(handleCollieScrollResize).observe(sc);
+    } else {
+      addEventListener("resize", () => handleCollieScrollResize(), { passive: true });
     }
-    addEventListener("resize", handleCollieScrollResize, { passive: true });
     sc?.addEventListener("wheel", (e) => {
       if (e.deltaY < 0) {
         collieForceBottomUntil = 0;
@@ -7146,8 +7197,8 @@
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
       const now = performance.now();
-      const sizeStable = sc.clientWidth === collieResizeW && sc.clientHeight === collieResizeH;
-      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil && sizeStable) {
+      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil
+        && sc.clientWidth === collieResizeW && sc.clientHeight === collieResizeH) {
         const nearB = isCollieNearBottom(sc);
         collieStickBottom = nearB;
         collieResizeWasBottom = nearB;
@@ -7161,6 +7212,7 @@
         }
       }
       if (superJumpScrollRAF) return;
+      if (now < collieResizeGraceUntil && collieStickBottom && $("#super-jump")?.hidden) return;
       const run = () => {
         superJumpScrollRAF = 0;
         updateSuperJump();
@@ -7230,7 +7282,9 @@
     };
     sc?.addEventListener("keydown", onScrollKey);
     document.addEventListener("keydown", onScrollKey);
-    addEventListener("resize", updateSuperJump);
+    if (typeof ResizeObserver !== "function") {
+      addEventListener("resize", () => updateSuperJump(), { passive: true });
+    }
 
     // Horizontal wheel-to-scroll & fallback fade sync for overflowing worker capsule strips.
     const supportsScrollFade = typeof CSS !== "undefined"
@@ -7865,12 +7919,15 @@
       const latestBeforeSend = latestPersistedEntryId();
       if (latestBeforeSend) commitChatRead(latestBeforeSend, { immediate: false });
     }
-    renderSide();
+    const deferMobileSide = narrow() && view === "collie" && !!document.body?.classList?.contains("show-main");
     renderSuper({ scrollBottom, ...(keepRestore ? { restore: keepRestore } : {}) });
+    if (deferMobileSide) scheduleLiveUpdates(LIVE_SIDE);
+    else renderSide();
     let r;
     try {
-      const info = await modelsFor(t.kind, t.machine);
-      const sendEffort = effortsFor(info, t.kind, model).includes(effort) ? effort : "";
+      const needEffort = ("effort" in p || "kind" in p) && !!effort;
+      const info = needEffort ? await modelsFor(t.kind, t.machine) : null;
+      const sendEffort = needEffort ? (effortsFor(info, t.kind, model).includes(effort) ? effort : "") : "";
       const payload = {
         text,
         re: normRe?.entry || "",
@@ -7908,8 +7965,12 @@
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
         pendingSays.splice(idx, 1);
-        renderSide();
         renderSuper();
+        if (narrow() && view === "collie" && !!document.body?.classList?.contains("show-main")) {
+          scheduleLiveUpdates(LIVE_SIDE);
+        } else {
+          renderSide();
+        }
       } else if (isInPlace) {
         renderSuper();
       }
@@ -16823,7 +16884,19 @@
     $("#term-fit").textContent = overview ? "放大" : "全览";
     $("#term-fit").hidden = !narrowScreen.matches || fitW >= 11;
   }
-  addEventListener("resize", () => fitTerm());
+  let fitTermResizeRAF = 0;
+  addEventListener("resize", () => {
+    if (view !== "pane" || curMode() !== "screen" || !term || !size.cols) return;
+    if (fitTermResizeRAF) return;
+    if (typeof requestAnimationFrame === "function") {
+      fitTermResizeRAF = requestAnimationFrame(() => {
+        fitTermResizeRAF = 0;
+        if (view === "pane" && curMode() === "screen") fitTerm();
+      });
+    } else {
+      fitTerm();
+    }
+  }, { passive: true });
   $("#term-fit").addEventListener("click", () => { store.set("term-overview", !store.get("term-overview", false)); fitTerm(); });
   $("#term-kbd").addEventListener("click", () => term?.focus());
 
@@ -21668,10 +21741,14 @@
       syncCollieTopHeight(bs);
     }).observe(collieTopEl);
   }
+  let lastLayoutResizeW = innerWidth;
   window.addEventListener("resize", () => {
+    const wChanged = innerWidth !== lastLayoutResizeW;
+    lastLayoutResizeW = innerWidth;
+    if (!wChanged && !activeWorkerKey && (!pane || pane.hidden)) return;
     finishDrawerGlide(true);
     finishSideGlide(true);
-    if (view === "collie") {
+    if (view === "collie" && wChanged) {
       clearCollieShiftInline();
       syncCollieTopHeight();
       syncNotebookVisibility({ immediate: true });
@@ -21689,10 +21766,10 @@
       syncFileWidenUI();
     }
     if (activeWorkerKey) {
-      applyWorkerWidth();
+      if (wChanged) applyWorkerWidth();
       fitWdTerm();
     }
-  });
+  }, { passive: true });
 
   // ───────────────────────────── natural reply-chain thread drawer
   let thPopSig = "";
@@ -22327,7 +22404,14 @@
   }
   function growThreadInput() {
     if (!tdInput) return;
-    if (window.CSS?.supports?.("field-sizing", "content")) return;
+    if (window.CSS?.supports?.("field-sizing", "content")) {
+      if (tdInput.style.height) tdInput.style.height = "";
+      return;
+    }
+    if (!tdInput.value) {
+      if (tdInput.style.height) tdInput.style.height = "";
+      return;
+    }
     tdInput.style.height = "auto";
     tdInput.style.height = Math.min(tdInput.scrollHeight, 160) + "px";
   }
@@ -22957,11 +23041,15 @@
       if (e.target.closest?.("a, button, input, textarea, select, label, .composer, .d-head, .crew, .super-search, .pending-wrap, .msg, .event, .ask, .thumb")) return;
       setThreadWide(false);
     });
+    let lastThreadResizeW = innerWidth;
     addEventListener("resize", () => {
+      const wChanged = innerWidth !== lastThreadResizeW;
+      lastThreadResizeW = innerWidth;
+      if (!wChanged) return;
       finishDrawerGlide(true);
       if (activeThreadRoot) applyThreadWidth();
       else syncThreadWideUI();
-    });
+    }, { passive: true });
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
     tdScrim?.addEventListener("click", () => closeThreadDrawer());
     bindDrawerSheetDrag(tdDrawer, tdScrim, [tdHandleBtn, tdHeadEl], () => !!activeThreadRoot, () => closeThreadDrawer());
@@ -26345,6 +26433,10 @@
       if (el.style.height) el.style.height = "";
       return;
     }
+    if (!el.value) {
+      if (el.style.height) el.style.height = "";
+      return;
+    }
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, innerHeight * 0.4) + "px";
   }
@@ -27145,6 +27237,49 @@
       });
     }
     const ime = trackIME(input);
+    if (btn) {
+      // Preserve textarea focus & keep the soft keyboard open on iOS Safari / Android / desktop
+      // when tapping the Send arrow button while typing (like WeChat / iMessage / ChatGPT).
+      btn.addEventListener("mousedown", (e) => {
+        if (document.activeElement === input) e.preventDefault();
+      });
+      let sendTouch = null;
+      btn.addEventListener("touchstart", (e) => {
+        if (document.activeElement !== input || e.touches?.length !== 1) {
+          sendTouch = null;
+          return;
+        }
+        const t = e.touches[0];
+        sendTouch = { id: t.identifier, x: t.clientX, y: t.clientY, moved: false };
+      }, { passive: true });
+      btn.addEventListener("touchmove", (e) => {
+        if (!sendTouch || sendTouch.moved) return;
+        const t = [...(e.touches || [])].find((x) => x.identifier === sendTouch.id);
+        if (!t || Math.hypot(t.clientX - sendTouch.x, t.clientY - sendTouch.y) > 14) {
+          sendTouch.moved = true;
+        }
+      }, { passive: true });
+      btn.addEventListener("touchcancel", () => { sendTouch = null; }, { passive: true });
+      btn.addEventListener("touchend", (e) => {
+        const st = sendTouch;
+        sendTouch = null;
+        if (!st || st.moved || e.defaultPrevented || document.activeElement !== input) return;
+        const t = [...(e.changedTouches || [])].find((x) => x.identifier === st.id);
+        if (t && typeof btn.getBoundingClientRect === "function") {
+          const r = btn.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0
+            && (t.clientX < r.left - 12 || t.clientX > r.right + 12 || t.clientY < r.top - 12 || t.clientY > r.bottom + 12)) {
+            return;
+          }
+        }
+        // Preventing default on touchend stops iOS Safari from blurring the focused textarea
+        // and collapsing the keyboard, and suppresses synthetic click/double-tap zoom.
+        e.preventDefault();
+        if (sending || btn.disabled) return;
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.dispatchEvent(new Event("submit", { cancelable: true }));
+      }, { passive: false });
+    }
     input.addEventListener("input", () => { growFn(input); syncBtn(); });
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey) return;
@@ -27179,6 +27314,8 @@
       sending = true;
       syncBtn();
       const files = form._takeFiles ? form._takeFiles() : [];
+      ime.composing = false;
+      if (input.id === "super-input" || input.id === "td-input") resetCompositionGuard();
       input.value = "";
       growFn(input);
       try {
@@ -27471,28 +27608,132 @@
   // ───────────────────────────── viewport (mobile keyboard)
   // The app fills the visible area: its height shrinks above the keyboard, and
   // it follows the visible area when the browser scrolls the page for it.
-  let lastVH = "", lastVTop = "", setVHRAF = 0;
+  // Coalesce resize/scroll into one rAF, write non-inheriting height/--vtop on #app
+  // (deferring :root --vh until keyboard settle), and keep strict read-before-write
+  // so keyboard animations never trigger full-tree recalcs or forced reflows.
+  let lastVH = "", lastVHNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
+  let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
+  function hasViewportOverlayOpen() {
+    return !!(
+      activeThreadRoot || activeWorkerKey || notesOpen || superSearchOpen
+      || pickOpen || dirCtx
+      || ($("#file-view") && !$("#file-view").hidden)
+      || ($("#lightbox") && $("#lightbox").open)
+      || document.querySelector("dialog[open]")
+    );
+  }
+  function syncRootVHNow() {
+    if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
+    if (!lastVH) return;
+    const root = document.documentElement?.style;
+    if (root && root.getPropertyValue("--vh") !== lastVH) {
+      root.setProperty("--vh", lastVH);
+    }
+  }
+  function endViewportTransition() {
+    if (vvSettleTimer) { clearTimeout(vvSettleTimer); vvSettleTimer = 0; }
+    if (vvCapTimer) { clearTimeout(vvCapTimer); vvCapTimer = 0; }
+    vvTransitioning = false;
+    syncRootVHNow();
+    if (deferredViewportMask) {
+      const pending = deferredViewportMask;
+      deferredViewportMask = 0;
+      scheduleLiveUpdates(pending);
+    }
+  }
+  function noteViewportHeightTick() {
+    const now = performance.now();
+    const rapidBurst = vvLastHeightTickAt > 0 && (now - vvLastHeightTickAt) <= 120;
+    vvLastHeightTickAt = now;
+    if (rapidBurst) {
+      vvTransitioning = true;
+      if (!vvCapTimer) {
+        vvCapTimer = setTimeout(() => {
+          vvCapTimer = 0;
+          if (vvTransitioning) endViewportTransition();
+        }, 380);
+      }
+    }
+    if (vvSettleTimer) clearTimeout(vvSettleTimer);
+    vvSettleTimer = setTimeout(() => {
+      vvSettleTimer = 0;
+      if (vvTransitioning) endViewportTransition();
+      else syncRootVHNow();
+    }, 130);
+  }
   function setVH() {
     const v = window.visualViewport;
-    const nextVH = (v ? Math.round(v.height) : innerHeight) + "px";
-    const nextVTop = (v ? Math.max(0, Math.round(v.offsetTop)) : 0) + "px";
+    const nextVHNum = Math.round(v ? v.height : innerHeight);
+    const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
+    const nextVH = nextVHNum + "px";
+    const nextVTop = nextVTopNum + "px";
     if (nextVH === lastVH && nextVTop === lastVTop) return;
     const root = document.documentElement.style;
+    const appEl = $("#app");
     const vhChanged = nextVH !== lastVH;
-    if (vhChanged) {
+    const vtopChanged = nextVTop !== lastVTop;
+    const isInitial = !lastVH;
+    const vhShrank = !isInitial && nextVHNum < lastVHNum;
+
+    // 1) Read phase (strictly before any DOM/style writes).
+    let screenPinned = false;
+    let wdScreenPinned = false;
+    const pinTargets = [];
+    if (vhChanged && !isInitial) {
+      screenPinned = view === "pane" && curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
+      wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
       // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-      const screenPinned = curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
-      const wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
-      const pinned = [...document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
-      lastVH = nextVH;
-      root.setProperty("--vh", nextVH);
-      pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
-      if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
-      if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
+      // When the viewport grows (keyboard dismissing), native scroll clamping keeps bottom-pinned scrollers
+      // anchored without forcing synchronous layout or extra scrollTop writes.
+      if (vhShrank) {
+        for (const el of document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")) {
+          if (!el.offsetParent) continue;
+          const sh = el.scrollHeight;
+          if (sh - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX) {
+            pinTargets.push({ el, sh });
+          }
+        }
+      }
     }
-    if (nextVTop !== lastVTop) {
+
+    // 2) Write phase (style mutations only; zero post-write layout reads).
+    if (vhChanged) {
+      lastVH = nextVH;
+      lastVHNum = nextVHNum;
+      if (appEl?.style) appEl.style.height = nextVH;
+      if (isInitial || !narrow() || hasViewportOverlayOpen()) {
+        root.setProperty("--vh", nextVH);
+      } else {
+        if (rootVHSyncTimer) clearTimeout(rootVHSyncTimer);
+        rootVHSyncTimer = setTimeout(syncRootVHNow, 140);
+      }
+      if (!isInitial) noteViewportHeightTick();
+    }
+    if (vtopChanged) {
       lastVTop = nextVTop;
-      root.setProperty("--vtop", nextVTop);
+      if (appEl?.style) appEl.style.setProperty("--vtop", nextVTop);
+      else root.setProperty("--vtop", nextVTop);
+    }
+
+    // 3) Post-layout pin phase (deferred to next clean frame; zero forced reflow).
+    if (pinTargets.length || screenPinned || wdScreenPinned) {
+      const applyPin = () => {
+        setVHPinRAF = 0;
+        markProgrammaticScroll(140);
+        for (const { el } of pinTargets) {
+          if (!el.isConnected) continue;
+          const sh = el.scrollHeight;
+          if (sh - el.scrollTop - el.clientHeight > 1) el.scrollTop = sh;
+        }
+        if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
+        if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
+      };
+      if (typeof requestAnimationFrame === "function") {
+        if (setVHPinRAF) cancelAnimationFrame(setVHPinRAF);
+        setVHPinRAF = requestAnimationFrame(applyPin);
+      } else {
+        applyPin();
+      }
     }
   }
   function scheduleSetVH() {
@@ -27503,9 +27744,9 @@
       setVH();
     }
   }
-  window.visualViewport?.addEventListener("resize", setVH);
+  window.visualViewport?.addEventListener("resize", scheduleSetVH);
   window.visualViewport?.addEventListener("scroll", scheduleSetVH);
-  addEventListener("resize", setVH);
+  addEventListener("resize", scheduleSetVH);
   setVH();
 
   // ───────────────────────────── boot

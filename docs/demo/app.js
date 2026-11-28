@@ -31519,7 +31519,7 @@
     }
   }
   function applyWideBaseHeight(h) {
-    for (const sel of ["#app", ".side", "#side-full", "#file-view", "#thread-drawer", "#worker-drawer", "#notes-pane"]) {
+    for (const sel of [".side", "#side-full"]) {
       const st = $(sel)?.style;
       if (typeof st?.setProperty !== "function") continue;
       if (h) {
@@ -31582,6 +31582,7 @@
   }
   function setVH() {
     const v = window.visualViewport, isN = narrow();
+    const appEl = $("#app");
     const nextVHNum = Math.round(v ? v.height : innerHeight);
     const nextVWNum = Math.round((v && typeof v.width === "number" && v.width > 0) ? v.width : innerWidth);
     const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
@@ -31590,43 +31591,51 @@
     const widthChanged = !!lastVH && lastVWNum > 0 && Math.abs(nextVWNum - lastVWNum) > 2;
     const modeChg = lastNarrow !== null && lastNarrow !== isN;
 
-    // On real iPadOS Safari/PWA (>760px), opening the soft keyboard shrinks BOTH
-    // window.innerHeight (layout viewport) and visualViewport.height, often on staggered frames.
-    // Lock wideBaseH at the keyboard-closed full-screen baseline on touch viewports so:
-    //  1) #app / .side / .side-full / .side-rail stay pinned to full screen height (.side-foot & .sr-foot never lift),
-    //  2) --kb-inset = wideBaseH - min(vv.height, innerHeight) - offsetTop stays strictly monotonic across desync,
-    //  3) :root --vh has 0 writes on keyboard open & dismiss (0 full-document recalc / WebKit flash).
+    // On real iPadOS Safari/PWA (>760px), opening the soft keyboard may either:
+    //  (a) shrink layout viewport / window.innerHeight / #app.clientHeight alongside visualViewport.height, or
+    //  (b) keep #app at full screen height while visualViewport shrinks and/or pans (offsetTop > 0).
+    // Never size #app taller than the layout viewport (which causes iPadOS document focus-scroll & blank screen).
+    // Keep #app strictly at height: 100% (overflow: clip), pin ONLY .side / #side-full to --side-full-h so
+    // .side-foot/.sr-foot stay anchored behind the keyboard, and compute --kb-top / --kb-inset strictly from
+    // #app's rendered height (appH) so #v-collie & drawers always fit [offsetTop, offsetTop + visH] with 0
+    // double-shrink and 0 :root --vh writes across keyboard open/dismiss/settle.
+    const rawAppH = (!isN && !modeChg && appEl && !appEl.hidden && !appEl.style?.height
+      && typeof appEl.clientHeight === "number" && appEl.clientHeight > 0)
+      ? Math.round(appEl.clientHeight)
+      : 0;
+    const appH = !isN ? (rawAppH > 0 ? rawAppH : fh) : fh;
     const coarsePrimary = !isN && isCoarsePrimary();
     const tabletTouch = !isN && isTabletTouchLockEligible();
     const editable = !isN && isEditableFocused();
     let nextBaseH = 0;
     let nextSideLockH = "";
     if (!isN) {
-      const maxCurH = Math.max(fh, nextVHNum);
+      const maxCurH = Math.max(fh, appH, nextVHNum);
       if (!lastBaseH || widthChanged || modeChg) {
         nextBaseH = maxCurH;
       } else if (maxCurH >= lastBaseH) {
         nextBaseH = maxCurH;
       } else {
-        const drop = lastBaseH - fh;
-        const keepLock = (coarsePrimary && (editable || drop >= 100 || lastKI > 0))
-          || (tabletTouch && (editable || drop >= 100 || lastKI > 0));
+        const drop = lastBaseH - Math.min(fh, appH);
+        const keepLock = (coarsePrimary && (editable || drop >= 100 || lastKI > 0 || lastVHNum < lastBaseH))
+          || (tabletTouch && (editable || drop >= 100 || lastKI > 0 || lastVHNum < lastBaseH));
         nextBaseH = keepLock ? lastBaseH : maxCurH;
       }
-      const kbActive = !zoomed && (Math.min(nextVHNum, fh) < nextBaseH || nextVTopNum > 0);
+      const kbActive = !zoomed && (Math.min(nextVHNum, appH) < nextBaseH || nextVTopNum > 0);
       const alwaysLockBase = coarsePrimary || (tabletTouch && typeof matchMedia === "function" && matchMedia("(hover: none)").matches);
       nextSideLockH = (alwaysLockBase || (tabletTouch && kbActive)) ? (nextBaseH + "px") : "";
     }
 
-    const visH = (!isN && !zoomed) ? Math.min(nextVHNum, fh) : nextVHNum;
-    const kt = (!isN && !zoomed) ? nextVTopNum : 0;
-    const ki = (!isN && !zoomed) ? Math.max(0, nextBaseH - visH - kt) : 0;
+    const visH = (!isN && !zoomed) ? Math.min(nextVHNum, appH) : nextVHNum;
+    const maxPan = !isN ? Math.max(0, appH - visH) : 0;
+    const kt = (!isN && !zoomed) ? Math.min(nextVTopNum, maxPan) : 0;
+    const ki = (!isN && !zoomed) ? Math.max(0, appH - visH - kt) : 0;
     const nextVH = visH + "px", nextVTop = nextVTopNum + "px";
     const vhChanged = nextVH !== lastVH, vtopChanged = nextVTop !== lastVTop;
     const kbChg = ki !== lastKI || kt !== lastKT;
     const baseChg = nextBaseH !== lastBaseH, lockChg = nextSideLockH !== lastSideLockH;
     if (!vhChanged && !vtopChanged && !widthChanged && !modeChg && !kbChg && !baseChg && !lockChg) return;
-    const root = document.documentElement.style, appEl = $("#app");
+    const root = document.documentElement.style;
     const isInitial = !lastVH, prevVHNum = lastVHNum, deltaH = isInitial ? 0 : (visH - prevVHNum);
     const vhShrank = !isInitial && deltaH < 0;
     const wantKbFlip = vhChanged && !isInitial && !widthChanged
@@ -31636,7 +31645,8 @@
     // 1) Read phase (strictly before any DOM/style writes — zero forced synchronous reflow).
     let screenPinned = false, wdScreenPinned = false, kbFlipPlan = null, activeInline = null;
     const pinTargets = [], pinInfo = new Map();
-    const curScrollY = (!isN && !isInitial && !vhShrank && !ki && !kt) ? (window.scrollY || 0) : 0;
+    const curScrollY = (!isN && !isInitial && !ki && !kt) ? (window.scrollY || 0) : 0;
+    const curAppScrollTop = (!isN && appEl) ? (appEl.scrollTop || 0) : 0;
     const colSc = view === "collie" ? viewScroller("collie") : null;
     if ((vhChanged || widthChanged) && !isInitial) {
       if (vhShrank && !widthChanged) {
@@ -31708,6 +31718,7 @@
         setRootVH(ov ? nextVH : (nextBaseH + "px"));
       }
       if (!isInitial && vhChanged) noteViewportHeightTick();
+      if (curAppScrollTop > 0 && appEl) appEl.scrollTop = 0;
       if (curScrollY > 0) {
         try { window.scrollTo?.(0, 0); } catch {}
       }

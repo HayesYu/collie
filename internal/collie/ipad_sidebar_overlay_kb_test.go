@@ -52,10 +52,28 @@ for (const [name, src] of [["web/app.css", cssSrc], ["docs/demo/app.css", demoCs
     name + " must NOT pin .app with position: fixed; inset: 0 on >760px (prevents WebKit tile discard flash)",
   );
   assert.ok(
-    src.includes("@media (min-width: 761px) {\n  .app { position: relative; height: var(--side-full-h, 100%); overflow: hidden; }\n  .app > .side { height: var(--side-full-h, 100%); align-self: start; }")
+    src.includes("html { overflow: hidden; overflow: clip; overscroll-behavior: none; }"),
+    name + " must lock html against document scrolling via overflow: clip",
+  );
+  assert.ok(
+    !src.includes(".app { position: relative; height: var(--side-full-h"),
+    name + " must NEVER size #app to --side-full-h (causes iPadOS focus-scroll & blank screen)",
+  );
+  assert.ok(
+    src.includes("@media (min-width: 761px) {\n  .app { position: relative; height: 100%; grid-template-rows: minmax(0, 100%); overflow: hidden; overflow: clip; }\n  .app > .side { height: var(--side-full-h, 100%); align-self: start; }")
       && src.includes("padding-bottom: var(--kb-inset, 0px);")
       && src.includes("bottom: var(--kb-inset, 0px);"),
-    name + " must bind #app/.side to --side-full-h on >760px and apply --kb-inset only to .main/#v-collie/.side-drawer/.notepane",
+    name + " must keep #app at height: 100% with minmax(0, 100%) row & overflow: clip, bind ONLY .side to --side-full-h, and apply --kb-inset to .main/#v-collie/.side-drawer/.notepane",
+  );
+  const drawerMediaIdx = src.indexOf("@media (max-width: 1180px) {");
+  assert.ok(
+    drawerMediaIdx > 0 && !src.slice(drawerMediaIdx, drawerMediaIdx + 640).includes("height: var(--side-full-h"),
+    name + " <=1180px fixed .side-drawer must track layout viewport (bottom: 0) rather than --side-full-h so composers never hide behind keyboard",
+  );
+  const notesMediaIdx = src.indexOf("@media (max-width: 1359px) {");
+  assert.ok(
+    notesMediaIdx > 0 && !src.slice(notesMediaIdx, notesMediaIdx + 500).includes("height: var(--side-full-h"),
+    name + " <=1359px fixed .notepane must track layout viewport (bottom: 0) rather than --side-full-h",
   );
   // Active #v-collie uses contain: layout style (no strict paint tile discard on iPadOS keyboard resize), while parked keeps contain: strict
   const vColIdx = src.indexOf("#v-collie {");
@@ -101,6 +119,10 @@ for (const [name, src] of [["web/app.js", appSrc], ["docs/demo/app.js", demoAppS
   assert.ok(src.includes("function setSideOverlayOpen("), name + " must define setSideOverlayOpen");
   assert.ok(src.includes("function applyWideKeyboardInsets("), name + " must define applyWideKeyboardInsets");
   assert.ok(src.includes("function applyWideBaseHeight("), name + " must define applyWideBaseHeight");
+  assert.ok(
+    src.includes('for (const sel of [".side", "#side-full"])'),
+    name + " applyWideBaseHeight must ONLY lock .side and #side-full (NEVER #app or drawers)",
+  );
   assert.ok(src.includes("function hasWideRootVHOverlayOpen("), name + " must define hasWideRootVHOverlayOpen");
   assert.ok(src.includes('addEventListener("orientationchange"'), name + " must wire orientationchange handler");
   assert.ok(!src.includes('if (innerWidth <= 1000) {\n      e.preventDefault();'), name + " [data-toggle-side] must NOT block 761-1000px tablet portrait toggle");
@@ -345,9 +367,79 @@ const sideExpandBtn = getEl("#side-expand-btn");
 const sideToggleBtn = getEl("#side-toggle-btn");
 const mainEl = getEl(".main");
 const colEl = getEl("#v-collie");
+const compEl = getEl("#super-composer");
+const tdEl = getEl("#thread-drawer");
 const wdEl = getEl("#worker-drawer");
 const notesEl = getEl("#notes-pane");
 const superInp = getEl("#super-input");
+
+// Realistic layout geometry bound to #app height (CSS height: 100% + grid-template-rows: minmax(0, 100%)),
+// .side height (var(--side-full-h, 100%)), and #v-collie / drawers --kb-top & --kb-inset.
+let mockAppHOverride = null;
+Object.defineProperty(appEl, "clientHeight", {
+  configurable: true,
+  get() { return mockAppHOverride !== null ? mockAppHOverride : ctx.innerHeight; },
+  set(v) { mockAppHOverride = v; },
+});
+const parsePx = (v, fb) => {
+  const s = String(v || "").trim();
+  if (s.endsWith("px")) {
+    const n = parseFloat(s);
+    if (!Number.isNaN(n)) return n;
+  }
+  return fb;
+};
+sideEl.getBoundingClientRect = () => {
+  const h = parsePx(sideEl.style.getPropertyValue("--side-full-h"), appEl.clientHeight);
+  return { top: 0, left: 0, right: T.currentSideW(), bottom: h, width: T.currentSideW(), height: h };
+};
+colEl.getBoundingClientRect = () => {
+  const appH = appEl.clientHeight;
+  const top = parsePx(colEl.style.getPropertyValue("--kb-top"), 0);
+  const bottom = Math.max(top, appH - parsePx(colEl.style.getPropertyValue("--kb-inset"), 0));
+  const left = T.currentSideW();
+  const w = Math.max(0, ctx.innerWidth - left);
+  return { top, left, right: left + w, bottom, width: w, height: bottom - top };
+};
+compEl.getBoundingClientRect = () => {
+  const cr = colEl.getBoundingClientRect();
+  const compH = 68;
+  return { top: cr.bottom - compH, left: cr.left, right: cr.right, bottom: cr.bottom, width: cr.width, height: compH };
+};
+const drawerInnerRect = (el) => {
+  const appH = appEl.clientHeight;
+  const top = parsePx(el.style.getPropertyValue("--kb-top"), 0);
+  const bottom = Math.max(top, appH - parsePx(el.style.getPropertyValue("--kb-inset"), 0));
+  return { top, bottom, height: bottom - top };
+};
+function assertViewportSafety(label, expectedSideH) {
+  const appH = appEl.clientHeight;
+  const visH = Math.min(fakeVV.height, appH);
+  const vvTop = Math.min(fakeVV.offsetTop, Math.max(0, appH - visH));
+  const vvBot = vvTop + visH;
+  const colR = colEl.getBoundingClientRect();
+  const compR = compEl.getBoundingClientRect();
+  const sideR = sideEl.getBoundingClientRect();
+  assert.equal(appEl.style.getPropertyValue("--side-full-h"), "", label + ": #app must NEVER receive --side-full-h");
+  assert.equal(appEl.style.height, "", label + ": wide #app must NEVER receive inline height");
+  assert.equal(sideR.top, 0, label + ": .side top must stay strictly 0");
+  if (expectedSideH) {
+    assert.equal(sideR.height, expectedSideH, label + ": .side height stays pinned at full baseline " + expectedSideH);
+  }
+  assert.ok(colR.top >= vvTop, label + ": #v-collie top (" + colR.top + ") >= vvTop (" + vvTop + ")");
+  assert.ok(colR.bottom <= vvBot, label + ": #v-collie bottom (" + colR.bottom + ") <= vvBot (" + vvBot + ")");
+  assert.ok(colR.height >= 300, label + ": #v-collie visible height (" + colR.height + ") >= 300px (no blank screen)");
+  assert.equal(colR.height, visH, label + ": #v-collie height matches visible height " + visH);
+  assert.ok(compR.top >= vvTop, label + ": #super-composer top (" + compR.top + ") >= vvTop (" + vvTop + ")");
+  assert.ok(compR.bottom <= vvBot, label + ": #super-composer bottom (" + compR.bottom + ") <= vvBot (" + vvBot + ")");
+  for (const [dName, dEl] of [["#thread-drawer", tdEl], ["#worker-drawer", wdEl], ["#notes-pane", notesEl]]) {
+    const dr = drawerInnerRect(dEl);
+    assert.ok(dr.top >= vvTop && dr.bottom <= vvBot && dr.height === visH, label + ": " + dName + " content box matches visible viewport [" + vvTop + "," + vvBot + "], got [" + dr.top + "," + dr.bottom + "]");
+  }
+}
+
+// Re-sync initial baseline now that appEl.clientHeight tracks ctx.innerHeight (834)
+T.setVH();
 
 // ─── 2a) iPad Landscape (1194x834, touch): DEFAULT DOCKED EXPANDED + manual collapse/expand (#t15294) ───
 assert.equal(T.isOverlaySidebarViewport(), false, "iPad landscape 1194x834 touch uses docked sidebar (NOT overlay)");
@@ -355,8 +447,9 @@ assert.equal(T.currentSideW(), 300, "iPad landscape starts expanded at docked wi
 assert.equal(appEl.classList.contains("side-collapsed"), false, "iPad landscape starts expanded by default");
 assert.equal(appEl.classList.contains("side-overlay-open"), false, "iPad landscape never sets side-overlay-open");
 assert.equal(sideFull.inert, false, "iPad landscape docked .side-full is never inert");
-assert.equal(appEl.style.getPropertyValue("--side-full-h"), "834px", "iPad landscape locks --side-full-h to full baseline 834px");
+assert.equal(appEl.style.getPropertyValue("--side-full-h"), "", "iPad landscape MUST NOT set --side-full-h on #app");
 assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "834px", ".side receives --side-full-h 834px");
+assertViewportSafety("iPad landscape closed", 834);
 
 // Manual collapse & expand on iPad landscape via [data-toggle-side]
 sideToggleBtn.closest = (s) => (s === "[data-toggle-side]" ? sideToggleBtn : null);
@@ -435,37 +528,55 @@ let rootWritesBefore = rootEl._styleWrites;
 let sideBaseBefore = sideEl._styleWrites;
 doc.activeElement = superInp;
 
-// Staggered Frame 1: vv.height drops 1180 -> 860 BEFORE innerHeight shrinks
+// Staggered Frame 1: vv.height drops 1180 -> 860 BEFORE innerHeight / #app shrinks (appH still 1180)
 fakeVV.height = 860;
 fakeVV.dispatch("resize");
 flushRAF();
 assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "1180px", "portrait .side height stays locked at 1180px (.sr-foot/.side-foot pinned)");
-assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "320px", "Frame 1: --kb-inset = 320px");
+assert.equal(appEl.style.getPropertyValue("--side-full-h"), "", "Frame 1: #app never gets --side-full-h");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "320px", "Frame 1: --kb-inset = 1180 - 860 = 320px");
 assert.equal(colEl.style.getPropertyValue("--kb-inset"), "320px");
 assert.equal(wdEl.style.getPropertyValue("--kb-inset"), "320px");
 assert.equal(notesEl.style.getPropertyValue("--kb-inset"), "320px");
 assert.equal(rootEl._styleWrites, rootWritesBefore, "Frame 1: 0 :root --vh writes");
+assertViewportSafety("Portrait staggered open F1 (appH=1180, vv=860)", 1180);
 
-// Staggered Frame 2: iPadOS Safari ALSO shrinks window.innerHeight 1180 -> 860!
-const mainWritesAfterF1 = mainEl._styleWrites;
+// Staggered Frame 2: iPadOS Safari ALSO shrinks window.innerHeight & #app.clientHeight 1180 -> 860!
+// Because #app itself is now 860px, --kb-inset drops cleanly to 0px (0 double-shrink!) while #v-collie stays identically 860px!
 ctx.innerHeight = 860;
 ctx.dispatchEvent({ type: "resize" });
 flushRAF();
 assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "1180px", "Frame 2 (innerHeight=860): .side stays locked at 1180px, ZERO lift!");
 assert.equal(sideFull.style.getPropertyValue("--side-full-h"), "1180px", "Frame 2: overlay .side-full stays locked at 1180px");
-assert.equal(appEl.style.getPropertyValue("--side-full-h"), "1180px", "Frame 2: #app stays locked at 1180px (ZERO double-shrink)");
-assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "320px", "Frame 2: --kb-inset stays strictly monotonic at 320px (ZERO spike/reset flash)");
-assert.equal(mainEl._styleWrites, mainWritesAfterF1, "Frame 2: 0 redundant style writes when innerHeight catches up to vv.height");
+assert.equal(appEl.style.getPropertyValue("--side-full-h"), "", "Frame 2: #app stays unlocked at height: 100% (860px, 0 doc overflow)");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "0px", "Frame 2: --kb-inset = 860 - 860 = 0px (ZERO double-shrink)");
+assert.equal(colEl.style.getPropertyValue("--kb-inset"), "0px");
 assert.equal(sideEl._styleWrites, sideBaseBefore, "0 redundant .side --side-full-h writes during keyboard open");
 assert.equal(rootEl._styleWrites, rootWritesBefore, "Frame 2: 0 :root --vh writes even when innerHeight shrunk!");
 assert.equal(appEl._heightWrites, appHeightWritesBefore, "0 #app inline height writes");
+assertViewportSafety("Portrait staggered open F2 (appH=860, vv=860)", 1180);
+
+// Portrait Extreme: appH === 1180, vv.height === 700, offsetTop === 480 (pan without innerHeight shrink)
+ctx.innerHeight = 1180; fakeVV.height = 700; fakeVV.offsetTop = 480;
+fakeVV.dispatch("resize");
+flushRAF();
+assert.equal(mainEl.style.getPropertyValue("--kb-top"), "480px", "Portrait panned: --kb-top = 480px");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "0px", "Portrait panned: --kb-inset = 1180 - 700 - 480 = 0px");
+assert.equal(rootEl._styleWrites, rootWritesBefore, "Portrait panned: 0 :root --vh writes");
+assertViewportSafety("Portrait panned extreme (appH=1180, vv=700, offsetTop=480)", 1180);
+
+// Return to staggered open state (appH=860, vv=860, offsetTop=0) before dismiss
+ctx.innerHeight = 860; fakeVV.height = 860; fakeVV.offsetTop = 0;
+fakeVV.dispatch("resize");
+flushRAF();
 
 // Staggered Dismiss Frame 1: innerHeight restores 860 -> 1180 BEFORE vv.height restores
 ctx.innerHeight = 1180;
 ctx.dispatchEvent({ type: "resize" });
 flushRAF();
-assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "320px", "Dismiss Frame 1: stays monotonically 320px until vv.height restores (no bounce)");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "320px", "Dismiss Frame 1: --kb-inset absorbs 1180 - 860 = 320px until vv.height restores (no bounce)");
 assert.equal(rootEl._styleWrites, rootWritesBefore, "Dismiss Frame 1: 0 :root --vh writes");
+assertViewportSafety("Portrait staggered dismiss F1 (appH=1180, vv=860)", 1180);
 
 // Staggered Dismiss Frame 2: vv.height restores 860 -> 1180 with residual scrollY = 18
 _scrollY = 18;
@@ -484,26 +595,78 @@ assert.equal(appEl._heightWrites, appHeightWritesBefore, "0 #app inline height w
 assert.deepEqual(scrollToCalls, [[0, 0]], "residual Safari window.scrollY resets cleanly to (0, 0)");
 advanceTimers(220);
 assert.equal(rootEl._styleWrites, rootWritesBefore, "post-dismiss settle timer performs 0 delayed :root --vh writes");
+assertViewportSafety("Portrait dismissed (appH=1180, vv=1180)", 1180);
 
-// Landscape 1194x834 keyboard open (both simultaneous innerHeight+vv shrink AND offsetTop=24)
+// ─── 2c-bis) P0 Regression Guard (#t15419): iPad Landscape 1194x834 BOTH Extreme iPadOS Keyboard Behaviors ───
 ctx.innerWidth = 1194; ctx.innerHeight = 834; fakeVV.width = 1194; fakeVV.height = 834; fakeVV.offsetTop = 0;
 T.syncSideOverlayMode();
 T.setVH();
 assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "834px", "rotating to landscape resets --side-full-h to 834px");
+assert.equal(appEl.style.getPropertyValue("--side-full-h"), "", "landscape #app never receives --side-full-h");
 rootWritesBefore = rootEl._styleWrites;
-ctx.innerHeight = 514; fakeVV.height = 514; fakeVV.offsetTop = 24;
+
+// Extreme A: iPadOS shrinks innerHeight & #app.clientHeight to 460 alongside vv.height = 460 (offsetTop = 0)
+_scrollY = 24;
+appEl.scrollTop = 16;
+ctx.innerHeight = 460; fakeVV.height = 460; fakeVV.offsetTop = 0;
 fakeVV.dispatch("resize");
 flushRAF();
-assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "834px", "landscape keyboard open keeps .side locked at 834px (.side-foot pinned)");
+assert.equal(mainEl.style.getPropertyValue("--kb-top"), "0px", "Extreme A (appH=innerHeight=vv=460): --kb-top = 0px");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "0px", "Extreme A (appH=innerHeight=vv=460): --kb-inset = 0px (ZERO double-shrink, ZERO blank screen)");
+assert.equal(colEl.style.getPropertyValue("--kb-inset"), "0px");
+assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "834px", "Extreme A: .side stays locked at 834px (clipped by #app, 0 lift)");
+assert.equal(appEl.scrollTop, 0, "Extreme A: #app.scrollTop clamped to 0");
+assert.equal(_scrollY, 0, "Extreme A: residual window.scrollY cleared to 0");
+assert.equal(rootEl._styleWrites, rootWritesBefore, "Extreme A: 0 :root --vh writes (0 flash)");
+assertViewportSafety("Landscape Extreme A (appH=innerHeight=vv=460, offsetTop=0)", 834);
+
+// Extreme A-stale: transient stale offsetTop=374 while appH=vv=460 must clamp kbTop to 0px (never squash #v-collie to 86px!)
+fakeVV.offsetTop = 374;
+fakeVV.dispatch("scroll");
+flushRAF();
+assert.equal(mainEl.style.getPropertyValue("--kb-top"), "0px", "Extreme A-stale: stale offsetTop clamped to maxPan=0");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "0px");
+assertViewportSafety("Landscape Extreme A-stale (appH=460, vv=460, stale offsetTop=374)", 834);
+
+// Extreme B1: iPadOS does NOT shrink innerHeight/#app (appH=834), vv.height=460, AND pans visualViewport offsetTop=374!
+ctx.innerHeight = 834; fakeVV.height = 460; fakeVV.offsetTop = 374;
+fakeVV.dispatch("resize");
+flushRAF();
+assert.equal(mainEl.style.getPropertyValue("--kb-top"), "374px", "Extreme B1 (appH=834, vv=460, offsetTop=374): --kb-top = 374px");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "0px", "Extreme B1: --kb-inset = 834 - 460 - 374 = 0px");
+assert.equal(colEl.style.getPropertyValue("--kb-top"), "374px");
+assert.equal(colEl.style.getPropertyValue("--kb-inset"), "0px");
+assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "834px", "Extreme B1: .side stays locked at 834px");
+assert.equal(rootEl._styleWrites, rootWritesBefore, "Extreme B1: 0 :root --vh writes (0 flash)");
+assertViewportSafety("Landscape Extreme B1 (appH=834, vv=460, offsetTop=374)", 834);
+
+// Extreme B2: iPadOS keeps appH=834, vv.height=460, offsetTop=0
+ctx.innerHeight = 834; fakeVV.height = 460; fakeVV.offsetTop = 0;
+fakeVV.dispatch("resize");
+flushRAF();
+assert.equal(mainEl.style.getPropertyValue("--kb-top"), "0px", "Extreme B2 (appH=834, vv=460, offsetTop=0): --kb-top = 0px");
+assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "374px", "Extreme B2: --kb-inset = 374px");
+assert.equal(rootEl._styleWrites, rootWritesBefore, "Extreme B2: 0 :root --vh writes");
+assertViewportSafety("Landscape Extreme B2 (appH=834, vv=460, offsetTop=0)", 834);
+
+// Extreme B3: partial pan appH=834, vv.height=514, offsetTop=24
+ctx.innerHeight = 834; fakeVV.height = 514; fakeVV.offsetTop = 24;
+fakeVV.dispatch("resize");
+flushRAF();
+assert.equal(sideEl.style.getPropertyValue("--side-full-h"), "834px", "Extreme B3: .side stays locked at 834px");
 assert.equal(mainEl.style.getPropertyValue("--kb-top"), "24px");
 assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "296px");
-assert.equal(rootEl._styleWrites, rootWritesBefore, "landscape keyboard open performs 0 :root --vh writes");
+assert.equal(rootEl._styleWrites, rootWritesBefore, "Extreme B3: 0 :root --vh writes");
+assertViewportSafety("Landscape Extreme B3 (appH=834, vv=514, offsetTop=24)", 834);
+
+// Landscape keyboard dismiss
 ctx.innerHeight = 834; fakeVV.height = 834; fakeVV.offsetTop = 0;
 fakeVV.dispatch("resize");
 flushRAF();
 assert.equal(mainEl.style.getPropertyValue("--kb-top"), "0px");
 assert.equal(mainEl.style.getPropertyValue("--kb-inset"), "0px");
 assert.equal(rootEl._styleWrites, rootWritesBefore, "landscape keyboard dismiss performs 0 :root --vh writes");
+assertViewportSafety("Landscape dismissed (appH=834, vv=834)", 834);
 
 // ─── 2d) iPad Landscape (1194x834) <-> Portrait (820x1180) Rotation Main Chat Zero-Drift Anchor (#t15309) ───
 T.setView("collie");

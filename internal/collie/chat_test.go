@@ -356,3 +356,44 @@ func TestActivityLine(t *testing.T) {
 		}
 	}
 }
+
+func TestBridgeTranscriptPiAndOmp(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	srv := &Server{home: dir, sup: &Super{dir: dir}}
+	for _, kind := range []string{"pi", "omp"} {
+		td := srv.bridgeTranscriptDir(kind)
+		if err := os.MkdirAll(td, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		sid := kind + "-sess-1"
+		lp := filepath.Join(td, sid+".jsonl")
+		lines := strings.Join([]string{
+			`{"type":"user","text":"hello ` + kind + `"}`,
+			`{"type":"tool","id":"t1","title":"read","status":"in_progress","input":"README.md"}`,
+			`{"type":"tool","id":"t1","title":"read","status":"completed","output":"ok"}`,
+			`{"type":"assistant_chunk","id":"m1","text":"hi "}`,
+			`{"type":"assistant_chunk","id":"m1","text":"there"}`,
+		}, "\n") + "\n"
+		if err := os.WriteFile(lp, []byte(lines), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeACPPaneMeta(td, acpPaneMeta{PaneID: "w1:p1", SessionID: sid, Path: lp}); err != nil {
+			t.Fatal(err)
+		}
+		gotPath, gotFmt := srv.findTranscript(kind, "id", sid, "", dir)
+		if gotPath != lp || gotFmt != kind {
+			t.Fatalf("%s findTranscript(id) = %q, %q", kind, gotPath, gotFmt)
+		}
+		gotPath2, gotFmt2 := srv.findTranscript(kind, "", "", "w1:p1", dir)
+		if gotPath2 != lp || gotFmt2 != kind {
+			t.Fatalf("%s findTranscript(pane) = %q, %q", kind, gotPath2, gotFmt2)
+		}
+		tr := newTranscript(lp, gotFmt)
+		tr.update()
+		msgs := tr.view()
+		if len(msgs) != 3 || msgs[0].Text != "hello "+kind || msgs[1].Name != "read" || msgs[1].Output != "ok" || msgs[2].Text != "hi there" {
+			t.Fatalf("%s transcript msgs = %+v", kind, msgs)
+		}
+	}
+}

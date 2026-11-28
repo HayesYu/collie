@@ -258,7 +258,7 @@ func (t *transcript) line(line []byte) bool {
 		return t.codexLine(line)
 	case "agy":
 		return t.agyLine(line)
-	case "doubao", "cursor":
+	case "doubao", "cursor", "pi", "omp":
 		return t.acpLine(line)
 	}
 	return t.claudeLine(line)
@@ -1242,7 +1242,7 @@ func (s *Server) transcriptFor(key, pane string, a agentDetail, cache map[string
 
 func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, format string) {
 	format = kind
-	if kind != "codex" && kind != "agy" && kind != "doubao" && kind != "cursor" {
+	if kind != "codex" && kind != "agy" && !isBridgeKind(kind) {
 		format = "claude"
 	}
 	if sessKind == "path" {
@@ -1284,7 +1284,7 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 			}
 		}
 		return s.guessAgy(brain, pane, cwd), "agy"
-	case "doubao", "cursor":
+	case "doubao", "cursor", "pi", "omp":
 		dir := s.bridgeTranscriptDir(kind)
 		if value != "" {
 			if p := filepath.Join(dir, value+".jsonl"); isFile(p) {

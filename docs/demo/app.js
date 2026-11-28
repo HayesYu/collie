@@ -9,7 +9,7 @@
     set(k, v) { try { localStorage.setItem("collie." + k, JSON.stringify(v)); } catch {} },
   };
   const narrow = () => matchMedia("(max-width: 760px)").matches;
-  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", doubao: "Doubao", cursor: "Cursor" };
+  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", doubao: "Doubao", cursor: "Cursor", pi: "Pi", omp: "Oh My Pi" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
   const FMT_HHMM = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }) : null;
@@ -104,11 +104,13 @@
     agy: '<svg viewBox="0 0 32 32"><ellipse cx="16" cy="16" rx="11" ry="5" transform="rotate(-30 16 16)"/><path d="M16 21V9M12 13l4-4 4 4"/></svg>',
     doubao: '<svg viewBox="0 0 32 32"><path d="M16 5c5.8 0 10 4.2 10 10.2C26 21.8 21.8 27 16 27S6 21.8 6 15.2C6 9.2 10.2 5 16 5z"/><circle cx="12.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="19.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><path d="M12.5 19.5c1.1 1.1 2.2 1.6 3.5 1.6s2.4-.5 3.5-1.6"/></svg>',
     cursor: '<svg viewBox="0 0 32 32"><path d="M8 5l16 9.5-7.2 2.1L14.5 24 8 5z"/><path d="M17.2 16.8L23 22.6"/></svg>',
+    pi: '<svg viewBox="0 0 32 32"><path d="M7 10h18M12 10v13.5c0 1.4-.6 2.5-2 2.5M20 10v12.5c0 2 1 3.5 2.8 3.5.7 0 1.4-.2 2-.6"/></svg>',
+    omp: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11.5"/><path d="M10.5 12.5h11M13.5 12.5v7.5c0 1-.4 1.6-1.2 1.8M18.5 12.5v7c0 1.2.6 2 1.8 2"/></svg>',
     agent: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="10"/><path d="M12 15h.01M20 15h.01M12 20c2.4 1.8 5.6 1.8 8 0"/></svg>',
     shell: '<svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg>',
     collie: '<img src="icon.svg" alt="" style="width:20px;height:20px">',
   };
-  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity", doubao: "doubao", cursor: "cursor" };
+  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity", doubao: "doubao", cursor: "cursor", pi: "pi", omp: "omp", "oh-my-pi": "omp" };
   const STATUS_LABEL = {
     idle: "空闲", working: "工作中", waiting: "在等后台任务", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
     asleep: "休眠中", starting: "启动中", gone: "已退出", failed: "启动失败",
@@ -2155,7 +2157,7 @@
   const find = (id) => state.agents.find((a) => a.pane_id === id) || state.shells.find((a) => a.pane_id === id);
   // What to call an agent: the session's own title; a handle like "agy-1" says
   // nothing, so until there's a title use the folder it works in.
-  const autoName = (n) => /^(claude|codex|agy|antigravity|doubao|cursor)-\d+$/.test(n || "");
+  const autoName = (n) => /^(claude|codex|agy|antigravity|doubao|cursor|pi|omp|oh-my-pi)-\d+$/.test(n || "");
   const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "~";
   const cleanLabel = (s) => (typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "");
   const workerLabelOf = (w) => cleanLabel(w?.label);
@@ -3471,7 +3473,7 @@
   const entryKey = (e) => (e && (e.id || e._localId)) || "";
   const threadWhoLabel = (e) => (e?.role === "user" ? "你" : "Collie");
   const isWorkerActiveStatus = (w) => !!w && !w.ended && ["working", "starting", "waiting", "blocked"].includes(w.status);
-  const META_PAREN_TOKEN_RE = /^(?:claude|codex|agy|antigravity|doubao|cursor|shell|hub|local|mac|macbook|devbox|linux|darwin|amd64|arm64|worker|agent|main|worktree|v?\d+(?:\.\d+)*|#t\d+|t\d+)$/i;
+  const META_PAREN_TOKEN_RE = /^(?:claude|codex|agy|antigravity|doubao|cursor|pi|omp|oh-my-pi|shell|hub|local|mac|macbook|devbox|linux|darwin|amd64|arm64|worker|agent|main|worktree|v?\d+(?:\.\d+)*|#t\d+|t\d+)$/i;
   function isMetaParen(inner) {
     const parts = String(inner || "").split(/[\s·•\/,|｜\-—–+]+/).filter(Boolean);
     return !parts.length || parts.every((p) => META_PAREN_TOKEN_RE.test(p));
@@ -7556,8 +7558,9 @@
   });
 
   // Models and thinking efforts each agent offers, per computer (asked once per page).
-  const EFFORT_LABEL = { none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极致" };
+  const EFFORT_LABEL = { off: "关闭", none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极致", auto: "自动" };
   const AGY_EFFORT_RE = /-(low|medium|high|xhigh|max)$/i;
+  const PI_THINKING_SUFFIX_RE = /:(off|minimal|low|medium|high|xhigh|max|auto)$/i;
   function agyRejectsEffort(model) {
     const m = (model || "").trim();
     return AGY_EFFORT_RE.test(m) || /orchestrator/i.test(m);
@@ -7565,6 +7568,7 @@
   function effortsFor(info, kind, model) {
     if (kind === "cursor") return [];
     if ((kind === "agy" || kind === "antigravity") && model && agyRejectsEffort(model)) return [];
+    if ((kind === "pi" || kind === "omp" || kind === "oh-my-pi") && model && PI_THINKING_SUFFIX_RE.test(model.trim())) return [];
     const m = (info?.models || []).find((x) => x.id === model);
     if (m && Array.isArray(m.efforts)) return m.efforts;
     return Array.isArray(info?.efforts) ? info.efforts : [];
@@ -7584,7 +7588,10 @@
       if (machine) q.set("machine", machine);
       modelInfo[key] = api("/api/models?" + q).catch(() => ({
         models: [],
-        efforts: kind === "agy" || kind === "antigravity" || kind === "cursor" ? [] : ["low", "medium", "high", "xhigh", "max"],
+        efforts: kind === "agy" || kind === "antigravity" || kind === "cursor" ? []
+          : kind === "pi" ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+          : kind === "omp" || kind === "oh-my-pi" ? ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"]
+          : ["low", "medium", "high", "xhigh", "max"],
       })).then((info) => {
         modelInfoResolved[key] = info;
         return info;
@@ -7665,7 +7672,7 @@
       _renderTargetSig = "";
       try {
         const s = (await api("/api/super/settings")).settings;
-        targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
+        targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind === "oh-my-pi" ? "omp" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
       } catch { targetDefault ||= { machine: "", kind: "claude", model: "", effort: "" }; }
     }
     // What was picked here over the defaults: picking only an agent leaves the
@@ -7683,7 +7690,7 @@
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
       data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
     const have = ms.find((m) => m.id === t.machine)?.agents;
-    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["doubao", "Doubao"], ["cursor", "Cursor"]].map(([k, l]) => {
+    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["doubao", "Doubao"], ["cursor", "Cursor"], ["pi", "Pi"], ["omp", "Oh My Pi"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
       const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
       return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${sub}"` : ""} ${missing && k !== t.kind ? "disabled" : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`;
@@ -14510,9 +14517,12 @@
     const s = r.settings;
     latestSettingsBase = s;
     const routerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
-    const workerKindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["doubao", "Doubao", "doubao"], ["cursor", "Cursor", "cursor"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
+    const workerKindOpts = (v) => {
+      const cur = v === "oh-my-pi" ? "omp" : v;
+      return [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["doubao", "Doubao", "doubao"], ["cursor", "Cursor", "cursor"], ["pi", "Pi", "pi"], ["omp", "Oh My Pi", "omp"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${cur === k ? "selected" : ""}>${l}</option>`).join("");
+    };
     const modelPick = (who, kind, model, effort) => {
-      const hideEff = kind === "cursor" || ((kind === "antigravity" || kind === "agy") && agyRejectsEffort(model));
+      const hideEff = kind === "cursor" || ((kind === "antigravity" || kind === "agy") && agyRejectsEffort(model)) || ((kind === "pi" || kind === "omp" || kind === "oh-my-pi") && PI_THINKING_SUFFIX_RE.test((model || "").trim()));
       const eff = hideEff ? "" : (effort || "");
       return `
           <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
@@ -15305,7 +15315,7 @@
       if (view === "ext" && extCur === "h:" + hid) el.innerHTML = `<div class="thread-empty">${esc(err.message)}</div>`;
     }
   }
-  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s], doubao: (s) => ["--resume", s], cursor: (s) => ["--resume", s] };
+  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s], doubao: (s) => ["--resume", s], cursor: (s) => ["--resume", s], pi: (s) => ["--resume", s], omp: (s) => ["--resume", s] };
   async function continueHist(hid) {
     const h = hist.find((x) => x.id === hid);
     if (!h || !RESUME[h.kind]) return;
@@ -16278,7 +16288,7 @@
   // Which agents a computer has: nothing when not known (an older node).
   const agentsTag = (list) => !Array.isArray(list) ? ""
     : list.length ? `<span title="这台电脑上装了的 agent">${list.map((k) => esc(AGENT_LABEL[k] || k)).join(" · ")}</span>`
-    : `<span class="tag attn" title="找不到 claude、codex、agy、doubao、cursor-agent 命令：装一个，再重连这台电脑">没装 agent</span>`;
+    : `<span class="tag attn" title="找不到 claude、codex、agy、doubao、cursor-agent、pi、omp 命令：装一个，再重连这台电脑">没装 agent</span>`;
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
     ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
   const updateRow = (have, latest, cmd, note, id, name) => {

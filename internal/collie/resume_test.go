@@ -36,6 +36,12 @@ func TestResumeFrom(t *testing.T) {
 	if got := resumeArgs("cursor", "c"); !slices.Equal(got, []string{"--resume", "c"}) {
 		t.Errorf("cursor: %v", got)
 	}
+	if got := resumeArgs("pi", "c"); !slices.Equal(got, []string{"--resume", "c"}) {
+		t.Errorf("pi: %v", got)
+	}
+	if got := resumeArgs(kinds["oh-my-pi"], "c"); !slices.Equal(got, []string{"--resume", "c"}) {
+		t.Errorf("omp: %v", got)
+	}
 }
 
 func TestRouterDocChanged(t *testing.T) {
@@ -81,6 +87,9 @@ func TestAgentStopLine(t *testing.T) {
 		{"⚠ Warning: The provided API key is invalid.\n❯ ", "", "Warning: The provided API key is invalid."},
 		{"⚠ Error: Failed to initialize session services\n❯ ", "", "Error: Failed to initialize session services"},
 		{"⚠ Error: You have reached your spending limit for this month.\n❯ ", "", "Error: You have reached your spending limit for this month."},
+		{"⚠ Error: No API key found for provider openai\n❯ ", "", "Error: No API key found for provider openai"},
+		{"⚠ Error: Model not found: anthropic/missing\n❯ ", "", "Error: Model not found: anthropic/missing"},
+		{"⚠ Error: Insufficient balance on account\n❯ ", "", "Error: Insufficient balance on account"},
 	}
 	for _, c := range cases {
 		if got := agentStopLine(c.screen, c.summary); got != c.want {

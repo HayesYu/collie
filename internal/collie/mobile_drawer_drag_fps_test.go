@@ -358,7 +358,8 @@ for (const d of drawers) {
   // 2a) Open -> settle -> idle will-change cleared
   d.open();
   flushRAF();
-  advanceTimers(400);
+  flushRAF();
+  advanceTimers(500);
   flushRAF();
   assert.equal(d.drawer.style.willChange, "", d.name + ": idle drawer must clear will-change after open settles");
   assert.equal(d.scrim.style.willChange, "", d.name + ": idle scrim must clear will-change after open settles");

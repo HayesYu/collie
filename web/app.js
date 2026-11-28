@@ -1322,7 +1322,7 @@
   function isAnyMobileSheetAnimating() {
     for (const id of ["#worker-drawer", "#thread-drawer", "#file-view"]) {
       const el = $(id);
-      if (el && (el.classList?.contains("is-sheet-opening") || (el._slideSettleAt && el._slideSettleAt > performance.now() + 16))) {
+      if (el && (el.classList?.contains("is-sheet-opening") || el.classList?.contains("is-sheet-prep") || (el._slideSettleAt && el._slideSettleAt > performance.now() + 16))) {
         return true;
       }
     }
@@ -8188,40 +8188,30 @@
     </div>`;
   }
 
-  function openWorkerFromLink(a, ev, fromThreadRoot = "", opts = {}) {
-    if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return false;
-    if (!opts.allowAnyView && view !== "collie") return false;
-    if (a.id === "wd-popout" || a.closest?.("#worker-drawer")) return false;
+  function extractWorkerTargetFromEl(a) {
+    if (!a || a.id === "wd-popout" || a.closest?.("#worker-drawer")) return null;
     const href = a.getAttribute?.("href") || "";
-    const ret = (fromThreadRoot || a.closest?.("#thread-drawer")) && activeThreadRoot ? captureThreadReturnTo() : null;
-    const retOpt = ret ? { returnTo: ret } : {};
-    const directWorker = String(a.dataset?.openWorker || a.dataset?.worker || "").trim();
+    const directWorker = String(a.dataset?.openWorker || a.dataset?.worker || a.dataset?.tdWorker || a.dataset?.npWorker || "").trim();
     if (directWorker && directWorker !== ROUTER) {
       const paneId = String(a.dataset?.paneId || "").trim()
         || (href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)).trim() : "")
         || paneOf(directWorker) || "";
       const histId = String(a.dataset?.histId || "").trim()
         || (href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "");
-      ev.preventDefault();
-      openWorkerDrawer({ worker: directWorker, paneId, histId, fromThreadRoot, ...retOpt });
-      return true;
+      return { worker: directWorker, paneId, histId };
     }
     if (a.classList?.contains("event")) {
       const ref = String(a.dataset?.ref || "").trim();
       if (ref && ref !== ROUTER && !ref.startsWith("h:") && !ref.startsWith("peer-req:")) {
         const paneId = href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)) : (paneOf(ref) || "");
         const histId = href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)) : "";
-        ev.preventDefault();
-        openWorkerDrawer({ worker: ref, paneId, histId, fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: ref, paneId, histId };
       }
     }
     if (href.startsWith("#/w/")) {
       const wName = decodeURIComponent(href.slice(4)).trim();
       if (wName && wName !== ROUTER) {
-        ev.preventDefault();
-        openWorkerDrawer({ worker: wName, paneId: paneOf(wName) || "", fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: wName, paneId: paneOf(wName) || "", histId: "" };
       }
     }
     if (href.startsWith("#/p/")) {
@@ -8229,9 +8219,7 @@
       if (paneId) {
         const ag = find(paneId);
         const wName = ag && ag.name && ag.name !== ROUTER ? ag.name : "";
-        ev.preventDefault();
-        openWorkerDrawer({ worker: wName, paneId, fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: wName, paneId, histId: "" };
       }
     }
     if (href.startsWith("#/h/")) {
@@ -8239,12 +8227,22 @@
       const hRec = histId ? hist.find((x) => x.id === histId) : null;
       const wName = String(a.dataset?.ref || hRec?.name || "").trim();
       if (wName && wName !== ROUTER && !wName.startsWith("h:") && (getWorkerLookup().byName.has(wName) || a.classList?.contains("event") || a.closest?.(".mem-crew"))) {
-        ev.preventDefault();
-        openWorkerDrawer({ worker: wName, histId, fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: wName, paneId: "", histId };
       }
     }
-    return false;
+    return null;
+  }
+
+  function openWorkerFromLink(a, ev, fromThreadRoot = "", opts = {}) {
+    if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return false;
+    if (!opts.allowAnyView && view !== "collie") return false;
+    const target = extractWorkerTargetFromEl(a);
+    if (!target) return false;
+    const ret = (fromThreadRoot || a.closest?.("#thread-drawer")) && activeThreadRoot ? captureThreadReturnTo() : null;
+    const retOpt = ret ? { returnTo: ret } : {};
+    ev.preventDefault();
+    openWorkerDrawer({ worker: target.worker, paneId: target.paneId, histId: target.histId, fromThreadRoot, ...retOpt });
+    return true;
   }
 
   $("#super-thread").addEventListener("mousedown", (e) => { if (e.target.closest(".ask button")) e.preventDefault(); });
@@ -18783,17 +18781,53 @@
     return `<div class="msg assistant">${md(m.text)}</div>`;
   }
 
+  function triggerWdContentReveal(el) {
+    if (!el?.classList) return;
+    clearTimeout(el._revealTimer);
+    el._revealTimer = 0;
+    if (el._revealOnEnd) {
+      el.removeEventListener?.("animationend", el._revealOnEnd);
+      el._revealOnEnd = null;
+    }
+    el.classList.remove("is-content-reveal");
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    el.classList.add("is-content-reveal");
+    const done = (ev) => {
+      if (ev && ev.target !== el) return;
+      clearTimeout(el._revealTimer);
+      el._revealTimer = 0;
+      if (el._revealOnEnd) {
+        el.removeEventListener?.("animationend", el._revealOnEnd);
+        el._revealOnEnd = null;
+      }
+      el.classList.remove("is-content-reveal");
+    };
+    el._revealOnEnd = done;
+    el.addEventListener?.("animationend", done);
+    el._revealTimer = setTimeout(done, 210);
+  }
+
   function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。"), drawOpts = null) {
     const wasChunking = !!el._chunking;
+    const wasBackfilling = !!el._backfilling;
     clearTimeout(el._chunkTimer);
     el._chunkTimer = 0;
     el._chunking = false;
+    el._backfilling = false;
+    el._startBackfill = null;
+    const hadSkel = !!(drawOpts?.revealFromSkel && el.querySelector?.(".thread-skel"));
+    const skipSyncScroll = !!drawOpts?.skipSyncScroll;
     const rest = el._restore;
     // Just opened: start at the latest message, unless restoring a scroll position.
-    const was = rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || wasChunking || nearBottom(el));
+    const was = skipSyncScroll ? true : (rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || wasChunking || nearBottom(el)));
     if (msgs.length) el._fresh = false;
     const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
-    if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._rawMsgsSig = ""; el._blocks = null; el._lazyRuns = null; return; }
+    if (!msgs.length) {
+      el.innerHTML = `<div class="thread-empty">${empty}</div>`;
+      el._sig = ""; el._rawMsgsSig = ""; el._tailRawSig = ""; el._tailCacheKey = ""; el._blocks = null; el._lazyRuns = null;
+      return;
+    }
     const fullTask = el.id === "wd-thread"
       ? (resolveWorkerContext().supW?.task || "")
       : (el.id === "thread" && current ? (getWorkerLookup().byPane.get(current)?.task || "") : "");
@@ -18802,25 +18836,32 @@
     el._lazyRuns = lazyRuns;
     bindLazyToolRuns(el);
 
-    // Only use tail-first chunked mount for genuinely huge (>60-group) threads on initial cold open;
-    // normal worker transcripts (<=60 groups) commit atomically in one frame after slide settle so
-    // scrollHeight / scrollTop never thrash and active SSE patches never reset progressive chunks.
-    const useProgressive = !!(drawOpts?.progressive && !wasChunking && groups.length > 60 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
+    const wantTailGroups = typeof drawOpts?.tailGroups === "number" && drawOpts.tailGroups > 0 ? drawOpts.tailGroups : 0;
+    const useTailWindow = !!(wantTailGroups && !wasBackfilling && !el._sig && groups.length > wantTailGroups && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
+    const useProgressive = useTailWindow || !!(drawOpts?.progressive && !wasChunking && groups.length > 60 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
     if (useProgressive) {
       el._chunking = true;
       const blocks = new Array(groups.length);
-      const tailCount = Math.min(groups.length, 12);
+      const tailCount = Math.min(groups.length, useTailWindow ? wantTailGroups : 12);
       const tailStart = Math.max(0, groups.length - tailCount);
       for (let gi = tailStart; gi < groups.length; gi++) {
         blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
       }
       el.innerHTML = blocks.slice(tailStart).join("");
-      syncExpandedPrompts(el);
-      hydrateRichContent(el);
-      stick(el, true);
+      if (hadSkel) triggerWdContentReveal(el);
+      if (drawOpts?.cacheKey) el._tailCacheKey = drawOpts.cacheKey;
+      if (drawOpts?.rawSig) el._tailRawSig = drawOpts.rawSig;
+      if (!skipSyncScroll) {
+        syncExpandedPrompts(el);
+        hydrateRichContent(el);
+        stick(el, true);
+      }
       let curStart = tailStart;
+      let backfillStarted = false;
       const finishAll = () => {
         el._chunking = false;
+        el._backfilling = false;
+        el._startBackfill = null;
         if (el._loadingEarlier) {
           const rowHtml = `<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`;
           blocks.unshift(rowHtml);
@@ -18840,7 +18881,8 @@
       };
       const prependNext = () => {
         el._chunkTimer = 0;
-        if (drawOpts?.isAlive && !drawOpts.isAlive()) { el._chunking = false; return; }
+        if (drawOpts?.isAlive && !drawOpts.isAlive()) { el._chunking = false; el._backfilling = false; el._startBackfill = null; return; }
+        el._backfilling = true;
         const nextStart = Math.max(0, curStart - 10);
         for (let gi = nextStart; gi < curStart; gi++) {
           blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
@@ -18870,7 +18912,19 @@
           finishAll();
         }
       };
-      el._chunkTimer = setTimeout(prependNext, 32);
+      const startBackfill = () => {
+        if (backfillStarted || !el._chunking) return;
+        backfillStarted = true;
+        if (drawOpts?.isAlive && !drawOpts.isAlive()) { el._chunking = false; el._backfilling = false; el._startBackfill = null; return; }
+        el._backfilling = true;
+        el._chunkTimer = setTimeout(prependNext, 16);
+      };
+      el._startBackfill = startBackfill;
+      if (!drawOpts?.deferBackfill) {
+        backfillStarted = true;
+        el._backfilling = true;
+        el._chunkTimer = setTimeout(prependNext, 32);
+      }
       return;
     }
 
@@ -18879,7 +18933,8 @@
     const sig = blocks.join("");
     if (sig === el._sig) return;
     el._sig = sig;
-    if (drawOpts?.rawSig) el._rawMsgsSig = drawOpts.rawSig;
+    if (drawOpts?.rawSig) { el._rawMsgsSig = drawOpts.rawSig; el._tailRawSig = drawOpts.rawSig; }
+    if (drawOpts?.cacheKey) el._tailCacheKey = drawOpts.cacheKey;
     const old = el._blocks;
     if (old && el.children.length === old.length && el.lastElementChild === el._last) {
       // Keep what did not change (and its open/closed state); redraw from
@@ -18891,7 +18946,9 @@
     } else {
       el.innerHTML = sig;
     }
+    if (hadSkel) triggerWdContentReveal(el);
     el._blocks = blocks; el._last = el.lastElementChild;
+    if (skipSyncScroll) return;
     syncExpandedPrompts(el);
     hydrateRichContent(el);
     if (rest && !rest.atBottom) {
@@ -22689,16 +22746,23 @@
 
   function clearMobileSheetOpen(el) {
     if (!el) return;
+    if (el._sdPrepRAF1 && typeof cancelAnimationFrame === "function") cancelAnimationFrame(el._sdPrepRAF1);
+    if (el._sdPrepRAF2 && typeof cancelAnimationFrame === "function") cancelAnimationFrame(el._sdPrepRAF2);
+    el._sdPrepRAF1 = 0;
+    el._sdPrepRAF2 = 0;
+    el._onPrepFrame = null;
     clearTimeout(el._sdOpenTimer);
     el._sdOpenTimer = 0;
     el._slideSettleAt = 0;
     if (el._sdOpenOnEnd) {
+      el.removeEventListener?.("transitionend", el._sdOpenOnEnd);
+      el.removeEventListener?.("transitioncancel", el._sdOpenOnEnd);
       el.removeEventListener?.("animationend", el._sdOpenOnEnd);
       el.removeEventListener?.("animationcancel", el._sdOpenOnEnd);
       el._sdOpenOnEnd = null;
     }
-    const wasOpening = !!el.classList?.contains("is-sheet-opening");
-    el.classList?.remove("is-sheet-opening", "is-scrim-opening");
+    const wasOpening = !!el.classList?.contains("is-sheet-opening") || !!el.classList?.contains("is-sheet-prep");
+    el.classList?.remove("is-sheet-prep", "is-sheet-opening", "is-scrim-prep", "is-scrim-opening");
     if (wasOpening && !isAnyMobileSheetAnimating()) {
       flushDeferredSheetUpdates();
       if (!isLayoutGliding()) flushPostGlideRichSync();
@@ -22718,11 +22782,23 @@
       if (drawerEl === wdDrawer) flushWdPendingLive();
       return;
     }
-    drawerEl._slideSettleAt = performance.now() + 310;
-    promoteSheetWillChange(drawerEl, "transform", 360);
-    drawerEl.classList?.add("is-sheet-opening");
+    const mobile = innerWidth <= 760;
+    const durMs = mobile ? 340 : 280;
+    const scrimDurMs = mobile ? 320 : 240;
+    // Two-phase GPU layer prime: Frame 0 paints offscreen at translate3d(0, 100%, 0)
+    // (waking content-visibility: hidden, mounting header + tail content, uploading the GPU layer),
+    // then rAF #2 removes .is-sheet-prep so CoreAnimation starts CSS transition at true t=0ms (0% jump).
+    drawerEl._slideSettleAt = performance.now() + durMs + 60;
+    promoteSheetWillChange(drawerEl, "transform", 0);
+    drawerEl.classList?.add("is-sheet-opening", "is-sheet-prep");
+    if (scrimEl) {
+      promoteSheetWillChange(scrimEl, "opacity", 0);
+      scrimEl.classList?.add("is-scrim-opening", "is-scrim-prep");
+    }
     const doneDrawer = (ev) => {
       if (ev && ev.target !== drawerEl) return;
+      if (ev && drawerEl.classList?.contains("is-sheet-prep")) return;
+      if (ev && ev.propertyName && ev.propertyName !== "transform") return;
       clearMobileSheetOpen(drawerEl);
       clearSheetWillChange(drawerEl);
       const cb = drawerEl._onSlideSettled;
@@ -22731,21 +22807,51 @@
       if (drawerEl === wdDrawer) flushWdPendingLive();
     };
     drawerEl._sdOpenOnEnd = doneDrawer;
+    drawerEl.addEventListener?.("transitionend", doneDrawer);
+    drawerEl.addEventListener?.("transitioncancel", doneDrawer);
     drawerEl.addEventListener?.("animationend", doneDrawer);
     drawerEl.addEventListener?.("animationcancel", doneDrawer);
-    drawerEl._sdOpenTimer = setTimeout(doneDrawer, 330);
+    drawerEl._sdOpenTimer = setTimeout(doneDrawer, durMs + 120);
     if (scrimEl) {
-      promoteSheetWillChange(scrimEl, "opacity", 360);
-      scrimEl.classList?.add("is-scrim-opening");
       const doneScrim = (ev) => {
         if (ev && ev.target !== scrimEl) return;
+        if (ev && scrimEl.classList?.contains("is-scrim-prep")) return;
+        if (ev && ev.propertyName && ev.propertyName !== "opacity") return;
         clearMobileSheetOpen(scrimEl);
         clearSheetWillChange(scrimEl);
       };
       scrimEl._sdOpenOnEnd = doneScrim;
+      scrimEl.addEventListener?.("transitionend", doneScrim);
+      scrimEl.addEventListener?.("transitioncancel", doneScrim);
       scrimEl.addEventListener?.("animationend", doneScrim);
       scrimEl.addEventListener?.("animationcancel", doneScrim);
-      scrimEl._sdOpenTimer = setTimeout(doneScrim, 350);
+      scrimEl._sdOpenTimer = setTimeout(doneScrim, scrimDurMs + 130);
+    }
+    const releasePrep = () => {
+      drawerEl._sdPrepRAF1 = 0;
+      drawerEl._sdPrepRAF2 = 0;
+      if (!drawerEl.classList?.contains("is-sheet-prep")) return;
+      const latePrep = drawerEl._onPrepFrame;
+      drawerEl._onPrepFrame = null;
+      if (latePrep) latePrep();
+      drawerEl._slideSettleAt = performance.now() + durMs + 30;
+      drawerEl.classList.remove("is-sheet-prep");
+      if (scrimEl) scrimEl.classList?.remove("is-scrim-prep");
+    };
+    if (typeof requestAnimationFrame === "function") {
+      drawerEl._sdPrepRAF1 = requestAnimationFrame(() => {
+        drawerEl._sdPrepRAF1 = 0;
+        if (!drawerEl.classList?.contains("is-sheet-prep")) return;
+        const prepFn = drawerEl._onPrepFrame;
+        drawerEl._onPrepFrame = null;
+        if (prepFn) prepFn();
+        drawerEl._sdPrepRAF2 = requestAnimationFrame(releasePrep);
+      });
+    } else {
+      const prepFn = drawerEl._onPrepFrame;
+      drawerEl._onPrepFrame = null;
+      if (prepFn) prepFn();
+      releasePrep();
     }
   }
   const resetDrawerMotion = (el, opts = {}) => {
@@ -25835,6 +25941,10 @@
   let wdPendingLive = null;
   let wdPrewarmTimer = 0;
   const wdLiveCache = new Map();
+  const wdHistoryInflight = new Map();
+  const wdHistoryEarlier = new Map();
+  const wdHistoryFetchedAt = new Map();
+  const WD_MOBILE_TAIL_GROUPS = 8;
   let wdShowRaw = false;
   let wdPeekMode = "";
   let wdMoreClosedAt = 0;
@@ -25909,18 +26019,84 @@
     const hasFiles = !!(wdComposerEl?._files?.length);
     wdSendBtn.disabled = !!sending || (!hasText && !hasFiles);
   }
-  function resolveWorkerContext() {
+  function resolveWorkerContextFor(workerName, paneHint = "", histHint = "") {
     const { byName, byPane } = getWorkerLookup();
-    const supW = (wdWorkerName ? byName.get(wdWorkerName) : null) || (wdPaneId ? byPane.get(wdPaneId) : null) || null;
-    const livePaneId = (wdPaneId && find(wdPaneId) ? wdPaneId : "")
-      || (wdWorkerName ? (paneOf(wdWorkerName) || "") : "")
+    const supW = (workerName ? byName.get(workerName) : null) || (paneHint ? byPane.get(paneHint) : null) || null;
+    const livePaneId = (paneHint && find(paneHint) ? paneHint : "")
+      || (workerName ? (paneOf(workerName) || "") : "")
       || (supW && !supW.ended && supW.pane_id && find(supW.pane_id) ? supW.pane_id : "");
     const liveAgent = livePaneId ? find(livePaneId) : null;
-    const name = wdWorkerName || liveAgent?.name || supW?.name || "";
+    const name = workerName || liveAgent?.name || supW?.name || "";
     const past = !liveAgent && name
-      ? (workerHist(name, supW?.created_at || 0) || getHistIndex().byName.get(name)?.[0]?.h || (wdHistId ? hist.find((x) => x.id === wdHistId) : null) || null)
-      : (wdHistId ? hist.find((x) => x.id === wdHistId) : null);
+      ? (workerHist(name, supW?.created_at || 0) || getHistIndex().byName.get(name)?.[0]?.h || (histHint ? hist.find((x) => x.id === histHint) : null) || null)
+      : (histHint ? hist.find((x) => x.id === histHint) : null);
     return { supW, livePaneId, liveAgent, name, past };
+  }
+  function resolveWorkerContext() {
+    return resolveWorkerContextFor(wdWorkerName, wdPaneId, wdHistId);
+  }
+  function fetchWdTranscript(past) {
+    if (!past?.id) return Promise.resolve(null);
+    const cacheKey = "h:" + past.id;
+    const existing = wdHistoryInflight.get(cacheKey);
+    if (existing && (performance.now() - existing.ts) < 10000) return existing.promise;
+    const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
+    if (past.machine) q.set("machine", past.machine);
+    const promise = api("/api/transcript?" + q).then((r) => {
+      const nextMsgs = r?.messages || [];
+      const nextEarlier = r?.earlier || 0;
+      keepThread(cacheKey, nextMsgs);
+      wdHistoryEarlier.set(cacheKey, nextEarlier);
+      wdHistoryFetchedAt.set(cacheKey, performance.now());
+      while (wdHistoryEarlier.size > 24) wdHistoryEarlier.delete(wdHistoryEarlier.keys().next().value);
+      while (wdHistoryFetchedAt.size > 24) wdHistoryFetchedAt.delete(wdHistoryFetchedAt.keys().next().value);
+      return { messages: nextMsgs, earlier: nextEarlier, q };
+    }).finally(() => {
+      if (wdHistoryInflight.get(cacheKey)?.promise === promise) wdHistoryInflight.delete(cacheKey);
+    });
+    wdHistoryInflight.set(cacheKey, { promise, ts: performance.now() });
+    while (wdHistoryInflight.size > 6) wdHistoryInflight.delete(wdHistoryInflight.keys().next().value);
+    return promise;
+  }
+  function prefetchWdHistory(past) {
+    if (!past?.id) return;
+    const cacheKey = "h:" + past.id;
+    const fetchedAt = wdHistoryFetchedAt.get(cacheKey) || 0;
+    if (threadCache.has(cacheKey) && (performance.now() - fetchedAt) < 5000) return;
+    if (wdHistoryInflight.has(cacheKey)) return;
+    fetchWdTranscript(past).then((res) => {
+      const msgs = res?.messages;
+      if (!msgs || !msgs.length) return;
+      // Pre-compile tail assistant markdown in tiny <=3ms slices so click-open hits 100% mdCache.
+      const todo = [];
+      for (let i = msgs.length - 1; i >= 0 && todo.length < WD_MOBILE_TAIL_GROUPS; i--) {
+        const m = msgs[i];
+        if (m && m.kind !== "user" && m.kind !== "tool" && m.kind !== "ask" && m.kind !== "compaction" && m.text) {
+          const rawKey = String(m.text);
+          if (!mdCache.has(rawKey)) todo.push(rawKey);
+        }
+      }
+      if (!todo.length) return;
+      let idx = 0;
+      const step = () => {
+        const t0 = performance.now();
+        while (idx < todo.length) {
+          md(todo[idx++]);
+          if (performance.now() - t0 >= 3) break;
+        }
+        if (idx < todo.length) setTimeout(step, 8);
+      };
+      step();
+    }).catch(() => {});
+  }
+  function prefetchWdFromTarget(targetEl) {
+    if (!targetEl?.closest) return;
+    const link = targetEl.closest('a[data-open-worker], a.chip[data-worker], a.td-worker[data-td-worker], button.np-item[data-np-worker], a.event[href], a.need[href], .ask-head a[href], a[href^="#/w/"], a[href^="#/p/"], a[href^="#/h/"]');
+    if (!link) return;
+    const target = extractWorkerTargetFromEl(link);
+    if (!target) return;
+    const { liveAgent, past } = resolveWorkerContextFor(target.worker, target.paneId, target.histId);
+    if (!liveAgent && past?.id) prefetchWdHistory(past);
   }
   function isWdShell() {
     const v = wdPaneId ? find(wdPaneId) : null;
@@ -26108,9 +26284,18 @@
     clearTimeout(wdThreadEl._chunkTimer);
     wdThreadEl._chunkTimer = 0;
     wdThreadEl._chunking = false;
-    wdThreadEl._sig = ""; wdThreadEl._rawMsgsSig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._lazyRuns = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
+    wdThreadEl._startBackfill = null;
+    clearTimeout(wdThreadEl._revealTimer);
+    wdThreadEl._revealTimer = 0;
+    if (wdThreadEl._revealOnEnd) {
+      wdThreadEl.removeEventListener?.("animationend", wdThreadEl._revealOnEnd);
+      wdThreadEl._revealOnEnd = null;
+    }
+    wdThreadEl.classList?.remove("is-content-reveal");
+    wdThreadEl._sig = ""; wdThreadEl._rawMsgsSig = ""; wdThreadEl._tailRawSig = ""; wdThreadEl._tailCacheKey = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._lazyRuns = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
     wdThreadEl._renderedCacheKey = "";
     wdThreadEl._fresh = true;
+    wdThreadEl._trackedAtBottom = true;
     wdLastLive = null; wdShowRaw = false;
   }
   function resetWdChat() {
@@ -26148,6 +26333,7 @@
       if (wdScreenEl) { wdScreenEl.scrollTop = 0; wdScreenEl.scrollLeft = 0; }
     }
   }
+  const isWdSheetPrepping = () => !isDesktopDrawerViewport() && !!wdDrawer?.classList?.contains("is-sheet-prep");
   const isWdSlidePending = () => !isDesktopDrawerViewport() && !!wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16;
   const isWdSheetAnimating = () => !isDesktopDrawerViewport() && (!!wdDrawer?.classList?.contains("is-sheet-opening") || isWdSlidePending());
   const wdScreenNearBottom = () => {
@@ -26627,7 +26813,7 @@
         flushWdPendingLive();
       };
       wdDrawer._onSlideSettled = runOnce;
-      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(360, Math.ceil(remain) + 25));
+      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(480, Math.ceil(remain) + 25));
       return true;
     }
     if (wdDrawer) wdDrawer._slideSettleAt = 0;
@@ -26636,10 +26822,55 @@
     flushWdPendingLive();
     return false;
   }
+  function mountWdThread(msgs, emptyMsg, opts = {}) {
+    if (!wdThreadEl) return;
+    const { cacheKey = "", rawSig = "", isAlive = null, allowReveal = false } = opts;
+    const mobile = !isDesktopDrawerViewport();
+    const alive = () => !isAlive || isAlive();
+    const paintNow = (tailOnlyPrepping) => {
+      if (!alive()) return;
+      drawThread(msgs, wdThreadEl, emptyMsg, {
+        tailGroups: mobile ? WD_MOBILE_TAIL_GROUPS : 0,
+        deferBackfill: tailOnlyPrepping,
+        skipSyncScroll: tailOnlyPrepping,
+        revealFromSkel: !tailOnlyPrepping && allowReveal,
+        cacheKey,
+        rawSig,
+        isAlive: alive,
+      });
+      if (!wdThreadEl._chunking) {
+        wdThreadEl._renderedCacheKey = cacheKey;
+        wdThreadEl._rawMsgsSig = rawSig;
+      }
+      if (tailOnlyPrepping && wdDrawer) {
+        wdDrawer._onPrepFrame = () => {
+          if (!alive()) return;
+          syncExpandedPrompts(wdThreadEl);
+          stick(wdThreadEl, true);
+        };
+        scheduleAfterWdSlide(() => {
+          if (!alive()) return;
+          hydrateRichContent(wdThreadEl);
+          wdThreadEl._startBackfill?.();
+        });
+      }
+    };
+    if (mobile && isWdSheetPrepping()) {
+      paintNow(true);
+      return;
+    }
+    if (mobile && isWdSlidePending()) {
+      prewarmWdThreadMd(msgs, alive);
+      scheduleAfterWdSlide(() => paintNow(false));
+      return;
+    }
+    paintNow(false);
+  }
   async function loadWdHistory(past, supW, opts = {}) {
     if (!wdThreadEl) return;
     const seq = ++wdSeq;
     const preserve = !!opts.preserve;
+    const alive = () => seq === wdSeq && !!activeWorkerKey;
     clearTimeout(wdSkelTimer);
     wdSkelTimer = 0;
     clearTimeout(wdDrawer?._deferredDrawTimer);
@@ -26660,60 +26891,14 @@
     const cacheKey = "h:" + past.id;
     const cached = threadCache.get(cacheKey);
     const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
-    if (!sameRendered) {
-      resetWdChatStateOnly();
-      clearWdLive(wdPaneId);
-      if (cached) {
-        const cachedRawSig = workerMsgsRawSig(cached, 0);
-        const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 120;
-        const paintCached = () => {
-          if (seq !== wdSeq || !activeWorkerKey) return;
-          drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
-            progressive: mobileProgressive,
-            cacheKey,
-            rawSig: cachedRawSig,
-            isAlive: () => seq === wdSeq && !!activeWorkerKey,
-          });
-          if (!wdThreadEl._chunking) {
-            wdThreadEl._renderedCacheKey = cacheKey;
-            wdThreadEl._rawMsgsSig = cachedRawSig;
-          }
-          wdThreadEl._fresh = true;
-        };
-        if (isWdSlidePending()) {
-          wdThreadEl.innerHTML = SKELETON;
-          prewarmWdThreadMd(cached, () => seq === wdSeq && !!activeWorkerKey);
-          scheduleAfterWdSlide(paintCached);
-        } else {
-          paintCached();
-        }
-      } else if (preserve && wdThreadEl.childElementCount > 0) {
-        wdSkelTimer = setTimeout(() => {
-          wdSkelTimer = 0;
-          if (seq === wdSeq && activeWorkerKey && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
-        }, 140);
-      } else {
-        wdThreadEl.innerHTML = SKELETON;
-      }
-    } else {
-      clearWdLive(wdPaneId);
-    }
-    try {
-      const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
-      if (past.machine) q.set("machine", past.machine);
-      const r = await api("/api/transcript?" + q);
-      if (seq !== wdSeq || !activeWorkerKey) return;
-      clearTimeout(wdSkelTimer);
-      wdSkelTimer = 0;
-      const nextMsgs = r.messages || [];
-      const nextEarlier = r.earlier || 0;
-      const nextRawSig = workerMsgsRawSig(nextMsgs, nextEarlier);
+    const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
+    if (past.machine) q.set("machine", past.machine);
+    const bindHistoryMeta = (msgs, earlier) => {
       resetEarlier(wdThreadEl, (c) => `/api/transcript?${q}&before=${c}`);
-      wdThreadEl._msgs = nextMsgs;
-      wdThreadEl._liveEarlier = nextEarlier;
-      keepThread(cacheKey, nextMsgs);
+      wdThreadEl._msgs = msgs;
+      wdThreadEl._liveEarlier = earlier || 0;
       wdThreadEl._redraw = () => {
-        if (seq === wdSeq && activeWorkerKey) {
+        if (alive()) {
           const allMsgs = threadMsgs(wdThreadEl);
           const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
           drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), { rawSig: curRawSig });
@@ -26721,32 +26906,68 @@
           wdThreadEl._rawMsgsSig = curRawSig;
         }
       };
+    };
+    const emptyMsg = tx("worker.noMsgs", "这个任务会话没有消息记录。");
+    if (!sameRendered) {
+      resetWdChatStateOnly();
+      clearWdLive(wdPaneId);
+      if (cached) {
+        const cachedEarlier = wdHistoryEarlier.get(cacheKey) || 0;
+        const cachedRawSig = workerMsgsRawSig(cached, cachedEarlier);
+        bindHistoryMeta(cached, cachedEarlier);
+        if (isWdSheetPrepping() || !isWdSlidePending()) {
+          mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: false });
+          wdThreadEl._fresh = true;
+          const fetchedAt = wdHistoryFetchedAt.get(cacheKey) || 0;
+          if (fetchedAt && (performance.now() - fetchedAt) < 3000) return;
+        } else {
+          wdThreadEl.innerHTML = SKELETON;
+          mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: true });
+          wdThreadEl._fresh = true;
+        }
+      } else if (preserve && wdThreadEl.childElementCount > 0) {
+        wdSkelTimer = setTimeout(() => {
+          wdSkelTimer = 0;
+          if (alive() && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
+        }, 140);
+      } else {
+        wdThreadEl.innerHTML = SKELETON;
+      }
+    } else {
+      clearWdLive(wdPaneId);
+      if (isWdSheetPrepping() && wdDrawer) {
+        wdDrawer._onPrepFrame = () => {
+          if (!alive() || !wdThreadEl) return;
+          if (wdThreadEl._trackedAtBottom !== false && wdThreadEl.scrollTop === 0 && wdThreadEl.scrollHeight > wdThreadEl.clientHeight) {
+            markProgrammaticScroll(80);
+            wdThreadEl.scrollTop = wdThreadEl.scrollHeight;
+          }
+        };
+      }
+    }
+    try {
+      const r = await fetchWdTranscript(past);
+      if (!alive() || !r) return;
+      clearTimeout(wdSkelTimer);
+      wdSkelTimer = 0;
+      const nextMsgs = r.messages || [];
+      const nextEarlier = r.earlier || 0;
+      const nextRawSig = workerMsgsRawSig(nextMsgs, nextEarlier);
+      bindHistoryMeta(nextMsgs, nextEarlier);
       // Warm reopen fast-path: identical transcript skips re-parsing markdown and forced scrollHeight reads completely.
       if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === nextRawSig && wdThreadEl._sig) {
         return;
       }
-      const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && nextMsgs.length > 120;
-      if (isWdSlidePending()) prewarmWdThreadMd(nextMsgs, () => seq === wdSeq && !!activeWorkerKey);
-      scheduleAfterWdSlide(() => {
-        if (seq !== wdSeq || !activeWorkerKey) return;
-        const allMsgs = threadMsgs(wdThreadEl);
-        const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
-        if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
-          return;
-        }
-        drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
-          progressive: mobileProgressive,
-          cacheKey,
-          rawSig: curRawSig,
-          isAlive: () => seq === wdSeq && !!activeWorkerKey,
+      // Frame-0 tail already mounted with the exact same transcript: keep tail untouched and finish backfill after slide.
+      if (wdThreadEl._tailCacheKey === cacheKey && wdThreadEl._tailRawSig && wdThreadEl._tailRawSig === nextRawSig && wdThreadEl._startBackfill) {
+        scheduleAfterWdSlide(() => {
+          if (alive()) wdThreadEl._startBackfill?.();
         });
-        if (!wdThreadEl._chunking) {
-          wdThreadEl._renderedCacheKey = cacheKey;
-          wdThreadEl._rawMsgsSig = curRawSig;
-        }
-      });
+        return;
+      }
+      mountWdThread(threadMsgs(wdThreadEl), emptyMsg, { cacheKey, rawSig: nextRawSig, isAlive: alive, allowReveal: true });
     } catch (err) {
-      if (seq !== wdSeq || !activeWorkerKey) return;
+      if (!alive()) return;
       clearTimeout(wdSkelTimer);
       wdSkelTimer = 0;
       if (sameRendered) return;
@@ -26775,6 +26996,8 @@
       const cacheKey = "p:" + id;
       const cached = threadCache.get(cacheKey);
       const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
+      const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
+      const emptyMsg = tx("worker.waitingOutput", "等待任务输出…");
       if (!sameRendered) {
         resetWdChatStateOnly();
       }
@@ -26783,38 +27006,32 @@
       if (!sameRendered) {
         if (cached) {
           const cachedRawSig = workerMsgsRawSig(cached, 0);
-          const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 120;
-          const paintCached = () => {
-            if (seq !== wdSeq || !activeWorkerKey || wdPaneId !== id) return;
-            drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
-              progressive: mobileProgressive,
-              cacheKey,
-              rawSig: cachedRawSig,
-              isAlive: () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id,
-            });
-            if (!wdThreadEl._chunking) {
-              wdThreadEl._renderedCacheKey = cacheKey;
-              wdThreadEl._rawMsgsSig = cachedRawSig;
-            }
+          if (isWdSheetPrepping() || !isWdSlidePending()) {
+            mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: false });
             wdThreadEl._fresh = true;
-          };
-          if (isWdSlidePending()) {
-            wdThreadEl.innerHTML = SKELETON;
-            prewarmWdThreadMd(cached, () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id);
-            scheduleAfterWdSlide(paintCached);
           } else {
-            paintCached();
+            wdThreadEl.innerHTML = SKELETON;
+            mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: true });
+            wdThreadEl._fresh = true;
           }
         } else if (preserve && wdThreadEl.childElementCount > 0) {
           wdSkelTimer = setTimeout(() => {
             wdSkelTimer = 0;
-            if (seq === wdSeq && activeWorkerKey && wdPaneId === id && !wdThreadEl._msgs) {
+            if (alive() && !wdThreadEl._msgs) {
               wdThreadEl.innerHTML = SKELETON;
             }
           }, 140);
         } else {
           wdThreadEl.innerHTML = SKELETON;
         }
+      } else if (isWdSheetPrepping() && wdDrawer) {
+        wdDrawer._onPrepFrame = () => {
+          if (!alive() || !wdThreadEl) return;
+          if (wdThreadEl._trackedAtBottom !== false && wdThreadEl.scrollTop === 0 && wdThreadEl.scrollHeight > wdThreadEl.clientHeight) {
+            markProgrammaticScroll(80);
+            wdThreadEl.scrollTop = wdThreadEl.scrollHeight;
+          }
+        };
       }
       const cachedLive = wdLiveCache.get(id);
       if (cachedLive) drawWdLive(cachedLive);
@@ -26825,12 +27042,11 @@
         wdLiveEl._html = "";
         wdLiveEl._lastTail = "";
       }
-      const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
       wdThreadEl._redraw = () => {
         if (!alive()) return;
         const allMsgs = threadMsgs(wdThreadEl);
         const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
-        drawThread(allMsgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), { rawSig: curRawSig });
+        drawThread(allMsgs, wdThreadEl, emptyMsg, { rawSig: curRawSig });
         wdThreadEl._renderedCacheKey = cacheKey;
         wdThreadEl._rawMsgsSig = curRawSig;
       };
@@ -26843,24 +27059,13 @@
         if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
           return;
         }
-        const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && !wdThreadEl._chunking && msgs.length > 120;
-        if (isWdSlidePending()) prewarmWdThreadMd(msgs, alive);
-        scheduleAfterWdSlide(() => {
-          if (!alive()) return;
-          if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
-            return;
-          }
-          drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
-            progressive: mobileProgressive,
-            cacheKey,
-            rawSig: curRawSig,
-            isAlive: alive,
+        if (wdThreadEl._tailCacheKey === cacheKey && wdThreadEl._tailRawSig && wdThreadEl._tailRawSig === curRawSig && wdThreadEl._startBackfill) {
+          scheduleAfterWdSlide(() => {
+            if (alive()) wdThreadEl._startBackfill?.();
           });
-          if (!wdThreadEl._chunking) {
-            wdThreadEl._renderedCacheKey = cacheKey;
-            wdThreadEl._rawMsgsSig = curRawSig;
-          }
-        });
+          return;
+        }
+        mountWdThread(msgs, emptyMsg, { cacheKey, rawSig: curRawSig, isAlive: alive, allowReveal: true });
       };
       wdStream.addEventListener("reset", () => { if (alive()) resetWdChatStateOnly(); });
       wdStream.addEventListener("patch", (e) => alive() && showPane(applyPatch(wdThreadEl, JSON.parse(e.data))));
@@ -27179,10 +27384,19 @@
     clearTimeout(wdDrawer._deferredDrawTimer);
     wdDrawer._deferredDrawTimer = 0;
     wdDrawer._onSlideSettled = null;
+    wdDrawer._onPrepFrame = null;
     wdDrawer._slideSettleAt = 0;
     cancelWdPrewarm();
     clearTimeout(wdThreadEl?._chunkTimer);
-    if (wdThreadEl) { wdThreadEl._chunkTimer = 0; wdThreadEl._chunking = false; }
+    if (wdThreadEl) {
+      wdThreadEl._chunkTimer = 0;
+      wdThreadEl._chunking = false;
+      wdThreadEl._backfilling = false;
+      wdThreadEl._startBackfill = null;
+      wdThreadEl._tailCacheKey = "";
+      wdThreadEl._tailRawSig = "";
+      wdThreadEl.classList?.remove("is-content-reveal");
+    }
     if (wdLogEl) wdLogEl._lastText = "";
     wdSeq++;
     const prevWdPane = wdPaneId || wdLastLivePaneId;
@@ -27436,6 +27650,14 @@
     wdLogEl?.addEventListener("scroll", () => {
       if (curWdMode() !== "log" || !wdJumpBtn) return;
       wdJumpBtn.hidden = wdLogEl.scrollHeight - wdLogEl.scrollTop - wdLogEl.clientHeight < 40;
+    }, { passive: true });
+    wdThreadEl?.addEventListener("scroll", () => {
+      if (!wdThreadEl || wdDrawer.hidden) return;
+      wdThreadEl._trackedAtBottom = (wdThreadEl.scrollHeight - wdThreadEl.scrollTop - wdThreadEl.clientHeight) < 80;
+    }, { passive: true });
+    document.addEventListener("pointerdown", (e) => {
+      if (view !== "collie" || (e.pointerType !== "touch" && e.button !== 0)) return;
+      prefetchWdFromTarget(e.target);
     }, { passive: true });
     wdJumpBtn?.addEventListener("click", () => {
       if (curWdMode() === "screen") {

@@ -32,6 +32,10 @@ try {
   --ok-light: #15803d;
   --ok-dot-light: #22c55e;
   --ok-ring-light: rgba(34, 197, 94, .18);
+  --ok-on-accent-light: #4ade80;
+  --toast-bg-light: #141416;
+  --toast-fg-light: #f8f8f7;
+  --toast-border-light: rgba(255, 255, 255, .12);
   --attn-light: #b45309;
   --attn-dot-light: #f59e0b;
   --attn-ring-light: rgba(245, 158, 11, .2);
@@ -59,6 +63,10 @@ try {
   --ok-dark: #4ade80;
   --ok-dot-dark: #4ade80;
   --ok-ring-dark: rgba(74, 222, 128, .22);
+  --ok-on-accent-dark: #15803d;
+  --toast-bg-dark: #222229;
+  --toast-fg-dark: #f2f2f0;
+  --toast-border-dark: rgba(255, 255, 255, .14);
   --attn-dark: #fbbf24;
   --attn-dot-dark: #fbbf24;
   --attn-ring-dark: rgba(251, 191, 36, .22);
@@ -86,6 +94,10 @@ try {
   --ok: var(--ok-light);
   --ok-dot: var(--ok-dot-light);
   --ok-ring: var(--ok-ring-light);
+  --ok-on-accent: var(--ok-on-accent-light);
+  --toast-bg: var(--toast-bg-light);
+  --toast-fg: var(--toast-fg-light);
+  --toast-border: var(--toast-border-light);
   --attn: var(--attn-light);
   --attn-dot: var(--attn-dot-light);
   --attn-ring: var(--attn-ring-light);
@@ -123,6 +135,10 @@ try {
     --ok: var(--ok-dark);
     --ok-dot: var(--ok-dot-dark);
     --ok-ring: var(--ok-ring-dark);
+    --ok-on-accent: var(--ok-on-accent-dark);
+    --toast-bg: var(--toast-bg-dark);
+    --toast-fg: var(--toast-fg-dark);
+    --toast-border: var(--toast-border-dark);
     --attn: var(--attn-dark);
     --attn-dot: var(--attn-dot-dark);
     --attn-ring: var(--attn-ring-dark);
@@ -153,6 +169,10 @@ try {
     --ok: light-dark(var(--ok-light), var(--ok-dark));
     --ok-dot: light-dark(var(--ok-dot-light), var(--ok-dot-dark));
     --ok-ring: light-dark(var(--ok-ring-light), var(--ok-ring-dark));
+    --ok-on-accent: light-dark(var(--ok-on-accent-light), var(--ok-on-accent-dark));
+    --toast-bg: light-dark(var(--toast-bg-light), var(--toast-bg-dark));
+    --toast-fg: light-dark(var(--toast-fg-light), var(--toast-fg-dark));
+    --toast-border: light-dark(var(--toast-border-light), var(--toast-border-dark));
     --attn: light-dark(var(--attn-light), var(--attn-dark));
     --attn-dot: light-dark(var(--attn-dot-light), var(--attn-dot-dark));
     --attn-ring: light-dark(var(--attn-ring-light), var(--attn-ring-dark));
@@ -183,6 +203,7 @@ try {
     --fg: var(--fg-dark); --fg-2: var(--fg-2-dark); --fg-3: var(--fg-3-dark);
     --accent: var(--accent-dark); --accent-hover: var(--accent-hover-dark); --on-accent: var(--on-accent-dark);
     --ok: var(--ok-dark); --ok-dot: var(--ok-dot-dark); --ok-ring: var(--ok-ring-dark);
+    --ok-on-accent: var(--ok-on-accent-dark); --toast-bg: var(--toast-bg-dark); --toast-fg: var(--toast-fg-dark); --toast-border: var(--toast-border-dark);
     --attn: var(--attn-dark); --attn-dot: var(--attn-dot-dark); --attn-ring: var(--attn-ring-dark);
     --err: var(--err-dark); --err-soft: var(--err-soft-dark); --err-dot: var(--err-dot-dark); --err-ring: var(--err-ring-dark);
   }
@@ -192,6 +213,7 @@ try {
     --fg: var(--fg-light); --fg-2: var(--fg-2-light); --fg-3: var(--fg-3-light);
     --accent: var(--accent-light); --accent-hover: var(--accent-hover-light); --on-accent: var(--on-accent-light);
     --ok: var(--ok-light); --ok-dot: var(--ok-dot-light); --ok-ring: var(--ok-ring-light);
+    --ok-on-accent: var(--ok-on-accent-light); --toast-bg: var(--toast-bg-light); --toast-fg: var(--toast-fg-light); --toast-border: var(--toast-border-light);
     --attn: var(--attn-light); --attn-dot: var(--attn-dot-light); --attn-ring: var(--attn-ring-light);
     --err: var(--err-light); --err-soft: var(--err-soft-light); --err-dot: var(--err-dot-light); --err-ring: var(--err-ring-light);
   }
@@ -510,6 +532,17 @@ main {
 .btn.primary:hover:not(:disabled) .arrow-ic {
   transform: translateX(2px);
 }
+.btn.primary .ic-copy,
+.btn.primary .ic-check {
+  display: none;
+}
+.btn.primary.is-copy-primary .arrow-ic { display: none; }
+.btn.primary.is-copy-primary .ic-copy { display: block; }
+.btn.primary.is-copy-primary.done .ic-copy { display: none; }
+.btn.primary.is-copy-primary.done .ic-check {
+  display: block;
+  stroke: var(--ok-on-accent);
+}
 .btn.secondary {
   min-block-size: 42px;
   padding: 9px 16px;
@@ -532,6 +565,60 @@ main {
 .btn.secondary .ic-check { display: none; }
 .btn.secondary.done .ic-copy { display: none; }
 .btn.secondary.done .ic-check { display: block; }
+
+/* Mobile post-copy inline guidance & fallback code box */
+.copy-guide {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--ok) 28%, var(--line));
+  background: color-mix(in srgb, var(--ok) 6%, var(--surface-2));
+  color: var(--fg-2);
+  font-size: 0.79rem;
+  line-height: 1.5;
+  text-align: left;
+}
+.copy-guide svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-top: 2px;
+  stroke: var(--ok);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.copy-guide.is-err {
+  border-color: color-mix(in srgb, var(--err) 30%, var(--line));
+  background: var(--err-soft);
+  color: var(--fg);
+}
+.copy-guide.is-err svg { stroke: var(--err); }
+.copy-guide .ic-err,
+.join-toast .ic-err { display: none; }
+.copy-guide.is-err .ic-ok,
+.join-toast.is-err .ic-ok { display: none; }
+.copy-guide.is-err .ic-err,
+.join-toast.is-err .ic-err { display: block; }
+.copy-guide-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.copy-guide-code {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  color: var(--fg);
+  font: 0.74rem/1.35 var(--mono);
+}
 
 /* Smooth native <details> disclosure animation (progressive enhancement) */
 details::details-content {
@@ -673,6 +760,13 @@ details[open] > summary .chev { rotate: 180deg; }
   flex-direction: column;
   gap: 4px;
 }
+.addr-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
 .addr-opt {
   position: relative;
   display: flex;
@@ -807,6 +901,26 @@ details[open] > summary .chev { rotate: 180deg; }
   line-height: 1.45;
   color: var(--fg-3);
 }
+.custom-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.clear-custom-btn {
+  border: 0;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-3);
+  font: 500 0.74rem/1.4 var(--sans);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color .14s ease;
+}
+.clear-custom-btn:hover { color: var(--fg); }
 .error-msg {
   display: none;
   margin: 0;
@@ -1000,8 +1114,89 @@ footer {
   opacity: .85;
 }
 
+/* Lightweight toast notification (Popover progressive enhancement + fixed fallback) */
+.join-toast-region {
+  position: fixed;
+  inset-inline: 16px;
+  inset-block-end: max(18px, calc(12px + env(safe-area-inset-bottom, 0px)));
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 40;
+}
+.join-toast {
+  pointer-events: auto;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 10px 10px 10px 14px;
+  border-radius: 13px;
+  border: 1px solid var(--toast-border);
+  background: var(--toast-bg);
+  color: var(--toast-fg);
+  box-shadow: 0 8px 28px -6px rgba(0, 0, 0, .32);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.join-toast[popover] {
+  position: fixed;
+  inset: auto 16px max(18px, calc(12px + env(safe-area-inset-bottom, 0px))) 16px;
+  margin: 0 auto;
+  width: fit-content;
+  transition: opacity .18s ease, transform .18s ease, overlay .18s ease, display .18s ease;
+  transition-behavior: allow-discrete;
+}
+.join-toast[popover]:not(:popover-open):not(.\:popover-open) {
+  display: none;
+}
+.join-toast.is-open,
+.join-toast[popover]:is(:popover-open, .\:popover-open) {
+  display: inline-flex;
+  opacity: 1;
+  transform: translateY(0);
+}
+@starting-style {
+  .join-toast[popover]:is(:popover-open, .\:popover-open) {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.join-toast-ic {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  stroke: var(--ok-dot);
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.join-toast.is-err .join-toast-ic { stroke: var(--err-dot); }
+.join-toast-msg { flex: 1; min-width: 0; }
+.join-toast-x {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  min-inline-size: 26px;
+  min-block-size: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  opacity: .72;
+  font: 500 1rem/1 var(--sans);
+  cursor: pointer;
+  transition: opacity .14s ease, background-color .14s ease;
+}
+.join-toast-x:hover { opacity: 1; background: rgba(255, 255, 255, .12); }
+
 @media (prefers-reduced-motion: reduce) {
-  .btn, .btn .arrow-ic, .ctrl, .nav-link, .addr-summary, .tech-summary, .chev, .addr-opt, .radio-dot, .radio-dot::after, .text-input, .save-btn, .pwa-quick-btn {
+  .btn, .btn .arrow-ic, .ctrl, .nav-link, .addr-summary, .tech-summary, .chev, .addr-opt, .radio-dot, .radio-dot::after, .text-input, .save-btn, .clear-custom-btn, .pwa-quick-btn, .join-toast, .join-toast-x {
     transition: none;
   }
 }
@@ -1117,6 +1312,8 @@ footer {
       <div class="open-section" id="open-section" hidden>
         <form class="hub-form" id="hub-form" novalidate>
           <button type="submit" class="btn primary" id="open-btn">
+            <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="ic-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
             <span id="open-btn-text" data-i18n="open_btn">Open in my Collie &amp; Request</span>
             <svg class="arrow-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </button>
@@ -1127,15 +1324,24 @@ footer {
             <span id="copy-code-text" data-i18n="copy_code">Copy invite code</span>
           </button>
 
+          <div class="copy-guide" id="mobile-copy-guide" hidden>
+            <svg class="ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <svg class="ic-err" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5h.01"/></svg>
+            <div class="copy-guide-body">
+              <span id="mobile-copy-guide-text"></span>
+              <input type="text" class="copy-guide-code" id="mobile-copy-fallback-code" readonly aria-label="Invite code" hidden>
+            </div>
+          </div>
+
           <!-- Compact target indicator + collapsible one-click switcher -->
           <details class="addr-details" id="addr-details">
             <summary class="addr-summary" id="addr-summary">
-              <span data-i18n="opens_prefix">Opens:</span>
+              <span id="addr-opens-prefix" data-i18n="opens_prefix">Opens:</span>
               <span class="addr-current" id="addr-current"></span>
               <span class="addr-saved-flash" id="addr-saved-flash" hidden></span>
-              <span class="addr-sep" aria-hidden="true">·</span>
+              <span class="addr-sep" id="addr-sep" aria-hidden="true">·</span>
               <span class="addr-action">
-                <span data-i18n="switch_addr">Switch</span>
+                <span id="addr-switch-text" data-i18n="switch_addr">Switch</span>
                 <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </span>
             </summary>
@@ -1144,40 +1350,42 @@ footer {
               <fieldset class="addr-fieldset">
                 <legend class="visually-hidden" data-i18n="addr_legend">Choose your Collie address</legend>
 
-                <label class="addr-opt" for="mode-node">
-                  <input type="radio" class="visually-hidden" id="mode-node" name="hub_mode" value="node" checked>
-                  <span class="addr-opt-left">
-                    <span class="radio-dot" aria-hidden="true"></span>
-                    <span class="addr-opt-title" data-i18n="opt_node">Local Node Proxy</span>
-                  </span>
-                  <span class="addr-opt-code">127.0.0.1:17788</span>
-                </label>
+                <div class="addr-presets" id="addr-presets-desktop">
+                  <label class="addr-opt" for="mode-node">
+                    <input type="radio" class="visually-hidden" id="mode-node" name="hub_mode" value="node" checked>
+                    <span class="addr-opt-left">
+                      <span class="radio-dot" aria-hidden="true"></span>
+                      <span class="addr-opt-title" data-i18n="opt_node">Local Node Proxy</span>
+                    </span>
+                    <span class="addr-opt-code">127.0.0.1:17788</span>
+                  </label>
 
-                <label class="addr-opt" for="mode-hub">
-                  <input type="radio" class="visually-hidden" id="mode-hub" name="hub_mode" value="hub">
-                  <span class="addr-opt-left">
-                    <span class="radio-dot" aria-hidden="true"></span>
-                    <span class="addr-opt-title" data-i18n="opt_hub">Local Hub</span>
-                  </span>
-                  <span class="addr-opt-code">127.0.0.1:7788</span>
-                </label>
+                  <label class="addr-opt" for="mode-hub">
+                    <input type="radio" class="visually-hidden" id="mode-hub" name="hub_mode" value="hub">
+                    <span class="addr-opt-left">
+                      <span class="radio-dot" aria-hidden="true"></span>
+                      <span class="addr-opt-title" data-i18n="opt_hub">Local Hub</span>
+                    </span>
+                    <span class="addr-opt-code">127.0.0.1:7788</span>
+                  </label>
 
-                <label class="addr-opt" for="mode-pwa">
-                  <input type="radio" class="visually-hidden" id="mode-pwa" name="hub_mode" value="pwa">
-                  <span class="addr-opt-left">
-                    <span class="radio-dot" aria-hidden="true"></span>
-                    <span class="addr-opt-title" data-i18n="opt_pwa">Installed Collie App</span>
-                  </span>
-                  <span class="addr-opt-code">web+collie://</span>
-                </label>
+                  <label class="addr-opt" for="mode-pwa">
+                    <input type="radio" class="visually-hidden" id="mode-pwa" name="hub_mode" value="pwa">
+                    <span class="addr-opt-left">
+                      <span class="radio-dot" aria-hidden="true"></span>
+                      <span class="addr-opt-title" data-i18n="opt_pwa">Installed Collie App</span>
+                    </span>
+                    <span class="addr-opt-code">web+collie://</span>
+                  </label>
 
-                <label class="addr-opt" for="mode-custom">
-                  <input type="radio" class="visually-hidden" id="mode-custom" name="hub_mode" value="custom">
-                  <span class="addr-opt-left">
-                    <span class="radio-dot" aria-hidden="true"></span>
-                    <span class="addr-opt-title" data-i18n="opt_custom">Custom LAN / Tailscale URL</span>
-                  </span>
-                </label>
+                  <label class="addr-opt" for="mode-custom">
+                    <input type="radio" class="visually-hidden" id="mode-custom" name="hub_mode" value="custom">
+                    <span class="addr-opt-left">
+                      <span class="radio-dot" aria-hidden="true"></span>
+                      <span class="addr-opt-title" data-i18n="opt_custom">Custom LAN / Tailscale URL</span>
+                    </span>
+                  </label>
+                </div>
 
                 <div class="custom-wrap" id="custom-wrap" hidden>
                   <label for="hub-url" class="visually-hidden" data-i18n="hub_label">Custom Collie URL</label>
@@ -1200,7 +1408,10 @@ footer {
                     >
                     <button type="button" class="save-btn" id="save-custom-btn" data-i18n="save_addr">Save</button>
                   </div>
-                  <p id="hub-url-hint" class="custom-hint" data-i18n="custom_hint">Saved only in this browser. Press Enter or Save to apply.</p>
+                  <div class="custom-foot">
+                    <p id="hub-url-hint" class="custom-hint" data-i18n="custom_hint">Saved only in this browser. Press Enter or Save to apply.</p>
+                    <button type="button" class="clear-custom-btn" id="clear-custom-btn" data-i18n="clear_saved_addr" hidden>Clear saved URL</button>
+                  </div>
                   <p id="hub-url-error" class="error-msg"></p>
                 </div>
               </fieldset>
@@ -1266,6 +1477,15 @@ footer {
   <span data-i18n="footer_privacy">100% client-side · # hash never leaves your browser</span>
 </footer>
 
+<div class="join-toast-region" id="join-toast-region" role="region" aria-label="Notifications">
+  <div class="join-toast" id="join-toast" popover="manual" hidden>
+    <svg class="join-toast-ic ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+    <svg class="join-toast-ic ic-err" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5h.01"/></svg>
+    <span class="join-toast-msg" id="join-toast-msg"></span>
+    <button type="button" class="join-toast-x" id="join-toast-close" aria-label="Close">×</button>
+  </div>
+</div>
+
 <script>
 (() => {
 "use strict";
@@ -1304,10 +1524,16 @@ const COPY = {
     note_expired: "Invite expired",
     note_invalid: "Incomplete or truncated # link",
     open_btn: "Open in my Collie & Request",
+    open_btn_mobile_copy: "Copy invite code & paste in Collie",
+    open_btn_mobile_open: "Open in my Collie",
     copy_code: "Copy invite code",
     copied: "Invite code copied",
+    copy_failed: "Clipboard blocked — select and copy the invite code below.",
+    mobile_copy_toast: "Code copied · Open Collie on Home Screen → Peers → Paste",
+    mobile_copy_guide: "Invite code copied! Open Collie from your Home Screen → Peers → Add Friend, then tap Paste.",
     opens_prefix: "Opens:",
     switch_addr: "Switch",
+    mobile_addr_toggle: "Enter my LAN / Tailscale URL to open directly",
     addr_legend: "Choose your Collie address",
     opt_node: "Local Node Proxy",
     opt_hub: "Local Hub",
@@ -1318,14 +1544,20 @@ const COPY = {
     hub_label: "Custom Collie URL",
     save_addr: "Save",
     saved_flash: "Saved",
+    cleared_flash: "Cleared",
+    clear_saved_addr: "Clear saved URL",
     custom_hint: "Saved only in this browser. Press Enter or Save to apply.",
+    mobile_custom_hint: "Remembered in this browser so you can open your Collie directly next time.",
     target_node_name: "Local Collie",
     target_hub_name: "Local Hub",
     target_pwa_name: "Collie App",
     target_custom_empty: "Custom URL not set",
     err_url_empty: "Enter your Collie URL first (e.g. http://your-hub:7788).",
     err_url_invalid: "Enter a valid http:// or https:// Collie URL (e.g. http://your-hub:7788).",
+    err_url_loopback_mobile: "127.0.0.1 is unavailable on mobile. Enter your LAN or Tailscale Hub URL (e.g. http://your-hub:7788).",
     err_url_self: "Enter your own Collie Hub URL, not this static invite page.",
+    toast_region_label: "Notifications",
+    toast_close: "Close notification",
     manual_label: "Paste a friend's card link or invite code",
     manual_ph: "https://lihuanyu0w0.github.io/collie/join/#2.... or collie-peer://v2/...",
     manual_btn: "Open business card",
@@ -1362,10 +1594,16 @@ const COPY = {
     note_expired: "邀请已过期",
     note_invalid: "名片链接格式无效或被截断",
     open_btn: "在我的 Collie 中打开并申请",
+    open_btn_mobile_copy: "复制邀请码，去 Collie 粘贴",
+    open_btn_mobile_open: "在我的 Collie 中打开",
     copy_code: "复制邀请码",
     copied: "已复制邀请码",
+    copy_failed: "自动复制受限，请长按全选下方邀请码复制。",
+    mobile_copy_toast: "已复制邀请码 · 回主屏幕打开 Collie → 好友边牧粘贴",
+    mobile_copy_guide: "已复制邀请码！回到主屏幕打开 Collie → 好友边牧 → 添加好友，点「粘贴」即可。",
     opens_prefix: "将打开：",
     switch_addr: "切换地址",
+    mobile_addr_toggle: "填写我的局域网 / Tailscale 地址直达",
     addr_legend: "选择你的 Collie 地址",
     opt_node: "本机代理（Node）",
     opt_hub: "本机 Hub",
@@ -1376,14 +1614,20 @@ const COPY = {
     hub_label: "自定义 Collie 地址",
     save_addr: "保存",
     saved_flash: "已保存",
+    cleared_flash: "已清除",
+    clear_saved_addr: "清除已记住地址",
     custom_hint: "仅保存在当前浏览器本地，回车或点击保存生效。",
+    mobile_custom_hint: "填写后自动记住，下次点主按钮即可直接打开你的 Collie。",
     target_node_name: "本机 Collie",
     target_hub_name: "本机 Hub",
     target_pwa_name: "Collie 应用",
     target_custom_empty: "未填写自定义地址",
     err_url_empty: "请先输入你的 Collie 地址（例如 http://your-hub:7788）。",
     err_url_invalid: "请输入有效的 http:// 或 https:// Collie 地址（例如 http://your-hub:7788）。",
+    err_url_loopback_mobile: "手机上无法访问 127.0.0.1，请填写局域网或 Tailscale 地址（例如 http://your-hub:7788）。",
     err_url_self: "请填写你自己运行的 Collie 地址，而不是当前邀请落地页。",
+    toast_region_label: "操作提示",
+    toast_close: "关闭提示",
     manual_label: "粘贴好友的名片链接或邀请码",
     manual_ph: "粘贴整段分享文案、https://lihuanyu0w0.github.io/collie/join/#2.... 或 collie-peer://v2/...",
     manual_btn: "打开边牧名片",
@@ -1405,11 +1649,36 @@ const writeStored = (k, v) => { try { v == null ? localStorage.removeItem(k) : l
 let currentLang = "en";
 let cardState = { status: "empty", version: 0, kind: "card", inviteCode: "", hashPayload: "", rawPayload: "", payload: null };
 let legacyTimer = null;
-let selectedMode = "node"; // "node" | "hub" | "pwa" | "custom"
+let selectedMode = "node"; // desktop: "node" | "hub" | "pwa" | "custom"; mobile: "mobile_copy" | "custom"
 let customSavedUrl = "";
 let copyTimer = null;
 let flashTimer = null;
 let pwaHintTimer = null;
+let toastTimer = 0;
+let toastHover = false;
+let toastTriggerEl = null;
+let copyGuideState = ""; // "" | "copied" | "failed"
+
+function detectMobileClient() {
+  try {
+    if (navigator.userAgentData && navigator.userAgentData.mobile === true) return true;
+  } catch {}
+  const ua = String(navigator.userAgent || "");
+  if (/iPhone|iPad|iPod|Android|HarmonyOS|OpenHarmony|Mobile/i.test(ua)) return true;
+  const touchPoints = Number(navigator.maxTouchPoints || 0);
+  if (/Macintosh/i.test(ua) && touchPoints > 1) return true;
+  return false;
+}
+
+function isLoopbackHost(hostname) {
+  const h = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  return h === "127.0.0.1" || h === "localhost" || h === "::1";
+}
+
+const isMobileClient = detectMobileClient();
+if (isMobileClient && document.documentElement?.classList) {
+  document.documentElement.classList.add("is-mobile");
+}
 
 /* Polite live region announcer for accessible validation & copy feedback */
 const announcer = document.createElement("div");
@@ -1417,12 +1686,16 @@ announcer.setAttribute("aria-live", "polite");
 announcer.className = "visually-hidden";
 document.body.append(announcer);
 let announceTimer = 0;
+let lastAnnounced = "";
 
 function announce(msg) {
   clearTimeout(announceTimer);
   announcer.textContent = "";
   if (!msg) return;
-  announceTimer = setTimeout(() => { announcer.textContent = msg; }, 180);
+  let next = String(msg);
+  if (next === lastAnnounced) next += "\u00A0";
+  lastAnnounced = next;
+  announceTimer = setTimeout(() => { announcer.textContent = next; }, 180);
 }
 
 function detectInitialLang() {
@@ -1624,6 +1897,7 @@ function normalizeUserHubUrl(raw) {
   let s = String(raw || "").trim();
   if (!s) return { ok: false, error: dict.err_url_empty };
   if (s.toLowerCase() === PRESET_PWA) {
+    if (isMobileClient) return { ok: false, error: dict.err_url_invalid };
     return { ok: true, normalized: PRESET_PWA };
   }
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
@@ -1644,6 +1918,9 @@ function normalizeUserHubUrl(raw) {
     } catch {
       return { ok: false, error: dict.err_url_invalid };
     }
+  }
+  if (isMobileClient && isLoopbackHost(u.hostname)) {
+    return { ok: false, error: dict.err_url_loopback_mobile };
   }
   if (isSameOriginAsPage(u.href) && location.pathname.includes("/join")) {
     return { ok: false, error: dict.err_url_self };
@@ -1705,12 +1982,89 @@ function validateCustomField({ force = false, shouldAnnounce = false, normalizeD
   return res;
 }
 
+function syncActionButtons() {
+  const dict = COPY[currentLang];
+  const openBtn = $("open-btn");
+  const openText = $("open-btn-text");
+  const copyBtn = $("copy-code-btn");
+  const copyText = $("copy-code-text");
+  const clearBtn = $("clear-custom-btn");
+  const hintEl = $("hub-url-hint");
+  const isMobileCopy = isMobileClient && selectedMode === "mobile_copy";
+
+  if (openBtn) {
+    openBtn.classList.toggle("is-copy-primary", isMobileCopy);
+    if (!isMobileCopy) openBtn.classList.remove("done");
+  }
+  if (openText) {
+    if (isMobileCopy) {
+      openText.textContent = openBtn?.classList.contains("done") ? dict.copied : dict.open_btn_mobile_copy;
+    } else if (isMobileClient) {
+      openText.textContent = dict.open_btn_mobile_open;
+    } else {
+      openText.textContent = dict.open_btn;
+    }
+  }
+  if (copyBtn) {
+    copyBtn.hidden = isMobileCopy;
+    if (copyText && !copyBtn.classList.contains("done")) {
+      copyText.textContent = dict.copy_code;
+    }
+  }
+  if (clearBtn) {
+    clearBtn.hidden = !(isMobileClient && selectedMode === "custom" && !!customSavedUrl);
+  }
+  if (hintEl) {
+    hintEl.textContent = isMobileClient ? dict.mobile_custom_hint : dict.custom_hint;
+  }
+  syncCopyGuide();
+}
+
+function syncCopyGuide() {
+  const guide = $("mobile-copy-guide");
+  const guideText = $("mobile-copy-guide-text");
+  const fallbackInput = $("mobile-copy-fallback-code");
+  if (!guide || !guideText) return;
+  const dict = COPY[currentLang];
+  if (!copyGuideState || !isActionableStatus(cardState.status)) {
+    guide.hidden = true;
+    guide.classList.remove("is-err");
+    if (fallbackInput) fallbackInput.hidden = true;
+    return;
+  }
+  if (copyGuideState === "failed") {
+    guide.classList.add("is-err");
+    guideText.textContent = dict.copy_failed;
+    if (fallbackInput) {
+      fallbackInput.value = cardState.inviteCode || "";
+      fallbackInput.hidden = !cardState.inviteCode;
+    }
+    guide.hidden = false;
+  } else {
+    guide.classList.remove("is-err");
+    guideText.textContent = dict.mobile_copy_guide;
+    if (fallbackInput) fallbackInput.hidden = true;
+    guide.hidden = false;
+  }
+}
+
 function renderTargetSummary() {
   const dict = COPY[currentLang];
   const el = $("addr-current");
+  const prefixEl = $("addr-opens-prefix");
+  const sepEl = $("addr-sep");
+  const switchEl = $("addr-switch-text");
   const pwaRow = $("pwa-quick-row");
-  if (pwaRow) pwaRow.hidden = selectedMode === "pwa";
-  if (!el) return;
+  if (pwaRow) pwaRow.hidden = isMobileClient || selectedMode === "pwa";
+
+  const isMobileCopy = isMobileClient && selectedMode === "mobile_copy";
+  if (prefixEl) prefixEl.hidden = isMobileCopy;
+  if (sepEl) sepEl.hidden = isMobileCopy;
+  if (el) el.hidden = isMobileCopy;
+  if (switchEl) {
+    switchEl.textContent = isMobileCopy ? dict.mobile_addr_toggle : dict.switch_addr;
+  }
+  if (!el || isMobileCopy) return;
   el.textContent = "";
 
   if (selectedMode === "node") {
@@ -1744,43 +2098,53 @@ function renderTargetSummary() {
   }
 }
 
-function flashSaved() {
+function flashSaved(msgKey = "saved_flash") {
   const el = $("addr-saved-flash");
   if (!el) return;
   clearTimeout(flashTimer);
-  el.textContent = "· " + COPY[currentLang].saved_flash;
+  const label = COPY[currentLang][msgKey] || COPY[currentLang].saved_flash;
+  el.textContent = "· " + label;
   el.hidden = false;
   flashTimer = setTimeout(() => { el.hidden = true; }, 1800);
 }
 
 function applyHubMode(mode, { persist = false, focusCustom = false } = {}) {
-  selectedMode = mode;
-  $("mode-node").checked = mode === "node";
-  $("mode-hub").checked = mode === "hub";
-  $("mode-pwa").checked = mode === "pwa";
-  $("mode-custom").checked = mode === "custom";
-  $("custom-wrap").hidden = mode !== "custom";
+  const effectiveMode = isMobileClient
+    ? (mode === "custom" ? "custom" : "mobile_copy")
+    : (mode === "mobile_copy" ? "node" : mode);
+  selectedMode = effectiveMode;
+
+  const presetsDesktop = $("addr-presets-desktop");
+  if (presetsDesktop) presetsDesktop.hidden = isMobileClient;
+
+  $("mode-node").checked = !isMobileClient && effectiveMode === "node";
+  $("mode-hub").checked = !isMobileClient && effectiveMode === "hub";
+  $("mode-pwa").checked = !isMobileClient && effectiveMode === "pwa";
+  $("mode-custom").checked = effectiveMode === "custom";
+  $("custom-wrap").hidden = isMobileClient ? false : (effectiveMode !== "custom");
   $("pwa-hint").hidden = true;
 
-  if (mode === "node") {
+  if (effectiveMode === "mobile_copy") {
+    clearCustomError();
+  } else if (effectiveMode === "node") {
     clearCustomError();
     if (persist) {
       writeStored(HUB_URL_KEY, PRESET_NODE);
       flashSaved();
     }
-  } else if (mode === "hub") {
+  } else if (effectiveMode === "hub") {
     clearCustomError();
     if (persist) {
       writeStored(HUB_URL_KEY, PRESET_HUB);
       flashSaved();
     }
-  } else if (mode === "pwa") {
+  } else if (effectiveMode === "pwa") {
     clearCustomError();
     if (persist) {
       writeStored(HUB_URL_KEY, PRESET_PWA);
       flashSaved();
     }
-  } else if (mode === "custom") {
+  } else if (effectiveMode === "custom") {
     if (customSavedUrl && !$("hub-url").value.trim()) {
       $("hub-url").value = customSavedUrl;
     }
@@ -1788,11 +2152,36 @@ function applyHubMode(mode, { persist = false, focusCustom = false } = {}) {
       requestAnimationFrame(() => $("hub-url").focus());
     }
   }
+  syncActionButtons();
   renderTargetSummary();
 }
 
 function initStoredHub() {
   const saved = readStored(HUB_URL_KEY);
+  if (isMobileClient) {
+    const clean = (saved && saved !== PRESET_NODE && saved !== PRESET_HUB && saved !== PRESET_PWA)
+      ? sanitizeHttpUrl(saved, { defaultHttp: false })
+      : "";
+    let usable = false;
+    if (clean) {
+      try {
+        const u = new URL(clean);
+        usable = !isLoopbackHost(u.hostname) && !(isSameOriginAsPage(clean) && location.pathname.includes("/join"));
+      } catch {
+        usable = false;
+      }
+    }
+    if (usable) {
+      customSavedUrl = clean;
+      $("hub-url").value = clean;
+      applyHubMode("custom");
+    } else {
+      customSavedUrl = "";
+      $("hub-url").value = "";
+      applyHubMode("mobile_copy");
+    }
+    return;
+  }
   if (!saved || saved === PRESET_NODE) {
     applyHubMode("node");
   } else if (saved === PRESET_HUB) {
@@ -1949,36 +2338,130 @@ function applyLang(lang) {
   });
 
   renderCard();
+  syncActionButtons();
   renderTargetSummary();
+  const toastRegion = $("join-toast-region");
+  const toastClose = $("join-toast-close");
+  if (toastRegion) toastRegion.setAttribute("aria-label", dict.toast_region_label);
+  if (toastClose) toastClose.setAttribute("aria-label", dict.toast_close);
   if ($("hub-url-error")?.classList.contains("is-shown")) {
     validateCustomField({ force: true, shouldAnnounce: false });
   }
 }
 
-async function copyInviteCode() {
-  if (!cardState.inviteCode) return;
-  const btn = $("copy-code-btn");
-  const label = $("copy-code-text");
-  try {
-    await navigator.clipboard.writeText(cardState.inviteCode);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = cardState.inviteCode;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.append(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
+function hideJoinToast({ restoreFocus = false } = {}) {
+  const toastEl = $("join-toast");
+  clearTimeout(toastTimer);
+  toastTimer = 0;
+  if (!toastEl) return;
+  const hadFocus = restoreFocus && document.activeElement && toastEl.contains?.(document.activeElement);
+  toastEl.classList.remove("is-open");
+  if (typeof toastEl.hidePopover === "function") {
+    try {
+      if (!toastEl.matches || toastEl.matches(":popover-open")) toastEl.hidePopover();
+    } catch {}
   }
+  toastEl.hidden = true;
+  if (hadFocus && toastTriggerEl && typeof toastTriggerEl.focus === "function") {
+    toastTriggerEl.focus();
+  }
+}
+
+function showJoinToast(msg, { isErr = false, triggerEl = null } = {}) {
+  const toastEl = $("join-toast");
+  const msgEl = $("join-toast-msg");
+  if (!toastEl || !msgEl || !msg) return;
+  clearTimeout(toastTimer);
+  toastTimer = 0;
+  toastTriggerEl = triggerEl || document.activeElement || null;
+  toastEl.classList.toggle("is-err", !!isErr);
+  msgEl.textContent = msg;
+  toastEl.hidden = false;
+  if (typeof toastEl.showPopover === "function") {
+    try {
+      if (!toastEl.matches || !toastEl.matches(":popover-open")) toastEl.showPopover();
+    } catch {}
+  }
+  toastEl.classList.add("is-open");
+  if (typeof document.ariaNotify === "function") {
+    try { document.ariaNotify(msg); } catch {}
+  } else {
+    announce(msg);
+  }
+  const scheduleHide = () => {
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      const active = document.activeElement;
+      if (toastHover || (active && toastEl.contains && toastEl.contains(active))) {
+        scheduleHide();
+        return;
+      }
+      hideJoinToast();
+    }, isErr ? 6500 : 5200);
+  };
+  scheduleHide();
+}
+
+function legacyCopyText(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "0";
+  ta.style.left = "0";
+  ta.style.opacity = "0";
+  ta.style.fontSize = "16px";
+  document.body.append(ta);
+  ta.focus();
+  ta.select();
+  try { ta.setSelectionRange?.(0, text.length); } catch {}
+  let ok = false;
+  try { ok = !!document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+async function copyInviteCode({ fromPrimary = false } = {}) {
+  if (!cardState.inviteCode) return;
+  const dict = COPY[currentLang];
+  const btn = fromPrimary ? $("open-btn") : $("copy-code-btn");
+  const label = fromPrimary ? $("open-btn-text") : $("copy-code-text");
+  let copied = false;
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(cardState.inviteCode);
+      copied = true;
+    } catch {}
+  }
+  if (!copied) {
+    copied = legacyCopyText(cardState.inviteCode);
+  }
+
   clearTimeout(copyTimer);
-  btn.classList.add("done");
-  label.textContent = COPY[currentLang].copied;
-  announce(COPY[currentLang].copied);
+  if (!copied) {
+    copyGuideState = "failed";
+    syncCopyGuide();
+    showJoinToast(dict.copy_failed, { isErr: true, triggerEl: btn });
+    return;
+  }
+
+  if (btn) btn.classList.add("done");
+  if (label) label.textContent = dict.copied;
+
+  if (isMobileClient) {
+    copyGuideState = "copied";
+    syncCopyGuide();
+    showJoinToast(dict.mobile_copy_toast, { isErr: false, triggerEl: btn });
+  } else {
+    copyGuideState = "";
+    syncCopyGuide();
+    announce(dict.copied);
+  }
+
   copyTimer = setTimeout(() => {
-    btn.classList.remove("done");
-    label.textContent = COPY[currentLang].copy_code;
-  }, 1800);
+    if (btn) btn.classList.remove("done");
+    syncActionButtons();
+  }, 2200);
 }
 
 function launchPwaDirect({ rememberOnHandoff = true } = {}) {
@@ -2071,19 +2554,26 @@ function saveCustomUrl({ collapse = true } = {}) {
     $("hub-url").focus();
     return null;
   }
-  if (res.normalized === PRESET_NODE) {
+  if (!isMobileClient && res.normalized === PRESET_NODE) {
     customSavedUrl = "";
     applyHubMode("node", { persist: true });
-  } else if (res.normalized === PRESET_HUB) {
+  } else if (!isMobileClient && res.normalized === PRESET_HUB) {
     customSavedUrl = "";
     applyHubMode("hub", { persist: true });
-  } else if (res.normalized === PRESET_PWA) {
+  } else if (!isMobileClient && res.normalized === PRESET_PWA) {
     customSavedUrl = "";
     applyHubMode("pwa", { persist: true });
   } else {
     customSavedUrl = res.normalized;
+    copyGuideState = "";
+    hideJoinToast();
     writeStored(HUB_URL_KEY, res.normalized);
-    renderTargetSummary();
+    if (isMobileClient && selectedMode !== "custom") {
+      applyHubMode("custom");
+    } else {
+      syncActionButtons();
+      renderTargetSummary();
+    }
     flashSaved();
     announce(COPY[currentLang].saved_flash);
   }
@@ -2091,6 +2581,21 @@ function saveCustomUrl({ collapse = true } = {}) {
     $("addr-details").open = false;
   }
   return res.normalized;
+}
+
+function clearCustomUrl() {
+  customSavedUrl = "";
+  copyGuideState = "";
+  hideJoinToast();
+  customDirty = false;
+  customBlurred = false;
+  $("hub-url").value = "";
+  clearCustomError();
+  writeStored(HUB_URL_KEY, null);
+  applyHubMode(isMobileClient ? "mobile_copy" : "node");
+  $("addr-details").open = false;
+  flashSaved("cleared_flash");
+  announce(COPY[currentLang].cleared_flash);
 }
 
 const hubInput = $("hub-url");
@@ -2116,19 +2621,28 @@ hubInput.addEventListener("keydown", (e) => {
 $("save-custom-btn").addEventListener("click", () => {
   saveCustomUrl({ collapse: true });
 });
+$("clear-custom-btn")?.addEventListener("click", clearCustomUrl);
+$("join-toast-close")?.addEventListener("click", () => hideJoinToast({ restoreFocus: true }));
+$("join-toast")?.addEventListener("mouseenter", () => { toastHover = true; });
+$("join-toast")?.addEventListener("mouseleave", () => { toastHover = false; });
 
 $("hub-form").addEventListener("submit", (e) => {
   e.preventDefault();
   if (!isActionableStatus(cardState.status)) return;
 
-  if (selectedMode === "pwa") {
+  if (isMobileClient && selectedMode === "mobile_copy") {
+    copyInviteCode({ fromPrimary: true });
+    return;
+  }
+
+  if (!isMobileClient && selectedMode === "pwa") {
     writeStored(HUB_URL_KEY, PRESET_PWA);
     location.href = buildPwaLaunchUrl(cardState);
     return;
   }
 
   let targetBase = PRESET_NODE;
-  if (selectedMode === "hub") {
+  if (!isMobileClient && selectedMode === "hub") {
     targetBase = PRESET_HUB;
     writeStored(HUB_URL_KEY, targetBase);
   } else if (selectedMode === "custom") {
@@ -2139,7 +2653,7 @@ $("hub-form").addEventListener("submit", (e) => {
       $("hub-url").focus();
       return;
     }
-    if (saved === PRESET_PWA) {
+    if (!isMobileClient && saved === PRESET_PWA) {
       location.href = buildPwaLaunchUrl(cardState);
       return;
     }
@@ -2153,11 +2667,11 @@ $("hub-form").addEventListener("submit", (e) => {
 });
 
 $("pwa-direct-btn").addEventListener("click", () => {
-  if (!isActionableStatus(cardState.status)) return;
+  if (isMobileClient || !isActionableStatus(cardState.status)) return;
   launchPwaDirect({ rememberOnHandoff: true });
 });
 
-$("copy-code-btn").addEventListener("click", copyInviteCode);
+$("copy-code-btn").addEventListener("click", () => copyInviteCode({ fromPrimary: false }));
 
 $("manual-parse-btn").addEventListener("click", () => {
   const raw = $("manual-input").value.trim();
@@ -2171,8 +2685,11 @@ $("manual-parse-btn").addEventListener("click", () => {
 });
 
 function syncFromHash() {
+  copyGuideState = "";
+  hideJoinToast();
   cardState = parseCardFromHash(location.hash);
   renderCard();
+  syncActionButtons();
 }
 
 window.addEventListener("hashchange", syncFromHash);

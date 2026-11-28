@@ -4063,8 +4063,25 @@
     return "";
   }
   const SNAP_PATH_RE = /(?:^|[\s（(【\[「『"'`,:;：；、])((?:~\/|\/[A-Za-z0-9._-]+\/)[A-Za-z0-9._/@+\-\u4e00-\u9fff]+\.(?:html?|csv|tsv))(?::\d+(?:-\d+)?)?/gi;
+  const MAX_INLINE_HTML_CARDS = 3;
+  const MAX_INLINE_FILE_IMAGES = 4;
   const _artifactExtractCache = new WeakMap();
   const _artifactRenderCache = new WeakMap();
+  const failedFileGalleryImgs = new Set();
+  let failedFileGalleryVer = 0;
+  function markFileGalleryImgFailed(p) {
+    if (!p || failedFileGalleryImgs.has(p)) return;
+    if (failedFileGalleryImgs.size >= 500) {
+      const oldest = failedFileGalleryImgs.values().next().value;
+      if (oldest !== undefined) failedFileGalleryImgs.delete(oldest);
+    }
+    failedFileGalleryImgs.add(p);
+    failedFileGalleryVer++;
+  }
+  function clearFileGalleryImgFailed(p) {
+    if (!p || !failedFileGalleryImgs.delete(p)) return;
+    failedFileGalleryVer++;
+  }
   function extractEntryArtifacts(e) {
     if (!e || e.role !== "collie") return [];
     const text = e.text || "";
@@ -4079,7 +4096,8 @@
     const add = (raw, explicit = false) => {
       const p = String(raw || "").trim();
       if (!p || /^https?:\/\//i.test(p)) return;
-      if (/\/\.collie\/(?:uploads|images|router\/memory|router\/dreams)\//i.test(p)) return;
+      if (/\/\.collie\/router\/(?:memory|dreams)\//i.test(p)) return;
+      if (!explicit && /\/\.collie\/(?:uploads|images)\//i.test(p)) return;
       const key = p.toLowerCase();
       if (seen.has(key)) {
         if (explicit) {
@@ -4099,6 +4117,7 @@
         explicit: !!explicit,
         isHtml: ext === "html" || ext === "htm",
         isCsv: ext === "csv" || ext === "tsv",
+        isImg: IMG_EXT.test(name),
       });
     };
     if (files) {
@@ -4112,7 +4131,158 @@
     _artifactExtractCache.set(e, { text, filesKey, items: out });
     return out;
   }
-  const MAX_INLINE_HTML_CARDS = 3;
+  const ARTIFACT_CHEV_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+  function renderArtifactChipHtml(it, activeMatch = "") {
+    const act = !!(activeMatch && activeMatch === it.path);
+    return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapPreview", "预览 {name}", { name: it.name }))}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>`;
+  }
+  function fileGallerySizeClass(n) {
+    return n === 1 ? "is-1" : n === 2 ? "is-2" : n === 3 ? "is-3" : n === 4 ? "is-4" : "is-many";
+  }
+  function renderFileImageTileHtml(it, idx, total, overflow) {
+    const ep = esc(it.path);
+    const en = esc(it.name);
+    const moreHtml = idx === MAX_INLINE_FILE_IMAGES - 1 && overflow > 0
+      ? `<span class="gal-more" aria-hidden="true">+${overflow}</span>`
+      : "";
+    const aria = moreHtml
+      ? esc(tx("file.galMoreAria", "查看大图 {name}，共 {total} 张（还有 {more} 张）", { name: it.name, total, more: overflow }))
+      : esc(tx("file.viewImgTip", "查看大图 {name}", { name: it.name }));
+    return `<button type="button" class="gal-tile thumb file-gal-tile" data-img="${ep}" data-img-alt="${en}" data-file-gal-item="1" data-file-name="${en}" data-file-ext="${esc(it.ext)}" title="${ep}" aria-label="${aria}"><img alt="${en}" loading="lazy" decoding="async"${thumbImgAttrs(it.path, "file-gal-img")}>${moreHtml}</button>`;
+  }
+  function renderFileImageGallery(imgItems) {
+    if (!imgItems?.length) return "";
+    const n = imgItems.length;
+    const sizeCls = fileGallerySizeClass(n);
+    const visible = imgItems.slice(0, MAX_INLINE_FILE_IMAGES);
+    const overflow = n - visible.length;
+    const tilesHtml = visible.map((it, idx) => renderFileImageTileHtml(it, idx, n, overflow)).join("");
+    const hiddenHtml = overflow > 0
+      ? imgItems.slice(MAX_INLINE_FILE_IMAGES).map((it) =>
+          `<span class="gal-hidden-item" hidden data-img="${esc(it.path)}" data-img-alt="${esc(it.name)}" data-file-name="${esc(it.name)}" data-file-ext="${esc(it.ext)}"></span>`
+        ).join("")
+      : "";
+    return `<div class="file-gallery ${sizeCls}" data-count="${n}" role="group" aria-label="${esc(tx("md.galleryAria", "图片画廊（{n} 张）", { n }))}">${tilesHtml}${hiddenHtml}</div>`;
+  }
+  function createArtifactChipEl(path, name, ext) {
+    const el = document.createElement("button");
+    el.type = "button";
+    const normExt = String(ext || "").toLowerCase();
+    el.className = "snap-chip" + (normExt === "html" || normExt === "htm" ? " is-html" : "");
+    el.dataset.openFile = path;
+    el.title = path;
+    el.setAttribute("aria-label", tx("file.snapPreview", "预览 {name}", { name }));
+    el.innerHTML = `<span class="snap-chip-ext">${esc((normExt || "FILE").toUpperCase())}</span><span class="snap-chip-name">${esc(name)}</span><span class="snap-chip-chev" aria-hidden="true">${ARTIFACT_CHEV_SVG}</span>`;
+    return el;
+  }
+  function createPromotedFileTileEl(path, name, ext) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "gal-tile thumb file-gal-tile";
+    btn.dataset.img = path;
+    btn.dataset.imgAlt = name;
+    btn.dataset.fileGalItem = "1";
+    btn.dataset.fileName = name;
+    btn.dataset.fileExt = ext;
+    btn.title = path;
+    btn.setAttribute("aria-label", tx("file.viewImgTip", "查看大图 {name}", { name }));
+    const img = document.createElement("img");
+    img.className = "file-gal-img";
+    img.alt = name;
+    img.setAttribute("loading", "lazy");
+    img.setAttribute("decoding", "async");
+    const cachedSrc = thumbs.get(path);
+    const dim = thumbDims.get(path);
+    if (cachedSrc) {
+      if (!decodedThumbs.has(path)) img.classList.add("is-img-loading");
+      img.src = cachedSrc;
+    }
+    if (dim) { img.width = dim.w; img.height = dim.h; }
+    btn.appendChild(img);
+    return btn;
+  }
+  function degradeFileGalleryTile(btn) {
+    if (!btn || btn.dataset?.degraded === "1") return;
+    if (btn.dataset) btn.dataset.degraded = "1";
+    const path = btn.dataset?.img || "";
+    if (!path) return;
+    const name = btn.dataset?.fileName || path.split("/").pop() || path;
+    const ext = btn.dataset?.fileExt || (name.includes(".") ? name.split(".").pop().toLowerCase() : "img");
+    markFileGalleryImgFailed(path);
+
+    const gal = btn.closest?.(".file-gallery") || null;
+    const wrap = gal?.closest?.("[data-file-gallery-wrap]") || null;
+    btn.remove?.();
+
+    if (typeof document !== "undefined" && typeof document.createElement === "function") {
+      let fallbacks = wrap?.querySelector?.(".file-gallery-fallbacks") || null;
+      if (!fallbacks) {
+        fallbacks = document.createElement("div");
+        fallbacks.className = "msg-files file-gallery-fallbacks";
+        if (wrap) wrap.appendChild(fallbacks);
+        else if (gal?.parentElement) gal.parentElement.insertBefore(fallbacks, gal.nextSibling);
+      }
+      const existing = [...(fallbacks.querySelectorAll?.(".snap-chip[data-open-file]") || [])];
+      if (!existing.some((el) => el.dataset?.openFile === path)) {
+        fallbacks.appendChild(createArtifactChipEl(path, name, ext));
+      }
+    }
+
+    if (!gal) return;
+    const hiddenNodes = () => [...(gal.querySelectorAll?.(".gal-hidden-item") || [])];
+    const tileNodes = () => [...(gal.querySelectorAll?.(".gal-tile") || [])];
+
+    if (typeof document !== "undefined" && typeof document.createElement === "function") {
+      while (tileNodes().length < MAX_INLINE_FILE_IMAGES) {
+        const nextHidden = hiddenNodes().find((el) => {
+          const hp = el.dataset?.img || "";
+          if (!hp || failedFileGalleryImgs.has(hp)) {
+            el.remove?.();
+            return false;
+          }
+          return true;
+        });
+        if (!nextHidden) break;
+        const hp = nextHidden.dataset?.img || "";
+        const hn = nextHidden.dataset?.fileName || nextHidden.dataset?.imgAlt || hp.split("/").pop() || hp;
+        const he = nextHidden.dataset?.fileExt || (hn.includes(".") ? hn.split(".").pop().toLowerCase() : "img");
+        const promoted = createPromotedFileTileEl(hp, hn, he);
+        gal.insertBefore(promoted, nextHidden);
+        nextHidden.remove?.();
+        const promotedImg = promoted.querySelector?.("img");
+        if (promotedImg) observeThumbImg(promotedImg);
+      }
+    }
+
+    const tiles = tileNodes();
+    const hidden = hiddenNodes();
+    for (const t of tiles) {
+      t.querySelector?.(".gal-more")?.remove?.();
+      const tn = t.dataset?.fileName || t.dataset?.imgAlt || (t.dataset?.img || "").split("/").pop() || "";
+      if (tn) t.setAttribute?.("aria-label", tx("file.viewImgTip", "查看大图 {name}", { name: tn }));
+    }
+    const total = tiles.length + hidden.length;
+    if (tiles.length === 0) {
+      gal.hidden = true;
+      if (gal.dataset) gal.dataset.count = "0";
+    } else {
+      gal.hidden = false;
+      if (gal.dataset) gal.dataset.count = String(total);
+      gal.setAttribute?.("aria-label", tx("md.galleryAria", "图片画廊（{n} 张）", { n: total }));
+      gal.classList?.remove("is-1", "is-2", "is-3", "is-4", "is-many");
+      gal.classList?.add(fileGallerySizeClass(total));
+      if (hidden.length > 0 && typeof document !== "undefined" && typeof document.createElement === "function") {
+        const lastTile = tiles[tiles.length - 1];
+        const more = document.createElement("span");
+        more.className = "gal-more";
+        more.setAttribute("aria-hidden", "true");
+        more.textContent = `+${hidden.length}`;
+        lastTile.appendChild(more);
+        const ln = lastTile.dataset?.fileName || lastTile.dataset?.imgAlt || "";
+        lastTile.setAttribute?.("aria-label", tx("file.galMoreAria", "查看大图 {name}，共 {total} 张（还有 {more} 张）", { name: ln, total, more: hidden.length }));
+      }
+    }
+  }
   function renderEntryArtifacts(e, openPathOverride) {
     const items = extractEntryArtifacts(e);
     if (!items.length) return "";
@@ -4121,27 +4291,49 @@
       : (!$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "");
     const activeMatch = openPath && items.some((it) => it.path === openPath) ? openPath : "";
     const hasExplicit = Array.isArray(e.files) && e.files.length > 0;
+    const lang = curLang();
     const cached = _artifactRenderCache.get(e);
-    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit) {
+    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit && cached.failVer === failedFileGalleryVer && cached.lang === lang) {
       return cached.html;
     }
-    const chevSVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
-    const renderChip = (it) => {
-      const act = activeMatch === it.path;
-      return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapPreview", "预览 {name}", { name: it.name }))}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>`;
-    };
-    const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
-    let html;
-    if (inlineHtmlItems.length > 0) {
-      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
-      const rest = items.filter((it) => !inlineSet.has(it.path));
-      const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-      html = inlineHtmlItems.map((it, idx) => {
+    const renderChip = (it) => renderArtifactChipHtml(it, activeMatch);
+    const renderHtmlCards = (htmlItems, companionChips) => {
+      const extraChips = companionChips.length ? `<div class="snap-files">${companionChips.map(renderChip).join("")}</div>` : "";
+      return htmlItems.map((it, idx) => {
         const act = activeMatch === it.path;
         const hash = richVisualHash("html-file:" + it.path);
-        const chipsHere = idx === inlineHtmlItems.length - 1 ? extraChips : "";
-        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: it.name }))}"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}" aria-label="${esc(tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="${esc(tx("file.snapOpenNewWin", "在新窗口打开"))}" aria-label="${esc(tx("file.snapOpenNewWinName", "在新窗口打开 {name}", { name: it.name }))}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>${esc(tx("file.snapLoading", "加载预览中…"))}</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button></div>${chipsHere}</section>`;
+        const chipsHere = idx === htmlItems.length - 1 ? extraChips : "";
+        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: it.name }))}"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}" aria-label="${esc(tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="${esc(tx("file.snapOpenNewWin", "在新窗口打开"))}" aria-label="${esc(tx("file.snapOpenNewWinName", "在新窗口打开 {name}", { name: it.name }))}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>${esc(tx("file.snapLoading", "加载预览中…"))}</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button></div>${chipsHere}</section>`;
       }).join("");
+    };
+    const inlineImgItems = items.filter((it) => it.isImg && it.explicit);
+    const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
+    let html;
+    if (inlineImgItems.length > 0) {
+      const inlineSet = new Set([
+        ...inlineImgItems.map((it) => it.path),
+        ...inlineHtmlItems.map((it) => it.path),
+      ]);
+      const otherItems = items.filter((it) => !inlineSet.has(it.path));
+      const activeImgs = inlineImgItems.filter((it) => !failedFileGalleryImgs.has(it.path));
+      const failedImgs = inlineImgItems.filter((it) => failedFileGalleryImgs.has(it.path));
+      const fallbackHtml = failedImgs.length
+        ? `<div class="msg-files file-gallery-fallbacks">${failedImgs.map(renderChip).join("")}</div>`
+        : "";
+      const galleryHtml = activeImgs.length > 0
+        ? `<div class="file-gallery-wrap" data-file-gallery-wrap>${renderFileImageGallery(activeImgs)}${fallbackHtml}</div>`
+        : fallbackHtml;
+      let restHtml = "";
+      if (inlineHtmlItems.length > 0) {
+        restHtml = renderHtmlCards(inlineHtmlItems, otherItems);
+      } else if (otherItems.length > 0) {
+        restHtml = `<div class="msg-files">${otherItems.map(renderChip).join("")}</div>`;
+      }
+      html = galleryHtml + restHtml;
+    } else if (inlineHtmlItems.length > 0) {
+      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
+      const rest = items.filter((it) => !inlineSet.has(it.path));
+      html = renderHtmlCards(inlineHtmlItems, rest);
     } else {
       const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
       if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
@@ -4151,10 +4343,10 @@
         const metaTag = primary.isHtml ? tx("file.snapHtmlReport", "HTML 交互报告") : primary.isCsv ? tx("file.snapCsvData", "{ext} 表格数据", { ext: primary.ext.toUpperCase() }) : primary.ext.toUpperCase();
         const rest = items.filter((it) => it.path !== primary.path);
         const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primary.name }) : tx("file.snapPreview", "预览 {name}", { name: primary.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primary.name }) : tx("file.snapPreview", "预览 {name}", { name: primary.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>${extraChips}</section>`;
       }
     }
-    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, html });
+    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, failVer: failedFileGalleryVer, lang, html });
     return html;
   }
   function threadEntryPlainText(e) {
@@ -7078,7 +7270,7 @@
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>${esc(tx("collie.pinned", "已钉住"))}</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${renderCollieBody(e.text)}${artifactsHtml}${optsHtml}${inPlaceHtml}${renderFoot()}</div></div>`;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${renderCollieBody(e.text, e.files)}${artifactsHtml}${optsHtml}${inPlaceHtml}${renderFoot()}</div></div>`;
               },
             });
             sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
@@ -19674,6 +19866,7 @@
       const u = URL.createObjectURL(new Blob([f.blob], { type: imgMime(p) }));
       thumbs.delete(p);
       thumbs.set(p, u);
+      clearFileGalleryImgFailed(p);
       thumbMeta.set(p, { size: f.size, machine: f.machine, path: f.path });
       invalidateMdCacheForImage(p);
       for (const el of document.querySelectorAll(".thumb[data-img] img")) {
@@ -19683,7 +19876,23 @@
         }
       }
       evictThumbsLRU();
-    } catch { thumbs.delete(p); img.classList?.remove("is-img-loading"); img.parentElement?.classList?.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
+    } catch {
+      thumbs.delete(p);
+      const affected = new Set();
+      if (img.parentElement) affected.add(img.parentElement);
+      if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+        for (const el of document.querySelectorAll(".thumb[data-img]")) {
+          if (el.dataset?.img === p) affected.add(el);
+        }
+      }
+      for (const btn of affected) {
+        const innerImg = btn.querySelector?.("img");
+        innerImg?.classList?.remove("is-img-loading");
+        if (btn.classList?.contains("file-gal-tile")) degradeFileGalleryTile(btn);
+        else btn.classList?.add("broken");
+      }
+      if (collieInitialAnchor) applyInitialAnchor();
+    }
   }
   // Under each Collie message, on hover (and persistently when clapped): clap (monochrome fine-line thumbs-up SVG, zero emoji), copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
   const ICON_CLAP = `<svg class="clap-ico" viewBox="0 0 24 24" aria-hidden="true"><path class="clap-body" d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/><path class="clap-seam" d="M7 10v12"/></svg>`;
@@ -20045,8 +20254,26 @@
   }, true);
   document.addEventListener("error", (e) => {
     const img = e.target;
-    if (img?.tagName !== "IMG" || !img.classList?.contains("is-img-loading")) return;
-    img.classList.remove("is-img-loading");
+    if (img?.tagName !== "IMG") return;
+    if (img.classList?.contains("is-img-loading")) img.classList.remove("is-img-loading");
+    const btn = img.parentElement;
+    if (btn?.classList?.contains("file-gal-tile")) {
+      const p = btn.dataset?.img || "";
+      const badSrc = img.getAttribute?.("src") || "";
+      if (p && badSrc && thumbs.get(p) === badSrc) {
+        thumbs.delete(p);
+        decodedThumbs.delete(p);
+        try { URL.revokeObjectURL(badSrc); } catch {}
+      }
+      const affected = new Set([btn]);
+      if (p && typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+        for (const el of document.querySelectorAll(".file-gal-tile[data-img]")) {
+          if (el.dataset?.img === p) affected.add(el);
+        }
+      }
+      for (const tile of affected) degradeFileGalleryTile(tile);
+      if (collieInitialAnchor) applyInitialAnchor();
+    }
   }, true);
 
   // ───────────────────────────── rich rendering transient UI state & interactions
@@ -20636,7 +20863,7 @@
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
-    const gal = triggerEl?.closest?.(".md-gallery");
+    const gal = triggerEl?.closest?.(".file-gallery, .md-gallery");
     if (gal) {
       const seen = new Set(), items = [];
       const add = (it) => {
@@ -20827,6 +21054,7 @@
       return;
     }
     const blobUrl = URL.createObjectURL(new Blob([f.blob], { type: imgMime(item.path) }));
+    clearFileGalleryImgFailed(item.path);
     // If a `.thumb` in the DOM is waiting on this exact path, share it into `thumbs`.
     if (document.querySelector(`.thumb[data-img="${CSS.escape(item.path)}"]`)) {
       thumbs.delete(item.path);
@@ -20978,29 +21206,50 @@
       const dx = ev.clientX - gesture.startX, dy = ev.clientY - gesture.startY;
       if (!gesture.moved && Math.hypot(dx, dy) > 5) {
         gesture.moved = true;
-        if (lbScale > 1.005) lightbox.classList.add("is-dragging");
+        if (lbScale > 1.005) {
+          lightbox.classList.add("is-dragging");
+        } else if (lbItems.length > 1 && Math.abs(dx) > Math.abs(dy)) {
+          gesture.swiping = true;
+          lightbox.classList.add("is-dragging");
+          try { lbStage.setPointerCapture(ev.pointerId); } catch {}
+        }
       }
       if (gesture.moved && lbScale > 1.005) {
         lbX = gesture.panX0 + dx;
         lbY = gesture.panY0 + dy;
         applyLbTransform(true);
+      } else if (gesture.swiping && lbScale <= 1.005 && lbHasMedia()) {
+        const media = lbActiveMedia();
+        const damp = Math.max(-120, Math.min(120, dx * 0.45));
+        if (media) media.style.transform = `translate3d(${damp.toFixed(1)}px, 0, 0)`;
       }
     });
     const endPtr = (ev, cancelled = false) => {
       ptrs.delete(ev.pointerId);
       if (ptrs.size === 0) lightbox.classList.remove("is-dragging");
-      if (!gesture || cancelled) { if (!ptrs.size) gesture = null; return; }
+      if (!gesture || cancelled) {
+        if (gesture?.swiping && lbScale <= 1.005 && lbHasMedia()) {
+          const media = lbActiveMedia();
+          if (media) media.style.transform = "";
+        }
+        if (!ptrs.size) gesture = null;
+        return;
+      }
       if (gesture.kind === "single" && gesture.pointerId === ev.pointerId) {
         const g = gesture;
         gesture = null;
         const dx = ev.clientX - g.startX, dy = ev.clientY - g.startY;
+        if (g.swiping && lbScale <= 1.005 && lbHasMedia()) {
+          const media = lbActiveMedia();
+          if (media) media.style.transform = "";
+        }
         if (!g.moved) {
           if (hitLbMedia(g.target) && lbHasMedia()) {
             toggleLbZoom(ev.clientX, ev.clientY);
           } else if (g.target === lbStage && ev.target === lbStage) {
             closeLightbox();
           }
-        } else if (lbScale <= 1.005 && lbItems.length > 1 && Math.abs(dx) > 52 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+        } else if (lbScale <= 1.005 && lbItems.length > 1 && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
           showLbSlide(lbIdx + (dx < 0 ? 1 : -1));
         }
       }
@@ -24453,7 +24702,7 @@
             const artifactsHtml = renderEntryArtifacts(m);
             const bodyHtml = m.role === "user"
               ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
-              : `<div class="td-text msg assistant">${rootQuoteHtml}${renderCollieBody(m.text)}${artifactsHtml}${optsHtml}</div>`;
+              : `<div class="td-text msg assistant">${rootQuoteHtml}${renderCollieBody(m.text, m.files)}${artifactsHtml}${optsHtml}</div>`;
             return `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
           <div class="td-rail">${avHtml}</div>
           <div class="td-content">
@@ -26611,11 +26860,25 @@
       }
     }
   }
+  function parseMdCacheKey(cacheKey) {
+    if (!cacheKey.startsWith("\u0002")) return { rawKey: cacheKey, opts: null };
+    const rest = cacheKey.slice(1);
+    const sep = rest.indexOf("\u0003");
+    if (sep >= 0) {
+      const exStr = rest.slice(0, sep);
+      const excludePathImages = exStr ? new Set(exStr.split("\u001f").filter(Boolean)) : null;
+      return { rawKey: rest.slice(sep + 1), opts: { includePathImages: true, excludePathImages } };
+    }
+    return { rawKey: rest, opts: { includePathImages: true } };
+  }
   function md(src, opts = null) {
     syncMdWorkerCache();
     const includePathImages = !!(opts && opts.includePathImages);
     const rawKey = String(src || "");
-    const key = includePathImages ? "\u0002" + rawKey : rawKey;
+    const exArr = includePathImages && opts?.excludePathImages?.size ? [...opts.excludePathImages].sort() : null;
+    const key = includePathImages
+      ? (exArr ? "\u0002" + exArr.join("\u001f") + "\u0003" + rawKey : "\u0002" + rawKey)
+      : rawKey;
     let out = mdCache.get(key);
     if (out === undefined) {
       const prevCands = _mdCurWorkerCandidates;
@@ -26653,14 +26916,13 @@
       for (const cacheKey of [...mdCacheMathKeys]) {
         mdCacheMathKeys.delete(cacheKey);
         if (!mdCache.has(cacheKey)) continue;
-        const includePathImages = cacheKey.startsWith("\u0002");
-        const rawKey = includePathImages ? cacheKey.slice(1) : cacheKey;
+        const { rawKey, opts } = parseMdCacheKey(cacheKey);
         const prevCands = _mdCurWorkerCandidates;
         const cands = new Set();
         _mdCurWorkerCandidates = cands;
         let freshHtml = "";
         try {
-          freshHtml = mdRender(rawKey, includePathImages ? { includePathImages: true } : null);
+          freshHtml = mdRender(rawKey, opts);
         } finally {
           _mdCurWorkerCandidates = prevCands;
         }
@@ -29054,7 +29316,12 @@
       flushGallery();
       return out.join("");
     };
-    const trailingImgs = opts?.includePathImages ? extractImagePaths(rawSrc).map((p) => ({ path: p, alt: "" })) : null;
+    const excludeImgSet = opts?.excludePathImages;
+    const trailingImgs = opts?.includePathImages
+      ? extractImagePaths(rawSrc)
+          .filter((p) => !(excludeImgSet && excludeImgSet.has(p.toLowerCase())))
+          .map((p) => ({ path: p, alt: "" }))
+      : null;
     const rendered = parseBlockLines(text.split("\n"), 0, trailingImgs);
     return rendered.replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
   }
@@ -29820,8 +30087,22 @@
     const ps = extractImagePaths(t);
     return ps.length ? renderMdGallery(ps.map((p) => ({ path: p, alt: "" }))) : "";
   }
-  function renderCollieBody(t) {
-    return md(t, { includePathImages: true });
+  function explicitImagePathSet(files) {
+    if (!Array.isArray(files) || !files.length) return null;
+    let set = null;
+    for (const raw of files) {
+      const p = String(raw || "").trim();
+      if (!p || /^https?:\/\//i.test(p) || /\/\.collie\/router\/(?:memory|dreams)\//i.test(p)) continue;
+      const name = p.split("/").pop() || p;
+      if (!IMG_EXT.test(name)) continue;
+      if (!set) set = new Set();
+      set.add(p.toLowerCase());
+    }
+    return set;
+  }
+  function renderCollieBody(t, files = null) {
+    const excludePathImages = explicitImagePathSet(files);
+    return md(t, excludePathImages ? { includePathImages: true, excludePathImages } : { includePathImages: true });
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
   const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i, "").replace(/<\/?(?:details(?:\s+open(?:\s*=\s*(?:"(?:open)?"|'(?:open)?'|open))?)?|summary)>/gi, " ").replace(/^\[[ xX~*!]\]\s+/, "").trim()).filter(Boolean).join(" ")

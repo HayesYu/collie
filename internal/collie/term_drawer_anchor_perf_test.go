@@ -767,8 +767,8 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(createdTerm.writes.length, writesBeforeBurst + 2, "only the latest coalesced frame flushes after completion");
   assert.ok(createdTerm.writes[createdTerm.writes.length - 1].includes("line #599"), "coalesced flush writes the latest frame");
 
-  // Both global MutationObservers must skip nested #screen/.xterm-rows mutations with 0 querySelectorAll calls!
-  assert.ok(registeredObservers.length >= 2, "both select and thumb MutationObservers registered");
+  // Only the select MutationObserver remains (thumbnail loading moved to IntersectionObserver), and it must skip nested #screen/.xterm-rows mutations with 0 querySelectorAll calls!
+  assert.equal(registeredObservers.length, 1, "only the select MutationObserver should be registered on document.body (thumb MutationObserver replaced by IntersectionObserver)");
   const fakeRow = new DomNode("DIV");
   createdTerm._rowsEl.appendChild(fakeRow);
   const addedSpan = new DomNode("SPAN");

@@ -4,6 +4,47 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.12 (2026-11-28)
+
+### Highlights
+
+- **Chat Rendering Performance, Frameless Rich Visuals & Markdown 2.0 (`internal/collie/server.go`, `web/{index.html,app.css,app.js,vendor/mermaid/*}`, `scripts/demo.sh`, `docs/demo/`)**:
+  - **~80% Cold-Start Transfer Reduction & On-Demand Lazy Loading**: Added content-hashed gzip precompression with distinct raw/gzip ETags (`-gz`), `Vary: Accept-Encoding`, `304`, `HEAD`, and `206` Range fallback to embedded static serving, and moved xterm.js, KaTeX, and Mermaid to strict on-demand lazy loading — dropping cold-start first-screen transfer from ~2.1 MB to ~420 KB gzipped even with all `v0.3.12` features bundled, replacing global `MutationObserver` thumbnail scanning with viewport-aware `IntersectionObserver` and per-worker targeted `mdCache` invalidation.
+  - **Frameless Native Mermaid, Safe SVG & Sandboxed Inline HTML Cards**: Upgraded `mdRender` to CommonMark §4.5 multi-backtick/tilde fences and rendered `mermaid` (offline local vendor), sanitized `svg`, and `html-card` / `html preview` / `html card` blocks natively into the chat surface with zero persistent gray top chrome (hover/focus micro-icons for source toggle, expand, and new window), plus automatic light/dark theme passthrough (`collie-theme` `postMessage` & CSS variables) and iframe height persistence.
+  - **Tables 2.0, Code Blocks 2.0, Adaptive Image Galleries & Extended GFM**: Removed persistent top headers from code blocks and tables in favor of subtle corner tags and hover-revealed floating copy actions; added 18-line collapsible code folds (`hidden="until-found"`), diff `+`/`−` stats, right-aligned tabular numeric table columns with sticky first column and horizontal scroll affordance, 1–6+ adaptive image galleries, and GFM alerts (`NOTE`/`TIP`/`WARNING`/`CAUTION`), task lists, and safe `<details>` folds.
+- **Scheme B Staggered Mist Reply Motion & Two-Stage Unread Reply UX (`internal/collie/{store.go,super.go,superapi.go}`, `web/{app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - **Staggered Mist Motion & 0px Unread Isolation**: Added subtle block-level staggered mist-emerge entrance animations for live replies at bottom (strictly isolated with 0 animations and 0px scroll drift when scrolled up, loading history, or anchored on unread), refined button micro-motion, odometer counter rolls on clap/unread badges, and Firefox `[data-closing]` fallback for `#super-jump`.
+  - **Two-Stage `#super-jump` & In-Place Earlier Replies**: Upgraded `#super-jump` to a two-stage jump (`↓ N 未读` to jump to the first unread boundary without marking read → pure circular `↓` to jump to latest and sync read cursor); replying to an earlier message while scrolled up now settles cleanly in-place beneath the target message and its topic thread (`in_place: true`) without creating a jarring bottom bubble or losing scroll position.
+  - **In-Place Desktop Supplement Pill & Mobile Plan B**: Clicking「补充一句」on desktop morphs the dashed pill in-place inside `.reply-opts` into a compact auto-growing input (0 vertical jump), while mobile routes cleanly to the bottom composer with target context and draft persistence.
+- **Subscription Quota Badge, Official Zero-Token Routines & Lossless Worker Hibernation GC (`internal/collie/{quota.go,briefing.go,worker_gc.go,dream.go,fleet.go,history.go,server.go,store.go,super.go,superapi.go}`, `web/{index.html,app.css,app.js,quota.css,quota.js}`, `scripts/demo/`)**:
+  - **Account-Level Subscription Quota Indicator (`GET /api/quota`, `POST /api/quota/refresh`, SSE `event: quota`)**: Merged a quiet 18px monochrome gauge icon directly into the desktop sidebar/rail footer (0 height increase) and mobile `⋯` menu (with a 5px corner dot only when low), backed by zero-idle-polling on-demand local status readers and a clean popover showing remaining percentage windows and reset countdowns.
+  - **Optional Official Routines with Zero-Token Gating**: Added opt-in settings for Morning Briefing (`morning_brief`), Weekly Review (`weekly_review`), and Stale Task Follow-Up (`stale_follow`) in Automation → Settings, gated by deterministic Go-side checks so idle days/weeks consume zero LLM tokens.
+  - **Remote System Pane Isolation, Lossless Managed Worker Hibernation GC & Dream Hygiene**: Isolated remote machines' own `collie` / `collie-dream` system panes from leaking into the Hub fleet; added configurable idle hibernation GC (`worker_idle_gc_minutes`, `worker_max_live_per_machine`) that archives managed worker sessions cleanly before reclaiming panes, wakes them losslessly via `session` resume on re-spawn/send, and expands ended worker history retention to 200; expanded nightly `dream` prompt with safe workspace and temporary-resource hygiene principles.
+- **Mobile 60 FPS Send Polish, Header Slimming, Notebook Sheet, Join UX, Stable Sidebar Sort, Minimalist Links & Feishu Push Mentions (`internal/collie/{feishu_ws.go,external.go,server.go,super.go}`, `web/{index.html,app.css,app.js}`, `docs/join/index.html`, `docs/demo/`)**:
+  - **Mobile Send Focus & 60 FPS Keyboard Dismissal**: Kept focus inside the composer textarea when tapping `↑` on mobile (no involuntary keyboard collapse) and eliminated forced synchronous layout thrashing during iOS/mobile keyboard resize frames.
+  - **Mobile Header, Notebook Drawer & Invite Landing UX**: Slimmed the mobile top bar by moving the version-update pill into `⋯` with a 5px dot, fixed half-character text clipping and multi-line quick-reply option truncation, aligned the mobile「小本本」sheet with unified bottom drawers (`92vh`, `20px` top radius, no redundant `<`), and upgraded `docs/join/` plus the Peer Hub modal with one-tap paste and plain-HTTP camera QR scanning.
+  - **Stable Sidebar Ordering, Monochrome Inline Links & Feishu Push `<at>`**: Sorted the sidebar「工作中」agent list stably by `created_at` descending (no status-poll row jumping); polished prose inline links to restrained monochrome/graphite with crisp contrast inside dark user bubbles; and automatically prefixed Feishu `<at id=ou_...>` mentions on actionable decision, approval, and error cards (omitting mentions on quiet updates and resolved cards) to trigger reliable mobile push alerts.
+
+### Client / API Changes
+
+- **New HTTP endpoints & SSE event (standard `s.auth`, backward compatible)**:
+  - `GET /api/quota`: returns cached or on-demand refreshed `QuotaSnapshot` (`{ updated_at?, stale?, refreshing?, refresh_cooldown_sec?, agents: [{ kind, name, plan?, status, source?, updated_at?, note?, link_text?, link_url?, pools?: [{ group?, compact_full?, windows: [{ id, label, remaining_pct, resets_at? }] }] }] }`).
+  - `POST /api/quota/refresh`: triggers a manual quota refresh subject to a 30s server cooldown and returns `QuotaSnapshot`.
+  - SSE `/api/events` new event `quota`: pushes updated `QuotaSnapshot` JSON whenever refreshed.
+- **`POST /api/super/say` & `Entry` / `DecisionPick` JSON (backward compatible)**:
+  - Request body accepts optional `in_place` (`bool`): when `true` with `re` targeting an earlier entry (and not `pick`), settles the user reply beneath the target message and its topic thread without appending a bottom main-stream bubble; response echoes `"in_place": true` when applied.
+  - `Entry` and `DecisionPick` add optional `in_place` (`bool`, `omitempty`).
+- **`GET /api/state` (`AgentView`) (backward compatible)**:
+  - `AgentView` adds optional `created_at` (`RFC3339` timestamp, `omitempty`); `agents` are sorted stably by `created_at` descending.
+- **`GET /api/super/state` (`Worker`) & `GET/POST /api/super/settings` (backward compatible)**:
+  - `Worker` adds optional `idle_since` (`RFC3339`, `omitempty`), `hibernating` (`bool`, `omitempty`), `startup_failed` (`bool`, `omitempty`), and `keep` (`bool`, `omitempty`).
+  - `Settings` adds optional routine configs `morning_brief`, `weekly_review`, `stale_follow` (`{ enabled, at?, day? }`) and worker hibernation GC tuning fields `worker_idle_gc_minutes` (`int`) and `worker_max_live_per_machine` (`int`, `-1` disables).
+- **Static Asset HTTP Negotiation (`web/*`) (backward compatible)**:
+  - Embedded static text assets (`.html`, `.js`, `.css`, `.svg`, `.webmanifest`) now negotiate `Content-Encoding: gzip` with `Vary: Accept-Encoding` and representation-specific ETags (`"...-gz"` vs `"..."`).
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.11 (2026-11-28)
 
 ### Highlights

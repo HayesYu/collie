@@ -1210,6 +1210,8 @@
   let collieScrollEndTimer = 0;
   let collieScrollCapTimer = 0;
   let deferredScrollMask = 0;
+  let vvTransitioning = false;
+  let deferredViewportMask = 0;
   let liveUpdateMask = 0;
   let liveUpdateRAF = 0;
   let liveComposeTimer = 0;
@@ -1305,6 +1307,15 @@
       }
       if (!mask) return;
     }
+    if (vvTransitioning && view === "collie" && !superComposing && !document.hidden && typeof requestAnimationFrame === "function") {
+      const deferBits = LIVE_SUPER | (narrow() ? LIVE_SIDE : 0);
+      const toDefer = mask & deferBits;
+      if (toDefer) {
+        deferredViewportMask |= toDefer;
+        mask &= ~deferBits;
+      }
+      if (!mask) return;
+    }
     liveUpdateMask |= mask;
     if (superComposing) {
       if (!liveComposeTimer) {
@@ -1350,6 +1361,12 @@
     el.addEventListener("compositionupdate", onUpdate);
     el.addEventListener("compositionend", onEnd);
     el.addEventListener("blur", onEnd);
+  }
+  function resetCompositionGuard() {
+    if (!superComposing) return;
+    superComposing = false;
+    if (liveComposeTimer) { clearTimeout(liveComposeTimer); liveComposeTimer = 0; }
+    if (liveUpdateMask) scheduleLiveUpdates(0);
   }
   bindCompositionGuard($("#super-input"));
   bindCompositionGuard($("#td-input"));
@@ -1399,6 +1416,9 @@
       notifyTransitions(next);
       state = next;
       scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
+    });
+    ev.addEventListener("quota", (e) => {
+      try { window.__collieQuota?.onEvent?.(JSON.parse(e.data)); } catch {}
     });
     ev.onopen = () => setConnDotState(true);
     ev.onerror = async () => {
@@ -1474,8 +1494,7 @@
   const canBrowserNotify = () => notifyEnvState().active;
   const pageInBackground = () => !!document.hidden || (typeof document.hasFocus === "function" && !document.hasFocus());
   function collieNotifySummary(text) {
-    const cleaned = String(text || "")
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(String(text || ""), " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     for (const raw of cleaned.split("\n")) {
@@ -1646,7 +1665,104 @@
     older = next;
     _chatEntriesCache = null;
   }
-  function applyClapBtnState(btn, count) {
+  // ─── Main chat micro-motion helpers (compositor-only, reduced-motion aware) ───
+  const SUPER_ANIM_MAX_KEYS = 800;
+  const superAnimatedKeys = new Set();
+  const justSettledDecisions = new Set();
+  const justSettledTimers = new Map();
+  let _supportsDisplayTransition;
+  let _supportsSiblingIndex;
+  function prefersReducedMotion() {
+    return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+  function supportsSiblingIndex() {
+    if (_supportsSiblingIndex === undefined) {
+      _supportsSiblingIndex = typeof CSS !== "undefined"
+        && typeof CSS.supports === "function"
+        && CSS.supports("animation-delay: calc(sibling-index() * 0.1s)");
+    }
+    return _supportsSiblingIndex;
+  }
+  function canTransitionDisplay() {
+    if (_supportsDisplayTransition !== undefined) return _supportsDisplayTransition;
+    if (typeof CSS === "undefined" || !CSS.supports?.("transition-behavior", "allow-discrete") || !document?.body) {
+      return false;
+    }
+    if (typeof getComputedStyle !== "function") return false;
+    const probe = document.createElement("div");
+    if (!probe?.style || typeof document.body.appendChild !== "function") return false;
+    probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
+    document.body.appendChild(probe);
+    getComputedStyle(probe).display;
+    probe.style.display = "none";
+    _supportsDisplayTransition = getComputedStyle(probe).display === "block";
+    probe.remove?.();
+    return _supportsDisplayTransition;
+  }
+  function markSuperAnimatedKey(k) {
+    if (!k) return;
+    if (superAnimatedKeys.size >= SUPER_ANIM_MAX_KEYS) {
+      let drop = 200;
+      for (const old of superAnimatedKeys) {
+        superAnimatedKeys.delete(old);
+        if (--drop <= 0) break;
+      }
+    }
+    superAnimatedKeys.add(k);
+  }
+  function markDecisionJustSettled(id) {
+    if (!id) return;
+    justSettledDecisions.add(id);
+    const prevTimer = justSettledTimers.get(id);
+    if (prevTimer) clearTimeout(prevTimer);
+    const tid = setTimeout(() => {
+      justSettledTimers.delete(id);
+      justSettledDecisions.delete(id);
+      if (typeof document?.querySelectorAll === "function") {
+        const sel = `.reply-receipt[data-entry="${CSS.escape(id)}"]`;
+        for (const el of document.querySelectorAll(sel)) {
+          el.removeAttribute?.("data-just-settled");
+        }
+      }
+    }, 440);
+    justSettledTimers.set(id, tid);
+  }
+  function rollCounterSlot(el, nextText, animate = false) {
+    if (!el) return;
+    const prevText = el.textContent || "";
+    if (!nextText) {
+      if (el._rollTimer) { clearTimeout(el._rollTimer); el._rollTimer = 0; }
+      el.removeAttribute?.("data-prev");
+      el.classList?.remove("roll-a", "roll-b");
+      if (el.textContent !== "") el.textContent = "";
+      return;
+    }
+    const changed = !!(prevText && prevText !== nextText);
+    if (!animate || !changed || prefersReducedMotion() || document.hidden
+      || typeof el.replaceChildren !== "function" || typeof document?.createElement !== "function") {
+      if (el._rollTimer) { clearTimeout(el._rollTimer); el._rollTimer = 0; }
+      el.removeAttribute?.("data-prev");
+      el.classList?.remove("roll-a", "roll-b");
+      if (el.textContent !== nextText) el.textContent = nextText;
+      return;
+    }
+    el.setAttribute?.("data-prev", prevText);
+    const cur = document.createElement("span");
+    cur.className = "num-cur";
+    cur.textContent = nextText;
+    el.replaceChildren(cur);
+    el._rollAlt = !el._rollAlt;
+    el.classList?.remove("roll-a", "roll-b");
+    el.classList?.add(el._rollAlt ? "roll-a" : "roll-b");
+    if (el._rollTimer) clearTimeout(el._rollTimer);
+    el._rollTimer = setTimeout(() => {
+      el._rollTimer = 0;
+      el.removeAttribute?.("data-prev");
+      el.classList?.remove("roll-a", "roll-b");
+      if (el.textContent === nextText) el.textContent = nextText;
+    }, 185);
+  }
+  function applyClapBtnState(btn, count, opts = null) {
     if (!btn) return;
     const c = clampClaps(count);
     btn.classList?.toggle?.("on", c > 0);
@@ -1654,17 +1770,17 @@
     btn.setAttribute?.("title", clapTitle(c));
     btn.setAttribute?.("aria-label", clapAriaLabel(c));
     const numEl = btn.querySelector?.(".clap-n");
-    if (numEl) numEl.textContent = c > 0 ? String(c) : "";
+    if (numEl) rollCounterSlot(numEl, c > 0 ? String(c) : "", !!opts?.animate);
     const sayEl = btn.closest?.(".say");
     if (sayEl) sayEl.classList?.toggle?.("has-claps", c > 0);
     const tdEl = btn.closest?.(".td-node");
     if (tdEl) tdEl.classList?.toggle?.("has-claps", c > 0);
   }
-  function applyClapDomInPlace(id, count) {
+  function applyClapDomInPlace(id, count, opts = null) {
     if (!id || typeof document?.querySelectorAll !== "function") return;
     const sel = `.clap-btn[data-clap="${CSS.escape(id)}"]`;
     for (const btn of document.querySelectorAll(sel)) {
-      applyClapBtnState(btn, count);
+      applyClapBtnState(btn, count, opts);
     }
   }
   function playClapFx(btn, burstCount, capped = false) {
@@ -1811,7 +1927,7 @@
     st.pendingDelta += 1;
     st.reset = false;
     st.ackUntil = 0;
-    applyClapDomInPlace(id, next);
+    applyClapDomInPlace(id, next, { animate: true });
     playClapFx(btn, bSt.count, false);
     clearTimeout(st.timer);
     st.timer = setTimeout(() => flushClap(id, false), CLAP_DEBOUNCE_MS);
@@ -1992,15 +2108,21 @@
     // earlier pages are loaded or the viewer is reading above the bottom, so an
     // anchored historical message never vanishes from the DOM on SSE updates.
     if (sup.entries?.length && s.entries.length) {
-      const sc = $("#super-thread")?.parentElement;
-      const keepSpilled = older.length > 0 || !!activeThreadRoot || (view === "collie"
-        ? !!(sc && sc.clientHeight > 0 && sc.scrollHeight - sc.scrollTop - sc.clientHeight > AT_BOTTOM_PX)
-        : scrollByRoute.get("collie")?.atBottom === false);
-      if (keepSpilled) {
-        const nextIds = new Set(s.entries.map((e) => e?.id));
-        const oldIds = new Set(older.map((e) => e?.id));
-        const spilled = sup.entries.filter((e) => e?.id && !nextIds.has(e.id) && !oldIds.has(e.id));
-        if (spilled.length) older = [...older, ...spilled];
+      const firstPrevId = sup.entries[0]?.id || "";
+      const maybeSpilled = !firstPrevId || s.entries[0]?.id !== firstPrevId;
+      if (maybeSpilled) {
+        const sc = $("#super-thread")?.parentElement;
+        const keepSpilled = older.length > 0 || !!activeThreadRoot || (view === "collie"
+          ? (vvTransitioning
+              ? !collieStickBottom
+              : !!(sc && sc.clientHeight > 0 && sc.scrollHeight - sc.scrollTop - sc.clientHeight > AT_BOTTOM_PX))
+          : scrollByRoute.get("collie")?.atBottom === false);
+        if (keepSpilled) {
+          const nextIds = new Set(s.entries.map((e) => e?.id));
+          const oldIds = new Set(older.map((e) => e?.id));
+          const spilled = sup.entries.filter((e) => e?.id && !nextIds.has(e.id) && !oldIds.has(e.id));
+          if (spilled.length) older = [...older, ...spilled];
+        }
       }
     }
     for (const [id, loc] of pinnedLocal) {
@@ -2390,7 +2512,7 @@
     sideRenderedOnce = true;
     const allEntries = chatEntries();
     const wtMap = computeWorkerThreadMap(null, allEntries);
-    const blocked = state.agents.filter((a) => a.status === "blocked");
+    const blocked = state.agents.filter((a) => a.status === "blocked").sort(compareLiveSession);
     $("#attention-group").hidden = blocked.length === 0;
     patchKeyedList($("#attention"), blocked.map((a) => itemSpec(a, wtMap, allEntries)));
 
@@ -2942,6 +3064,7 @@
     const col = $("#v-collie");
     if (!col) return;
     if (parked) {
+      clearSuperEnterMarks($("#super-thread"));
       if (collieMounted || (!col.hidden && superBodyKey)) {
         collieMounted = true;
         if (!col.hidden && col.classList.contains("is-parked")) return;
@@ -3276,6 +3399,7 @@
   const workerChatter = (e) => e.ref && e.ref !== ROUTER && (e.tone === "done" || e.tone === "info" || e.tone === "blocked") && CHATTER.test(e.text);
   const isHiddenSuperEntry = (e) => {
     if (!e) return true;
+    if (e.role === "user" && e.in_place) return true;
     if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") return true;
     if (e.role === "event" && workerChatter(e)) return true;
     return false;
@@ -3326,6 +3450,7 @@
       promotedPendingKeys.delete(promotedPendingKeys.keys().next().value);
     }
     promotedPendingKeys.set(realId, localId);
+    if (superAnimatedKeys.has(localId)) markSuperAnimatedKey(realId);
   }
   // Natural reply-chain thread drawer state.
   let activeThreadRoot = null;
@@ -3396,8 +3521,7 @@
     if (!raw) return { goal: "", full: "" };
     const hit = _goalTaskCache.get(raw);
     if (hit !== undefined) return hit;
-    const cleaned = raw
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(raw, " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     const rawLines = cleaned.split("\n");
@@ -3568,8 +3692,26 @@
     return reaches(startId, targetId) || reaches(targetId, startId);
   }
   let openInlineDecisionId = null;
+  const inlineDecisionDrafts = new Map();
+  const getInlineDraft = (id) => (id ? (inlineDecisionDrafts.get(id) || "") : "");
+  const setInlineDraft = (id, val) => {
+    if (!id) return;
+    const s = String(val || "");
+    if (s.trim()) inlineDecisionDrafts.set(id, s);
+    else inlineDecisionDrafts.delete(id);
+  };
+  const inlineDraftDotsFingerprint = () => {
+    if (!inlineDecisionDrafts.size) return "";
+    const ids = [];
+    for (const [k, v] of inlineDecisionDrafts) {
+      if (v && v.trim()) ids.push(k);
+    }
+    return ids.sort().join(",");
+  };
   const ICON_EDIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
   const ICON_RECEIPT_CHK = `<svg class="rr-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
+  const ICON_SEND_UP = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
+  const ICON_CLOSE_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
   const ICON_SPLIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M13 4v16"/></svg>`;
   const ICON_DOC_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>`;
   function entryPendingNow(allEntries, idx, id, pendIds = null) {
@@ -3590,18 +3732,25 @@
         text: localPick.text || "",
         at: localPick.at || "",
         sending: !!localPick.sending,
+        inPlace: !!localPick.inPlace,
       };
     }
     if (e.pick && e.pick.state) {
+      let inPlace = !!e.pick.in_place;
+      if (!inPlace && e.pick.state === "custom" && Array.isArray(allEntries) && idx >= 0) {
+        const next = getEntryGraph(allEntries).replyByTarget.get(e.id);
+        if (next?.in_place) inPlace = true;
+      }
       return {
         state: e.pick.state,
         text: e.pick.text || "",
         at: e.pick.at || "",
         sending: false,
+        inPlace,
       };
     }
     if (dismissedLocal.has(e.id)) {
-      return { state: "dismissed", text: "", at: "", sending: false };
+      return { state: "dismissed", text: "", at: "", sending: false, inPlace: false };
     }
     if (Array.isArray(allEntries) && idx >= 0) {
       const next = getEntryGraph(allEntries).replyByTarget.get(e.id);
@@ -3613,33 +3762,57 @@
           text: txt,
           at: next.at || "",
           sending: false,
+          inPlace: !!next.in_place,
         };
       }
     }
-    return { state: "dismissed", text: "", at: "", sending: false };
+    return { state: "dismissed", text: "", at: "", sending: false, inPlace: false };
+  }
+  function inlinePillLayout(text) {
+    const raw = String(text || "");
+    const lines = raw.split("\n");
+    let maxUnits = 0;
+    for (const ln of lines) {
+      let u = 0;
+      for (const ch of ln) u += ch.charCodeAt(0) > 0x7f ? 1 : 0.58;
+      if (u > maxUnits) maxUnits = u;
+    }
+    const width = Math.min(340, Math.max(220, Math.ceil(maxUnits * 13 + 84)));
+    const multi = lines.length > 1 || (width >= 340 && maxUnits * 13 > 260);
+    return { width, multi };
   }
   function replyOptsMarkup(e, idx, allEntries, pendIds = null, opts = null) {
     if (!e || e.role !== "collie" || !e.id) return "";
     const optList = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
     if (optList.length) {
       if (entryPendingNow(allEntries, idx, e.id, pendIds, true)) {
-        const inlineOpen = openInlineDecisionId === e.id;
+        const inDrawer = !!opts?.inDrawer;
+        const isMobileTarget = !inDrawer && replyTo?.entry === e.id && replyTo?.mode === "supplement";
+        const inlineOpen = openInlineDecisionId === e.id && (inDrawer || !narrow());
+        const savedDraft = getInlineDraft(e.id);
+        const hasDraft = !inlineOpen && !isMobileTarget && savedDraft.trim().length > 0;
+        const taId = (inDrawer ? "ri-td-" : "ri-") + e.id;
+        const pill = inlinePillLayout(savedDraft);
         return `<div class="decision-wrap" data-decision="${esc(e.id)}"><div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
-          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen ? "true" : "false"}">${ICON_EDIT_MINI}<span>补充一句</span></button></div><div class="reply-inline" data-inline-box="${esc(e.id)}"${inlineOpen ? "" : " hidden"}><input type="text" data-inline-input="${esc(e.id)}" placeholder="补充一句发给 Collie，自动关联这条决策…" autocomplete="off"><button type="button" class="reply-inline-send" data-inline-send="${esc(e.id)}" disabled>发送</button><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="收起" aria-label="收起输入框">${ICON_X}</button></div></div>`;
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}"${inlineOpen ? " hidden" : ""}>${ICON_EDIT_MINI}<span>补充一句</span>${hasDraft ? `<span class="draft-dot" aria-label="有草稿"></span>` : ""}</button><form class="reply-inline${pill.multi ? " is-multiline" : ""}" data-inline-box="${esc(e.id)}" style="--ri-w:${pill.width}px"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">补充一句</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="1" placeholder="补充一句…" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-acts"><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="取消 (Esc)" aria-label="取消">${ICON_CLOSE_MINI}</button><button type="submit" class="reply-inline-send" data-inline-send="${esc(e.id)}" title="发送 (Enter)" aria-label="发送"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div></div>`;
       }
       const res = resolveDecisionInfo(e, idx, allEntries);
       if (res) {
         const isDismissed = res.state === "dismissed";
         const isCustom = res.state === "custom";
-        const lbl = isDismissed ? "已划掉" : isCustom ? "已回复" : "已选：";
-        const val = isDismissed ? "暂不处理" : isCustom ? "" : (res.text || "");
+        const isInPlaceCustom = isCustom && !!res.inPlace;
+        const lbl = isDismissed ? "已划掉" : isInPlaceCustom ? "" : isCustom ? "已回复" : "已选：";
+        const val = isDismissed ? "暂不处理" : isInPlaceCustom ? plainLine(res.text || "") : isCustom ? "" : (res.text || "");
         const atStr = res.at ? hhmm(res.at) : "";
         const origHtml = optList.map((o) => {
           const hit = !isDismissed && !isCustom && o === res.text;
           return `<span class="rr-orig-opt${hit ? " is-picked" : ""}">${hit ? "✓ " : ""}${esc(o)}</span>`;
         }).join("");
+        const lblHtml = lbl ? `<span class="rr-lbl">${esc(lbl)}</span>` : "";
         const valHtml = val ? `<span class="rr-val">${esc(val)}</span>` : "";
-        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span>${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
+        const justSettled = !isDismissed && justSettledDecisions.has(e.id);
+        const noteHtml = isInPlaceCustom && res.text ? `<div class="rr-custom-note">${esc(res.text)}</div>` : "";
+        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"${justSettled ? ' data-just-settled="1"' : ""}><summary>${ICON_RECEIPT_CHK}${lblHtml}${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body">${noteHtml}<div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
       }
       return "";
     }
@@ -3662,12 +3835,18 @@
     }
     const seen = new Set();
     const out = [];
-    const add = (raw) => {
+    const add = (raw, explicit = false) => {
       const p = String(raw || "").trim();
       if (!p || /^https?:\/\//i.test(p)) return;
       if (/\/\.collie\/(?:uploads|images|router\/memory|router\/dreams)\//i.test(p)) return;
       const key = p.toLowerCase();
-      if (seen.has(key)) return;
+      if (seen.has(key)) {
+        if (explicit) {
+          const prevItem = out.find((x) => x.path.toLowerCase() === key);
+          if (prevItem) prevItem.explicit = true;
+        }
+        return;
+      }
       seen.add(key);
       const name = p.split("/").pop() || p;
       const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
@@ -3676,21 +3855,23 @@
         path: p,
         name,
         ext,
+        explicit: !!explicit,
         isHtml: ext === "html" || ext === "htm",
         isCsv: ext === "csv" || ext === "tsv",
       });
     };
     if (files) {
-      for (const fp of files) add(fp);
+      for (const fp of files) add(fp, true);
     }
     if (text) {
       for (const m of String(text).matchAll(SNAP_PATH_RE)) {
-        if (m[1]) add(m[1]);
+        if (m[1]) add(m[1], false);
       }
     }
     _artifactExtractCache.set(e, { text, filesKey, items: out });
     return out;
   }
+  const MAX_INLINE_HTML_CARDS = 3;
   function renderEntryArtifacts(e, openPathOverride) {
     const items = extractEntryArtifacts(e);
     if (!items.length) return "";
@@ -3703,21 +3884,34 @@
     if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit) {
       return cached.html;
     }
-    const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
     const chevSVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
     const renderChip = (it) => {
       const act = activeMatch === it.path;
       return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "预览 ") + it.name)}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>`;
     };
+    const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
     let html;
-    if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
-      html = `<div class="msg-files">${renderChip(primary)}</div>`;
-    } else {
-      const primaryAct = activeMatch === primary.path;
-      const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
-      const rest = items.filter((it) => it.path !== primary.path);
+    if (inlineHtmlItems.length > 0) {
+      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
+      const rest = items.filter((it) => !inlineSet.has(it.path));
       const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-      html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc((primaryAct ? "正在预览 " : "预览 ") + primary.name)}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+      html = inlineHtmlItems.map((it, idx) => {
+        const act = activeMatch === it.path;
+        const hash = richVisualHash("html-file:" + it.path);
+        const chipsHere = idx === inlineHtmlItems.length - 1 ? extraChips : "";
+        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(it.name)} 操作"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="在抽屉打开" aria-label="在抽屉打开 ${esc(it.name)}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="在新窗口打开" aria-label="在新窗口打开 ${esc(it.name)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>加载预览中…</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "在抽屉打开 ") + it.name)}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">在抽屉打开</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button></div>${chipsHere}</section>`;
+      }).join("");
+    } else {
+      const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
+      if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
+        html = `<div class="msg-files">${renderChip(primary)}</div>`;
+      } else {
+        const primaryAct = activeMatch === primary.path;
+        const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
+        const rest = items.filter((it) => it.path !== primary.path);
+        const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
+        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc((primaryAct ? "正在预览 " : "预览 ") + primary.name)}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+      }
     }
     _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, html });
     return html;
@@ -3744,8 +3938,7 @@
   }
   function firstCleanThreadLine(text) {
     const rawText = String(text || "");
-    const cleaned = rawText
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(rawText, " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     for (const raw of cleaned.split("\n")) {
@@ -3753,19 +3946,18 @@
       if (line) return line;
     }
     if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
-    if (/```/.test(rawText)) return "代码片段";
+    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return "代码片段";
     return stripThreadMarkdownLine(plainLine(rawText));
   }
   function collapseThreadMarkdown(text) {
     const rawText = String(text || "");
-    const cleaned = rawText
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(rawText, " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     const lines = cleaned.split("\n").map(stripThreadMarkdownLine).filter(Boolean);
     if (lines.length) return lines.join(" ").replace(/\s+/g, " ").trim();
     if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
-    if (/```/.test(rawText)) return "代码片段";
+    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return "代码片段";
     return stripThreadMarkdownLine(plainLine(rawText));
   }
   function threadCleanText(e) {
@@ -3904,12 +4096,14 @@
       }
       if (e.check) h = Math.imul(h ^ 37, 16777619);
       if (e.pending) h = Math.imul(h ^ 41, 16777619);
+      if (e.in_place) h = Math.imul(h ^ 47, 16777619);
       if (e.picked || e.resolved || e.dismissed) h = Math.imul(h ^ 43, 16777619);
       if (e.claps) h = Math.imul(h ^ (((Number(e.claps) || 0) * 2654435761) >>> 0), 16777619);
       if (e.pick) {
         h = fnvHashStr(h, e.pick.state || "");
         h = fnvHashStr(h, e.pick.text || "");
         h = fnvHashStr(h, e.pick.at || "");
+        if (e.pick.in_place) h = Math.imul(h ^ 59, 16777619);
       }
       if (Array.isArray(e.files) && e.files.length) {
         h = fnvHashStr(h, e.files.join("\x1f"));
@@ -4227,6 +4421,7 @@
       const latestReply = latest && latest !== root ? latest : null;
       const replyCount = totalCount - 1;
       const rootSummary = root ? threadCleanText(root) : (missingRoot?.text ? firstCleanThreadLine(missingRoot.text) || collieNotifySummary(missingRoot.text) : threadCleanText(list[0]));
+      const hasInPlace = list.some((x) => !!x?.in_place);
       const thObj = {
         rootId,
         root,
@@ -4236,22 +4431,23 @@
         replyCount,
         totalCount,
         branchCount,
+        hasInPlace,
         title: threadTitleFromText(rootSummary),
         fullTitle: rootSummary,
         preview: latestReply ? threadPreviewFromEntry(latestReply) : "",
       };
       allThreads.set(rootId, thObj);
       for (const x of list) allMsgToRoot.set(entryKey(x), rootId);
-      if (totalCount < 3) continue;
+      if (totalCount < 3 && !(totalCount >= 2 && hasInPlace)) continue;
       threads.set(rootId, thObj);
       for (const x of list) msgToRoot.set(entryKey(x), rootId);
     }
-    // Only show `↳ N 条回复 >` at the end of each contiguous run of a >=3 thread,
-    // avoiding stacked duplicate links when messages of the same thread are adjacent.
+    // Only show `↳ N 条回复 >` at the end of each contiguous run of a thread,
+    // skipping hidden in-place replies so the visible target message always owns the entry pill.
     const showEntryOn = new Set();
     const visibleTalk = [];
     for (const m of entries) {
-      if (m && (m.role === "user" || m.role === "collie")) visibleTalk.push(m);
+      if (m && (m.role === "user" || m.role === "collie") && !m.in_place) visibleTalk.push(m);
     }
     for (let i = 0; i < visibleTalk.length; i++) {
       const k = entryKey(visibleTalk[i]);
@@ -4341,34 +4537,148 @@
     await scrollToAsync(sc, finalWant, "smooth");
     return "teleport-glide";
   }
-  let _lastJumpUiKey = "";
-  function updateSuperJump() {
+  let _lastJumpUiKey = "", _prevJumpUnread = 0, _prevJumpShow = false, _jumpNudgeAlt = false;
+  function setSuperJumpVisible(btn, show, sc) {
+    if (btn._jumpHideTimer) { clearTimeout(btn._jumpHideTimer); btn._jumpHideTimer = 0; }
+    if (show) {
+      btn.removeAttribute?.("data-closing");
+      btn.hidden = false;
+      return;
+    }
+    const hadFocus = document.activeElement === btn;
+    if (btn.hidden && !btn.hasAttribute?.("data-closing")) return;
+    if (prefersReducedMotion() || document.hidden || canTransitionDisplay() || typeof btn.getAnimations !== "function") {
+      btn.removeAttribute?.("data-closing");
+      btn.hidden = true;
+      if (hadFocus) sc?.focus?.({ preventScroll: true });
+      return;
+    }
+    btn.setAttribute("data-closing", "");
+    if (hadFocus) sc?.focus?.({ preventScroll: true });
+    const anims = btn.getAnimations();
+    if (!anims.length) {
+      btn.removeAttribute("data-closing");
+      btn.hidden = true;
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (btn._jumpHideTimer) { clearTimeout(btn._jumpHideTimer); btn._jumpHideTimer = 0; }
+      if (btn.hasAttribute("data-closing")) {
+        btn.removeAttribute("data-closing");
+        btn.hidden = true;
+      }
+    };
+    btn._jumpHideTimer = setTimeout(finish, 220);
+    Promise.allSettled(anims.map((a) => a.finished)).then(finish);
+  }
+  const UNREAD_STAGE1_TOLERANCE_PX = 42;
+  function computeUnreadJumpTarget(sc = $("#super-thread")?.parentElement, box = $("#super-thread")) {
+    const { firstUnreadId, count } = computeUnreadInfo();
+    if (!sc || !box || count <= 0 || !firstUnreadId) return null;
+    let anchorEl = null;
+    let isSep = false;
+    if (sessionUnreadMarkerId && firstUnreadId === sessionUnreadMarkerId) {
+      const sep = $("#unread-sep", box);
+      if (sep) { anchorEl = sep; isSep = true; }
+    }
+    if (!anchorEl) {
+      anchorEl = findUnreadRowEl(box, firstUnreadId);
+    }
+    if (!anchorEl) {
+      const sep = $("#unread-sep", box);
+      if (sep) { anchorEl = sep; isSep = true; }
+    }
+    if (!anchorEl || typeof sc.getBoundingClientRect !== "function" || typeof anchorEl.getBoundingClientRect !== "function") {
+      return { anchorEl: null, isSep: false, firstUnreadId, count, rawTop: 0, wantTop: 0, fitsAtBottom: true, isStage1: false };
+    }
+    const sr = sc.getBoundingClientRect();
+    const er = anchorEl.getBoundingClientRect();
+    const rawTop = sc.scrollTop + (er.top - sr.top);
+    const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const wantTop = Math.max(0, Math.min(maxTop, rawTop - UNREAD_TOP_PAD));
+    const fitsAtBottom = maxTop <= 0 || (rawTop - UNREAD_TOP_PAD >= maxTop - 24);
+    const isStage1 = !fitsAtBottom && (wantTop > sc.scrollTop + UNREAD_STAGE1_TOLERANCE_PX);
+    return { anchorEl, isSep, firstUnreadId, count, rawTop, wantTop, fitsAtBottom, isStage1 };
+  }
+  function updateSuperJump(opts = {}) {
     const btn = $("#super-jump"), sc = $("#super-thread")?.parentElement;
     if (!btn || !sc) return;
-    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    const dist = typeof opts.dist === "number" ? opts.dist : (sc.scrollHeight - sc.scrollTop - sc.clientHeight);
     if (dist <= 24) superJumpHiding = false;
     const unreadCount = view === "collie" ? computeUnreadInfo().count : 0;
     const threshold = unreadCount > 0 ? AT_BOTTOM_PX : SUPER_JUMP_DIST;
     const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > threshold;
-    const uiKey = `${show ? 1 : 0}|${unreadCount}`;
-    if (uiKey === _lastJumpUiKey && btn.hidden === !show) return;
+    const target = show && unreadCount > 0 ? computeUnreadJumpTarget(sc, $("#super-thread")) : null;
+    const stage = show && target?.isStage1 ? "unread-start" : "latest";
+    const visibleNow = !btn.hidden && !btn.hasAttribute?.("data-closing");
+    const uiKey = `${show ? 1 : 0}|${stage}|${unreadCount}`;
+    if (uiKey === _lastJumpUiKey && visibleNow === show) return;
+    const unreadIncreased = show && unreadCount > _prevJumpUnread && (_prevJumpShow || _prevJumpUnread > 0);
     _lastJumpUiKey = uiKey;
-    const badgeText = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
-    const ariaText = unreadCount > 0 ? `回到底部，${unreadCount} 条未读` : "回到底部";
+    _prevJumpShow = show;
+    _prevJumpUnread = show ? unreadCount : 0;
+    btn.dataset.stage = stage;
+    const isStage1 = stage === "unread-start";
+    const compactCount = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
+    const ariaText = isStage1
+      ? `跳到未读开头，${unreadCount} 条未读`
+      : unreadCount > 0
+        ? `跳到最新，余 ${unreadCount} 条未读`
+        : "跳到最新";
     const badgeEl = $("#super-jump-badge", btn);
     if (badgeEl) {
-      if (badgeEl.textContent !== badgeText) badgeEl.textContent = badgeText;
-      badgeEl.hidden = !badgeText;
+      if (isStage1 && compactCount) {
+        if (typeof document?.createElement === "function" && typeof document?.createTextNode === "function" && typeof badgeEl.replaceChildren === "function") {
+          let numEl = badgeEl.querySelector?.(".sj-n");
+          if (!numEl) {
+            numEl = document.createElement("span");
+            numEl.className = "sj-n";
+            badgeEl.replaceChildren(numEl, document.createTextNode(" 未读"));
+          }
+          rollCounterSlot(numEl, compactCount, unreadIncreased);
+        } else {
+          const nextText = `${compactCount} 未读`;
+          const nextHtml = `<span class="sj-n">${compactCount}</span> 未读`;
+          if (badgeEl.textContent !== nextText || badgeEl.innerHTML !== nextHtml) {
+            badgeEl.textContent = nextText;
+            badgeEl.innerHTML = nextHtml;
+          }
+        }
+        badgeEl.hidden = false;
+      } else {
+        const oldNum = badgeEl.querySelector?.(".sj-n");
+        if (oldNum) rollCounterSlot(oldNum, "", false);
+        rollCounterSlot(badgeEl, "", false);
+        if (badgeEl.textContent !== "") badgeEl.textContent = "";
+        if (badgeEl.innerHTML !== "") badgeEl.innerHTML = "";
+        badgeEl.hidden = true;
+      }
     }
+    btn.classList.toggle("stage-unread", isStage1);
     btn.classList.toggle("has-unread", unreadCount > 0);
     if (btn.title !== ariaText) {
       btn.title = ariaText;
       btn.setAttribute("aria-label", ariaText);
     }
-    if (btn.hidden === !show) return;
-    const hadFocus = !show && document.activeElement === btn;
-    btn.hidden = !show;
-    if (hadFocus) sc.focus({ preventScroll: true });
+    if (visibleNow !== show) {
+      setSuperJumpVisible(btn, show, sc);
+    }
+    if (!show) {
+      if (btn._jumpNudgeTimer) { clearTimeout(btn._jumpNudgeTimer); btn._jumpNudgeTimer = 0; }
+      btn.classList.remove("nudge-a", "nudge-b");
+    } else if (unreadIncreased && !prefersReducedMotion() && !document.hidden) {
+      _jumpNudgeAlt = !_jumpNudgeAlt;
+      btn.classList.remove("nudge-a", "nudge-b");
+      btn.classList.add(_jumpNudgeAlt ? "nudge-a" : "nudge-b");
+      if (btn._jumpNudgeTimer) clearTimeout(btn._jumpNudgeTimer);
+      btn._jumpNudgeTimer = setTimeout(() => {
+        btn._jumpNudgeTimer = 0;
+        btn.classList.remove("nudge-a", "nudge-b");
+      }, 280);
+    }
   }
   function maybeScheduleReadAtBottom(opts = {}) {
     if (view !== "collie" || document.hidden || collieLayoutLock) return;
@@ -4494,7 +4804,7 @@
       toast(err.message, "attn");
     }
   }
-  function renderPendingBar() {
+  function renderPendingBar(opts = {}) {
     const wrap = $("#pending-wrap"), bar = $("#pending-bar"), listEl = $("#pending-list");
     if (!wrap) return;
     const pend = activePending(), pinsAll = activePinned();
@@ -4509,7 +4819,7 @@
       listEl.hidden = true;
       pendingBarSig = pendingListSig = "";
       activePinId = lastPinTopId = "";
-      updateSuperJump();
+      if (!opts.skipJump) updateSuperJump();
       return;
     }
     wrap.hidden = false;
@@ -4591,7 +4901,7 @@
         pendingListSig = "";
       }
     }
-    updateSuperJump();
+    if (!opts.skipJump) updateSuperJump();
   }
   async function dismissPending(id) {
     if (!id || dismissedLocal.has(id)) return;
@@ -4766,7 +5076,25 @@
     const eid = CSS.escape(id);
     return `#v-collie .msg[data-id="${eid}"], #v-collie .event[data-id="${eid}"]`;
   };
+  function resolveVisibleEntryId(id, allEntries = chatEntries()) {
+    if (!id) return "";
+    const byId = new Map();
+    for (let i = 0; i < (allEntries?.length || 0); i++) {
+      const x = allEntries[i];
+      if (x?.id) byId.set(x.id, x);
+    }
+    let cur = id;
+    const seen = new Set();
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const ent = byId.get(cur);
+      if (!ent || !ent.in_place || !ent.re?.entry) return cur;
+      cur = ent.re.entry;
+    }
+    return id;
+  }
   async function jumpToEntry(id, opts) {
+    id = resolveVisibleEntryId(id);
     if (!id) return;
     const seq = ++jumpSeq;
     cancelCollieLayoutLock();
@@ -4789,7 +5117,7 @@
     }
     if (!m) { toast("这条消息太早了，已经不在这里"); return; }
     if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
-    collieStickBottom = false;
+    setCollieBottomStick(false);
     collieForceBottomUntil = 0;
     const sc = $("#super-thread").parentElement;
     const measureTargetTop = (el) => {
@@ -4818,7 +5146,7 @@
     captureViewScroll("collie", null, navCur);
     updateSuperJump();
     if (seq !== jumpSeq) return;
-    flashEntry = { id, until: Date.now() + 1550 };
+    flashEntry = { id, until: Date.now() + 1400 };
     const hit = document.querySelector(sel);
     if (hit) {
       hit.classList.remove("flash");
@@ -4833,7 +5161,7 @@
       if (flashEntry.id === id && Date.now() >= flashEntry.until) {
         document.querySelector(sel)?.classList.remove("flash");
       }
-    }, 1600);
+    }, 1450);
   }
   // Legacy quotes created before worker events stored quote.entry: locate the
   // worker's nearest preceding timeline event in main chat without leaving it.
@@ -5186,6 +5514,7 @@
       return { fitsAtBottom: true, wantTop: maxTop };
     }
     markProgrammaticScroll(240);
+    setCollieBottomStick(false);
     scroller.scrollTop = wantTop;
     return { fitsAtBottom: false, wantTop };
   }
@@ -5339,11 +5668,16 @@
     const msgEl = el.querySelector?.(".msg.assistant");
     if (!msgEl) return null;
     const prevPinned = !!el.classList?.contains("is-pinned");
+    const prevCont = !!el.classList?.contains("cont");
     const nextCls = `say${item.cont ? " cont" : ""}${item.pinned ? " is-pinned" : ""}${item.claps > 0 ? " has-claps" : ""}`;
     if (el.className !== nextCls) el.className = nextCls;
+    if (prevCont !== !!item.cont) {
+      const av = el.querySelector?.(":scope > .avatar") || el.querySelector?.(".avatar");
+      if (av) av.innerHTML = item.cont ? "" : `<img src="icon.svg" alt="">`;
+    }
     if (item.rootId) el.dataset.threadRoot = item.rootId;
     else delete el.dataset.threadRoot;
-    let layoutChanged = prevPinned !== !!item.pinned;
+    let layoutChanged = prevPinned !== !!item.pinned || prevCont !== !!item.cont;
     const curPin = msgEl.querySelector?.(":scope > .pin-ind") || msgEl.querySelector?.(".pin-ind");
     if (item.pinned && !curPin) {
       const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
@@ -5357,6 +5691,22 @@
     const oldFoot = (lastCh && (lastCh.classList?.contains("msg-foot") || lastCh.classList?.contains("msg-acts")))
       ? lastCh
       : msgEl.querySelector?.(":scope > .msg-foot, :scope > .msg-acts");
+    if (item.optsHtml !== undefined && el._collieOptsHtml !== item.optsHtml) {
+      const oldOpts = msgEl.querySelector?.(":scope > .decision-wrap, :scope > .reply-opts, :scope > .reply-receipt");
+      const beforeEl = msgEl.querySelector?.(":scope > .inplace-receipts") || oldFoot;
+      if (item.optsHtml) {
+        const newOpts = parseSuperNode(item.optsHtml);
+        if (newOpts) {
+          if (oldOpts && oldOpts.parentNode === msgEl) msgEl.replaceChild(newOpts, oldOpts);
+          else if (beforeEl && beforeEl.parentNode === msgEl) msgEl.insertBefore(newOpts, beforeEl);
+          else msgEl.appendChild(newOpts);
+        }
+      } else if (oldOpts && oldOpts.parentNode === msgEl) {
+        msgEl.removeChild(oldOpts);
+      }
+      el._collieOptsHtml = item.optsHtml;
+      layoutChanged = true;
+    }
     const curEntry = oldFoot?.querySelector?.(".thread-entry");
     const curCount = curEntry?.querySelector?.(".te-count");
     const wantHasEntry = !!(item.teRoot && item.teCount > 0);
@@ -5421,6 +5771,96 @@
     el._collieKey = item.key;
     return { layoutChanged: false };
   }
+  function clearSuperEnterMarks(box) {
+    if (!box || typeof box.querySelectorAll !== "function") return;
+    for (const el of box.querySelectorAll("[data-enter]")) {
+      if (el._enterTimer) { clearTimeout(el._enterTimer); el._enterTimer = 0; }
+      if (el._enterOnEnd && typeof el.removeEventListener === "function") {
+        el.removeEventListener("animationend", el._enterOnEnd);
+        el._enterOnEnd = null;
+      }
+      el.removeAttribute?.("data-enter");
+      const msgEl = el.querySelector?.(".msg.assistant");
+      if (msgEl?.children) {
+        for (const ch of msgEl.children) ch.style?.removeProperty?.("--sibling-index");
+      }
+    }
+  }
+  function armSuperRowEnter(rowEl, role) {
+    if (!rowEl || !rowEl.dataset) return false;
+    let mode = "";
+    let fallbackMs = 260;
+    let lastTarget = null;
+    if (role === "user") {
+      mode = "user";
+      fallbackMs = 260;
+      lastTarget = rowEl.querySelector?.(".msg.user") || rowEl;
+    } else if (role === "collie") {
+      const msgEl = rowEl.querySelector?.(".msg.assistant");
+      const contentChildren = [];
+      if (msgEl?.children) {
+        for (const ch of msgEl.children) {
+          if (ch.classList?.contains("msg-acts")) continue;
+          contentChildren.push(ch);
+        }
+      }
+      const isShort = contentChildren.length <= 1;
+      mode = isShort ? "collie-short" : "collie";
+      fallbackMs = isShort ? 280 : 450;
+      if (!isShort && !supportsSiblingIndex() && msgEl?.children) {
+        let idx = 0;
+        for (const ch of msgEl.children) {
+          if (ch.classList?.contains("msg-acts")) continue;
+          ch.style?.setProperty?.("--sibling-index", String(Math.min(idx, 4)));
+          idx++;
+        }
+      }
+      lastTarget = isShort
+        ? (contentChildren[0] || msgEl || rowEl)
+        : (contentChildren[Math.min(contentChildren.length - 1, 4)] || msgEl || rowEl);
+    } else {
+      return false;
+    }
+    rowEl.dataset.enter = mode;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (rowEl._enterTimer) { clearTimeout(rowEl._enterTimer); rowEl._enterTimer = 0; }
+      if (rowEl._enterOnEnd && typeof rowEl.removeEventListener === "function") {
+        rowEl.removeEventListener("animationend", rowEl._enterOnEnd);
+        rowEl._enterOnEnd = null;
+      }
+      rowEl.removeAttribute?.("data-enter");
+      if (role === "collie") {
+        const msgEl = rowEl.querySelector?.(".msg.assistant");
+        if (msgEl?.children) {
+          for (const ch of msgEl.children) ch.style?.removeProperty?.("--sibling-index");
+        }
+      }
+    };
+    if (typeof rowEl.addEventListener === "function") {
+      const onEnd = (ev) => {
+        if (!ev?.animationName || !String(ev.animationName).startsWith("cm-")) return;
+        const reduced = prefersReducedMotion();
+        if (reduced || !lastTarget || ev.target === lastTarget) {
+          cleanup();
+          return;
+        }
+        if (typeof rowEl.getAnimations === "function") {
+          const running = rowEl.getAnimations({ subtree: true }).some(
+            (a) => a.playState === "running" && String(a.animationName || "").startsWith("cm-")
+          );
+          if (!running) cleanup();
+        }
+      };
+      rowEl._enterOnEnd = onEnd;
+      rowEl.addEventListener("animationend", onEnd);
+    }
+    if (rowEl._enterTimer) clearTimeout(rowEl._enterTimer);
+    rowEl._enterTimer = setTimeout(cleanup, fallbackMs);
+    return true;
+  }
   function patchSuperThread(box, items, opts = {}) {
     const t0 = performance.now();
     const beforeLayout = typeof opts?.onBeforeLayoutMutate === "function" ? opts.onBeforeLayoutMutate : null;
@@ -5432,7 +5872,7 @@
       }
     };
     const stats = box._colliePatchStats || (box._colliePatchStats = {
-      renders: 0, fullRebuilds: 0, lastAdded: 0, lastUpdated: 0, lastRemoved: 0, lastReused: 0, lastMs: 0,
+      renders: 0, fullRebuilds: 0, lastAdded: 0, lastUpdated: 0, lastRemoved: 0, lastReused: 0, lastAnimated: 0, lastMs: 0,
     });
     stats.renders++;
     let nodeMap = box._collieNodes;
@@ -5444,9 +5884,9 @@
       if (!items.length) {
         while (box.firstChild) box.removeChild(box.firstChild);
         stats.fullRebuilds++;
-        stats.lastAdded = stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+        stats.lastAdded = stats.lastUpdated = stats.lastRemoved = stats.lastReused = stats.lastAnimated = 0;
         stats.lastMs = performance.now() - t0;
-        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, fullRebuild: true, layoutChanged: true };
+        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, animated: 0, fullRebuild: true, layoutChanged: true };
       }
       const frag = document.createDocumentFragment();
       if (items.length > 16) {
@@ -5458,7 +5898,10 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+            markSuperAnimatedKey(it.key);
+            if (it.entryId) markSuperAnimatedKey(it.entryId);
             nodeMap.set(it.key, el);
             frag.appendChild(el);
           }
@@ -5470,7 +5913,10 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+            markSuperAnimatedKey(it.key);
+            if (it.entryId) markSuperAnimatedKey(it.entryId);
             nodeMap.set(it.key, el);
             frag.appendChild(el);
           }
@@ -5482,7 +5928,10 @@
           el._collieKey = it.key;
           el._collieSig = it.sig;
           if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+          if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
           if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+          markSuperAnimatedKey(it.key);
+          if (it.entryId) markSuperAnimatedKey(it.entryId);
           nodeMap.set(it.key, el);
           frag.appendChild(el);
         }
@@ -5491,12 +5940,12 @@
       box.appendChild(frag);
       stats.fullRebuilds++;
       stats.lastAdded = items.length;
-      stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+      stats.lastUpdated = stats.lastRemoved = stats.lastReused = stats.lastAnimated = 0;
       stats.lastMs = performance.now() - t0;
-      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, fullRebuild: true, layoutChanged: true };
+      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, animated: 0, fullRebuild: true, layoutChanged: true };
     }
 
-    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0, layoutChanged = false;
+    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0, animated = 0, layoutChanged = false;
     const nextKeys = new Set();
     for (let i = 0; i < items.length; i++) {
       const k = items[i].key;
@@ -5531,50 +5980,45 @@
 
     let cursor = box.firstElementChild;
     let pendingNew = null;
+    const tailCandidates = [];
     const flushFrag = () => {
       if (!pendingNew || !pendingNew.length) return;
       noteLayoutMutate();
       layoutChanged = true;
+      const isTailAppend = !cursor || cursor._collieKey === "__needs__";
       const frag = document.createDocumentFragment();
+      const recordNode = (el, it) => {
+        el._collieKey = it.key;
+        el._collieSig = it.sig;
+        if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+        if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
+        if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+        nodeMap.set(it.key, el);
+        frag.appendChild(el);
+        added++;
+        if (isTailAppend && (it.role === "user" || it.role === "collie")) {
+          const alreadyAnimated = superAnimatedKeys.has(it.key) || !!(it.entryId && superAnimatedKeys.has(it.entryId));
+          tailCandidates.push({ el, it, alreadyAnimated });
+        }
+        markSuperAnimatedKey(it.key);
+        if (it.entryId) markSuperAnimatedKey(it.entryId);
+      };
       if (pendingNew.length > 8) {
         _superPatchTpl.innerHTML = pendingNew.map((it) => it.render()).join("");
         const parsed = [..._superPatchTpl.content.children];
         if (parsed.length === pendingNew.length) {
-          for (let j = 0; j < pendingNew.length; j++) {
-            const el = parsed[j], it = pendingNew[j];
-            el._collieKey = it.key;
-            el._collieSig = it.sig;
-            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
-            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
-            nodeMap.set(it.key, el);
-            frag.appendChild(el);
-            added++;
-          }
+          for (let j = 0; j < pendingNew.length; j++) recordNode(parsed[j], pendingNew[j]);
         } else {
           _superPatchTpl.innerHTML = "";
           for (let j = 0; j < pendingNew.length; j++) {
             const it = pendingNew[j], el = parseSuperNode(it.render());
-            if (!el) continue;
-            el._collieKey = it.key;
-            el._collieSig = it.sig;
-            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
-            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
-            nodeMap.set(it.key, el);
-            frag.appendChild(el);
-            added++;
+            if (el) recordNode(el, it);
           }
         }
       } else {
         for (let j = 0; j < pendingNew.length; j++) {
           const it = pendingNew[j], el = parseSuperNode(it.render());
-          if (!el) continue;
-          el._collieKey = it.key;
-          el._collieSig = it.sig;
-          if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
-          if (it.entryId !== undefined) el._collieEntryId = it.entryId;
-          nodeMap.set(it.key, el);
-          frag.appendChild(el);
-          added++;
+          if (el) recordNode(el, it);
         }
       }
       if (frag.firstChild) {
@@ -5616,7 +6060,9 @@
             fresh._collieKey = it.key;
             fresh._collieSig = it.sig;
             if (it.msgSig !== undefined) fresh._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) fresh._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) fresh._collieEntryId = it.entryId;
+            carryRichVisualState(el, fresh);
             const wasCursor = el === cursor;
             if (el.parentNode === box) box.replaceChild(fresh, el);
             el = fresh;
@@ -5647,12 +6093,20 @@
       cursor = next;
       removed++;
     }
+    if (opts.allowEnterAnim && tailCandidates.length > 0 && tailCandidates.length <= 2) {
+      for (const cand of tailCandidates) {
+        if (!cand.alreadyAnimated && armSuperRowEnter(cand.el, cand.it.role)) {
+          animated++;
+        }
+      }
+    }
     stats.lastAdded = added;
     stats.lastUpdated = updated;
     stats.lastRemoved = removed;
     stats.lastReused = reused;
+    stats.lastAnimated = animated;
     stats.lastMs = performance.now() - t0;
-    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, fullRebuild: false, layoutChanged };
+    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, animated, fullRebuild: false, layoutChanged };
   }
 
   // Anti-flicker state for the in-stream "Collie 在想…" row (#super-working):
@@ -5736,6 +6190,11 @@
 
   const THREAD_DESKTOP_MIN = 1180;
   let collieStickBottom = true;
+  let collieResizeWasBottom = true;
+  const setCollieBottomStick = (on) => {
+    collieStickBottom = !!on;
+    collieResizeWasBottom = !!on;
+  };
   let collieForceBottomUntil = 0;
   const isDesktopThreadSideBySide = () => !!(activeThreadRoot && innerWidth > THREAD_DESKTOP_MIN && $("#app")?.classList?.contains("has-thread"));
   function snapCollieStickBottom(sc = viewScroller("collie")) {
@@ -5763,6 +6222,149 @@
     }
   }
 
+  function patchCrewStrip(crew, active, onBeforeMutate) {
+    if (!crew) return false;
+    const items = active.map((w) => {
+      const pane = paneOf(w.name);
+      const disp = workerDisplayName(w);
+      const kindLbl = KIND_LABEL[w.kind] || w.kind;
+      const status = workerStatus(w);
+      const stLbl = STATUS_LABEL[status] || "";
+      const metaTip = [w.name, kindLbl, stLbl].filter(Boolean).join(" · ");
+      const goal = w.task ? extractGoalFromTask(w.task).goal : "";
+      const tip = goal && goal !== disp && goal !== w.name ? `${metaTip} — ${goal}` : metaTip;
+      const href = pane ? `#/p/${encodeURIComponent(pane)}` : "";
+      const sig = `${w.name}|${href}|${disp}|${kindLbl}|${status}|${tip}`;
+      return { name: w.name, href, disp, kindLbl, status, tip, sig };
+    });
+    const crewSig = items.map((x) => x.sig).join("\n");
+    if (!canPatchSuperDom(crew)) {
+      const prevCrew = crew._html ?? crew.innerHTML;
+      const crewHTML = items.map((x) =>
+        `<a class="chip${x.status === "blocked" ? " is-blocked" : ""}" ${x.href ? `href="${x.href}"` : ""} data-worker="${esc(x.name)}" title="${esc(x.tip)}"><span class="dot ${esc(x.status)}" aria-hidden="true"></span><span class="chip-name">${esc(x.disp)}</span><span class="k">${esc(x.kindLbl)}</span></a>`
+      ).join("");
+      const crewWillChange = crewHTML !== prevCrew;
+      if (crewWillChange && onBeforeMutate) onBeforeMutate();
+      return setHTML(crew, crewHTML) || crewWillChange;
+    }
+    if (crew._crewHydrated && crewSig === crew._crewSig) return false;
+    if (onBeforeMutate) onBeforeMutate();
+    let nodeMap = crew._crewNodes;
+    const isInitial = !crew._crewHydrated || !nodeMap;
+    if (isInitial) {
+      crew._crewHydrated = true;
+      nodeMap = new Map();
+      crew._crewNodes = nodeMap;
+      while (crew.firstChild) crew.removeChild(crew.firstChild);
+      const frag = document.createDocumentFragment();
+      for (const x of items) {
+        const el = parseSuperNode(`<a class="chip${x.status === "blocked" ? " is-blocked" : ""}" ${x.href ? `href="${x.href}"` : ""} data-worker="${esc(x.name)}" title="${esc(x.tip)}"><span class="dot ${esc(x.status)}" aria-hidden="true"></span><span class="chip-name">${esc(x.disp)}</span><span class="k">${esc(x.kindLbl)}</span></a>`);
+        if (!el) continue;
+        el._workerStatus = x.status;
+        el._chipSig = x.sig;
+        nodeMap.set(x.name, el);
+        frag.appendChild(el);
+      }
+      crew.appendChild(frag);
+      crew._crewSig = crewSig;
+      if (crew.dataset && !crew.dataset.live) {
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => { if (crew.dataset) crew.dataset.live = "1"; });
+        } else {
+          crew.dataset.live = "1";
+        }
+      }
+      return true;
+    }
+    const nextNames = new Set(items.map((x) => x.name));
+    const canAnimateExit = !!crew.dataset?.live && !document.hidden && !prefersReducedMotion();
+    for (const [name, el] of [...nodeMap.entries()]) {
+      if (nextNames.has(name)) continue;
+      if (el.hasAttribute?.("data-closing")) continue;
+      if (!canAnimateExit || typeof el.getAnimations !== "function") {
+        if (el.parentNode === crew) crew.removeChild(el);
+        nodeMap.delete(name);
+        continue;
+      }
+      el.setAttribute("data-closing", "");
+      el.setAttribute("aria-hidden", "true");
+      el.tabIndex = -1;
+      const anims = el.getAnimations();
+      const finishExit = () => {
+        if (!el.hasAttribute?.("data-closing")) return;
+        if (el.parentNode === crew) crew.removeChild(el);
+        if (crew._crewNodes?.get(name) === el) crew._crewNodes.delete(name);
+        syncCrewCompact(crew);
+        crew._syncScrollFade?.();
+        syncCollieTopHeight();
+      };
+      if (!anims.length) {
+        finishExit();
+      } else {
+        Promise.race([
+          Promise.allSettled(anims.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 240)),
+        ]).then(finishExit);
+      }
+    }
+    const nextNonClosing = (node) => {
+      let cur = node;
+      while (cur && cur.hasAttribute?.("data-closing")) cur = cur.nextElementSibling;
+      return cur;
+    };
+    let cursor = nextNonClosing(crew.firstElementChild);
+    for (const x of items) {
+      let el = nodeMap.get(x.name);
+      if (el) {
+        if (el.hasAttribute?.("data-closing")) {
+          el.removeAttribute("data-closing");
+          el.removeAttribute("aria-hidden");
+          el.removeAttribute("tabindex");
+        }
+        if (el._chipSig !== x.sig) {
+          const prevStatus = el._workerStatus || "";
+          if (x.href) el.setAttribute("href", x.href);
+          else el.removeAttribute("href");
+          if (el.title !== x.tip) el.title = x.tip;
+          const dotEl = el.querySelector?.(".dot");
+          const nextDotCls = `dot ${x.status}`;
+          if (dotEl && dotEl.className !== nextDotCls) dotEl.className = nextDotCls;
+          const nameEl = el.querySelector?.(".chip-name");
+          if (nameEl && nameEl.textContent !== x.disp) nameEl.textContent = x.disp;
+          const kindEl = el.querySelector?.(".k");
+          if (kindEl && kindEl.textContent !== x.kindLbl) kindEl.textContent = x.kindLbl;
+          el.classList?.toggle("is-blocked", x.status === "blocked");
+          if (x.status === "blocked" && prevStatus && prevStatus !== "blocked" && !document.hidden && !prefersReducedMotion()) {
+            el.classList?.remove("ping-blocked");
+            void el.offsetWidth;
+            el.classList?.add("ping-blocked");
+            if (el._pingTimer) clearTimeout(el._pingTimer);
+            el._pingTimer = setTimeout(() => {
+              el._pingTimer = 0;
+              el.classList?.remove("ping-blocked");
+            }, 540);
+          }
+          el._workerStatus = x.status;
+          el._chipSig = x.sig;
+        }
+      } else {
+        el = parseSuperNode(`<a class="chip${x.status === "blocked" ? " is-blocked" : ""}" ${x.href ? `href="${x.href}"` : ""} data-worker="${esc(x.name)}" title="${esc(x.tip)}"><span class="dot ${esc(x.status)}" aria-hidden="true"></span><span class="chip-name">${esc(x.disp)}</span><span class="k">${esc(x.kindLbl)}</span></a>`);
+        if (!el) continue;
+        el._workerStatus = x.status;
+        el._chipSig = x.sig;
+        nodeMap.set(x.name, el);
+      }
+      if (el === cursor) {
+        cursor = nextNonClosing(el.nextElementSibling);
+      } else {
+        if (cursor) crew.insertBefore(el, cursor);
+        else crew.appendChild(el);
+      }
+    }
+    crew._crewSig = crewSig;
+    return true;
+  }
+
   function renderSuper(opts) {
     const force = opts === true || !!opts?.force;
     const forceBottom = !!opts?.scrollBottom;
@@ -5773,20 +6375,21 @@
     const drawerSideBySide = isDesktopThreadSideBySide();
     const drawerFreezeMain = !forceBottom && drawerSideBySide;
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
-    const distBefore = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && (collieInitialAnchor?.mode === "bottom" || (collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom))
       && performance.now() <= collieInitialAnchor.until;
     const stickBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && performance.now() < collieForceBottomUntil;
+    const needDistRead = !forceBottom && !drawerFreezeMain && !holdRestore && !initialBottomLock && !stickBottomLock;
+    const distBefore = needDistRead ? (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight) : 0;
     const atBottom = forceBottom ? true : drawerFreezeMain ? false : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || stickBottomLock || distBefore <= AT_BOTTOM_PX);
     if (forceBottom) {
-      collieStickBottom = true;
+      setCollieBottomStick(true);
       collieForceBottomUntil = performance.now() + 4000;
     } else if (drawerFreezeMain) {
       collieForceBottomUntil = 0;
     } else if (holdRestore && !holdRestore.atBottom) {
-      collieStickBottom = false;
+      setCollieBottomStick(false);
       collieForceBottomUntil = 0;
     }
     const jumping = flashEntry.until > Date.now();
@@ -5800,8 +6403,8 @@
       liveAnchor = captureCollieAnchor(scroller);
       return liveAnchor;
     };
-    const prevScrollTop = scroller.scrollTop;
-    const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew._html ?? crew.innerHTML;
+    const prevScrollTop = needLiveAnchor ? scroller.scrollTop : 0;
+    const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "";
     const r = sup.router || {};
     const allEntries = chatEntries();
     reconcileStaleReplyTo(allEntries);
@@ -5827,9 +6430,20 @@
     if (busy) {
       if (wk.className !== busyInfo.cls) wk.className = busyInfo.cls;
       if (busy !== prevBusy) wk.innerHTML = `<span class="avatar"><img src="icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
+      if (!wasWorking && view === "collie" && !document.hidden && !prefersReducedMotion()) {
+        if (wk.dataset) wk.dataset.entering = "1";
+        if (wk._enterTimer) clearTimeout(wk._enterTimer);
+        wk._enterTimer = setTimeout(() => {
+          wk._enterTimer = 0;
+          if (wk.dataset) delete wk.dataset.entering;
+        }, 200);
+      }
+    } else {
+      if (wk._enterTimer) { clearTimeout(wk._enterTimer); wk._enterTimer = 0; }
+      if (wk.dataset) delete wk.dataset.entering;
     }
     wk.hidden = !busy;
-    setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "");
+    setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条排队中` : "");
     const cx = $("#router-ctx");
     setText(cx, r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "");
     cx.classList.toggle("warn", !!r.handover || (!!r.alive && Number(r.context) >= 75));
@@ -5842,20 +6456,8 @@
 
     const active = sup.workers.filter((w) => !w.ended);
     if (view === "collie") renderTarget();
-    const crewHTML = active.map((w) => {
-      const pane = paneOf(w.name);
-      const disp = workerDisplayName(w);
-      const kindLbl = KIND_LABEL[w.kind] || w.kind;
-      const stLbl = STATUS_LABEL[workerStatus(w)] || "";
-      const metaTip = [w.name, kindLbl, stLbl].filter(Boolean).join(" · ");
-      const goal = w.task ? extractGoalFromTask(w.task).goal : "";
-      const tip = goal && goal !== disp && goal !== w.name ? `${metaTip} — ${goal}` : metaTip;
-      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""} data-worker="${esc(w.name)}" title="${esc(tip)}"><span class="dot ${esc(workerStatus(w))}" aria-hidden="true"></span><span class="chip-name">${esc(disp)}</span><span class="k">${esc(kindLbl)}</span></a>`;
-    }).join("");
-    const crewWillChange = crewHTML !== prevCrew;
-    if (crewWillChange) ensureLiveAnchor();
     const prevCrewScroll = crew.scrollLeft || 0;
-    const crewChanged = setHTML(crew, crewHTML) || crewWillChange;
+    const crewChanged = patchCrewStrip(crew, active, ensureLiveAnchor);
     if (crewChanged) {
       if (prevCrewScroll > 0) crew.scrollLeft = prevCrewScroll;
       syncCrewCompact(crew);
@@ -5892,6 +6494,7 @@
     }
 
     const curDayStamp = dayBounds();
+    const openFilePathNow = !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "";
     // Fast structural key for #super-thread body: skip item diffing when completely unchanged.
     const nextBodyKey = [
       isEmptyChat ? "E" : "L",
@@ -5902,9 +6505,10 @@
       sup.hasPending ? 1 : 0,
       pendList.map((p) => p.id).join(","),
       dismissedLocal.size ? [...dismissedLocal].join(",") : "",
-      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.state || "picked"}:${v.text}`).join(",") : "",
+      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.state || "picked"}:${v.inPlace ? 1 : 0}:${v.text}`).join(",") : "",
       openInlineDecisionId || "",
-      !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "",
+      replyTo?.mode === "supplement" ? (replyTo.entry || "") : "",
+      inlineDraftDotsFingerprint(),
       pinList.map((p) => p.id).join(","),
       clapLocalFingerprint(),
       superThreadWorkerFingerprint(),
@@ -5923,7 +6527,8 @@
     }
 
     if (!force && nextBodyKey === superBodyKey && (!canPatchSuperDom(box) || box.firstElementChild)) {
-      renderPendingBar();
+      renderPendingBar({ skipJump: true });
+      syncActiveFileMarks(box, openFilePathNow);
       if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
@@ -6001,6 +6606,41 @@
           return `<button type="button" class="thread-entry" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(eKey)}" aria-expanded="false">` +
             `${ICON_THREAD_BRANCH}<span class="te-count">${replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
         };
+        const inPlaceByTarget = new Map();
+        for (let ii = 0; ii < allEntries.length; ii++) {
+          const x = allEntries[ii];
+          if (x && x.role === "user" && x.in_place && x.re?.entry) {
+            let arr = inPlaceByTarget.get(x.re.entry);
+            if (!arr) { arr = []; inPlaceByTarget.set(x.re.entry, arr); }
+            arr.push(x);
+          }
+        }
+        const renderInPlaceReceipts = (e, eKey) => {
+          const list = e?.id ? inPlaceByTarget.get(e.id) : null;
+          if (!list || !list.length) return "";
+          let shown = list;
+          if (e.role === "collie" && Array.isArray(e.options) && e.options.length > 0) {
+            const localPick = pickedReplyOpts.get(e.id);
+            const pickText = (localPick?.inPlace ? localPick.text : e.pick?.in_place ? e.pick.text : "").trim();
+            let skipped = false;
+            shown = list.filter((r) => {
+              if (!skipped && pickText && (threadEntryPlainText(r).trim() || String(r.text || "").trim()) === pickText) {
+                skipped = true;
+                return false;
+              }
+              return true;
+            });
+          }
+          if (!shown.length) return "";
+          const rootId = threadInfo.allMsgToRoot.get(eKey) || e.id;
+          return `<div class="inplace-receipts">${shown.map((r) => {
+            const rk = entryKey(r);
+            const full = threadEntryPlainText(r).trim() || plainLine(r.text || "");
+            const sum = plainLine(full);
+            const atStr = r.at ? hhmm(r.at) : "";
+            return `<button type="button" class="inplace-receipt${r.pending ? " is-sending" : ""}" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(rk)}" title="${esc(full)}">${ICON_RECEIPT_CHK}<span class="ir-val">${esc(sum)}</span>${atStr ? `<span class="ir-time">· ${esc(atStr)}</span>` : ""}</button>`;
+          }).join("")}</div>`;
+        };
         let prevCollieRoot = "", prevCollieHasEntry = false;
         for (let ei = 0; ei < allEntries.length; ei++) {
           const e = allEntries[ei];
@@ -6052,7 +6692,8 @@
           if (e.role === "user") {
             const qi = analyzeQuote(e, ei);
             const qSig = qi ? qi.sig : "";
-            const msgSig = `u:${qSig}|${e.text || ""}`;
+            const inPlaceHtml = renderInPlaceReceipts(e, eKey);
+            const msgSig = `u:${qSig}|${inPlaceHtml}|${e.text || ""}`;
             const sig = `u|${e.id || ""}|${at}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${msgSig}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -6061,6 +6702,7 @@
             };
             items.push({
               key: eKey,
+              role: "user",
               sig,
               msgSig,
               canPromoteInPlace: true,
@@ -6080,9 +6722,9 @@
                 const idTitleAttrs = `data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}`;
                 const quoteCls = quoteHtml ? " has-quote" : "";
                 if (mediaHtml && !parts.hasBubbleContent) {
-                  return `<div class="mine is-media-only${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}<div class="msg user is-media-only" ${idTitleAttrs}>${mediaHtml}</div>${renderFoot()}</div>`;
+                  return `<div class="mine is-media-only${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}<div class="msg user is-media-only" ${idTitleAttrs}>${mediaHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
                 }
-                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}${parts.attHtml}</div>${renderFoot()}</div>`;
+                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}${parts.attHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
               },
             });
             lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
@@ -6091,10 +6733,11 @@
             const qSig = qi ? qi.sig : "";
             const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
             const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
-            const artifactsHtml = renderEntryArtifacts(e, openFilePath);
+            const inPlaceHtml = renderInPlaceReceipts(e, eKey);
+            const artifactsHtml = renderEntryArtifacts(e, "");
             const claps = effectiveClaps(e.id, e);
-            const msgSig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${e.text || ""}`;
-            const sig = `${msgSig}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|cl:${claps}`;
+            const msgSig = `c|${e.id || ""}|${at}|${curDayStamp}|${qSig}|${artifactsHtml}|${inPlaceHtml}|${e.text || ""}`;
+            const sig = `${msgSig}|${cont ? 1 : 0}|${optsHtml}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|cl:${claps}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
               const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot, claps);
@@ -6102,9 +6745,12 @@
             };
             items.push({
               key: eKey,
+              role: "collie",
               sig,
               msgSig,
+              optsHtml,
               canPromoteCollieInPlace: true,
+              entryId: e.id || "",
               cont,
               pinned,
               claps,
@@ -6115,7 +6761,7 @@
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${artifactsHtml}${optsHtml}${renderFoot()}</div></div>`;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${renderCollieBody(e.text)}${artifactsHtml}${optsHtml}${inPlaceHtml}${renderFoot()}</div></div>`;
               },
             });
             sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
@@ -6179,7 +6825,13 @@
       let domMutated = false;
       let domLayoutChanged = false;
       if (canPatchSuperDom(box)) {
-        const res = patchSuperThread(box, items, { onBeforeLayoutMutate: ensureLiveAnchor });
+        const collieEl = $("#v-collie");
+        const collieVisible = view === "collie" && !document.hidden && !collieEl?.classList?.contains("is-parked");
+        const allowEnterAnim = !force && !wantUnreadAnchor && !restore && !olderBusy && !jumping
+          && !shouldApplyUnreadAnchor && !drawerFreezeMain && collieVisible && atBottom
+          && !(collieInitialAnchor?.mode === "unread")
+          && !(collieInitialAnchor?.mode === "unread-auto" && !collieInitialAnchor.atBottom);
+        const res = patchSuperThread(box, items, { onBeforeLayoutMutate: ensureLiveAnchor, allowEnterAnim });
         domMutated = res.mutated;
         domLayoutChanged = res.layoutChanged;
         if (domMutated) superDomGen++;
@@ -6195,7 +6847,9 @@
         }
       }
       if (domMutated) {
-        renderPendingBar();
+        hydrateRichContent(box);
+        renderPendingBar({ skipJump: true });
+        syncActiveFileMarks(box, openFilePathNow);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (flashEntry.until > Date.now() && flashEntry.id) {
           const fid = CSS.escape(flashEntry.id);
@@ -6208,13 +6862,15 @@
           return;
         }
       } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
-        renderPendingBar();
+        renderPendingBar({ skipJump: true });
+        syncActiveFileMarks(box, openFilePathNow);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
         updateSuperJump();
         return;
       } else {
-        renderPendingBar();
+        renderPendingBar({ skipJump: true });
+        syncActiveFileMarks(box, openFilePathNow);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
       }
@@ -6348,27 +7004,34 @@
         pendingUnreadAnchorOnVisible = false;
         clearScrollReadTimer();
       }
-      collieStickBottom = true;
+      setCollieBottomStick(true);
       activeCollieRestore = null;
+      // Finish all composer/jump DOM updates before the single scroll-to-bottom commit.
+      updateSuperJump({ dist: 0 });
       markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
       const set = scroller.scrollTop;
       if (typeof requestAnimationFrame === "function") {
         if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
         superScrollRAF = requestAnimationFrame(() => {
-          if (collieInitialAnchor?.mode === "bottom" || collieStickBottom || scroller.scrollTop === set) {
+          const sh = scroller.scrollHeight;
+          const dist = sh - scroller.scrollTop - scroller.clientHeight;
+          let finalDist = dist;
+          if (dist > 1 && (collieInitialAnchor?.mode === "bottom" || collieStickBottom || scroller.scrollTop === set)) {
             markProgrammaticScroll();
-            scroller.scrollTop = scroller.scrollHeight;
+            scroller.scrollTop = sh;
+            finalDist = 0;
           }
           captureViewScroll("collie", null, navCur);
-          updateSuperJump();
+          updateSuperJump({ dist: finalDist });
           maybeScheduleReadAtBottom();
         });
       } else {
         maybeScheduleReadAtBottom();
       }
+      return;
     } else {
-      collieStickBottom = false;
+      setCollieBottomStick(false);
       collieForceBottomUntil = 0;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       if (!jumping && !olderBusy && liveAnchor) {
@@ -6421,7 +7084,6 @@
     }, true);
     let collieResizeW = sc?.clientWidth || 0;
     let collieResizeH = sc?.clientHeight || 0;
-    let collieResizeWasBottom = true;
     let collieResizeAnchor = null;
     let collieResizeGraceUntil = 0;
     let collieResizeAnchorTimer = 0;
@@ -6429,45 +7091,66 @@
     const captureCollieResizeMidAnchor = () => {
       collieResizeAnchorTimer = 0;
       if (view !== "collie" || !sc || sc.clientHeight <= 0) return;
-      if (collieResizeWasBottom || isCollieNearBottom(sc)) {
+      if (isCollieNearBottom(sc)) {
         collieResizeWasBottom = true;
         collieResizeAnchor = null;
         return;
       }
+      collieResizeWasBottom = false;
       collieResizeAnchor = captureCollieAnchor(sc);
     };
-    const handleCollieScrollResize = () => {
+    const handleCollieScrollResize = (entries) => {
       if (isLayoutGliding()) return;
-      if (!sc || view !== "collie" || sc.clientWidth <= 0 || sc.clientHeight <= 0) return;
-      const w = sc.clientWidth, h = sc.clientHeight;
+      if (!sc || view !== "collie") return;
+      const cr = Array.isArray(entries) && entries[0]?.contentRect ? entries[0].contentRect : null;
+      const w = cr ? Math.round(cr.width) : sc.clientWidth;
+      const h = cr ? Math.round(cr.height) : sc.clientHeight;
+      if (w <= 0 || h <= 0) return;
       if (collieResizeW === 0 && collieResizeH === 0) {
         collieResizeW = w;
         collieResizeH = h;
-        collieResizeWasBottom = isCollieNearBottom(sc) || collieStickBottom;
+        collieResizeWasBottom = isCollieNearBottom(sc) && collieStickBottom;
         return;
       }
       if (w === collieResizeW && h === collieResizeH) return;
       const widthChanged = w !== collieResizeW;
+      const heightGrew = !widthChanged && h > collieResizeH;
       collieResizeW = w;
       collieResizeH = h;
-      if (collieInitialAnchor || collieLayoutLock) return;
+      if (collieInitialAnchor || collieLayoutLock || (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until)) return;
       collieResizeGraceUntil = performance.now() + 200;
       markProgrammaticScroll(200);
       const restoreNow = () => {
         if (view !== "collie" || !sc || sc.clientHeight <= 0 || collieInitialAnchor || collieLayoutLock) return;
-        if (collieResizeWasBottom || collieStickBottom) {
-          collieStickBottom = true;
-          collieResizeWasBottom = true;
-          markProgrammaticScroll(140);
-          sc.scrollTop = sc.scrollHeight;
-          updateSuperJump();
+        if (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until) return;
+        if (collieResizeWasBottom && collieStickBottom) {
+          setCollieBottomStick(true);
+          const sh = sc.scrollHeight;
+          const dist = sh - sc.scrollTop - sc.clientHeight;
+          if (dist > 1) {
+            markProgrammaticScroll(140);
+            sc.scrollTop = sh;
+          }
+          if (!$("#super-jump")?.hidden || dist > 1) updateSuperJump({ dist: dist > 1 ? 0 : dist });
         } else if (widthChanged && collieResizeAnchor) {
           applyCollieAnchor(sc, collieResizeAnchor);
           updateSuperJump();
+        } else {
+          updateSuperJump();
         }
       };
+      // During vertical height expansion (e.g. mobile keyboard dismissing), native
+      // scroll clamping keeps bottom-pinned chats glued to bottom with 0px drift.
+      if (heightGrew && (collieResizeWasBottom || collieStickBottom)) {
+        const sh = sc.scrollHeight;
+        const dist = sh - sc.scrollTop - sc.clientHeight;
+        if (dist <= 1) {
+          if (!$("#super-jump")?.hidden) updateSuperJump({ dist: 0 });
+          return;
+        }
+      }
       restoreNow();
-      if (typeof requestAnimationFrame === "function") {
+      if (typeof requestAnimationFrame === "function" && (widthChanged || !heightGrew)) {
         if (collieResizeRestoreRAF) cancelAnimationFrame(collieResizeRestoreRAF);
         collieResizeRestoreRAF = requestAnimationFrame(() => {
           collieResizeRestoreRAF = 0;
@@ -6477,8 +7160,9 @@
     };
     if (sc && typeof ResizeObserver === "function") {
       new ResizeObserver(handleCollieScrollResize).observe(sc);
+    } else {
+      addEventListener("resize", () => handleCollieScrollResize(), { passive: true });
     }
-    addEventListener("resize", handleCollieScrollResize, { passive: true });
     sc?.addEventListener("wheel", (e) => {
       if (e.deltaY < 0) {
         collieForceBottomUntil = 0;
@@ -6513,8 +7197,8 @@
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
       const now = performance.now();
-      const sizeStable = sc.clientWidth === collieResizeW && sc.clientHeight === collieResizeH;
-      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil && sizeStable) {
+      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil
+        && sc.clientWidth === collieResizeW && sc.clientHeight === collieResizeH) {
         const nearB = isCollieNearBottom(sc);
         collieStickBottom = nearB;
         collieResizeWasBottom = nearB;
@@ -6528,6 +7212,7 @@
         }
       }
       if (superJumpScrollRAF) return;
+      if (now < collieResizeGraceUntil && collieStickBottom && $("#super-jump")?.hidden) return;
       const run = () => {
         superJumpScrollRAF = 0;
         updateSuperJump();
@@ -6560,12 +7245,20 @@
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
-      if (e.deltaY < 0 && superJumpHiding) { jumpSeq++; superJumpHiding = false; updateSuperJump(); }
+      if (performance.now() < programmaticScrollUntil || superJumpHiding) {
+        jumpSeq++;
+        programmaticScrollUntil = 0;
+        if (e.deltaY < 0 && superJumpHiding) { superJumpHiding = false; updateSuperJump(); }
+      }
     }, { passive: true });
     sc?.addEventListener("touchstart", () => {
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
+      if (performance.now() < programmaticScrollUntil) {
+        jumpSeq++;
+        programmaticScrollUntil = 0;
+      }
     }, { passive: true });
     sc?.addEventListener("touchmove", () => {
       cancelCollieLayoutLock();
@@ -6589,7 +7282,9 @@
     };
     sc?.addEventListener("keydown", onScrollKey);
     document.addEventListener("keydown", onScrollKey);
-    addEventListener("resize", updateSuperJump);
+    if (typeof ResizeObserver !== "function") {
+      addEventListener("resize", () => updateSuperJump(), { passive: true });
+    }
 
     // Horizontal wheel-to-scroll & fallback fade sync for overflowing worker capsule strips.
     const supportsScrollFade = typeof CSS !== "undefined"
@@ -6678,9 +7373,40 @@
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
-      collieStickBottom = true;
-      collieForceBottomUntil = 0;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+
+      // Stage 1: unread start is below viewport top and doesn't fit in one screen ->
+      // glide to the unread divider / first unread row (leaving ~14px breathing pad)
+      // WITHOUT prematurely clearing unread; subsequent click jumps to bottom.
+      const box = $("#super-thread");
+      const target = computeUnreadJumpTarget(sc, box);
+      if (target?.isStage1) {
+        setCollieBottomStick(false);
+        collieForceBottomUntil = 0;
+        superJumpHiding = false;
+        await smartScrollCollie(sc, target.wantTop, {
+          isCanceled: () => seq !== jumpSeq,
+          markMs: 420,
+          remeasureTarget: () => computeUnreadJumpTarget(sc, box)?.wantTop,
+        });
+        if (seq !== jumpSeq) return;
+        captureViewScroll("collie", null, navCur);
+        updateSuperJump();
+        const landed = computeUnreadJumpTarget(sc, box)?.anchorEl || target.anchorEl;
+        if (landed?.classList) {
+          const pulseCls = landed.id === "unread-sep" ? "is-pulse" : "flash";
+          landed.classList.remove(pulseCls);
+          void landed.offsetWidth;
+          landed.classList.add(pulseCls);
+          setTimeout(() => { landed.classList?.remove(pulseCls); }, 1250);
+        }
+        return;
+      }
+
+      // Stage 2: already at/past unread start, single-screen unread, or 0 unread ->
+      // jump straight to bottom and sync read cursor immediately.
+      setCollieBottomStick(true);
+      collieForceBottomUntil = 0;
       superJumpHiding = true;
       const latestId = latestPersistedEntryId();
       if (latestId) commitChatRead(latestId, { immediate: true });
@@ -7048,18 +7774,42 @@
     return !(inp?.value || "").trim() && !(form?._files?.length);
   };
   const setReply = (e, opts = {}) => {
-    replyTo = e ? { entry: e.id, who: e.role === "user" ? "你" : "Collie", text: e.text } : null;
+    const mode = opts.mode === "supplement" ? "supplement" : "quote";
+    replyTo = e ? { entry: e.id, who: e.role === "user" ? "你" : "Collie", text: e.text, mode } : null;
     replyToSetLatestId = e ? latestPersistedEntryId() : "";
     replyToHadPick = !!(e && e.pick);
+    if (e && view === "collie") {
+      const sc = viewScroller("collie");
+      if (sc && !isCollieNearBottom(sc)) setCollieBottomStick(false);
+    }
     const box = $("#re-draft");
     box.hidden = !e;
     if (e) {
       const whoEl = $(".re-who", box);
-      if (whoEl) whoEl.textContent = replyTo.who;
+      if (whoEl) whoEl.textContent = mode === "supplement" ? "回复 ·" : replyTo.who;
       $(".re-t", box).textContent = reLine(e.text);
       if (opts.focus !== false) $("#super-input").focus({ preventScroll: true });
     }
   };
+  function cancelComposerReplyTarget() {
+    if (!replyTo) return;
+    const prev = replyTo;
+    const inp = $("#super-input");
+    if (prev.mode === "supplement" && inp) {
+      setInlineDraft(prev.entry, inp.value);
+      inp.value = "";
+      grow(inp);
+    }
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const keepSnap = prev.mode === "supplement" && sc && !isCollieNearBottom(sc)
+      ? (captureEntryAnchor(sc, prev.entry) || captureColliePos(sc))
+      : null;
+    if (keepSnap) keepSnap.atBottom = false;
+    setReply(null);
+    if (prev.mode === "supplement" && view === "collie") {
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    }
+  }
   function reconcileStaleReplyTo(allEntries) {
     if (!replyTo?.entry) return;
     const targetId = replyTo.entry;
@@ -7085,11 +7835,16 @@
     }
   }
   const reLine = (t) => plainLine(t);
-  $("#re-draft button").addEventListener("click", () => setReply(null));
+  $("#re-draft button").addEventListener("click", () => cancelComposerReplyTarget());
+  $("#super-input")?.addEventListener("input", () => {
+    if (replyTo?.mode === "supplement" && replyTo.entry) {
+      setInlineDraft(replyTo.entry, $("#super-input").value);
+    }
+  });
   $("#super-input")?.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && replyTo && !ev.isComposing && ev.keyCode !== 229) {
       ev.preventDefault();
-      setReply(null);
+      cancelComposerReplyTarget();
     }
   });
   document.addEventListener("click", (ev) => {
@@ -7101,7 +7856,17 @@
     ev.preventDefault();
     ev.stopPropagation();
     const e = chatEntries().find((x) => x.id === b.dataset.re);
-    if (e) setReply(e);
+    if (e) {
+      if (replyTo?.mode === "supplement" && replyTo.entry !== e.id) {
+        const inp = $("#super-input");
+        if (inp) {
+          setInlineDraft(replyTo.entry, inp.value);
+          inp.value = "";
+          grow(inp);
+        }
+      }
+      setReply(e, { mode: "quote" });
+    }
   });
 
   const newClientMsgID = () => (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
@@ -7110,16 +7875,19 @@
 
   async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID(), opts = {}) {
     const isPick = !!opts.pick;
-    const scrollBottom = isPick ? !!opts.scrollBottom : opts.scrollBottom !== false;
+    const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
+    const isInPlace = !isPick && !!opts.inPlace && !!normRe?.entry;
+    const scrollBottom = (isPick || isInPlace) ? !!opts.scrollBottom : opts.scrollBottom !== false;
     const shouldCommitRead = scrollBottom || !!opts.commitRead;
     const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
-    const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
     // Only what was actively overridden goes along; otherwise the hub/Collie
     // follows memory preferences and configured defaults.
     const t = targetNow(), ov = targetOverrideFlags(), p = ov.any ? (target || {}) : {};
     const { model, effort } = modelNow(t);
     // Normal messages show optimistically as user bubbles; pure --opt picks
-    // collapse the decision card in-place without emitting a user bubble.
+    // collapse the decision card in-place without emitting a user bubble;
+    // in-place replies attach optimistically to the target & thread drawer
+    // without appending a stray user bubble to the bottom of the main timeline.
     let mine = null;
     if (!isPick) {
       mine = {
@@ -7131,6 +7899,7 @@
         text,
         at: new Date().toISOString(),
         pending: true,
+        ...(isInPlace ? { in_place: true } : {}),
         re: normRe,
       };
       pendingSays.push(mine);
@@ -7142,17 +7911,23 @@
       activeCollieRestore = null;
       unreadAnchorApplied = true;
       sessionUnreadMarkerId = "";
+    } else if (keepRestore) {
+      setCollieBottomStick(false);
+      collieForceBottomUntil = 0;
     }
     if (shouldCommitRead) {
       const latestBeforeSend = latestPersistedEntryId();
       if (latestBeforeSend) commitChatRead(latestBeforeSend, { immediate: false });
     }
-    renderSide();
+    const deferMobileSide = narrow() && view === "collie" && !!document.body?.classList?.contains("show-main");
     renderSuper({ scrollBottom, ...(keepRestore ? { restore: keepRestore } : {}) });
+    if (deferMobileSide) scheduleLiveUpdates(LIVE_SIDE);
+    else renderSide();
     let r;
     try {
-      const info = await modelsFor(t.kind, t.machine);
-      const sendEffort = effortsFor(info, t.kind, model).includes(effort) ? effort : "";
+      const needEffort = ("effort" in p || "kind" in p) && !!effort;
+      const info = needEffort ? await modelsFor(t.kind, t.machine) : null;
+      const sendEffort = needEffort ? (effortsFor(info, t.kind, model).includes(effort) ? effort : "") : "";
       const payload = {
         text,
         re: normRe?.entry || "",
@@ -7163,13 +7938,14 @@
         effort: "effort" in p || "kind" in p ? sendEffort : "",
       };
       if (isPick) payload.pick = true;
+      if (isInPlace) payload.in_place = true;
       r = await api("/api/super/say", { body: payload });
     } catch (err) {
       if (mine) {
         const idx = pendingSays.indexOf(mine);
         if (idx >= 0) pendingSays.splice(idx, 1);
       }
-      if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry), { focus: false });
+      if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry), { focus: false, mode: re?.mode });
       opts.onRollback?.();
       const errSc = !scrollBottom && view === "collie" ? viewScroller("collie") : null;
       const errRestore = errSc && !isCollieNearBottom(errSc)
@@ -7183,12 +7959,19 @@
     if (mine) {
       // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
       mine.id = r?.entry || mine.id || "";
+      if (mine.id) rememberPromotedPending(mine.id, mine._localId);
+      mine.pending = false;
       if (mine.id && shouldCommitRead) commitChatRead(mine.id, { immediate: true });
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
-        if (mine.id) rememberPromotedPending(mine.id, mine._localId);
         pendingSays.splice(idx, 1);
-        renderSide();
+        renderSuper();
+        if (narrow() && view === "collie" && !!document.body?.classList?.contains("show-main")) {
+          scheduleLiveUpdates(LIVE_SIDE);
+        } else {
+          renderSide();
+        }
+      } else if (isInPlace) {
         renderSuper();
       }
     } else if (r?.entry && shouldCommitRead) {
@@ -7197,15 +7980,66 @@
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }
 
+  function ensureInlineCardVisible(sc, entryId) {
+    if (!sc || !entryId || sc.clientHeight <= 0) return;
+    const card = $("#super-thread")?.querySelector?.(`[data-inline-box="${CSS.escape(entryId)}"]`);
+    if (!card || card.hidden || typeof card.getBoundingClientRect !== "function" || typeof sc.getBoundingClientRect !== "function") return;
+    const sr = sc.getBoundingClientRect();
+    const cr = card.getBoundingClientRect();
+    let bottomPad = 16;
+    const jump = $("#super-jump");
+    if (jump && !jump.hidden && typeof jump.getBoundingClientRect === "function") {
+      const jr = jump.getBoundingClientRect();
+      if (jr.height > 0 && jr.top < sr.bottom) {
+        bottomPad = Math.max(bottomPad, Math.ceil(sr.bottom - jr.top) + 12);
+      }
+    }
+    const bottomSafe = sr.bottom - bottomPad;
+    if (cr.bottom > bottomSafe) {
+      smartScrollCollie(sc, sc.scrollTop + (cr.bottom - bottomSafe), { markMs: 280 });
+    }
+  }
+  function closeInlineDecision(id, opts = {}) {
+    if (!id || openInlineDecisionId !== id) return;
+    const sc = !opts.inDrawer && view === "collie" ? viewScroller("collie") : null;
+    const keepSnap = sc && !isCollieNearBottom(sc)
+      ? (captureEntryAnchor(sc, id) || captureColliePos(sc))
+      : null;
+    if (keepSnap) keepSnap.atBottom = false;
+    openInlineDecisionId = null;
+    renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    if (activeThreadRoot) syncThreadDrawer();
+    if (opts.restoreFocus) {
+      const scope = opts.inDrawer ? $("#td-list") : $("#super-thread");
+      scope?.querySelector?.(`[data-toggle-inline="${CSS.escape(id)}"]`)?.focus?.({ preventScroll: true });
+    }
+  }
+
   const busyReplyOpts = new Set();
   async function submitInlineDecision(id, rawText, opts = {}) {
     const text = String(rawText || "").trim();
     if (!id || !text || busyReplyOpts.has(id)) return;
     busyReplyOpts.add(id);
+    const prevDraft = getInlineDraft(id);
+    inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
-    pickedReplyOpts.set(id, { state: "custom", text, at: new Date().toISOString(), sending: true });
+    const sc = viewScroller("collie");
+    const nearBot = isCollieNearBottom(sc);
+    const isInPlace = !nearBot;
+    const shouldCommitRead = nearBot || (!!opts.inDrawer && computeUnreadInfo().count === 0);
+    let keepSnap = null;
+    if (!opts.inDrawer && !nearBot) {
+      cancelCollieLayoutLock();
+      cancelInitialAnchor();
+      activeCollieRestore = null;
+      unreadAnchorApplied = true;
+      keepSnap = captureEntryAnchor(sc, id) || captureColliePos(sc);
+      if (keepSnap) keepSnap.atBottom = false;
+    }
+    pickedReplyOpts.set(id, { state: "custom", text, at: new Date().toISOString(), sending: true, inPlace: isInPlace });
+    markDecisionJustSettled(id);
     try {
       await sendSuper(
         text,
@@ -7213,9 +8047,15 @@
         false,
         undefined,
         {
-          scrollBottom: !opts.inDrawer,
-          commitRead: true,
-          onRollback: () => { pickedReplyOpts.delete(id); },
+          inPlace: isInPlace,
+          scrollBottom: nearBot && !opts.inDrawer,
+          commitRead: shouldCommitRead,
+          restore: keepSnap,
+          onRollback: () => {
+            pickedReplyOpts.delete(id);
+            justSettledDecisions.delete(id);
+            setInlineDraft(id, prevDraft || text);
+          },
         },
       );
       const picked = pickedReplyOpts.get(id);
@@ -7225,6 +8065,7 @@
       }
     } catch (err) {
       pickedReplyOpts.delete(id);
+      setInlineDraft(id, prevDraft || text);
       toast(err.message, "attn");
     } finally {
       busyReplyOpts.delete(id);
@@ -7243,14 +8084,71 @@
     if (tog) {
       ev.preventDefault();
       const id = tog.dataset.toggleInline;
+      const sc = !opts.inDrawer && view === "collie" ? viewScroller("collie") : null;
+      const keepSnap = sc && !isCollieNearBottom(sc)
+        ? (captureEntryAnchor(sc, id) || captureColliePos(sc))
+        : null;
+      if (keepSnap) keepSnap.atBottom = false;
+
+      // Mobile (<=760px) Plan B: never expand mid-stream; attach compact quote strip to bottom composer.
+      if (!opts.inDrawer && narrow()) {
+        const inp = $("#super-input");
+        if (replyTo?.entry === id && replyTo?.mode === "supplement") {
+          if (inp) {
+            setInlineDraft(id, inp.value);
+            inp.value = "";
+            grow(inp);
+          }
+          setReply(null);
+          renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+          return true;
+        }
+        if (replyTo?.mode === "supplement" && replyTo.entry && inp) {
+          setInlineDraft(replyTo.entry, inp.value);
+        }
+        const hadSupplement = replyTo?.mode === "supplement";
+        openInlineDecisionId = null;
+        const target = chatEntries().find((x) => x.id === id);
+        if (target) {
+          setReply(target, { mode: "supplement", focus: false });
+          if (inp && (hadSupplement || !inp.value.trim())) {
+            inp.value = getInlineDraft(id);
+            grow(inp);
+          }
+          renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+          if (inp) {
+            inp.focus({ preventScroll: true });
+            const end = inp.value.length;
+            inp.setSelectionRange?.(end, end);
+          }
+        }
+        return true;
+      }
+
+      // Desktop (>760px) / Drawer Plan A: smooth 1px multiline inline comment card right below options.
+      if (replyTo?.mode === "supplement") {
+        const inp = $("#super-input");
+        if (inp) {
+          setInlineDraft(replyTo.entry, inp.value);
+          inp.value = "";
+          grow(inp);
+        }
+        setReply(null);
+      }
       openInlineDecisionId = openInlineDecisionId === id ? null : id;
-      renderSuper();
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
       if (activeThreadRoot) syncThreadDrawer();
       if (openInlineDecisionId) {
         requestAnimationFrame(() => {
           const scope = opts.inDrawer ? $("#td-list") : $("#super-thread");
           const inp = scope?.querySelector?.(`[data-inline-input="${CSS.escape(openInlineDecisionId)}"]`);
-          inp?.focus?.({ preventScroll: true });
+          if (inp) {
+            trackIME(inp);
+            inp.focus?.({ preventScroll: true });
+            const end = String(inp.value || "").length;
+            inp.setSelectionRange?.(end, end);
+          }
+          if (!opts.inDrawer && sc) ensureInlineCardVisible(sc, openInlineDecisionId);
         });
       }
       return true;
@@ -7258,11 +8156,7 @@
     const cancel = ev.target.closest("[data-inline-cancel]");
     if (cancel) {
       ev.preventDefault();
-      if (openInlineDecisionId === cancel.dataset.inlineCancel) {
-        openInlineDecisionId = null;
-        renderSuper();
-        if (activeThreadRoot) syncThreadDrawer();
-      }
+      closeInlineDecision(cancel.dataset.inlineCancel, { inDrawer: !!opts.inDrawer, restoreFocus: true });
       return true;
     }
     const sendBtn = ev.target.closest("[data-inline-send]");
@@ -7283,8 +8177,16 @@
     grp.dataset.busy = "1";
     grp.querySelectorAll("button").forEach((x) => { x.disabled = true; });
     const text = b.dataset.opt;
+    inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
+    const canPlayOptSettle = !prefersReducedMotion() && !document.hidden
+      && typeof grp.getAnimations === "function" && !!grp.classList && !!b.classList;
+    if (canPlayOptSettle) {
+      b.classList.add("is-chosen");
+      grp.classList.add("is-settling");
+      await new Promise((r) => setTimeout(r, 110));
+    }
     const e = chatEntries().find((x) => x.id === id);
     const sc = viewScroller("collie");
     const nearBot = isCollieNearBottom(sc);
@@ -7299,6 +8201,7 @@
       if (keepSnap) keepSnap.atBottom = false;
     }
     pickedReplyOpts.set(id, { state: "picked", text, at: new Date().toISOString(), sending: true });
+    markDecisionJustSettled(id);
     try {
       await sendSuper(
         text,
@@ -7310,7 +8213,7 @@
           scrollBottom: nearBot && !opts.inDrawer,
           commitRead: shouldCommitRead,
           restore: keepSnap,
-          onRollback: () => { pickedReplyOpts.delete(id); },
+          onRollback: () => { pickedReplyOpts.delete(id); justSettledDecisions.delete(id); },
         },
       );
       const picked = pickedReplyOpts.get(id);
@@ -7320,6 +8223,9 @@
       }
     } catch (err) {
       pickedReplyOpts.delete(id);
+      justSettledDecisions.delete(id);
+      b.classList?.remove("is-chosen");
+      grp.classList?.remove("is-settling");
       delete grp.dataset.busy;
       grp.querySelectorAll("button").forEach((x) => { x.disabled = false; });
       toast(err.message, "attn");
@@ -7329,10 +8235,33 @@
     return true;
   }
   $("#super-thread").addEventListener("click", (ev) => { handleQuickOptionClick(ev); });
+  document.addEventListener("submit", (ev) => {
+    const form = ev.target?.closest?.("form.reply-inline[data-inline-box]");
+    if (!form) return;
+    ev.preventDefault();
+    const id = form.dataset.inlineBox;
+    const inp = form.querySelector?.("[data-inline-input]");
+    if (inp?.value?.trim()) submitInlineDecision(id, inp.value, { inDrawer: !!form.closest?.("#thread-drawer") });
+  });
   document.addEventListener("input", (ev) => {
     const inp = ev.target?.closest?.("[data-inline-input]");
     if (!inp) return;
+    const id = inp.dataset.inlineInput;
+    setInlineDraft(id, inp.value);
+    if (!window.CSS?.supports?.("field-sizing", "content") && inp.parentElement) {
+      inp.parentElement.dataset.replicatedValue = inp.value;
+    }
     const box = inp.closest("[data-inline-box]");
+    if (box) {
+      const pill = inlinePillLayout(inp.value);
+      box.style?.setProperty?.("--ri-w", pill.width + "px");
+      const isMulti = pill.multi || (pill.width >= 340 && inp.scrollHeight > 30);
+      box.classList?.toggle?.("is-multiline", isMulti);
+      if (isMulti && !box.closest?.("#thread-drawer") && view === "collie") {
+        const sc = viewScroller("collie");
+        if (sc) ensureInlineCardVisible(sc, id);
+      }
+    }
     const btn = box?.querySelector?.("[data-inline-send]");
     if (btn) btn.disabled = !String(inp.value || "").trim();
   });
@@ -7340,16 +8269,26 @@
     const inp = ev.target?.closest?.("[data-inline-input]");
     if (!inp) return;
     const id = inp.dataset.inlineInput;
-    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) {
-      ev.preventDefault();
-      if (String(inp.value || "").trim()) submitInlineDecision(id, inp.value, { inDrawer: !!inp.closest("#thread-drawer") });
-    } else if (ev.key === "Escape" && !ev.isComposing) {
-      ev.preventDefault();
-      if (openInlineDecisionId === id) {
-        openInlineDecisionId = null;
-        renderSuper();
-        if (activeThreadRoot) syncThreadDrawer();
+    const ime = trackIME(inp);
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      if (isIMEComposing(ev, ime)) return;
+      if (isPostCompositionSafariEnter(ev, ime)) {
+        ev.preventDefault();
+        return;
       }
+      const mod = ev.metaKey || ev.ctrlKey;
+      if (prefs.sendKey() === "mod" ? mod : !mod) {
+        ev.preventDefault();
+        if (ev.repeat) return;
+        if (String(inp.value || "").trim()) {
+          const form = inp.closest?.("form.reply-inline");
+          if (form?.requestSubmit) form.requestSubmit();
+          else submitInlineDecision(id, inp.value, { inDrawer: !!inp.closest?.("#thread-drawer") });
+        }
+      }
+    } else if (ev.key === "Escape" && !isIMEComposing(ev, ime)) {
+      ev.preventDefault();
+      closeInlineDecision(id, { inDrawer: !!inp.closest?.("#thread-drawer"), restoreFocus: true });
     }
   });
 
@@ -7378,11 +8317,60 @@
     }
   });
 
-  bindComposer($("#super-composer"), $("#super-input"), async (text, re) => {
-    await sendSuper(text, re, true);
+  bindComposer($("#super-composer"), $("#super-input"), async (text, ctx) => {
+    const re = ctx?.re || null;
+    const isInPlace = !!(re?.entry && !ctx?.nearBot);
+    const targetEntry = re?.entry ? chatEntries().find((x) => x.id === re.entry) : null;
+    const marksDecision = !!(targetEntry && targetEntry.role === "collie" && Array.isArray(targetEntry.options) && targetEntry.options.length && !targetEntry.pick && !pickedReplyOpts.has(targetEntry.id));
+    if (marksDecision) {
+      pickedReplyOpts.set(targetEntry.id, { state: "custom", text: String(text || "").trim(), at: new Date().toISOString(), sending: true, inPlace: isInPlace });
+    }
+    try {
+      await sendSuper(text, re, true, undefined, {
+        inPlace: isInPlace,
+        scrollBottom: !isInPlace,
+        commitRead: !isInPlace,
+        restore: isInPlace ? ctx?.restore : null,
+        onRollback: () => {
+          if (marksDecision) pickedReplyOpts.delete(targetEntry.id);
+          if (re?.mode === "supplement" && re.entry) setInlineDraft(re.entry, text);
+        },
+      });
+      if (marksDecision) {
+        const picked = pickedReplyOpts.get(targetEntry.id);
+        if (picked) {
+          picked.sending = false;
+          document.querySelectorAll(`.reply-receipt[data-entry="${CSS.escape(targetEntry.id)}"]`).forEach((el) => el.classList.remove("is-sending"));
+        }
+      }
+    } catch (err) {
+      if (marksDecision) pickedReplyOpts.delete(targetEntry.id);
+      throw err;
+    }
   }, () => targetNow().machine, {
-    beforeSend: () => { const re = replyTo; setReply(null); return re; },
-    onError: (re) => { if (re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry), { focus: false }); },
+    beforeSend: () => {
+      const re = replyTo;
+      const sc = view === "collie" ? viewScroller("collie") : null;
+      const nearBot = !re?.entry || isCollieNearBottom(sc);
+      let keepSnap = null;
+      if (re?.entry) {
+        inlineDecisionDrafts.delete(re.entry);
+        if (!nearBot && sc) {
+          cancelCollieLayoutLock();
+          cancelInitialAnchor();
+          activeCollieRestore = null;
+          unreadAnchorApplied = true;
+          keepSnap = captureEntryAnchor(sc, re.entry) || captureColliePos(sc);
+          if (keepSnap) keepSnap.atBottom = false;
+        }
+      }
+      setReply(null);
+      return { re, nearBot, restore: keepSnap };
+    },
+    onError: (ctx) => {
+      const re = ctx?.re;
+      if (re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry), { focus: false, mode: re.mode });
+    },
   });
 
   // ───────────────────────────── automation view
@@ -10256,14 +11244,36 @@
     refreshPeerModalData();
   }
 
+  function isPeerSecureContext() {
+    if (typeof window !== "undefined" && typeof window.isSecureContext === "boolean") {
+      return window.isSecureContext;
+    }
+    const proto = String(location?.protocol || "");
+    const host = String(location?.hostname || "");
+    return proto === "https:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  }
+
+  function isPeerMobileClient() {
+    try {
+      if (navigator?.userAgentData && navigator.userAgentData.mobile === true) return true;
+    } catch {}
+    const ua = String(navigator?.userAgent || "");
+    if (/iPhone|iPad|iPod|Android|HarmonyOS|OpenHarmony|Mobile/i.test(ua)) return true;
+    const touchPoints = Number(navigator?.maxTouchPoints || 0);
+    if (/Macintosh/i.test(ua) && touchPoints > 1) return true;
+    return false;
+  }
+
   async function startPeerCameraScan() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers") return;
     stopPeerCameraScan();
-    const isSecure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
-    if (!isSecure) {
-      d.scanNote = "当前通过局域网 HTTP 访问，浏览器安全策略限制直接调用摄像头；请点击「识别图片」或用手机系统相机扫码后粘贴下方邀请码。";
-      patchPeerScanPanel();
+    if (!isPeerSecureContext()) {
+      if (isPeerMobileClient()) {
+        d.scanNote = "";
+        patchPeerScanPanel();
+        $("#peer-scan-capture")?.click();
+      }
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -10816,6 +11826,13 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
     const data = d.data || { hub_id: "" };
+    const secureCtx = isPeerSecureContext();
+    const mobileClient = isPeerMobileClient();
+    const scanBtn = $("#peer-scan-toggle");
+    if (scanBtn) {
+      scanBtn.hidden = !secureCtx && !mobileClient;
+      scanBtn.title = (!secureCtx && mobileClient) ? "拍照识别二维码" : "";
+    }
     setText($("#peer-scan-toggle-lbl"), d.scanning ? "停止扫码" : "扫码");
     const stageSlot = $("#peer-scan-stage-slot");
     if (stageSlot) {
@@ -10882,6 +11899,7 @@
           d.pairName = "";
           d.fromInviteLink = false;
           d.pairErr = "";
+          d.scanNote = "";
           patchPeerScanPanel();
           $("#peer-paste-input")?.focus();
         });
@@ -11236,11 +12254,18 @@
                       <span>识别图片</span>
                     </button>
                     <input id="peer-scan-file" type="file" accept="image/*" class="visually-hidden">
+                    <input id="peer-scan-capture" type="file" accept="image/*" capture="environment" class="visually-hidden">
                   </div>
                 </div>
                 <div id="peer-scan-stage-slot" hidden></div>
                 <div class="pm-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
-                <textarea id="peer-paste-input" class="pm-paste-area" rows="2" spellcheck="false" placeholder="粘贴好友分享的邀请链接、整段文案或名片码">${esc(d.pasteRaw)}</textarea>
+                <div class="pm-paste-box">
+                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="粘贴好友分享的邀请链接、整段文案或名片码">${esc(d.pasteRaw)}</textarea>
+                  <button type="button" class="pm-paste-btn" id="peer-paste-btn" title="从剪贴板粘贴邀请码">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>
+                    <span>粘贴</span>
+                  </button>
+                </div>
               </div>
 
               <div class="pm-parsed-card" id="peer-scan-parsed-slot" hidden></div>
@@ -11451,6 +12476,15 @@
 
     // Add Friend scan / image decode / paste / submit
     $("#peer-scan-toggle")?.addEventListener("click", () => {
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+      if (!isPeerSecureContext()) {
+        if (isPeerMobileClient()) {
+          d.scanNote = "";
+          patchPeerScanPanel();
+          $("#peer-scan-capture")?.click();
+        }
+        return;
+      }
       if (d.scanning) {
         stopPeerCameraScan();
         patchPeerScanPanel();
@@ -11459,21 +12493,72 @@
       }
     });
     $("#peer-scan-img-btn")?.addEventListener("click", () => $("#peer-scan-file")?.click());
-    $("#peer-scan-file")?.addEventListener("change", (ev) => {
+    const onPeerScanFileChange = (ev) => {
       const f = ev.target.files?.[0];
       ev.target.value = "";
       if (f) decodePeerQRImage(f);
-    });
+    };
+    $("#peer-scan-file")?.addEventListener("change", onPeerScanFileChange);
+    $("#peer-scan-capture")?.addEventListener("change", onPeerScanFileChange);
 
-    $("#peer-paste-input")?.addEventListener("input", (ev) => {
-      d.pasteRaw = ev.target.value;
+    const applyPeerPasteRaw = (raw) => {
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return null;
+      d.pasteRaw = String(raw ?? "");
       d.pairErr = "";
-      if (ev.isComposing) return;
+      d.scanNote = "";
       const parsed = parsePeerInviteClient(d.pasteRaw, d.data?.hub_id);
       if (parsed?.ok && !d.pairName.trim() && parsed.payload?.hub_name) {
         d.pairName = parsed.payload.hub_name;
       }
       patchPeerScanPanel();
+      return parsed;
+    };
+
+    const pastePeerFromClipboard = async () => {
+      if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+      const focusFallback = (note, toastMsg) => {
+        d.scanNote = note;
+        patchPeerScanPanel();
+        const inp = $("#peer-paste-input");
+        if (inp) {
+          inp.focus();
+          try { inp.select?.(); } catch {}
+        }
+        toast(toastMsg);
+      };
+      if (typeof navigator === "undefined" || typeof navigator.clipboard?.readText !== "function") {
+        focusFallback("当前浏览器不支持一键读取剪贴板，请长按下方输入框粘贴", "请长按输入框粘贴邀请码");
+        return;
+      }
+      try {
+        const raw = await navigator.clipboard.readText();
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        const text = String(raw || "").trim();
+        if (!text) {
+          focusFallback("剪贴板为空，请先复制好友的邀请链接或名片码", "剪贴板为空，请先复制邀请码");
+          return;
+        }
+        const parsed = applyPeerPasteRaw(text);
+        if (parsed?.ok) {
+          toast(`已粘贴并识别「${parsed.payload.hub_name || parsed.payload.hub_id}」的名片`);
+        } else if (parsed?.error) {
+          $("#peer-paste-input")?.focus();
+        }
+      } catch {
+        if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
+        focusFallback("未获取剪贴板权限，请长按下方输入框粘贴", "请长按输入框粘贴邀请码");
+      }
+    };
+
+    $("#peer-paste-btn")?.addEventListener("click", pastePeerFromClipboard);
+
+    $("#peer-paste-input")?.addEventListener("input", (ev) => {
+      if (ev.isComposing) {
+        d.pasteRaw = ev.target.value;
+        d.pairErr = "";
+        return;
+      }
+      applyPeerPasteRaw(ev.target.value);
     });
     $("#peer-pair-name")?.addEventListener("input", (ev) => { d.pairName = ev.target.value; });
 
@@ -11848,7 +12933,7 @@
       const nodes = [];
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
         const p = n.parentElement;
-        if (!p || p.closest?.("form.mem-edit, textarea, button, mark.mem-hl, .mem-ins-acts, .mem-ins-tag, .katex-mathml")) continue;
+        if (!p || p.closest?.("form.mem-edit, textarea, button, mark.mem-hl, .mem-ins-acts, .mem-ins-tag, .katex-mathml, .rv-card")) continue;
         if (n.nodeValue && n.nodeValue.trim()) nodes.push(n);
       }
       for (const textNode of nodes) {
@@ -12326,6 +13411,7 @@
     if (!detailsEl.isConnected || !file) return;
     viewEl.removeAttribute("data-mem-lazy");
     viewEl.innerHTML = md(file.text || "");
+    hydrateRichContent(viewEl);
     if (wantEdit && !detailsEl.querySelector?.(".mem-tools")) {
       viewEl.insertAdjacentHTML?.("afterend", memToolsHTML(file, wantCrew));
     }
@@ -12673,6 +13759,7 @@
     const prevOpen = opts.preserveOpen ? snapshotOpenMemoryKeys(content) : null;
     const res = renderMemoryHTML(r, memQuery);
     content.innerHTML = res.html;
+    hydrateRichContent(content);
     const meta = wrap?.querySelector?.("#mem-search-meta");
     if (meta) {
       if (res.searching) {
@@ -12701,6 +13788,7 @@
         hydrateMemoryFold(openFold);
       }
     }
+    observeRichVisuals(content);
     applyMemoryHighlights(content, memQueryTerms(memQuery));
   }
   function needsRemoteMemorySearch(data) {
@@ -13225,6 +14313,19 @@
       stall_minutes: readNum(form.stall_minutes, base.stall_minutes || 0, 0),
       rotate_pct: Number(form.rotate_pct.value),
       dream_at: form.dream_at.value,
+      morning_brief: {
+        enabled: !!form.morning_brief_enabled?.checked,
+        at: form.morning_brief_at?.value || base.morning_brief?.at || "09:00",
+      },
+      weekly_review: {
+        enabled: !!form.weekly_review_enabled?.checked,
+        day: form.weekly_review_day?.value || base.weekly_review?.day || "mon",
+        at: form.weekly_review_at?.value || base.weekly_review?.at || "09:00",
+      },
+      stale_follow: {
+        enabled: !!form.stale_follow_enabled?.checked,
+        at: form.stale_follow_at?.value || base.stale_follow?.at || "17:30",
+      },
       notify_webhook: form.notify_webhook.value.trim(),
       notify_lark: form.notify_lark.checked,
       notify_level: form.notify_level.value,
@@ -13311,8 +14412,28 @@
     });
 
     // Selects and checkboxes save immediately on change.
-    for (const name of ["rotate_pct", "dream_at", "notify_level", "notify_lark", "bypass", "paused"]) {
+    for (const name of ["rotate_pct", "dream_at", "weekly_review_day", "notify_level", "notify_lark", "bypass", "paused"]) {
       form[name]?.addEventListener("change", () => saver.flush());
+    }
+    const nativeSwitch = typeof HTMLInputElement !== "undefined" && "switch" in HTMLInputElement.prototype;
+    for (const name of ["morning_brief_enabled", "weekly_review_enabled", "stale_follow_enabled"]) {
+      const sw = form[name];
+      if (!sw) continue;
+      if (!nativeSwitch) sw.setAttribute("role", "switch");
+      sw.addEventListener("change", () => {
+        sw.closest(".set-routine-row")?.classList.toggle("is-on", sw.checked);
+        saver.flush();
+      });
+    }
+    for (const [name, fallback] of [["morning_brief_at", "09:00"], ["weekly_review_at", "09:00"], ["stale_follow_at", "17:30"]]) {
+      const el = form[name];
+      if (!el) continue;
+      const saveClock = () => {
+        if (!el.value) el.value = fallback;
+        saver.flush();
+      };
+      el.addEventListener("change", saveClock);
+      el.addEventListener("blur", saveClock);
     }
     // Text & number inputs auto-save after 500ms debounce or immediately on blur / IME-safe Enter.
     for (const name of ["router_args", "worker_cwd", "notify_webhook", "reply_chars", "stall_minutes"]) {
@@ -13335,6 +14456,54 @@
       });
     }
     form.worker_cwd.addEventListener("change", () => saver.flush());
+  }
+
+  const ROUTINE_DAYS = [
+    ["mon", "周一"], ["tue", "周二"], ["wed", "周三"],
+    ["thu", "周四"], ["fri", "周五"], ["sat", "周六"], ["sun", "周日"],
+  ];
+  function routinesSettingsHTML(s) {
+    const mb = s.morning_brief || {};
+    const wr = s.weekly_review || {};
+    const sf = s.stale_follow || {};
+    const mbOn = !!mb.enabled, mbAt = mb.at || "09:00";
+    const wrOn = !!wr.enabled, wrDay = wr.day || "mon", wrAt = wr.at || "09:00";
+    const sfOn = !!sf.enabled, sfAt = sf.at || "17:30";
+    const dayOpts = ROUTINE_DAYS.map(([k, l]) => `<option value="${k}"${wrDay === k ? " selected" : ""}>${l}</option>`).join("");
+    return `<div class="set-routines" aria-label="官方定时">
+          <div class="set-routine-row${mbOn ? " is-on" : ""}">
+            <div class="set-routine-copy">
+              <label class="set-routine-title" for="routine-morning-enabled">每日晨报</label>
+              <small id="routine-morning-desc">仅在近 24h 有任务、待办或环境异常时推送，无事零打扰</small>
+            </div>
+            <div class="set-routine-ctls">
+              <input type="time" class="set-routine-time" name="morning_brief_at" value="${esc(mbAt)}" aria-label="每日晨报时间" aria-describedby="routine-morning-desc">
+              <input type="checkbox" switch class="set-switch" id="routine-morning-enabled" name="morning_brief_enabled" aria-describedby="routine-morning-desc"${mbOn ? " checked" : ""}>
+            </div>
+          </div>
+          <div class="set-routine-row${wrOn ? " is-on" : ""}">
+            <div class="set-routine-copy">
+              <label class="set-routine-title" for="routine-weekly-enabled">每周复盘</label>
+              <small id="routine-weekly-desc">仅在近 7 天有完工归档或任务挂起超 3 天时汇总</small>
+            </div>
+            <div class="set-routine-ctls">
+              <select class="set-routine-day" name="weekly_review_day" data-pick="compact" data-title="每周复盘日期" aria-label="每周复盘星期">${dayOpts}</select>
+              <input type="time" class="set-routine-time" name="weekly_review_at" value="${esc(wrAt)}" aria-label="每周复盘时间" aria-describedby="routine-weekly-desc">
+              <input type="checkbox" switch class="set-switch" id="routine-weekly-enabled" name="weekly_review_enabled" aria-describedby="routine-weekly-desc"${wrOn ? " checked" : ""}>
+            </div>
+          </div>
+          <div class="set-routine-row${sfOn ? " is-on" : ""}">
+            <div class="set-routine-copy">
+              <label class="set-routine-title" for="routine-stale-enabled">滞留事项轻提醒</label>
+              <small id="routine-stale-desc">工作日检查超 24h 待拍板或超 48h 未推进任务，无滞留静默跳过</small>
+            </div>
+            <div class="set-routine-ctls">
+              <span class="set-routine-cadence" aria-hidden="true">工作日</span>
+              <input type="time" class="set-routine-time" name="stale_follow_at" value="${esc(sfAt)}" aria-label="滞留事项轻提醒时间" aria-describedby="routine-stale-desc">
+              <input type="checkbox" switch class="set-switch" id="routine-stale-enabled" name="stale_follow_enabled" aria-describedby="routine-stale-desc"${sfOn ? " checked" : ""}>
+            </div>
+          </div>
+        </div>`;
   }
 
   function settingsHTML(r) {
@@ -13387,11 +14556,12 @@
       </section>
 
       <section class="card set-sec">
-        <header><h4>记忆与会话</h4><p>对话超限时自动交接新会话，夜间自动整理记忆。</p></header>
+        <header><h4>记忆与会话</h4><p>对话超限时自动交接新会话，夜间自动整理记忆，按需开启官方定时。</p></header>
         <div class="set-grid">
           <label>上下文用到多少时换新会话<select name="rotate_pct" data-pick="compact" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
           <label>每晚做梦<select name="dream_at" data-pick="compact" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
         </div>
+        ${routinesSettingsHTML(s)}
         <div class="set-mem-io">
           <div class="set-mem-io-copy">
             <span class="set-mem-io-title">记忆备份与迁移</span>
@@ -14178,7 +15348,41 @@
   liveGroup.addEventListener("toggle", () => store.set("liveGroupOpen", liveGroup.open));
   let extAll = store.get("extAll", false);
   const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
-  const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
+  const LIVE_BUSY_STATUS = new Set(["working", "waiting", "starting"]);
+  const LIVE_KEY_COLLATOR = typeof Intl !== "undefined" && Intl.Collator
+    ? new Intl.Collator("en", { numeric: true })
+    : null;
+  function parseCreatedMs(v) {
+    if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+    if (!v) return 0;
+    const ms = Date.parse(v);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  function liveCreatedMs(s) {
+    if (!s) return 0;
+    if (s.pane_id) {
+      const direct = parseCreatedMs(s.created_at);
+      if (direct) return direct;
+      const w = findWorkerForAgent(s);
+      return parseCreatedMs(w && !w.ended ? w.created_at : 0) || parseCreatedMs(s.started);
+    }
+    return parseCreatedMs(s.created_at) || parseCreatedMs(s.started);
+  }
+  function liveStableKey(s) {
+    if (!s) return "";
+    return s.pane_id ? "p:" + s.pane_id : "x:" + (s.id || s.name || "");
+  }
+  function compareLiveSession(a, b) {
+    const ta = liveCreatedMs(a), tb = liveCreatedMs(b);
+    if (tb !== ta) return tb - ta;
+    const ka = liveStableKey(a), kb = liveStableKey(b);
+    if (ka === kb) return 0;
+    if (LIVE_KEY_COLLATOR) {
+      const c = LIVE_KEY_COLLATOR.compare(ka, kb);
+      if (c !== 0) return c;
+    }
+    return ka < kb ? -1 : 1;
+  }
   function renderExt() { renderSessions(); }
   function renderSessions(workerThreadMap = null, allEntries = null) {
     const entries = allEntries || chatEntries();
@@ -14207,9 +15411,8 @@
     // saying it is still open.
     const going = (e) => e.live && e.status !== "idle" && e.status !== "unknown";
     const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked");
-    const rank = (s) => RANK[s.status] ?? 3;
-    const live = [...panes, ...ext.filter(going)].sort((a, b) => rank(a) - rank(b));
-    const busy = live.filter((s) => rank(s) <= 1).length;
+    const live = [...panes, ...ext.filter(going)].sort(compareLiveSession);
+    const busy = live.filter((s) => LIVE_BUSY_STATUS.has(s.status)).length;
     setText(
       $("#live-count"),
       !live.length
@@ -14264,7 +15467,7 @@
     const railSepEl = $("#rail-live-sep");
     if (railLiveEl) {
       const blockedAgents = state.agents.filter((a) => a.name !== ROUTER && a.status === "blocked");
-      const railItems = [...blockedAgents, ...live].slice(0, 10);
+      const railItems = [...blockedAgents, ...live].sort(compareLiveSession).slice(0, 10);
       if (railSepEl) railSepEl.hidden = railItems.length === 0;
       const monoOf = (str) => {
         const s = String(str || "").replace(/^[^A-Za-z0-9\u4e00-\u9fff]+/, "").trim();
@@ -14819,6 +16022,9 @@
   }
   function renderUpdateEntry() {
     const btns = updatePillButtons();
+    const updateDot = $("#collie-update-dot");
+    const updateSep = $("#collie-update-sep");
+    const moreBtn = $("#collie-menu-btn");
     if (!btns.length) return;
     const list = outdatedOnlineMachines();
     for (const k of [...updateFlow.errors.keys()]) {
@@ -14833,34 +16039,39 @@
         b.removeAttribute("aria-disabled");
         b.classList.remove("busy", "failed");
       }
+      if (updateSep) updateSep.hidden = true;
+      if (updateDot) {
+        updateDot.hidden = true;
+        updateDot.classList.remove("is-failed");
+      }
+      if (moreBtn) {
+        moreBtn.title = "更多";
+        moreBtn.setAttribute("aria-label", "更多");
+      }
       syncDeviceUpdateButtons();
       return;
     }
-    let html = "", compactHtml = "", tip = "", aria = "", cls = "";
+    let html = "", tip = "", aria = "", cls = "";
     const busy = updateFlow.busy;
     if (updateFlow.phase === "updating") {
       const step = updateFlow.total > 1 ? ` ${updateFlow.index}/${updateFlow.total}` : "";
       const label = `更新中${step}…`;
       html = `<span class="up-spin" aria-hidden="true"></span><span>${esc(label)}</span>`;
-      compactHtml = html;
       tip = `正在更新 ${updateFlow.currentName}${step ? `（${updateFlow.index}/${updateFlow.total}）` : ""}…`;
       aria = `${label}，正在更新 ${updateFlow.currentName}`;
       cls = "busy";
     } else if (updateFlow.phase === "restarting") {
       html = `<span class="up-spin" aria-hidden="true"></span><span>重启中…</span>`;
-      compactHtml = html;
       tip = `正在重启 ${updateFlow.currentName || "hub"}，恢复后自动刷新`;
       aria = `重启中…，恢复后自动刷新`;
       cls = "busy";
     } else if (updateFlow.phase === "reconnecting") {
       html = `<span class="up-spin" aria-hidden="true"></span><span>重连中…</span>`;
-      compactHtml = html;
       tip = "节点已更新，正在等待重连…";
       aria = "重连中…，等待节点上线";
       cls = "busy";
     } else if (updateFlow.phase === "failed") {
       html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span>重试更新</span>`;
-      compactHtml = html;
       tip = `更新 ${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}（点此重试）`;
       aria = `重试更新（${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}）`;
       cls = "failed";
@@ -14868,19 +16079,27 @@
       const names = list.map((m) => m.name).join("、");
       const arrow = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>`;
       html = `${arrow}<span>更新到 ${esc(latest)}</span>`;
-      compactHtml = `${arrow}<span>${esc(latest)}</span>`;
       tip = `一键更新到 ${latest}（待更新：${names}）`;
       aria = `一键更新到 ${latest}（待更新：${names}）`;
     }
     for (const b of btns) {
-      const nextHtml = b.id === "collie-update-btn" ? compactHtml : html;
       b.hidden = false;
       b.classList.toggle("busy", cls === "busy");
       b.classList.toggle("failed", cls === "failed");
       if (busy) b.setAttribute("aria-disabled", "true"); else b.removeAttribute("aria-disabled");
       b.title = tip;
       b.setAttribute("aria-label", aria);
-      if (b.innerHTML !== nextHtml) b.innerHTML = nextHtml;
+      if (b.innerHTML !== html) b.innerHTML = html;
+    }
+    if (updateSep) updateSep.hidden = false;
+    if (updateDot) {
+      updateDot.hidden = false;
+      updateDot.classList.toggle("is-failed", cls === "failed");
+    }
+    if (moreBtn) {
+      const moreLbl = cls === "failed" ? "更多（更新失败，可重试）" : latest ? `更多（有新版本 ${latest}）` : "更多（正在更新）";
+      moreBtn.title = moreLbl;
+      moreBtn.setAttribute("aria-label", moreLbl);
     }
     syncDeviceUpdateButtons();
   }
@@ -15441,10 +16660,81 @@
     j.hidden = true;
     if (hadFocus) (curMode() === "screen" ? $("#screen") : $("#log"))?.focus({ preventScroll: true });
   }
+  let preXtermScreenFrame = null;
+  let preXtermWdFrame = null;
+  let xtermPromise = null;
+  let katexPromise = null;
+  function ensureLazyStylesheet(href, key) {
+    if (typeof document === "undefined" || !document.head || typeof document.head.appendChild !== "function") return;
+    if (document.querySelector?.(`link[data-lazy-css="${key}"]`)) return;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    if (link.dataset) link.dataset.lazyCss = key;
+    document.head.appendChild(link);
+  }
+  function ensureXterm() {
+    if (typeof window !== "undefined" && typeof window.Terminal === "function") return Promise.resolve(window.Terminal);
+    if (typeof document === "undefined" || !document.head || typeof document.head.appendChild !== "function") return Promise.resolve(null);
+    if (xtermPromise) return xtermPromise;
+    ensureLazyStylesheet("vendor/xterm.css", "xterm");
+    xtermPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector?.('script[data-lazy-js="xterm"]');
+      if (existing) {
+        if (typeof window.Terminal === "function") { resolve(window.Terminal); return; }
+        existing.addEventListener("load", () => resolve(window.Terminal || null), { once: true });
+        existing.addEventListener("error", (e) => { xtermPromise = null; reject(e); }, { once: true });
+        return;
+      }
+      const s = document.createElement("script");
+      s.src = "vendor/xterm.js";
+      s.async = true;
+      if (s.dataset) s.dataset.lazyJs = "xterm";
+      s.onload = () => {
+        if (typeof window.Terminal === "function") resolve(window.Terminal);
+        else { xtermPromise = null; reject(new Error("xterm failed to load")); }
+      };
+      s.onerror = (e) => { xtermPromise = null; reject(e); };
+      document.head.appendChild(s);
+    });
+    return xtermPromise;
+  }
+  function ensureKaTeX() {
+    const getK = () => (typeof katex !== "undefined" ? katex : (typeof globalThis !== "undefined" ? globalThis.katex : null));
+    const cur = getK();
+    if (cur && typeof cur.renderToString === "function") return Promise.resolve(cur);
+    if (typeof document === "undefined" || !document.head || typeof document.head.appendChild !== "function") return Promise.resolve(null);
+    if (katexPromise) return katexPromise;
+    ensureLazyStylesheet("vendor/katex/katex.min.css", "katex");
+    katexPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector?.('script[data-lazy-js="katex"]');
+      if (existing) {
+        const loaded = getK();
+        if (loaded && typeof loaded.renderToString === "function") { resolve(loaded); return; }
+        existing.addEventListener("load", () => resolve(getK()), { once: true });
+        existing.addEventListener("error", (e) => { katexPromise = null; reject(e); }, { once: true });
+        return;
+      }
+      const s = document.createElement("script");
+      s.src = "vendor/katex/katex.min.js";
+      s.async = true;
+      if (s.dataset) s.dataset.lazyJs = "katex";
+      s.onload = () => {
+        const loaded = getK();
+        if (loaded && typeof loaded.renderToString === "function") resolve(loaded);
+        else { katexPromise = null; reject(new Error("KaTeX failed to load")); }
+      };
+      s.onerror = (e) => { katexPromise = null; reject(e); };
+      document.head.appendChild(s);
+    });
+    return katexPromise;
+  }
+
   function resetScreen() {
     screenSeq++;
     screenWriting = false;
     screenQueuedFrame = null;
+    preXtermScreenFrame = null;
     if (screenScrollRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(screenScrollRAF);
       screenScrollRAF = 0;
@@ -15536,6 +16826,40 @@
   // can't fit 120 columns legibly: there it shows the screen at a readable
   // size and scrolls sideways, or, with 全览, the whole width at once.
   const narrowScreen = matchMedia("(max-width: 760px)");
+  narrowScreen.addEventListener?.("change", () => {
+    if (view !== "collie") return;
+    const sc = viewScroller("collie");
+    const nearBot = isCollieNearBottom(sc);
+    if (narrowScreen.matches && openInlineDecisionId && !activeThreadRoot) {
+      const id = openInlineDecisionId;
+      const target = chatEntries().find((x) => x.id === id);
+      const keepSnap = !nearBot ? (captureEntryAnchor(sc, id) || captureColliePos(sc)) : null;
+      if (keepSnap) keepSnap.atBottom = false;
+      openInlineDecisionId = null;
+      if (target) {
+        setReply(target, { mode: "supplement", focus: false });
+        const inp = $("#super-input");
+        if (inp && !inp.value.trim()) {
+          inp.value = getInlineDraft(id);
+          grow(inp);
+        }
+      }
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    } else if (!narrowScreen.matches && replyTo?.mode === "supplement" && replyTo.entry) {
+      const id = replyTo.entry;
+      const inp = $("#super-input");
+      if (inp) {
+        setInlineDraft(id, inp.value);
+        inp.value = "";
+        grow(inp);
+      }
+      const keepSnap = !nearBot ? (captureEntryAnchor(sc, id) || captureColliePos(sc)) : null;
+      if (keepSnap) keepSnap.atBottom = false;
+      setReply(null);
+      openInlineDecisionId = id;
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    }
+  });
   function fitTerm() {
     if (!term || !size.cols) return;
     const el = $("#screen"), was = screenNearBottom();
@@ -15560,7 +16884,19 @@
     $("#term-fit").textContent = overview ? "放大" : "全览";
     $("#term-fit").hidden = !narrowScreen.matches || fitW >= 11;
   }
-  addEventListener("resize", () => fitTerm());
+  let fitTermResizeRAF = 0;
+  addEventListener("resize", () => {
+    if (view !== "pane" || curMode() !== "screen" || !term || !size.cols) return;
+    if (fitTermResizeRAF) return;
+    if (typeof requestAnimationFrame === "function") {
+      fitTermResizeRAF = requestAnimationFrame(() => {
+        fitTermResizeRAF = 0;
+        if (view === "pane" && curMode() === "screen") fitTerm();
+      });
+    } else {
+      fitTerm();
+    }
+  }, { passive: true });
   $("#term-fit").addEventListener("click", () => { store.set("term-overview", !store.get("term-overview", false)); fitTerm(); });
   $("#term-kbd").addEventListener("click", () => term?.focus());
 
@@ -15569,7 +16905,21 @@
     applyMode();
     const m = curMode();
     if (m === "chat") return openChat(id, restore);
-    if (m === "screen") ensureTerm();
+    if (m === "screen") {
+      ensureTerm();
+      if (!term && !window.Terminal) {
+        ensureXterm().then(() => {
+          if (id === current && view === "pane" && curMode() === "screen") {
+            ensureTerm();
+            if (preXtermScreenFrame) {
+              const pf = preXtermScreenFrame;
+              preXtermScreenFrame = null;
+              drawScreen(pf.f, pf.restore);
+            }
+          }
+        }).catch(() => {});
+      }
+    }
     let pendingRestore = restore && !restore.atBottom ? restore : null;
     stream = openES(paneURL(id, "stream") + "?mode=" + m);
     stream.addEventListener("frame", (e) => {
@@ -15690,7 +17040,22 @@
   }
 
   function drawScreen(f, restore = null) {
-    if (!term) return;
+    if (!term) {
+      if (typeof window !== "undefined" && !window.Terminal) {
+        preXtermScreenFrame = { f, restore };
+        ensureXterm().then(() => {
+          if (view === "pane" && curMode() === "screen") {
+            ensureTerm();
+            if (term && preXtermScreenFrame) {
+              const pf = preXtermScreenFrame;
+              preXtermScreenFrame = null;
+              drawScreen(pf.f, pf.restore);
+            }
+          }
+        }).catch(() => {});
+      }
+      return;
+    }
     if (!screenFresh && term.hasSelection?.()) {
       pendingScreen = f;
       return;
@@ -16241,6 +17606,7 @@
       el.innerHTML = sig;
     }
     el._blocks = blocks; el._last = el.lastElementChild;
+    hydrateRichContent(el);
     if (rest && !rest.atBottom) {
       restoreSimpleScroll(scroller(el), rest);
       if (msgs.length && !el.querySelector(".thread-skel")) el._restore = null;
@@ -17160,6 +18526,7 @@
     if (MD_EXT.test(path)) {
       syncFileBar("fv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl, wideHref: wHref });
       body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
+      hydrateRichContent(body);
       body.scrollTop = body.scrollLeft = 0;
       if (view === "collie") renderSuper();
       return;
@@ -17251,6 +18618,7 @@
     } else if (MD_EXT.test(path)) {
       syncFileBar("rv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl });
       body.innerHTML = `<article class="msg assistant rv-md" id="rv-code-src">${md(text)}</article>${cut}`;
+      hydrateRichContent(body);
     } else {
       const lang = renderCodeBody(body, path, text, cut, "rv-code-src", true);
       syncFileBar("rv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl });
@@ -17410,17 +18778,70 @@
     img.src = src;
     if (!cached) watchImgDecode(img, k);
   }
-  const thumbImgAttrs = (p) => {
+  const thumbLRULimit = () => (typeof matchMedia === "function" && matchMedia("(max-width: 760px)").matches) ? 60 : 120;
+  function touchThumbLRU(p) {
+    if (!p || !thumbs.has(p)) return;
+    const v = thumbs.get(p);
+    thumbs.delete(p);
+    thumbs.set(p, v);
+  }
+  function isThumbNearViewport(p) {
+    if (!p || typeof document === "undefined" || typeof document.querySelectorAll !== "function") return false;
+    const vh = (typeof window !== "undefined" && window.innerHeight) || 900;
+    const margin = 800;
+    for (const btn of document.querySelectorAll(".thumb[data-img]")) {
+      if (btn.dataset?.img !== p || !btn.isConnected) continue;
+      if (typeof btn.getBoundingClientRect !== "function") return true;
+      const r = btn.getBoundingClientRect();
+      if ((r.width > 0 || r.height > 0) && r.bottom >= -margin && r.top <= vh + margin) return true;
+    }
+    return false;
+  }
+  function evictThumbsLRU() {
+    const max = thumbLRULimit();
+    let loadedCount = 0;
+    for (const v of thumbs.values()) if (v) loadedCount++;
+    if (loadedCount <= max) return;
+    const lbOpenSrc = (lightbox?.open && lbImg?.getAttribute?.("src")) || "";
+    for (const [p, url] of [...thumbs.entries()]) {
+      if (loadedCount <= max) break;
+      if (!url) continue;
+      if (lbOpenSrc && lbOpenSrc === url) continue;
+      if (lbTabProtected.has(url)) continue;
+      if (isThumbNearViewport(p)) continue;
+      thumbs.delete(p);
+      decodedThumbs.delete(p);
+      loadedCount--;
+      if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+        for (const el of document.querySelectorAll(".thumb[data-img] img")) {
+          if (el.parentElement?.dataset?.img === p) {
+            el.removeAttribute("src");
+            if (el.dataset) delete el.dataset.asked;
+            el.classList?.remove("is-img-loading");
+            observeThumbImg(el);
+          }
+        }
+      }
+      invalidateMdCacheForImage(p);
+      try { URL.revokeObjectURL(url); } catch {}
+    }
+  }
+  const thumbImgAttrs = (p, extraCls = "") => {
     const src = thumbs.get(p);
     const dim = thumbDims.get(p);
-    const cls = src && !decodedThumbs.has(p) ? ` class="is-img-loading"` : "";
+    const clsParts = [];
+    if (extraCls) clsParts.push(extraCls);
+    if (src && !decodedThumbs.has(p)) clsParts.push("is-img-loading");
+    const cls = clsParts.length ? ` class="${clsParts.join(" ")}"` : "";
     return cls + (src ? ` src="${src}"` : "") + (dim ? ` width="${dim.w}" height="${dim.h}"` : "");
   };
   const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="${esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt="" decoding="async"${thumbImgAttrs(p)}></button>`;
   const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
   async function loadThumb(img) {
-    const p = img.parentElement.dataset.img;
+    const p = img?.parentElement?.dataset?.img;
+    if (!p) return;
     if (thumbs.get(p)) {
+      touchThumbLRU(p);
       applyThumbSrc(img, thumbs.get(p), p);
       const dim = thumbDims.get(p);
       if (dim) { img.width = dim.w; img.height = dim.h; }
@@ -17432,6 +18853,7 @@
       const f = await findFile(p);
       if (!f || f.kind !== "image") throw 0;
       const u = URL.createObjectURL(new Blob([f.blob], { type: imgMime(p) }));
+      thumbs.delete(p);
       thumbs.set(p, u);
       thumbMeta.set(p, { size: f.size, machine: f.machine, path: f.path });
       invalidateMdCacheForImage(p);
@@ -17441,7 +18863,8 @@
           el.parentElement.classList.remove("broken");
         }
       }
-    } catch { thumbs.delete(p); img.classList?.remove("is-img-loading"); img.parentElement.classList.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
+      evictThumbsLRU();
+    } catch { thumbs.delete(p); img.classList?.remove("is-img-loading"); img.parentElement?.classList?.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
   }
   // Under each Collie message, on hover (and persistently when clapped): clap (monochrome fine-line thumbs-up SVG, zero emoji), copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
   const ICON_CLAP = `<svg class="clap-ico" viewBox="0 0 24 24" aria-hidden="true"><path class="clap-body" d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/><path class="clap-seam" d="M7 10v12"/></svg>`;
@@ -17698,51 +19121,417 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, .thumb, img")) return;
+    if (m && e.target.closest("a, button, summary, details, input, textarea, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
-  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "rail-live", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "router-status", "screen", "log"]);
-  function triggerThumbLoads(root) {
+  // Viewport-aware thumbnail lazy loading via IntersectionObserver (replaces global MutationObserver).
+  // Observe the visible .thumb button (not the inner <img>, which is display:none before src is set).
+  const observedThumbImgs = new WeakSet();
+  const thumbIOByRoot = new WeakMap();
+  let thumbViewportIO = null;
+  function getThumbObserver(scrollRoot) {
+    if (typeof IntersectionObserver !== "function") return null;
+    const onEntries = (entries, io) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const target = entry.target;
+        io.unobserve(target);
+        observedThumbImgs.delete(target);
+        const img = target.tagName === "IMG" ? target : target.querySelector?.("img");
+        if (!img) continue;
+        const p = img.parentElement?.dataset?.img || target.dataset?.img || "";
+        if (!img.getAttribute("src") && !img.dataset?.asked) {
+          if (img.dataset) img.dataset.asked = "1";
+          loadThumb(img);
+        } else if (p) {
+          touchThumbLRU(p);
+        }
+      }
+    };
+    if (!scrollRoot) {
+      if (!thumbViewportIO) thumbViewportIO = new IntersectionObserver(onEntries, { root: null, rootMargin: "400px 0px" });
+      return thumbViewportIO;
+    }
+    let io = thumbIOByRoot.get(scrollRoot);
+    if (!io) {
+      try {
+        io = new IntersectionObserver(onEntries, { root: scrollRoot, rootMargin: "400px 0px" });
+      } catch {
+        return getThumbObserver(null);
+      }
+      thumbIOByRoot.set(scrollRoot, io);
+    }
+    return io;
+  }
+  function observeThumbImg(img) {
+    if (!img || img.tagName !== "IMG") return;
+    const btn = img.parentElement;
+    const p = btn?.dataset?.img || "";
+    if (!p) return;
+    if (img.getAttribute("src")) {
+      touchThumbLRU(p);
+      if (img.classList?.contains("is-img-loading")) watchImgDecode(img, p);
+      return;
+    }
+    if (thumbs.get(p)) {
+      touchThumbLRU(p);
+      applyThumbSrc(img, thumbs.get(p), p);
+      const dim = thumbDims.get(p);
+      if (dim) { img.width = dim.w; img.height = dim.h; }
+      return;
+    }
+    if (img.dataset?.asked) return;
+    if (typeof IntersectionObserver === "function") {
+      const target = btn?.classList?.contains("thumb") ? btn : img;
+      if (observedThumbImgs.has(target)) return;
+      const scrollRoot = target.closest?.(".scroller, #td-body, #fv-body, #rv-scroller, .wd-body") || null;
+      const io = getThumbObserver(scrollRoot);
+      if (io) {
+        observedThumbImgs.add(target);
+        io.observe(target);
+        return;
+      }
+    }
+    if (img.dataset) img.dataset.asked = "1";
+    loadThumb(img);
+  }
+  function observeThumbs(root) {
     if (!root || root.nodeType !== 1) return;
     if (root.tagName === "IMG") {
       if (root.classList?.contains("is-img-loading")) {
         watchImgDecode(root, root.parentElement?.dataset?.img || root.getAttribute("src") || "");
       }
-      if (!root.getAttribute("src") && !root.dataset.asked && root.parentElement?.classList?.contains("thumb")) {
-        root.dataset.asked = 1;
-        loadThumb(root);
-      }
+      if (root.parentElement?.classList?.contains("thumb")) observeThumbImg(root);
       return;
     }
     if (root.childElementCount === 0) return;
-    for (const img of root.querySelectorAll(".thumb img:not([src])")) {
-      if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
+    for (const img of root.querySelectorAll?.(".thumb img") || []) {
+      observeThumbImg(img);
     }
-    for (const img of root.querySelectorAll("img.is-img-loading[src]")) {
+    for (const img of root.querySelectorAll?.("img.is-img-loading[src]") || []) {
       watchImgDecode(img, img.parentElement?.dataset?.img || img.getAttribute("src") || "");
     }
   }
   document.addEventListener("load", (e) => {
     const img = e.target;
-    if (img?.tagName !== "IMG" || !img.classList?.contains("is-img-loading")) return;
-    revealDecodedImg(img, img.parentElement?.dataset?.img || img.getAttribute("src") || "");
+    if (img?.tagName !== "IMG") return;
+    const p = img.parentElement?.dataset?.img || "";
+    if (p && img.naturalWidth > 0 && img.naturalHeight > 0 && !thumbDims.has(p)) {
+      thumbDims.set(p, { w: img.naturalWidth, h: img.naturalHeight });
+    }
+    if (img.classList?.contains("is-img-loading")) {
+      revealDecodedImg(img, p || img.getAttribute("src") || "");
+    }
   }, true);
   document.addEventListener("error", (e) => {
     const img = e.target;
     if (img?.tagName !== "IMG" || !img.classList?.contains("is-img-loading")) return;
     img.classList.remove("is-img-loading");
   }, true);
-  new MutationObserver((ms) => {
-    for (const m of ms) {
-      const t = m.target;
-      if (NO_THUMB_IDS.has(t?.id) || isScreenDomTarget(t)) continue;
-      for (const n of m.addedNodes) triggerThumbLoads(n);
+
+  // ───────────────────────────── rich rendering transient UI state & interactions
+  const SUPPORTS_UNTIL_FOUND = typeof HTMLElement === "undefined" || ("onbeforematch" in HTMLElement.prototype);
+  const richUiState = new Map(); // "${entryId}|${kind}|${blockIdx}" -> state (boolean | number)
+  const RICH_UI_STATE_MAX = 1000;
+  function setRichUiState(key, val) {
+    if (!key) return;
+    if (richUiState.has(key)) richUiState.delete(key);
+    else if (richUiState.size >= RICH_UI_STATE_MAX) {
+      const oldest = richUiState.keys().next().value;
+      if (oldest !== undefined) richUiState.delete(oldest);
     }
-  }).observe(document.body, { childList: true, subtree: true });
+    richUiState.set(key, val);
+  }
+  function getRichHostId(el) {
+    const msg = el?.closest?.(".msg[data-id]");
+    if (msg?.dataset?.id) return msg.dataset.id;
+    const td = el?.closest?.(".td-node[data-entry-id]");
+    if (td?.dataset?.entryId) return td.dataset.entryId;
+    const fv = el?.closest?.("#fv-code-src, #rv-code-src");
+    if (fv?.id) return fv.id;
+    return "";
+  }
+  function getRichBlockKey(el, kind, selector) {
+    if (!el) return "";
+    if (el._richKey) return el._richKey;
+    const host = el.closest?.(".msg[data-id], .td-node[data-entry-id], #fv-code-src, #rv-code-src");
+    if (!host) return "";
+    const id = getRichHostId(el);
+    if (!id) return "";
+    const list = host.querySelectorAll?.(selector) || [];
+    let idx = -1;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] === el) { idx = i; break; }
+    }
+    if (idx < 0) return "";
+    const k = `${id}|${kind}|${idx}`;
+    el._richKey = k;
+    return k;
+  }
+  function setCodeBlockExpanded(block, expanded, persist = true) {
+    if (!block) return;
+    const pre = block.querySelector?.("pre");
+    const savedScrollLeft = pre ? pre.scrollLeft : 0;
+    const tail = block.querySelector?.(".code-tail");
+    const btn = block.querySelector?.("[data-code-fold]");
+    const lbl = btn?.querySelector?.("[data-fold-label]");
+    const total = Number(block.dataset?.totalLines) || 0;
+    const head = Number(block.dataset?.headLines) || 14;
+    const remain = Math.max(0, total - head);
+    block.classList?.toggle("is-collapsed", !expanded);
+    btn?.setAttribute?.("aria-expanded", String(!!expanded));
+    if (tail) {
+      if (expanded) {
+        tail.removeAttribute?.("hidden");
+        tail.hidden = false;
+      } else if (SUPPORTS_UNTIL_FOUND) {
+        tail.setAttribute?.("hidden", "until-found");
+      } else {
+        tail.setAttribute?.("hidden", "");
+        tail.hidden = true;
+      }
+    }
+    if (lbl) lbl.textContent = expanded ? "收起代码" : `展开剩余 ${remain} 行`;
+    if (pre && savedScrollLeft) pre.scrollLeft = savedScrollLeft;
+    if (persist) {
+      const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
+      if (k) setRichUiState(k, !!expanded);
+    }
+  }
+  function extractCodeBlockText(block) {
+    if (!block) return "";
+    const code = block.querySelector?.("pre code");
+    if (!code) return "";
+    if (block.classList?.contains("is-diff")) {
+      const lines = code.querySelectorAll?.(".diff-line") || [];
+      if (lines.length) return [...lines].map((n) => n.textContent || "").join("\n");
+    }
+    const headPart = code.querySelector?.(".code-head-part");
+    const tailPart = code.querySelector?.(".code-tail");
+    if (headPart && tailPart) {
+      return (headPart.textContent || "") + "\n" + (tailPart.textContent || "");
+    }
+    return code.textContent || "";
+  }
+  function flashMiniBtnDone(btn, doneLabel) {
+    if (!btn) return;
+    clearTimeout(btn._doneTimer);
+    const lbl = btn.querySelector?.(".md-copy-lbl");
+    if (lbl) {
+      if (btn._origLabel === undefined) btn._origLabel = lbl.textContent;
+      lbl.textContent = doneLabel;
+    } else {
+      if (btn._origLabel === undefined) btn._origLabel = btn.textContent;
+      btn.textContent = doneLabel;
+    }
+    btn.classList?.add("is-done");
+    btn._doneTimer = setTimeout(() => {
+      if (lbl) lbl.textContent = btn._origLabel ?? "";
+      else btn.textContent = btn._origLabel ?? "";
+      btn.classList?.remove("is-done");
+    }, 1500);
+  }
+  function extractTableRows(table) {
+    if (!table) return { rows: [], aligns: [] };
+    const trs = [...(table.querySelectorAll?.("tr") || [])];
+    const aligns = [];
+    const rows = trs.map((tr, ri) => {
+      const cells = [...(tr.children || [])];
+      return cells.map((c, ci) => {
+        if (ri === 0) {
+          const al = c.style?.textAlign || "";
+          aligns[ci] = al === "center" ? ":---:" : al === "right" ? "---:" : "---";
+        }
+        return (c.textContent || "").trim().replace(/\s+/g, " ");
+      });
+    });
+    return { rows, aligns };
+  }
+  function syncTableCard(card) {
+    if (!card) return;
+    const vp = card.querySelector?.("[data-table-vp]");
+    const sc = card.querySelector?.(".md-table");
+    if (!vp || !sc) return;
+    const maxScroll = (sc.scrollWidth || 0) - (sc.clientWidth || 0);
+    const scrollable = maxScroll > 2;
+    vp.classList?.toggle("is-scrollable", scrollable);
+    if (scrollable) {
+      const firstCell = sc.querySelector?.("thead th:first-child, tbody th:first-child");
+      const colW = firstCell?.offsetWidth || 0;
+      if (colW > 0) vp.style?.setProperty?.("--sticky-col-w", colW + "px");
+    } else {
+      vp.style?.removeProperty?.("--sticky-col-w");
+    }
+    vp.classList?.toggle("can-scroll-l", scrollable && (sc.scrollLeft || 0) > 4);
+    vp.classList?.toggle("can-scroll-r", scrollable && (sc.scrollLeft || 0) < maxScroll - 4);
+  }
+  const boundTableScrolls = new WeakSet();
+  let tableRO = null;
+  function observeTableResize(sc) {
+    if (!sc || typeof ResizeObserver !== "function") return;
+    if (!tableRO) {
+      tableRO = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const card = entry.target?.closest?.("[data-table-card]");
+          if (card) syncTableCard(card);
+        }
+      });
+    }
+    try { tableRO.observe(sc); } catch {}
+  }
+  function hydrateTables(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    const cards = root.querySelectorAll("[data-table-card]");
+    for (const card of cards) {
+      const sc = card.querySelector?.(".md-table");
+      if (!sc) continue;
+      if (!boundTableScrolls.has(sc)) {
+        boundTableScrolls.add(sc);
+        sc.addEventListener?.("scroll", () => {
+          syncTableCard(card);
+          const k = getRichBlockKey(card, "table", "[data-table-card]");
+          if (k) setRichUiState(k, sc.scrollLeft || 0);
+        }, { passive: true });
+        observeTableResize(sc);
+      }
+      if (!card._richHydrated) {
+        card._richHydrated = true;
+        const k = getRichBlockKey(card, "table", "[data-table-card]");
+        const saved = k ? richUiState.get(k) : 0;
+        if (typeof saved === "number" && saved > 0) sc.scrollLeft = saved;
+      }
+      syncTableCard(card);
+    }
+  }
+  function hydrateCodeBlocks(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    for (const block of root.querySelectorAll(".md-code[data-foldable]")) {
+      if (block._richHydrated) continue;
+      block._richHydrated = true;
+      const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
+      if (k && richUiState.has(k)) {
+        setCodeBlockExpanded(block, !!richUiState.get(k), false);
+      } else if (!SUPPORTS_UNTIL_FOUND && block.classList?.contains("is-collapsed")) {
+        const tail = block.querySelector?.(".code-tail");
+        if (tail) { tail.setAttribute?.("hidden", ""); tail.hidden = true; }
+      }
+    }
+  }
+  function hydrateDetails(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    for (const det of root.querySelectorAll("details.md-fold")) {
+      if (det._richHydrated) continue;
+      det._richHydrated = true;
+      const k = getRichBlockKey(det, "details", "details.md-fold");
+      if (k && richUiState.has(k)) {
+        det.open = !!richUiState.get(k);
+      }
+    }
+  }
+  function hydrateRichContent(root) {
+    if (!root || root.nodeType !== 1) return;
+    observeThumbs(root);
+    hydrateCodeBlocks(root);
+    hydrateDetails(root);
+    hydrateTables(root);
+    hydratePendingMath(root);
+    observeRichVisuals(root);
+  }
+  function closeRichFloatActs(except = null) {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+    for (const el of document.querySelectorAll(".md-table-card.is-acts-open, .md-code.is-acts-open")) {
+      if (el !== except) {
+        el.classList.remove("is-acts-open");
+        const act = document.activeElement;
+        if (act && el.contains?.(act) && typeof act.blur === "function") act.blur();
+      }
+    }
+  }
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeRichFloatActs();
+  });
+  document.addEventListener("click", async (ev) => {
+    const foldBtn = ev.target?.closest?.("[data-code-fold]");
+    if (foldBtn) {
+      ev.preventDefault();
+      const block = foldBtn.closest?.(".md-code[data-foldable]");
+      if (block) setCodeBlockExpanded(block, block.classList.contains("is-collapsed"), true);
+      return;
+    }
+    const copyCodeBtn = ev.target?.closest?.("[data-copy-code]");
+    if (copyCodeBtn) {
+      ev.preventDefault();
+      if (ev.detail > 0) copyCodeBtn.blur?.();
+      const block = copyCodeBtn.closest?.("[data-code-block]");
+      const txt = extractCodeBlockText(block);
+      const ok = await copyText(txt);
+      if (ok) {
+        flashMiniBtnDone(copyCodeBtn, "已复制 ✓");
+        toast("已复制代码");
+      } else {
+        toast("复制失败", "attn");
+      }
+      return;
+    }
+    const copyTblBtn = ev.target?.closest?.("[data-copy-table]");
+    if (copyTblBtn) {
+      ev.preventDefault();
+      if (ev.detail > 0) copyTblBtn.blur?.();
+      const mode = copyTblBtn.dataset?.copyTable || "tsv";
+      const card = copyTblBtn.closest?.("[data-table-card]");
+      const table = card?.querySelector?.("table");
+      const { rows, aligns } = extractTableRows(table);
+      if (!rows.length) return;
+      let payload = "";
+      if (mode === "md") {
+        const [head, ...body] = rows;
+        const escCell = (c) => c.replace(/\|/g, "\\|");
+        const sep = head.map((_, i) => aligns[i] || "---");
+        payload = [head.map(escCell), sep, ...body.map((r) => r.map(escCell))]
+          .map((r) => "| " + r.join(" | ") + " |")
+          .join("\n");
+      } else {
+        payload = rows.map((r) => r.map((c) => c.replace(/\t/g, " ")).join("\t")).join("\n");
+      }
+      const ok = await copyText(payload);
+      if (ok) {
+        flashMiniBtnDone(copyTblBtn, mode === "tsv" ? "已复制 TSV ✓" : "已复制 ✓");
+        toast(mode === "tsv" ? "已复制为表格数据（TSV）" : "已复制 Markdown 表格");
+      } else {
+        toast("复制失败", "attn");
+      }
+      return;
+    }
+    // Touch/mobile tap on headerless table or code block toggles its floating micro-actions pill; tapping outside dismisses.
+    const floatHost = ev.target?.closest?.(".md-table-card, .md-code");
+    const isTouchLike = typeof matchMedia === "function" && (matchMedia("(hover: none)").matches || matchMedia("(pointer: coarse)").matches);
+    if (floatHost && isTouchLike) {
+      const sel = typeof window !== "undefined" && typeof window.getSelection === "function" ? String(window.getSelection() || "") : "";
+      if (!sel && !ev.target?.closest?.("a, button")) {
+        const nextOpen = !floatHost.classList.contains("is-acts-open");
+        closeRichFloatActs(nextOpen ? floatHost : null);
+        floatHost.classList.toggle("is-acts-open", nextOpen);
+      }
+      return;
+    }
+    if (!floatHost) closeRichFloatActs();
+  });
+  document.addEventListener("beforematch", (ev) => {
+    const block = ev.target?.closest?.(".md-code[data-foldable]");
+    if (block && block.classList?.contains("is-collapsed")) {
+      setCodeBlockExpanded(block, true, true);
+    }
+  });
+  document.addEventListener("toggle", (ev) => {
+    const det = ev.target;
+    if (!det || det.tagName !== "DETAILS" || !det.classList?.contains("md-fold")) return;
+    const k = getRichBlockKey(det, "details", "details.md-fold");
+    if (k) setRichUiState(k, !!det.open);
+  }, { capture: true });
 
   // ───────────────────────────── fullscreen image lightbox
-  const lightbox = $("#lightbox"), lbStage = $("#lb-stage"), lbImg = $("#lb-img");
+  const lightbox = $("#lightbox"), lbStage = $("#lb-stage"), lbImg = $("#lb-img"), lbSvg = $("#lb-svg");
   const lbName = $("#lb-name"), lbCount = $("#lb-count"), lbMeta = $("#lb-meta"), lbStatus = $("#lb-status");
   const lbZoomBtn = $("#lb-zoom"), lbZoomPct = $("#lb-zoom-pct"), lbOpenLink = $("#lb-open"), lbDlLink = $("#lb-dl");
   const lbPrevBtn = $("#lb-prev"), lbNextBtn = $("#lb-next"), lbCloseBtn = $("#lb-close");
@@ -17750,19 +19539,6 @@
   let lbScale = 1, lbX = 0, lbY = 0, lbSavedScroll = null;
   const lbTabProtected = new Set();
 
-  let supportsDisplayTransition;
-  function canTransitionDisplay() {
-    if (supportsDisplayTransition !== undefined) return supportsDisplayTransition;
-    if (!window.CSS?.supports?.("transition-behavior", "allow-discrete") || !document.body) return false;
-    const probe = document.createElement("div");
-    probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
-    document.body.appendChild(probe);
-    getComputedStyle(probe).display;
-    probe.style.display = "none";
-    supportsDisplayTransition = getComputedStyle(probe).display === "block";
-    probe.remove();
-    return supportsDisplayTransition;
-  }
   const supportsTopLayerExit = () => !!(window.CSS?.supports?.("overlay", "auto") && canTransitionDisplay());
 
   function releaseLbTempUrl() {
@@ -17816,10 +19592,13 @@
       else lbDlLink.removeAttribute("download");
     }
   }
+  const lbActiveMedia = () => (lbSvg && !lbSvg.hidden ? lbSvg : lbImg);
+  const lbHasMedia = () => !lbImg.hidden || !!(lbSvg && !lbSvg.hidden);
   function clampLbPan() {
     if (lbScale <= 1.005) { lbScale = 1; lbX = 0; lbY = 0; return; }
     const st = lbStage.getBoundingClientRect();
-    const bw = lbImg.offsetWidth || 0, bh = lbImg.offsetHeight || 0;
+    const media = lbActiveMedia();
+    const bw = media?.offsetWidth || 0, bh = media?.offsetHeight || 0;
     const maxX = Math.max(0, (bw * lbScale - st.width) / 2 + 24);
     const maxY = Math.max(0, (bh * lbScale - st.height) / 2 + 24);
     lbX = Math.min(maxX, Math.max(-maxX, lbX));
@@ -17830,7 +19609,9 @@
     const zoomed = lbScale > 1.005;
     lightbox.classList.toggle("is-zoomed", zoomed);
     if (immediate) lightbox.classList.add("no-anim");
-    lbImg.style.transform = zoomed ? `translate3d(${lbX.toFixed(1)}px, ${lbY.toFixed(1)}px, 0) scale(${lbScale.toFixed(3)})` : "";
+    const tf = zoomed ? `translate3d(${lbX.toFixed(1)}px, ${lbY.toFixed(1)}px, 0) scale(${lbScale.toFixed(3)})` : "";
+    if (lbImg) lbImg.style.transform = lbImg.hidden ? "" : tf;
+    if (lbSvg) lbSvg.style.transform = lbSvg.hidden ? "" : tf;
     if (immediate) requestAnimationFrame(() => lightbox.classList.remove("no-anim"));
     if (lbZoomBtn) {
       lbZoomBtn.classList.toggle("zoomed", zoomed);
@@ -17844,6 +19625,7 @@
     }
   }
   function targetLbZoomScale() {
+    if (lbSvg && !lbSvg.hidden) return 2;
     const bw = lbImg.offsetWidth || 0, nw = lbImg.naturalWidth || 0;
     if (bw > 0 && nw > 0 && !lbImg.classList.contains("is-svg")) {
       const ratio = nw / bw;
@@ -17871,11 +19653,29 @@
     applyLbTransform(immediate);
   }
   function toggleLbZoom(clientX, clientY) {
-    if (lbImg.hidden || lbZoomBtn?.disabled) return;
+    if (!lbHasMedia() || lbZoomBtn?.disabled) return;
     if (lbScale > 1.005) zoomLbTo(1);
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
+    const gal = triggerEl?.closest?.(".md-gallery");
+    if (gal) {
+      const seen = new Set(), items = [];
+      const add = (it) => {
+        const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        items.push(it);
+      };
+      for (const el of gal.querySelectorAll?.(".gal-tile, .gal-hidden-item") || []) {
+        if (el.dataset?.img) add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
+        else if (el.dataset?.imgUrl) add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
+      }
+      const wantKey = fallbackItem.path ? "p:" + fallbackItem.path : "u:" + (fallbackItem.url || "");
+      let index = items.findIndex((it) => (it.path ? "p:" + it.path : "u:" + (it.url || "")) === wantKey);
+      if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
+      return { items, index };
+    }
     const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".mine") || triggerEl?.closest(".mine-group") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
     const seen = new Set(), items = [];
@@ -17885,10 +19685,10 @@
       seen.add(key);
       items.push(it);
     };
-    for (const el of scope.querySelectorAll(".thumb[data-img], .md-img-btn[data-img-url], a.fpath[data-path], img")) {
-      if (el.classList.contains("thumb") && el.dataset.img) {
+    for (const el of scope.querySelectorAll(".thumb[data-img], .md-img-btn[data-img-url], .gal-hidden-item, a.fpath[data-path], img")) {
+      if ((el.classList.contains("thumb") || el.classList.contains("gal-hidden-item")) && el.dataset.img) {
         add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
-      } else if (el.classList.contains("md-img-btn") && el.dataset.imgUrl) {
+      } else if ((el.classList.contains("md-img-btn") || el.classList.contains("gal-hidden-item")) && el.dataset.imgUrl) {
         add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
       } else if (el.matches("a.fpath[data-path]")) {
         const p = el.dataset.path || "";
@@ -17916,11 +19716,53 @@
     lbCount.hidden = !multi;
     if (multi) lbCount.textContent = `${lbIdx + 1} / ${lbItems.length}`;
 
-    const name = cleanImgName(item.path || item.url, item.alt || "图片");
-    lbName.textContent = item.alt && !item.path ? item.alt : name;
+    const name = item.title || cleanImgName(item.path || item.url, item.alt || "图片");
+    lbName.textContent = item.title || (item.alt && !item.path ? item.alt : name);
     lbCurMeta = null;
     updateLbMeta();
     setLbReady(false);
+    if (lbSvg) {
+      lbSvg.hidden = true;
+      lbSvg.innerHTML = "";
+      lbSvg.style.transform = "";
+    }
+
+    // 0. Inline SVG diagram (e.g. Mermaid / safe SVG fullscreen inspection)
+    if ((item.svgNode || item.svgHtml) && lbSvg) {
+      lbImg.hidden = true;
+      lbImg.removeAttribute("src");
+      lbStatus.hidden = true;
+      lbSvg.classList.toggle("is-light-canvas", !!item.lightCanvas);
+      if (item.svgNode && typeof document.importNode === "function") {
+        lbSvg.replaceChildren(document.importNode(item.svgNode, true));
+      } else {
+        lbSvg.innerHTML = item.svgHtml;
+      }
+      const mountedSvg = lbSvg.querySelector?.("svg");
+      if (mountedSvg) {
+        mountedSvg.removeAttribute("height");
+        mountedSvg.setAttribute("width", "100%");
+        if (mountedSvg.style) {
+          mountedSvg.style.width = "100%";
+          mountedSvg.style.maxWidth = "100%";
+          mountedSvg.style.height = "auto";
+        }
+      }
+      lbSvg.hidden = false;
+      const svgRaw = item.svgHtml || (item.svgNode ? item.svgNode.outerHTML : "");
+      lbCurMeta = { isSvg: true, width: 0, height: 0, size: svgRaw.length };
+      updateLbMeta();
+      const svgFile = svgRaw.includes("xmlns=")
+        ? svgRaw
+        : svgRaw.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+      let blobUrl = "";
+      try {
+        blobUrl = URL.createObjectURL(new Blob([svgFile], { type: "image/svg+xml;charset=utf-8" }));
+        lbTempUrl = blobUrl;
+      } catch {}
+      setLbReady(true, blobUrl, item.dlName || "diagram.svg");
+      return;
+    }
 
     const isSvg = /\.svg(?:$|[?#])/i.test(item.path || item.url || "");
     lbImg.classList.toggle("is-svg", isSvg);
@@ -17999,6 +19841,7 @@
     const blobUrl = URL.createObjectURL(new Blob([f.blob], { type: imgMime(item.path) }));
     // If a `.thumb` in the DOM is waiting on this exact path, share it into `thumbs`.
     if (document.querySelector(`.thumb[data-img="${CSS.escape(item.path)}"]`)) {
+      thumbs.delete(item.path);
       thumbs.set(item.path, blobUrl);
       thumbMeta.set(item.path, { size: f.size, machine: f.machine, path: f.path });
       for (const el of document.querySelectorAll(".thumb[data-img] img")) {
@@ -18007,6 +19850,7 @@
           el.parentElement.classList.remove("broken");
         }
       }
+      evictThumbsLRU();
     } else {
       lbTempUrl = blobUrl;
     }
@@ -18065,6 +19909,7 @@
       lightbox.returnValue = "";
       lightbox.removeAttribute("data-closing");
       lightbox.classList.remove("is-zoomed", "is-dragging", "no-anim");
+      if (lbSvg) { lbSvg.hidden = true; lbSvg.classList.remove("is-light-canvas"); lbSvg.innerHTML = ""; lbSvg.style.transform = ""; }
       lbSeq++;
       releaseLbTempUrl();
       lbImg.onload = lbImg.onerror = null;
@@ -18093,12 +19938,12 @@
       if (!lightbox.open || lightbox.hasAttribute("data-closing") || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "ArrowLeft" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx - 1); }
       else if (ev.key === "ArrowRight" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx + 1); }
-      else if (ev.key === "+" || ev.key === "=") { ev.preventDefault(); if (!lbImg.hidden) zoomLbTo(lbScale * 1.35); }
-      else if (ev.key === "-") { ev.preventDefault(); if (!lbImg.hidden) zoomLbTo(lbScale / 1.35); }
+      else if (ev.key === "+" || ev.key === "=") { ev.preventDefault(); if (lbHasMedia()) zoomLbTo(lbScale * 1.35); }
+      else if (ev.key === "-") { ev.preventDefault(); if (lbHasMedia()) zoomLbTo(lbScale / 1.35); }
       else if (ev.key === "0") { ev.preventDefault(); zoomLbTo(1); }
     });
     lightbox.addEventListener("wheel", (ev) => {
-      if (lbImg.hidden || lbZoomBtn?.disabled) return;
+      if (!lbHasMedia() || lbZoomBtn?.disabled) return;
       ev.preventDefault();
       const factor = Math.exp(-ev.deltaY * 0.0022);
       zoomLbTo(lbScale * factor, ev.clientX, ev.clientY, true);
@@ -18107,6 +19952,7 @@
     // Pointer gestures on stage: backdrop light-dismiss, click-to-zoom, 1-finger pan, 2-finger pinch & 1x swipe.
     const ptrs = new Map();
     let gesture = null;
+    const hitLbMedia = (target) => !!(target && (target === lbImg || (lbSvg && !lbSvg.hidden && (target === lbSvg || lbSvg.contains(target)))));
     lbStage.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0 && ev.pointerType === "mouse") return;
       ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
@@ -18126,14 +19972,14 @@
         panX0: lbX, panY0: lbY,
         target: ev.target, moved: false,
       };
-      if (lbScale > 1.005 && ev.target === lbImg) {
+      if (lbScale > 1.005 && hitLbMedia(ev.target)) {
         try { lbStage.setPointerCapture(ev.pointerId); } catch {}
       }
     });
     lbStage.addEventListener("pointermove", (ev) => {
       if (!ptrs.has(ev.pointerId)) return;
       ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-      if (ptrs.size === 2 && gesture?.kind === "pinch" && !lbImg.hidden) {
+      if (ptrs.size === 2 && gesture?.kind === "pinch" && lbHasMedia()) {
         const [a, b] = [...ptrs.values()];
         const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
         const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
@@ -18161,7 +20007,7 @@
         gesture = null;
         const dx = ev.clientX - g.startX, dy = ev.clientY - g.startY;
         if (!g.moved) {
-          if (g.target === lbImg && !lbImg.hidden) {
+          if (hitLbMedia(g.target) && lbHasMedia()) {
             toggleLbZoom(ev.clientX, ev.clientY);
           } else if (g.target === lbStage && ev.target === lbStage) {
             closeLightbox();
@@ -18964,7 +20810,7 @@
     grip.addEventListener("pointercancel", up, { once: true });
   });
 
-  // Shared mobile bottom-sheet drag-to-dismiss helper for all three unified right drawers.
+  // Shared mobile bottom-sheet drag-to-dismiss helper for the unified right drawers and mobile notebook sheet.
   function bindDrawerSheetDrag(drawerEl, scrimEl, zones, isOpenFn, closeFn) {
     if (!drawerEl) return;
     let skipClickUntil = 0;
@@ -18986,7 +20832,7 @@
       zone.addEventListener("pointerdown", (e) => {
         if (innerWidth > 760 || !isOpenFn()) return;
         if (e.pointerType === "mouse" && e.button !== 0) return;
-        if (e.target.closest("button:not(.sd-handle), a")) return;
+        if (e.target.closest("button:not(.sd-handle):not(.np-handle), a")) return;
         pid = e.pointerId;
         startY = lastY = e.clientY;
         startX = e.clientX;
@@ -19654,6 +21500,10 @@
     }
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
     notesPane.setAttribute("aria-label", isThreads ? "小本本 · 话题" : "小本本");
+    if (!wantOpen) {
+      const ae = document.activeElement;
+      if (ae && notesPane.contains?.(ae) && typeof ae.blur === "function") ae.blur();
+    }
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
     if ("inert" in notesPane) notesPane.inert = !wantOpen;
     npSecTasksEl?.setAttribute("aria-labelledby", isThreads ? "np-tab-threads" : "np-tab-notes");
@@ -19793,9 +21643,14 @@
     syncNotebookVisibility();
   };
   $("#np-close")?.addEventListener("click", hideNotebookFromCard);
-  $("#np-back")?.addEventListener("click", hideNotebookFromCard);
-  $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
+  bindDrawerSheetDrag(
+    notesPane,
+    notesScrim,
+    [$("#np-handle"), npHeadEl],
+    () => notesOpen && !isWideNotesViewport(),
+    () => hideNotebookFromCard(),
+  );
   npTabNotesBtn?.addEventListener("click", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -19816,7 +21671,7 @@
     (nextTab === "threads" ? npTabThreadsBtn : npTabNotesBtn)?.focus?.();
   });
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("#np-close, #np-back, #np-handle")) return;
+    if (ev.target.closest("#np-close, #np-handle")) return;
     const tabBtn = ev.target.closest("[data-np-tab]");
     if (tabBtn) {
       ev.preventDefault();
@@ -19886,10 +21741,14 @@
       syncCollieTopHeight(bs);
     }).observe(collieTopEl);
   }
+  let lastLayoutResizeW = innerWidth;
   window.addEventListener("resize", () => {
+    const wChanged = innerWidth !== lastLayoutResizeW;
+    lastLayoutResizeW = innerWidth;
+    if (!wChanged && !activeWorkerKey && (!pane || pane.hidden)) return;
     finishDrawerGlide(true);
     finishSideGlide(true);
-    if (view === "collie") {
+    if (view === "collie" && wChanged) {
       clearCollieShiftInline();
       syncCollieTopHeight();
       syncNotebookVisibility({ immediate: true });
@@ -19907,10 +21766,10 @@
       syncFileWidenUI();
     }
     if (activeWorkerKey) {
-      applyWorkerWidth();
+      if (wChanged) applyWorkerWidth();
       fitWdTerm();
     }
-  });
+  }, { passive: true });
 
   // ───────────────────────────── natural reply-chain thread drawer
   let thPopSig = "";
@@ -20545,7 +22404,14 @@
   }
   function growThreadInput() {
     if (!tdInput) return;
-    if (window.CSS?.supports?.("field-sizing", "content")) return;
+    if (window.CSS?.supports?.("field-sizing", "content")) {
+      if (tdInput.style.height) tdInput.style.height = "";
+      return;
+    }
+    if (!tdInput.value) {
+      if (tdInput.style.height) tdInput.style.height = "";
+      return;
+    }
     tdInput.style.height = "auto";
     tdInput.style.height = Math.min(tdInput.scrollHeight, 160) + "px";
   }
@@ -20777,6 +22643,7 @@
             fresh._tdKey = it.key;
             fresh._tdSig = it.sig;
             if (it.msgSig !== undefined) fresh._tdMsgSig = it.msgSig;
+            carryRichVisualState(el, fresh);
             const wasCursor = el === cursor;
             if (el.parentNode === box) box.replaceChild(fresh, el);
             el = fresh;
@@ -20957,7 +22824,7 @@
             const artifactsHtml = renderEntryArtifacts(m);
             const bodyHtml = m.role === "user"
               ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
-              : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}${artifactsHtml}${optsHtml}</div>`;
+              : `<div class="td-text msg assistant">${rootQuoteHtml}${renderCollieBody(m.text)}${artifactsHtml}${optsHtml}</div>`;
             return `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
           <div class="td-rail">${avHtml}</div>
           <div class="td-content">
@@ -20989,13 +22856,16 @@
           }
         }
         patchThreadDrawerList(tdListEl, th.rootId, items);
+        observeRichVisuals(tdListEl);
         if (prepAnchor && prepAnchor.isConnected && typeof prepAnchor.getBoundingClientRect === "function") {
           const delta = prepAnchor.getBoundingClientRect().top - prepTop;
           if (Math.abs(delta) > 0.5) tdBodyEl.scrollTop += delta;
         }
       } else {
         tdListEl.innerHTML = items.map((it) => it.render()).join("");
+        observeRichVisuals(tdListEl);
       }
+      hydrateRichContent(tdListEl);
     }
     updateThreadTargetBanner(th, info.byId);
     syncThreadComposerHint();
@@ -21171,11 +23041,15 @@
       if (e.target.closest?.("a, button, input, textarea, select, label, .composer, .d-head, .crew, .super-search, .pending-wrap, .msg, .event, .ask, .thumb")) return;
       setThreadWide(false);
     });
+    let lastThreadResizeW = innerWidth;
     addEventListener("resize", () => {
+      const wChanged = innerWidth !== lastThreadResizeW;
+      lastThreadResizeW = innerWidth;
+      if (!wChanged) return;
       finishDrawerGlide(true);
       if (activeThreadRoot) applyThreadWidth();
       else syncThreadWideUI();
-    });
+    }, { passive: true });
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
     tdScrim?.addEventListener("click", () => closeThreadDrawer());
     bindDrawerSheetDrag(tdDrawer, tdScrim, [tdHandleBtn, tdHeadEl], () => !!activeThreadRoot, () => closeThreadDrawer());
@@ -21557,6 +23431,7 @@
     wdScreenSeq++;
     wdScreenWriting = false;
     wdScreenQueuedFrame = null;
+    preXtermWdFrame = null;
     if (wdScreenScrollRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(wdScreenScrollRAF);
       wdScreenScrollRAF = 0;
@@ -21643,7 +23518,22 @@
     }
   }
   function drawWdScreen(f) {
-    if (!wdTerm) return;
+    if (!wdTerm) {
+      if (typeof window !== "undefined" && !window.Terminal) {
+        preXtermWdFrame = f;
+        ensureXterm().then(() => {
+          if (activeWorkerKey && curWdMode() === "screen") {
+            ensureWdTerm();
+            if (wdTerm && preXtermWdFrame) {
+              const pf = preXtermWdFrame;
+              preXtermWdFrame = null;
+              drawWdScreen(pf);
+            }
+          }
+        }).catch(() => {});
+      }
+      return;
+    }
     if (!wdScreenFresh && wdTerm.hasSelection?.()) { wdPendingScreen = f; return; }
     if (wdScreenWriting) { wdScreenQueuedFrame = f; return; }
     const stick = wdScreenFresh || wdScreenNearBottom();
@@ -21871,6 +23761,7 @@
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
         : `<div class="thread-empty">该任务已结束，暂无可读取的历史会话记录。</div>`;
+      if (rep) hydrateRichContent(wdThreadEl);
       return;
     }
     const cacheKey = "h:" + past.id;
@@ -21909,6 +23800,7 @@
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
         : `<div class="thread-empty">${esc(err.message || "暂时读不到历史记录")}</div>`;
+      if (rep) hydrateRichContent(wdThreadEl);
     }
   }
   function openWorkerDrawerStream(opts = {}) {
@@ -21983,6 +23875,18 @@
     if (m === "screen") {
       ensureWdTerm();
       resetWdScreen();
+      if (!wdTerm && !window.Terminal) {
+        ensureXterm().then(() => {
+          if (activeWorkerKey && wdPaneId === id && curWdMode() === "screen") {
+            ensureWdTerm();
+            if (wdTerm && preXtermWdFrame) {
+              const pf = preXtermWdFrame;
+              preXtermWdFrame = null;
+              drawWdScreen(pf);
+            }
+          }
+        }).catch(() => {});
+      }
     } else if (wdLogEl && !preserve) {
       wdLogEl.textContent = "";
     }
@@ -22414,20 +24318,83 @@
   // Minimal, safe Markdown: escape first, then add a little structure.
   const mdCache = new Map();
   const mdCacheImgKeys = new Set();
-  let mdWorkerSig = "";
-  function currentMdWorkerSig() {
-    const names = [];
-    for (const w of sup.workers || []) if (w?.name && w.name !== ROUTER) names.push(w.name);
-    for (const a of state.agents || []) if (a?.name && a.name !== ROUTER) names.push(a.name);
-    return names.join("\0");
+  const mdCacheMathKeys = new Set();
+  const mdCacheWorkerKeys = new Map(); // cacheKey -> Set<candidateInlineCodeToken>
+  let mdWorkerState = new Map();       // workerName -> "${paneId}|${label}|${status}"
+  let _mdCurWorkerCandidates = null;
+  function workerLinkStatus(w, a) {
+    if (w) {
+      if (w.ended) return "ended";
+      const st = workerStatus(w) || w.status || "";
+      if (st === "blocked") return "blocked";
+      if (st === "working" || st === "starting" || st === "running") return "working";
+      if (st === "waiting") return "waiting";
+      if (st === "done") return "done";
+      return "idle";
+    }
+    if (a) {
+      const st = a.status || "";
+      if (st === "blocked") return "blocked";
+      if (st === "working" || st === "starting" || st === "running") return "working";
+      if (st === "waiting") return "waiting";
+      if (st === "done") return "done";
+      return "idle";
+    }
+    return "idle";
+  }
+  function currentMdWorkerState() {
+    const m = new Map();
+    for (const w of sup.workers || []) {
+      if (w?.name && w.name !== ROUTER) {
+        const pId = paneOf(w.name) || (!w.ended ? w.pane_id || "" : "");
+        m.set(w.name, `${pId}|${workerDisplayName(w)}|${workerLinkStatus(w, null)}`);
+      }
+    }
+    for (const a of state.agents || []) {
+      if (a?.name && a.name !== ROUTER && !m.has(a.name)) {
+        m.set(a.name, `${a.pane_id || ""}|${title(a)}|${workerLinkStatus(null, a)}`);
+      }
+    }
+    return m;
+  }
+  function syncMdWorkerCache() {
+    const next = currentMdWorkerState();
+    let changed = null;
+    for (const [k, v] of next) {
+      if (mdWorkerState.get(k) !== v) {
+        if (!changed) changed = new Set();
+        changed.add(k);
+      }
+    }
+    for (const k of mdWorkerState.keys()) {
+      if (!next.has(k)) {
+        if (!changed) changed = new Set();
+        changed.add(k);
+      }
+    }
+    if (!changed) return;
+    mdWorkerState = next;
+    if (!mdCacheWorkerKeys.size) return;
+    for (const [cacheKey, cands] of [...mdCacheWorkerKeys.entries()]) {
+      let hit = false;
+      for (const name of changed) {
+        if (cands.has(name)) { hit = true; break; }
+      }
+      if (hit) {
+        mdCache.delete(cacheKey);
+        mdCacheImgKeys.delete(cacheKey);
+        mdCacheMathKeys.delete(cacheKey);
+        mdCacheWorkerKeys.delete(cacheKey);
+      }
+    }
   }
   function resolveInlineWorker(raw) {
     if (!raw || raw === ROUTER || raw.length < 2 || raw.length > 64) return null;
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) return null;
     const w = getWorkerLookup().byName.get(raw) || null;
-    if (w) return { name: raw, label: workerDisplayName(w), paneId: paneOf(raw) || (!w.ended ? w.pane_id || "" : "") };
+    if (w) return { name: raw, label: workerDisplayName(w), paneId: paneOf(raw) || (!w.ended ? w.pane_id || "" : ""), status: workerLinkStatus(w, null) };
     const a = getAgentByName().get(raw) || null;
-    if (a && a.is_agent && a.name !== ROUTER) return { name: raw, label: title(a), paneId: a.pane_id || "" };
+    if (a && a.is_agent && a.name !== ROUTER) return { name: raw, label: title(a), paneId: a.pane_id || "", status: workerLinkStatus(null, a) };
     return null;
   }
   function invalidateMdCacheForImage(p) {
@@ -22439,29 +24406,97 @@
       if (k.includes(p) || (baseName && k.includes(baseName)) || rendered.includes(p)) {
         mdCache.delete(k);
         mdCacheImgKeys.delete(k);
+        mdCacheMathKeys.delete(k);
+        mdCacheWorkerKeys.delete(k);
       }
     }
   }
-  function md(src) {
-    const wSig = currentMdWorkerSig();
-    if (wSig !== mdWorkerSig) {
-      mdWorkerSig = wSig;
-      mdCache.clear();
-      mdCacheImgKeys.clear();
-    }
-    const key = String(src || "");
+  function md(src, opts = null) {
+    syncMdWorkerCache();
+    const includePathImages = !!(opts && opts.includePathImages);
+    const rawKey = String(src || "");
+    const key = includePathImages ? "\u0002" + rawKey : rawKey;
     let out = mdCache.get(key);
     if (out === undefined) {
-      out = mdRender(key);
+      const prevCands = _mdCurWorkerCandidates;
+      const cands = new Set();
+      _mdCurWorkerCandidates = cands;
+      try {
+        out = mdRender(rawKey, opts);
+      } finally {
+        _mdCurWorkerCandidates = prevCands;
+      }
       if (mdCache.size > 8000) {
         const oldest = mdCache.keys().next().value;
         mdCache.delete(oldest);
         mdCacheImgKeys.delete(oldest);
+        mdCacheMathKeys.delete(oldest);
+        mdCacheWorkerKeys.delete(oldest);
       }
       mdCache.set(key, out);
-      if (out.includes('class="thumb md-thumb"')) mdCacheImgKeys.add(key);
+      if (out.includes("md-thumb")) mdCacheImgKeys.add(key);
+      if (out.includes("md-math-pending")) mdCacheMathKeys.add(key);
+      if (cands.size) mdCacheWorkerKeys.set(key, cands);
     }
     return out;
+  }
+  let mathHydrating = false;
+  function hydratePendingMath(root) {
+    const scope = root || (typeof document !== "undefined" ? document : null);
+    if (!scope || typeof scope.querySelectorAll !== "function") return;
+    const pending = scope.querySelectorAll(".md-math-pending[data-tex]");
+    if (!pending || !pending.length) return;
+    const getK = () => (typeof katex !== "undefined" ? katex : (typeof globalThis !== "undefined" ? globalThis.katex : null));
+    const applyAll = () => {
+      const k = getK();
+      if (!k || typeof k.renderToString !== "function") return;
+      for (const cacheKey of [...mdCacheMathKeys]) {
+        mdCacheMathKeys.delete(cacheKey);
+        if (!mdCache.has(cacheKey)) continue;
+        const includePathImages = cacheKey.startsWith("\u0002");
+        const rawKey = includePathImages ? cacheKey.slice(1) : cacheKey;
+        const prevCands = _mdCurWorkerCandidates;
+        const cands = new Set();
+        _mdCurWorkerCandidates = cands;
+        let freshHtml = "";
+        try {
+          freshHtml = mdRender(rawKey, includePathImages ? { includePathImages: true } : null);
+        } finally {
+          _mdCurWorkerCandidates = prevCands;
+        }
+        mdCache.set(cacheKey, freshHtml);
+        if (freshHtml.includes("md-thumb")) mdCacheImgKeys.add(cacheKey);
+        if (cands.size) mdCacheWorkerKeys.set(cacheKey, cands);
+      }
+      const sc = view === "collie" ? $("#v-collie .scroller") : null;
+      const stickBottom = !!(sc && (sc.scrollHeight - sc.scrollTop - sc.clientHeight <= 40));
+      const docNodes = (typeof document !== "undefined" && typeof document.querySelectorAll === "function")
+        ? document.querySelectorAll(".md-math-pending[data-tex]")
+        : pending;
+      for (const el of [...docNodes]) {
+        if (el.isConnected === false) continue;
+        const tex = el.dataset?.tex || "";
+        if (!tex) continue;
+        const rendered = renderMath(tex, el.dataset?.display === "1", el.dataset?.inlineWrap === "1");
+        const parsed = parseSuperNode(rendered);
+        if (parsed && el.parentNode) {
+          if (typeof el.replaceWith === "function") el.replaceWith(parsed);
+          else el.parentNode.replaceChild(parsed, el);
+        }
+      }
+      if (stickBottom && sc) sc.scrollTop = sc.scrollHeight;
+    };
+    const kNow = getK();
+    if (kNow && typeof kNow.renderToString === "function") {
+      applyAll();
+      return;
+    }
+    if (mathHydrating) return;
+    mathHydrating = true;
+    ensureKaTeX().then((k) => {
+      mathHydrating = false;
+      if (k && typeof k.renderToString === "function") applyAll();
+    }).catch(() => { mathHydrating = false; });
   }
   // A bare link: ASCII URL characters up to whitespace, tags or non-ASCII text
   // and punctuation, shown as its host and path, shortened ([name](url) is
@@ -22471,6 +24506,28 @@
   const urlLabel = (u) => {
     const s = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return s.length > 42 ? s.slice(0, 40) + "…" : s;
+  };
+  const linkifyUrlMatch = (m) => {
+    const raw = unesc(m);
+    const cut = raw.search(/[<>"`]/);
+    let u = cut < 0 ? raw : raw.slice(0, cut);
+    const rest = cut < 0 ? "" : raw.slice(cut);
+    let tail = "";
+    const count = (x, ch) => x.split(ch).length - 1;
+    while (u.length) {
+      if (/[.,;:!?'*~]$/.test(u) ||
+          (u.endsWith(")") && count(u, "(") < count(u, ")")) ||
+          (u.endsWith("]") && count(u, "[") < count(u, "]"))) {
+        tail = u.slice(-1) + tail;
+        u = u.slice(0, -1);
+      } else break;
+    }
+    if (!/^https?:\/\/[^\/.\s]/.test(u)) return null;
+    const eu = esc(u);
+    return {
+      anchor: `<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`,
+      suffix: esc(tail + rest),
+    };
   };
   function parseInlineCodePath(raw) {
     if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return "";
@@ -22545,11 +24602,12 @@
         return `<span class="md-math">${html}</span>`;
       } catch {}
     }
+    const escTex = esc(src);
     return displayMode
       ? (inlineWrap
-        ? `<span class="md-math-block md-math-fallback"><code>${esc(src)}</code></span>`
-        : `<div class="md-math-block md-math-fallback"><code>${esc(src)}</code></div>`)
-      : `<span class="md-math md-math-fallback"><code>${esc(src)}</code></span>`;
+        ? `<span class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" data-inline-wrap="1" role="region" aria-label="数学公式"><code>${escTex}</code></span>`
+        : `<div class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" tabindex="0" role="region" aria-label="数学公式"><code>${escTex}</code></div>`)
+      : `<span class="md-math md-math-pending md-math-fallback" data-tex="${escTex}" data-display="0"><code>${escTex}</code></span>`;
   }
   function extractMathBlocks(text, blocks) {
     const rawLines = text.split("\n");
@@ -22665,16 +24723,1301 @@
     }
     return -1;
   };
-  function mdRender(src) {
-    const blocks = [];
-    let text = String(src || "").replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, info, code) => {
-      const raw = code.replace(/\n$/, "");
-      const lang = detectCodeLang(info, false);
-      blocks.push(`<pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${lang ? highlightCode(raw, lang.id) : esc(raw)}</code></pre>`);
-      return `\u0000${blocks.length - 1}\u0000`;
+  // ───────────────────────────── rich visuals (lazy offline Mermaid + sandboxed HTML cards)
+  const RV_MERMAID_SCRIPT = "vendor/mermaid/mermaid.min.js";
+  const ICON_RV_CODE = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+  const ICON_RV_VISUAL = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+  const ICON_RV_EXPAND = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6"/></svg>';
+  const ICON_RV_DRAWER = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>';
+  const ICON_RV_NEWWIN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M17 13v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h4"/></svg>';
+  function richVisualHash(str) {
+    const s = String(str || "");
+    let h1 = 0x811c9dc5 >>> 0;
+    let h2 = (0x9e3779b1 ^ s.length) >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+      h2 = Math.imul(h2 ^ ((c + i) & 0xffff), 2246822519) >>> 0;
+    }
+    return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
+  }
+  function stripFencedBlocks(src, replacement = " ") {
+    const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+      if (m) {
+        const fenceCh = m[2][0];
+        const fenceLen = m[2].length;
+        const info = m[3];
+        if (!(fenceCh === "`" && info.includes("`"))) {
+          const closeRe = new RegExp(`^ {0,3}${fenceCh}{${fenceLen},}[ \\t]*$`);
+          let j = i + 1;
+          while (j < lines.length && !closeRe.test(lines[j])) j++;
+          if (replacement) out.push(replacement);
+          i = j;
+          continue;
+        }
+      }
+      out.push(line);
+    }
+    return out.join("\n");
+  }
+  function parseHtmlCardInfo(info) {
+    const raw = String(info || "").trim();
+    if (!raw) return null;
+    const tokens = raw.split(/\s+/);
+    const first = tokens[0].toLowerCase().replace(/^language-/, "");
+    let rest = [];
+    if (first === "html-card") {
+      rest = tokens.slice(1);
+    } else if (first === "html" || first === "htm") {
+      let matched = false;
+      for (let i = 1; i < tokens.length; i++) {
+        const low = tokens[i].toLowerCase();
+        if (!matched && (low === "preview" || low === "card")) {
+          matched = true;
+        } else {
+          rest.push(tokens[i]);
+        }
+      }
+      if (!matched) return null;
+    } else {
+      return null;
+    }
+    let title = rest.join(" ").trim();
+    const tm = title.match(/^title=(?:"([^"]*)"|'([^']*)'|(\S+))$/i);
+    if (tm) title = (tm[1] ?? tm[2] ?? tm[3] ?? "").trim();
+    return { title };
+  }
+  function renderFencedBlock(info, code) {
+    const raw = String(code || "").replace(/\n$/, "");
+    const fenceTag = String(info || "").trim().split(/[\s{:]/)[0].toLowerCase().replace(/^language-/, "");
+    if (fenceTag === "mermaid" && raw.trim()) {
+      const hash = richVisualHash("mermaid:" + raw);
+      return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="Mermaid 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 Mermaid 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="mermaid" title="全屏放大" aria-label="全屏放大查看图表" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="Mermaid 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染图表中…</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
+    }
+    if (fenceTag === "svg" && raw.trim()) {
+      const hash = richVisualHash("svg:" + raw);
+      return `<div class="rv-card rv-svg is-pending" data-rv-kind="svg" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="SVG 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 SVG 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="svg" title="全屏放大" aria-label="全屏放大查看 SVG" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-svg-stage" role="img" aria-label="SVG 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染 SVG 中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></div>`;
+    }
+    const htmlCard = parseHtmlCardInfo(info);
+    if (htmlCard && raw.trim()) {
+      const hash = richVisualHash("html-code:" + raw);
+      const label = htmlCard.title || "HTML 卡片";
+      return `<section class="rv-card rv-html-card is-pending" data-rv-kind="html-code" data-rv-hash="${hash}" data-rv-mode="preview" data-rv-title="${esc(label)}" aria-label="${esc(label)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(label)} 操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 HTML 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-open-code-win="1" title="在新窗口打开" aria-label="在新窗口打开 ${esc(label)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>渲染卡片中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></section>`;
+    }
+    return renderCodeBlock(info, raw);
+  }
+  function extractFencedBlocks(text, blocks) {
+    const lines = String(text || "").split("\n");
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // CommonMark §4.5: fenced code block opens only at line start (0-3 spaces) with 3+ ` or ~.
+      const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+      if (m) {
+        const indent = m[1].length;
+        const fenceCh = m[2][0];
+        const fenceLen = m[2].length;
+        const info = m[3];
+        // Backtick code fence info strings cannot contain backticks (preserves 4-backtick inline code spans like ```` ```mermaid ````).
+        if (!(fenceCh === "`" && info.includes("`"))) {
+          const closeRe = new RegExp(`^ {0,3}${fenceCh}{${fenceLen},}[ \\t]*$`);
+          const bodyLines = [];
+          let j = i + 1;
+          for (; j < lines.length; j++) {
+            if (closeRe.test(lines[j])) break;
+            let cl = lines[j];
+            if (indent > 0) {
+              let strip = 0;
+              while (strip < indent && strip < cl.length && cl[strip] === " ") strip++;
+              cl = cl.slice(strip);
+            }
+            bodyLines.push(cl);
+          }
+          blocks.push(renderFencedBlock(info, bodyLines.join("\n")));
+          out.push(`\u0000${blocks.length - 1}\u0000`);
+          i = j;
+          continue;
+        }
+      }
+      out.push(line);
+    }
+    return out.join("\n");
+  }
+
+  let _lastFileMarkGen = -1, _lastFileMarkPath = null;
+  function syncActiveFileMarks(box, openFilePath) {
+    if (!box) return;
+    const cur = openFilePath || "";
+    if (_lastFileMarkGen === superDomGen && _lastFileMarkPath === cur) return;
+    _lastFileMarkGen = superDomGen;
+    _lastFileMarkPath = cur;
+    for (const btn of box.querySelectorAll?.(".snap-head[data-open-file], .snap-chip[data-open-file]") || []) {
+      const p = btn.dataset?.openFile || "";
+      const active = !!(cur && p === cur);
+      const wasActive = !!btn.classList?.contains("is-active");
+      if (active === wasActive) continue;
+      btn.classList.toggle("is-active", active);
+      const chev = btn.querySelector?.(".snap-chev, .snap-chip-chev");
+      if (chev) {
+        const dot = chev.querySelector?.(".snap-act-dot");
+        if (active && !dot && typeof document?.createElement === "function") {
+          const d = document.createElement("span");
+          d.className = "snap-act-dot";
+          chev.insertBefore(d, chev.firstChild);
+        } else if (!active && dot) {
+          dot.remove();
+        }
+      }
+    }
+  }
+
+  const mermaidSvgCache = new Map();
+  const MERMAID_CACHE_MAX = 200;
+  const svgSanitizedCache = new Map();
+  const SVG_CACHE_MAX = 200;
+  const SVG_BLOCKED_TAGS = new Set([
+    "script", "foreignobject", "iframe", "object", "embed", "applet",
+    "base", "meta", "link", "frame", "frameset", "handler", "listener",
+    "form", "input", "button", "textarea", "select", "audio", "video", "canvas",
+  ]);
+  const SVG_SMIL_TAGS = new Set(["animate", "set", "animatemotion", "animatetransform", "animatecolor"]);
+  const SVG_URL_ATTRS = new Set(["href", "xlink:href", "src", "action", "formaction", "poster"]);
+  const SVG_PAINT_URL_ATTRS = new Set(["fill", "stroke", "filter", "clip-path", "mask", "marker-start", "marker-mid", "marker-end", "cursor"]);
+  function isUnsafeProtocol(raw) {
+    const norm = String(raw || "").replace(/[\u0000-\u0020]+/g, "").toLowerCase();
+    return /^(?:javascript|vbscript|data|file):/i.test(norm);
+  }
+  function sanitizeSvgCssText(css) {
+    return String(css || "")
+      .replace(/@import\b[^;]*;?/gi, "")
+      .replace(/expression\s*\([^)]*\)/gi, "")
+      .replace(/(?:javascript|vbscript)\s*:/gi, "")
+      .replace(/(?:behavior|-moz-binding)\s*:[^;"]*;?/gi, "")
+      .replace(/url\s*\(\s*(['"]?)(?!#)[^)]*\1\s*\)/gi, "none");
+  }
+  function svgNeedsLightCanvas(svgEl) {
+    const raw = svgEl?.outerHTML || "";
+    if (!raw) return false;
+    if (/currentColor|prefers-color-scheme|--collie-/i.test(raw)) return false;
+    // Detect explicit dark background rect covering the canvas
+    if (/<rect\b[^>]*fill\s*=\s*["']\s*(?:#(?:0[0-9a-f]|1[0-9a-f]|2[0-9a-f])[0-9a-f]{3,5}|#(?:0|1|2)[0-9a-f]{2}|black|rgb\(\s*[0-4]\d)/i.test(raw)) {
+      return false;
+    }
+    // Detect explicit light stroke/fill meant for dark canvas
+    if (/(?:stroke|fill)\s*=\s*["']\s*(?:#(?:d|e|f)[0-9a-f]{2,5}|white)/i.test(raw) && !/(?:stroke|fill)\s*=\s*["']\s*(?:#(?:0|1|2|3)[0-9a-f]{2,5}|black)/i.test(raw)) {
+      return false;
+    }
+    return true;
+  }
+  function sanitizeSvgElement(raw) {
+    const src = String(raw || "").trim();
+    if (!src || !/<svg[\s>]/i.test(src)) return null;
+    if (typeof DOMParser !== "function") return null;
+    // Inject SVG / XLink XML namespaces BEFORE parsing so DOMParser creates true SVGElement nodes (not null-namespace XML elements).
+    let xmlSrc = src;
+    if (!/<svg\b[^>]*\bxmlns\s*=/i.test(xmlSrc)) {
+      xmlSrc = xmlSrc.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    if (/\bxlink:/i.test(xmlSrc) && !/<svg\b[^>]*\bxmlns:xlink\s*=/i.test(xmlSrc)) {
+      xmlSrc = xmlSrc.replace(/<svg\b/i, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+    }
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(xmlSrc, "image/svg+xml");
+    } catch {
+      return null;
+    }
+    if (!doc || !doc.documentElement) return null;
+    if (doc.getElementsByTagName?.("parsererror")?.length) return null;
+    if (doc.getElementsByTagNameNS?.("*", "parsererror")?.length) return null;
+    const root = doc.documentElement;
+    if ((root.localName || root.tagName || "").toLowerCase() !== "svg") return null;
+
+    const cleanNode = (node) => {
+      const children = [...(node.childNodes || [])];
+      for (const ch of children) {
+        if (ch.nodeType === 8) { ch.remove?.(); continue; } // drop comments
+        if (ch.nodeType !== 1) continue;
+        const tag = (ch.localName || ch.tagName || "").toLowerCase();
+        if (SVG_BLOCKED_TAGS.has(tag)) {
+          ch.remove?.();
+          continue;
+        }
+        if (SVG_SMIL_TAGS.has(tag)) {
+          const targetAttr = (ch.getAttribute?.("attributeName") || "").trim();
+          const vals = [ch.getAttribute?.("to"), ch.getAttribute?.("from"), ch.getAttribute?.("values"), ch.getAttribute?.("by")].join(" ");
+          if (/^(?:on|href$|xlink:href$|src$|action$|formaction$|style$)/i.test(targetAttr) || /(?:javascript|vbscript|data)\s*:/i.test(vals.replace(/[\u0000-\u0020]+/g, ""))) {
+            ch.remove?.();
+            continue;
+          }
+        }
+        for (const attr of [...(ch.attributes || [])]) {
+          const name = String(attr.name || "");
+          const low = name.toLowerCase();
+          const val = String(attr.value || "");
+          if (/^on/i.test(low) || low === "srcdoc" || low === "formaction" || low === "action") {
+            ch.removeAttribute(name);
+            continue;
+          }
+          if (SVG_URL_ATTRS.has(low) || low.endsWith(":href")) {
+            const trimmed = val.trim();
+            const safeFrag = trimmed.startsWith("#");
+            const safeHttp = tag === "a" && /^https?:\/\//i.test(trimmed);
+            if (isUnsafeProtocol(trimmed) || (!safeFrag && !safeHttp)) {
+              ch.removeAttribute(name);
+              continue;
+            }
+            if (tag === "a" && safeHttp) {
+              ch.setAttribute("target", "_blank");
+              ch.setAttribute("rel", "noopener noreferrer");
+            }
+          } else if (low === "style") {
+            const cleanedStyle = sanitizeSvgCssText(val).trim();
+            if (cleanedStyle) ch.setAttribute(name, cleanedStyle);
+            else ch.removeAttribute(name);
+          } else if (SVG_PAINT_URL_ATTRS.has(low)) {
+            if (/url\s*\(/i.test(val) && !/^\s*url\s*\(\s*['"]?#[A-Za-z0-9_.:-]+\s*['"]?\s*\)\s*$/i.test(val)) {
+              ch.removeAttribute(name);
+            }
+          }
+        }
+        if (tag === "style") {
+          ch.textContent = sanitizeSvgCssText(ch.textContent || "");
+        } else {
+          cleanNode(ch);
+        }
+      }
+    };
+    // Sanitize root <svg> attributes first
+    for (const attr of [...(root.attributes || [])]) {
+      const name = String(attr.name || "");
+      const low = name.toLowerCase();
+      const val = String(attr.value || "");
+      if (/^on/i.test(low) || low === "srcdoc" || low === "formaction" || low === "action" || SVG_URL_ATTRS.has(low) || low.endsWith(":href")) {
+        root.removeAttribute(name);
+      } else if (low === "style") {
+        const cleanedStyle = sanitizeSvgCssText(val).trim();
+        if (cleanedStyle) root.setAttribute(name, cleanedStyle);
+        else root.removeAttribute(name);
+      }
+    }
+    cleanNode(root);
+    if (!root.getAttribute("xmlns")) root.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    if (!root.getAttribute("viewBox")) {
+      const rw = parseFloat(root.getAttribute("width") || "");
+      const rh = parseFloat(root.getAttribute("height") || "");
+      if (Number.isFinite(rw) && rw > 0 && Number.isFinite(rh) && rh > 0) {
+        root.setAttribute("viewBox", `0 0 ${rw} ${rh}`);
+      }
+    }
+    root.removeAttribute("height");
+    return { node: root, lightCanvas: svgNeedsLightCanvas(root) };
+  }
+  function applyResponsiveSvgSizing(svgEl) {
+    if (!svgEl) return;
+    let vbW = 0;
+    const vb = (svgEl.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) vbW = vb[2];
+    if (!vbW) {
+      const aw = parseFloat(svgEl.getAttribute?.("width") || "");
+      if (Number.isFinite(aw) && aw > 0) vbW = aw;
+    }
+    svgEl.removeAttribute?.("height");
+    svgEl.setAttribute?.("width", "100%");
+    if (svgEl.style) {
+      svgEl.style.width = "100%";
+      svgEl.style.maxWidth = vbW > 0 ? `min(100%, ${Math.ceil(vbW)}px)` : "100%";
+      svgEl.style.height = "auto";
+    }
+  }
+  function applySanitizedSvg(card, entry, hash) {
+    const stage = card.querySelector?.(".rv-svg-stage");
+    if (!stage || !entry?.node) return;
+    const imported = typeof document?.importNode === "function"
+      ? document.importNode(entry.node, true)
+      : entry.node.cloneNode(true);
+    applyResponsiveSvgSizing(imported);
+    if (typeof stage.replaceChildren === "function") stage.replaceChildren(imported);
+    else { stage.innerHTML = ""; stage.appendChild(imported); }
+    stage.classList.toggle("is-light-canvas", !!entry.lightCanvas);
+    card.dataset.rvRendered = `svg:${hash}`;
+    card.dataset.rvLightCanvas = entry.lightCanvas ? "1" : "0";
+    card.classList.remove("is-pending", "is-fallback");
+    card.classList.add("is-ready");
+    const expandBtn = card.querySelector?.('[data-rv-expand="svg"]');
+    if (expandBtn) expandBtn.hidden = false;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = false;
+    const showSource = card.dataset.rvMode === "source";
+    stage.hidden = showSource;
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = !showSource;
+  }
+  function fallbackSvgCard(card) {
+    card.classList.remove("is-pending", "is-ready", "is-acts-open");
+    card.classList.add("is-fallback");
+    card.dataset.rvRendered = "fallback";
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = true;
+    const stage = card.querySelector?.(".rv-svg-stage");
+    if (stage) stage.hidden = true;
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = false;
+  }
+  function renderSvgCard(card) {
+    if (!card || card.dataset?.rvKind !== "svg") return;
+    const hash = card.dataset.rvHash || "";
+    const sig = `svg:${hash}`;
+    if (card.dataset.rvRendered === sig || card.dataset.rvRendered === "fallback") return;
+    let entry = svgSanitizedCache.get(hash);
+    if (entry === undefined) {
+      const code = (card.querySelector?.(".rv-source code")?.textContent || "").trim();
+      entry = sanitizeSvgElement(code) || null;
+      if (svgSanitizedCache.size >= SVG_CACHE_MAX) {
+        const oldest = svgSanitizedCache.keys().next().value;
+        if (oldest !== undefined) svgSanitizedCache.delete(oldest);
+      }
+      svgSanitizedCache.set(hash, entry);
+    }
+    if (!entry) { fallbackSvgCard(card); return; }
+    applySanitizedSvg(card, entry, hash);
+  }
+  const htmlFileCache = new Map();
+  const htmlFileInflight = new Map();
+  const HTML_FILE_CACHE_MAX = 40;
+  const HTML_FILE_CACHE_TTL_MS = 60000;
+  const rvHeightCache = new Map();
+  const RV_HEIGHT_CACHE_MAX = 200;
+  const htmlCardFrames = new Map();
+  let mermaidLoadPromise = null;
+  let mermaidQueue = Promise.resolve();
+  let mermaidRenderSeq = 0;
+  let mermaidInitTheme = "";
+  let rvFrameSeq = 0;
+  let rvLastTheme = "";
+
+  function currentVisualTheme() {
+    const t = document?.documentElement?.dataset?.theme;
+    if (t === "dark") return "dark";
+    if (t === "light") return "light";
+    return darkMQ?.matches ? "dark" : "light";
+  }
+  function isCompactHtmlCard(card) {
+    if (typeof innerWidth === "number" && innerWidth <= 760) return true;
+    return !!card?.closest?.("#thread-drawer, .td-text, #file-view");
+  }
+  function rvHeightMax(card) {
+    return isCompactHtmlCard(card) ? 380 : 460;
+  }
+  function rvHeightKey(card) {
+    const h = card?.dataset?.rvHash || "";
+    if (!h) return "";
+    return `${isCompactHtmlCard(card) ? "c" : "w"}:${h}`;
+  }
+  function rvRandToken() {
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+      const a = new Uint32Array(2);
+      crypto.getRandomValues(a);
+      return a[0].toString(36) + a[1].toString(36);
+    }
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+  function mermaidConfig(isDark) {
+    const sans = '-apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif';
+    const edgeInk = isDark ? "#a1a1aa" : "#64645e";
+    const strokeCol = isDark ? "#2d2d34" : "#d8d8d3";
+    const linkCol = isDark ? "#71717a" : "#787872";
+    return {
+      startOnLoad: false,
+      securityLevel: "strict",
+      suppressErrorRendering: true,
+      logLevel: 5,
+      fontFamily: sans,
+      theme: "base",
+      themeVariables: isDark ? {
+        darkMode: true,
+        background: "#111113",
+        fontFamily: sans,
+        fontSize: "13px",
+        primaryColor: "#17171a",
+        primaryTextColor: "#ececea",
+        primaryBorderColor: "#2d2d34",
+        secondaryColor: "#1d1d22",
+        secondaryTextColor: "#ececea",
+        secondaryBorderColor: "#34343c",
+        tertiaryColor: "#141417",
+        tertiaryTextColor: "#ececea",
+        tertiaryBorderColor: "#26262c",
+        lineColor: "#71717a",
+        textColor: "#ececea",
+        mainBkg: "#17171a",
+        nodeBorder: "#2d2d34",
+        clusterBkg: "#141417",
+        clusterBorder: "#26262c",
+        defaultLinkColor: "#71717a",
+        titleColor: "#ececea",
+        edgeLabelBackground: "#111113",
+        actorBkg: "#17171a",
+        actorBorder: "#2d2d34",
+        actorTextColor: "#ececea",
+        actorLineColor: "#27272e",
+        signalColor: "#a1a1aa",
+        signalTextColor: "#ececea",
+        labelBoxBkgColor: "#141417",
+        labelBoxBorderColor: "#2d2d34",
+        labelTextColor: "#ececea",
+        loopTextColor: "#a1a1aa",
+        noteBkgColor: "#1c1c21",
+        noteBorderColor: "#2d2d34",
+        noteTextColor: "#ececea",
+        activationBkgColor: "#232329",
+        activationBorderColor: "#52525b",
+        sequenceNumberColor: "#111113",
+        pie1: "#dcdcd9", pie2: "#a8a8a3", pie3: "#76767a", pie4: "#4d4d55", pie5: "#34343b", pie6: "#232329",
+        pieStrokeColor: "#111113", pieStrokeWidth: "1px", pieOpacity: "0.95",
+        pieSectionTextColor: "#111113", pieTitleTextColor: "#ececea", pieLegendTextColor: "#c8c8c3",
+        cScale0: "#17171a", cScale1: "#1d1d22", cScale2: "#24242b", cScale3: "#2d2d34",
+        cScaleLabel0: "#ececea", cScaleLabel1: "#ececea", cScaleLabel2: "#ececea", cScaleLabel3: "#ececea",
+      } : {
+        darkMode: false,
+        background: "#ffffff",
+        fontFamily: sans,
+        fontSize: "13px",
+        primaryColor: "#fafaf9",
+        primaryTextColor: "#18181b",
+        primaryBorderColor: "#d8d8d3",
+        secondaryColor: "#f4f4f2",
+        secondaryTextColor: "#18181b",
+        secondaryBorderColor: "#d8d8d3",
+        tertiaryColor: "#ffffff",
+        tertiaryTextColor: "#18181b",
+        tertiaryBorderColor: "#e6e6e2",
+        lineColor: "#787872",
+        textColor: "#18181b",
+        mainBkg: "#fafaf9",
+        nodeBorder: "#d8d8d3",
+        clusterBkg: "#fafaf9",
+        clusterBorder: "#e4e4e0",
+        defaultLinkColor: "#787872",
+        titleColor: "#18181b",
+        edgeLabelBackground: "#ffffff",
+        actorBkg: "#fafaf9",
+        actorBorder: "#d8d8d3",
+        actorTextColor: "#18181b",
+        actorLineColor: "#e2e2dd",
+        signalColor: "#52524c",
+        signalTextColor: "#18181b",
+        labelBoxBkgColor: "#ffffff",
+        labelBoxBorderColor: "#e4e4e0",
+        labelTextColor: "#18181b",
+        loopTextColor: "#64645e",
+        noteBkgColor: "#f7f7f5",
+        noteBorderColor: "#e2e2dd",
+        noteTextColor: "#18181b",
+        activationBkgColor: "#f2f2ef",
+        activationBorderColor: "#a8a8a1",
+        sequenceNumberColor: "#ffffff",
+        pie1: "#27272a", pie2: "#52525b", pie3: "#8e8e88", pie4: "#bdbdb7", pie5: "#dcdcd8", pie6: "#efefed",
+        pieStrokeColor: "#ffffff", pieStrokeWidth: "1px", pieOpacity: "0.95",
+        pieSectionTextColor: "#ffffff", pieTitleTextColor: "#18181b", pieLegendTextColor: "#3f3f46",
+        cScale0: "#fafaf9", cScale1: "#f4f4f2", cScale2: "#eaeae6", cScale3: "#dcdcd7",
+        cScaleLabel0: "#18181b", cScaleLabel1: "#18181b", cScaleLabel2: "#18181b", cScaleLabel3: "#18181b",
+      },
+      themeCSS: [
+        `svg { background: transparent !important; }`,
+        `.node rect, .node circle, .node ellipse, .node polygon, .node path, rect.actor, .cluster rect, .note { stroke: ${strokeCol} !important; stroke-width: 1px !important; }`,
+        `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
+        `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
+        `.actor-line { stroke-width: 1px !important; }`,
+        `.nodeLabel, .label, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; letter-spacing: -0.005em; }`,
+        `.edgeLabel, .edgeLabel p, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.cluster-label .nodeLabel { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; }`,
+      ].join("\n"),
+      flowchart: { htmlLabels: true, curve: "basis", padding: 12, nodeSpacing: 36, rankSpacing: 44, useMaxWidth: true },
+      sequence: { useMaxWidth: true, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 44, messageMargin: 34, mirrorActors: false },
+      gantt: { useMaxWidth: true },
+      er: { useMaxWidth: true },
+      state: { useMaxWidth: true },
+      class: { useMaxWidth: true },
+    };
+  }
+  function loadMermaid() {
+    const existing = typeof mermaid !== "undefined" ? mermaid : globalThis.mermaid;
+    if (existing && typeof existing.render === "function") return Promise.resolve(existing);
+    if (mermaidLoadPromise) return mermaidLoadPromise;
+    if (typeof document === "undefined" || !document.head) return Promise.reject(new Error("mermaid DOM unavailable"));
+    mermaidLoadPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = RV_MERMAID_SCRIPT;
+      s.async = true;
+      s.onload = () => {
+        const m = typeof mermaid !== "undefined" ? mermaid : globalThis.mermaid;
+        if (m && typeof m.render === "function") resolve(m);
+        else { mermaidLoadPromise = null; reject(new Error("mermaid unavailable")); }
+      };
+      s.onerror = () => {
+        mermaidLoadPromise = null;
+        reject(new Error("mermaid script load failed"));
+      };
+      document.head.appendChild(s);
     });
+    return mermaidLoadPromise;
+  }
+  function applyMermaidSvg(card, svg, themeKey, hash) {
+    const stage = card.querySelector?.(".rv-mermaid-stage");
+    if (!stage) return;
+    stage.innerHTML = svg;
+    const svgEl = stage.querySelector?.("svg");
+    if (svgEl) {
+      applyResponsiveSvgSizing(svgEl);
+      for (const rect of svgEl.querySelectorAll?.(".node rect, rect.actor, .cluster rect") || []) {
+        const w = parseFloat(rect.getAttribute?.("width") || "0");
+        const h = parseFloat(rect.getAttribute?.("height") || "0");
+        if ((!w || w >= 18) && (!h || h >= 18)) {
+          rect.setAttribute?.("rx", "8");
+          rect.setAttribute?.("ry", "8");
+        }
+      }
+    }
+    stage.style.minHeight = "";
+    card.dataset.rvRendered = `${themeKey}:${hash}`;
+    card.dataset.rvTheme = themeKey;
+    card.classList.remove("is-pending", "is-fallback");
+    card.classList.add("is-ready");
+    const expandBtn = card.querySelector?.('[data-rv-expand="mermaid"]');
+    if (expandBtn) expandBtn.hidden = false;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = false;
+    const showSource = card.dataset.rvMode === "source";
+    stage.hidden = showSource;
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = !showSource;
+  }
+  function fallbackMermaidCard(card) {
+    card.classList.remove("is-pending", "is-ready", "is-acts-open");
+    card.classList.add("is-fallback");
+    card.dataset.rvRendered = "fallback";
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = true;
+    const stage = card.querySelector?.(".rv-mermaid-stage");
+    if (stage) { stage.hidden = true; stage.style.minHeight = ""; }
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = false;
+  }
+  function renderMermaidCard(card, opts = {}) {
+    if (!card || card.dataset?.rvKind !== "mermaid") return;
+    const hash = card.dataset.rvHash || "";
+    const themeKey = currentVisualTheme();
+    const cacheKey = `${themeKey}:${hash}`;
+    if (!opts.force && card.dataset.rvRendered === cacheKey) return;
+    if (!opts.force && card.dataset.rvRendered === "fallback") return;
+    const cachedSvg = mermaidSvgCache.get(cacheKey);
+    if (cachedSvg) {
+      applyMermaidSvg(card, cachedSvg, themeKey, hash);
+      return;
+    }
+    if (card.dataset.rvRendering === cacheKey) return;
+    const code = (card.querySelector?.(".rv-source code")?.textContent || "").trim();
+    if (!code) { fallbackMermaidCard(card); return; }
+    card.dataset.rvRendering = cacheKey;
+    const stage = card.querySelector?.(".rv-mermaid-stage");
+    if (stage && card.classList.contains("is-ready")) {
+      const h = stage.offsetHeight || 0;
+      if (h > 40) stage.style.minHeight = h + "px";
+    }
+    mermaidQueue = mermaidQueue.then(async () => {
+      if (!card.isConnected) return;
+      const curTheme = currentVisualTheme();
+      const curKey = `${curTheme}:${hash}`;
+      const hitNow = mermaidSvgCache.get(curKey);
+      if (hitNow) {
+        applyMermaidSvg(card, hitNow, curTheme, hash);
+        return;
+      }
+      let m;
+      try {
+        m = await loadMermaid();
+      } catch {
+        if (card.isConnected) fallbackMermaidCard(card);
+        return;
+      }
+      if (!card.isConnected) return;
+      if (mermaidInitTheme !== curTheme) {
+        m.initialize(mermaidConfig(curTheme === "dark"));
+        mermaidInitTheme = curTheme;
+      }
+      const rid = `collie-mmd-${++mermaidRenderSeq}`;
+      let tempHost = null;
+      try {
+        if (typeof m.parse === "function") {
+          const valid = await m.parse(code, { suppressErrors: true });
+          if (valid === false) {
+            if (card.isConnected) fallbackMermaidCard(card);
+            return;
+          }
+        }
+        if (typeof document?.createElement === "function" && document.body) {
+          tempHost = document.createElement("div");
+          tempHost.style.cssText = "position:fixed;left:-99999px;top:0;width:820px;visibility:hidden;pointer-events:none;";
+          document.body.appendChild(tempHost);
+        }
+        const res = await m.render(rid, code, tempHost || undefined);
+        const svg = typeof res === "string" ? res : (res?.svg || "");
+        if (tempHost) { tempHost.remove(); tempHost = null; }
+        document.getElementById?.("d" + rid)?.remove?.();
+        const stray = document.getElementById?.(rid);
+        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        if (!svg || !svg.includes("<svg")) {
+          if (card.isConnected) fallbackMermaidCard(card);
+          return;
+        }
+        if (mermaidSvgCache.size >= MERMAID_CACHE_MAX) {
+          const oldest = mermaidSvgCache.keys().next().value;
+          if (oldest !== undefined) mermaidSvgCache.delete(oldest);
+        }
+        mermaidSvgCache.set(curKey, svg);
+        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash);
+      } catch {
+        if (card.isConnected) fallbackMermaidCard(card);
+      } finally {
+        if (card.dataset.rvRendering === cacheKey) delete card.dataset.rvRendering;
+        if (tempHost) tempHost.remove();
+        document.getElementById?.("d" + rid)?.remove?.();
+        const stray = document.getElementById?.(rid);
+        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        if (typeof requestAnimationFrame === "function") {
+          await new Promise((r) => requestAnimationFrame(r));
+        }
+      }
+    });
+  }
+  function collieThemeVarsCss() {
+    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057}:where(html,body){background-color:var(--collie-bg);color:var(--collie-fg)}</style>`;
+  }
+  function buildSandboxedCardSrcdoc(rawHtml, { frameId, token, isFragment, isDark }) {
+    const src = String(rawHtml || "");
+    const theme = isDark ? "dark" : "light";
+    const safeId = JSON.stringify(frameId);
+    const safeTok = JSON.stringify(token);
+    const safeTheme = JSON.stringify(theme);
+    const varsStyle = collieThemeVarsCss();
+    const bridge = `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});document.addEventListener("click",function(ev){try{if(ev.target&&ev.target.closest&&ev.target.closest("a,button,input,select,textarea,summary,label,[role=button]"))return;parent.postMessage({type:"collie:card-tap",id:ID,token:TOK},"*");}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`;
+    const hasDoc = /<!doctype\s+html|<html[\s>]/i.test(src);
+    if (!hasDoc && isFragment) {
+      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:var(--collie-bg);color:var(--collie-fg);font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif;overflow-x:hidden}</style></head><body>${src}${bridge}</body></html>`;
+    }
+    let out = src;
+    if (/<html\b[^>]*>/i.test(out)) {
+      out = out.replace(/<html\b([^>]*)>/i, (m, attrs) => {
+        const nextAttrs = /\bdata-theme\s*=/i.test(attrs) ? attrs : `${attrs} data-theme="${theme}"`;
+        return `<html${nextAttrs}>`;
+      });
+    }
+    const metaCS = /<meta\b[^>]*name\s*=\s*["']color-scheme["']/i.test(out) ? "" : `<meta name="color-scheme" content="${theme}">`;
+    const headInject = metaCS + varsStyle;
+    if (/<head\b[^>]*>/i.test(out)) {
+      out = out.replace(/<head\b[^>]*>/i, (m) => m + headInject);
+    } else if (/<html\b[^>]*>/i.test(out)) {
+      out = out.replace(/<html\b[^>]*>/i, (m) => m + `<head>${headInject}</head>`);
+    } else {
+      out = headInject + out;
+    }
+    if (/<\/body>/i.test(out)) return out.replace(/<\/body>/i, bridge + "</body>");
+    if (/<\/html>/i.test(out)) return out.replace(/<\/html>/i, bridge + "</html>");
+    return out + bridge;
+  }
+  async function getCachedHtmlFile(path) {
+    const now = Date.now();
+    const hit = htmlFileCache.get(path);
+    if (hit && now - hit.at < HTML_FILE_CACHE_TTL_MS) return hit.data;
+    let p = htmlFileInflight.get(path);
+    if (!p) {
+      p = fetchHtmlFile(path).then((data) => {
+        htmlFileInflight.delete(path);
+        if (data) {
+          if (htmlFileCache.size >= HTML_FILE_CACHE_MAX) {
+            const oldest = htmlFileCache.keys().next().value;
+            if (oldest !== undefined) htmlFileCache.delete(oldest);
+          }
+          htmlFileCache.set(path, { data, at: Date.now() });
+        }
+        return data;
+      }).catch((err) => {
+        htmlFileInflight.delete(path);
+        throw err;
+      });
+      htmlFileInflight.set(path, p);
+    }
+    return p;
+  }
+  function pruneDisconnectedHtmlFrames() {
+    for (const [id, rec] of htmlCardFrames) {
+      if (!rec?.iframe?.isConnected) htmlCardFrames.delete(id);
+    }
+  }
+  async function mountHtmlCard(card) {
+    if (!card) return;
+    const kind = card.dataset?.rvKind;
+    if (kind !== "html-file" && kind !== "html-code") return;
+    const hash = card.dataset.rvHash || "";
+    if (card.dataset.rvMountedHash === hash) return;
+    if (card.dataset.rvMounting === hash) return;
+    const stage = card.querySelector?.("[data-rv-stage]");
+    if (!stage) return;
+    const hKey = rvHeightKey(card);
+    const prevH = hKey ? rvHeightCache.get(hKey) : 0;
+    if (prevH && !stage.style.height) stage.style.height = prevH + "px";
+
+    card.dataset.rvMounting = hash;
+    let rawHtml = "";
+    let title = card.dataset.rvTitle || "HTML 预览";
+    if (kind === "html-file") {
+      const path = card.dataset.rvPath || "";
+      title = baseFileName(path);
+      try {
+        const hf = await getCachedHtmlFile(path);
+        if (!card.isConnected) return;
+        if (!hf || typeof hf.htmlText !== "string") {
+          card.classList.remove("is-pending");
+          card.classList.add("is-error");
+          stage.innerHTML = `<div class="rv-html-err">未找到这个 HTML 文件，可点下方「在抽屉打开」重试。</div>`;
+          stage.style.height = "auto";
+          delete card.dataset.rvMounting;
+          return;
+        }
+        rawHtml = hf.htmlText;
+      } catch (err) {
+        if (!card.isConnected) return;
+        card.classList.remove("is-pending");
+        card.classList.add("is-error");
+        stage.innerHTML = `<div class="rv-html-err">${esc(err?.message || "加载 HTML 预览失败")}</div>`;
+        stage.style.height = "auto";
+        delete card.dataset.rvMounting;
+        return;
+      }
+    } else {
+      rawHtml = card.querySelector?.(".rv-source code")?.textContent || "";
+    }
+    if (!card.isConnected) return;
+    pruneDisconnectedHtmlFrames();
+    const frameId = `rvf-${++rvFrameSeq}`;
+    const token = rvRandToken();
+    const curTheme = currentVisualTheme();
+    const iframe = document.createElement("iframe");
+    iframe.className = "rv-html-frame";
+    iframe.setAttribute("sandbox", HTML_SANDBOX_ATTR);
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    iframe.setAttribute("allow", "focus-without-user-activation 'none'");
+    iframe.setAttribute("loading", "lazy");
+    iframe.setAttribute("title", title);
+    if (iframe.style) iframe.style.colorScheme = curTheme;
+    const pinnedOrigin = typeof Origin === "function" ? new Origin() : null;
+    htmlCardFrames.set(frameId, {
+      iframe, card, stage, hash, token,
+      pinnedOrigin, originPinned: false,
+      updates: 0, lastH: prevH || 0,
+    });
+    stage.innerHTML = "";
+    stage.appendChild(iframe);
+    iframe.srcdoc = buildSandboxedCardSrcdoc(rawHtml, {
+      frameId, token,
+      isFragment: kind === "html-code",
+      isDark: curTheme === "dark",
+    });
+    card.dataset.rvMountedHash = hash;
+    delete card.dataset.rvMounting;
+    card.classList.remove("is-pending", "is-error");
+    card.classList.add("is-ready");
+  }
+  function isCoarseRvPointer() {
+    try {
+      if (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) return true;
+    } catch {}
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function closeOtherRvFloatActs(exceptCard) {
+    for (const open of document.querySelectorAll?.(".rv-card.is-acts-open") || []) {
+      if (open !== exceptCard) open.classList.remove("is-acts-open");
+    }
+  }
+  function handleRichCardMessage(ev) {
+    const data = ev?.data;
+    if (!data || typeof data !== "object") return;
+    const isBridge = data.type === "collie:card-height";
+    const isCardTap = data.type === "collie:card-tap";
+    const isUserResize = data.type === "collie:resize";
+    if (!isBridge && !isCardTap && !isUserResize) return;
+    let rec = null;
+    if ((isBridge || isCardTap) && typeof data.id === "string") {
+      rec = htmlCardFrames.get(data.id) || null;
+      if (!rec || data.token !== rec.token) return;
+    } else if (isUserResize) {
+      for (const r of htmlCardFrames.values()) {
+        if (r?.iframe?.contentWindow && ev.source === r.iframe.contentWindow) { rec = r; break; }
+      }
+    }
+    if (!rec || !rec.iframe?.isConnected || !rec.iframe.contentWindow || ev.source !== rec.iframe.contentWindow) return;
+    // Pin and verify opaque sandbox origin via Origin API when supported (prevents "null" === "null" spoofing).
+    if (typeof Origin === "function" && typeof Origin.from === "function") {
+      try {
+        const senderOrigin = Origin.from(ev);
+        if (!rec.originPinned) {
+          rec.pinnedOrigin = senderOrigin;
+          rec.originPinned = true;
+        } else if (!senderOrigin.isSameOrigin(rec.pinnedOrigin)) {
+          return;
+        }
+      } catch {
+        // Synthetic MessageEvent in tests lacks browser-internal origin; event.source already matched rec.iframe.contentWindow.
+      }
+    }
+    if (isCardTap) {
+      if (isCoarseRvPointer() && rec.card) {
+        const next = !rec.card.classList.contains("is-acts-open");
+        closeOtherRvFloatActs(next ? rec.card : null);
+        rec.card.classList.toggle("is-acts-open", next);
+      }
+      return;
+    }
+    const rawH = Number(data.height);
+    if (!Number.isFinite(rawH) || rawH <= 0) return;
+    if (rec.updates >= 24) return;
+    const maxH = rvHeightMax(rec.card);
+    const clamped = Math.round(Math.max(64, Math.min(maxH, rawH + 2)));
+    if (Math.abs(clamped - (rec.lastH || 0)) < 4) return;
+    rec.updates++;
+    rec.lastH = clamped;
+    rec.stage.style.height = clamped + "px";
+    const hk = rvHeightKey(rec.card);
+    if (hk) {
+      if (rvHeightCache.size >= RV_HEIGHT_CACHE_MAX) {
+        const oldest = rvHeightCache.keys().next().value;
+        if (oldest !== undefined) rvHeightCache.delete(oldest);
+      }
+      rvHeightCache.set(hk, clamped);
+    }
+  }
+  if (typeof addEventListener === "function") {
+    addEventListener("message", handleRichCardMessage);
+  }
+  function carryRichVisualState(oldEl, newEl) {
+    if (!oldEl || !newEl) return;
+    const oldCards = oldEl.querySelectorAll?.(".rv-card[data-rv-hash]");
+    const newCards = newEl.querySelectorAll?.(".rv-card[data-rv-hash]");
+    if (!oldCards?.length || !newCards?.length) return;
+    const buckets = new Map();
+    for (const oc of oldCards) {
+      const k = `${oc.dataset?.rvKind || ""}:${oc.dataset?.rvHash || ""}`;
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push(oc);
+    }
+    const curTheme = currentVisualTheme();
+    for (const nc of newCards) {
+      const kind = nc.dataset?.rvKind || "";
+      const hash = nc.dataset?.rvHash || "";
+      const q = buckets.get(`${kind}:${hash}`);
+      const oc = q?.shift();
+      if (!oc) continue;
+      if (oc.dataset?.rvMode === "source") {
+        setRichCardMode(nc, "source");
+      }
+      if (kind === "mermaid") {
+        const svg = mermaidSvgCache.get(`${curTheme}:${hash}`);
+        if (svg) applyMermaidSvg(nc, svg, curTheme, hash);
+      } else if (kind === "svg") {
+        const entry = svgSanitizedCache.get(hash);
+        if (entry) applySanitizedSvg(nc, entry, hash);
+      } else if (kind === "html-file" || kind === "html-code") {
+        const oh = oc.querySelector?.("[data-rv-stage]")?.style?.height;
+        const ns = nc.querySelector?.("[data-rv-stage]");
+        if (oh && ns) ns.style.height = oh;
+      }
+    }
+  }
+  function setRichCardMode(card, mode) {
+    if (!card) return;
+    const kind = card.dataset?.rvKind || "";
+    const isDiagram = kind === "mermaid" || kind === "svg";
+    const showSource = mode === "source";
+    card.dataset.rvMode = showSource ? "source" : (isDiagram ? "diagram" : "preview");
+    const stage = card.querySelector?.(".rv-mermaid-stage, .rv-svg-stage, .rv-html-stage");
+    const srcEl = card.querySelector?.(".rv-source");
+    if (stage) stage.hidden = showSource;
+    if (srcEl) srcEl.hidden = !showSource;
+    const btn = card.querySelector?.('[data-rv-toggle="source"]');
+    if (btn) {
+      btn.setAttribute("aria-pressed", showSource ? "true" : "false");
+      btn.classList.toggle("on", showSource);
+      if (btn.classList?.contains("rv-ico")) {
+        btn.innerHTML = showSource ? ICON_RV_VISUAL : ICON_RV_CODE;
+      } else {
+        btn.textContent = showSource ? (isDiagram ? "图表" : "预览") : "源码";
+      }
+      const lbl = showSource ? (isDiagram ? "切回图表" : "切回预览") : "查看源码";
+      btn.title = lbl;
+      btn.setAttribute("aria-label", lbl);
+    }
+  }
+  function activateRichCard(card) {
+    if (!card || !card.isConnected) return;
+    const kind = card.dataset?.rvKind;
+    if (kind === "mermaid") renderMermaidCard(card);
+    else if (kind === "svg") renderSvgCard(card);
+    else if (kind === "html-file" || kind === "html-code") mountHtmlCard(card);
+  }
+  const rvRootObservers = typeof WeakMap === "function" ? new WeakMap() : null;
+  let rvDefaultObserver = null;
+  function getRichVisualObserver(card) {
+    if (typeof IntersectionObserver !== "function") return null;
+    const scroller = card?.closest?.(".viewer, #td-body, #fv-body, #rv-scroller, .mem-scroll, #v-memory") || null;
+    if (scroller && rvRootObservers) {
+      let obs = rvRootObservers.get(scroller);
+      if (!obs) {
+        obs = new IntersectionObserver((entries, io) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            io.unobserve(entry.target);
+            activateRichCard(entry.target);
+          }
+        }, { root: scroller, rootMargin: "360px 0px" });
+        rvRootObservers.set(scroller, obs);
+      }
+      return obs;
+    }
+    if (!rvDefaultObserver) {
+      rvDefaultObserver = new IntersectionObserver((entries, io) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          io.unobserve(entry.target);
+          activateRichCard(entry.target);
+        }
+      }, { rootMargin: "360px 0px" });
+    }
+    return rvDefaultObserver;
+  }
+  function observeRichVisuals(root) {
+    if (!root || root.nodeType !== 1) return;
+    const cards = [];
+    if (root.classList?.contains("rv-card") && root.dataset?.rvKind) cards.push(root);
+    if (root.childElementCount > 0) {
+      for (const c of root.querySelectorAll?.(".rv-card[data-rv-kind]") || []) cards.push(c);
+    }
+    if (!cards.length) return;
+    const curTheme = currentVisualTheme();
+    for (const card of cards) {
+      const kind = card.dataset.rvKind;
+      const hash = card.dataset.rvHash || "";
+      if (kind === "mermaid") {
+        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${hash}`);
+        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${hash}`) {
+          applyMermaidSvg(card, cachedSvg, curTheme, hash);
+          card.dataset.rvWatched = "1";
+          continue;
+        }
+      } else if (kind === "svg") {
+        const cachedEntry = svgSanitizedCache.get(hash);
+        if (cachedEntry && card.dataset.rvRendered !== `svg:${hash}`) {
+          applySanitizedSvg(card, cachedEntry, hash);
+          card.dataset.rvWatched = "1";
+          continue;
+        }
+      } else if (kind === "html-file" || kind === "html-code") {
+        const hk = rvHeightKey(card);
+        const prevH = hk ? rvHeightCache.get(hk) : 0;
+        const st = card.querySelector?.("[data-rv-stage]");
+        if (prevH && st && !st.style.height) st.style.height = prevH + "px";
+      }
+      if (card.dataset.rvWatched === "1") continue;
+      card.dataset.rvWatched = "1";
+      const obs = getRichVisualObserver(card);
+      if (obs) obs.observe(card);
+      else activateRichCard(card);
+    }
+  }
+  function onRichVisualThemeChange() {
+    const nextTheme = currentVisualTheme();
+    if (nextTheme === rvLastTheme) return;
+    rvLastTheme = nextTheme;
+    for (const card of document.querySelectorAll?.(".rv-mermaid.is-ready") || []) {
+      if (card.dataset?.rvTheme !== nextTheme) renderMermaidCard(card, { force: true });
+    }
+    pruneDisconnectedHtmlFrames();
+    for (const rec of htmlCardFrames.values()) {
+      if (rec.iframe?.style) rec.iframe.style.colorScheme = nextTheme;
+      try {
+        rec.iframe?.contentWindow?.postMessage({ type: "collie-theme", theme: nextTheme }, "*");
+      } catch {}
+    }
+  }
+  if (typeof addEventListener === "function") {
+    rvLastTheme = currentVisualTheme();
+    addEventListener("collie:theme", onRichVisualThemeChange);
+  }
+  darkMQ?.addEventListener?.("change", onRichVisualThemeChange);
+  document.addEventListener?.("click", (ev) => {
+    const toggleBtn = ev.target?.closest?.('[data-rv-toggle="source"]');
+    if (toggleBtn) {
+      const card = toggleBtn.closest(".rv-card");
+      if (card) {
+        ev.preventDefault();
+        const nextMode = card.dataset.rvMode === "source" ? "visual" : "source";
+        setRichCardMode(card, nextMode);
+        if (nextMode !== "source") activateRichCard(card);
+      }
+      return;
+    }
+    const expandBtn = ev.target?.closest?.('[data-rv-expand="mermaid"], [data-rv-expand="svg"]');
+    const stageClick = !expandBtn ? ev.target?.closest?.(".rv-mermaid.is-ready .rv-mermaid-stage, .rv-svg.is-ready .rv-svg-stage") : null;
+    if (expandBtn || stageClick) {
+      const card = (expandBtn || stageClick).closest(".rv-mermaid, .rv-svg");
+      if (stageClick && card && isCoarseRvPointer() && !card.classList.contains("is-acts-open")) {
+        ev.preventDefault();
+        closeOtherRvFloatActs(card);
+        card.classList.add("is-acts-open");
+        return;
+      }
+      const isSvgCard = card?.dataset?.rvKind === "svg";
+      const svgEl = card?.querySelector?.(isSvgCard ? ".rv-svg-stage svg" : ".rv-mermaid-stage svg");
+      if (svgEl) {
+        ev.preventDefault();
+        closeOtherRvFloatActs(null);
+        openLightbox([{
+          svgNode: svgEl.cloneNode(true),
+          svgHtml: svgEl.outerHTML,
+          lightCanvas: isSvgCard && card.dataset.rvLightCanvas === "1",
+          title: isSvgCard ? "SVG 图表" : "Mermaid 图表",
+          alt: isSvgCard ? "SVG 图表" : "Mermaid 图表",
+          dlName: isSvgCard ? "diagram.svg" : "mermaid-diagram.svg",
+        }], 0);
+      }
+      return;
+    }
+    if (!ev.target?.closest?.(".rv-card")) {
+      closeOtherRvFloatActs(null);
+    }
+    const openWinBtn = ev.target?.closest?.("[data-rv-open-win]");
+    if (openWinBtn) {
+      ev.preventDefault();
+      const path = openWinBtn.dataset.rvOpenWin || "";
+      if (!path) return;
+      const cached = htmlFileCache.get(path)?.data;
+      const curMachine = cached?.machine || fileContextMachine() || "";
+      const isRemoteHub = !!hubOf(curMachine);
+      const isDemoNoStatic = !!(window.__collieDemo && !window.__collieDemoHtmlUrl?.(path));
+      if ((isStandaloneMode() || isRemoteHub || isDemoNoStatic) && typeof cached?.htmlText === "string") {
+        if (!openSandboxedHtmlWindow(baseFileName(cached.path || path), cached.htmlText)) {
+          toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+        }
+        return;
+      }
+      if (isRemoteHub) {
+        const win = window.open("", "_blank");
+        if (win) { try { win.opener = null; } catch {} }
+        openSandboxedHtmlRemote(path, win);
+        return;
+      }
+      const win = window.open(htmlFileURL(path, curMachine), "_blank");
+      if (win) { try { win.opener = null; } catch {} return; }
+      toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+      return;
+    }
+    const openCodeWinBtn = ev.target?.closest?.("[data-rv-open-code-win]");
+    if (openCodeWinBtn) {
+      ev.preventDefault();
+      const card = openCodeWinBtn.closest(".rv-html-card");
+      const rawHtml = card?.querySelector?.(".rv-source code")?.textContent || "";
+      if (!rawHtml.trim()) return;
+      const title = card?.dataset?.rvTitle || "HTML 卡片";
+      const docHtml = buildSandboxedCardSrcdoc(rawHtml, {
+        frameId: "win", token: "", isFragment: true, isDark: currentVisualTheme() === "dark",
+      });
+      if (!openSandboxedHtmlWindow(title, docHtml)) {
+        toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+      }
+    }
+  });
+
+  const CODE_FOLD_THRESHOLD = 18;
+  const CODE_FOLD_HEAD = 14;
+  const ICON_MD_COPY = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
+  const ICON_MD_CHEV = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
+  const ICON_TASK_CHECK = `<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.6"/></svg>`;
+  const CALLOUT_META = {
+    NOTE: { cls: "is-note", label: "说明", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>` },
+    TIP: { cls: "is-tip", label: "提示", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>` },
+    WARNING: { cls: "is-warn", label: "注意", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>` },
+    CAUTION: { cls: "is-caution", label: "风险", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2Z"/><path d="M12 8v5M12 16.5h.01"/></svg>` },
+  };
+  const TABLE_NUM_RE = /^(?:[<>≤≥~≈±+\-−$€£¥]?\s*)?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|ms|us|µs|ns|s|min|h|B|KB|MB|GB|TB|KiB|MiB|GiB|px|fps|FPS|x|×|\/s|次|行|列|条|个|张|天|小时|分钟|秒))?(?:\s*[–\-~→]\s*[+-]?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|ms|s|KB|MB|GB|px|x|×))?)?$/;
+  function isNumericTableCell(raw) {
+    const clean = unesc(String(raw || "")).replace(/\*\*|__|~~|`|[*_]/g, "").trim();
+    return !!clean && TABLE_NUM_RE.test(clean);
+  }
+  function splitHighlightedLines(html, keepLines) {
+    let lineCount = 0;
+    const openTags = [];
+    for (let i = 0; i < html.length; ) {
+      const ch = html[i];
+      if (ch === "<") {
+        const end = html.indexOf(">", i);
+        if (end < 0) break;
+        const tag = html.slice(i, end + 1);
+        if (tag.startsWith("</")) openTags.pop();
+        else if (!tag.endsWith("/>")) openTags.push(tag);
+        i = end + 1;
+        continue;
+      }
+      if (ch === "\n") {
+        lineCount++;
+        if (lineCount === keepLines) {
+          const closeAll = openTags.length ? "</span>".repeat(openTags.length) : "";
+          const reopenAll = openTags.join("");
+          return { head: html.slice(0, i) + closeAll, tail: reopenAll + html.slice(i + 1) };
+        }
+      }
+      i++;
+    }
+    return { head: html, tail: "" };
+  }
+  function renderCodeBlock(info, raw) {
+    const infoTrim = String(info || "").trim();
+    const infoParts = infoTrim ? infoTrim.split(/\s+/) : [];
+    const lang = detectCodeLang(infoTrim, false);
+    const rawTag = infoParts[0] ? infoParts[0].replace(/^language-/i, "").slice(0, 24) : "";
+    const langLabel = lang ? lang.label : rawTag;
+    const rawLines = raw.split("\n");
+    const totalLines = rawLines.length;
+    const isDiff = lang?.id === "diff";
+    const collapsible = totalLines > CODE_FOLD_THRESHOLD;
+    const remain = collapsible ? totalLines - CODE_FOLD_HEAD : 0;
+    const hiddenAttr = SUPPORTS_UNTIL_FOUND ? 'hidden="until-found"' : 'hidden=""';
+    let addCount = 0, delCount = 0;
+    let bodyCodeHtml = "";
+    if (isDiff) {
+      const spans = rawLines.map((ln) => {
+        if (/^@@/.test(ln)) return `<span class="diff-line is-hunk">${esc(ln)}</span>`;
+        if (/^(?:diff |index |--- |\+\+\+ )/.test(ln)) return `<span class="diff-line is-meta">${esc(ln)}</span>`;
+        if (ln.startsWith("+")) {
+          addCount++;
+          return `<span class="diff-line is-add"><span class="diff-sig">+</span>${esc(ln.slice(1))}</span>`;
+        }
+        if (ln.startsWith("-")) {
+          delCount++;
+          return `<span class="diff-line is-del"><span class="diff-sig">-</span>${esc(ln.slice(1))}</span>`;
+        }
+        if (ln.startsWith(" ")) return `<span class="diff-line"><span class="diff-sig"> </span>${esc(ln.slice(1))}</span>`;
+        return `<span class="diff-line">${esc(ln)}</span>`;
+      });
+      bodyCodeHtml = collapsible
+        ? `<span class="code-head-part">${spans.slice(0, CODE_FOLD_HEAD).join("")}</span><span class="code-tail" ${hiddenAttr}>${spans.slice(CODE_FOLD_HEAD).join("")}</span>`
+        : spans.join("");
+    } else {
+      const hl = lang ? highlightCode(raw, lang.id) : esc(raw);
+      if (collapsible) {
+        const { head, tail } = splitHighlightedLines(hl, CODE_FOLD_HEAD);
+        bodyCodeHtml = `<span class="code-head-part">${head}</span><span class="code-tail" ${hiddenAttr}>${tail}</span>`;
+      } else {
+        bodyCodeHtml = hl;
+      }
+    }
+    const diffStatHtml = isDiff && (addCount > 0 || delCount > 0)
+      ? `<span class="md-diff-stat" aria-label="新增 ${addCount} 行，删除 ${delCount} 行">${addCount > 0 ? `<span class="add">+${addCount}</span>` : ""}${delCount > 0 ? `<span class="del">−${delCount}</span>` : ""}</span>`
+      : "";
+    const cornerTagInner = isDiff
+      ? (diffStatHtml || `<span class="md-code-lang">Diff</span>`)
+      : (langLabel ? `<span class="md-code-lang">${esc(langLabel)}</span>` : "");
+    const cornerTagHtml = cornerTagInner ? `<div class="md-code-tag" aria-hidden="true">${cornerTagInner}</div>` : "";
+    const floatActsHtml = `<div class="md-float-acts md-code-acts"><button type="button" class="mini-btn md-copy-btn" data-copy-code aria-label="复制代码">${ICON_MD_COPY}<span class="md-copy-lbl">复制</span></button></div>`;
+    const foldBtnHtml = collapsible
+      ? `<button type="button" class="md-code-fold-btn" data-code-fold aria-expanded="false">${ICON_MD_CHEV}<span data-fold-label>展开剩余 ${remain} 行</span></button>`
+      : "";
+    return `<div class="md-code${isDiff ? " is-diff" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
+      `${cornerTagHtml}${floatActsHtml}` +
+      `<div class="md-code-body"><pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${bodyCodeHtml}</code></pre></div>${foldBtnHtml}</div>`;
+  }
+  function renderMdGallery(rawItems) {
+    if (!rawItems?.length) return "";
+    const seen = new Set();
+    const list = [];
+    for (const it of rawItems) {
+      const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      list.push(it);
+    }
+    const n = list.length;
+    if (!n) return "";
+    const sizeCls = n === 1 ? "is-1" : n === 2 ? "is-2" : n === 3 ? "is-3" : n === 4 ? "is-4" : "is-many";
+    const visible = list.slice(0, 6);
+    const overflow = n - visible.length;
+    const tilesHtml = visible.map((it, idx) => {
+      const moreHtml = idx === 5 && overflow > 0 ? `<span class="gal-more" aria-hidden="true">+${overflow}</span>` : "";
+      const capText = String(it.alt || "").trim();
+      const capHtml = capText ? `<span class="gal-cap">${esc(capText)}</span>` : "";
+      if (it.path) {
+        const ep = esc(it.path), ea = esc(capText);
+        const aria = esc(capText ? "查看大图：" + capText : "查看大图 " + (it.path.split("/").pop() || "图片"));
+        const dim = n === 1 ? thumbDims.get(it.path) : null;
+        const arStyle = dim && dim.w > 0 && dim.h > 0 ? ` style="aspect-ratio:${dim.w}/${dim.h}"` : "";
+        return `<button type="button" class="gal-tile thumb md-thumb" data-img="${ep}" data-img-alt="${ea}" aria-label="${aria}"${arStyle}><img alt="${ea}" decoding="async"${thumbImgAttrs(it.path, "md-img")}>${capHtml}${moreHtml}</button>`;
+      }
+      const eu = esc(it.url), ea = esc(capText);
+      const loadCls = decodedThumbs.has(it.url) ? "" : " is-img-loading";
+      const aria = esc(capText ? "查看大图：" + capText : "查看大图");
+      return `<button type="button" class="gal-tile md-img-btn" data-img-url="${eu}" data-img-alt="${ea}" aria-label="${aria}"><img class="md-img${loadCls}" src="${eu}" alt="${ea}" loading="lazy" decoding="async">${capHtml}${moreHtml}</button>`;
+    }).join("");
+    const hiddenHtml = overflow > 0
+      ? list.slice(6).map((it) => it.path
+        ? `<span class="gal-hidden-item" hidden data-img="${esc(it.path)}" data-img-alt="${esc(it.alt || "")}"></span>`
+        : `<span class="gal-hidden-item" hidden data-img-url="${esc(it.url)}" data-img-alt="${esc(it.alt || "")}"></span>`
+      ).join("")
+      : "";
+    return `<div class="md-gallery ${sizeCls}" data-count="${n}" role="group" aria-label="图片画廊（${n} 张）">${tilesHtml}${hiddenHtml}</div>`;
+  }
+  const MD_IMG_TOKEN_RE = /!\[([^\]\n]*)\]\((?:(https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)|(?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?)\)/g;
+  function parseImageOnlyLine(escapedLine) {
+    const trimmed = String(escapedLine || "").trim();
+    if (!trimmed || !trimmed.includes("![")) return null;
+    MD_IMG_TOKEN_RE.lastIndex = 0;
+    const items = [];
+    let pos = 0, m;
+    while ((m = MD_IMG_TOKEN_RE.exec(trimmed)) !== null) {
+      if (trimmed.slice(pos, m.index).trim()) return null;
+      const alt = unesc(m[1] || "");
+      if (m[2]) {
+        items.push({ url: unesc(m[2]), alt });
+      } else if (m[3]) {
+        let p = unesc(m[3]).replace(/:\d+(?:[-:]\d+)?$/, "");
+        try { p = decodeURI(p); } catch {}
+        if (!IMG_EXT.test(p)) return null;
+        items.push({ path: p, alt });
+      }
+      pos = MD_IMG_TOKEN_RE.lastIndex;
+    }
+    if (!items.length || trimmed.slice(pos).trim()) return null;
+    return items;
+  }
+  const DETAILS_OPEN_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*$/i;
+  const DETAILS_CLOSE_RE = /^\s*&lt;\/details&gt;\s*$/i;
+  const SUMMARY_LINE_RE = /^\s*&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;\s*$/i;
+  const DETAILS_INLINE_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*(?:&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;)?\s*([\s\S]*?)&lt;\/details&gt;\s*$/i;
+  function mdRender(src, opts = null) {
+    const blocks = [];
+    const mdImgPaths = new Set();
+    const rawSrc = String(src || "");
+    let text = extractFencedBlocks(rawSrc.replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks);
     text = extractMathBlocks(text, blocks);
     text = esc(text);
+    const applyInlineStyle = (t) => t
+      .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/~~(?=\S)([^~\n]*?\S)~~/g, "<del>$1</del>")
+      .replace(/(?<!\*)\*(?!\s|\*)([^*\n]+?)(?<!\s)\*(?!\*)/g, "<em>$1</em>")
+      .replace(/(?<![A-Za-z0-9_\/])_(?!\s|_)([^_\n]+?)(?<!\s)_(?![A-Za-z0-9_\/])/g, "<em>$1</em>");
     const inline = (s) => {
       const stash = [];
       const keep = (h) => `\u0001${stash.push(h) - 1}\u0001`;
@@ -22694,7 +26037,7 @@
           }
           if (close > i + ticks) {
             let c = s.slice(i + ticks, close);
-            if (ticks > 1 && c.length >= 2 && c.startsWith(" ") && c.endsWith(" ") && c.trim()) {
+            if (c.length >= 2 && c[0] === " " && c[c.length - 1] === " " && /[^ ]/.test(c)) {
               c = c.slice(1, -1);
             }
             const raw = unesc(c).trim();
@@ -22706,11 +26049,14 @@
               const eu = esc(raw);
               scanned += keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
             } else {
+              if (raw && raw !== ROUTER && raw.length >= 2 && raw.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) {
+                _mdCurWorkerCandidates?.add(raw);
+              }
               const wk = resolveInlineWorker(raw);
               if (wk) {
                 const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
                 const tip = wk.label && wk.label !== wk.name ? `查看任务：${wk.label} (${wk.name})` : `查看任务：${wk.name}`;
-                scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
+                scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
               } else {
                 scanned += keep(`<code>${c}</code>`);
               }
@@ -22791,7 +26137,6 @@
         i++;
       }
       let r = scanned
-        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
         .replace(/!\[([^\]\n]*)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, alt, u) => {
           const rawU = unesc(u), eu = esc(rawU);
           const loadCls = decodedThumbs.has(rawU) ? "" : " is-img-loading";
@@ -22802,87 +26147,220 @@
           try { p = decodeURI(p); } catch {}
           const ep = esc(p);
           if (!IMG_EXT.test(p)) return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${alt || ep}</a>`);
-          return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img class="md-img" alt="${alt}"${thumbImgAttrs(p)}></button>`);
+          mdImgPaths.add(p);
+          return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt="${alt}" decoding="async"${thumbImgAttrs(p, "md-img")}></button>`);
         })
-        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${applyInlineStyle(l)}</a>`))
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
         .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
           p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
           try { p = decodeURI(p); } catch {}
           const ep = esc(p);
-          return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${label}</a>`);
+          return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${applyInlineStyle(label)}</a>`);
         })
         .replace(URL_RE, (m) => {
-          const raw = unesc(m);
-          const cut = raw.search(/[<>"`]/);
-          let u = cut < 0 ? raw : raw.slice(0, cut);
-          const rest = cut < 0 ? "" : raw.slice(cut);
-          let tail = "";
-          const count = (x, ch) => x.split(ch).length - 1;
-          while (u.length) {
-            if (/[.,;:!?']$/.test(u) ||
-                (u.endsWith(")") && count(u, "(") < count(u, ")")) ||
-                (u.endsWith("]") && count(u, "[") < count(u, "]"))) {
-              tail = u.slice(-1) + tail;
-              u = u.slice(0, -1);
-            } else break;
-          }
-          if (!/^https?:\/\/[^\/.\s]/.test(u)) return m;
-          const eu = esc(u);
-          return keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`) + esc(tail + rest);
+          const hit = linkifyUrlMatch(m);
+          return hit ? keep(hit.anchor) + hit.suffix : m;
         })
         .replace(FILE_RE, (_, pre, p) => {
           const rawP = unesc(p);
           return `${pre}${keep(`<a ${fileLinkAttrs(rawP, p, "打开这个文件")}>${p}</a>`)}`;
         });
+      r = applyInlineStyle(r);
       while (r.includes("\u0001")) r = r.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
       return r;
     };
-    const out = [];
-    let list = null, para = [];
-    const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; } };
-    const flushList = () => { if (list) { out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
-    // A GFM table: a | row, a |---| row, then more | rows.
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
     const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
-    const lines = text.split("\n");
-    for (let li = 0; li < lines.length; li++) {
-      const line = lines[li];
-      let m;
-      if (line.includes("|") && li + 1 < lines.length && isSep(lines[li + 1]) && lines[li + 1].includes("|")) {
-        flushPara(); flushList();
-        const head = cells(line);
-        const align = cells(lines[li + 1]).map((c) => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
-        const td = (tag, c, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ""}>${inline(c)}</${tag}>`;
-        let body = "";
-        li += 2;
-        while (li < lines.length && lines[li].includes("|") && lines[li].trim()) {
-          const r = cells(lines[li]);
-          body += `<tr>${head.map((_, k) => td("td", r[k] || "", k)).join("")}</tr>`;
-          li++;
+    const renderQuoteBlock = (qLines) => {
+      const first = (qLines[0] || "").trim();
+      const cm = first.match(/^\[!(NOTE|TIP|WARNING|CAUTION)\](?:\s+(.*))?$/i);
+      const groupParas = (arr) => {
+        const ps = [];
+        let cur = [];
+        for (const ql of arr) {
+          if (!ql.trim()) { if (cur.length) { ps.push(cur); cur = []; } }
+          else cur.push(ql);
         }
-        li--;
-        out.push(`<div class="md-table" tabindex="0" role="region" aria-label="数据表格"><table><thead><tr>${head.map((c, k) => td("th", c, k)).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
-        continue;
+        if (cur.length) ps.push(cur);
+        return ps.map((p) => `<p>${p.map(inline).join("<br>")}</p>`).join("");
+      };
+      if (cm) {
+        const kind = cm[1].toUpperCase();
+        const meta = CALLOUT_META[kind] || CALLOUT_META.NOTE;
+        const extra = (cm[2] || "").trim();
+        const headHtml = extra ? `${meta.label} · ${inline(extra)}` : meta.label;
+        const bodyHtml = groupParas(qLines.slice(1));
+        return `<div class="md-callout ${meta.cls}" role="note"><div class="md-callout-head">${meta.icon}<span>${headHtml}</span></div>${bodyHtml ? `<div class="md-callout-body">${bodyHtml}</div>` : ""}</div>`;
       }
-      if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
-      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); flushList(); out.push("<hr>"); continue; }
-      if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); const h = Math.min(m[1].length + 1, 4); out.push(`<h${h}>${inline(m[2])}</h${h}>`); continue; }
-      if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
-        const tag = /^\s*\d/.test(line) ? "ol" : "ul";
-        flushPara();
-        // "2." after a few bullets carries on the numbering, as the agent wrote it.
-        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [], start: parseInt(line) || 1 }; }
-        list.items.push(m[1]);
-        continue;
+      const inner = groupParas(qLines);
+      return `<blockquote>${inner}</blockquote>`;
+    };
+    const parseBlockLines = (lines, depth = 0, trailingImgs = null) => {
+      const out = [];
+      let list = null, para = [], galleryBuf = [];
+      const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; } };
+      const flushGallery = () => {
+        if (galleryBuf.length) {
+          out.push(renderMdGallery(galleryBuf));
+          galleryBuf = [];
+        }
+      };
+      const flushList = () => {
+        if (!list) return;
+        if (list.kind === "task") {
+          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"><span class="md-task-box" role="img" aria-label="${it.done ? "已完成" : "未完成"}">${it.done ? ICON_TASK_CHECK : ""}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
+        } else {
+          out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`);
+        }
+        list = null;
+      };
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        let m;
+        // Safe whitelist <details>/<summary> (already HTML-escaped, zero extra attributes)
+        if (depth < 2 && (m = line.match(DETAILS_INLINE_RE))) {
+          flushPara(); flushList(); flushGallery();
+          const isOpen = !!m[1];
+          const rawSum = (m[2] || "").trim().replace(/^#{1,6}\s+/, "");
+          const sumHtml = rawSum ? inline(rawSum) : "展开详情";
+          const innerBody = (m[3] || "").trim();
+          const bodyHtml = innerBody ? parseBlockLines([innerBody], depth + 1) : "";
+          out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
+          continue;
+        }
+        if (depth < 2 && (m = line.match(DETAILS_OPEN_RE))) {
+          const isOpen = !!m[1];
+          let nest = 1, closeIdx = -1;
+          for (let j = li + 1; j < lines.length; j++) {
+            if (DETAILS_OPEN_RE.test(lines[j])) nest++;
+            else if (DETAILS_CLOSE_RE.test(lines[j])) {
+              nest--;
+              if (nest === 0) { closeIdx = j; break; }
+            }
+          }
+          if (closeIdx > li) {
+            flushPara(); flushList(); flushGallery();
+            const innerLines = lines.slice(li + 1, closeIdx);
+            let sumHtml = "展开详情";
+            let bodyStart = 0;
+            while (bodyStart < innerLines.length && !innerLines[bodyStart].trim()) bodyStart++;
+            if (bodyStart < innerLines.length) {
+              const sm = innerLines[bodyStart].match(SUMMARY_LINE_RE);
+              if (sm) {
+                const rawSum = (sm[1] || "").trim().replace(/^#{1,6}\s+/, "");
+                if (rawSum) sumHtml = inline(rawSum);
+                bodyStart++;
+              }
+            }
+            const bodyHtml = parseBlockLines(innerLines.slice(bodyStart), depth + 1);
+            out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
+            li = closeIdx;
+            continue;
+          }
+        }
+        // Standalone Markdown image lines -> unified adaptive .md-gallery
+        const imgItems = parseImageOnlyLine(line);
+        if (imgItems) {
+          flushPara(); flushList();
+          for (const it of imgItems) {
+            if (it.path) mdImgPaths.add(it.path);
+            galleryBuf.push(it);
+          }
+          continue;
+        }
+        if (galleryBuf.length) {
+          if (!line.trim()) {
+            let nextIdx = li + 1;
+            while (nextIdx < lines.length && !lines[nextIdx].trim()) nextIdx++;
+            if (nextIdx < lines.length && parseImageOnlyLine(lines[nextIdx])) continue;
+            if (nextIdx >= lines.length && trailingImgs?.length) continue;
+          }
+          flushGallery();
+        }
+        if (line.includes("|") && li + 1 < lines.length && isSep(lines[li + 1]) && lines[li + 1].includes("|")) {
+          flushPara(); flushList();
+          const head = cells(line);
+          const align = cells(lines[li + 1]).map((c) => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
+          const bodyRows = [];
+          li += 2;
+          while (li < lines.length && lines[li].includes("|") && lines[li].trim()) {
+            bodyRows.push(cells(lines[li]));
+            li++;
+          }
+          li--;
+          const colNumeric = head.map((_, k) => {
+            if (k === 0 || !bodyRows.length) return false;
+            let any = false;
+            for (const r of bodyRows) {
+              const v = (r[k] || "").trim();
+              if (!v) continue;
+              any = true;
+              if (!isNumericTableCell(v)) return false;
+            }
+            return any;
+          });
+          const headHtml = head.map((c, k) => {
+            const isNum = colNumeric[k];
+            const al = align[k] || (isNum ? "right" : "");
+            return `<th scope="col"${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(c)}</th>`;
+          }).join("");
+          const bodyHtml = bodyRows.map((r) => `<tr>${head.map((_, k) => {
+            const val = r[k] || "";
+            const isNum = k > 0 && (colNumeric[k] || isNumericTableCell(val));
+            const al = align[k] || (colNumeric[k] ? "right" : "");
+            const tag = k === 0 ? "th" : "td";
+            const scopeAttr = k === 0 ? ' scope="row"' : "";
+            return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
+          }).join("")}</tr>`).join("");
+          const rowCount = bodyRows.length, colCount = head.length;
+          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="复制表格（TSV）">${ICON_MD_COPY}<span class="md-copy-lbl">复制表格</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="复制 Markdown 表格"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="数据表格（${rowCount} 行 × ${colCount} 列）"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          continue;
+        }
+        if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
+        if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); flushList(); out.push("<hr>"); continue; }
+        if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); const h = Math.min(m[1].length + 1, 4); out.push(`<h${h}>${inline(m[2])}</h${h}>`); continue; }
+        if ((m = line.match(/^\s*[-*•]\s+\[([ xX])\]\s+(.*)$/))) {
+          flushPara();
+          if (!list || list.kind !== "task") { flushList(); list = { kind: "task", tag: "ul", items: [], start: 1 }; }
+          list.items.push({ done: m[1] !== " ", text: m[2] });
+          continue;
+        }
+        if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+          const tag = /^\s*\d/.test(line) ? "ol" : "ul";
+          flushPara();
+          // "2." after a few bullets carries on the numbering, as the agent wrote it.
+          if (!list || list.kind !== tag) { flushList(); list = { kind: tag, tag, items: [], start: parseInt(line) || 1 }; }
+          list.items.push(m[1]);
+          continue;
+        }
+        if ((m = line.match(/^&gt;\s?(.*)$/))) {
+          flushPara(); flushList();
+          const qLines = [m[1]];
+          while (li + 1 < lines.length && (m = lines[li + 1].match(/^&gt;\s?(.*)$/))) {
+            qLines.push(m[1]);
+            li++;
+          }
+          out.push(renderQuoteBlock(qLines));
+          continue;
+        }
+        if (!line.trim()) { flushPara(); flushList(); continue; }
+        flushList();
+        para.push(line);
       }
-      if ((m = line.match(/^&gt;\s?(.*)$/))) { flushPara(); flushList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
-      if (!line.trim()) { flushPara(); flushList(); continue; }
-      flushList();
-      para.push(line);
-    }
-    flushPara(); flushList();
-    return out.join("").replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
+      flushPara(); flushList();
+      if (trailingImgs?.length) {
+        for (const it of trailingImgs) {
+          if (it.path && mdImgPaths.has(it.path)) continue;
+          galleryBuf.push(it);
+        }
+      }
+      flushGallery();
+      return out.join("");
+    };
+    const trailingImgs = opts?.includePathImages ? extractImagePaths(rawSrc).map((p) => ({ path: p, alt: "" })) : null;
+    const rendered = parseBlockLines(text.split("\n"), 0, trailingImgs);
+    return rendered.replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
   }
 
   // ───────────────────────────── input
@@ -22952,6 +26430,10 @@
   function grow(el) {
     if (!el) return;
     if (el.closest?.(".cbox") && typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content")) {
+      if (el.style.height) el.style.height = "";
+      return;
+    }
+    if (!el.value) {
       if (el.style.height) el.style.height = "";
       return;
     }
@@ -23634,18 +27116,35 @@
   // Images a Collie message points at (a screenshot a worker took) show
   // under it, so you need not open each one.
   const IMG_PATH = /(?:^|[\s(（`"'：:，、,;；>])((?:~|\/)[^\s`"'()（）<>，、,;；]*\.(?:png|jpe?g|gif|webp|svg))(?=$|[\s)）`"'，。、,;；!?！？])/gim;
+  function extractImagePaths(t) {
+    const clean = stripFencedBlocks(String(t || ""), " ").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, " ");
+    return [...new Set([...clean.matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 24);
+  }
   function imagesIn(t) {
-    const clean = String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, " ");
-    const ps = [...new Set([...clean.matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
-    return ps.length ? `<span class="thumbs">${ps.map(thumbBtn).join("")}</span>` : "";
+    const ps = extractImagePaths(t);
+    return ps.length ? renderMdGallery(ps.map((p) => ({ path: p, alt: "" }))) : "";
+  }
+  function renderCollieBody(t) {
+    return md(t, { includePathImages: true });
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
-  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").trim()).filter(Boolean).join(" ")
+  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|WARNING|CAUTION)\]\s*/i, "").replace(/^\[[ xX]\]\s+/, "").trim()).filter(Boolean).join(" ")
     .replace(/\\([!"#$%&'()*+,\-.\/:;<=>?@\[\\\]^_`{|}~])/g, "$1")
-    .replace(/\*\*|__|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    .replace(/\*\*|__|~~|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
-  const linkUserFiles = (escaped) => escaped.replace(FILE_RE, (_, pre, p) => `${pre}<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`);
+  const linkUserFiles = (escaped) => {
+    const stash = [];
+    const keep = (h) => `\u0001${stash.push(h) - 1}\u0001`;
+    let out = String(escaped || "").replace(/[\u0000\u0001]/g, "")
+      .replace(URL_RE, (m) => {
+        const hit = linkifyUrlMatch(m);
+        return hit ? keep(hit.anchor) + hit.suffix : m;
+      })
+      .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`)}`);
+    while (out.includes("\u0001")) out = out.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
+    return out;
+  };
   function parseUserParts(raw) {
     const t = String(raw || "");
     const i = t.lastIndexOf("附件：\n");
@@ -23738,6 +27237,49 @@
       });
     }
     const ime = trackIME(input);
+    if (btn) {
+      // Preserve textarea focus & keep the soft keyboard open on iOS Safari / Android / desktop
+      // when tapping the Send arrow button while typing (like WeChat / iMessage / ChatGPT).
+      btn.addEventListener("mousedown", (e) => {
+        if (document.activeElement === input) e.preventDefault();
+      });
+      let sendTouch = null;
+      btn.addEventListener("touchstart", (e) => {
+        if (document.activeElement !== input || e.touches?.length !== 1) {
+          sendTouch = null;
+          return;
+        }
+        const t = e.touches[0];
+        sendTouch = { id: t.identifier, x: t.clientX, y: t.clientY, moved: false };
+      }, { passive: true });
+      btn.addEventListener("touchmove", (e) => {
+        if (!sendTouch || sendTouch.moved) return;
+        const t = [...(e.touches || [])].find((x) => x.identifier === sendTouch.id);
+        if (!t || Math.hypot(t.clientX - sendTouch.x, t.clientY - sendTouch.y) > 14) {
+          sendTouch.moved = true;
+        }
+      }, { passive: true });
+      btn.addEventListener("touchcancel", () => { sendTouch = null; }, { passive: true });
+      btn.addEventListener("touchend", (e) => {
+        const st = sendTouch;
+        sendTouch = null;
+        if (!st || st.moved || e.defaultPrevented || document.activeElement !== input) return;
+        const t = [...(e.changedTouches || [])].find((x) => x.identifier === st.id);
+        if (t && typeof btn.getBoundingClientRect === "function") {
+          const r = btn.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0
+            && (t.clientX < r.left - 12 || t.clientX > r.right + 12 || t.clientY < r.top - 12 || t.clientY > r.bottom + 12)) {
+            return;
+          }
+        }
+        // Preventing default on touchend stops iOS Safari from blurring the focused textarea
+        // and collapsing the keyboard, and suppresses synthetic click/double-tap zoom.
+        e.preventDefault();
+        if (sending || btn.disabled) return;
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.dispatchEvent(new Event("submit", { cancelable: true }));
+      }, { passive: false });
+    }
     input.addEventListener("input", () => { growFn(input); syncBtn(); });
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey) return;
@@ -23772,6 +27314,8 @@
       sending = true;
       syncBtn();
       const files = form._takeFiles ? form._takeFiles() : [];
+      ime.composing = false;
+      if (input.id === "super-input" || input.id === "td-input") resetCompositionGuard();
       input.value = "";
       growFn(input);
       try {
@@ -23920,6 +27464,7 @@
         toast(cur.paused ? "已恢复投递" : "已暂停投递");
       }
       if (act === "auto") location.hash = "#/auto";
+      if (act === "quota") window.__collieQuota?.open?.();
     } catch (err) { toast(err.message, "attn"); }
   });
 
@@ -24063,28 +27608,132 @@
   // ───────────────────────────── viewport (mobile keyboard)
   // The app fills the visible area: its height shrinks above the keyboard, and
   // it follows the visible area when the browser scrolls the page for it.
-  let lastVH = "", lastVTop = "", setVHRAF = 0;
+  // Coalesce resize/scroll into one rAF, write non-inheriting height/--vtop on #app
+  // (deferring :root --vh until keyboard settle), and keep strict read-before-write
+  // so keyboard animations never trigger full-tree recalcs or forced reflows.
+  let lastVH = "", lastVHNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
+  let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
+  function hasViewportOverlayOpen() {
+    return !!(
+      activeThreadRoot || activeWorkerKey || notesOpen || superSearchOpen
+      || pickOpen || dirCtx
+      || ($("#file-view") && !$("#file-view").hidden)
+      || ($("#lightbox") && $("#lightbox").open)
+      || document.querySelector("dialog[open]")
+    );
+  }
+  function syncRootVHNow() {
+    if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
+    if (!lastVH) return;
+    const root = document.documentElement?.style;
+    if (root && root.getPropertyValue("--vh") !== lastVH) {
+      root.setProperty("--vh", lastVH);
+    }
+  }
+  function endViewportTransition() {
+    if (vvSettleTimer) { clearTimeout(vvSettleTimer); vvSettleTimer = 0; }
+    if (vvCapTimer) { clearTimeout(vvCapTimer); vvCapTimer = 0; }
+    vvTransitioning = false;
+    syncRootVHNow();
+    if (deferredViewportMask) {
+      const pending = deferredViewportMask;
+      deferredViewportMask = 0;
+      scheduleLiveUpdates(pending);
+    }
+  }
+  function noteViewportHeightTick() {
+    const now = performance.now();
+    const rapidBurst = vvLastHeightTickAt > 0 && (now - vvLastHeightTickAt) <= 120;
+    vvLastHeightTickAt = now;
+    if (rapidBurst) {
+      vvTransitioning = true;
+      if (!vvCapTimer) {
+        vvCapTimer = setTimeout(() => {
+          vvCapTimer = 0;
+          if (vvTransitioning) endViewportTransition();
+        }, 380);
+      }
+    }
+    if (vvSettleTimer) clearTimeout(vvSettleTimer);
+    vvSettleTimer = setTimeout(() => {
+      vvSettleTimer = 0;
+      if (vvTransitioning) endViewportTransition();
+      else syncRootVHNow();
+    }, 130);
+  }
   function setVH() {
     const v = window.visualViewport;
-    const nextVH = (v ? Math.round(v.height) : innerHeight) + "px";
-    const nextVTop = (v ? Math.max(0, Math.round(v.offsetTop)) : 0) + "px";
+    const nextVHNum = Math.round(v ? v.height : innerHeight);
+    const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
+    const nextVH = nextVHNum + "px";
+    const nextVTop = nextVTopNum + "px";
     if (nextVH === lastVH && nextVTop === lastVTop) return;
     const root = document.documentElement.style;
+    const appEl = $("#app");
     const vhChanged = nextVH !== lastVH;
-    if (vhChanged) {
+    const vtopChanged = nextVTop !== lastVTop;
+    const isInitial = !lastVH;
+    const vhShrank = !isInitial && nextVHNum < lastVHNum;
+
+    // 1) Read phase (strictly before any DOM/style writes).
+    let screenPinned = false;
+    let wdScreenPinned = false;
+    const pinTargets = [];
+    if (vhChanged && !isInitial) {
+      screenPinned = view === "pane" && curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
+      wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
       // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-      const screenPinned = curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
-      const wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
-      const pinned = [...document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX);
-      lastVH = nextVH;
-      root.setProperty("--vh", nextVH);
-      pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
-      if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
-      if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
+      // When the viewport grows (keyboard dismissing), native scroll clamping keeps bottom-pinned scrollers
+      // anchored without forcing synchronous layout or extra scrollTop writes.
+      if (vhShrank) {
+        for (const el of document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")) {
+          if (!el.offsetParent) continue;
+          const sh = el.scrollHeight;
+          if (sh - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX) {
+            pinTargets.push({ el, sh });
+          }
+        }
+      }
     }
-    if (nextVTop !== lastVTop) {
+
+    // 2) Write phase (style mutations only; zero post-write layout reads).
+    if (vhChanged) {
+      lastVH = nextVH;
+      lastVHNum = nextVHNum;
+      if (appEl?.style) appEl.style.height = nextVH;
+      if (isInitial || !narrow() || hasViewportOverlayOpen()) {
+        root.setProperty("--vh", nextVH);
+      } else {
+        if (rootVHSyncTimer) clearTimeout(rootVHSyncTimer);
+        rootVHSyncTimer = setTimeout(syncRootVHNow, 140);
+      }
+      if (!isInitial) noteViewportHeightTick();
+    }
+    if (vtopChanged) {
       lastVTop = nextVTop;
-      root.setProperty("--vtop", nextVTop);
+      if (appEl?.style) appEl.style.setProperty("--vtop", nextVTop);
+      else root.setProperty("--vtop", nextVTop);
+    }
+
+    // 3) Post-layout pin phase (deferred to next clean frame; zero forced reflow).
+    if (pinTargets.length || screenPinned || wdScreenPinned) {
+      const applyPin = () => {
+        setVHPinRAF = 0;
+        markProgrammaticScroll(140);
+        for (const { el } of pinTargets) {
+          if (!el.isConnected) continue;
+          const sh = el.scrollHeight;
+          if (sh - el.scrollTop - el.clientHeight > 1) el.scrollTop = sh;
+        }
+        if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
+        if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
+      };
+      if (typeof requestAnimationFrame === "function") {
+        if (setVHPinRAF) cancelAnimationFrame(setVHPinRAF);
+        setVHPinRAF = requestAnimationFrame(applyPin);
+      } else {
+        applyPin();
+      }
     }
   }
   function scheduleSetVH() {
@@ -24095,9 +27744,9 @@
       setVH();
     }
   }
-  window.visualViewport?.addEventListener("resize", setVH);
+  window.visualViewport?.addEventListener("resize", scheduleSetVH);
   window.visualViewport?.addEventListener("scroll", scheduleSetVH);
-  addEventListener("resize", setVH);
+  addEventListener("resize", scheduleSetVH);
   setVH();
 
   // ───────────────────────────── boot
@@ -24181,6 +27830,7 @@
     $("#app").hidden = false;
     setMode(mode);
     connect();
+    window.__collieQuota?.init?.({ api, toast });
     booted = false;
     view = undefined;
     route();

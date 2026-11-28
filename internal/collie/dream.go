@@ -15,9 +15,10 @@ import (
 
 // Dreaming: while Collie sleeps (nightly, or on demand) a separate session
 // reviews what happened since the last dream (the chat with the human and
-// Collie's own session logs) and tidies memory/. It replaces stale entries
-// and records patterns that only show across many sessions. Collie then wakes
-// up in a fresh session.
+// Collie's own session logs), tidies memory/, and performs safe environment
+// and resource hygiene (silently cleaning provably safe leftovers while only
+// inventorying anything risky for the human). Collie then wakes up in a fresh
+// session.
 
 const (
 	dreamName             = "collie-dream"
@@ -622,7 +623,7 @@ func (sp *Super) writeDreamInput() error {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-const dreamPrompt = `[collie] Dream. You are Collie's memory keeper, running while Collie sleeps. Collie is the agent described in ROUTER.md: read it for context and for the layout of memory/; your part is its memory. Your inputs, all in this directory:
+const dreamPrompt = `[collie] Dream. You are Collie's memory keeper, running while Collie sleeps. Collie is the agent described in ROUTER.md: read it for context and for the layout of memory/; your part is tidying its memory and doing a safe environment & resource hygiene pass. Your inputs, all in this directory:
 - memory/: Collie's memory, laid out as ROUTER.md describes.
 - dream/input.md: what happened since the last dream: the chat with the human and Collie's own session logs.
 - dreams/: earlier dream journals, if any.
@@ -634,11 +635,22 @@ Tidy memory/. Every session reads the up-front files Collie writes (instructions
 3. Look for patterns that only show across sessions: requests the human repeats, corrections they keep making, preferences they never stated outright, mistakes Collie made more than once. Write the ones that should change how Collie behaves into instructions.md (or a note), marked "(inferred)", in the same short form. Each is backed by the logs and seen more than once.
 4. Finished work that taught something reusable (where data lives, the command or query that worked, a pitfall, where results are) belongs in notes/, filed by topic so the next similar job finds it; read the task files and the logs for it. Add what Collie missed; skip one-off details. Pointers (paths, thread ids, URLs), not copies; merge duplicates. Each note gets one line in notes/index.md. What the logs show about agents (availability, failures/workarounds on each computer, and explicit human preferences — not subjective quality recommendations to override the default model) goes into notes/agents.md. Dated facts that are old enough to have changed: check them (` + "`{{BIN}} list`" + `, the files) and fix or drop them.
 5. Skills. Find the ones that exist (notes/skills.md says where they live; look there). A note whose how-to is now a skill shrinks to a pointer to it.
-   - A how-to in notes/ that three or more jobs have used, whose steps stopped changing and that no skill covers yet, could become one. The human decides about skills: list these on a line starting "可做成 skill：", separated by 、 (each a few words a human recognises, e.g. "Dorado 只读查表").
+   - A how-to in notes/ that three or more jobs have used, whose steps stopped changing and that no skill covers yet, could become one. The human decides about skills: list these on a line starting "可做成 skill：", separated by 、 (each a few words a human recognises, e.g. "数据库只读查表").
    - An existing skill the logs show agents working around, failing with, or correcting by hand needs fixing: list it on a line starting "可改进 skill：" as "name（what to fix, a few words）", separated by 、.
    Both lines go right under the journal's first line; the human gets them as messages from Collie. Leave a line out when it has nothing; a skill that already exists belongs on the second line or nowhere.
 6. Keep every explicit instruction from the human unless a later one overrides it, or unless it is a recurring routine already backed by an active timer and a notes/ file (rule 2; shortening wording is fine). memory/messages.md is the hub's to write; read it as input.
 
-Then write a new file dreams/{{DATE}}.md. Its first line: one sentence in Chinese saying what you changed; the human sees it. Then the skill lines, if any. Then, in under 30 lines: what you changed and why, and patterns you noticed but didn't act on.
+Environment & resource hygiene. After tidying memory/, do a brief, low-risk sweep of local workspaces and resources (when in doubt, inventory rather than delete):
+- Safe to clean silently (ONLY when 100% certain there is zero data-loss risk and no active worker in ` + "`{{BIN}} list`" + ` is using it):
+  * Temporary git worktrees (never the primary repository checkout) whose branch is already merged into the main/default branch and whose working tree is clean (` + "`git status --porcelain`" + ` is empty, with no unpushed or unmerged commits); run ` + "`git worktree prune`" + ` afterward.
+  * Stale ` + "`/tmp/collie-*`" + ` verification/scratch directories older than 7 days and dead orphan socket files (confirm no live process holds them).
+- Inventory only — NEVER auto-delete:
+  * Git worktrees with uncommitted changes or unmerged branches.
+  * Large workspaces or artifact directories (e.g. >1 GB) and noticeably high disk usage.
+  * Suspected forgotten long-running orphan processes or idle external compute resources.
+- Reporting: record routine safe cleanup and normal inventory silently in tonight's ` + "`dreams/{{DATE}}.md`" + ` journal with zero interruption. Only when inventory finds anomalies that genuinely need a human decision (e.g. critically high disk usage, piled-up dirty/unmerged worktrees, or suspected forgotten long-running orphan processes), highlight them in ` + "`dreams/{{DATE}}.md`" + ` and optionally leave a short reminder in ` + "`memory/`" + ` (an open task or note) so Collie can bring them up naturally next time it talks to the human.
+- Hard redlines — NEVER delete user project source code, databases, configs, credentials, or any active worker's workspace.
 
-Your work is the files alone: when they are written, stop. Collie tells the human what you found.`
+Then write a new file dreams/{{DATE}}.md. Its first line: one sentence in Chinese saying what you changed (and cleaned, if any); the human sees it. Then the skill lines, if any. Then, in under 30 lines: what you changed and why, patterns you noticed but didn't act on, and any environment/resource cleanup done or inventory items flagged for human review.
+
+Do not message the human or spawn workers: finish memory/, safe hygiene above (if any), and the journal, then stop. Collie tells the human what you found.`

@@ -1,6 +1,8 @@
 package collie
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -17,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,10 +39,15 @@ type Server struct {
 	localAddr  string   // hub only: local host:port for CLI and loopback links
 	publicURLs []string // hub only: addresses given with -url, shown first
 
-	startMu sync.Mutex
-	started map[string]time.Time // pane → when Collie started an agent there
+	startMu   sync.Mutex
+	started   map[string]time.Time // pane → when Collie started an agent there
+	firstSeen map[string]time.Time // pane → first observation time for non-Collie panes
 
 	agyResuming sync.Map // CLI history IDs currently starting in herdr
+
+	quotaOnce sync.Once
+	quota     *quotaManager
+	quotaDir  string // optional override for tests; defaults to sup.dir
 }
 
 func (s *Server) markStarted(pane string) {
@@ -52,6 +60,10 @@ func (s *Server) markStarted(pane string) {
 	s.started[local] = now
 	if pane != local {
 		s.started[pane] = now
+	}
+	delete(s.firstSeen, local)
+	if pane != local {
+		delete(s.firstSeen, pane)
 	}
 	s.startMu.Unlock()
 
@@ -76,6 +88,38 @@ func (s *Server) startedAt(pane string) (time.Time, bool) {
 	}
 	t, ok := s.started[local]
 	return t, ok
+}
+
+// agentCreatedAt returns a stable creation timestamp for an agent pane: the
+// exact time Collie started it when known, otherwise its first-observed time.
+func (s *Server) agentCreatedAt(pane string, fallback time.Time) time.Time {
+	local, _ := split(pane)
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	if t, ok := s.started[pane]; ok && !t.IsZero() {
+		return t
+	}
+	if t, ok := s.started[local]; ok && !t.IsZero() {
+		return t
+	}
+	if s.firstSeen == nil {
+		s.firstSeen = map[string]time.Time{}
+	}
+	if t, ok := s.firstSeen[pane]; ok && !t.IsZero() {
+		return t
+	}
+	s.firstSeen[pane] = fallback
+	return fallback
+}
+
+func (s *Server) pruneFirstSeen(alive map[string]bool, listed func(machine string) bool) {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	for p := range s.firstSeen {
+		if _, m := split(p); !alive[p] && listed(m) {
+			delete(s.firstSeen, p)
+		}
+	}
 }
 
 // Agent kinds Collie offers in its launcher, mapped to herdr's --kind values.
@@ -153,6 +197,8 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("POST /api/uploads", wrap(s.upload))
 	mux.Handle("GET /api/titles", wrap(s.getTitles))
 	mux.Handle("GET /api/models", wrap(s.listModels))
+	mux.Handle("GET /api/quota", wrap(s.getQuota))
+	mux.Handle("POST /api/quota/refresh", wrap(s.refreshQuota))
 	mux.Handle("POST /api/trust", wrap(s.trustFolder))
 	mux.Handle("POST /api/update", wrap(s.selfUpdate))
 	mux.Handle("GET /api/transcript", wrap(s.getTranscript))
@@ -224,7 +270,7 @@ func (s *Server) webBuild() string {
 	}
 	webBuildOnce.Do(func() {
 		h := sha256.New()
-		for _, p := range []string{"index.html", "app.js", "app.css"} {
+		for _, p := range []string{"index.html", "app.js", "app.css", "quota.js", "quota.css"} {
 			b, _ := fs.ReadFile(s.web, p)
 			h.Write(b)
 		}
@@ -290,6 +336,7 @@ type AgentView struct {
 	Session        string     `json:"session,omitempty"` // id to resume it by
 	IsAgent        bool       `json:"is_agent"`
 	Machine        string     `json:"machine"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
 	Run            *[2]string `json:"run,omitempty"` // model, effort Collie started it with
 }
 
@@ -340,9 +387,12 @@ func (s *Server) state(ctx context.Context) PaneState {
 
 	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, LastReadEntryID: lastRead}
 	var workerLabelByPane, workerLabelByName map[string]string
+	var workerCreatedByPane, workerCreatedByName map[string]time.Time
 	if s.sup != nil {
 		workerLabelByPane, workerLabelByName = s.sup.workerLabels()
+		workerCreatedByPane, workerCreatedByName = s.sup.workerCreatedAt()
 	}
+	pollNow := time.Now()
 	topics := map[string]map[string]paneSession{"": s.titlesFor("", ctx)}
 	for _, m := range machines {
 		if !m.Local && m.Online {
@@ -378,6 +428,18 @@ func (s *Server) state(ctx context.Context) PaneState {
 				v.Label = lbl
 			} else if lbl := workerLabelByName[v.Name]; lbl != "" {
 				v.Label = lbl
+			}
+			var created time.Time
+			if t := workerCreatedByPane[p.ID]; !t.IsZero() {
+				created = t
+			} else if t := workerCreatedByName[v.Name]; !t.IsZero() {
+				created = t
+			} else {
+				created = s.agentCreatedAt(p.ID, pollNow)
+			}
+			if !created.IsZero() {
+				t := created
+				v.CreatedAt = &t
 			}
 		}
 		if v.IsAgent {
@@ -416,8 +478,20 @@ func (s *Server) state(ctx context.Context) PaneState {
 			online[m.ID] = m.Online && s.herdr.MachineHerdrOK(m.ID)
 		}
 	}
-	s.herdr.pruneRuns(alive, func(m string) bool { return online[m] })
-	sort.SliceStable(st.Agents, less(st.Agents))
+	listed := func(m string) bool { return online[m] }
+	s.herdr.pruneRuns(alive, listed)
+	s.pruneFirstSeen(alive, listed)
+	agentLess := less(st.Agents)
+	sort.SliceStable(st.Agents, func(i, j int) bool {
+		ti, tj := st.Agents[i].CreatedAt, st.Agents[j].CreatedAt
+		switch {
+		case ti != nil && tj != nil && !ti.Equal(*tj):
+			return ti.After(*tj)
+		case (ti != nil) != (tj != nil):
+			return ti != nil
+		}
+		return agentLess(i, j)
+	})
 	sort.SliceStable(st.Shells, less(st.Shells))
 	return st
 }
@@ -440,7 +514,13 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 		defer done()
 		ch = c
 	}
-	var lastState, lastSuper string
+	var qch <-chan struct{}
+	if qm := s.quotaMgr(); qm != nil {
+		c, done := qm.subscribe()
+		defer done()
+		qch = c
+	}
+	var lastState, lastSuper, lastQuota string
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 	beat := time.NewTicker(15 * time.Second)
@@ -457,6 +537,17 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		if qm := s.quotaMgr(); qm != nil {
+			if snap, ok := qm.CachedSnapshot(); ok {
+				b, _ := json.Marshal(snap)
+				if string(b) != lastQuota {
+					lastQuota = string(b)
+					if sse.send("quota", b) != nil {
+						return
+					}
+				}
+			}
+		}
 		b, _ := json.Marshal(s.state(r.Context()))
 		if string(b) != lastState {
 			lastState = string(b)
@@ -470,6 +561,7 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 		case <-beat.C:
 			sse.comment()
 		case <-ch:
+		case <-qch:
 		case <-tick.C:
 		}
 	}
@@ -605,6 +697,9 @@ func (s *Server) sendText(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if s.sup != nil {
+		s.sup.touchPaneActivity(id)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -619,9 +714,13 @@ func (s *Server) sendKeys(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "keys required"})
 		return
 	}
-	if err := s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": r.PathValue("id"), "keys": body.Keys}, nil); err != nil {
+	id := r.PathValue("id")
+	if err := s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": id, "keys": body.Keys}, nil); err != nil {
 		fail(w, err)
 		return
+	}
+	if s.sup != nil {
+		s.sup.touchPaneActivity(id)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
@@ -637,9 +736,13 @@ func (s *Server) promptAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "empty prompt"})
 		return
 	}
-	if err := s.herdr.Prompt(r.Context(), r.PathValue("target"), body.Text); err != nil {
+	target := r.PathValue("target")
+	if err := s.herdr.Prompt(r.Context(), target, body.Text); err != nil {
 		fail(w, err)
 		return
+	}
+	if s.sup != nil {
+		s.sup.touchPaneActivity(target)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
@@ -959,6 +1062,54 @@ func init() {
 	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 }
 
+type staticAsset struct {
+	gz           []byte
+	etag         string
+	gzETag       string
+	contentType  string
+	compressible bool
+}
+
+func isCompressibleStatic(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".html", ".js", ".css", ".svg", ".webmanifest":
+		return true
+	}
+	return false
+}
+
+func acceptsGzip(r *http.Request) bool {
+	ae := r.Header.Get("Accept-Encoding")
+	if ae == "" {
+		return false
+	}
+	for _, part := range strings.Split(ae, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		tok, params, hasParams := strings.Cut(part, ";")
+		tok = strings.ToLower(strings.TrimSpace(tok))
+		if tok != "gzip" {
+			continue
+		}
+		if !hasParams {
+			return true
+		}
+		q := 1.0
+		for _, kv := range strings.Split(params, ";") {
+			k, v, ok := strings.Cut(kv, "=")
+			if ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					q = parsed
+				}
+			}
+		}
+		return q > 0
+	}
+	return false
+}
+
 func (s *Server) static() http.Handler {
 	if s.web == nil {
 		return http.NotFoundHandler()
@@ -966,31 +1117,75 @@ func (s *Server) static() http.Handler {
 	files := http.FileServerFS(s.web)
 	// Embedded files have no modification time, so browsers would guess how
 	// long to keep them and run an old app.js after an upgrade. Tag each file
-	// by its content and have the browser revalidate every time.
-	var etags sync.Map
-	etag := func(p string) string {
-		if v, ok := etags.Load(p); ok {
-			return v.(string)
+	// by its content, cache its gzipped representation in memory, and negotiate
+	// Content-Encoding with distinct ETags for compressed vs raw responses.
+	var cache sync.Map
+	loadAsset := func(p string) *staticAsset {
+		if v, ok := cache.Load(p); ok {
+			return v.(*staticAsset)
 		}
 		b, err := fs.ReadFile(s.web, p)
 		if err != nil {
-			return ""
+			return nil
 		}
 		sum := sha256.Sum256(b)
-		tag := `"` + hex.EncodeToString(sum[:8]) + `"`
-		etags.Store(p, tag)
-		return tag
+		base := hex.EncodeToString(sum[:8])
+		ct := mime.TypeByExtension(path.Ext(p))
+		if ct == "" {
+			ct = http.DetectContentType(b)
+		}
+		a := &staticAsset{
+			etag:         `"` + base + `"`,
+			gzETag:       `"` + base + `-gz"`,
+			contentType:  ct,
+			compressible: isCompressibleStatic(p),
+		}
+		if a.compressible && len(b) > 0 {
+			var buf bytes.Buffer
+			zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+			if err == nil {
+				if _, werr := zw.Write(b); werr == nil {
+					if cerr := zw.Close(); cerr == nil && buf.Len() > 0 && buf.Len() < len(b) {
+						a.gz = buf.Bytes()
+					}
+				}
+			}
+		}
+		actual, _ := cache.LoadOrStore(p, a)
+		return actual.(*staticAsset)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p == "" {
 			p = "index.html"
 		}
-		if tag := etag(p); tag != "" {
+		if a := loadAsset(p); a != nil {
+			if a.compressible {
+				w.Header().Add("Vary", "Accept-Encoding")
+			}
+			useGzip := a.compressible && len(a.gz) > 0 && r.Header.Get("Range") == "" && acceptsGzip(r)
+			tag := a.etag
+			if useGzip {
+				tag = a.gzETag
+			}
 			w.Header().Set("ETag", tag)
-			w.Header().Set("Cache-Control", "no-cache")
-			if r.Header.Get("If-None-Match") == tag {
+			if strings.HasPrefix(p, "vendor/katex/fonts/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			if etagMatches(r, tag) {
 				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			if useGzip {
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Content-Type", a.contentType)
+				w.Header().Set("Content-Length", strconv.Itoa(len(a.gz)))
+				w.WriteHeader(http.StatusOK)
+				if r.Method != http.MethodHead {
+					_, _ = w.Write(a.gz)
+				}
 				return
 			}
 		}

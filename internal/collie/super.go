@@ -64,13 +64,13 @@ type Super struct {
 	handover           *handover            // set while the router writes its memory before a fresh session
 	dream              *dreamRun            // set while Collie sleeps and a dream session tidies its memory
 	activeDreamPending bool                 // persisted active_dream marker waiting for restart cleanup
+	routineDates       map[string]string    // official routine kind → last evaluated local YYYY-MM-DD
 	hubUpdating        bool                 // set while Hub self-update has reserved an idle restart window
 	lastTrust          map[string]time.Time // pane → when its trust dialog was last answered
 	lastAnswer         map[string]time.Time // pane → when a dialog there was just answered
 	lastScreen         map[string]screenMark
 	transcripts        map[string]*transcript
 	noAgent            map[string]time.Time  // worker → since when its pane has had no agent in it
-	idleSince          map[string]time.Time  // worker → since when it has sat idle (done with its turn)
 	pinnedCache        map[string]*Entry     // older pinned entries resolved from SQLite
 	sayDedup           map[string]sayReceipt // client_msg_id → recent /api/super/say receipt
 	notifyBuf          []notice
@@ -83,11 +83,14 @@ type Super struct {
 	feishu        *FeishuAdapter
 	feishuOnboard *feishuOnboarder
 	peers         *PeerManager
+	gc            workerGCState
 }
 
 type sayReceipt struct {
 	entry   string
 	trigger string
+	picked  bool
+	inPlace bool
 	at      time.Time
 }
 
@@ -119,8 +122,8 @@ func newSuper(s *Server, dir string) (*Super, error) {
 		lastScreen:  map[string]screenMark{},
 		transcripts: map[string]*transcript{},
 		noAgent:     map[string]time.Time{},
-		idleSince:   map[string]time.Time{},
 		sayDedup:    map[string]sayReceipt{},
+		gc:          workerGCState{startedAt: time.Now()},
 	}
 	db, err := openDB(filepath.Join(dir, "herd.db")) // ~/.collie/collie.db belongs to another app
 	if err != nil {
@@ -550,6 +553,12 @@ func (sp *Super) liveAgentsWithStatus(ctx context.Context) (map[string]liveAgent
 	var byMachine map[string]map[string]paneSession
 	for _, a := range list {
 		if a.Name != nil {
+			name := *a.Name
+			// Router and Dream are strictly Hub-local system sessions: ignore
+			// any same-named leftover pane on remote nodes.
+			if name == "" || (isHubSystemName(name) && !isHubLocalPane(a.PaneID)) {
+				continue
+			}
 			la := liveAgent{Pane: a.PaneID, Status: a.AgentStatus, Ready: a.Ready, Kind: deref(a.Agent)}
 			if a.Session != nil {
 				la.Session = sessionID(a.Session.Kind, a.Session.Value)
@@ -576,7 +585,7 @@ func (sp *Super) liveAgentsWithStatus(ctx context.Context) (map[string]liveAgent
 					}
 				}
 			}
-			m[*a.Name] = la
+			m[name] = la
 		}
 	}
 	return m, answered, true
@@ -602,6 +611,7 @@ func (sp *Super) tick(parent context.Context) {
 	var fin []finished
 	var dead []*Worker         // the agent never started, or quit, leaving a shell
 	var trustWorkers []*Worker // bypass-mode workers sitting on a blocked screen (may be folder trust)
+	var reconcile []gcReconcile
 	deliveries := map[string][]*Trigger{}
 	var blockedRouterPane string
 	var wakeRouterAfterHerdr bool
@@ -638,9 +648,16 @@ func (sp *Super) tick(parent context.Context) {
 			// leave worker state and queued triggers intact until it answers again.
 			continue
 		}
+		if w.Hibernating {
+			if !sp.isWorkerGCClosingLocked(w.Name) {
+				_, alive := live[w.Name]
+				reconcile = append(reconcile, gcReconcile{name: w.Name, alive: alive})
+			}
+			continue
+		}
 		if w.Ended {
 			// herdr restored its pane (a herdr restart or update): it's back.
-			if a, ok := live[w.Name]; ok && w.Status == "gone" && w.PaneID != "" && (a.Pane == w.PaneID || machineOf(a.Pane) == wMachine) {
+			if a, ok := live[w.Name]; ok && w.Status == "gone" && w.PaneID != "" && !sp.isRecentlyClosedPaneLocked(a.Pane, now) && (a.Pane == w.PaneID || machineOf(a.Pane) == wMachine) {
 				w.Ended, w.Status, w.PaneID = false, a.Status, a.Pane
 				sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf("worker %s is back: herdr restored its pane (status %s).", w.Name, a.Status), "", "", w.Name)
 				sp.addEntryLocked("event", w.Thread, w.Name+" 回来了（herdr 恢复了它的窗格）", w.Name, "info")
@@ -670,6 +687,13 @@ func (sp *Super) tick(parent context.Context) {
 			if now.Sub(since) > 30*time.Second && now.Sub(w.CreatedAt) > 45*time.Second {
 				delete(sp.noAgent, w.Name)
 				w.Ended, w.Status, w.PaneID = true, "failed", a.Pane
+				if w.Session == "" {
+					w.StartupFailed = true
+				}
+				if w.IdleSince == nil {
+					t := now
+					w.IdleSince = &t
+				}
 				for _, t := range sp.st.Triggers {
 					if t.Status == "queued" && len(t.Targets) == 1 && t.Targets[0] == w.Name {
 						t.Status = "ignored"
@@ -692,6 +716,12 @@ func (sp *Super) tick(parent context.Context) {
 		if a.Status != prev {
 			w.Status = a.Status
 			w.PaneID = a.Pane
+			if a.Status == "idle" || a.Status == "done" {
+				t := now
+				w.IdleSince = &t
+			} else {
+				w.IdleSince = nil
+			}
 			sp.changed()
 			switch {
 			case a.Status == "blocked":
@@ -701,12 +731,22 @@ func (sp *Super) tick(parent context.Context) {
 					fin = append(fin, finished{w, false})
 				}
 			}
-		} else if a.Status == "blocked" && !askPermissions {
-			// A worker that started or recovered directly in "blocked" (e.g.
-			// agent_not_ready on folder trust or herdr pane restore) did not
-			// transition status; still check folder trust proactively.
-			w.PaneID = a.Pane
-			trustWorkers = append(trustWorkers, w)
+		} else {
+			if (a.Status == "idle" || a.Status == "done") && w.IdleSince == nil {
+				t := now
+				w.IdleSince = &t
+				sp.dirty = true
+			} else if (a.Status == "working" || a.Status == "blocked" || a.Status == "starting") && w.IdleSince != nil {
+				w.IdleSince = nil
+				sp.dirty = true
+			}
+			if a.Status == "blocked" && !askPermissions {
+				// A worker that started or recovered directly in "blocked" (e.g.
+				// agent_not_ready on folder trust or herdr pane restore) did not
+				// transition status; still check folder trust proactively.
+				w.PaneID = a.Pane
+				trustWorkers = append(trustWorkers, w)
+			}
 		}
 	}
 	// 3. Route queued triggers to sessions: subscribed workers first (fast path), router otherwise.
@@ -758,6 +798,9 @@ func (sp *Super) tick(parent context.Context) {
 	}
 
 	// Worker completion summaries need file/screen IO: do it outside the lock.
+	for _, r := range reconcile {
+		sp.reconcileHibernatingWorker(ctx, r.name, r.alive, now)
+	}
 	for _, f := range fin {
 		sp.workerSettled(ctx, f.w, f.blocked)
 	}
@@ -825,13 +868,11 @@ func (sp *Super) tick(parent context.Context) {
 	}
 	sp.checkHandover(ctx, live, len(deliveries[routerName]) > 0)
 	sp.checkDream(ctx, live, len(deliveries[routerName]) > 0)
+	sp.checkRoutines(ctx, live, len(deliveries[routerName]) > 0)
 
-	// 5. Watchdog.
+	// 5. Watchdog & lossless worker hibernation GC.
 	sp.watchdog(ctx, live, routerAlive)
-
-	// 6. Close workers that have sat idle too long: each one keeps an agent
-	// process (and its memory) alive until stopped.
-	sp.reapIdle(ctx, live, deliveries, now)
+	sp.maybeRunWorkerGC(parent, live, answered, now)
 }
 
 // fromHuman keeps what the human said in the chat.
@@ -940,6 +981,9 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 		} else if hasChat {
 			sp.routerAskedChat = true
 		}
+	}
+	if target != routerName {
+		sp.touchWorkerActivityLocked(target, time.Now(), true)
 	}
 	for _, t := range list {
 		t.Targets = remove(t.Targets, target)
@@ -1058,6 +1102,9 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 	sp.ingestLocked("worker", w.Thread, w.Name,
 		fmt.Sprintf("worker %s finished a turn. Last message:\n%s", w.Name, summary), "", "", w.Name)
 	sp.addEntryLocked("event", w.Thread, w.Name+" 完成了一轮", w.Name, "done")
+	if sp.s != nil {
+		sp.s.onWorkerSettledQuota(w.Kind)
+	}
 }
 
 // workerQuotaRe is an agent CLI saying it can't go on: a usage limit, the
@@ -1301,18 +1348,62 @@ var workerNameRe = regexp.MustCompile(`[^a-z0-9_-]+`)
 // where it ran and the conversation to open again.
 func (sp *Super) resumeFrom(name string) (*Worker, error) {
 	sp.mu.Lock()
-	defer sp.mu.Unlock()
 	w := sp.st.Workers[name]
 	switch {
-	case w == nil:
-		return nil, fmt.Errorf("no worker named %s", name)
-	case !w.Ended:
+	case w != nil && w.Hibernating:
+		sp.mu.Unlock()
+		return nil, fmt.Errorf("%s is hibernating; retry in a moment", name)
+	case w != nil && !w.Ended:
+		sp.mu.Unlock()
 		return nil, fmt.Errorf("%s is still running: `send` it instead", name)
-	case w.Session == "":
+	case w != nil && w.Session != "":
+		c := *w
+		sp.mu.Unlock()
+		return &c, nil
+	}
+	var fallback *Worker
+	if w != nil {
+		cp := *w
+		fallback = &cp
+	}
+	srv := sp.s
+	sp.mu.Unlock()
+
+	if e := srv.findEndedByName(name); e != nil {
+		res := &Worker{
+			Name:      e.Name,
+			Label:     e.Label,
+			Kind:      e.Kind,
+			Machine:   e.Machine,
+			Cwd:       e.Cwd,
+			Model:     e.Model,
+			Effort:    e.Effort,
+			Thread:    e.Thread,
+			CreatedBy: e.CreatedBy,
+			Session:   e.Session,
+			Ended:     true,
+		}
+		if fallback != nil {
+			if res.Label == "" {
+				res.Label = fallback.Label
+			}
+			if res.Model == "" && res.Effort == "" {
+				res.Model, res.Effort = fallback.Model, fallback.Effort
+				res.Run = fallback.Run
+			}
+			if res.Thread == "" {
+				res.Thread = fallback.Thread
+			}
+			if res.CreatedBy == "" {
+				res.CreatedBy = fallback.CreatedBy
+			}
+		}
+		return res, nil
+	}
+	if fallback != nil {
 		return nil, fmt.Errorf("%s left no conversation to resume; spawn a fresh worker", name)
 	}
-	c := *w
-	return &c, nil
+	return nil, fmt.Errorf("no worker named %s", name)
 }
 
 func (sp *Super) Spawn(kind, cwd, task, thread, name, label, by, machine, model, effort string, subscribe bool, resume string) (*Worker, <-chan error, error) {
@@ -1359,7 +1450,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, label, by, machine, model,
 		}
 	}
 	name = strings.Trim(workerNameRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
-	if !nameRe.MatchString(name) || name == routerName {
+	if !nameRe.MatchString(name) || isHubSystemName(name) {
 		sp.mu.Unlock()
 		return nil, nil, fmt.Errorf("invalid worker name %q", name)
 	}
@@ -1390,6 +1481,9 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, label, by, machine, model,
 	}
 	sp.addEntryLocked("event", thread, fmt.Sprintf("%s %s（%s%s）：%s", verb, name, kind, where, clip(firstLine(task), 120)), name, "spawn")
 	sp.mu.Unlock()
+	if resume != "" && sp.s != nil {
+		sp.s.forgetSession(kinds[kind], m.ID, resume)
+	}
 
 	// The default model applies to the default kind of worker.
 	sp.mu.Lock()
@@ -1439,6 +1533,11 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, label, by, machine, model,
 		blocked := err != nil && errors.As(err, &he) && he.Code == "agent_not_ready"
 		if err != nil && !blocked {
 			w.Status, w.Ended, w.Note = "failed", true, err.Error()
+			if w.Session == "" {
+				w.StartupFailed = true
+			}
+			now := time.Now()
+			w.IdleSince = &now
 			e := sp.addEntryLocked("event", thread, name+" 启动失败："+err.Error(), name, "error")
 			sp.mu.Unlock()
 			if !tell(err) {
@@ -1453,6 +1552,9 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, label, by, machine, model,
 		w.Status = "idle"
 		if blocked {
 			w.Status = "blocked"
+		} else {
+			now := time.Now()
+			w.IdleSince = &now
 		}
 		sp.changed()
 		sp.mu.Unlock()
@@ -1506,7 +1608,9 @@ func (sp *Super) Report(name, text string) error {
 	if w == nil {
 		return fmt.Errorf("unknown worker %s", name)
 	}
-	w.LastReport, w.ReportAt = text, time.Now()
+	now := time.Now()
+	w.LastReport, w.ReportAt = text, now
+	sp.touchWorkerActivityLocked(name, now, false)
 	t := sp.ingestLocked("worker", w.Thread, name, fmt.Sprintf("report from %s:\n%s", name, text), "", "", name)
 	e := sp.addEntryLocked("event", w.Thread, name+" 回报："+clip(text, 160), name, "done")
 	if t != nil {
@@ -1554,6 +1658,34 @@ func (sp *Super) workerLabels() (byPane, byName map[string]string) {
 				byName = map[string]string{}
 			}
 			byName[w.Name] = lbl
+		}
+	}
+	return byPane, byName
+}
+
+// workerCreatedAt returns the creation timestamps of active workers, keyed by
+// pane_id and ASCII worker name, so GET /api/state can expose durable ordering.
+func (sp *Super) workerCreatedAt() (byPane, byName map[string]time.Time) {
+	if sp == nil {
+		return nil, nil
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	for _, w := range sp.st.Workers {
+		if w == nil || w.Ended || w.CreatedAt.IsZero() {
+			continue
+		}
+		if w.PaneID != "" {
+			if byPane == nil {
+				byPane = map[string]time.Time{}
+			}
+			byPane[w.PaneID] = w.CreatedAt
+		}
+		if w.Name != "" {
+			if byName == nil {
+				byName = map[string]time.Time{}
+			}
+			byName[w.Name] = w.CreatedAt
 		}
 	}
 	return byPane, byName
@@ -1617,67 +1749,6 @@ func workerCollieBin(hubBin string, m *Machine, kind string) string {
 		return m.Bin
 	}
 	return "collie"
-}
-
-// reapIdle stops workers that have been idle longer than the idle-stop
-// setting. Idle time is counted from when this process first saw it idle, so a
-// collie restart starts the clock again. Left alone: workers still starting,
-// working or blocked; ones with messages queued for them; ones subscribed to a
-// thread (they are waiting for its events); and ones without a herdr
-// workspace of their own to close.
-func (sp *Super) reapIdle(ctx context.Context, live map[string]liveAgent, delivered map[string][]*Trigger, now time.Time) {
-	sp.mu.Lock()
-	if sp.idleSince == nil {
-		sp.idleSince = map[string]time.Time{}
-	}
-	limit := sp.st.Settings.idleStop()
-	queued := map[string]bool{}
-	for _, t := range sp.st.Triggers {
-		if t.Status == "queued" {
-			for _, target := range t.Targets {
-				queued[target] = true
-			}
-		}
-	}
-	subscribed := map[string]bool{}
-	for _, th := range sp.st.Threads {
-		for _, sub := range th.Subscribers {
-			subscribed[sub] = true
-		}
-	}
-	var stale []*Worker
-	for name := range sp.idleSince {
-		if w := sp.st.Workers[name]; w == nil || w.Ended {
-			delete(sp.idleSince, name)
-		}
-	}
-	for name, w := range sp.st.Workers {
-		if w.Ended || name == routerName {
-			continue
-		}
-		a, alive := live[name]
-		// live is from before this tick's deliveries: one just handed work
-		// still reads idle here.
-		if !alive || (a.Status != "idle" && a.Status != "done") || queued[name] || len(delivered[name]) > 0 {
-			delete(sp.idleSince, name)
-			continue
-		}
-		since, seen := sp.idleSince[name]
-		if !seen {
-			sp.idleSince[name] = now
-			continue
-		}
-		if limit > 0 && now.Sub(since) >= limit && !subscribed[name] && w.WorkspaceID != "" {
-			stale = append(stale, w)
-		}
-	}
-	sp.mu.Unlock()
-
-	for _, w := range stale {
-		mins := int(limit.Minutes())
-		log.Printf("super: stopping %s, idle for %d min", w.Name, mins)
-		sp.s.stopWorker(ctx, w, fmt.Sprintf("%s 空闲超过 %d 分钟，已自动回收（需要时可 spawn --resume 接着用）", w.Name, mins))
-	}
 }
 
 // watchRouter catches Collie itself hanging mid-turn (a stream that never

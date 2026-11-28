@@ -32,7 +32,7 @@ const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 assert.ok(scripts.length >= 2, "expected FOUC theme script + main script");
 const mainSrc = scripts[scripts.length - 1][1];
 
-function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN" } = {}) {
+function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN", userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36", maxTouchPoints = 0, clipboardFail = false, execCopyOk = true } = {}) {
   const storage = new Map();
   if (savedHub !== null) storage.set("collie-join-hub-url", savedHub);
 
@@ -47,6 +47,7 @@ function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN" } = {}) {
   }
   function makeEl(id = "") {
     const listeners = new Map(), attrs = new Map();
+    let popOpen = false;
     const el = {
       id, tagName: "DIV", value: "", textContent: "", innerHTML: "", placeholder: "", content: "light dark",
       hidden: false, disabled: false, checked: false, open: false, className: "", dataset: {},
@@ -58,13 +59,17 @@ function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN" } = {}) {
       getAttribute(k) { return attrs.get(k) ?? ""; },
       removeAttribute(k) { attrs.delete(k); },
       setCustomValidity(m) { el._validity = m; },
+      matches(sel) { return sel === ":popover-open" ? popOpen : false; },
+      showPopover() { popOpen = true; },
+      hidePopover() { popOpen = false; },
+      contains() { return false; },
       append(...nodes) {
         for (const n of nodes) {
           el.children.push(n);
           el.textContent += typeof n === "string" ? n : (n.textContent || "");
         }
       },
-      focus() {}, select() {}, remove() {},
+      focus() {}, select() {}, setSelectionRange() {}, remove() {},
     };
     return el;
   }
@@ -94,6 +99,7 @@ function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN" } = {}) {
     document: {
       title: "",
       hidden: false,
+      activeElement: null,
       documentElement: makeEl("html"),
       body: makeEl("body"),
       createElement: (tag) => makeEl(tag),
@@ -103,7 +109,7 @@ function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN" } = {}) {
       querySelectorAll: (sel) => (sel.includes('hub_mode') ? radios : []),
       addEventListener(type, fn) { if (!docListeners.has(type)) docListeners.set(type, []); docListeners.get(type).push(fn); },
       removeEventListener() {},
-      execCommand() {},
+      execCommand() { return execCopyOk; },
     },
     location: {
       hash,
@@ -113,7 +119,14 @@ function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN" } = {}) {
     },
     navigator: {
       language: lang,
-      clipboard: { writeText: async (txt) => { clipboardText = txt; } },
+      userAgent,
+      maxTouchPoints,
+      clipboard: {
+        writeText: async (txt) => {
+          if (clipboardFail) throw new Error("denied");
+          clipboardText = txt;
+        },
+      },
     },
     localStorage: {
       getItem: (k) => (storage.has(k) ? storage.get(k) : null),
@@ -129,7 +142,7 @@ function runJoinPage({ hash = "", savedHub = null, lang = "zh-CN" } = {}) {
 
   const instrumented = mainSrc.replace(
     "syncFromHash();\n})();",
-    "syncFromHash();\nglobalThis.__join = { getState: () => cardState, extractInviteFromInput, parseCardFromHash, buildPwaLaunchUrl, buildHttpLaunchUrl, normalizeUserHubUrl };\n})();"
+    "syncFromHash();\nglobalThis.__join = { getState: () => cardState, getMode: () => selectedMode, isMobileClient, detectMobileClient, extractInviteFromInput, parseCardFromHash, buildPwaLaunchUrl, buildHttpLaunchUrl, normalizeUserHubUrl };\n})();"
   );
   vm.runInNewContext(instrumented, ctx, { filename: "docs/join/index.html" });
 
@@ -227,7 +240,94 @@ assert.deepEqual(runV2.J.extractInviteFromInput("http://127.0.0.1:17788/?peer_in
 assert.deepEqual(runV2.J.extractInviteFromInput("https://lihuanyu0w0.github.io/collie/join/#" + v1B64), { ver: 1, b64: v1B64 });
 assert.deepEqual(runV2.J.extractInviteFromInput("collie-peer://v1/" + v1B64), { ver: 1, b64: v1B64 });
 
-console.log("OK: all join page v1/v2/PWA contracts passed");
+// 5) Mobile UX (iPhone Safari / in-app WebView / Android / iPadOS) without saved custom URL:
+//    - Hides desktop 127.0.0.1 presets & web+collie:// quick launch
+//    - Never selects web+collie:// even if stale localStorage had it
+//    - Primary CTA copies raw invite code & opens clear toast + inline guidance
+//    - Saving custom LAN/Tailscale URL switches seamlessly to direct http(s) launch
+(async () => {
+  const iPhoneLarkUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Lark/7.20";
+  const androidWechatUA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 MicroMessenger/8.0";
+  const iPadDesktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+
+  // 5a) Fresh mobile visit (even with stale web+collie:// in localStorage) defaults to mobile_copy
+  const runMob = runJoinPage({ hash: "#2." + v2B64, savedHub: "web+collie://", lang: "zh-CN", userAgent: iPhoneLarkUA });
+  assert.equal(runMob.J.isMobileClient, true);
+  assert.equal(runMob.J.getMode(), "mobile_copy", "mobile must ignore stale web+collie:// and default to copy-first");
+  assert.equal(runMob.getEl("addr-presets-desktop").hidden, true, "desktop presets must be hidden on mobile");
+  assert.equal(runMob.getEl("pwa-quick-row").hidden, true, "web+collie:// quick row must be hidden on mobile");
+  assert.equal(runMob.getEl("mode-pwa").checked, false, "mobile must never check web+collie://");
+  assert.equal(runMob.getEl("copy-code-btn").hidden, true, "duplicate secondary copy button hidden in copy-first mode");
+  assert.equal(runMob.getEl("open-btn").classList.contains("is-copy-primary"), true);
+  assert.equal(runMob.getEl("open-btn-text").textContent, "复制邀请码，去 Collie 粘贴");
+  assert.equal(runMob.getEl("addr-switch-text").textContent, "填写我的局域网 / Tailscale 地址直达");
+  assert.equal(runMob.getEl("custom-wrap").hidden, false, "custom URL input ready inside collapsible disclosure");
+
+  // Submitting in mobile_copy mode copies invite code without navigating away
+  const origHref = runMob.ctx.location.href;
+  runMob.getEl("hub-form").dispatch("submit", { preventDefault() {} });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(runMob.ctx.location.href, origHref, "mobile copy primary CTA must NOT navigate to web+collie://");
+  assert.equal(runMob.getClipboard(), "collie-peer://v2/" + v2B64);
+  assert.equal(runMob.getEl("join-toast").hidden, false, "mobile copy shows toast guidance");
+  assert.ok(runMob.getEl("join-toast-msg").textContent.includes("好友边牧"), "toast guides back to Collie peer modal");
+  assert.equal(runMob.getEl("mobile-copy-guide").hidden, false, "inline copy guide remains visible");
+
+  // Rejects web+collie:// and 127.0.0.1 in mobile custom URL input
+  assert.equal(runMob.J.normalizeUserHubUrl("web+collie://").ok, false, "mobile rejects web+collie://");
+  assert.equal(runMob.J.normalizeUserHubUrl("http://127.0.0.1:7788").ok, false, "mobile rejects 127.0.0.1");
+
+  // Saving LAN/Tailscale URL remembers it & transitions live to direct http(s) launch + secondary copy button
+  runMob.getEl("hub-url").value = "192.168.1.42:7788";
+  runMob.getEl("save-custom-btn").dispatch("click");
+  assert.equal(runMob.storage.get("collie-join-hub-url"), "http://192.168.1.42:7788");
+  assert.equal(runMob.J.getMode(), "custom");
+  assert.equal(runMob.getEl("open-btn").classList.contains("is-copy-primary"), false);
+  assert.equal(runMob.getEl("open-btn-text").textContent, "在我的 Collie 中打开");
+  assert.equal(runMob.getEl("copy-code-btn").hidden, false, "secondary copy button appears once custom URL is saved");
+  assert.equal(runMob.getEl("clear-custom-btn").hidden, false, "clear saved URL button visible on mobile custom mode");
+  runMob.getEl("hub-form").dispatch("submit", { preventDefault() {} });
+  assert.equal(
+    runMob.ctx.location.href,
+    "http://192.168.1.42:7788/?peer_invite=" + encodeURIComponent("collie-peer://v2/" + v2B64)
+  );
+
+  // Clearing saved custom URL returns cleanly to copy-first mode
+  runMob.getEl("clear-custom-btn").dispatch("click");
+  assert.equal(runMob.storage.get("collie-join-hub-url"), undefined);
+  assert.equal(runMob.J.getMode(), "mobile_copy");
+  assert.equal(runMob.getEl("open-btn-text").textContent, "复制邀请码，去 Collie 粘贴");
+  assert.equal(runMob.getEl("copy-code-btn").hidden, true);
+
+  // 5b) Mobile with remembered custom HTTPS URL (English)
+  const runMobSaved = runJoinPage({ hash: "#2." + v2B64, savedHub: "https://collie.example.com", lang: "en-US", userAgent: androidWechatUA });
+  assert.equal(runMobSaved.J.isMobileClient, true);
+  assert.equal(runMobSaved.J.getMode(), "custom");
+  assert.equal(runMobSaved.getEl("open-btn-text").textContent, "Open in my Collie");
+  assert.equal(runMobSaved.getEl("copy-code-btn").hidden, false);
+  assert.equal(runMobSaved.getEl("pwa-quick-row").hidden, true);
+  runMobSaved.getEl("hub-form").dispatch("submit", { preventDefault() {} });
+  assert.equal(
+    runMobSaved.ctx.location.href,
+    "https://collie.example.com/?peer_invite=" + encodeURIComponent("collie-peer://v2/" + v2B64)
+  );
+
+  // 5c) iPadOS desktop-UA with multi-touch detected as mobile; macOS with 0 touch points stays desktop
+  const runIpad = runJoinPage({ hash: "#2." + v2B64, userAgent: iPadDesktopUA, maxTouchPoints: 5, lang: "en-US" });
+  assert.equal(runIpad.J.isMobileClient, true, "iPadOS desktop UA + touchPoints>1 must be treated as mobile");
+  assert.equal(runIpad.getEl("open-btn-text").textContent, "Copy invite code & paste in Collie");
+  assert.equal(runV2.J.isMobileClient, false, "macOS desktop with 0 touchPoints stays desktop");
+
+  // 5d) Clipboard write failure shows selectable fallback code input
+  const runFail = runJoinPage({ hash: "#2." + v2B64, userAgent: iPhoneLarkUA, clipboardFail: true, execCopyOk: false });
+  runFail.getEl("hub-form").dispatch("submit", { preventDefault() {} });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(runFail.getEl("mobile-copy-guide").classList.contains("is-err"), true);
+  assert.equal(runFail.getEl("mobile-copy-fallback-code").hidden, false);
+  assert.equal(runFail.getEl("mobile-copy-fallback-code").value, "collie-peer://v2/" + v2B64);
+
+  console.log("OK: all join page v1/v2/PWA & mobile UX contracts passed");
+})().catch((e) => { console.error(e); process.exit(1); });
 `
 	cmd := exec.Command("node", "-e", script)
 	cmd.Dir = filepath.Join("..", "..")

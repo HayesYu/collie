@@ -199,7 +199,8 @@ func forgetExternalSessions() {
 func (s *Server) externalSessions() []*External {
 	externalCache.Lock()
 	defer externalCache.Unlock()
-	if cached := externalCache.snapshot.Load(); cached != nil && time.Since(cached.at) < 4*time.Second {
+	cached := externalCache.snapshot.Load()
+	if cached != nil && time.Since(cached.at) < 4*time.Second {
 		return cached.list
 	}
 	ps, err := listProcs()
@@ -303,6 +304,22 @@ func (s *Server) externalSessions() []*External {
 		}
 	}
 	list = kept
+	if cached != nil {
+		prevStarted := make(map[string]time.Time, len(cached.list))
+		for _, e := range cached.list {
+			if e.Live && !e.Started.IsZero() {
+				prevStarted[e.ID] = e.Started
+			}
+		}
+		for _, e := range list {
+			if !e.Live {
+				continue
+			}
+			if prev, ok := prevStarted[e.ID]; ok && (!e.desktop || e.Started.Equal(now)) {
+				e.Started = prev
+			}
+		}
+	}
 	sortSessions(list)
 	externalCache.snapshot.Store(&externalSnapshot{at: time.Now(), list: list})
 	return list
@@ -752,13 +769,24 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"pane_id": pane, "workspace_id": ws, "name": name})
 }
 
-// sortSessions puts running sessions first, then the most recently active.
+// sortSessions puts running sessions first (newest created first with stable
+// ID tie-breaker), then resting sessions by most recently active.
 func sortSessions(list []*External) {
 	sort.SliceStable(list, func(i, j int) bool {
 		if list[i].Live != list[j].Live {
 			return list[i].Live
 		}
-		return lastActive(list[i]).After(lastActive(list[j]))
+		if list[i].Live {
+			if !list[i].Started.Equal(list[j].Started) {
+				return list[i].Started.After(list[j].Started)
+			}
+			return list[i].ID < list[j].ID
+		}
+		ai, aj := lastActive(list[i]), lastActive(list[j])
+		if !ai.Equal(aj) {
+			return ai.After(aj)
+		}
+		return list[i].ID < list[j].ID
 	})
 }
 

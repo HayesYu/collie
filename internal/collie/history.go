@@ -17,17 +17,24 @@ import (
 // so they can be read and continued later.
 
 type Ended struct {
-	ID      string    `json:"id"`
-	Kind    string    `json:"kind"` // claude | codex | agy
-	Machine string    `json:"machine,omitempty"`
-	Cwd     string    `json:"cwd"`
-	Title   string    `json:"title,omitempty"`
-	Name    string    `json:"name,omitempty"`
-	Session string    `json:"session"`
-	Ended   time.Time `json:"ended"`
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"` // claude | codex | agy | doubao | cursor
+	Machine     string    `json:"machine,omitempty"`
+	Cwd         string    `json:"cwd"`
+	Title       string    `json:"title,omitempty"`
+	Name        string    `json:"name,omitempty"`
+	Label       string    `json:"label,omitempty"`
+	Model       string    `json:"model,omitempty"`
+	Effort      string    `json:"effort,omitempty"`
+	Thread      string    `json:"thread,omitempty"`
+	CreatedBy   string    `json:"created_by,omitempty"`
+	Subscribers []string  `json:"subscribers,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
+	Session     string    `json:"session"`
+	Ended       time.Time `json:"ended"`
 }
 
-const maxEnded = 40
+const maxEnded = 200
 
 var history = struct {
 	sync.Mutex
@@ -41,18 +48,54 @@ func (s *Server) loadHistory() {
 	}
 	history.loaded = true
 	var raw string
-	if s.sup != nil && s.sup.db.QueryRow(`SELECT v FROM kv WHERE k='ended_sessions'`).Scan(&raw) == nil {
+	if s.sup != nil && s.sup.db != nil && s.sup.db.QueryRow(`SELECT v FROM kv WHERE k='ended_sessions'`).Scan(&raw) == nil {
 		json.Unmarshal([]byte(raw), &history.list)
 	}
 }
 
 func (s *Server) saveHistory() {
-	if s.sup == nil {
+	if s.sup == nil || s.sup.db == nil {
 		return
 	}
 	b, _ := json.Marshal(history.list)
 	if _, err := s.sup.db.Exec(`INSERT INTO kv(k,v) VALUES('ended_sessions',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(b)); err != nil {
 		log.Printf("save ended sessions: %v", err)
+	}
+}
+
+func mergeEndedMeta(dst, prev *Ended) {
+	if dst == nil || prev == nil {
+		return
+	}
+	if dst.Cwd == "" {
+		dst.Cwd = prev.Cwd
+	}
+	if dst.Title == "" {
+		dst.Title = prev.Title
+	}
+	if dst.Name == "" {
+		dst.Name = prev.Name
+	}
+	if dst.Label == "" {
+		dst.Label = prev.Label
+	}
+	if dst.Model == "" {
+		dst.Model = prev.Model
+	}
+	if dst.Effort == "" {
+		dst.Effort = prev.Effort
+	}
+	if dst.Thread == "" {
+		dst.Thread = prev.Thread
+	}
+	if dst.CreatedBy == "" {
+		dst.CreatedBy = prev.CreatedBy
+	}
+	if len(dst.Subscribers) == 0 && len(prev.Subscribers) > 0 {
+		dst.Subscribers = append([]string(nil), prev.Subscribers...)
+	}
+	if dst.Reason == "" {
+		dst.Reason = prev.Reason
 	}
 }
 
@@ -62,9 +105,11 @@ func (s *Server) remember(e *Ended) {
 	s.loadHistory()
 	kept := history.list[:0]
 	for _, x := range history.list {
-		if !(x.Kind == e.Kind && x.Session == e.Session && x.Machine == e.Machine) {
-			kept = append(kept, x)
+		if x.Kind == e.Kind && x.Session == e.Session && x.Machine == e.Machine {
+			mergeEndedMeta(e, x)
+			continue
 		}
+		kept = append(kept, x)
 	}
 	e.ID = randomToken()[:10]
 	history.list = append([]*Ended{e}, kept...)
@@ -72,6 +117,34 @@ func (s *Server) remember(e *Ended) {
 		history.list = history.list[:maxEnded]
 	}
 	s.saveHistory()
+}
+
+// findEndedByName returns the most recent archived session matching a worker
+// name (with a valid resumable session id), or nil.
+func (s *Server) findEndedByName(name string) *Ended {
+	if s == nil || name == "" {
+		return nil
+	}
+	history.Lock()
+	defer history.Unlock()
+	s.loadHistory()
+	var best *Ended
+	for _, x := range history.list {
+		if x == nil || x.Name != name || x.Session == "" {
+			continue
+		}
+		if best == nil || x.Ended.After(best.Ended) {
+			best = x
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	cp := *best
+	if len(best.Subscribers) > 0 {
+		cp.Subscribers = append([]string(nil), best.Subscribers...)
+	}
+	return &cp
 }
 
 // forgetSession drops a session that is live again (it was continued).
@@ -119,7 +192,14 @@ func (s *Server) watchEndings(ctx context.Context) {
 			}
 		}
 		now := map[string]bool{}
+		seenAt := time.Now()
 		for _, a := range st.Agents {
+			// Skip panes that GC is closing or just closed so an in-flight poll
+			// cannot call forgetSession and wipe a freshly archived hibernation.
+			if s.sup != nil && s.sup.isPaneGCProtected(a.PaneID, seenAt) {
+				delete(prev, a.PaneID)
+				continue
+			}
 			now[a.PaneID] = true
 			// Collie's own session isn't one to reopen; its name can lag behind
 			// after a restart, its workspace label doesn't.

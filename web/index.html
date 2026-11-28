@@ -14,9 +14,8 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/vendor/xterm.css">
-  <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/quota.css">
   <script>
     // Apply this device's look before first paint (see 偏好设置).
     try {
@@ -110,7 +109,13 @@
           <a class="foot-status" href="#/devices" id="nav-devices" title="管理电脑与连接">
             <span class="conn" id="conn" aria-hidden="true"></span><span id="herdr-status" class="muted">connecting…</span><svg class="foot-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.25 3.75L10.5 8l-4.25 4.25"/></svg>
           </a>
-          <div class="sf-acts" role="group" aria-label="好友与设置">
+          <div class="sf-acts" role="group" aria-label="额度、好友与设置">
+            <button type="button" class="icon-btn sf-btn sf-quota-btn" id="nav-quota" aria-controls="quota-popover" aria-expanded="false" title="订阅额度" aria-label="订阅额度">
+              <span class="q-ring-box" aria-hidden="true">
+                <progress class="q-ring is-unknown" id="nav-quota-ring" value="0" max="100" tabindex="-1"></progress>
+              </span>
+              <span class="sf-badge-dot" id="nav-quota-dot" aria-hidden="true" hidden></span>
+            </button>
             <button type="button" class="icon-btn sf-btn" id="nav-peers" title="好友边牧" aria-label="好友边牧">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 18.5c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M15.8 14.3c2 .3 3.8 1.6 4.7 4.2"/></svg>
               <span class="sf-badge-dot" id="nav-peers-dot" aria-hidden="true" hidden></span>
@@ -146,6 +151,12 @@
       </div>
       <div class="sr-foot">
         <div class="sr-sep" aria-hidden="true"></div>
+        <button type="button" class="sr-btn sr-quota-btn" id="rail-quota" aria-controls="quota-popover" aria-expanded="false" title="订阅额度" aria-label="订阅额度">
+          <span class="q-ring-box" aria-hidden="true">
+            <progress class="q-ring is-unknown" id="rail-quota-ring" value="0" max="100" tabindex="-1"></progress>
+          </span>
+          <span class="sr-badge-dot" id="rail-quota-dot" aria-hidden="true" hidden></span>
+        </button>
         <a class="sr-btn" id="rail-devices" href="#/devices" title="设备与连接" aria-label="设备与连接">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M8 20h8M12 17v3"/></svg>
           <span class="sr-conn-dot" id="rail-conn" aria-hidden="true"></span>
@@ -173,8 +184,7 @@
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
         <div class="d-head-acts">
-          <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
-          <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" aria-label="展开或收起小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
+          <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" aria-label="小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
             <span>小本本</span>
             <span class="th-head-dot" id="open-notes-dot" aria-hidden="true" hidden></span>
           </button>
@@ -182,10 +192,19 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
           </button>
           <div class="menu-wrap">
-            <button class="icon-btn" data-menu="collie-menu" title="更多">
-              <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+            <button type="button" class="icon-btn collie-more-btn" id="collie-menu-btn" data-menu="collie-menu" aria-label="更多" title="更多">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+              <span class="menu-update-dot mobile-only" id="collie-update-dot" aria-hidden="true" hidden></span>
+              <span class="mob-more-dot" id="collie-more-quota-dot" aria-hidden="true" hidden></span>
             </button>
             <div class="menu" id="collie-menu" hidden>
+              <button type="button" class="menu-update-btn mobile-only" id="collie-update-btn" hidden></button>
+              <hr class="menu-update-sep mobile-only" id="collie-update-sep" hidden>
+              <button type="button" data-act="quota" id="menu-open-quota" class="menu-quota-btn">
+                <span>订阅额度</span>
+                <span class="hm-sub" id="menu-quota-sub">查看</span>
+              </button>
+              <hr>
               <button data-act="router-open">查看 Collie 的终端</button>
               <button data-act="router-restart">重启 Collie</button>
               <button data-act="pause">暂停投递</button>
@@ -210,13 +229,10 @@
       <div class="notes-scrim" id="notes-scrim" aria-hidden="true"></div>
       <aside class="notepane is-hidden" id="notes-pane" data-side-mode="notes" aria-label="小本本" aria-hidden="true" inert>
         <div class="np-inner">
-          <button type="button" class="np-handle" id="np-handle" aria-label="收起侧卡" title="收起侧卡">
+          <button type="button" class="np-handle" id="np-handle" aria-label="下滑或轻点收起小本本" title="收起小本本">
             <span class="np-handle-pill" aria-hidden="true"></span>
           </button>
           <header class="np-head" id="np-head" title="点击空白处切换紧凑或展开">
-            <button type="button" class="icon-btn np-back" id="np-back" aria-label="返回对话" title="返回对话">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
-            </button>
             <div class="np-title-row">
               <h2 class="np-title" id="np-title">小本本</h2>
               <span class="np-sub" id="np-date"></span>
@@ -892,6 +908,7 @@
   <div class="lb-stage" id="lb-stage">
     <div class="lb-status" id="lb-status" hidden></div>
     <img class="lb-img" id="lb-img" alt="" draggable="false" hidden>
+    <div class="lb-svg" id="lb-svg" hidden></div>
   </div>
   <button type="button" class="lb-nav prev" id="lb-prev" aria-label="上一张图片" title="上一张 (←)" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
@@ -950,10 +967,35 @@
 </dialog>
 <input type="file" id="mem-import-file" accept=".zip,application/zip" class="visually-hidden" tabindex="-1" aria-label="选择记忆压缩包">
 
+<!-- ───────────── account subscription quota popover / mobile sheet ───────────── -->
+<div id="quota-popover" class="quota-pop" popover="auto" aria-labelledby="qp-title">
+  <div class="qp-handle" aria-hidden="true"><span></span></div>
+  <header class="qp-head">
+    <h2 class="qp-title" id="qp-title">订阅额度</h2>
+    <div class="qp-head-right">
+      <span id="qp-updated">读取中…</span>
+      <button type="button" class="qp-refresh" id="qp-refresh-btn" aria-label="刷新订阅额度" title="手动刷新（不消耗模型额度）">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 11a8 8 0 1 0 2 5.3"/>
+          <path d="M20 4v7h-7"/>
+        </svg>
+      </button>
+      <button type="button" class="qp-close" id="qp-close-btn" aria-label="关闭订阅额度面板" title="关闭">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </header>
+  <div class="qp-body" id="qp-body"></div>
+  <footer class="qp-foot">
+    <span>仅读取本机官方状态，不消耗模型额度</span>
+    <span id="qp-cooldown" class="qp-cooldown"></span>
+  </footer>
+</div>
+<div class="visually-hidden" role="status" aria-live="polite" id="quota-live-status"></div>
+
 <div class="toasts" id="toasts" popover="manual" role="region" aria-label="通知" aria-live="polite" aria-atomic="false"></div>
 
-<script src="/vendor/xterm.js"></script>
-<script src="/vendor/katex/katex.min.js"></script>
+<script src="/quota.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

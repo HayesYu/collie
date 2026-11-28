@@ -236,7 +236,15 @@ func (s *Server) superState(ctx context.Context) superView {
 			v.Workers = append(v.Workers, &cp)
 		}
 	}
-	sort.Slice(v.Workers, func(i, j int) bool { return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt) })
+	sort.Slice(v.Workers, func(i, j int) bool {
+		if !v.Workers[i].CreatedAt.Equal(v.Workers[j].CreatedAt) {
+			return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt)
+		}
+		if v.Workers[i].Name != v.Workers[j].Name {
+			return v.Workers[i].Name < v.Workers[j].Name
+		}
+		return v.Workers[i].PaneID < v.Workers[j].PaneID
+	})
 	v.Follow = sp.followLocked()
 	for _, t := range sp.st.Timers {
 		if t.Enabled {
@@ -320,6 +328,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		Effort      string `json:"effort"`
 		Re          string `json:"re"`            // a message of Collie's this answers
 		Pick        bool   `json:"pick"`          // true when tapping a --opt button: collapse card in-place without a user bubble
+		InPlace     bool   `json:"in_place"`      // true when replying to an earlier message while scrolled up: settle under target & thread without a main-bottom bubble
 		ClientMsgID string `json:"client_msg_id"` // optional client idempotency token
 	}
 	if !decode(w, r, &body) || strings.TrimSpace(body.Text) == "" {
@@ -337,7 +346,14 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	sp.mu.Lock()
 	if prev, ok := sp.lookupSayDedupLocked(cid, now); ok {
 		sp.mu.Unlock()
-		writeJSON(w, 200, map[string]any{"entry": prev.entry, "trigger": prev.trigger, "duplicate": true})
+		dupResp := map[string]any{"entry": prev.entry, "trigger": prev.trigger, "duplicate": true}
+		if prev.picked {
+			dupResp["picked"] = true
+		}
+		if prev.inPlace {
+			dupResp["in_place"] = true
+		}
+		writeJSON(w, 200, dupResp)
 		return
 	}
 	beforePending := sp.pendingLocked(now)
@@ -349,6 +365,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	isSilentPick := body.Pick && pickTarget != nil
+	isInPlace := !isSilentPick && body.InPlace && re != nil && re.Entry != ""
 	var entryID string
 	text := body.Text
 	if isSilentPick {
@@ -362,9 +379,12 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		if cid != "" {
 			e.ClientMsgID = cid
 		}
+		if isInPlace {
+			e.InPlace = true
+		}
 		entryID = e.ID
 		if pickTarget != nil && pickTarget.Pick == nil {
-			pickTarget.Pick = &DecisionPick{State: "custom", Text: strings.TrimSpace(body.Text), At: now}
+			pickTarget.Pick = &DecisionPick{State: "custom", Text: strings.TrimSpace(body.Text), At: now, InPlace: isInPlace}
 			sp.changed()
 		}
 		if re != nil { // which message they mean: Collie need not guess
@@ -419,6 +439,13 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	}
 	t := sp.ingestLocked("chat", mainThread, "you", text, "", "", entryID)
 	sp.recordSayDedupLocked(cid, entryID, t.ID, now)
+	if cid != "" {
+		if rec, ok := sp.sayDedup[cid]; ok {
+			rec.picked = isSilentPick
+			rec.inPlace = isInPlace
+			sp.sayDedup[cid] = rec
+		}
+	}
 	afterPending := sp.pendingLocked(now)
 	mgr := sp.integrations
 	sp.mu.Unlock()
@@ -451,6 +478,9 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"entry": entryID, "trigger": t.ID}
 	if isSilentPick {
 		resp["picked"] = true
+	}
+	if isInPlace {
+		resp["in_place"] = true
 	}
 	writeJSON(w, 200, resp)
 }
@@ -655,6 +685,9 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Model == "" && body.Effort == "" {
 			body.Model, body.Effort = old.Model, old.Effort
+			if body.Model == "" && body.Effort == "" && old.Run != nil {
+				body.Model, body.Effort = old.Run[0], old.Run[1]
+			}
 		}
 		if body.Thread == "" {
 			body.Thread = old.Thread
@@ -732,6 +765,7 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 		body.Thread = wk.Thread
 	}
 	t := sp.ingestLocked("router", body.Thread, routerName, body.Text, "", body.To, "")
+	sp.touchWorkerActivityLocked(body.To, time.Now(), true)
 	sp.mu.Unlock()
 	writeJSON(w, 202, map[string]any{"trigger": t.ID, "note": "queued; delivered when the worker is free"})
 }
@@ -809,20 +843,10 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]any{"error": "unknown worker"})
 		return
 	}
-	s.stopWorker(r.Context(), wk, wk.Name+" 已停止")
-	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
-// stopWorker ends a worker the way `collie stop` does: interrupt its turn,
-// close its herdr workspace (which ends the agent and, for claude-sg, the
-// process in the container) and mark it gone. Its Session is kept so a later
-// `spawn --resume` can carry on. note is the event shown in its thread.
-func (s *Server) stopWorker(ctx context.Context, wk *Worker, note string) {
-	sp := s.sup
 	if wk.Session == "" && wk.PaneID != "" {
 		// herdr does not always know (Antigravity, or Codex without hook): ask the pane's machine.
 		local, m := split(wk.PaneID)
-		sess := s.titlesFor(m, ctx)[local].Session
+		sess := s.titlesFor(m, r.Context())[local].Session
 		if sess == "" && m == "" && kinds[wk.Kind] == "codex" {
 			if p, _ := s.findTranscript("codex", "", "", local, wk.Cwd); p != "" {
 				sess = codexSessionID(p)
@@ -838,27 +862,37 @@ func (s *Server) stopWorker(ctx context.Context, wk *Worker, note string) {
 		// Esc stops the turn it is on, the way you would before closing it:
 		// Codex's turn lives in a shared daemon and would carry on without
 		// its window.
-		s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": wk.PaneID, "keys": []string{"esc"}}, nil)
+		s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": wk.PaneID, "keys": []string{"esc"}}, nil)
 		time.Sleep(700 * time.Millisecond)
 	}
 	if kinds[wk.Kind] == "codex" && wk.Session != "" {
 		// Its turn runs in Codex's shared daemon and outlives the terminal.
-		if err := s.stopCodexTurn(ctx, wk.Machine, wk.Session); err != nil {
+		if err := s.stopCodexTurn(r.Context(), wk.Machine, wk.Session); err != nil {
 			log.Printf("stop %s: interrupt its codex turn: %v", wk.Name, err)
 		}
 	}
 	if wk.WorkspaceID != "" {
-		s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)
+		s.herdr.Call(r.Context(), "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)
+	}
+	now := time.Now()
+	sp.mu.Lock()
+	wkCopy := *wk
+	subs := sp.workerSubscribersLocked(wk.Name)
+	if wk.PaneID != "" {
+		sp.recordRecentlyClosedPaneLocked(wk.PaneID, now)
+	}
+	sp.mu.Unlock()
+	if wkCopy.Session != "" {
+		sp.archiveWorkerSession(&wkCopy, subs, "stopped", now)
 	}
 	sp.mu.Lock()
-	wk.Ended, wk.Status = true, "gone"
+	wk.Ended, wk.Hibernating, wk.Status = true, false, "gone"
 	for _, th := range sp.st.Threads {
 		th.Subscribers = remove(th.Subscribers, wk.Name)
 	}
-	delete(sp.idleSince, wk.Name)
-	sp.addEntryLocked("event", wk.Thread, note, wk.Name, "info")
-	sp.changed()
+	sp.addEntryLocked("event", wk.Thread, wk.Name+" 已停止", wk.Name, "info")
 	sp.mu.Unlock()
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
@@ -1104,6 +1138,7 @@ func (s *Server) superSettings(w http.ResponseWriter, r *http.Request) {
 	sp.mu.Lock()
 	st := sp.st.Settings
 	st.RouterArgs = slices.Clone(st.RouterArgs)
+	st.MorningBrief, st.WeeklyReview, st.StaleFollow = st.effectiveRoutines()
 	pol := slices.Clone(sp.st.Policies)
 	sp.mu.Unlock()
 	writeJSONETag(w, r, map[string]any{
@@ -1219,13 +1254,17 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 				ns.DreamAt = fmt.Sprintf("%02d:%02d", h, m)
 			}
 		}
-		if ns.IdleStopMinutes < 0 {
-			ns.IdleStopMinutes = -1
-		}
+		ns.normalizeRoutines(prev)
 		if ns.RotatePct > 95 || (ns.RotatePct > 0 && ns.RotatePct < 20) {
 			ns.RotatePct = 0
 		} else if ns.RotatePct < 0 {
 			ns.RotatePct = -1
+		}
+		if ns.WorkerIdleGCMinutes < 0 {
+			ns.WorkerIdleGCMinutes = -1
+		}
+		if ns.WorkerMaxLivePerMachine < 0 {
+			ns.WorkerMaxLivePerMachine = -1
 		}
 		ns.WorkerMachine = s.machineByName(ns.WorkerMachine)
 		if ns.WorkerMachine == "" {
@@ -1263,7 +1302,10 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 	}
-	writeJSON(w, 200, map[string]any{"settings": sp.st.Settings, "policies": sp.st.Policies})
+	respSettings := sp.st.Settings
+	respSettings.RouterArgs = slices.Clone(respSettings.RouterArgs)
+	respSettings.MorningBrief, respSettings.WeeklyReview, respSettings.StaleFollow = respSettings.effectiveRoutines()
+	writeJSON(w, 200, map[string]any{"settings": respSettings, "policies": sp.st.Policies})
 }
 
 func (s *Server) superRestartRouter(w http.ResponseWriter, r *http.Request) {

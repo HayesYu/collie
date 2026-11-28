@@ -169,7 +169,9 @@ func (h *Herdr) Remember(pane, name string) {
 	}
 	h.mu.Lock()
 	h.named[pane] = name
-	h.names[name] = pane
+	if !isHubSystemName(name) || isHubLocalPane(pane) {
+		h.names[name] = pane
+	}
 	h.persistNamesLocked()
 	h.mu.Unlock()
 }
@@ -561,6 +563,11 @@ func (h *Herdr) fanOutWithStatus(ctx context.Context, method string) (json.RawMe
 				merged[i], _ = json.Marshal(a)
 			}
 			if name != "" && pane != "" {
+				// Router and Dream are strictly Hub-local system sessions: never let a
+				// leftover same-named pane on a remote node hijack Hub routing.
+				if isHubSystemName(name) && !isHubLocalPane(pane) {
+					continue
+				}
 				names[name] = pane
 			}
 		}
@@ -596,6 +603,37 @@ func (h *Herdr) fanOutWithStatus(ctx context.Context, method string) (json.RawMe
 }
 
 func machineOf(id string) string { _, m := split(id); return m }
+
+func isHubSystemName(name string) bool {
+	return name == routerName || name == dreamName
+}
+
+func isHubLocalPane(paneID string) bool {
+	return paneID != "" && !strings.Contains(paneID, "@")
+}
+
+// PanesOnMachine queries pane.list on a single machine ("" = hub local) without
+// fanning out to unrelated nodes. Remote IDs receive the usual "@machine" suffix.
+func (h *Herdr) PanesOnMachine(ctx context.Context, machine string) ([]Pane, error) {
+	mc, err := h.machine(machine)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := mc.conn.call(ctx, "pane.list", nil)
+	if err != nil {
+		return nil, err
+	}
+	if machine != "" {
+		raw = suffixIDs(raw, machine)
+	}
+	var r struct {
+		Panes []Pane `json:"panes"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, err
+	}
+	return r.Panes, nil
+}
 
 // suffixIDs appends "@machine" to every id-like string in a herdr result.
 func suffixIDs(raw json.RawMessage, machine string) json.RawMessage {

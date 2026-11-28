@@ -44,6 +44,9 @@ assert.ok(!appSrc.includes("好友边牧 · 受控收件箱"), "peer modal title
 assert.ok(!appSrc.includes("data-peer-add-sub"), "nested add-friend segmented sub-tabs must be removed in favor of single-level 3 tabs");
 assert.ok(appSrc.includes('id="peer-tab-friends"') && appSrc.includes('id="peer-tab-card"') && appSrc.includes('id="peer-tab-add"'), "single-level 3 tabs must exist");
 assert.ok(appSrc.includes('id="peer-adv-details"') && appSrc.includes("连接与高级详情"), "raw addrs/code/hub_id/reset must fold into 连接与高级详情");
+assert.ok(appSrc.includes('id="peer-paste-btn"') && appSrc.includes("navigator.clipboard?.readText"), "Add Friend input must include one-tap clipboard Paste button");
+assert.ok(appSrc.includes('id="peer-scan-capture"') && appSrc.includes('capture="environment"'), "Add Friend panel must include native camera capture input for mobile HTTP");
+assert.ok(cssSrc.includes(".pm-paste-box") && cssSrc.includes(".pm-paste-btn"), "peer paste box and button styles must be defined");
 assert.ok(demoSrc.includes("100.64.0.18:7788"), "demo.js peer mock should stay synced");
 
 // ─── 2. Runtime VM Tests ───
@@ -104,7 +107,9 @@ function makeEl(id = "") {
     showPopover() { popOpen = true; el.dispatch("toggle", { newState: "open", oldState: "closed" }); },
     hidePopover() { if (!popOpen) return; popOpen = false; el.dispatch("toggle", { newState: "closed", oldState: "open" }); },
     closest() { return null; }, contains() { return false; },
-    append() {}, remove() {}, after() {}, focus() {}, select() {}, click() {}, scrollIntoView() {},
+    _focusCount: 0, _clickCount: 0,
+    append() {}, remove() {}, after() {},
+    focus() { el._focusCount++; }, select() {}, click() { el._clickCount++; }, scrollIntoView() {},
     showModal() { el.open = true; }, close() { el.open = false; el.dispatch("close"); },
     getBoundingClientRect() { return { top: 200, bottom: 236, left: 20, right: 20 + el.offsetWidth, width: el.offsetWidth, height: el.offsetHeight }; },
   };
@@ -161,7 +166,7 @@ const ctx = {
   document: doc,
   location: { hash: "#/collie", origin: "http://127.0.0.1:7788", href: "http://127.0.0.1:7788/#/collie", pathname: "/", search: "" },
   history: { state: null, pushState() {}, replaceState() {}, back() {} },
-  navigator: { platform: "MacIntel", clipboard: { writeText: async () => {} } },
+  navigator: { platform: "MacIntel", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", maxTouchPoints: 0, clipboard: { writeText: async () => {}, readText: async () => "" } },
   isSecureContext: true, innerWidth: 1280, innerHeight: 860,
   visualViewport: { height: 860, offsetTop: 0, addEventListener() {} },
   CSS: { escape: (s) => String(s), supports: () => true },
@@ -310,6 +315,61 @@ const T = ctx.__test;
   T.openPeerPopover(modePop, leftCompactTrig, { fromPointer: true });
   assert.equal(modePop.classList.contains("is-match-width"), false);
   assert.equal(modePop.classList.contains("is-align-start"), true, "left-side compact trigger aligns start inside modal");
+
+  // 2g) Add Friend one-tap Paste button: success auto-parses, denied/unsupported focuses input with guidance
+  getEl("#peer-clear-parsed-btn").dispatch("click");
+  assert.equal(getEl("#peer-add-input-wrap").hidden, false);
+  ctx.navigator.clipboard = { writeText: async () => {}, readText: async () => sampleInv };
+  getEl("#peer-paste-btn").dispatch("click");
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal(getEl("#peer-add-input-wrap").hidden, true, "pasting valid invite collapses input wrap into confirmed card");
+  assert.equal(getEl("#peer-scan-parsed-slot").hidden, false);
+  assert.ok(getEl("#peer-scan-parsed-slot").innerHTML.includes("周远的边牧"));
+  assert.equal(getEl("#peer-pair-submit").disabled, false);
+
+  // Permission denied fallback -> focuses input & shows guidance note
+  getEl("#peer-clear-parsed-btn").dispatch("click");
+  const pasteInput = getEl("#peer-paste-input");
+  const prevFocus = pasteInput._focusCount;
+  ctx.navigator.clipboard = { writeText: async () => {}, readText: async () => { throw new Error("NotAllowedError"); } };
+  getEl("#peer-paste-btn").dispatch("click");
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal(pasteInput._focusCount, prevFocus + 1, "clipboard permission denied must focus invite input");
+  assert.equal(getEl("#peer-scan-note-slot").hidden, false, "clipboard permission denied shows guidance note");
+  assert.ok(getEl("#peer-scan-note-slot").textContent.includes("长按"), "guidance note instructs user to long-press paste");
+
+  // Unsupported clipboard API (HTTP LAN) -> focuses input & shows guidance note
+  ctx.navigator.clipboard = undefined;
+  const prevFocus2 = pasteInput._focusCount;
+  getEl("#peer-paste-btn").dispatch("click");
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal(pasteInput._focusCount, prevFocus2 + 1, "unsupported clipboard must focus invite input");
+  assert.equal(getEl("#peer-scan-note-slot").hidden, false);
+  assert.ok(getEl("#peer-scan-note-slot").textContent.includes("长按"));
+
+  // 2h) Non-secure HTTP scan handling (#t13874):
+  //     - Desktop HTTP hides scan button cleanly (no dead error button)
+  //     - Mobile HTTP keeps scan button & triggers native camera capture input without gray error box
+  //     - Secure context (HTTPS / localhost) keeps live scan button visible on desktop & mobile
+  ctx.isSecureContext = false;
+  ctx.navigator.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)";
+  ctx.navigator.maxTouchPoints = 0;
+  T.patchPeerScanPanel();
+  assert.equal(getEl("#peer-scan-toggle").hidden, true, "desktop HTTP must hide live camera scan button");
+
+  ctx.navigator.userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) Mobile/15E148 Safari/604.1";
+  T.patchPeerScanPanel();
+  assert.equal(getEl("#peer-scan-toggle").hidden, false, "mobile HTTP keeps scan button for native camera capture");
+  const capEl = getEl("#peer-scan-capture");
+  const prevCapClicks = capEl._clickCount;
+  getEl("#peer-scan-toggle").dispatch("click");
+  assert.equal(capEl._clickCount, prevCapClicks + 1, "mobile HTTP scan click triggers hidden capture=environment file input");
+  assert.equal(getEl("#peer-scan-note-slot").hidden, true, "mobile HTTP scan must NOT show gray HTTP error banner");
+
+  ctx.isSecureContext = true;
+  ctx.navigator.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)";
+  T.patchPeerScanPanel();
+  assert.equal(getEl("#peer-scan-toggle").hidden, false, "secure context (HTTPS/localhost) preserves scan button on desktop");
 
   console.log("OK: all v0.3.11 peer modal redesign contracts passed");
 })().catch((e) => { console.error(e); process.exit(1); });

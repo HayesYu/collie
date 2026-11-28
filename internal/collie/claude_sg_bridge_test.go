@@ -330,10 +330,10 @@ func TestForkReleaseRepoURL(t *testing.T) {
 		t.Fatalf("default releaseRepoURL = %q, want https://github.com/HayesYu/collie", releaseRepoURL)
 	}
 	cases := map[string]string{
-		"":                                     "https://github.com/HayesYu/collie",
-		"HayesYu/collie":                       "https://github.com/HayesYu/collie",
-		"HayesYu/collie.git":                   "https://github.com/HayesYu/collie",
-		"https://github.com/HayesYu/collie/":   "https://github.com/HayesYu/collie",
+		"":                                      "https://github.com/HayesYu/collie",
+		"HayesYu/collie":                        "https://github.com/HayesYu/collie",
+		"HayesYu/collie.git":                    "https://github.com/HayesYu/collie",
+		"https://github.com/HayesYu/collie/":    "https://github.com/HayesYu/collie",
 		"https://github.com/lihuanyu0w0/collie": "https://github.com/lihuanyu0w0/collie",
 	}
 	for in, want := range cases {

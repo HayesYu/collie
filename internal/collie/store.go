@@ -59,6 +59,17 @@ type Worker struct {
 	LastReport string     `json:"last_report,omitempty"`
 	ReportAt   time.Time  `json:"report_at,omitempty"`
 	Ended      bool       `json:"ended,omitempty"`
+	// IdleSince tracks when the worker entered continuous idle/done state for
+	// lossless hibernation GC; persisted so Hub restarts don't reset the clock.
+	IdleSince *time.Time `json:"idle_since,omitempty"`
+	// Hibernating is persisted BEFORE closing the herdr workspace so a crash or
+	// RPC timeout reconciles quietly instead of reporting an unexpected exit.
+	Hibernating bool `json:"hibernating,omitempty"`
+	// StartupFailed marks a managed worker that failed on launch without running
+	// a resumable session, allowing GC to reap its empty shell workspace.
+	StartupFailed bool `json:"startup_failed,omitempty"`
+	// Keep exempts a worker from automatic idle/LRU hibernation GC.
+	Keep bool `json:"keep,omitempty"`
 	// Session is its agent's conversation id, kept after it stops so a later
 	// `spawn --resume` can carry on where it left off.
 	Session string `json:"session,omitempty"`
@@ -89,9 +100,10 @@ func cleanWorkerLabel(s string) string {
 
 // DecisionPick records how the human resolved a Collie --opt decision card.
 type DecisionPick struct {
-	State string    `json:"state"`          // picked | custom | dismissed
-	Text  string    `json:"text,omitempty"` // picked option label or custom reply text
-	At    time.Time `json:"at"`
+	State   string    `json:"state"`          // picked | custom | dismissed
+	Text    string    `json:"text,omitempty"` // picked option label or custom reply text
+	At      time.Time `json:"at"`
+	InPlace bool      `json:"in_place,omitempty"` // true when custom reply settled in-place without a main-bottom bubble
 }
 
 // Entry is one line of the human-facing super-agent conversation.
@@ -110,6 +122,10 @@ type Entry struct {
 	Options []string `json:"options,omitempty"`
 	// Resolved receipt for a Collie --opt decision card (pure click, custom note, or dismissed).
 	Pick *DecisionPick `json:"pick,omitempty"`
+	// InPlace marks a targeted user reply sent while scrolled above the bottom:
+	// settled under its target message and grouped into its reply thread without
+	// adding a stray user bubble to the bottom of the main timeline.
+	InPlace bool `json:"in_place,omitempty"`
 	// Structured deliverable paths attached via `collie reply --file`.
 	Files []string `json:"files,omitempty"`
 	// Marked by Collie (--check) when a reply without options still awaits the human's review or action.
@@ -196,26 +212,19 @@ type Settings struct {
 	// When Collie dreams (reviews recent sessions and tidies its memory):
 	// "HH:MM" each night, "" for 04:00, "off" never.
 	DreamAt string `json:"dream_at,omitempty"`
+	// Official optional routines (all off by default; zero-token gated before waking Router).
+	MorningBrief *RoutineConfig `json:"morning_brief,omitempty"`
+	WeeklyReview *RoutineConfig `json:"weekly_review,omitempty"`
+	StaleFollow  *RoutineConfig `json:"stale_follow,omitempty"`
 	// Collie and its workers run with the agent's permission checks off
 	// (--dangerously-skip-permissions and the like) unless this is set.
 	AskPermissions bool `json:"ask_permissions,omitempty"`
-	// A worker idle (done with its turn, nothing queued for it) this many
-	// minutes is stopped to free its agent process; its session is kept for
-	// `spawn --resume`. 0 means the default (60), -1 never.
-	IdleStopMinutes int `json:"idle_stop_minutes,omitempty"`
-}
-
-const defaultIdleStopMinutes = 60
-
-// idleStop is how long a worker may sit idle before it is stopped; 0 = never.
-func (s Settings) idleStop() time.Duration {
-	switch {
-	case s.IdleStopMinutes < 0:
-		return 0
-	case s.IdleStopMinutes == 0:
-		return defaultIdleStopMinutes * time.Minute
-	}
-	return time.Duration(s.IdleStopMinutes) * time.Minute
+	// Idle minutes before a managed worker is hibernated (workspace closed,
+	// session archived for lossless resume): 0 means default (120), -1 never.
+	WorkerIdleGCMinutes int `json:"worker_idle_gc_minutes,omitempty"`
+	// Soft cap of live managed workers per machine before LRU hibernation kicks
+	// in for idle workers (>=15m): 0 means default (6), -1 disables cap LRU.
+	WorkerMaxLivePerMachine int `json:"worker_max_live_per_machine,omitempty"`
 }
 
 type State struct {

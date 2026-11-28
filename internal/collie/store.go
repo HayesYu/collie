@@ -207,6 +207,10 @@ type Settings struct {
 	// When Collie dreams (reviews recent sessions and tidies its memory):
 	// "HH:MM" each night, "" for 04:00, "off" never.
 	DreamAt string `json:"dream_at,omitempty"`
+	// Official optional routines (all off by default; zero-token gated before waking Router).
+	MorningBrief *RoutineConfig `json:"morning_brief,omitempty"`
+	WeeklyReview *RoutineConfig `json:"weekly_review,omitempty"`
+	StaleFollow  *RoutineConfig `json:"stale_follow,omitempty"`
 	// Collie and its workers run with the agent's permission checks off
 	// (--dangerously-skip-permissions and the like) unless this is set.
 	AskPermissions bool `json:"ask_permissions,omitempty"`

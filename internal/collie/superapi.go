@@ -1108,6 +1108,7 @@ func (s *Server) superSettings(w http.ResponseWriter, r *http.Request) {
 	sp.mu.Lock()
 	st := sp.st.Settings
 	st.RouterArgs = slices.Clone(st.RouterArgs)
+	st.MorningBrief, st.WeeklyReview, st.StaleFollow = st.effectiveRoutines()
 	pol := slices.Clone(sp.st.Policies)
 	sp.mu.Unlock()
 	writeJSONETag(w, r, map[string]any{
@@ -1223,6 +1224,7 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 				ns.DreamAt = fmt.Sprintf("%02d:%02d", h, m)
 			}
 		}
+		ns.normalizeRoutines(prev)
 		if ns.RotatePct > 95 || (ns.RotatePct > 0 && ns.RotatePct < 20) {
 			ns.RotatePct = 0
 		} else if ns.RotatePct < 0 {
@@ -1270,7 +1272,10 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 	}
-	writeJSON(w, 200, map[string]any{"settings": sp.st.Settings, "policies": sp.st.Policies})
+	respSettings := sp.st.Settings
+	respSettings.RouterArgs = slices.Clone(respSettings.RouterArgs)
+	respSettings.MorningBrief, respSettings.WeeklyReview, respSettings.StaleFollow = respSettings.effectiveRoutines()
+	writeJSON(w, 200, map[string]any{"settings": respSettings, "policies": sp.st.Policies})
 }
 
 func (s *Server) superRestartRouter(w http.ResponseWriter, r *http.Request) {

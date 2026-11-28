@@ -462,6 +462,7 @@
   let snapshot = { updated_at: "", agents: [] };
   let isRefreshing = false;
   let lastTrigger = null;
+  let pendingCloseTrigger = null;
   let claudeGuideOpen = false;
   let cooldownUntil = 0;
   let cooldownTimer = null;
@@ -949,6 +950,7 @@
   function openQuota(triggerEl) {
     const pop = $("#quota-popover");
     if (!pop) return;
+    pendingCloseTrigger = null;
     document.querySelectorAll?.(".menu")?.forEach((m) => { m.hidden = true; });
     const resolved = triggerEl || resolveTrigger(null);
     if (isPopoverOpen(pop) && lastTrigger === resolved) {
@@ -982,14 +984,34 @@
     const closeBtn = $("#qp-close-btn");
     const body = $("#qp-body");
 
-    navBtn?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openQuota(navBtn);
-    });
-    railBtn?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openQuota(railBtn);
-    });
+    const bindQuotaTrigger = (btn) => {
+      if (!btn) return;
+      btn.addEventListener("pointerdown", (e) => {
+        if (e.isPrimary === false) return;
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        // Native popover="auto" light-dismisses before click fires; remember close intent here.
+        pendingCloseTrigger = isPopoverOpen(pop) && lastTrigger === btn ? btn : null;
+      });
+      btn.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          pendingCloseTrigger = null;
+        }
+      });
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (pendingCloseTrigger === btn) {
+          pendingCloseTrigger = null;
+          hidePopoverEl(pop);
+          setExpandedAria(false);
+          return;
+        }
+        pendingCloseTrigger = null;
+        openQuota(btn);
+      });
+    };
+
+    bindQuotaTrigger(navBtn);
+    bindQuotaTrigger(railBtn);
     refreshBtn?.addEventListener("click", () => manualRefresh());
     closeBtn?.addEventListener("click", () => {
       hidePopoverEl(pop);
@@ -1098,6 +1120,17 @@
       }
     }
 
+    document.addEventListener("pointerup", (e) => {
+      if (pendingCloseTrigger && e.target !== pendingCloseTrigger && !pendingCloseTrigger.contains?.(e.target)) {
+        pendingCloseTrigger = null;
+      }
+    });
+    document.addEventListener("pointercancel", () => {
+      pendingCloseTrigger = null;
+    });
+    window.addEventListener("blur", () => {
+      pendingCloseTrigger = null;
+    });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && pop && !hasNativePopover(pop) && isPopoverOpen(pop)) {
         hidePopoverEl(pop);
@@ -1105,7 +1138,7 @@
       }
     });
     document.addEventListener("click", (e) => {
-      if (pop && !hasNativePopover(pop) && isPopoverOpen(pop) && !pop.contains(e.target) && e.target !== lastTrigger) {
+      if (pop && !hasNativePopover(pop) && isPopoverOpen(pop) && !pop.contains(e.target) && e.target !== lastTrigger && !lastTrigger?.contains?.(e.target)) {
         hidePopoverEl(pop);
       }
     });

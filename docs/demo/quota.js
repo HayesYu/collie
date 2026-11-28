@@ -66,28 +66,348 @@
     return tr("common.daysAgo", "{n} 天前", { n: Math.floor(hr / 24) });
   }
 
-  // summarizeQuota extracts the bottleneck remaining % per numeric agent and
-  // computes the overall quiet/low/exhausted level + compact hover tooltip.
-  function summarizeQuota(snap, nowMs = Date.now()) {
-    const agents = Array.isArray(snap?.agents) ? snap.agents : [];
-    const items = [];
-    for (const ag of agents) {
-      if (ag?.status !== "ok" || !Array.isArray(ag.pools)) continue;
-      let minVal = Infinity;
-      let activeCount = 0;
-      for (const p of ag.pools) {
-        for (const w of (p.windows || [])) {
-          if (typeof w.remaining_pct !== "number") continue;
-          if (isWindowExpired(w, nowMs)) continue;
-          activeCount++;
-          if (w.remaining_pct < minVal) minVal = w.remaining_pct;
-        }
-      }
-      if (activeCount > 0 && minVal !== Infinity) {
-        items.push({ kind: ag.kind || "", name: ag.name || ag.kind || "", min: minVal });
+  // ─── Model-Aware Bottleneck Selection ───
+  const EFFORT_SUFFIXES = new Set([
+    "off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "auto", "thinking",
+  ]);
+  const PAREN_EFFORT_RE = /\s*\((off|none|minimal|low|medium|high|xhigh|max|ultra|auto|thinking)\)\s*$/i;
+  const TRAIL_EFFORT_RE = /[-:](off|none|minimal|low|medium|high|xhigh|max|ultra|auto|thinking)$/i;
+  const SCOPE_SPLIT_RE = /(?:\s*\/\s*|\s*[,&+、·]\s*|\s+and\s+|\s+和\s+)/i;
+  const ZH_NOISE_RE = /(?:\d+\s*(?:分钟|小时|天)(?:窗口)?|周额度|日额度|月额度|主窗口|副窗口|周期额度|默认窗口|模型池|模型|额度|窗口|池)/g;
+  const EN_NOISE_RE = /(?:^|[\s_-])(?:five[\s_-]?hour|seven[\s_-]?day|thirty[\s_-]?day|24[\s_-]?hours?|5[\s_-]?hours?|7[\s_-]?days?|30[\s_-]?days?|\d+[mhd]|weekly|daily|monthly|primary|secondary|window|limits?|remaining|models?|pool|quota|default|all|shared|general|overall|account)(?=$|[\s_-])/gi;
+
+  function normalizeQuotaKind(kind) {
+    const k = String(kind || "").trim().toLowerCase();
+    if (k === "agy" || k === "antigravity") return "agy";
+    if (k === "cursor" || k === "cursor-agent") return "cursor";
+    if (k === "omp" || k === "oh-my-pi") return "omp";
+    return k;
+  }
+
+  function stripProviderPrefix(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return "";
+    if (s.includes("/") && !/\s\/\s/.test(s)) {
+      const parts = s.split("/").filter(Boolean);
+      if (parts.length >= 2) return parts[parts.length - 1];
+    }
+    return s;
+  }
+
+  function shortModelLabel(raw) {
+    const s = stripProviderPrefix(raw);
+    return s.length > 32 ? s.slice(0, 31) + "…" : s;
+  }
+
+  function canonicalSlug(raw) {
+    return String(raw || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s._:]+/g, "-")
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+  }
+
+  function parseModelDescriptor(raw, { stripProvider = false } = {}) {
+    let s = String(raw || "").trim();
+    if (stripProvider) s = stripProviderPrefix(s);
+    if (!s) return { rawSlug: "", baseSlug: "", effort: "", tokens: [], familyAliases: new Set() };
+
+    let effort = "";
+    let working = s;
+    for (let i = 0; i < 3; i++) {
+      const pm = working.match(PAREN_EFFORT_RE);
+      if (!pm) break;
+      const e = pm[1].toLowerCase();
+      if (!effort && e !== "thinking") effort = e;
+      working = working.slice(0, pm.index).trim();
+    }
+    const rawSlug = canonicalSlug(working);
+    let baseWorking = working;
+    for (let i = 0; i < 3; i++) {
+      const tm = baseWorking.match(TRAIL_EFFORT_RE);
+      if (!tm || tm.index <= 0) break;
+      const e = tm[1].toLowerCase();
+      if (!effort && e !== "thinking") effort = e;
+      baseWorking = baseWorking.slice(0, tm.index).trim();
+    }
+    const baseSlug = canonicalSlug(baseWorking) || rawSlug;
+    const tokens = baseSlug ? baseSlug.split("-").filter(Boolean) : [];
+    const familyAliases = new Set();
+    if (tokens.some((t) => t === "claude" || t === "sonnet" || t === "opus" || t === "haiku")) {
+      familyAliases.add("claude");
+    }
+    if (tokens.some((t) => t === "gpt" || t === "chatgpt" || t === "codex" || t === "openai" || /^o[134]$/.test(t))) {
+      familyAliases.add("gpt");
+      familyAliases.add("openai");
+    }
+    if (tokens.includes("gemini")) {
+      familyAliases.add("gemini");
+    }
+    return { rawSlug, baseSlug, effort, tokens, familyAliases };
+  }
+
+  function normalizeModelKey(raw) {
+    return parseModelDescriptor(raw, { stripProvider: true }).baseSlug;
+  }
+
+  function cleanScopeSegment(raw) {
+    let s = String(raw || "").trim();
+    if (!s) return "";
+    s = s.replace(ZH_NOISE_RE, " ");
+    for (let i = 0; i < 3; i++) {
+      const next = s.replace(EN_NOISE_RE, " ");
+      if (next === s) break;
+      s = next;
+    }
+    return s.replace(/^[\s\-_.:·]+|[\s\-_.:·]+$/g, "").trim();
+  }
+
+  function extractScopeSegments(raw) {
+    const str = String(raw || "").trim();
+    if (!str) return [];
+    const out = [];
+    for (const part of str.split(SCOPE_SPLIT_RE)) {
+      const cleaned = cleanScopeSegment(part);
+      if (!cleaned) continue;
+      const desc = parseModelDescriptor(cleaned, { stripProvider: false });
+      if (!desc.baseSlug || !/[a-z]/.test(desc.baseSlug)) continue;
+      if (EFFORT_SUFFIXES.has(desc.baseSlug)) continue;
+      out.push(cleaned);
+    }
+    return out;
+  }
+
+  function scoreModelMatch(modelRaw, scopeRaw) {
+    const m = parseModelDescriptor(modelRaw, { stripProvider: true });
+    const s = parseModelDescriptor(scopeRaw, { stripProvider: true });
+    if (!m.baseSlug || !s.baseSlug) return 0;
+
+    // If a bucket explicitly specifies an effort tier that differs from the active model's effort, skip.
+    if (s.effort && m.effort && s.effort !== m.effort && m.baseSlug === s.baseSlug) {
+      return 0;
+    }
+    // Tier 1: exact raw ID match (including effort suffix if present on both)
+    if (m.rawSlug && s.rawSlug && m.rawSlug === s.rawSlug) return 100;
+    // Tier 2: exact normalized base model match (effort suffix stripped)
+    if (m.baseSlug === s.baseSlug) return 90;
+    // Tier 3: token-boundary prefix match (same series, e.g. gemini-4-neon -> gemini-4 or gemini)
+    if (m.baseSlug.startsWith(s.baseSlug + "-")) {
+      return 70 + Math.min(18, s.baseSlug.length);
+    }
+    if (s.baseSlug.startsWith(m.baseSlug + "-")) {
+      return 65 + Math.min(18, m.baseSlug.length);
+    }
+    // Tier 4: subset token match (all tokens of the narrower descriptor appear in the other, with >=1 alpha token)
+    const mSet = new Set(m.tokens);
+    const sSet = new Set(s.tokens);
+    if (s.tokens.length > 0 && s.tokens.some((t) => /[a-z]/.test(t)) && s.tokens.every((t) => mSet.has(t))) {
+      return 60 + Math.min(9, s.tokens.length * 3);
+    }
+    if (m.tokens.length > 0 && m.tokens.some((t) => /[a-z]/.test(t)) && m.tokens.every((t) => sSet.has(t))) {
+      return 58 + Math.min(9, m.tokens.length * 3);
+    }
+    // Tier 5: family alias match (e.g. sonnet -> claude, o3-mini -> gpt)
+    if (s.tokens.length === 1 && m.familyAliases.has(s.baseSlug)) {
+      return 50 + Math.min(9, s.baseSlug.length);
+    }
+    return 0;
+  }
+
+  function collectPoolScopes(pool) {
+    const out = [];
+    const seen = new Set();
+    const push = (seg) => {
+      const k = canonicalSlug(seg);
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      out.push(seg);
+    };
+    if (Array.isArray(pool?.models)) {
+      for (const m of pool.models) {
+        const t = String(m || "").trim();
+        if (t) push(t);
       }
     }
-    if (!items.length) {
+    for (const seg of extractScopeSegments(pool?.group)) push(seg);
+    return out;
+  }
+
+  function collectWindowScopes(win) {
+    const out = [];
+    const seen = new Set();
+    const push = (seg) => {
+      const k = canonicalSlug(seg);
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      out.push(seg);
+    };
+    if (win?.model) push(String(win.model).trim());
+    if (Array.isArray(win?.models)) {
+      for (const m of win.models) {
+        const t = String(m || "").trim();
+        if (t) push(t);
+      }
+    }
+    for (const seg of extractScopeSegments(win?.id)) push(seg);
+    for (const seg of extractScopeSegments(win?.label)) push(seg);
+    return out;
+  }
+
+  // selectAgentBottleneck selects the bottleneck (minimum remaining %) window
+  // within one agent, scoping to buckets matching `model` when available and
+  // safely falling back to default/all active windows of that agent otherwise.
+  function selectAgentBottleneck(ag, model = "", nowMs = Date.now()) {
+    if (!ag || ag.status !== "ok" || !Array.isArray(ag.pools)) return null;
+    const entries = [];
+    for (let poolIndex = 0; poolIndex < ag.pools.length; poolIndex++) {
+      const pool = ag.pools[poolIndex];
+      const poolScopes = collectPoolScopes(pool);
+      const poolIsScoped = poolScopes.length > 0;
+      const wins = Array.isArray(pool?.windows) ? pool.windows : [];
+      for (let winIndex = 0; winIndex < wins.length; winIndex++) {
+        const win = wins[winIndex];
+        if (typeof win?.remaining_pct !== "number" || !Number.isFinite(win.remaining_pct)) continue;
+        if (isWindowExpired(win, nowMs)) continue;
+        const winScopes = collectWindowScopes(win);
+        const allScopes = [...poolScopes, ...winScopes];
+        const pct = Math.max(0, Math.min(100, Math.round(win.remaining_pct)));
+        entries.push({
+          kind: ag.kind || "",
+          agentName: ag.name || ag.kind || "",
+          poolIndex,
+          winIndex,
+          pool,
+          win,
+          pct,
+          poolIsScoped,
+          isScoped: allScopes.length > 0,
+          allScopes,
+          matchScore: 0,
+        });
+      }
+    }
+    if (!entries.length) return null;
+
+    const cleanModel = String(model || "").trim();
+    let maxScore = 0;
+    if (cleanModel) {
+      for (const e of entries) {
+        let best = 0;
+        for (const sc of e.allScopes) {
+          const scScore = scoreModelMatch(cleanModel, sc);
+          if (scScore > best) best = scScore;
+        }
+        e.matchScore = best;
+        if (best > maxScore) maxScore = best;
+      }
+    }
+
+    let candidates;
+    let matchMode;
+    if (cleanModel && maxScore > 0) {
+      const matched = entries.filter((e) => e.matchScore === maxScore);
+      const unscopedPoolIndices = new Set(matched.filter((e) => !e.poolIsScoped).map((e) => e.poolIndex));
+      if (unscopedPoolIndices.size > 0) {
+        const picked = new Set(matched);
+        for (const e of entries) {
+          if (!e.isScoped && unscopedPoolIndices.has(e.poolIndex)) picked.add(e);
+        }
+        candidates = entries.filter((e) => picked.has(e));
+      } else {
+        candidates = matched;
+      }
+      matchMode = "model";
+    } else {
+      const hasScopedPool = entries.some((e) => e.poolIsScoped);
+      const unscoped = entries.filter((e) => !e.isScoped);
+      if (hasScopedPool && unscoped.length > 0) {
+        candidates = unscoped;
+        matchMode = "agent";
+      } else {
+        candidates = entries;
+        matchMode = "agent";
+      }
+    }
+
+    let best = candidates[0];
+    for (let i = 1; i < candidates.length; i++) {
+      if (candidates[i].pct < best.pct) best = candidates[i];
+    }
+    return { best, candidates, matchMode, min: best.pct };
+  }
+
+  function normActiveContext(ctx) {
+    if (!ctx || typeof ctx !== "object") return { kind: "", model: "", source: "" };
+    return {
+      kind: normalizeQuotaKind(ctx.kind),
+      model: String(ctx.model || "").trim(),
+      source: String(ctx.source || "").trim(),
+    };
+  }
+
+  function formatBucketTitle(pool, win) {
+    const winLbl = locQ(win?.label || win?.id || "");
+    if (pool?.compact_full && pool?.group) return pool.group;
+    if (pool?.group && winLbl) return `${pool.group} · ${winLbl}`;
+    return winLbl || pool?.group || "";
+  }
+
+  // summarizeQuota extracts the bottleneck remaining % scoped to the active
+  // Agent & Model (when provided and available), falling back safely to the
+  // lowest remaining window across all numeric agents otherwise.
+  function summarizeQuota(snap, nowMs = Date.now(), activeCtx = null) {
+    const agents = Array.isArray(snap?.agents) ? snap.agents : [];
+    const ctx = normActiveContext(activeCtx);
+
+    if (ctx.kind) {
+      const activeAg = agents.find((ag) => normalizeQuotaKind(ag?.kind) === ctx.kind && ag?.status === "ok");
+      const sel = activeAg ? selectAgentBottleneck(activeAg, ctx.model, nowMs) : null;
+      if (sel) {
+        const minVal = sel.min;
+        const level = minVal === 0 ? "exhausted" : minVal < LOW_THRESHOLD ? "low" : "normal";
+        const prefix = level === "exhausted"
+          ? tr("quota.exhaustedPrefix", "额度已用尽")
+          : level === "low"
+            ? tr("quota.lowPrefix", "额度偏低")
+            : tr("quota.title", "订阅额度");
+        const bTitle = formatBucketTitle(sel.best.pool, sel.best.win);
+        const summary = bTitle ? `${activeAg.kind} · ${bTitle} ${minVal}%` : `${activeAg.kind} ${minVal}%`;
+        return {
+          known: true,
+          min: minVal,
+          level,
+          tooltip: `${prefix} · ${summary}`,
+          shortPct: `${minVal}%`,
+          summary,
+          scope: sel.matchMode,
+          activeKind: ctx.kind,
+          activeModel: ctx.model,
+          bottleneck: {
+            kind: activeAg.kind || "",
+            poolIndex: sel.best.poolIndex,
+            winIndex: sel.best.winIndex,
+            group: sel.best.pool?.group || "",
+            label: sel.best.win?.label || sel.best.win?.id || "",
+            compact: !!sel.best.pool?.compact_full,
+            pct: minVal,
+          },
+        };
+      }
+    }
+
+    const items = [];
+    let globalBest = null;
+    for (const ag of agents) {
+      const sel = selectAgentBottleneck(ag, "", nowMs);
+      if (!sel) continue;
+      items.push({ kind: ag.kind || "", name: ag.name || ag.kind || "", min: sel.min, best: sel.best });
+      if (!globalBest || sel.min < globalBest.pct) {
+        globalBest = sel.best;
+      }
+    }
+    if (!items.length || !globalBest) {
       return {
         known: false,
         min: null,
@@ -95,9 +415,13 @@
         tooltip: tr("quota.clickToView", "订阅额度 · 点击查看"),
         shortPct: "",
         summary: tr("common.view", "查看"),
+        scope: "unknown",
+        activeKind: ctx.kind,
+        activeModel: ctx.model,
+        bottleneck: null,
       };
     }
-    const overallMin = Math.min(...items.map((x) => x.min));
+    const overallMin = globalBest.pct;
     const level = overallMin === 0 ? "exhausted" : overallMin < LOW_THRESHOLD ? "low" : "normal";
     const ordered = level === "normal" ? items : [...items].sort((a, b) => a.min - b.min);
     const summary = ordered.slice(0, 3).map((x) => `${x.kind} ${x.min}%`).join(" · ");
@@ -113,11 +437,26 @@
       tooltip: `${prefix} · ${summary}`,
       shortPct: `${overallMin}%`,
       summary,
+      scope: ctx.kind ? "fallback" : "all",
+      activeKind: ctx.kind,
+      activeModel: ctx.model,
+      bottleneck: {
+        kind: globalBest.kind || "",
+        poolIndex: globalBest.poolIndex,
+        winIndex: globalBest.winIndex,
+        group: globalBest.pool?.group || "",
+        label: globalBest.win?.label || globalBest.win?.id || "",
+        compact: !!globalBest.pool?.compact_full,
+        pct: overallMin,
+      },
     };
   }
 
   let hostAPI = null;
   let hostToast = null;
+  let hostGetContext = null;
+  let activeContext = { kind: "", model: "", source: "" };
+  let activeContextSig = "";
   let initialized = false;
   let wired = false;
   let snapshot = { updated_at: "", agents: [] };
@@ -128,6 +467,29 @@
   let cooldownTimer = null;
   let openTickTimer = null;
   let fallbackScrim = null;
+
+  function setContext(nextCtx, { silent = false } = {}) {
+    const norm = normActiveContext(nextCtx);
+    const sig = `${norm.kind}|${norm.model}|${norm.source}`;
+    if (sig === activeContextSig) return false;
+    activeContextSig = sig;
+    activeContext = norm;
+    if (!silent) {
+      renderTriggers();
+      const pop = $("#quota-popover");
+      if (isPopoverOpen(pop)) renderPopoverBody();
+    }
+    return true;
+  }
+
+  function onContextChange() {
+    if (typeof hostGetContext !== "function") return false;
+    try {
+      return setContext(hostGetContext());
+    } catch {
+      return false;
+    }
+  }
 
   function hasNativePopover(el) {
     return !!(el && typeof el.showPopover === "function" && typeof el.hidePopover === "function");
@@ -158,7 +520,7 @@
   }
 
   function renderTriggers(nowMs = Date.now()) {
-    const sum = summarizeQuota(snapshot, nowMs);
+    const sum = summarizeQuota(snapshot, nowMs, activeContext);
     const warn = sum.level === "low" || sum.level === "exhausted";
     const danger = sum.level === "exhausted";
 
@@ -248,6 +610,13 @@
       return;
     }
 
+    const sum = summarizeQuota(snapshot, nowMs, activeContext);
+    const bn = sum.bottleneck;
+    const isScopedActive = sum.scope === "model" || sum.scope === "agent";
+    const bnTagText = isScopedActive
+      ? tr("quota.activeMinTag", "当前最低")
+      : tr("quota.minTag", "最低");
+
     const parts = [];
     for (const ag of agents) {
       let agMin = Infinity;
@@ -276,37 +645,68 @@
       else if (agLevel === "low") stateHtml = `<span class="qa-state is-low">${esc(tr("quota.stateLow", "余量偏低"))}</span>`;
       else if (agLevel === "expired") stateHtml = `<span class="qa-state">${esc(tr("quota.stateExpired", "已到重置点"))}</span>`;
 
+      const isActiveAg = !!(bn && ag.kind === bn.kind && isScopedActive);
+      const activeModelBadge = isActiveAg && sum.activeModel
+        ? `<span class="qa-model" title="${esc(sum.activeModel)}">${esc(shortModelLabel(sum.activeModel))}</span>`
+        : "";
+
       let innerHtml = "";
       if (ag.status === "ok" && Array.isArray(ag.pools) && ag.pools.length) {
         const rows = [];
         let wIdx = 0;
-        for (const pool of ag.pools) {
+        for (let poolIdx = 0; poolIdx < ag.pools.length; poolIdx++) {
+          const pool = ag.pools[poolIdx];
           if (pool.compact_full) {
             const label = pool.group
               ? tr("quota.poolFullGroup", "{group} 池 · 100% 满额", { group: pool.group })
               : tr("quota.poolFullOther", "其余模型池 · 100% 满额");
-            rows.push(`<div class="qm-compact"><span>${esc(label)}</span></div>`);
+            const isBnPool = !!(bn && bn.kind === ag.kind && bn.poolIndex === poolIdx);
+            if (isBnPool) {
+              rows.push(`
+                <div class="qm-compact is-bottleneck" data-quota-bottleneck="true">
+                  <span class="qm-left">
+                    <span class="qm-lbl">${esc(label)}</span>
+                    <span class="qm-tag">${esc(bnTagText)}</span>
+                  </span>
+                </div>
+              `);
+            } else {
+              rows.push(`<div class="qm-compact"><span>${esc(label)}</span></div>`);
+            }
             continue;
           }
-          for (const w of (pool.windows || [])) {
+          const wins = pool.windows || [];
+          for (let winIdx = 0; winIdx < wins.length; winIdx++) {
+            const w = wins[winIdx];
             wIdx++;
             const pct = Math.max(0, Math.min(100, Math.round(Number(w.remaining_pct) || 0)));
             const expired = isWindowExpired(w, nowMs);
             const wLevel = expired ? "normal" : (pct === 0 ? "exhausted" : pct < LOW_THRESHOLD ? "low" : "normal");
             const cls = wLevel === "low" ? "is-low" : wLevel === "exhausted" ? "is-exhausted" : "";
+            const isBnWin = !expired && !!(bn && bn.kind === ag.kind && bn.poolIndex === poolIdx && bn.winIndex === winIdx);
             const winLbl = locQ(w.label || w.id);
             const title = pool.group ? `${pool.group} · ${winLbl}` : winLbl;
             const resetTxt = formatResetCountdown(w.resets_at, pct, nowMs);
             const lblId = `qm-${esc(ag.kind)}-${wIdx}`;
-            const valText = tr("quota.progressAria", "剩余 {pct}%{reset}", {
+            const baseValText = tr("quota.progressAria", "剩余 {pct}%{reset}", {
               pct,
               reset: resetTxt ? tr("quota.progressComma", "，{reset}", { reset: resetTxt }) : "",
             });
+            const valText = isBnWin
+              ? baseValText + tr("quota.progressBottleneck", "，{tag}", { tag: bnTagText })
+              : baseValText;
+            const rowCls = [
+              "qm-row",
+              expired ? "is-expired" : "",
+              isBnWin ? "is-bottleneck" : "",
+              isBnWin && cls ? cls : "",
+            ].filter(Boolean).join(" ");
             rows.push(`
-              <div class="qm-row${expired ? " is-expired" : ""}">
+              <div class="${rowCls}"${isBnWin ? ' data-quota-bottleneck="true"' : ""}>
                 <div class="qm-top">
                   <span class="qm-left">
                     <span class="qm-lbl" id="${lblId}">${esc(title)}</span>
+                    ${isBnWin ? `<span class="qm-tag${cls ? " " + cls : ""}">${esc(bnTagText)}</span>` : ""}
                     ${resetTxt ? `<span class="qm-reset">${esc(resetTxt)}</span>` : ""}
                   </span>
                   <span class="qm-pct ${cls}">${pct}%</span>
@@ -344,11 +744,12 @@
       }
 
       parts.push(`
-        <section class="qa-sec" data-quota-kind="${esc(ag.kind)}">
+        <section class="qa-sec${isActiveAg ? " is-active-agent" : ""}" data-quota-kind="${esc(ag.kind)}">
           <div class="qa-head">
             <div class="qa-id">
               <h3 class="qa-name">${esc(ag.name || ag.kind)}</h3>
               ${ag.plan ? `<span class="qa-plan">${esc(locQ(ag.plan))}</span>` : ""}
+              ${activeModelBadge}
             </div>
             ${stateHtml}
           </div>
@@ -555,6 +956,10 @@
       return;
     }
     lastTrigger = resolved;
+    if (typeof hostGetContext === "function") {
+      try { setContext(hostGetContext(), { silent: true }); } catch {}
+    }
+    renderTriggers();
     renderPopoverBody();
     positionPopover(pop, resolved);
     if (!isPopoverOpen(pop)) {
@@ -714,9 +1119,15 @@
   function init(opts = {}) {
     if (opts.api) hostAPI = opts.api;
     if (opts.toast) hostToast = opts.toast;
+    if (typeof opts.getContext === "function") {
+      hostGetContext = opts.getContext;
+      try { setContext(hostGetContext(), { silent: true }); } catch {}
+    }
     wireDOM();
     if (!initialized) {
       initialized = true;
+      renderTriggers();
+    } else {
       renderTriggers();
     }
     fetchQuota();
@@ -733,12 +1144,18 @@
     init,
     onEvent: applySnapshot,
     onLangChange,
+    onContextChange,
+    setContext,
+    getContext: () => ({ ...activeContext }),
     open: openQuota,
     close: () => hidePopoverEl($("#quota-popover")),
     refresh: manualRefresh,
     getSnapshot: () => snapshot,
     // Pure helpers exported for contract tests
     summarizeQuota,
+    selectAgentBottleneck,
+    scoreModelMatch,
+    normalizeModelKey,
     formatResetCountdown,
     formatUpdatedAgo,
   };

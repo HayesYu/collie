@@ -1492,6 +1492,7 @@
     hydratedFromCache = false;
     syncCollieNotifyWatermark(sup.entries, !!opts.allowNotify);
     if (opts.liveState) setLocalState(opts.liveState);
+    syncQuotaContext();
     scheduleSnapCacheWrite();
     if (opts.skipRender) return;
     if (fromCacheReconcile) {
@@ -3573,6 +3574,7 @@
         if (!narrow()) $("#input").focus({ preventScroll: true });
       }
     }
+    syncQuotaContext();
   }
   addEventListener("popstate", () => {
     if (handleDrawerPopState()) return;
@@ -3629,6 +3631,7 @@
     if (r.effort) parts.push(esc(tx("effort.prefix", "思考 {v}", { v: EFFORT_LABEL[r.effort] || r.effort })));
     el.innerHTML = parts.join(" · ");
     el.title = tx("collie.modelTitle", "Collie 自己用的模型{model}{effort}（自动化 → 设置 → Collie 自己）", { model: model ? tx("collie.modelColon", "：{model}", { model }) : "", effort: r.effort ? tx("collie.effortComma", "，思考强度 {effort}", { effort: r.effort }) : "" });
+    syncQuotaContext();
   }
   // A worker's comings and goings: its spawn line shows where it stands, and
   // a dialog waiting on the human shows as a card below. Reports and errors stay.
@@ -7974,6 +7977,119 @@
       toggle.title = fallbackDesc;
       toggle.setAttribute("aria-description", fallbackDesc);
     }
+    syncQuotaContext();
+  }
+  function resolveActiveQuotaContext() {
+    const normKind = (k) => {
+      const s = String(k || "").trim().toLowerCase();
+      if (s === "antigravity") return "agy";
+      if (s === "cursor-agent") return "cursor";
+      if (s === "oh-my-pi") return "omp";
+      return s;
+    };
+    const cachedDefaultModel = (kind, machine = "") => {
+      if (!kind) return "";
+      const info = modelInfoResolved[kind + "@" + (machine || "")] || modelInfoResolved[kind + "@"];
+      return info?.default || "";
+    };
+    const warmDefaultModel = (kind, machine = "") => {
+      if (!kind || cachePreAuth) return;
+      const key = kind + "@" + (machine || "");
+      if (modelInfoResolved[key] || modelInfo[key]) return;
+      modelsFor(kind, machine || "").then(() => syncQuotaContext()).catch(() => {});
+    };
+
+    if (view === "pane" && current) {
+      const v = find(current);
+      if (v && v.is_agent) {
+        if (v.name === ROUTER) {
+          const kind = normKind(sup.router?.kind || v.kind);
+          let model = sup.router?.model || v.run?.[0] || "";
+          if (!model) {
+            model = cachedDefaultModel(kind, v.machine || "");
+            if (!model) warmDefaultModel(kind, v.machine || "");
+          }
+          return { kind, model, source: "router" };
+        }
+        const w = !v.run && isWorker(v.name) ? (sup.workers || []).find((x) => x.name === v.name && !x.ended) : null;
+        const run = v.run || w?.run;
+        const kind = normKind(v.run ? v.kind : (w?.kind || v.kind));
+        const machine = v.run ? (v.machine || "") : (w?.machine || "");
+        let model = run?.[0] || w?.model || "";
+        if (!model && !hubOf(v.pane_id)) {
+          model = cachedDefaultModel(kind, machine);
+          if (!model) warmDefaultModel(kind, machine);
+        }
+        return { kind, model, source: "pane" };
+      }
+    }
+
+    if (view === "ext" && extCur) {
+      if (extCur.startsWith("h:")) {
+        const hid = extCur.slice(2);
+        const h = (hist || []).find((x) => x.id === hid);
+        if (h?.kind) {
+          const kind = normKind(h.kind);
+          let model = h.model || "";
+          if (!model) {
+            model = cachedDefaultModel(kind, h.machine || "");
+            if (!model) warmDefaultModel(kind, h.machine || "");
+          }
+          return { kind, model, source: "history" };
+        }
+      } else {
+        const e = (ext || []).find((x) => x.id === extCur);
+        if (e?.kind) {
+          const kind = normKind(e.kind);
+          let model = e.model || "";
+          if (!model) {
+            model = cachedDefaultModel(kind, e.machine || "");
+            if (!model) warmDefaultModel(kind, e.machine || "");
+          }
+          return { kind, model, source: "external" };
+        }
+      }
+    }
+
+    if (view === "collie") {
+      const ov = targetOverrideFlags();
+      if (targetExpanded || ov.kindChanged || ov.modelChanged || ov.effortChanged) {
+        const kind = normKind(ov.t?.kind);
+        const machine = ov.t?.machine || "";
+        let model = ov.model || "";
+        if (!model) {
+          model = cachedDefaultModel(kind, machine);
+          if (!model) warmDefaultModel(kind, machine);
+        }
+        return { kind, model, source: "dispatch" };
+      }
+      if (activeWorkerKey) {
+        const { supW, liveAgent } = resolveWorkerContext();
+        if (liveAgent && liveAgent.is_agent) {
+          const run = liveAgent.run || supW?.run;
+          const kind = normKind(liveAgent.run ? liveAgent.kind : (supW?.kind || liveAgent.kind));
+          const machine = liveAgent.run ? (liveAgent.machine || "") : (supW?.machine || "");
+          let model = run?.[0] || supW?.model || "";
+          if (!model && !(liveAgent.pane_id && hubOf(liveAgent.pane_id))) {
+            model = cachedDefaultModel(kind, machine);
+            if (!model) warmDefaultModel(kind, machine);
+          }
+          return { kind, model, source: "worker" };
+        }
+      }
+    }
+
+    const r = sup.router || {};
+    const kind = normKind(r.kind);
+    let model = r.model || "";
+    if (!model && kind) {
+      model = cachedDefaultModel(kind, "");
+      if (!model) warmDefaultModel(kind, "");
+    }
+    return { kind, model, source: "router" };
+  }
+  function syncQuotaContext() {
+    try { window.__collieQuota?.onContextChange?.(); } catch {}
   }
   function resetTargetOverride() {
     target = null;
@@ -15894,6 +16010,7 @@
   }
   function renderExtHead(gone) {
     extWorking(gone);
+    syncQuotaContext();
     if (extCur?.startsWith("h:")) return renderHistHead(extCur.slice(2));
     $("#x-tag").textContent = tx("ext.readonly", "只读");
     $("#x-forget").hidden = true;
@@ -16960,6 +17077,7 @@
     // terminal): once it does, switch to the view that fits.
     if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); resetScreen(); openStream(); }
     $("#input").placeholder = v.name === ROUTER ? tx("detail.inputRouterPh", "直接在 Collie 的终端里输入…") : v.is_agent ? tx("detail.inputKindPh", "给 {kind} 发消息…", { kind: KIND_LABEL[v.kind] || v.kind }) : tx("detail.inputShellPh", "输入命令…");
+    syncQuotaContext();
   }
 
   // What model an agent was started with, recorded when Collie (the launcher
@@ -16990,6 +17108,7 @@
     el.textContent = parts.join(" · ");
     el.title = tx("detail.launchModelTitle", "启动时用的模型：{model}{effort}（之后在 agent 里换过的话这里不会变）", { model: model || tx("collie.agentOwnSettingShort", "agent 自己的设置"), effort: effort ? tx("collie.effortComma", "，思考强度 {effort}", { effort }) : "" });
     el.hidden = false;
+    syncQuotaContext();
   }
 
   // ───────────────────────────── one agent: streams
@@ -24902,6 +25021,7 @@
     wdModelEl.hidden = false;
     wdMoreState.modelText = modelStr;
     syncWdMoreMenuInfo();
+    syncQuotaContext();
   }
   function syncWorkerDrawerMeta() {
     if (!activeWorkerKey || !wdDrawer) return;
@@ -25015,6 +25135,7 @@
     if (wdGoneEl) wdGoneEl.hidden = true;
     applyWdModeUI();
     syncWorkerComposerUI();
+    syncQuotaContext();
   }
   async function loadWdHistory(past, supW, opts = {}) {
     if (!wdThreadEl) return;
@@ -25448,6 +25569,7 @@
     syncSideActive({ skipBadge: true });
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     wdDrawer.setAttribute("aria-hidden", "true");
+    syncQuotaContext();
     if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
@@ -29712,7 +29834,7 @@
         });
       }
       connect();
-      window.__collieQuota?.init?.({ api, toast });
+      window.__collieQuota?.init?.({ api, toast, getContext: resolveActiveQuotaContext });
       loadHubs();
       checkUpdates();
       if (view === "collie") {
@@ -29744,7 +29866,7 @@
       $("#app").hidden = false;
       setMode(mode);
       connect();
-      window.__collieQuota?.init?.({ api, toast });
+      window.__collieQuota?.init?.({ api, toast, getContext: resolveActiveQuotaContext });
       booted = false;
       view = undefined;
       route();

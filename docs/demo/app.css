@@ -41,6 +41,13 @@
   --user-bubble-bg: var(--accent);
   --user-bubble-fg: var(--on-accent);
   --user-bubble-shadow: none;
+  --link-ul: rgba(17, 17, 17, .26);
+  --link-ul-hover: rgba(17, 17, 17, .85);
+  --code-link-bg: rgba(17, 17, 17, .055);
+  --code-link-bg-hover: rgba(17, 17, 17, .105);
+  --code-link-bg-active: rgba(17, 17, 17, .15);
+  --code-link-cue: rgba(17, 17, 17, .50);
+  --code-link-cue-hover: rgba(17, 17, 17, .88);
   --attn: #b45309;
   --attn-soft: #fbf3e8;
   --attn-line: #d9a777;
@@ -111,6 +118,13 @@
     --user-bubble-bg: var(--human-bg);
     --user-bubble-fg: var(--human-line);
     --user-bubble-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
+    --link-ul: rgba(237, 237, 235, .28);
+    --link-ul-hover: rgba(237, 237, 235, .88);
+    --code-link-bg: rgba(255, 255, 255, .07);
+    --code-link-bg-hover: rgba(255, 255, 255, .13);
+    --code-link-bg-active: rgba(255, 255, 255, .18);
+    --code-link-cue: rgba(237, 237, 235, .52);
+    --code-link-cue-hover: rgba(237, 237, 235, .92);
     --attn: #dfa057;
     --attn-soft: #221c14;
     --attn-line: #5c4527;
@@ -171,6 +185,13 @@
   --user-bubble-bg: var(--human-bg);
   --user-bubble-fg: var(--human-line);
   --user-bubble-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
+  --link-ul: rgba(237, 237, 235, .28);
+  --link-ul-hover: rgba(237, 237, 235, .88);
+  --code-link-bg: rgba(255, 255, 255, .07);
+  --code-link-bg-hover: rgba(255, 255, 255, .13);
+  --code-link-bg-active: rgba(255, 255, 255, .18);
+  --code-link-cue: rgba(237, 237, 235, .52);
+  --code-link-cue-hover: rgba(237, 237, 235, .92);
   --attn: #dfa057;
   --attn-soft: #221c14;
   --attn-line: #5c4527;
@@ -912,6 +933,13 @@ html.is-idle .working-row .wk-t {
   align-self: flex-end; max-width: min(84%, 620px); background: var(--user-bubble-bg, var(--human-bg)); color: var(--user-bubble-fg, var(--human-line));
   box-shadow: var(--user-bubble-shadow, none);
   padding: 10px 16px; border-radius: 20px 20px 6px 20px; white-space: pre-wrap; line-height: 1.6;
+  --link-ul: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 42%, transparent);
+  --link-ul-hover: var(--user-bubble-fg, var(--human-line));
+  --code-link-bg: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 14%, transparent);
+  --code-link-bg-hover: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 23%, transparent);
+  --code-link-bg-active: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 30%, transparent);
+  --code-link-cue: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 66%, transparent);
+  --code-link-cue-hover: var(--user-bubble-fg, var(--human-line));
 }
 .msg.user.is-media-only {
   display: flex; flex-direction: column; align-items: flex-end;
@@ -1001,7 +1029,7 @@ html.is-idle .working-row .wk-t {
 .msg.assistant ul, .msg.assistant ol { margin: 0 0 1em; padding-left: 1.3em; }
 .msg.assistant li { margin: .4em 0; padding-left: .15em; }
 .msg.assistant li::marker { color: var(--fg-3); }
-.msg.assistant a { text-underline-offset: 2px; }
+.msg.assistant a { text-underline-offset: 3px; }
 .msg code { font: .86em var(--mono); background: color-mix(in srgb, var(--bg-3) 55%, transparent); padding: .08em .3em; border-radius: 4px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .msg.user code { background: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 14%, transparent); }
 .msg pre { margin: .2em 0 1em; padding: 14px 16px; overflow: auto; tab-size: 4; background: var(--code-bg); color: var(--code-fg); border: 1px solid var(--line); border-radius: 10px; font: 12.5px/1.55 var(--mono); }
@@ -3275,26 +3303,224 @@ body.reading-file .main { display: flex !important; content-visibility: visible 
 .thumb.broken { background: var(--img-skel); }
 .thumb.broken::after { content: "图片读不到"; display: block; padding: 14px 16px; font-size: 12px; opacity: .7; }
 .thumb.broken img { display: none; }
-a.fpath { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; cursor: pointer; }
+/* Inline prose links: classic B&W (light) & Linear graphite (dark), zero blue box stacking. */
+a.fpath {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--link-ul);
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: auto;
+  cursor: pointer;
+  transition: text-decoration-color .14s ease;
+}
 a.fpath.img-link { cursor: zoom-in; }
-a.fpath:hover { text-decoration-color: currentColor; }
-a:is(.fpath, .url, .worker-link):has(> code.code-link) { text-decoration: none; }
-.msg code.code-link, .td-text code.code-link, .mem-body code.code-link, .fv-md code.code-link, .rv-md code.code-link {
-  color: color-mix(in srgb, var(--hl-ty) 84%, var(--fg));
-  background: color-mix(in srgb, var(--hl-ty) 7%, var(--bg-3));
-  border: 1px solid color-mix(in srgb, var(--hl-ty) 18%, var(--line));
-  padding: .06em .34em; border-radius: 5px;
+a.fpath:hover, a.fpath:focus-visible { text-decoration-color: var(--link-ul-hover); }
+a.url {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--link-ul);
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  transition: text-decoration-color .14s ease;
+}
+a.url:hover, a.url:focus-visible { text-decoration-color: var(--link-ul-hover); }
+a:is(.fpath, .url, .worker-link):has(> code.code-link) {
+  color: inherit;
+  text-decoration: none;
+  border-radius: 5px;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a:not(.re, .btn, .td-worker):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--fg) 54%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.msg.user a:not(.re, .btn):focus-visible {
+  outline-color: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 65%, transparent);
+}
+.msg.user .att a:focus-visible, .td-text .att a:focus-visible { border-radius: 8px; }
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) code.code-link {
+  font: .86em var(--mono);
+  color: inherit;
+  background: var(--code-link-bg);
+  border: 0;
+  padding: .09em .4em;
+  border-radius: 5px;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, currentColor 34%, transparent);
-  text-underline-offset: 2.5px;
-  transition: background .12s, border-color .12s, text-decoration-color .12s;
+  text-decoration: none;
+  transition: background-color .14s ease, color .14s ease;
 }
-a:is(.fpath, .url, .worker-link):hover > code.code-link, a:is(.fpath, .url, .worker-link):focus-visible > code.code-link {
-  background: color-mix(in srgb, var(--hl-ty) 13%, var(--bg-3));
-  border-color: color-mix(in srgb, var(--hl-ty) 38%, var(--line-2));
-  text-decoration-color: currentColor;
+a:is(.fpath, .url, .worker-link):hover > code.code-link,
+a:is(.fpath, .url, .worker-link):focus-visible > code.code-link {
+  background: var(--code-link-bg-hover);
+}
+a:is(.fpath, .url, .worker-link):active > code.code-link {
+  background: var(--code-link-bg-active);
+}
+/* Worker links: neutral soft surface + restrained status micro-dot + subtle drawer chevron. */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link > code.code-link,
+.md-table th a.worker-link > code.code-link,
+.md-table td a.worker-link > code.code-link {
+  padding: .09em .42em;
+  white-space: nowrap;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link > code.code-link::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  margin-right: .42em;
+  vertical-align: .14em;
+  background: var(--code-link-cue);
+  transition: background-color .14s ease, box-shadow .14s ease;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link[data-worker-status="working"] > code.code-link::before {
+  background: var(--fg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 14%, transparent);
+}
+.msg.user a.worker-link[data-worker-status="working"] > code.code-link::before {
+  background: var(--user-bubble-fg, var(--human-line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 22%, transparent);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link[data-worker-status="blocked"] > code.code-link::before {
+  background: var(--attn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--attn) 20%, transparent);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link[data-worker-status="waiting"] > code.code-link::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.35px var(--fg-3);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link:is(:hover, :focus-visible) > code.code-link::before {
+  background: var(--code-link-cue-hover);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link[data-worker-status="working"]:is(:hover, :focus-visible) > code.code-link::before {
+  background: var(--fg);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link[data-worker-status="blocked"]:is(:hover, :focus-visible) > code.code-link::before {
+  background: var(--attn);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link[data-worker-status="waiting"]:is(:hover, :focus-visible) > code.code-link::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.35px var(--fg);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link > code.code-link::after {
+  content: "\203A";
+  content: "\203A" / "";
+  display: inline-block;
+  margin-left: .28em;
+  font-family: var(--sans);
+  font-size: 1.05em;
+  font-weight: 400;
+  line-height: 1;
+  vertical-align: -.02em;
+  color: var(--code-link-cue);
+  transition: color .14s ease, transform .14s ease;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link:is(:hover, :focus-visible) > code.code-link::after {
+  color: var(--code-link-cue-hover);
+  transform: translateX(1.5px);
+}
+/* File path code links: hairline monochrome file/image glyph bound via Word Joiner so icon never orphans on wrap. */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.fpath > code.code-link::before {
+  content: "\2060";
+  content: "\2060" / "";
+  display: inline;
+  padding-left: .94em;
+  margin-right: .28em;
+  background-color: var(--code-link-cue);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.45' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 1.75H4.25A1.25 1.25 0 0 0 3 3v10a1.25 1.25 0 0 0 1.25 1.25h7.5A1.25 1.25 0 0 0 13 13V5.25L9.5 1.75Z'/%3E%3Cpath d='M9.25 1.75V5.5H13'/%3E%3C/svg%3E") left 54% / .88em .88em no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.45' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 1.75H4.25A1.25 1.25 0 0 0 3 3v10a1.25 1.25 0 0 0 1.25 1.25h7.5A1.25 1.25 0 0 0 13 13V5.25L9.5 1.75Z'/%3E%3Cpath d='M9.25 1.75V5.5H13'/%3E%3C/svg%3E") left 54% / .88em .88em no-repeat;
+  transition: background-color .14s ease;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.fpath.img-link > code.code-link::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.45' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.25' y='2.75' width='11.5' height='10.5' rx='1.5'/%3E%3Ccircle cx='5.75' cy='6.25' r='1'/%3E%3Cpath d='m13.5 10.5-2.75-2.75L4.5 13.25'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.45' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.25' y='2.75' width='11.5' height='10.5' rx='1.5'/%3E%3Ccircle cx='5.75' cy='6.25' r='1'/%3E%3Cpath d='m13.5 10.5-2.75-2.75L4.5 13.25'/%3E%3C/svg%3E");
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.fpath:is(:hover, :focus-visible) > code.code-link::before {
+  background-color: var(--code-link-cue-hover);
+}
+/* Inline code URLs: neutral soft surface + restrained trailing external arrow bound via Word Joiner. */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url > code.code-link {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url > code.code-link::after {
+  content: "\2060\2197";
+  content: "\2060\2197" / "";
+  display: inline;
+  margin-left: .24em;
+  font-family: var(--sans);
+  font-size: .88em;
+  font-weight: 400;
+  line-height: 1;
+  vertical-align: .04em;
+  color: var(--code-link-cue);
+  transition: color .14s ease;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url:is(:hover, :focus-visible) > code.code-link::after {
+  color: var(--code-link-cue-hover);
+}
+/* Plain-text external links in prose (bare a.url & Markdown [label](https://...)); excludes buttons, cards, images, and code-link wrappers. */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) :is(a.url, a[href^="http://"], a[href^="https://"]):not(.btn, .re, .fpath, .worker-link, .td-worker, .snap-head, .snap-chip):not(:has(> code.code-link)):not(:has(img, svg, button, picture, video, canvas)) {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--link-ul);
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: auto;
+  overflow-wrap: anywhere;
+  transition: text-decoration-color .14s ease;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) :is(a.url, a[href^="http://"], a[href^="https://"]):not(.btn, .re, .fpath, .worker-link, .td-worker, .snap-head, .snap-chip):not(:has(> code.code-link)):not(:has(img, svg, button, picture, video, canvas)):is(:hover, :focus-visible) {
+  text-decoration-color: var(--link-ul-hover);
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) :is(a.url, a[href^="http://"], a[href^="https://"]):not(.btn, .re, .fpath, .worker-link, .td-worker, .snap-head, .snap-chip):not(:has(> code.code-link)):not(:has(img, svg, button, picture, video, canvas))::after {
+  content: "\2197";
+  content: "\2197" / "";
+  display: inline-block;
+  margin-left: .16em;
+  font-family: var(--sans);
+  font-size: .78em;
+  font-weight: 400;
+  line-height: 1;
+  vertical-align: .1em;
+  text-decoration: none;
+  color: var(--code-link-cue);
+  transition: color .14s ease, transform .14s ease;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) :is(a.url, a[href^="http://"], a[href^="https://"]):not(.btn, .re, .fpath, .worker-link, .td-worker, .snap-head, .snap-chip):not(:has(> code.code-link)):not(:has(img, svg, button, picture, video, canvas)):is(:hover, :focus-visible)::after {
+  color: var(--code-link-cue-hover);
+  transform: translate(.06em, -.06em);
+}
+@media (prefers-reduced-motion: reduce) {
+  a.fpath,
+  a.url,
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) code.code-link,
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link > code.code-link::before,
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link > code.code-link::after,
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.fpath > code.code-link::before,
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url > code.code-link::after,
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) :is(a.url, a[href^="http://"], a[href^="https://"])::after {
+    transition: none;
+    transform: none;
+  }
+}
+@media (forced-colors: active) {
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) code.code-link {
+    border: 1px solid LinkText;
+    text-decoration: underline;
+  }
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.worker-link > code.code-link::before {
+    border: 2.5px solid LinkText;
+  }
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a:not(.re, .btn, .td-worker):focus-visible {
+    outline: 2px solid Highlight;
+  }
 }
 .md-table:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 28%, transparent); outline-offset: 2px; border-radius: 6px; }
 
@@ -3465,8 +3691,6 @@ dialog.lightbox.is-dragging .lb-img, dialog.lightbox.no-anim .lb-img { transitio
 @media (pointer: coarse) {
   .lb-btn { min-width: 36px; height: 36px; padding: 0 8px; }
 }
-a.url { color: var(--accent, inherit); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; word-break: break-all; }
-a.url:hover { text-decoration-color: currentColor; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }
 .field small { display: block; margin-top: 6px; font-size: 12px; }
 .kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

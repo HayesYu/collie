@@ -40,6 +40,10 @@ type Server struct {
 	started map[string]time.Time // pane → when Collie started an agent there
 
 	agyResuming sync.Map // CLI history IDs currently starting in herdr
+
+	quotaOnce sync.Once
+	quota     *quotaManager
+	quotaDir  string // optional override for tests; defaults to sup.dir
 }
 
 func (s *Server) markStarted(pane string) {
@@ -153,6 +157,8 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("POST /api/uploads", wrap(s.upload))
 	mux.Handle("GET /api/titles", wrap(s.getTitles))
 	mux.Handle("GET /api/models", wrap(s.listModels))
+	mux.Handle("GET /api/quota", wrap(s.getQuota))
+	mux.Handle("POST /api/quota/refresh", wrap(s.refreshQuota))
 	mux.Handle("POST /api/trust", wrap(s.trustFolder))
 	mux.Handle("POST /api/update", wrap(s.selfUpdate))
 	mux.Handle("GET /api/transcript", wrap(s.getTranscript))
@@ -223,7 +229,7 @@ func (s *Server) webBuild() string {
 	}
 	webBuildOnce.Do(func() {
 		h := sha256.New()
-		for _, p := range []string{"index.html", "app.js", "app.css"} {
+		for _, p := range []string{"index.html", "app.js", "app.css", "quota.js", "quota.css"} {
 			b, _ := fs.ReadFile(s.web, p)
 			h.Write(b)
 		}
@@ -439,7 +445,13 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 		defer done()
 		ch = c
 	}
-	var lastState, lastSuper string
+	var qch <-chan struct{}
+	if qm := s.quotaMgr(); qm != nil {
+		c, done := qm.subscribe()
+		defer done()
+		qch = c
+	}
+	var lastState, lastSuper, lastQuota string
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 	beat := time.NewTicker(15 * time.Second)
@@ -456,6 +468,17 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		if qm := s.quotaMgr(); qm != nil {
+			if snap, ok := qm.CachedSnapshot(); ok {
+				b, _ := json.Marshal(snap)
+				if string(b) != lastQuota {
+					lastQuota = string(b)
+					if sse.send("quota", b) != nil {
+						return
+					}
+				}
+			}
+		}
 		b, _ := json.Marshal(s.state(r.Context()))
 		if string(b) != lastState {
 			lastState = string(b)
@@ -469,6 +492,7 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 		case <-beat.C:
 			sse.comment()
 		case <-ch:
+		case <-qch:
 		case <-tick.C:
 		}
 	}

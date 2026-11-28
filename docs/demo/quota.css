@@ -1,0 +1,714 @@
+/* Collie — Account Subscription Quota Badge & Popover/Sheet UI
+   Standalone stylesheet to avoid merge conflicts with parallel UI branches. */
+
+@property --q-val {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+:root {
+  --q-danger: #b42318;
+  --q-danger-soft: rgba(180, 35, 24, .08);
+  --q-bar-track: #e8e8e5;
+  --q-bar-fill: #3f3f3a;
+  --q-ring-track: #deded9;
+  --q-ring-fill: #55554f;
+  --q-ring-fill-hover: #111111;
+  --q-scrim: rgba(17, 17, 17, .28);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --q-danger: #e57368;
+    --q-danger-soft: rgba(229, 115, 104, .12);
+    --q-bar-track: #26262c;
+    --q-bar-fill: #a8a8a3;
+    --q-ring-track: #303038;
+    --q-ring-fill: #9b9b95;
+    --q-ring-fill-hover: #ededeb;
+    --q-scrim: rgba(0, 0, 0, .56);
+  }
+}
+
+:root[data-theme="dark"] {
+  --q-danger: #e57368;
+  --q-danger-soft: rgba(229, 115, 104, .12);
+  --q-bar-track: #26262c;
+  --q-bar-fill: #a8a8a3;
+  --q-ring-track: #303038;
+  --q-ring-fill: #9b9b95;
+  --q-ring-fill-hover: #ededeb;
+  --q-scrim: rgba(0, 0, 0, .56);
+}
+
+/* ─── Pure-Icon Footer Triggers (0px height increase on desktop & mobile) ─── */
+.sf-quota-btn {
+  anchor-name: --quota-anchor-full;
+}
+.sr-quota-btn {
+  anchor-name: --quota-anchor-rail;
+}
+
+.sf-quota-btn[aria-expanded="true"] {
+  background: var(--bg);
+  border-color: var(--line);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+.sr-quota-btn[aria-expanded="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.sf-quota-btn .q-ring-box,
+.sr-quota-btn .q-ring-box {
+  --ring-size: 18px;
+  --ring-stroke: 2.1px;
+}
+
+.sf-quota-btn:hover .q-ring:not(.is-low):not(.is-exhausted):not(.is-unknown),
+.sr-quota-btn:hover .q-ring:not(.is-low):not(.is-exhausted):not(.is-unknown),
+.sf-quota-btn[aria-expanded="true"] .q-ring:not(.is-low):not(.is-exhausted):not(.is-unknown),
+.sr-quota-btn[aria-expanded="true"] .q-ring:not(.is-low):not(.is-exhausted):not(.is-unknown) {
+  --fill: var(--q-ring-fill-hover);
+}
+
+.sf-quota-btn .sf-badge-dot.is-danger,
+.sr-quota-btn .sr-badge-dot.is-danger {
+  background: var(--q-danger);
+}
+
+@media (max-width: 760px) {
+  .sf-quota-btn .q-ring-box {
+    --ring-size: 20px;
+    --ring-stroke: 2.2px;
+  }
+  .sf-quota-btn .sf-badge-dot {
+    top: 8px;
+    right: 8px;
+  }
+}
+
+/* ─── Mobile Main Chat Header: 0 added controls, 5px amber corner dot on ⋯ only when <20% ─── */
+.collie-more-btn {
+  position: relative;
+}
+.mob-more-dot {
+  display: none;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--attn);
+  box-shadow: 0 0 0 1.5px var(--bg);
+  pointer-events: none;
+}
+.mob-more-dot.is-danger {
+  background: var(--q-danger);
+}
+.mob-more-dot[hidden] {
+  display: none !important;
+}
+@media (max-width: 760px) {
+  .mob-more-dot:not([hidden]) {
+    display: block;
+  }
+}
+
+/* Overflow menu quota shortcut row */
+.menu button.menu-quota-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.menu .hm-sub {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.menu .hm-sub.is-low {
+  color: var(--attn);
+  font-weight: 500;
+}
+.menu .hm-sub.is-exhausted {
+  color: var(--q-danger);
+  font-weight: 550;
+}
+
+/* ─── Micro Progress Ring (Native <progress> + conic-gradient + border-area / mask fallback) ─── */
+.q-ring-box {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: var(--ring-size, 18px);
+  height: var(--ring-size, 18px);
+  flex: none;
+  pointer-events: none;
+}
+
+progress.q-ring {
+  appearance: none;
+  -webkit-appearance: none;
+  --size: var(--ring-size, 18px);
+  --thickness: var(--ring-stroke, 2.1px);
+  --fill: var(--q-ring-fill);
+  --track: var(--q-ring-track);
+  display: block;
+  width: var(--size);
+  height: var(--size);
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--fill) calc(var(--q-val) * 1%),
+    var(--track) 0
+  );
+  background-clip: border-area;
+  border: var(--thickness) solid transparent;
+  background-origin: border-box;
+  transition: --q-val 0s ease-out;
+  pointer-events: none;
+}
+
+/* Hide native progress bar visuals (separate rules per browser engine) */
+progress.q-ring::-webkit-progress-bar {
+  display: none;
+  background: none;
+}
+progress.q-ring::-webkit-progress-value {
+  display: none;
+  background: none;
+}
+progress.q-ring::-moz-progress-bar {
+  display: none;
+  background: none;
+}
+progress.q-ring::slider-fill {
+  display: none;
+  background: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  progress.q-ring {
+    transition: --q-val .35s cubic-bezier(.4, 0, .2, 1);
+  }
+}
+
+@supports not (background-clip: border-area) {
+  progress.q-ring {
+    border: 0;
+    -webkit-mask-image: radial-gradient(
+      transparent calc(50% - var(--thickness)),
+      #000 calc(50% - var(--thickness) + 0.5px)
+    );
+    mask-image: radial-gradient(
+      transparent calc(50% - var(--thickness)),
+      #000 calc(50% - var(--thickness) + 0.5px)
+    );
+  }
+}
+
+progress.q-ring.is-low {
+  --fill: var(--attn);
+}
+progress.q-ring.is-exhausted {
+  --fill: var(--q-danger);
+  --track: color-mix(in srgb, var(--q-danger) 42%, transparent);
+}
+.q-ring-box:has(> progress.q-ring.is-exhausted)::after {
+  content: "";
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--q-danger);
+  pointer-events: none;
+}
+progress.q-ring.is-unknown {
+  background: none;
+  border: 1.6px dashed var(--fg-3);
+  -webkit-mask-image: none;
+  mask-image: none;
+  opacity: .76;
+}
+
+@media (forced-colors: active) {
+  progress.q-ring {
+    forced-color-adjust: none;
+    --fill: CanvasText;
+    --track: Canvas;
+  }
+}
+
+/* ─── Native Top-Layer Quota Popover & Mobile Bottom Sheet ─── */
+#quota-popover {
+  padding: 0;
+  border: 1px solid var(--pin-list-line);
+  border-radius: 14px;
+  background: var(--pin-list-bg);
+  color: var(--fg);
+  box-shadow: var(--pin-list-shadow);
+  width: min(326px, calc(100vw - 24px));
+  max-height: min(540px, calc(100dvh - 32px));
+  overflow: hidden;
+  flex-direction: column;
+  transform-origin: bottom left;
+  box-sizing: border-box;
+  opacity: 0;
+  transition-property: opacity, transform, display, overlay;
+  transition-duration: .18s;
+  transition-timing-function: cubic-bezier(.22, 1, .36, 1);
+  transition-behavior: allow-discrete;
+}
+
+#quota-popover:not(:popover-open):not(.\:popover-open) {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #quota-popover {
+    transform: translateY(5px) scale(.975);
+  }
+  #quota-popover.is-sheet {
+    transform: translateY(28px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #quota-popover {
+    transition-duration: .1s;
+  }
+}
+
+#quota-popover:is(:popover-open, .\:popover-open) {
+  display: flex;
+  opacity: 1;
+}
+
+@starting-style {
+  #quota-popover:is(:popover-open, .\:popover-open) {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #quota-popover:is(:popover-open, .\:popover-open) {
+    transform: translateY(0) scale(1);
+  }
+  @starting-style {
+    #quota-popover:is(:popover-open, .\:popover-open) {
+      transform: translateY(5px) scale(.975);
+    }
+    #quota-popover.is-sheet:is(:popover-open, .\:popover-open) {
+      transform: translateY(28px);
+    }
+  }
+}
+
+#quota-popover::backdrop {
+  background-color: transparent;
+  transition-property: background-color, display, overlay;
+  transition-duration: .18s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+}
+
+/* Gate inset:auto and margin inside @supports for CSS Anchor Positioning */
+@supports (position-area: block-start) {
+  #quota-popover.pos-anchor-full {
+    position-anchor: --quota-anchor-full;
+    inset: auto;
+    margin: 0 0 8px 0;
+    position-area: block-start span-inline-end;
+    position-try-fallbacks: flip-inline, flip-block, flip-block flip-inline;
+  }
+  #quota-popover.pos-anchor-rail {
+    position-anchor: --quota-anchor-rail;
+    inset: auto;
+    margin: 0 0 0 12px;
+    position-area: inline-end span-block-start;
+    position-try-fallbacks: flip-inline, flip-block, flip-block flip-inline;
+  }
+}
+
+#quota-popover.pos-manual {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+}
+
+/* Mobile bottom sheet presentation */
+#quota-popover.is-sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: 82dvh;
+  border-radius: 18px 18px 0 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-right: 0;
+  transform-origin: bottom center;
+  padding-bottom: max(6px, env(safe-area-inset-bottom));
+}
+#quota-popover.is-sheet:is(:popover-open, .\:popover-open)::backdrop {
+  background-color: var(--q-scrim);
+}
+@starting-style {
+  #quota-popover.is-sheet:is(:popover-open, .\:popover-open)::backdrop {
+    background-color: transparent;
+  }
+}
+
+/* Fallback scrim when browser lacks native top-layer popover */
+.quota-fallback-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 998;
+  background: var(--q-scrim);
+}
+#quota-popover.\:popover-open {
+  z-index: 999;
+}
+
+/* ─── Popover Internals ─── */
+.qp-handle {
+  display: none;
+  justify-content: center;
+  padding: 8px 0 2px;
+  flex: none;
+}
+#quota-popover.is-sheet .qp-handle {
+  display: flex;
+}
+.qp-handle span {
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line-2);
+}
+
+.qp-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.qp-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: var(--fg);
+}
+.qp-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.qp-refresh,
+.qp-close {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background .12s, color .12s, scale .1s;
+}
+.qp-refresh:hover:not(:disabled),
+.qp-close:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.qp-refresh:active:not(:disabled),
+.qp-close:active {
+  scale: .94;
+}
+.qp-refresh:disabled {
+  opacity: .42;
+  cursor: default;
+}
+.qp-refresh svg,
+.qp-close svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.qp-refresh.is-spinning svg {
+  animation: q-spin .75s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qp-refresh.is-spinning svg {
+    animation: none;
+  }
+}
+@keyframes q-spin {
+  to { transform: rotate(360deg); }
+}
+
+.qp-close {
+  display: none;
+  width: 28px;
+  height: 28px;
+}
+#quota-popover.is-sheet .qp-close {
+  display: inline-grid;
+}
+
+.qp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 0;
+}
+
+.qp-empty {
+  padding: 20px 14px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--fg-3);
+}
+
+.qa-sec {
+  padding: 11px 14px;
+}
+.qa-sec + .qa-sec {
+  border-top: 1px solid var(--line);
+}
+
+.qa-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.qa-id {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.qa-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.qa-plan {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qa-state {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-3);
+  white-space: nowrap;
+  flex: none;
+}
+.qa-state.is-low {
+  color: var(--attn);
+}
+.qa-state.is-exhausted {
+  color: var(--q-danger);
+}
+
+.qa-meters {
+  display: grid;
+  gap: 9px;
+}
+.qm-row {
+  display: grid;
+  gap: 4.5px;
+}
+.qm-row.is-expired {
+  opacity: .56;
+}
+.qm-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.qm-left {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.qm-lbl {
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.qm-reset {
+  font-size: 11px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qm-pct {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.qm-pct.is-low {
+  color: var(--attn);
+}
+.qm-pct.is-exhausted {
+  color: var(--q-danger);
+}
+
+/* Native semantic <progress> bar (separate -webkit / -moz rules per modern-web-guidance) */
+progress.q-bar {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  height: 4px;
+  border: 0 solid;
+  border-radius: 999px;
+  overflow: clip;
+  background: var(--q-bar-track);
+  --bar-c: var(--q-bar-fill);
+}
+progress.q-bar.is-low {
+  --bar-c: var(--attn);
+}
+progress.q-bar.is-exhausted {
+  --bar-c: var(--q-danger);
+}
+progress.q-bar::-webkit-progress-bar {
+  background: transparent;
+}
+progress.q-bar::-webkit-progress-value {
+  background: var(--bar-c);
+  border-radius: 999px;
+  transition: inline-size .3s ease-out;
+}
+progress.q-bar::-moz-progress-bar {
+  background: var(--bar-c);
+  border-radius: 999px;
+  transition: inline-size .3s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  progress.q-bar::-webkit-progress-value { transition: none; }
+  progress.q-bar::-moz-progress-bar { transition: none; }
+}
+
+.qm-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 2px;
+  font-size: 11.5px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.qa-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-2);
+}
+.qa-note.is-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.qa-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line-2);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color .12s, text-decoration-color .12s;
+}
+.qa-link:hover {
+  color: var(--fg);
+  text-decoration-color: var(--fg-2);
+}
+
+.qa-guide {
+  margin-top: 7px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+.qa-guide code {
+  font: 11px/1.4 var(--mono);
+  color: var(--fg);
+  background: var(--bg-3);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.qp-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-2) 65%, var(--pin-list-bg));
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.qp-cooldown {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

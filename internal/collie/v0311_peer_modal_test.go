@@ -40,7 +40,8 @@ assert.ok(cssSrc.includes(".pm-pop[popover].is-align-start") && cssSrc.includes(
 assert.ok(cssSrc.includes(".pm-fold::details-content"), "advanced details disclosure must use native <details> animation");
 
 // Zero engineering clutter in peer modal header/copy and zero nested segmented sub-tabs
-assert.ok(!appSrc.includes("好友边牧 · 受控收件箱"), "peer modal title must be clean 好友边牧 without engineering suffix");
+assert.ok(!appSrc.includes("好友边牧 · 受控收件箱"), "peer modal title must be clean Collie 的好狗友 without engineering suffix");
+assert.ok(!appSrc.includes("Collie 的好狗友 · 受控收件箱"), "peer modal title must be clean Collie 的好狗友 without engineering suffix");
 assert.ok(!appSrc.includes("data-peer-add-sub"), "nested add-friend segmented sub-tabs must be removed in favor of single-level 3 tabs");
 assert.ok(appSrc.includes('id="peer-tab-friends"') && appSrc.includes('id="peer-tab-card"') && appSrc.includes('id="peer-tab-add"'), "single-level 3 tabs must exist");
 assert.ok(appSrc.includes('id="peer-adv-details"') && appSrc.includes("连接与高级详情"), "raw addrs/code/hub_id/reset must fold into 连接与高级详情");
@@ -231,7 +232,7 @@ const T = ctx.__test;
   await T.openPeerModal("auto", { refresh: true });
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(getEl("#int-modal").open, true);
-  assert.equal(getEl("#int-modal-title").textContent, "好友边牧");
+  assert.equal(getEl("#int-modal-title").textContent, "Collie 的好狗友");
   assert.equal(T.getDraft().tab, "card", "0 peers auto-opens 我的名片 tab");
   assert.equal(getEl("#peer-tab-friends-cnt").hidden, true, "0 peers must hide redundant friend count");
   assert.equal(getEl("#peer-tab-pending-badge").hidden, true, "0 pending must hide amber badge");

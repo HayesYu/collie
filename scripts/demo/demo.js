@@ -11,7 +11,7 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.3.11", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.3.11", agents: ["claude", "codex", "agy", "doubao", "cursor", "pi", "omp"] },
     { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.3.11", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
@@ -488,6 +488,26 @@
       ],
       default: "auto",
       efforts: [],
+    },
+    pi: {
+      models: [
+        { id: "anthropic/claude-sonnet-4-5", label: "claude-sonnet-4-5", note: "anthropic · 200K", efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        { id: "openai/gpt-5.4", label: "gpt-5.4", note: "openai · 272K", efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        { id: "deepseek/deepseek-chat", label: "deepseek-chat", note: "deepseek · 128K", efforts: [] },
+      ],
+      default: "anthropic/claude-sonnet-4-5",
+      default_effort: "medium",
+      efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    },
+    omp: {
+      models: [
+        { id: "anthropic/claude-sonnet-4-5", label: "Claude Sonnet 4.5", note: "anthropic", efforts: ["off", "low", "medium", "high", "max", "auto"] },
+        { id: "openai/gpt-5.4", label: "GPT-5.4", note: "openai", efforts: ["off", "medium", "high", "xhigh", "auto"] },
+        { id: "deepseek/deepseek-flash", label: "DeepSeek Flash", note: "deepseek", efforts: [] },
+      ],
+      default: "anthropic/claude-sonnet-4-5",
+      default_effort: "auto",
+      efforts: ["off", "low", "medium", "high", "xhigh", "max", "auto"],
     },
   };
 
@@ -1112,7 +1132,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
           if (Array.isArray(obj.a) && obj.a[0]) parsedAddr = obj.a[0].includes("://") ? obj.a[0] : "http://" + obj.a[0];
         }
       } catch {}
-      const np = { id, hub_id: parsedHubId, name: body.name || parsedName || "新好友的边牧", addrs: [parsedAddr], primary_addr: parsedAddr, mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const np = { id, hub_id: parsedHubId, name: body.name || parsedName || (window.CollieI18n?.getLang?.() === "en" ? "New Pal" : "新狗友"), addrs: [parsedAddr], primary_addr: parsedAddr, mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       demoPeers.push(np);
       pushAll();
       return json({ ok: true, pending: true, peer: np });
@@ -1491,7 +1511,13 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
   if (!/[?&]clean\b/.test(location.search)) {
     addEventListener("DOMContentLoaded", () => {
       const b = document.createElement("a");
-      b.href = "../"; b.className = "demo-badge"; b.textContent = "演示 · 数据是虚构的 · 返回主页";
+      b.href = "../"; b.className = "demo-badge";
+      const syncDemoBadge = () => {
+        b.textContent = window.CollieI18n ? window.CollieI18n.t("demo.badge", null, "演示 · 数据是虚构的 · 返回主页") : "演示 · 数据是虚构的 · 返回主页";
+        document.title = window.CollieI18n ? window.CollieI18n.t("demo.title", null, "Collie 演示") : "Collie 演示";
+      };
+      syncDemoBadge();
+      window.CollieI18n?.onChange?.(syncDemoBadge);
       document.body.append(b);
     });
   }

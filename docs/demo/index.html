@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" data-theme-color="light">
+  <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)" data-theme-color="dark">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="app.css">
   <link rel="stylesheet" href="quota.css">
   <script>
-    // Apply this device's look before first paint (see 偏好设置).
+    // Apply this device's look & language before first paint (see 偏好设置).
     try {
       const g = (k) => JSON.parse(localStorage.getItem("collie." + k) || "null");
       const t = g("theme"), a = g("accent"), x = g("text");
@@ -24,9 +24,30 @@
         document.documentElement.dataset.theme = t;
         const cs = document.querySelector('meta[name="color-scheme"]');
         if (cs) cs.content = t;
+        const tc = t === "dark" ? "#111113" : "#ffffff";
+        document.querySelectorAll('meta[name="theme-color"]').forEach((m, i) => {
+          if (i === 0) {
+            m.removeAttribute("media");
+            m.content = tc;
+          } else {
+            m.setAttribute("media", "not all");
+            m.content = tc;
+          }
+        });
       }
       if (a === "cobalt" || a === "pine" || a === "ink") document.documentElement.dataset.accent = a;
       if (x === "small" || x === "large") document.documentElement.dataset.text = x;
+      let lp = "auto";
+      const rawLang = localStorage.getItem("collie.lang");
+      if (rawLang) {
+        try { lp = JSON.parse(rawLang); } catch { lp = rawLang; }
+      }
+      if (lp !== "zh" && lp !== "en" && lp !== "auto") lp = "auto";
+      const navLang = (navigator.language || (navigator.languages && navigator.languages[0]) || "").toLowerCase();
+      const effLang = lp === "auto" ? (/^zh(?:[-_]|$)/.test(navLang) ? "zh" : "en") : lp;
+      document.documentElement.lang = effLang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = effLang;
+      document.documentElement.dataset.langPref = lp;
     } catch {}
   </script>
 </head>
@@ -37,11 +58,11 @@
   <form class="login-card" id="login-form">
     <img src="icon.svg" alt="" class="login-mark">
     <h1>Collie</h1>
-    <p class="muted">手机：扫 hub 终端里的二维码，或在已登录的设备上打开「设备 → 连接手机」。<br>也可以输入配对码或访问令牌。</p>
-    <p class="login-tip" id="login-tip" hidden>桌面图标与浏览器登录态独立，请在此直接输入新生成的 8 位配对码或主令牌。</p>
-    <label for="login-token" class="visually-hidden">配对码或访问令牌</label>
-    <input id="login-token" name="token" type="password" autocomplete="current-password" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="配对码或访问令牌" aria-describedby="login-tip login-error" required>
-    <button class="btn primary block" type="submit">进入</button>
+    <p class="muted" data-i18n-html="login.descHtml">手机：扫 hub 终端里的二维码，或在已登录的设备上打开「设备 → 连接手机」。<br>也可以输入配对码或访问令牌。</p>
+    <p class="login-tip" id="login-tip" data-i18n="login.pwaTip" hidden>桌面图标与浏览器登录态独立，请在此直接输入新生成的 8 位配对码或主令牌。</p>
+    <label for="login-token" class="visually-hidden" data-i18n="login.tokenLabel">配对码或访问令牌</label>
+    <input id="login-token" name="token" type="password" autocomplete="current-password" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" data-i18n-placeholder="login.tokenPlaceholder" placeholder="配对码或访问令牌" aria-describedby="login-tip login-error" required>
+    <button class="btn primary block" type="submit" data-i18n="login.submit">进入</button>
     <p class="login-error" id="login-error" role="alert" aria-live="polite"></p>
   </form>
 </section>
@@ -53,118 +74,118 @@
     <div class="side-full">
       <header class="side-head">
         <div class="brand-wrap">
-          <button type="button" class="brand-toggle" id="side-toggle-btn" data-toggle-side title="收起侧栏 (⌘\)" aria-label="收起侧栏" aria-pressed="false">
+          <button type="button" class="brand-toggle" id="side-toggle-btn" data-toggle-side data-i18n-title="side.collapseKey" data-i18n-aria="side.collapse" title="收起侧栏 (⌘\)" aria-label="收起侧栏" aria-pressed="false">
             <img class="bt-logo" src="icon.svg" alt="">
             <svg class="bt-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
           </button>
-          <a class="brand-name" href="#/collie" title="回到 Collie 主会话">Collie</a>
+          <a class="brand-name" href="#/collie" data-i18n-title="side.brandHome" title="回到 Collie 主会话">Collie</a>
         </div>
         <div class="side-head-acts">
-          <button type="button" class="icon-btn" id="new-btn" title="新建 Agent" aria-label="新建 Agent">
+          <button type="button" class="icon-btn" id="new-btn" data-i18n-title="side.newAgent" data-i18n-aria="side.newAgent" title="新建 Agent" aria-label="新建 Agent">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           </button>
         </div>
       </header>
 
-      <nav class="side-nav" aria-label="主导航">
+      <nav class="side-nav" data-i18n-aria="side.primaryNav" aria-label="主导航">
         <a class="nav-item" id="nav-collie" href="#/collie">
           <span class="nav-ico"><img src="icon.svg" alt=""></span>
-          <span class="body"><div class="name">和 Collie 对话</div><div class="sub" id="nav-collie-sub">休眠中</div></span>
+          <span class="body"><div class="name" data-i18n="side.chatCollie">和 Collie 对话</div><div class="sub" id="nav-collie-sub" data-i18n="collie.st.asleep">休眠中</div></span>
           <span class="nav-right"><span class="count-pill attn" id="nav-pending" hidden></span><span class="dot" id="nav-collie-dot"></span></span>
         </a>
-        <a class="nav-item" id="nav-auto" href="#/auto" title="自动化 · 接入与定时">
+        <a class="nav-item" id="nav-auto" href="#/auto" data-i18n-title="side.autoTitle" title="自动化 · 接入与定时">
           <span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
-          <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">接入与定时</div></span>
+          <span class="body"><div class="name" data-i18n="side.auto">自动化</div><div class="sub" id="nav-auto-sub" data-i18n="side.autoSubDefault">接入与定时</div></span>
           <span class="nav-right"><span class="count-pill attn" id="nav-int-err" hidden></span><span class="count-pill" id="nav-queue" hidden></span></span>
         </a>
       </nav>
 
       <div class="side-scroll">
         <section class="group" id="attention-group" hidden>
-          <h2>需要你</h2>
+          <h2 data-i18n="side.needsYou">需要你</h2>
           <ul class="list attn" id="attention"></ul>
         </section>
         <details class="group" id="live-group" open>
-          <summary><h2>工作中 <span class="count" id="live-count"></span></h2></summary>
+          <summary data-i18n-lead="side.working"><h2>工作中 <span class="count" id="live-count"></span></h2></summary>
           <ul class="list" id="live-list"></ul>
         </details>
         <section class="group" id="recent-group" hidden>
-          <h2>最近</h2>
+          <h2 data-i18n="side.recent">最近</h2>
           <ul class="list" id="recent-list"></ul>
         </section>
         <details class="group" id="shell-group">
-          <summary><h2>终端 <span class="count" id="shell-count"></span></h2></summary>
+          <summary data-i18n-lead="side.terminals"><h2>终端 <span class="count" id="shell-count"></span></h2></summary>
           <ul class="list" id="shells"></ul>
         </details>
       </div>
 
       <div class="local-app" id="local-app" hidden>
-        <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span>在 Collie app 中打开</span></a>
-        <button class="icon-btn" id="local-app-x" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span data-i18n="side.openLocalApp">在 Collie app 中打开</span></a>
+        <button class="icon-btn" id="local-app-x" data-i18n-title="side.dismissLocalApp" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <footer class="side-foot">
         <button type="button" class="update-pill" id="update-all-btn" hidden></button>
         <div class="sf-row">
-          <a class="foot-status" href="#/devices" id="nav-devices" title="管理电脑与连接">
-            <span class="conn" id="conn" aria-hidden="true"></span><span id="herdr-status" class="muted">connecting…</span><svg class="foot-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.25 3.75L10.5 8l-4.25 4.25"/></svg>
+          <a class="foot-status" href="#/devices" id="nav-devices" data-i18n-title="side.manageDevices" title="管理电脑与连接">
+            <span class="conn" id="conn" aria-hidden="true"></span><span id="herdr-status" class="muted" data-i18n="common.connecting">connecting…</span><svg class="foot-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.25 3.75L10.5 8l-4.25 4.25"/></svg>
           </a>
-          <div class="sf-acts" role="group" aria-label="额度、好友与设置">
-            <button type="button" class="icon-btn sf-btn sf-quota-btn" id="nav-quota" aria-controls="quota-popover" aria-expanded="false" title="订阅额度" aria-label="订阅额度">
+          <div class="sf-acts" role="group" data-i18n-aria="side.footerActsAria" aria-label="额度、狗友与设置">
+            <button type="button" class="icon-btn sf-btn sf-quota-btn" id="nav-quota" aria-controls="quota-popover" aria-expanded="false" data-i18n-title="side.quota" data-i18n-aria="side.quota" title="订阅额度" aria-label="订阅额度">
               <span class="q-ring-box" aria-hidden="true">
                 <progress class="q-ring is-unknown" id="nav-quota-ring" value="0" max="100" tabindex="-1"></progress>
               </span>
               <span class="sf-badge-dot" id="nav-quota-dot" aria-hidden="true" hidden></span>
             </button>
-            <button type="button" class="icon-btn sf-btn" id="nav-peers" title="好友边牧" aria-label="好友边牧">
+            <button type="button" class="icon-btn sf-btn" id="nav-peers" data-i18n-title="side.pals" data-i18n-aria="side.pals" title="狗友" aria-label="狗友">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 18.5c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M15.8 14.3c2 .3 3.8 1.6 4.7 4.2"/></svg>
               <span class="sf-badge-dot" id="nav-peers-dot" aria-hidden="true" hidden></span>
             </button>
-            <a class="icon-btn sf-btn side-prefs-btn" id="nav-prefs" href="#/prefs" title="偏好设置" aria-label="偏好设置">
+            <a class="icon-btn sf-btn side-prefs-btn" id="nav-prefs" href="#/prefs" data-i18n-title="side.prefs" data-i18n-aria="side.prefs" title="偏好设置" aria-label="偏好设置">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
             </a>
           </div>
         </div>
       </footer>
     </div>
-    <nav class="side-rail" id="side-rail" aria-label="快捷窄轨">
+    <nav class="side-rail" id="side-rail" data-i18n-aria="side.railNav" aria-label="快捷窄轨">
       <div class="sr-top">
-        <button type="button" class="sr-btn sr-brand brand-toggle" id="side-expand-btn" data-toggle-side title="展开侧栏 (⌘\)" aria-label="展开侧栏" aria-pressed="true">
+        <button type="button" class="sr-btn sr-brand brand-toggle" id="side-expand-btn" data-toggle-side data-i18n-title="side.expandKey" data-i18n-aria="side.expand" title="展开侧栏 (⌘\)" aria-label="展开侧栏" aria-pressed="true">
           <img class="bt-logo" src="icon.svg" alt="">
           <svg class="bt-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
         </button>
-        <a class="sr-btn" id="rail-collie" href="#/collie" title="和 Collie 对话" aria-label="和 Collie 对话">
+        <a class="sr-btn" id="rail-collie" href="#/collie" data-i18n-title="side.chatCollie" data-i18n-aria="side.chatCollie" title="和 Collie 对话" aria-label="和 Collie 对话">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-12.3 7.6L3 20.5l1.4-5.7A8.5 8.5 0 1 1 21 11.5z"/></svg>
           <span class="sr-badge-dot" id="rail-collie-dot" aria-hidden="true" hidden></span>
         </a>
-        <button type="button" class="icon-btn sr-btn" id="rail-new-btn" title="新建 Agent" aria-label="新建 Agent">
+        <button type="button" class="icon-btn sr-btn" id="rail-new-btn" data-i18n-title="side.newAgent" data-i18n-aria="side.newAgent" title="新建 Agent" aria-label="新建 Agent">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        <a class="sr-btn" id="rail-auto" href="#/auto" title="自动化 · 接入与定时" aria-label="自动化">
+        <a class="sr-btn" id="rail-auto" href="#/auto" data-i18n-title="side.autoTitle" data-i18n-aria="side.auto" title="自动化 · 接入与定时" aria-label="自动化">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg>
           <span class="sr-badge-dot" id="rail-auto-dot" aria-hidden="true" hidden></span>
         </a>
       </div>
       <div class="sr-mid">
         <div class="sr-sep" id="rail-live-sep" aria-hidden="true" hidden></div>
-        <div class="sr-agents" id="rail-live" role="list" aria-label="工作中的 Agent"></div>
+        <div class="sr-agents" id="rail-live" role="list" data-i18n-aria="side.workingAgentsAria" aria-label="工作中的 Agent"></div>
       </div>
       <div class="sr-foot">
         <div class="sr-sep" aria-hidden="true"></div>
-        <button type="button" class="sr-btn sr-quota-btn" id="rail-quota" aria-controls="quota-popover" aria-expanded="false" title="订阅额度" aria-label="订阅额度">
+        <button type="button" class="sr-btn sr-quota-btn" id="rail-quota" aria-controls="quota-popover" aria-expanded="false" data-i18n-title="side.quota" data-i18n-aria="side.quota" title="订阅额度" aria-label="订阅额度">
           <span class="q-ring-box" aria-hidden="true">
             <progress class="q-ring is-unknown" id="rail-quota-ring" value="0" max="100" tabindex="-1"></progress>
           </span>
           <span class="sr-badge-dot" id="rail-quota-dot" aria-hidden="true" hidden></span>
         </button>
-        <a class="sr-btn" id="rail-devices" href="#/devices" title="设备与连接" aria-label="设备与连接">
+        <a class="sr-btn" id="rail-devices" href="#/devices" data-i18n-title="side.devicesConn" data-i18n-aria="side.devicesConn" title="设备与连接" aria-label="设备与连接">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M8 20h8M12 17v3"/></svg>
           <span class="sr-conn-dot" id="rail-conn" aria-hidden="true"></span>
         </a>
-        <button type="button" class="icon-btn sr-btn" id="rail-peers" title="好友边牧" aria-label="好友边牧">
+        <button type="button" class="icon-btn sr-btn" id="rail-peers" data-i18n-title="side.pals" data-i18n-aria="side.pals" title="狗友" aria-label="狗友">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 18.5c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M15.8 14.3c2 .3 3.8 1.6 4.7 4.2"/></svg>
           <span class="sr-badge-dot" id="rail-peers-dot" aria-hidden="true" hidden></span>
         </button>
-        <a class="sr-btn" id="rail-prefs" href="#/prefs" title="偏好设置" aria-label="偏好设置">
+        <a class="sr-btn" id="rail-prefs" href="#/prefs" data-i18n-title="side.prefs" data-i18n-aria="side.prefs" title="偏好设置" aria-label="偏好设置">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
         </a>
       </div>
@@ -177,21 +198,21 @@
     <section class="view" id="v-collie" hidden>
       <div class="collie-top">
       <header class="d-head">
-        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn back" data-i18n-aria="common.back" data-i18n-title="common.back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title">
           <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
         <div class="d-head-acts">
-          <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" aria-label="小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
+          <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" data-i18n-aria="collie.notes" data-i18n-title="collie.notes" aria-label="小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
             <span>小本本</span>
             <span class="th-head-dot" id="open-notes-dot" aria-hidden="true" hidden></span>
           </button>
-          <button type="button" class="icon-btn" id="super-search-btn" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
+          <button type="button" class="icon-btn" id="super-search-btn" data-i18n-aria="collie.search" data-i18n-title="collie.search" aria-label="搜索对话" aria-expanded="false" aria-controls="super-search" title="搜索对话">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
           </button>
           <div class="menu-wrap">
-            <button type="button" class="icon-btn collie-more-btn" id="collie-menu-btn" data-menu="collie-menu" aria-label="更多" title="更多">
+            <button type="button" class="icon-btn collie-more-btn" id="collie-menu-btn" data-menu="collie-menu" data-i18n-aria="common.more" data-i18n-title="common.more" aria-label="更多" title="更多">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
               <span class="menu-update-dot mobile-only" id="collie-update-dot" aria-hidden="true" hidden></span>
               <span class="mob-more-dot" id="collie-more-quota-dot" aria-hidden="true" hidden></span>
@@ -200,15 +221,15 @@
               <button type="button" class="menu-update-btn mobile-only" id="collie-update-btn" hidden></button>
               <hr class="menu-update-sep mobile-only" id="collie-update-sep" hidden>
               <button type="button" data-act="quota" id="menu-open-quota" class="menu-quota-btn">
-                <span>订阅额度</span>
-                <span class="hm-sub" id="menu-quota-sub">查看</span>
+                <span data-i18n="collie.menuQuota">订阅额度</span>
+                <span class="hm-sub" id="menu-quota-sub" data-i18n="common.view">查看</span>
               </button>
               <hr>
-              <button data-act="router-open">查看 Collie 的终端</button>
-              <button data-act="router-restart">重启 Collie</button>
-              <button data-act="pause">暂停投递</button>
+              <button data-act="router-open" data-i18n="collie.menuRouterTerm">查看 Collie 的终端</button>
+              <button data-act="router-restart" data-i18n="collie.menuRestart">重启 Collie</button>
+              <button data-act="pause" data-i18n="collie.menuPause">暂停投递</button>
               <hr>
-              <button data-act="auto">自动化与设置</button>
+              <button data-act="auto" data-i18n="collie.menuAuto">自动化与设置</button>
             </div>
           </div>
         </div>
@@ -226,18 +247,18 @@
       </div>
 
       <div class="notes-scrim" id="notes-scrim" aria-hidden="true"></div>
-      <aside class="notepane is-hidden" id="notes-pane" data-side-mode="notes" aria-label="小本本" aria-hidden="true" inert>
+      <aside class="notepane is-hidden" id="notes-pane" data-side-mode="notes" data-i18n-aria="notes.title" aria-label="小本本" aria-hidden="true" inert>
         <div class="np-inner">
-          <button type="button" class="np-handle" id="np-handle" aria-label="下滑或轻点收起小本本" title="收起小本本">
+          <button type="button" class="np-handle" id="np-handle" data-i18n-aria="notes.handleAria" data-i18n-title="notes.handleTitle" aria-label="下滑或轻点收起小本本" title="收起小本本">
             <span class="np-handle-pill" aria-hidden="true"></span>
           </button>
-          <header class="np-head" id="np-head" title="点击空白处切换紧凑或展开">
+          <header class="np-head" id="np-head" data-i18n-title="notes.headTitle" title="点击空白处切换紧凑或展开">
             <div class="np-title-row">
-              <h2 class="np-title" id="np-title">小本本</h2>
+              <h2 class="np-title" data-i18n="notes.title" id="np-title">小本本</h2>
               <span class="np-sub" id="np-date"></span>
             </div>
             <div class="np-head-acts">
-              <button type="button" class="icon-btn np-act-btn" id="np-close" aria-label="隐藏小本本" title="隐藏到顶栏">
+              <button type="button" class="icon-btn np-act-btn" id="np-close" data-i18n-aria="notes.hideAria" data-i18n-title="notes.hideTitle" aria-label="隐藏小本本" title="隐藏到顶栏">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
               </button>
             </div>
@@ -245,10 +266,10 @@
           <div class="np-body" id="np-body">
             <section class="np-sec np-sec-primary" id="np-sec-tasks" aria-labelledby="np-tab-notes">
               <div class="np-sec-head">
-                <div class="np-slash-tabs" id="np-tabs" role="tablist" aria-label="进行中与话题切换">
-                  <button type="button" class="np-slash-tab on" id="np-tab-notes" role="tab" aria-selected="true" tabindex="0" data-np-tab="notes">进行中</button>
+                <div class="np-slash-tabs" id="np-tabs" role="tablist" data-i18n-aria="notes.tabsAria" aria-label="进行中与话题切换">
+                  <button type="button" class="np-slash-tab on" id="np-tab-notes" role="tab" aria-selected="true" tabindex="0" data-np-tab="notes" data-i18n="notes.tabActive">进行中</button>
                   <span class="np-slash-sep" aria-hidden="true">/</span>
-                  <button type="button" class="np-slash-tab" id="np-tab-threads" role="tab" aria-selected="false" tabindex="-1" data-np-tab="threads"><span>话题</span><span class="np-tab-dot" id="collie-threads-dot" aria-hidden="true" hidden></span></button>
+                  <button type="button" class="np-slash-tab" id="np-tab-threads" role="tab" aria-selected="false" tabindex="-1" data-np-tab="threads"><span data-i18n="notes.tabThreads">话题</span><span class="np-tab-dot" id="collie-threads-dot" aria-hidden="true" hidden></span></button>
                 </div>
                 <button type="button" class="np-more-pill" id="np-tasks-more" data-np-expand hidden></button>
                 <button type="button" class="np-more-pill" id="np-threads-more" data-np-expand hidden></button>
@@ -262,14 +283,14 @@
             </section>
             <section class="np-sec" id="np-sec-files" aria-labelledby="np-h-files">
               <div class="np-sec-head">
-                <h3 class="np-sec-title" id="np-h-files">今日产物</h3>
+                <h3 class="np-sec-title" id="np-h-files" data-i18n="notes.todayFiles">今日产物</h3>
                 <button type="button" class="np-more-pill" id="np-files-more" data-np-expand hidden></button>
               </div>
               <ul class="np-list" id="np-files-list"></ul>
             </section>
             <section class="np-sec" id="np-sec-timers" aria-labelledby="np-h-timers">
               <div class="np-sec-head">
-                <h3 class="np-sec-title" id="np-h-timers">下一条定时</h3>
+                <h3 class="np-sec-title" id="np-h-timers" data-i18n="notes.nextTimer">下一条定时</h3>
                 <button type="button" class="np-more-pill" id="np-timers-more" data-np-expand hidden></button>
               </div>
               <ul class="np-list" id="np-timers-list"></ul>
@@ -279,50 +300,50 @@
       </aside>
 
       <form class="composer" id="super-composer">
-        <button type="button" class="super-jump" id="super-jump" title="回到底部" aria-label="回到底部" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5v11M7.25 12.75L12 17.5l4.75-4.75"/></svg><span class="sj-badge" id="super-jump-badge" aria-hidden="true" hidden></span></button>
+        <button type="button" class="super-jump" id="super-jump" data-i18n-title="collie.jumpBottom" data-i18n-aria="collie.jumpBottom" title="回到底部" aria-label="回到底部" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5v11M7.25 12.75L12 17.5l4.75-4.75"/></svg><span class="sj-badge" id="super-jump-badge" aria-hidden="true" hidden></span></button>
         <div class="pending-wrap" id="pending-wrap" hidden>
           <div class="pending-list" id="pending-list" hidden></div>
           <div class="pending-bar" id="pending-bar"></div>
         </div>
         <div class="cbox">
-          <div class="re-draft" id="re-draft" hidden><span class="re-who">Collie</span><span class="re-t"></span><button type="button" title="不引用了">×</button></div>
+          <div class="re-draft" id="re-draft" hidden><span class="re-who">Collie</span><span class="re-t"></span><button type="button" data-i18n-title="collie.unquote" title="不引用了">×</button></div>
           <div class="files" hidden></div>
-          <textarea id="super-input" rows="1" placeholder="告诉 Collie 你要做什么…" enterkeyhint="send"></textarea>
+          <textarea id="super-input" rows="1" data-i18n-placeholder="collie.inputPlaceholder" placeholder="告诉 Collie 你要做什么…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn attach" data-i18n-title="common.attach" data-i18n-aria="common.attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <div class="chips is-collapsed" id="t-bar">
-              <button type="button" class="dispatch-pill" id="t-toggle" aria-expanded="false" aria-controls="t-controls" title="按记忆偏好优先；点击可临时指定本次派活目标">
-                <span class="dp-lbl" id="t-toggle-lbl">派活 · 默认</span>
+              <button type="button" class="dispatch-pill" id="t-toggle" aria-expanded="false" aria-controls="t-controls" data-i18n-title="collie.dispatchTitle" title="按记忆偏好优先；点击可临时指定本次派活目标">
+                <span class="dp-lbl" id="t-toggle-lbl" data-i18n="collie.dispatchDefault">派活 · 默认</span>
                 <svg class="dp-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
               </button>
               <div class="dispatch-controls" id="t-controls" hidden>
-                <select id="t-machine" data-pick="chip" data-title="这次在哪台电脑上做" title="这次在哪台电脑上做"></select>
-                <select id="t-kind" data-pick="chip" data-title="这次派哪个 agent" title="这次派哪个 agent"></select>
-                <select id="t-model" data-pick="chip" data-title="这次用哪个模型" title="这次用哪个模型"></select>
-                <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
+                <select id="t-machine" data-pick="chip" data-i18n-pick-title="collie.dispatchMachineTitle" data-i18n-title="collie.dispatchMachineTitle" data-title="这次在哪台电脑上做" title="这次在哪台电脑上做"></select>
+                <select id="t-kind" data-pick="chip" data-i18n-pick-title="collie.dispatchKindTitle" data-i18n-title="collie.dispatchKindTitle" data-title="这次派哪个 agent" title="这次派哪个 agent"></select>
+                <select id="t-model" data-pick="chip" data-i18n-pick-title="collie.dispatchModelTitle" data-i18n-title="collie.dispatchModelTitle" data-title="这次用哪个模型" title="这次用哪个模型"></select>
+                <select id="t-effort" data-pick="chip" data-i18n-pick-title="effort.title" data-i18n-title="effort.title" data-title="思考强度" title="思考强度"></select>
               </div>
-              <button type="button" class="dispatch-reset" id="t-reset" title="恢复默认派活" aria-label="恢复默认派活" hidden>恢复默认</button>
+              <button type="button" class="dispatch-reset" id="t-reset" data-i18n="collie.dispatchReset" data-i18n-title="collie.dispatchResetTitle" data-i18n-aria="collie.dispatchResetTitle" title="恢复默认派活" aria-label="恢复默认派活" hidden>恢复默认</button>
             </div>
             <span class="spacer"></span>
-            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+            <button class="send" type="submit" data-i18n-title="common.sendEnter" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
-        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
+        <input type="file" multiple class="file-picker-input" tabindex="-1" data-i18n-aria="common.attach" aria-label="添加图片或文件">
       </form>
     </section>
 
     <!-- ── automation ── -->
     <section class="view" id="v-auto" hidden>
       <header class="d-head">
-        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <div class="d-title"><div class="d-name">自动化</div></div>
+        <button type="button" class="icon-btn back" data-i18n-aria="common.back" data-i18n-title="common.back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <div class="d-title"><div class="d-name" data-i18n="auto.title">自动化</div></div>
       </header>
       <div class="tabs" id="auto-tabs">
-        <button data-tab="memory" class="on">记忆</button>
-        <button data-tab="timers">定时</button>
-        <button data-tab="inbox">收件箱</button>
-        <button data-tab="integrations">接入</button>
-        <button data-tab="settings">设置</button>
+        <button data-tab="memory" class="on" data-i18n="auto.tab.memory">记忆</button>
+        <button data-tab="timers" data-i18n="auto.tab.timers">定时</button>
+        <button data-tab="inbox" data-i18n="auto.tab.inbox">收件箱</button>
+        <button data-tab="integrations" data-i18n="auto.tab.integrations">接入</button>
+        <button data-tab="settings" data-i18n="auto.tab.settings">设置</button>
       </div>
       <div class="auto-body" id="auto-body"></div>
     </section>
@@ -330,8 +351,8 @@
     <!-- ── devices: phones, browsers and computers ── -->
     <section class="view" id="v-devices" hidden>
       <header class="d-head">
-        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <div class="d-title"><div class="d-name">设备</div><div class="d-meta muted">这台 hub 管着哪些电脑，谁能连进来</div></div>
+        <button type="button" class="icon-btn back" data-i18n-aria="common.back" data-i18n-title="common.back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <div class="d-title"><div class="d-name" data-i18n="dev.title">设备</div><div class="d-meta muted" data-i18n="dev.subtitle">这台 hub 管着哪些电脑，谁能连进来</div></div>
       </header>
       <div class="auto-body" id="devices-body"></div>
     </section>
@@ -339,9 +360,9 @@
     <!-- ── an agent running in another terminal: read-only, can be taken over ── -->
     <section class="view" id="v-ext" hidden>
       <header class="d-head">
-        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn back" data-i18n-aria="common.back" data-i18n-title="common.back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title">
-          <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag">只读</span></div>
+          <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag" data-i18n="ext.readonly">只读</span></div>
           <div class="d-meta"><span class="status" id="x-status"></span><span class="muted mono" id="x-cwd"></span></div>
         </div>
       </header>
@@ -352,28 +373,28 @@
       <form class="composer" id="x-composer" hidden>
         <div class="cbox">
           <div class="files" hidden></div>
-          <textarea id="x-input" rows="1" placeholder="发消息给它，它会在原来的窗口里接着做…" enterkeyhint="send"></textarea>
+          <textarea id="x-input" rows="1" data-i18n-placeholder="ext.inputPh" placeholder="发消息给它，它会在原来的窗口里接着做…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn attach" data-i18n-title="common.attach" data-i18n-aria="common.attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <span class="muted x-hint" id="x-hint"></span>
             <span class="spacer"></span>
-            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+            <button class="send" type="submit" data-i18n-title="common.sendEnter" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
-        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
+        <input type="file" multiple class="file-picker-input" tabindex="-1" data-i18n-aria="common.attach" aria-label="添加图片或文件">
       </form>
       <div class="ext-bar">
         <p id="x-note"></p>
-        <button class="btn small" id="x-forget" hidden>移除</button>
-        <button class="btn primary small" id="x-takeover">在 herdr 里接管</button>
+        <button class="btn small" id="x-forget" data-i18n="common.remove" hidden>移除</button>
+        <button class="btn primary small" id="x-takeover" data-i18n="ext.takeover">在 herdr 里接管</button>
       </div>
     </section>
 
     <!-- ── preferences: this device's look and habits ── -->
     <section class="view" id="v-prefs" hidden>
       <header class="d-head">
-        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <div class="d-title"><div class="d-name">偏好设置</div><div class="d-meta muted">只影响这台设备上的这个浏览器</div></div>
+        <button type="button" class="icon-btn back" data-i18n-aria="common.back" data-i18n-title="common.back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <div class="d-title"><div class="d-name" data-i18n="prefs.title">偏好设置</div><div class="d-meta muted" data-i18n="prefs.subtitle">只影响这台设备上的这个浏览器</div></div>
       </header>
       <div class="auto-body" id="prefs-body"></div>
     </section>
@@ -381,26 +402,26 @@
     <!-- ── one agent terminal, wrapped ── -->
     <section class="view detail" id="detail" hidden>
       <header class="d-head">
-        <button type="button" class="icon-btn back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button type="button" class="icon-btn back" data-i18n-aria="common.back" data-i18n-title="common.back" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="d-title">
           <div class="d-name"><span id="d-name"></span><span class="kind" id="d-kind"></span><span class="tag" id="d-worker" hidden></span></div>
           <div class="d-meta"><span class="status" id="d-status"></span><span class="muted mono d-worker-id" id="d-worker-id" hidden></span><span class="muted" id="d-model" hidden></span><span class="muted mono" id="d-cwd"></span></div>
         </div>
-        <div class="wd-mode-tabs d-mode-tabs" id="mode-seg" role="group" aria-label="切换视图" hidden>
-          <button type="button" data-mode="chat" class="on" aria-pressed="true">对话</button>
-          <button type="button" data-mode="screen" aria-pressed="false">屏幕</button>
-          <button type="button" data-mode="log" aria-pressed="false">日志</button>
+        <div class="wd-mode-tabs d-mode-tabs" id="mode-seg" role="group" data-i18n-aria="detail.modeAria" aria-label="切换视图" hidden>
+          <button type="button" data-mode="chat" class="on" aria-pressed="true" data-i18n="worker.modeChat">对话</button>
+          <button type="button" data-mode="screen" aria-pressed="false" data-i18n="worker.modeScreen">屏幕</button>
+          <button type="button" data-mode="log" aria-pressed="false" data-i18n="worker.modeLog">日志</button>
         </div>
         <div class="menu-wrap">
-          <button class="icon-btn" data-menu="more-menu" title="更多">
+          <button class="icon-btn" data-menu="more-menu" data-i18n-title="common.more" data-i18n-aria="common.more" title="更多" aria-label="更多">
             <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
           </button>
           <div class="menu" id="more-menu" hidden>
-            <button type="button" data-act="interrupt" title="发送 Ctrl-C 中断当前执行">中断 (Ctrl-C)</button>
-            <button data-act="shell-here">在这个目录开个终端</button>
-            <button data-act="copy">复制 pane ID</button>
+            <button type="button" data-act="interrupt" data-i18n="detail.interruptBtn" data-i18n-title="worker.interruptTitle" title="发送 Ctrl-C 中断当前执行">中断 (Ctrl-C)</button>
+            <button data-act="shell-here" data-i18n="detail.shellHere">在这个目录开个终端</button>
+            <button data-act="copy" data-i18n="detail.copyPaneId">复制 pane ID</button>
             <hr>
-            <button data-act="close" class="danger">关闭工作区</button>
+            <button data-act="close" class="danger" data-i18n="detail.closeWs">关闭工作区</button>
           </div>
         </div>
       </header>
@@ -411,14 +432,14 @@
           <div class="live" id="live" hidden></div>
         </div>
         <div class="screen" id="screen" tabindex="-1"></div>
-        <div class="screen-hint" id="screen-hint">点终端即可输入</div>
+        <div class="screen-hint" id="screen-hint" data-i18n="detail.screenHint">点终端即可输入</div>
         <pre class="log" id="log" tabindex="-1"></pre>
-        <button class="jump" id="jump" title="回到最新" aria-label="回到最新" hidden><svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
-        <div class="gone" id="gone" hidden>这个 pane 已经关闭。</div>
+        <button class="jump" id="jump" data-i18n-title="worker.jumpLatest" data-i18n-aria="worker.jumpLatest" title="回到最新" aria-label="回到最新" hidden><svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
+        <div class="gone" id="gone" data-i18n="detail.gone" hidden>这个 pane 已经关闭。</div>
       </div>
 
       <div class="keys" id="keys">
-        <button class="screen-only" id="term-kbd" title="在终端里打字"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg></button>
+        <button class="screen-only" id="term-kbd" data-i18n-title="detail.termKbdTitle" title="在终端里打字"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg></button>
         <button data-k="esc">Esc</button>
         <button data-k="ctrl+c">^C</button>
         <button data-k="tab">Tab</button>
@@ -432,23 +453,23 @@
         <button data-t="2">2</button>
         <button data-t="3">3</button>
         <button data-k="backspace">⌫</button>
-        <button class="screen-only" id="term-fit" title="整屏缩到一屏宽 / 放大到能看清">全览</button>
+        <button class="screen-only" id="term-fit" data-i18n="detail.termFitOverview" data-i18n-title="detail.termFitTitle" title="整屏缩到一屏宽 / 放大到能看清">全览</button>
       </div>
 
       <form class="composer" id="composer">
         <div class="cbox">
           <div class="files" hidden></div>
-          <textarea id="input" rows="1" placeholder="给 agent 发消息…" enterkeyhint="send"></textarea>
+          <textarea id="input" rows="1" data-i18n-placeholder="detail.inputPh" placeholder="给 agent 发消息…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
-            <button type="button" class="icon-btn kbd-toggle" id="kbd-toggle" title="按键">
+            <button type="button" class="icon-btn attach" data-i18n-title="common.attach" data-i18n-aria="common.attach" title="添加图片或文件" aria-label="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn kbd-toggle" id="kbd-toggle" data-i18n-title="detail.kbdBtnTitle" title="按键">
               <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>
             </button>
             <span class="spacer"></span>
-            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+            <button class="send" type="submit" data-i18n-title="common.sendEnter" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
-        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
+        <input type="file" multiple class="file-picker-input" tabindex="-1" data-i18n-aria="common.attach" aria-label="添加图片或文件">
       </form>
     </section>
 
@@ -464,23 +485,23 @@
             <p class="muted mono rv-meta" id="rv-path"></p>
           </div>
           <div class="rv-actions">
-            <div class="seg fv-mode-seg" id="rv-mode-seg" role="group" aria-label="切换表格或原文" hidden>
-              <button type="button" data-rv-mode="table" class="on" aria-pressed="true">表格</button>
-              <button type="button" data-rv-mode="raw" aria-pressed="false">原文</button>
+            <div class="seg fv-mode-seg" id="rv-mode-seg" role="group" data-i18n-aria="file.modeSegAria" aria-label="切换表格或原文" hidden>
+              <button type="button" data-rv-mode="table" class="on" aria-pressed="true" data-i18n="file.modeTable">表格</button>
+              <button type="button" data-rv-mode="raw" aria-pressed="false" data-i18n="file.modeRaw">原文</button>
             </div>
-            <button type="button" class="icon-btn fv-act-btn" id="rv-dl" aria-label="下载完整原件" title="下载完整原件" hidden>
+            <button type="button" class="icon-btn fv-act-btn" id="rv-dl" data-i18n-aria="file.download" data-i18n-title="file.download" aria-label="下载完整原件" title="下载完整原件" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
             </button>
             <span class="fv-copy" id="rv-copy-wrap" hidden>
-              <button type="button" class="icon-btn fv-act-btn fv-copy-btn" id="rv-copy" command="--copy" commandfor="rv-body" aria-label="复制全文" title="复制全文">
+              <button type="button" class="icon-btn fv-act-btn fv-copy-btn" id="rv-copy" command="--copy" commandfor="rv-body" data-i18n-aria="file.copyAll" data-i18n-title="file.copyAll" aria-label="复制全文" title="复制全文">
                 <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
                 <svg class="ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
               </button>
               <span class="fv-copy-tip" role="status"></span>
             </span>
-            <a class="btn small rv-home-btn" id="rv-home" href="#/collie" title="返回 Collie 主界面">
+            <a class="btn small rv-home-btn" id="rv-home" href="#/collie" data-i18n-title="file.returnHomeTitle" title="返回 Collie 主界面">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
-              <span>返回主界面</span>
+              <span data-i18n="file.returnHome">返回主界面</span>
             </a>
           </div>
         </div>
@@ -492,14 +513,18 @@
   </main>
   <!-- unified three-in-one right drawer: file preview / reply-thread / dispatched worker -->
   <div class="file-scrim drawer-scrim" id="file-scrim" hidden aria-hidden="true"></div>
-  <aside class="filepane side-drawer" id="file-view" data-drawer-kind="file" hidden aria-label="文件预览" aria-hidden="true">
-    <div class="fv-grip sd-grip" id="fv-grip" title="拖动调整宽度"></div>
+  <aside class="filepane side-drawer" id="file-view" data-drawer-kind="file" hidden data-i18n-aria="drawer.fileAria" aria-label="文件预览" aria-hidden="true">
+    <div class="fv-grip sd-grip" id="fv-grip" data-i18n-title="drawer.gripTitle" title="拖动调整宽度"></div>
     <div class="fv-inner sd-inner">
-      <button type="button" class="fv-handle sd-handle" id="fv-handle" aria-label="收起预览" title="收起预览">
+      <button type="button" class="fv-handle sd-handle" id="fv-handle" data-i18n-aria="drawer.fileCollapse" data-i18n-title="drawer.fileCollapse" aria-label="收起预览" title="收起预览">
         <span class="fv-handle-pill sd-handle-pill" aria-hidden="true"></span>
       </button>
       <div class="sd-top fv-top">
         <header class="fv-head sd-head">
+          <button type="button" class="sd-back" id="fv-return" data-sd-back hidden data-i18n-aria="drawer.returnNotesAria" data-i18n-title="drawer.returnNotesAria" aria-label="返回小本本" title="返回小本本">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+            <span class="sd-back-label" id="fv-return-label" data-i18n="drawer.returnNotes">小本本</span>
+          </button>
           <div class="sd-title-wrap">
             <div class="sd-title-row">
               <h2 class="sd-title" id="fv-name"></h2>
@@ -507,32 +532,32 @@
             </div>
             <div class="sd-meta fv-meta">
               <span class="mono fv-path" id="fv-path"></span>
-              <span class="fv-sandbox-tag" id="fv-sandbox-tag" hidden><span class="dot ok" aria-hidden="true"></span>只读沙盒</span>
+              <span class="fv-sandbox-tag" id="fv-sandbox-tag" hidden><span class="dot ok" aria-hidden="true"></span><span data-i18n="file.sandboxTag">只读沙盒</span></span>
             </div>
           </div>
           <div class="fv-actions sd-head-acts">
-            <div class="seg fv-mode-seg" id="fv-mode-seg" role="group" aria-label="切换表格或原文" hidden>
-              <button type="button" data-fv-mode="table" class="on" aria-pressed="true">表格</button>
-              <button type="button" data-fv-mode="raw" aria-pressed="false">原文</button>
+            <div class="seg fv-mode-seg" id="fv-mode-seg" role="group" data-i18n-aria="file.modeSegAria" aria-label="切换表格或原文" hidden>
+              <button type="button" data-fv-mode="table" class="on" aria-pressed="true" data-i18n="file.modeTable">表格</button>
+              <button type="button" data-fv-mode="raw" aria-pressed="false" data-i18n="file.modeRaw">原文</button>
             </div>
-            <button type="button" class="icon-btn sd-act-btn fv-act-btn" id="fv-dl" aria-label="下载完整原件" title="下载完整原件" hidden>
+            <button type="button" class="icon-btn sd-act-btn fv-act-btn" id="fv-dl" data-i18n-aria="file.download" data-i18n-title="file.download" aria-label="下载完整原件" title="下载完整原件" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
             </button>
             <span class="fv-copy" id="fv-copy-wrap" hidden>
-              <button type="button" class="icon-btn sd-act-btn fv-act-btn fv-copy-btn" id="fv-copy" command="--copy" commandfor="fv-body" aria-label="复制全文" title="复制全文">
+              <button type="button" class="icon-btn sd-act-btn fv-act-btn fv-copy-btn" id="fv-copy" command="--copy" commandfor="fv-body" data-i18n-aria="file.copyAll" data-i18n-title="file.copyAll" aria-label="复制全文" title="复制全文">
                 <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
                 <svg class="ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
               </button>
               <span class="fv-copy-tip" role="status"></span>
             </span>
-            <a class="icon-btn sd-act-btn fv-act-btn" id="fv-wide" href="#/file" target="_blank" rel="noopener" aria-label="新标签打开" title="新标签打开" hidden>
+            <a class="icon-btn sd-act-btn fv-act-btn" id="fv-wide" href="#/file" target="_blank" rel="noopener" data-i18n-aria="file.openNewTab" data-i18n-title="file.openNewTab" aria-label="新标签打开" title="新标签打开" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
             </a>
-            <button type="button" class="icon-btn sd-act-btn fv-act-btn sd-widen fv-widen" id="fv-widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
+            <button type="button" class="icon-btn sd-act-btn fv-act-btn sd-widen fv-widen" id="fv-widen" data-i18n-aria="drawer.widen" data-i18n-title="drawer.widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
               <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
               <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
             </button>
-            <button type="button" class="icon-btn sd-act-btn fv-act-btn fv-x" data-fv-close aria-label="关闭抽屉" title="关闭 (Esc)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <button type="button" class="icon-btn sd-act-btn fv-act-btn fv-x" data-fv-close data-i18n-aria="drawer.closeAria" data-i18n-title="common.closeEsc" aria-label="关闭抽屉" title="关闭 (Esc)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           </div>
         </header>
       </div>
@@ -541,34 +566,38 @@
   </aside>
   <!-- natural reply-chain thread drawer, unified right drawer mode -->
   <div class="thread-scrim drawer-scrim" id="thread-scrim" hidden aria-hidden="true"></div>
-  <aside class="threadpane side-drawer" id="thread-drawer" data-drawer-kind="thread" hidden aria-label="话题抽屉" aria-hidden="true">
-    <div class="td-grip sd-grip" id="td-grip" title="拖动调整宽度"></div>
+  <aside class="threadpane side-drawer" id="thread-drawer" data-drawer-kind="thread" hidden data-i18n-aria="drawer.threadAria" aria-label="话题抽屉" aria-hidden="true">
+    <div class="td-grip sd-grip" id="td-grip" data-i18n-title="drawer.gripTitle" title="拖动调整宽度"></div>
     <div class="td-inner sd-inner">
-      <button type="button" class="td-handle sd-handle" id="td-handle" aria-label="下滑或轻点收起话题抽屉" title="收起话题抽屉">
+      <button type="button" class="td-handle sd-handle" id="td-handle" data-i18n-aria="drawer.threadHandleAria" data-i18n-title="drawer.threadHandleTitle" aria-label="下滑或轻点收起话题抽屉" title="收起话题抽屉">
         <span class="td-handle-pill sd-handle-pill" aria-hidden="true"></span>
       </button>
       <div class="sd-top td-top">
         <header class="td-head sd-head">
+          <button type="button" class="sd-back" id="td-return" data-sd-back hidden data-i18n-aria="drawer.returnNotesAria" data-i18n-title="drawer.returnNotesAria" aria-label="返回小本本" title="返回小本本">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+            <span class="sd-back-label" id="td-return-label" data-i18n="drawer.returnNotes">小本本</span>
+          </button>
           <div class="td-title-wrap sd-title-wrap">
             <div class="sd-title-row">
-              <h2 class="td-title sd-title" id="td-title">话题线</h2>
+              <h2 class="td-title sd-title" id="td-title" data-i18n="drawer.threadTitle">话题线</h2>
             </div>
             <div class="td-meta sd-meta" id="td-meta"></div>
           </div>
           <div class="td-head-acts sd-head-acts">
-            <button type="button" class="icon-btn sd-act-btn" id="td-locate-root" aria-label="定位到主聊天" title="定位到主聊天流">
+            <button type="button" class="icon-btn sd-act-btn" id="td-locate-root" data-i18n-aria="drawer.locateRootAria" data-i18n-title="drawer.locateRootTitle" aria-label="定位到主聊天" title="定位到主聊天流">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
             </button>
-            <button type="button" class="icon-btn sd-act-btn sd-widen td-widen" id="td-widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
+            <button type="button" class="icon-btn sd-act-btn sd-widen td-widen" id="td-widen" data-i18n-aria="drawer.widen" data-i18n-title="drawer.widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
               <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
               <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
             </button>
-            <button type="button" class="icon-btn sd-act-btn" id="td-close" aria-label="关闭抽屉" title="关闭 (Esc)">
+            <button type="button" class="icon-btn sd-act-btn" id="td-close" data-i18n-aria="drawer.closeAria" data-i18n-title="common.closeEsc" aria-label="关闭抽屉" title="关闭 (Esc)">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
           </div>
         </header>
-        <nav class="td-workers" id="td-workers" aria-label="话题关联的 Agent" hidden></nav>
+        <nav class="td-workers" id="td-workers" data-i18n-aria="drawer.threadWorkersAria" aria-label="话题关联的 Agent" hidden></nav>
       </div>
       <div class="td-body" id="td-body" tabindex="-1">
         <div class="td-list" id="td-list"></div>
@@ -577,41 +606,45 @@
         <div class="td-cbox">
           <div class="td-target" id="td-target">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v8a3 3 0 0 0 3 3h9"/><path d="M15 13l3 3-3 3"/></svg>
-            <span class="td-target-text" id="td-target-text">接续最新消息</span>
-            <button type="button" class="td-target-reset" id="td-target-reset" hidden>回到最新</button>
+            <span class="td-target-text" id="td-target-text" data-i18n="drawer.threadTargetDefault">接续最新消息</span>
+            <button type="button" class="td-target-reset" id="td-target-reset" data-i18n="drawer.threadTargetReset" hidden>回到最新</button>
           </div>
           <div class="files td-files" hidden></div>
-          <label for="td-input" class="visually-hidden">在这条话题线继续回复</label>
-          <textarea class="td-ta" id="td-input" rows="1" placeholder="在这条线里继续回复…" enterkeyhint="send"></textarea>
+          <label for="td-input" class="visually-hidden" data-i18n="drawer.threadInputAria">在这条话题线继续回复</label>
+          <textarea class="td-ta" id="td-input" rows="1" data-i18n-placeholder="drawer.threadInputPlaceholder" placeholder="在这条线里继续回复…" enterkeyhint="send"></textarea>
           <div class="td-cbar">
-            <button type="button" class="icon-btn attach td-attach" title="添加图片或文件" aria-label="添加图片或文件">
+            <button type="button" class="icon-btn attach td-attach" data-i18n-title="common.attach" data-i18n-aria="common.attach" title="添加图片或文件" aria-label="添加图片或文件">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             </button>
             <span class="td-hint" id="td-hint">Enter 发送 · 同步写入主聊天流</span>
-            <button class="send" id="td-send" type="submit" title="发送回复 (Enter)" aria-label="发送回复" disabled>
+            <button class="send" id="td-send" type="submit" title="发送回复 (Enter)" data-i18n-aria="drawer.threadSendAria" aria-label="发送回复" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
             </button>
           </div>
         </div>
-        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
+        <input type="file" multiple class="file-picker-input" tabindex="-1" data-i18n-aria="common.attach" aria-label="添加图片或文件">
       </form>
     </div>
   </aside>
   <!-- Collie-dispatched worker live task drawer, unified right drawer mode -->
   <div class="worker-scrim drawer-scrim" id="worker-scrim" hidden aria-hidden="true"></div>
-  <aside class="workerpane side-drawer" id="worker-drawer" data-drawer-kind="worker" hidden aria-label="任务抽屉" aria-hidden="true">
-    <div class="wd-grip sd-grip" id="wd-grip" title="拖动调整宽度"></div>
+  <aside class="workerpane side-drawer" id="worker-drawer" data-drawer-kind="worker" hidden data-i18n-aria="worker.drawerAria" aria-label="任务抽屉" aria-hidden="true">
+    <div class="wd-grip sd-grip" id="wd-grip" data-i18n-title="drawer.gripTitle" title="拖动调整宽度"></div>
     <div class="wd-inner sd-inner">
-      <button type="button" class="wd-handle sd-handle" id="wd-handle" aria-label="下滑或轻点收起任务抽屉" title="收起任务抽屉">
+      <button type="button" class="wd-handle sd-handle" id="wd-handle" data-i18n-aria="worker.handleAria" data-i18n-title="worker.handleTitle" aria-label="下滑或轻点收起任务抽屉" title="收起任务抽屉">
         <span class="wd-handle-pill sd-handle-pill" aria-hidden="true"></span>
       </button>
       <div class="sd-top wd-top">
         <header class="wd-head sd-head">
+          <button type="button" class="sd-back" id="wd-return" data-sd-back hidden data-i18n-aria="drawer.returnNotesAria" data-i18n-title="drawer.returnNotesAria" aria-label="返回小本本" title="返回小本本">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+            <span class="sd-back-label" id="wd-return-label" data-i18n="drawer.returnNotes">小本本</span>
+          </button>
           <div class="sd-title-wrap">
             <div class="sd-title-row">
-              <h2 class="sd-title" id="wd-title">进行中任务</h2>
+              <h2 class="sd-title" id="wd-title" data-i18n="worker.defaultTitle">进行中任务</h2>
               <span class="sd-badge wd-kind" id="wd-kind" hidden></span>
-              <span class="sd-badge wd-role" id="wd-role" hidden>Collie 派出</span>
+              <span class="sd-badge wd-role" id="wd-role" data-i18n="side.byCollie" hidden>Collie 派出</span>
             </div>
             <div class="sd-meta wd-meta">
               <span class="status" id="wd-status"></span>
@@ -620,21 +653,21 @@
             </div>
           </div>
           <div class="wd-head-acts sd-head-acts">
-            <button type="button" class="icon-btn sd-act-btn" id="wd-thread-btn" aria-label="打开关联话题" title="打开关联话题" hidden>
+            <button type="button" class="icon-btn sd-act-btn" id="wd-thread-btn" data-i18n-aria="worker.openThread" data-i18n-title="worker.openThread" aria-label="打开关联话题" title="打开关联话题" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a7.5 7.5 0 0 1-7.5 7.5c-1.2 0-2.4-.3-3.4-.8L5 20l1.3-4.1A7.46 7.46 0 0 1 5.5 12 7.5 7.5 0 1 1 21 12z"/></svg>
             </button>
-            <button type="button" class="icon-btn sd-act-btn is-stop" id="wd-interrupt" aria-label="中断当前执行" title="发送 Ctrl-C 中断当前执行" hidden>
+            <button type="button" class="icon-btn sd-act-btn is-stop" id="wd-interrupt" data-i18n-aria="worker.interruptAria" data-i18n-title="worker.interruptTitle" aria-label="中断当前执行" title="发送 Ctrl-C 中断当前执行" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-              <span class="sd-arm-lbl" aria-hidden="true">确认中断</span>
+              <span class="sd-arm-lbl" aria-hidden="true" data-i18n="worker.interruptArm">确认中断</span>
             </button>
-            <a class="icon-btn sd-act-btn" id="wd-popout" href="#/collie" aria-label="独立全屏打开" title="独立全屏打开" hidden>
+            <a class="icon-btn sd-act-btn" id="wd-popout" href="#/collie" data-i18n-aria="worker.popout" data-i18n-title="worker.popout" aria-label="独立全屏打开" title="独立全屏打开" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
             </a>
-            <button type="button" class="icon-btn sd-act-btn sd-widen wd-widen" id="wd-widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
+            <button type="button" class="icon-btn sd-act-btn sd-widen wd-widen" id="wd-widen" data-i18n-aria="drawer.widen" data-i18n-title="drawer.widen" aria-label="拓宽抽屉" aria-pressed="false" title="拓宽抽屉">
               <svg class="ic-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M3 12h6M15 12h6"/></svg>
               <svg class="ic-restore" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l5 5-5 5M20 7l-5 5 5 5M9 12H3M15 12h6"/></svg>
             </button>
-            <button type="button" class="icon-btn sd-act-btn" id="wd-close" aria-label="关闭抽屉" title="关闭 (Esc)">
+            <button type="button" class="icon-btn sd-act-btn" id="wd-close" data-i18n-aria="drawer.closeAria" data-i18n-title="common.closeEsc" aria-label="关闭抽屉" title="关闭 (Esc)">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
           </div>
@@ -643,10 +676,10 @@
           <p class="wd-summary-text" id="wd-summary-text" tabindex="0" role="button" aria-expanded="false"></p>
         </div>
         <div class="wd-bar" id="wd-bar" hidden>
-          <div class="wd-mode-tabs" id="wd-mode-seg" role="group" aria-label="切换任务视图">
-            <button type="button" data-wd-mode="chat" class="on" aria-pressed="true">对话</button>
-            <button type="button" data-wd-mode="screen" aria-pressed="false">屏幕</button>
-            <button type="button" data-wd-mode="log" aria-pressed="false">日志</button>
+          <div class="wd-mode-tabs" id="wd-mode-seg" role="group" data-i18n-aria="worker.modeAria" aria-label="切换任务视图">
+            <button type="button" data-wd-mode="chat" class="on" aria-pressed="true" data-i18n="worker.modeChat">对话</button>
+            <button type="button" data-wd-mode="screen" aria-pressed="false" data-i18n="worker.modeScreen">屏幕</button>
+            <button type="button" data-wd-mode="log" aria-pressed="false" data-i18n="worker.modeLog">日志</button>
           </div>
         </div>
       </div>
@@ -657,10 +690,10 @@
         </div>
         <div class="screen wd-screen" id="wd-screen" tabindex="-1"></div>
         <pre class="log wd-log" id="wd-log" tabindex="-1"></pre>
-        <button type="button" class="jump wd-jump" id="wd-jump" title="回到最新" aria-label="回到最新" hidden>
+        <button type="button" class="jump wd-jump" id="wd-jump" data-i18n-title="worker.jumpLatest" data-i18n-aria="worker.jumpLatest" title="回到最新" aria-label="回到最新" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
         </button>
-        <div class="gone wd-gone" id="wd-gone" hidden>这个任务会话已经结束。</div>
+        <div class="gone wd-gone" id="wd-gone" data-i18n="worker.gone" hidden>这个任务会话已经结束。</div>
       </div>
       <div class="keys wd-keys" id="wd-keys">
         <button type="button" data-k="esc">Esc</button>
@@ -674,58 +707,58 @@
         <button type="button" data-t="3">3</button>
       </div>
       <div class="wd-peek-foot" id="wd-peek-foot" hidden>
-        <span class="wd-peek-note" id="wd-peek-note">由 Collie 持续盯控</span>
-        <button type="button" class="wd-pill-btn wd-interject-btn" id="wd-interject-btn">直接插话</button>
+        <span class="wd-peek-note" id="wd-peek-note" data-i18n="worker.peekMonitoring">由 Collie 持续盯控</span>
+        <button type="button" class="wd-pill-btn wd-interject-btn" id="wd-interject-btn" data-i18n="worker.interject">直接插话</button>
       </div>
       <form class="td-foot wd-foot" id="wd-composer" hidden>
         <div class="td-cbox wd-cbox">
           <div class="files td-files wd-files" hidden></div>
-          <label for="wd-input" class="visually-hidden">给这个任务 Agent 发消息</label>
-          <textarea class="td-ta wd-ta" id="wd-input" rows="1" placeholder="直接给这个 Agent 插话…" enterkeyhint="send"></textarea>
+          <label for="wd-input" class="visually-hidden" data-i18n="worker.inputAria">给这个任务 Agent 发消息</label>
+          <textarea class="td-ta wd-ta" id="wd-input" rows="1" data-i18n-placeholder="worker.inputPlaceholder" placeholder="直接给这个 Agent 插话…" enterkeyhint="send"></textarea>
           <div class="td-cbar wd-cbar">
-            <button type="button" class="icon-btn attach td-attach" title="添加图片或文件" aria-label="添加图片或文件">
+            <button type="button" class="icon-btn attach td-attach" data-i18n-title="common.attach" data-i18n-aria="common.attach" title="添加图片或文件" aria-label="添加图片或文件">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             </button>
-            <button type="button" class="icon-btn wd-kbd-toggle" id="wd-kbd-toggle" title="快捷按键" aria-label="快捷按键" aria-pressed="false">
+            <button type="button" class="icon-btn wd-kbd-toggle" id="wd-kbd-toggle" data-i18n-title="worker.kbdTitle" data-i18n-aria="worker.kbdTitle" title="快捷按键" aria-label="快捷按键" aria-pressed="false">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>
             </button>
             <span class="td-hint" id="wd-hint">Enter 发送 · 直达该任务会话</span>
-            <button type="button" class="wd-collapse-btn" id="wd-composer-collapse" title="收起输入框">收起</button>
-            <button class="send" id="wd-send" type="submit" title="发送 (Enter)" aria-label="发送" disabled>
+            <button type="button" class="wd-collapse-btn" id="wd-composer-collapse" data-i18n="common.collapse" data-i18n-title="worker.collapseInputTitle" title="收起输入框">收起</button>
+            <button class="send" id="wd-send" type="submit" data-i18n-title="common.sendEnter" data-i18n-aria="common.send" title="发送 (Enter)" aria-label="发送" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
             </button>
           </div>
         </div>
-        <input type="file" multiple class="file-picker-input" tabindex="-1" aria-label="添加图片或文件">
+        <input type="file" multiple class="file-picker-input" tabindex="-1" data-i18n-aria="common.attach" aria-label="添加图片或文件">
       </form>
     </div>
   </aside>
 </div>
 
 <!-- ───────────── centered command search palette (Cmd/Ctrl+K) ───────────── -->
-<search class="super-search" id="super-search" hidden role="dialog" aria-modal="true" aria-label="搜索和 Collie 的对话">
+<search class="super-search" id="super-search" hidden role="dialog" aria-modal="true" data-i18n-aria="search.aria" aria-label="搜索和 Collie 的对话">
   <div class="ss-card" id="super-search-card">
     <div class="ss-bar">
       <div class="ss-field">
         <label class="ss-ico" for="super-search-input">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
-          <span class="visually-hidden">搜索和 Collie 的对话</span>
+          <span class="visually-hidden" data-i18n="search.aria">搜索和 Collie 的对话</span>
         </label>
-        <input id="super-search-input" name="q" type="search" placeholder="搜索对话历史（多词用空格分隔）…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="super-search-list">
+        <input id="super-search-input" name="q" type="search" data-i18n-placeholder="search.placeholder" placeholder="搜索对话历史（多词用空格分隔）…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="super-search-list">
         <span class="ss-meta" id="super-search-meta" hidden></span>
-        <button type="button" class="ss-clear" id="super-search-clear" title="清空输入" aria-label="清空输入" hidden>清空</button>
-        <button type="button" class="icon-btn ss-close" id="super-search-close" title="关闭搜索 (Esc)" aria-label="关闭搜索">
+        <button type="button" class="ss-clear" id="super-search-clear" data-i18n="common.clear" data-i18n-title="search.clearTitle" data-i18n-aria="search.clearTitle" title="清空输入" aria-label="清空输入" hidden>清空</button>
+        <button type="button" class="icon-btn ss-close" id="super-search-close" data-i18n-title="search.closeTitle" data-i18n-aria="search.closeAria" title="关闭搜索 (Esc)" aria-label="关闭搜索">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
     </div>
     <div class="ss-panel" id="super-search-panel" hidden>
       <div class="ss-head" id="super-search-head" hidden></div>
-      <div class="ss-list" id="super-search-list" role="listbox" aria-label="搜索结果"></div>
+      <div class="ss-list" id="super-search-list" role="listbox" data-i18n-aria="search.resultsAria" aria-label="搜索结果"></div>
     </div>
     <footer class="ss-foot" id="super-search-foot">
-      <span class="ss-foot-hint" id="super-search-hint">多词用空格分隔</span>
-      <span class="ss-foot-keys" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 定位</span><span><kbd>Esc</kbd> 关闭</span></span>
+      <span class="ss-foot-hint" id="super-search-hint" data-i18n="search.hintDefault">多词用空格分隔</span>
+      <span class="ss-foot-keys" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="search.keySelect">选择</span></span><span><kbd>↵</kbd> <span data-i18n="search.keyJump">定位</span></span><span><kbd>Esc</kbd> <span data-i18n="search.keyClose">关闭</span></span></span>
     </footer>
   </div>
 </search>
@@ -734,13 +767,13 @@
 <dialog class="sheet" id="launch">
   <form method="dialog" id="launch-form">
     <header class="sheet-head">
-      <h3 id="launch-title">新建</h3>
-      <button class="icon-btn" value="cancel" formnovalidate title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <h3 id="launch-title" data-i18n="launch.title">新建</h3>
+      <button class="icon-btn" value="cancel" formnovalidate data-i18n-title="common.close" data-i18n-aria="common.close" title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
     <div class="sheet-body">
-      <p class="sheet-note muted" id="launch-note">想让 Collie 拆解并派活？直接在「和 Collie 对话」里说就行。这里是手动启动一个独立的 agent，或开一个终端。</p>
+      <p class="sheet-note muted" id="launch-note" data-i18n="launch.note">想让 Collie 拆解并派活？直接在「和 Collie 对话」里说就行。这里是手动启动一个独立的 agent，或开一个终端。</p>
       <div class="field">
-        <label>类型</label>
+        <label data-i18n="launch.type">类型</label>
         <div class="kinds" id="kinds">
           <label class="kind-card"><input type="radio" name="kind" value="claude" checked>
             <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 5v22M5 16h22M8.2 8.2l15.6 15.6M23.8 8.2L8.2 23.8"/></svg><b>Claude</b><small>claude</small></label>
@@ -752,36 +785,40 @@
             <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 5c5.8 0 10 4.2 10 10.2C26 21.8 21.8 27 16 27S6 21.8 6 15.2C6 9.2 10.2 5 16 5z"/><circle cx="12.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="19.5" cy="14.5" r="1.4" fill="currentColor" stroke="none"/><path d="M12.5 19.5c1.1 1.1 2.2 1.6 3.5 1.6s2.4-.5 3.5-1.6"/></svg><b>Doubao</b><small>doubao</small></label>
           <label class="kind-card"><input type="radio" name="kind" value="cursor">
             <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 5l16 9.5-7.2 2.1L14.5 24 8 5z"/><path d="M17.2 16.8L23 22.6"/></svg><b>Cursor</b><small>cursor-agent</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="pi">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 10h18M12 10v13.5c0 1.4-.6 2.5-2 2.5M20 10v12.5c0 2 1 3.5 2.8 3.5.7 0 1.4-.2 2-.6"/></svg><b>Pi</b><small>pi</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="omp">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="11.5"/><path d="M10.5 12.5h11M13.5 12.5v7.5c0 1-.4 1.6-1.2 1.8M18.5 12.5v7c0 1.2.6 2 1.8 2"/></svg><b>Oh My Pi</b><small>omp</small></label>
           <label class="kind-card"><input type="radio" name="kind" value="shell">
-            <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg><b>终端</b><small>shell</small></label>
+            <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg><b data-i18n="launch.shell">终端</b><small>shell</small></label>
         </div>
       </div>
       <div class="field" id="l-machine-field" hidden>
-        <label>在哪台电脑上</label>
+        <label data-i18n="launch.machine">在哪台电脑上</label>
         <div class="machine-pick" id="l-machines"></div>
       </div>
       <div class="field agent-only">
-        <label for="l-model">模型 <span class="muted">可选</span></label>
+        <label for="l-model"><span data-i18n="launch.model">模型</span> <span class="muted" data-i18n="common.optional">可选</span></label>
         <div class="model-row"><select id="l-model"></select><select id="l-effort" data-pick="compact"></select></div>
       </div>
       <div class="field agent-only">
-        <label for="l-name">名字 <span class="muted">可选</span></label>
-        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="不填就用会话自己的标题" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-        <small class="muted">想用命令行或让 Collie 按名字找它时再起，小写字母开头，可含数字、- 和 _</small>
+        <label for="l-name"><span data-i18n="launch.name">名字</span> <span class="muted" data-i18n="common.optional">可选</span></label>
+        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" data-i18n-placeholder="launch.namePh" placeholder="不填就用会话自己的标题" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <small class="muted" data-i18n="launch.nameHelp">想用命令行或让 Collie 按名字找它时再起，小写字母开头，可含数字、- 和 _</small>
       </div>
       <div class="field">
-        <label for="l-cwd">目录</label>
-        <input id="l-cwd" class="mono" value="~" placeholder="~ 或输入任意目录路径" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <label for="l-cwd" data-i18n="launch.cwd">目录</label>
+        <input id="l-cwd" class="mono" value="~" data-i18n-placeholder="set.cwdPh" placeholder="~ 或输入任意目录路径" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       </div>
       <div class="field agent-only">
-        <label for="l-prompt">第一个任务 <span class="muted">（可选）</span></label>
-        <textarea id="l-prompt" rows="3" placeholder="例如：跑一遍测试，修掉失败的用例"></textarea>
+        <label for="l-prompt"><span data-i18n="launch.firstTask">第一个任务</span> <span class="muted" data-i18n="common.optionalParen">（可选）</span></label>
+        <textarea id="l-prompt" rows="3" data-i18n-placeholder="launch.firstTaskPh" placeholder="例如：跑一遍测试，修掉失败的用例"></textarea>
       </div>
       <p class="form-error" id="launch-error"></p>
     </div>
     <footer class="sheet-foot">
-      <button class="btn" value="cancel" formnovalidate>取消</button>
-      <button class="btn primary" id="launch-go" value="go">启动</button>
+      <button class="btn" value="cancel" formnovalidate data-i18n="common.cancel">取消</button>
+      <button class="btn primary" id="launch-go" value="go" data-i18n="common.start">启动</button>
     </footer>
   </form>
 </dialog>
@@ -792,86 +829,86 @@
     <span class="int-logo" id="int-modal-icon" aria-hidden="true"></span>
     <div class="int-sheet-info">
       <div class="int-sheet-title-row">
-        <h2 id="int-modal-title">配置接入</h2>
+        <h2 id="int-modal-title"></h2>
         <span class="int-sheet-state" id="int-modal-state"></span>
       </div>
       <p class="int-sheet-sub" id="int-modal-sub"></p>
     </div>
-    <button type="button" class="icon-btn" id="int-modal-close" autofocus aria-label="关闭配置弹窗" title="关闭 (Esc)">
+    <button type="button" class="icon-btn" id="int-modal-close" autofocus data-i18n-aria="int.modalCloseAria" data-i18n-title="common.closeEsc" aria-label="关闭配置弹窗" title="关闭 (Esc)">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
   </header>
   <div class="peer-tabs" id="int-modal-tabs" hidden></div>
   <div class="int-sheet-body" id="int-modal-body"></div>
   <footer class="int-sheet-foot" id="int-modal-foot"></footer>
-  <div id="peer-mode-popover" class="pm-pop" popover="auto" aria-label="选择接待方式"></div>
-  <div id="peer-action-popover" class="pm-pop is-narrow" popover="auto" aria-label="好友操作"></div>
+  <div id="peer-mode-popover" class="pm-pop" popover="auto" data-i18n-aria="peer.modePopAria" aria-label="选择接待方式"></div>
+  <div id="peer-action-popover" class="pm-pop is-narrow" popover="auto" data-i18n-aria="peer.actionPopAria" aria-label="狗友操作"></div>
 </dialog>
 
 <!-- ───────────── new timer modal ───────────── -->
 <dialog class="sheet tm-sheet" id="timer-modal" closedby="any" aria-labelledby="tm-modal-title">
   <form class="tm-dialog-form" id="timer-form" data-mode="weekdays">
     <header class="tm-sheet-head">
-      <h2 id="tm-modal-title">新建定时</h2>
-      <button type="button" class="icon-btn" id="tm-modal-close" autofocus aria-label="关闭新建定时弹窗" title="关闭 (Esc)">
+      <h2 id="tm-modal-title" data-i18n="timer.modalTitle">新建定时</h2>
+      <button type="button" class="icon-btn" id="tm-modal-close" autofocus data-i18n-aria="timer.modalCloseAria" data-i18n-title="common.closeEsc" aria-label="关闭新建定时弹窗" title="关闭 (Esc)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </header>
     <div class="tm-sheet-body">
       <div class="tm-mfield">
-        <span class="tm-lab">什么时候</span>
+        <span class="tm-lab" data-i18n="timer.when">什么时候</span>
         <div class="tm-when">
           <div class="seg tm-mode">
-            <button type="button" data-mode="daily">每天</button>
-            <button type="button" data-mode="weekdays" class="on">工作日</button>
-            <button type="button" data-mode="weekly">每周</button>
-            <button type="button" data-mode="every">每隔</button>
-            <button type="button" data-mode="once">一次</button>
+            <button type="button" data-mode="daily" data-i18n="timer.modeDaily">每天</button>
+            <button type="button" data-mode="weekdays" class="on" data-i18n="timer.modeWeekdays">工作日</button>
+            <button type="button" data-mode="weekly" data-i18n="timer.modeWeekly">每周</button>
+            <button type="button" data-mode="every" data-i18n="timer.modeEvery">每隔</button>
+            <button type="button" data-mode="once" data-i18n="timer.modeOnce">一次</button>
           </div>
           <div class="tm-days" data-show="weekly" hidden>
-            <button type="button" data-day="mon" class="on">一</button>
-            <button type="button" data-day="tue">二</button>
-            <button type="button" data-day="wed">三</button>
-            <button type="button" data-day="thu">四</button>
-            <button type="button" data-day="fri">五</button>
-            <button type="button" data-day="sat">六</button>
-            <button type="button" data-day="sun">日</button>
+            <button type="button" data-day="mon" class="on" data-i18n="timer.dayMon">一</button>
+            <button type="button" data-day="tue" data-i18n="timer.dayTue">二</button>
+            <button type="button" data-day="wed" data-i18n="timer.dayWed">三</button>
+            <button type="button" data-day="thu" data-i18n="timer.dayThu">四</button>
+            <button type="button" data-day="fri" data-i18n="timer.dayFri">五</button>
+            <button type="button" data-day="sat" data-i18n="timer.daySat">六</button>
+            <button type="button" data-day="sun" data-i18n="timer.daySun">日</button>
           </div>
           <input type="time" name="clock" value="09:00" data-show="daily weekdays weekly">
           <span class="tm-every" data-show="every" hidden>
             <input type="number" name="every_n" min="1" value="2">
-            <select name="every_u" data-pick="compact" data-title="单位">
-              <option value="m">分钟</option>
-              <option value="h" selected>小时</option>
-              <option value="d">天</option>
+            <select name="every_u" data-pick="compact" data-i18n-pick-title="timer.unitTitle" data-title="单位">
+              <option value="m" data-i18n="timer.unitMin">分钟</option>
+              <option value="h" selected data-i18n="timer.unitHour">小时</option>
+              <option value="d" data-i18n="timer.unitDay">天</option>
             </select>
           </span>
           <span class="tm-once" data-show="once" hidden>
             <input type="datetime-local" name="at">
             <span class="tm-chips">
-              <button type="button" class="chip-btn" data-at="30">30 分钟后</button>
-              <button type="button" class="chip-btn" data-at="60">1 小时后</button>
-              <button type="button" class="chip-btn" data-at="am">明早 9 点</button>
+              <button type="button" class="chip-btn" data-at="30" data-i18n="timer.chip30m">30 分钟后</button>
+              <button type="button" class="chip-btn" data-at="60" data-i18n="timer.chip1h">1 小时后</button>
+              <button type="button" class="chip-btn" data-at="am" data-i18n="timer.chip9am">明早 9 点</button>
             </span>
           </span>
         </div>
       </div>
       <label class="tm-mfield">
-        <span class="tm-lab">说什么</span>
-        <textarea name="text" rows="3" placeholder="例如：检查各个任务的进展，有卡住的告诉我" required></textarea>
+        <span class="tm-lab" data-i18n="timer.what">说什么</span>
+        <textarea name="text" rows="3" data-i18n-placeholder="timer.whatPlaceholder" placeholder="例如：检查各个任务的进展，有卡住的告诉我" required></textarea>
       </label>
       <label class="tm-mfield tm-target">
-        <span class="tm-lab">交给</span>
-        <select name="target" data-title="到点交给谁">
-          <option value="" data-sub="由它决定怎么处理">Collie</option>
+        <span class="tm-lab" data-i18n="timer.target">交给</span>
+        <select name="target" data-i18n-pick-title="timer.targetTitle" data-title="到点交给谁">
+          <option value="" data-i18n-sub="timer.targetCollieSub" data-sub="由它决定怎么处理">Collie</option>
         </select>
       </label>
     </div>
     <footer class="tm-sheet-foot">
       <span class="tm-sum muted"></span>
       <div class="tm-sheet-acts">
-        <button type="button" class="btn small" id="tm-modal-cancel">取消</button>
-        <button type="submit" class="btn primary small" id="tm-modal-submit">添加</button>
+        <button type="button" class="btn small" id="tm-modal-cancel" data-i18n="common.cancel">取消</button>
+        <button type="submit" class="btn primary small" id="tm-modal-submit" data-i18n="common.add">添加</button>
       </div>
     </footer>
   </form>
@@ -882,24 +919,24 @@
   <header class="lb-bar">
     <div class="lb-info">
       <div class="lb-title-row">
-        <h2 class="lb-name" id="lb-name">图片预览</h2>
+        <h2 class="lb-name" id="lb-name" data-i18n="lb.title">图片预览</h2>
         <span class="lb-count" id="lb-count" hidden></span>
       </div>
       <div class="lb-meta" id="lb-meta"></div>
     </div>
     <div class="lb-actions">
-      <button type="button" class="lb-btn lb-zoom-btn" id="lb-zoom" aria-label="放大查看细节" title="放大查看细节" aria-pressed="false" disabled>
+      <button type="button" class="lb-btn lb-zoom-btn" id="lb-zoom" data-i18n-aria="lb.zoomIn" data-i18n-title="lb.zoomIn" aria-label="放大查看细节" title="放大查看细节" aria-pressed="false" disabled>
         <svg class="ic-zoom-in" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2M11 8.5v5M8.5 11h5"/></svg>
         <svg class="ic-zoom-out" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2M8.5 11h5"/></svg>
         <span class="lb-zoom-pct" id="lb-zoom-pct">1x</span>
       </button>
-      <a class="lb-btn" id="lb-open" href="#" target="_blank" rel="noopener" aria-label="在新标签页打开原图" title="在新标签页打开原图" aria-disabled="true">
+      <a class="lb-btn" id="lb-open" href="#" target="_blank" rel="noopener" data-i18n-aria="lb.openOrig" data-i18n-title="lb.openOrig" aria-label="在新标签页打开原图" title="在新标签页打开原图" aria-disabled="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
       </a>
-      <a class="lb-btn" id="lb-dl" href="#" download aria-label="下载原图" title="下载原图" aria-disabled="true">
+      <a class="lb-btn" id="lb-dl" href="#" download data-i18n-aria="lb.download" data-i18n-title="lb.download" aria-label="下载原图" title="下载原图" aria-disabled="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg>
       </a>
-      <button type="button" class="lb-btn lb-close" id="lb-close" autofocus aria-label="关闭大图预览" title="关闭 (Esc)">
+      <button type="button" class="lb-btn lb-close" id="lb-close" autofocus data-i18n-aria="lb.closeAria" data-i18n-title="common.closeEsc" aria-label="关闭大图预览" title="关闭 (Esc)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
@@ -909,10 +946,10 @@
     <img class="lb-img" id="lb-img" alt="" draggable="false" hidden>
     <div class="lb-svg" id="lb-svg" hidden></div>
   </div>
-  <button type="button" class="lb-nav prev" id="lb-prev" aria-label="上一张图片" title="上一张 (←)" hidden>
+  <button type="button" class="lb-nav prev" id="lb-prev" data-i18n-aria="lb.prevAria" data-i18n-title="lb.prevTitle" aria-label="上一张图片" title="上一张 (←)" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
   </button>
-  <button type="button" class="lb-nav next" id="lb-next" aria-label="下一张图片" title="下一张 (→)" hidden>
+  <button type="button" class="lb-nav next" id="lb-next" data-i18n-aria="lb.nextAria" data-i18n-title="lb.nextTitle" aria-label="下一张图片" title="下一张 (→)" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
   </button>
 </dialog>
@@ -921,8 +958,8 @@
 <dialog class="sheet mem-io-sheet" id="mem-import-modal" closedby="any" aria-labelledby="mem-io-title">
   <form class="mem-io-form" id="mem-import-form" method="post" action="/api/memory/import" enctype="multipart/form-data">
     <header class="mem-io-head">
-      <h2 id="mem-io-title">导入记忆</h2>
-      <button type="button" class="icon-btn" id="mem-io-close" aria-label="关闭导入记忆弹窗" title="关闭 (Esc)">
+      <h2 id="mem-io-title" data-i18n="mem.importTitle">导入记忆</h2>
+      <button type="button" class="icon-btn" id="mem-io-close" data-i18n-aria="mem.importCloseAria" data-i18n-title="common.closeEsc" aria-label="关闭导入记忆弹窗" title="关闭 (Esc)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </header>
@@ -933,67 +970,69 @@
           <span class="mem-io-file-name" id="mem-io-file-name"></span>
           <span class="mem-io-file-meta muted" id="mem-io-file-meta"></span>
         </div>
-        <button type="button" class="btn ghost small" id="mem-io-repick">重选</button>
+        <button type="button" class="btn ghost small" id="mem-io-repick" data-i18n="mem.importRepick">重选</button>
       </div>
       <fieldset class="mem-io-modes">
-        <legend>导入方式</legend>
+        <legend data-i18n="mem.importModeLegend">导入方式</legend>
         <label class="mem-io-opt">
           <input type="radio" name="mode" value="merge" checked>
           <span class="mem-io-opt-body">
-            <b>合并导入（默认）</b>
-            <small>写入压缩包中的 <code>.md</code> 文件并保留现有其他记忆，同名文件以导入为准。</small>
+            <b data-i18n="mem.importMergeTitle">合并导入（默认）</b>
+            <small data-i18n-html="mem.importMergeDescHtml">写入压缩包中的 <code>.md</code> 文件并保留现有其他记忆，同名文件以导入为准。</small>
           </span>
         </label>
         <label class="mem-io-opt is-replace">
           <input type="radio" name="mode" value="replace">
           <span class="mem-io-opt-body">
-            <b>覆盖导入</b>
-            <small>清空当前 <code>memory/</code> 并完整替换为压缩包中的记忆文件。</small>
+            <b data-i18n="mem.importReplaceTitle">覆盖导入</b>
+            <small data-i18n-html="mem.importReplaceDescHtml">清空当前 <code>memory/</code> 并完整替换为压缩包中的记忆文件。</small>
           </span>
         </label>
       </fieldset>
       <p class="mem-io-notice" id="mem-io-notice">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3z"/><path d="M9.5 12.2l1.8 1.8 3.4-3.6"/></svg>
-        <span>导入前会自动备份当前记忆到 <code>router/memory-backups/</code>，可随时恢复。</span>
+        <span data-i18n-html="mem.importBackupNoticeHtml">导入前会自动备份当前记忆到 <code>router/memory-backups/</code>，可随时恢复。</span>
       </p>
       <p class="mem-io-err" id="mem-io-error" role="alert" aria-live="polite" hidden></p>
     </div>
     <footer class="mem-io-foot">
-      <button type="button" class="btn small" id="mem-io-cancel" autofocus>取消</button>
-      <button type="submit" class="btn primary small" id="mem-io-submit">开始导入</button>
+      <button type="button" class="btn small" id="mem-io-cancel" autofocus data-i18n="common.cancel">取消</button>
+      <button type="submit" class="btn primary small" id="mem-io-submit" data-i18n="mem.importStart">开始导入</button>
     </footer>
   </form>
 </dialog>
-<input type="file" id="mem-import-file" accept=".zip,application/zip" class="visually-hidden" tabindex="-1" aria-label="选择记忆压缩包">
+<input type="file" id="mem-import-file" accept=".zip,application/zip" class="visually-hidden" tabindex="-1" data-i18n-aria="mem.importPickAria" aria-label="选择记忆压缩包">
 
 <!-- ───────────── account subscription quota popover / mobile sheet ───────────── -->
 <div id="quota-popover" class="quota-pop" popover="auto" aria-labelledby="qp-title">
   <div class="qp-handle" aria-hidden="true"><span></span></div>
   <header class="qp-head">
-    <h2 class="qp-title" id="qp-title">订阅额度</h2>
+    <h2 class="qp-title" id="qp-title" data-i18n="quota.title">订阅额度</h2>
     <div class="qp-head-right">
-      <span id="qp-updated">读取中…</span>
-      <button type="button" class="qp-refresh" id="qp-refresh-btn" aria-label="刷新订阅额度" title="手动刷新（不消耗模型额度）">
+      <span id="qp-updated" data-i18n="common.reading">读取中…</span>
+      <button type="button" class="qp-refresh" id="qp-refresh-btn" data-i18n-aria="quota.refreshAria" data-i18n-title="quota.refreshTitle" aria-label="刷新订阅额度" title="手动刷新（不消耗模型额度）">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 11a8 8 0 1 0 2 5.3"/>
           <path d="M20 4v7h-7"/>
         </svg>
       </button>
-      <button type="button" class="qp-close" id="qp-close-btn" aria-label="关闭订阅额度面板" title="关闭">
+      <button type="button" class="qp-close" id="qp-close-btn" data-i18n-aria="quota.closeAria" data-i18n-title="common.close" aria-label="关闭订阅额度面板" title="关闭">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
   </header>
   <div class="qp-body" id="qp-body"></div>
   <footer class="qp-foot">
-    <span>仅读取本机官方状态，不消耗模型额度</span>
+    <span data-i18n="quota.foot">仅读取本机官方状态，不消耗模型额度</span>
     <span id="qp-cooldown" class="qp-cooldown"></span>
   </footer>
 </div>
 <div class="visually-hidden" role="status" aria-live="polite" id="quota-live-status"></div>
 
-<div class="toasts" id="toasts" popover="manual" role="region" aria-label="通知" aria-live="polite" aria-atomic="false"></div>
+<div class="toasts" id="toasts" popover="manual" role="region" data-i18n-aria="common.notifRegion" aria-label="通知" aria-live="polite" aria-atomic="false"></div>
 
+<script src="i18n.js"></script>
+<script src="cache.js"></script>
 <script src="quota.js"></script>
 <script src="demo.js"></script>
 <script src="app.js"></script>

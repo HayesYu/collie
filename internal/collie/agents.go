@@ -13,7 +13,7 @@ import (
 // Starting an agent checks again where it runs, so a stale list only greys
 // out the wrong choices in the UI, it never starts a pane for nothing.
 
-var agentKinds = []string{"claude", "codex", "agy", "doubao", "cursor"}
+var agentKinds = []string{"claude", "codex", "agy", "doubao", "cursor", "pi", "omp"}
 
 var agentNames = map[string]string{
 	"claude": "Claude Code",
@@ -21,6 +21,8 @@ var agentNames = map[string]string{
 	"agy":    "Antigravity",
 	"doubao": "Doubao",
 	"cursor": "Cursor",
+	"pi":     "Pi",
+	"omp":    "Oh My Pi",
 }
 
 // agentBins maps a herdr kind to its CLI executable when the binary name
@@ -110,7 +112,7 @@ func localAgents(home string, wait bool) []string {
 	return c.list
 }
 
-// agentMissing says why kind (herdr's: claude, codex, agy, doubao, cursor) can't
+// agentMissing says why kind (herdr's: claude, codex, agy, doubao, cursor, pi, omp) can't
 // start on machine, or nil. A list that isn't known yet lets it try.
 func (s *Server) agentMissing(machine, kind string) error {
 	name := agentNames[kind]

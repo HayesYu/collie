@@ -7,10 +7,13 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+  const interp = (tpl, vars) => (!vars ? String(tpl ?? "") : String(tpl ?? "").replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) => (vars[k] !== undefined && vars[k] !== null ? String(vars[k]) : m)));
+  const tr = (key, fallback, vars) => (window.CollieI18n ? window.CollieI18n.t(key, vars, fallback) : interp(fallback, vars));
+  const locQ = (s) => (window.CollieI18n?.localizeQuotaText ? window.CollieI18n.localizeQuotaText(s) : String(s ?? ""));
 
   const CACHE_TTL_MS = 3 * 60 * 1000;
   const LOW_THRESHOLD = 20;
-  const CLAUDE_OPTIN_GUIDE = "Collie 绝不修改 ~/.claude/settings.json，也不抓取私有 OAuth 接口；若你自行配置了 Claude Code 官方 statusLine 写入本地缓存，Collie 会自动读取并展示 5 小时与 7 天余量。";
+  const getClaudeOptinGuide = () => tr("quota.claudeGuide", "Collie 绝不修改 ~/.claude/settings.json，也不抓取私有 OAuth 接口；若你自行配置了 Claude Code 官方 statusLine 写入本地缓存，Collie 会自动读取并展示 5 小时与 7 天余量。");
 
   function isNarrow() {
     return typeof matchMedia === "function" && matchMedia("(max-width: 760px)").matches;
@@ -33,34 +36,34 @@
 
   function formatResetCountdown(resetsAt, remainingPct, nowMs = Date.now()) {
     if (!resetsAt) {
-      return remainingPct === 100 ? "尚未消耗" : "";
+      return remainingPct === 100 ? tr("quota.unused", "尚未消耗") : "";
     }
     const target = Date.parse(resetsAt);
     if (!Number.isFinite(target)) return "";
     const diff = target - nowMs;
-    if (diff <= 0) return "已到重置点，待刷新";
+    if (diff <= 0) return tr("quota.resetDue", "已到重置点，待刷新");
     const totalMin = Math.ceil(diff / 60000);
-    if (totalMin < 1) return "<1m 后重置";
-    if (totalMin < 60) return `${totalMin}m 后重置`;
+    if (totalMin < 1) return tr("quota.resetLt1m", "<1m 后重置");
+    if (totalMin < 60) return tr("quota.resetMin", "{m}m 后重置", { m: totalMin });
     const totalH = Math.floor(totalMin / 60);
     const remM = totalMin % 60;
-    if (totalH < 24) return remM > 0 ? `${totalH}h ${remM}m 后重置` : `${totalH}h 后重置`;
+    if (totalH < 24) return remM > 0 ? tr("quota.resetHrMin", "{h}h {m}m 后重置", { h: totalH, m: remM }) : tr("quota.resetHr", "{h}h 后重置", { h: totalH });
     const days = Math.floor(totalH / 24);
     const remH = totalH % 24;
-    return remH > 0 ? `${days}d ${remH}h 后重置` : `${days}d 后重置`;
+    return remH > 0 ? tr("quota.resetDayHr", "{d}d {h}h 后重置", { d: days, h: remH }) : tr("quota.resetDay", "{d}d 后重置", { d: days });
   }
 
   function formatUpdatedAgo(updatedAt, nowMs = Date.now()) {
-    if (!updatedAt) return "尚未同步";
+    if (!updatedAt) return tr("quota.neverSynced", "尚未同步");
     const t = Date.parse(updatedAt);
-    if (!Number.isFinite(t)) return "尚未同步";
+    if (!Number.isFinite(t)) return tr("quota.neverSynced", "尚未同步");
     const sec = Math.max(0, Math.floor((nowMs - t) / 1000));
-    if (sec < 45) return "刚刚同步";
+    if (sec < 45) return tr("quota.justSynced", "刚刚同步");
     const min = Math.floor(sec / 60);
-    if (min < 60) return `${min} 分钟前`;
+    if (min < 60) return tr("common.minsAgo", "{n} 分钟前", { n: min });
     const hr = Math.floor(min / 60);
-    if (hr < 24) return `${hr} 小时前`;
-    return `${Math.floor(hr / 24)} 天前`;
+    if (hr < 24) return tr("common.hoursAgo", "{n} 小时前", { n: hr });
+    return tr("common.daysAgo", "{n} 天前", { n: Math.floor(hr / 24) });
   }
 
   // summarizeQuota extracts the bottleneck remaining % per numeric agent and
@@ -89,16 +92,20 @@
         known: false,
         min: null,
         level: "unknown",
-        tooltip: "订阅额度 · 点击查看",
+        tooltip: tr("quota.clickToView", "订阅额度 · 点击查看"),
         shortPct: "",
-        summary: "查看",
+        summary: tr("common.view", "查看"),
       };
     }
     const overallMin = Math.min(...items.map((x) => x.min));
     const level = overallMin === 0 ? "exhausted" : overallMin < LOW_THRESHOLD ? "low" : "normal";
     const ordered = level === "normal" ? items : [...items].sort((a, b) => a.min - b.min);
     const summary = ordered.slice(0, 3).map((x) => `${x.kind} ${x.min}%`).join(" · ");
-    const prefix = level === "exhausted" ? "额度已用尽" : level === "low" ? "额度偏低" : "订阅额度";
+    const prefix = level === "exhausted"
+      ? tr("quota.exhaustedPrefix", "额度已用尽")
+      : level === "low"
+        ? tr("quota.lowPrefix", "额度偏低")
+        : tr("quota.title", "订阅额度");
     return {
       known: true,
       min: overallMin,
@@ -190,7 +197,7 @@
 
     const menuSub = $("#menu-quota-sub");
     if (menuSub) {
-      menuSub.textContent = sum.known ? (warn ? `最低 ${sum.shortPct}` : sum.shortPct) : "查看";
+      menuSub.textContent = sum.known ? (warn ? tr("quota.minPct", "最低 {pct}", { pct: sum.shortPct }) : sum.shortPct) : tr("common.view", "查看");
       menuSub.classList.toggle("is-low", sum.level === "low");
       menuSub.classList.toggle("is-exhausted", danger);
     }
@@ -206,10 +213,10 @@
       btn.disabled = isRefreshing || remSec > 0;
     }
     if (upd) {
-      upd.textContent = isRefreshing ? "同步中…" : formatUpdatedAgo(snapshot?.updated_at, nowMs);
+      upd.textContent = isRefreshing ? tr("quota.syncing", "同步中…") : formatUpdatedAgo(snapshot?.updated_at, nowMs);
     }
     if (cd) {
-      cd.textContent = !isRefreshing && remSec > 0 ? `${remSec}s 后可再刷` : "";
+      cd.textContent = !isRefreshing && remSec > 0 ? tr("quota.cooldown", "{s}s 后可再刷", { s: remSec }) : "";
     }
     if (remSec <= 0 && cooldownTimer) {
       clearInterval(cooldownTimer);
@@ -235,8 +242,8 @@
     const agents = Array.isArray(snapshot?.agents) ? snapshot.agents : [];
     if (!agents.length) {
       const msg = isRefreshing || snapshot?.refreshing
-        ? "正在读取本机 Agent 订阅额度…"
-        : "未检测到支持额度查询的本机 Agent";
+        ? tr("quota.emptyLoading", "正在读取本机 Agent 订阅额度…")
+        : tr("quota.emptyNone", "未检测到支持额度查询的本机 Agent");
       body.innerHTML = `<div class="qp-empty">${esc(msg)}</div>`;
       return;
     }
@@ -265,9 +272,9 @@
         : (anyExpired ? "expired" : "normal");
 
       let stateHtml = "";
-      if (agLevel === "exhausted") stateHtml = `<span class="qa-state is-exhausted">已触限</span>`;
-      else if (agLevel === "low") stateHtml = `<span class="qa-state is-low">余量偏低</span>`;
-      else if (agLevel === "expired") stateHtml = `<span class="qa-state">已到重置点</span>`;
+      if (agLevel === "exhausted") stateHtml = `<span class="qa-state is-exhausted">${esc(tr("quota.stateExhausted", "已触限"))}</span>`;
+      else if (agLevel === "low") stateHtml = `<span class="qa-state is-low">${esc(tr("quota.stateLow", "余量偏低"))}</span>`;
+      else if (agLevel === "expired") stateHtml = `<span class="qa-state">${esc(tr("quota.stateExpired", "已到重置点"))}</span>`;
 
       let innerHtml = "";
       if (ag.status === "ok" && Array.isArray(ag.pools) && ag.pools.length) {
@@ -275,7 +282,9 @@
         let wIdx = 0;
         for (const pool of ag.pools) {
           if (pool.compact_full) {
-            const label = pool.group ? `${pool.group} 池 · 100% 满额` : "其余模型池 · 100% 满额";
+            const label = pool.group
+              ? tr("quota.poolFullGroup", "{group} 池 · 100% 满额", { group: pool.group })
+              : tr("quota.poolFullOther", "其余模型池 · 100% 满额");
             rows.push(`<div class="qm-compact"><span>${esc(label)}</span></div>`);
             continue;
           }
@@ -285,9 +294,14 @@
             const expired = isWindowExpired(w, nowMs);
             const wLevel = expired ? "normal" : (pct === 0 ? "exhausted" : pct < LOW_THRESHOLD ? "low" : "normal");
             const cls = wLevel === "low" ? "is-low" : wLevel === "exhausted" ? "is-exhausted" : "";
-            const title = pool.group ? `${pool.group} · ${w.label || w.id}` : (w.label || w.id);
+            const winLbl = locQ(w.label || w.id);
+            const title = pool.group ? `${pool.group} · ${winLbl}` : winLbl;
             const resetTxt = formatResetCountdown(w.resets_at, pct, nowMs);
             const lblId = `qm-${esc(ag.kind)}-${wIdx}`;
+            const valText = tr("quota.progressAria", "剩余 {pct}%{reset}", {
+              pct,
+              reset: resetTxt ? tr("quota.progressComma", "，{reset}", { reset: resetTxt }) : "",
+            });
             rows.push(`
               <div class="qm-row${expired ? " is-expired" : ""}">
                 <div class="qm-top">
@@ -297,36 +311,36 @@
                   </span>
                   <span class="qm-pct ${cls}">${pct}%</span>
                 </div>
-                <progress class="q-bar ${cls}" value="${pct}" max="100" aria-labelledby="${lblId}" aria-valuetext="剩余 ${pct}%${resetTxt ? `，${esc(resetTxt)}` : ""}"></progress>
+                <progress class="q-bar ${cls}" value="${pct}" max="100" aria-labelledby="${lblId}" aria-valuetext="${esc(valText)}"></progress>
               </div>
             `);
           }
         }
         innerHtml = `<div class="qa-meters">${rows.join("")}</div>`;
         if (ag.note) {
-          innerHtml += `<div class="qa-note is-sub"><span>${esc(ag.note)}</span></div>`;
+          innerHtml += `<div class="qa-note is-sub"><span>${esc(locQ(ag.note))}</span></div>`;
         }
       } else if (ag.status === "optin") {
-        const toggleTxt = claudeGuideOpen ? "收起说明" : "说明";
+        const toggleTxt = claudeGuideOpen ? tr("quota.hideGuide", "收起说明") : tr("int.guide", "说明");
         innerHtml = `
           <div class="qa-note">
-            <span>${esc(ag.note || "按对话被动同步 · 未开启状态行采集")}</span>
-            <button type="button" class="qa-link" data-quota-guide="claude" aria-expanded="${claudeGuideOpen ? "true" : "false"}">${toggleTxt}</button>
+            <span>${esc(ag.note ? locQ(ag.note) : tr("quota.optinFallback", "按对话被动同步 · 未开启状态行采集"))}</span>
+            <button type="button" class="qa-link" data-quota-guide="claude" aria-expanded="${claudeGuideOpen ? "true" : "false"}">${esc(toggleTxt)}</button>
           </div>
-          ${claudeGuideOpen ? `<div class="qa-guide">${esc(CLAUDE_OPTIN_GUIDE).replace("~/.claude/settings.json", "<code>~/.claude/settings.json</code>")}</div>` : ""}
+          ${claudeGuideOpen ? `<div class="qa-guide">${esc(getClaudeOptinGuide()).replace("~/.claude/settings.json", "<code>~/.claude/settings.json</code>")}</div>` : ""}
         `;
       } else if (ag.status === "external") {
         const link = isSafeHttpsURL(ag.link_url)
-          ? `<a class="qa-link" href="${esc(ag.link_url)}" target="_blank" rel="noopener noreferrer">${esc(ag.link_text || "控制台 ↗")}</a>`
+          ? `<a class="qa-link" href="${esc(ag.link_url)}" target="_blank" rel="noopener noreferrer">${esc(ag.link_text ? locQ(ag.link_text) : tr("quota.consoleLink", "控制台 ↗"))}</a>`
           : "";
         innerHtml = `
           <div class="qa-note">
-            <span>${esc(ag.note || "CLI 未开放实时额度接口")}</span>
+            <span>${esc(ag.note ? locQ(ag.note) : tr("quota.externalFallback", "CLI 未开放实时额度接口"))}</span>
             ${link}
           </div>
         `;
       } else {
-        innerHtml = `<div class="qa-note"><span>${esc(ag.note || "暂不可用")}</span></div>`;
+        innerHtml = `<div class="qa-note"><span>${esc(ag.note ? locQ(ag.note) : tr("quota.unavailFallback", "暂不可用"))}</span></div>`;
       }
 
       parts.push(`
@@ -334,7 +348,7 @@
           <div class="qa-head">
             <div class="qa-id">
               <h3 class="qa-name">${esc(ag.name || ag.kind)}</h3>
-              ${ag.plan ? `<span class="qa-plan">${esc(ag.plan)}</span>` : ""}
+              ${ag.plan ? `<span class="qa-plan">${esc(locQ(ag.plan))}</span>` : ""}
             </div>
             ${stateHtml}
           </div>
@@ -503,11 +517,11 @@
       const cd = Number(data?.refresh_cooldown_sec) || 30;
       startCooldown(cd);
       const live = $("#quota-live-status");
-      if (live) live.textContent = "已同步最新订阅额度，未消耗模型额度";
+      if (live) live.textContent = tr("quota.liveSynced", "已同步最新订阅额度，未消耗模型额度");
     } catch (err) {
       isRefreshing = false;
       syncRefreshControls();
-      hostToast?.(err?.message || "刷新订阅额度失败", "attn");
+      hostToast?.(err?.message || tr("quota.refreshFail", "刷新订阅额度失败"), "attn");
     }
   }
 
@@ -587,8 +601,97 @@
       const open = e.newState === "open";
       setExpandedAria(open);
       if (open) startOpenTicker();
-      else stopOpenTicker();
+      else {
+        stopOpenTicker();
+        if (pop.style) {
+          pop.style.transform = "";
+          pop.style.willChange = "";
+        }
+        pop.classList.remove("is-dragging");
+      }
     });
+
+    // Mobile bottom-sheet rAF-batched drag-to-dismiss (zero layout reads during drag).
+    if (pop) {
+      const zones = [pop.querySelector?.(".qp-handle"), pop.querySelector?.(".qp-head")].filter(Boolean);
+      let wcTimer = 0;
+      const clearWC = () => {
+        if (wcTimer) { clearTimeout(wcTimer); wcTimer = 0; }
+        if (pop.style) pop.style.willChange = "";
+      };
+      for (const zone of zones) {
+        let startY = 0, startX = 0, startT = 0, lastY = 0, pid = null;
+        let dragging = false, applied = false, pendingDy = 0, rafId = 0, threshold = 96;
+        const cancelRaf = () => {
+          if (rafId && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
+          rafId = 0;
+        };
+        const flush = () => {
+          rafId = 0;
+          if (!dragging) return;
+          if (!applied) {
+            applied = true;
+            if (wcTimer) { clearTimeout(wcTimer); wcTimer = 0; }
+            pop.style.willChange = "transform";
+            pop.classList.add("is-dragging");
+          }
+          pop.style.transform = `translate3d(0, ${pendingDy}px, 0)`;
+        };
+        zone.addEventListener("pointerdown", (e) => {
+          if (!pop.classList.contains("is-sheet") || !isPopoverOpen(pop)) return;
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          if (e.target?.closest?.("button, a")) return;
+          cancelRaf();
+          pid = e.pointerId;
+          startY = lastY = e.clientY;
+          startX = e.clientX;
+          startT = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+          dragging = false;
+          applied = false;
+          pendingDy = 0;
+          threshold = Math.min(110, (pop.offsetHeight || 360) * 0.24);
+        });
+        zone.addEventListener("pointermove", (e) => {
+          if (pid !== e.pointerId) return;
+          const dy = e.clientY - startY, dx = e.clientX - startX;
+          lastY = e.clientY;
+          if (!dragging) {
+            if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { pid = null; return; }
+            if (dy <= 8) return;
+            dragging = true;
+            try { zone.setPointerCapture?.(e.pointerId); } catch {}
+          }
+          pendingDy = Math.max(0, dy);
+          if (!rafId) {
+            if (typeof requestAnimationFrame === "function") rafId = requestAnimationFrame(flush);
+            else flush();
+          }
+        });
+        const endDrag = (e, cancelled) => {
+          if (pid !== e.pointerId) return;
+          cancelRaf();
+          const wasDragging = dragging;
+          const hadApplied = applied;
+          pid = null;
+          dragging = false;
+          applied = false;
+          const nowT = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+          const dy = Math.max(0, lastY - startY);
+          const vy = dy / Math.max(1, nowT - startT);
+          const shouldClose = wasDragging && !cancelled && (dy > threshold || (dy > 40 && vy > 0.45));
+          pop.classList.remove("is-dragging");
+          pop.style.transform = "";
+          if (hadApplied) {
+            const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+            if (reduced) clearWC();
+            else wcTimer = setTimeout(clearWC, 320);
+          }
+          if (shouldClose) hidePopoverEl(pop);
+        };
+        zone.addEventListener("pointerup", (e) => endDrag(e, false));
+        zone.addEventListener("pointercancel", (e) => endDrag(e, true));
+      }
+    }
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && pop && !hasNativePopover(pop) && isPopoverOpen(pop)) {
@@ -619,9 +722,17 @@
     fetchQuota();
   }
 
+  function onLangChange() {
+    renderTriggers();
+    const pop = $("#quota-popover");
+    if (isPopoverOpen(pop)) renderPopoverBody();
+    else syncRefreshControls();
+  }
+
   window.__collieQuota = {
     init,
     onEvent: applySnapshot,
+    onLangChange,
     open: openQuota,
     close: () => hidePopoverEl($("#quota-popover")),
     refresh: manualRefresh,

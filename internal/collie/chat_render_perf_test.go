@@ -113,11 +113,12 @@ func TestStaticGzipNegotiationAndBudget(t *testing.T) {
 		}
 	}
 
-	// Hard budget: cold-start first-screen gzipped transfer <= 450 KB
+	// Hard budget: cold-start first-screen gzipped transfer <= 460 KB
 	// (v0.3.12 merged baseline ~420 KB vs ~2.1 MB in v0.3.11; still guards against eager vendor bundles)
-	const maxBudgetBytes = 450 * 1024
+	// Fork: upstream is 450 KB; raised to 460 KB for fork-only frontend features (e.g. message chime).
+	const maxBudgetBytes = 460 * 1024
 	if totalGzBytes > maxBudgetBytes {
-		t.Fatalf("first-screen gzipped transfer = %d bytes (%.1f KB), exceeds 450 KB budget", totalGzBytes, float64(totalGzBytes)/1024)
+		t.Fatalf("first-screen gzipped transfer = %d bytes (%.1f KB), exceeds 460 KB budget", totalGzBytes, float64(totalGzBytes)/1024)
 	}
 	t.Logf("first-screen transfer: raw=%.1f KB -> gzip=%.1f KB (%.1f%% reduction)",
 		float64(totalRawBytes)/1024, float64(totalGzBytes)/1024, 100*(1-float64(totalGzBytes)/float64(totalRawBytes)))

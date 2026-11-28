@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -400,10 +399,9 @@ func reportClaudeSGAgent(herdrSock, paneID, collieBin string, cfg claudeSGBridge
 	if sid != "" {
 		params["resume_argv"] = claudeSGResumeArgv(collieBin, cfg, sid)
 	}
-	id := "csg-" + strconv.FormatInt(n, 10)
-	if err := callHerdrSocket(herdrSock, id, "pane.report_agent", params); err != nil {
+	if err := callHerdrSocket(herdrSock, "csg", n, "pane.report_agent", params); err != nil {
 		n2 := seq.Add(1)
-		_ = callHerdrSocket(herdrSock, "csg-"+strconv.FormatInt(n2, 10), "pane.report_agent", map[string]any{
+		_ = callHerdrSocket(herdrSock, "csg", n2, "pane.report_agent", map[string]any{
 			"pane_id": paneID,
 			"source":  claudeSGBridgeSource,
 			"agent":   "claude",
@@ -418,7 +416,7 @@ func releaseClaudeSGAgent(herdrSock, paneID string, seq *atomic.Int64) {
 		return
 	}
 	n := seq.Add(1)
-	_ = callHerdrSocket(herdrSock, "csg-"+strconv.FormatInt(n, 10), "pane.release_agent", map[string]any{
+	_ = callHerdrSocket(herdrSock, "csg", n, "pane.release_agent", map[string]any{
 		"pane_id": paneID,
 		"source":  claudeSGBridgeSource,
 		"agent":   "claude",

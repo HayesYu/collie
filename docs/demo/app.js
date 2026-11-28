@@ -19966,10 +19966,41 @@
       syncTableCard(card);
     }
   }
+  function syncCodeBlockScroll(block) {
+    if (!block) return;
+    const pre = block.querySelector?.(".md-code-body pre");
+    if (!pre) return;
+    const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
+    const scrollable = maxScroll > 2;
+    block.classList?.toggle("is-scrollable", scrollable);
+    block.classList?.toggle("can-scroll-l", scrollable && (pre.scrollLeft || 0) > 4);
+    block.classList?.toggle("can-scroll-r", scrollable && (pre.scrollLeft || 0) < maxScroll - 4);
+  }
+  const boundCodeScrolls = new WeakSet();
+  let codeRO = null;
+  function observeCodeResize(pre) {
+    if (!pre || typeof ResizeObserver !== "function") return;
+    if (!codeRO) {
+      codeRO = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const block = entry.target?.closest?.("[data-code-block]");
+          if (block) syncCodeBlockScroll(block);
+        }
+      });
+    }
+    try { codeRO.observe(pre); } catch {}
+  }
   function hydrateCodeBlocks(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
-    for (const block of root.querySelectorAll(".md-code[data-foldable]")) {
-      if (block._richHydrated) continue;
+    for (const block of root.querySelectorAll("[data-code-block]")) {
+      const pre = block.querySelector?.(".md-code-body pre");
+      if (pre && !boundCodeScrolls.has(pre)) {
+        boundCodeScrolls.add(pre);
+        pre.addEventListener?.("scroll", () => syncCodeBlockScroll(block), { passive: true });
+        observeCodeResize(pre);
+      }
+      syncCodeBlockScroll(block);
+      if (!block.hasAttribute?.("data-foldable") || block._richHydrated) continue;
       block._richHydrated = true;
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
       if (k && richUiState.has(k)) {
@@ -20302,15 +20333,25 @@
       }
       const mountedSvg = lbSvg.querySelector?.("svg");
       if (mountedSvg) {
+        const natW = parseFloat(mountedSvg.dataset?.rvNatW || "0");
+        const minW = parseFloat(mountedSvg.dataset?.rvMinW || "0");
         mountedSvg.removeAttribute("height");
-        mountedSvg.setAttribute("width", "100%");
+        mountedSvg.removeAttribute("width");
         if (mountedSvg.style) {
-          mountedSvg.style.width = "100%";
-          mountedSvg.style.maxWidth = "100%";
+          if (natW > 0) {
+            mountedSvg.style.setProperty?.("--rv-vb-w", Math.ceil(natW) + "px");
+            mountedSvg.style.setProperty?.("--rv-min-w", (minW > 0 ? Math.ceil(minW) : 0) + "px");
+            mountedSvg.style.width = minW > 0 ? `clamp(${Math.ceil(minW)}px, 100%, ${Math.max(Math.ceil(natW), Math.ceil(minW))}px)` : "100%";
+            mountedSvg.style.maxWidth = "none";
+          } else {
+            mountedSvg.style.width = "100%";
+            mountedSvg.style.maxWidth = "100%";
+          }
           mountedSvg.style.height = "auto";
         }
       }
       lbSvg.hidden = false;
+      lbSvg.classList.toggle("is-scrollable", (lbSvg.scrollWidth || 0) - (lbSvg.clientWidth || 0) > 2);
       const svgRaw = item.svgHtml || (item.svgNode ? item.svgNode.outerHTML : "");
       lbCurMeta = { isSvg: true, width: 0, height: 0, size: svgRaw.length };
       updateLbMeta();
@@ -26391,21 +26432,147 @@
     root.removeAttribute("height");
     return { node: root, lightCanvas: svgNeedsLightCanvas(root) };
   }
-  function applyResponsiveSvgSizing(svgEl) {
-    if (!svgEl) return;
-    let vbW = 0;
-    const vb = (svgEl.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
-    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) vbW = vb[2];
+  function extractSvgMinFontSize(svgEl) {
+    if (!svgEl || typeof svgEl.querySelectorAll !== "function") return 0;
+    const textEls = svgEl.querySelectorAll("text, tspan");
+    if (!textEls?.length) return 0;
+    let minFs = Infinity;
+    let hasText = false;
+    for (const el of textEls) {
+      if (!(el.textContent || "").trim()) continue;
+      hasText = true;
+      let cur = el;
+      let found = 0;
+      while (cur && cur.nodeType === 1) {
+        const attrFs = parseFloat(cur.getAttribute?.("font-size") || "");
+        if (Number.isFinite(attrFs) && attrFs > 0) { found = attrFs; break; }
+        const st = String(cur.getAttribute?.("style") || "");
+        const m = st.match(/font-size\s*:\s*([0-9.]+)/i);
+        if (m) {
+          const parsed = parseFloat(m[1]);
+          if (Number.isFinite(parsed) && parsed > 0) { found = parsed; break; }
+        }
+        if (cur === svgEl) break;
+        cur = cur.parentElement || cur.parentNode;
+      }
+      if (found >= 6 && found < minFs) minFs = found;
+    }
+    if (!hasText) return 0;
+    return Number.isFinite(minFs) ? minFs : 14;
+  }
+  function computeResponsiveSvgMetrics(svgEl, kind) {
+    let vbW = 0, vbH = 0;
+    const vb = (svgEl?.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) {
+      vbW = vb[2];
+      if (Number.isFinite(vb[3]) && vb[3] > 0) vbH = vb[3];
+    }
     if (!vbW) {
-      const aw = parseFloat(svgEl.getAttribute?.("width") || "");
+      const aw = parseFloat(svgEl?.getAttribute?.("width") || "");
       if (Number.isFinite(aw) && aw > 0) vbW = aw;
     }
+    if (!vbW) return { natW: 0, minW: 0, vbH: 0 };
+    const natW = Math.ceil(vbW);
+    let minScale = 0;
+    if (kind === "mermaid") {
+      // Keep Mermaid 13px node text >= ~11px crisp vector glyphs (never downscaled to 4-7px ants).
+      minScale = 0.85;
+    } else {
+      const minFs = extractSvgMinFontSize(svgEl);
+      if (minFs > 0) {
+        // Keep text-bearing inline SVGs at >= 10.5px effective text size without upscaling past 1:1.
+        minScale = Math.min(1, Math.max(0.65, 10.5 / minFs));
+      }
+    }
+    const minW = minScale > 0 ? Math.min(natW, Math.ceil(vbW * minScale)) : 0;
+    return { natW, minW, vbH: Math.ceil(vbH) };
+  }
+  function applyResponsiveSvgSizing(svgEl, kind = "svg") {
+    if (!svgEl) return;
+    const { natW, minW } = computeResponsiveSvgMetrics(svgEl, kind);
     svgEl.removeAttribute?.("height");
-    svgEl.setAttribute?.("width", "100%");
+    svgEl.removeAttribute?.("width");
+    if (svgEl.dataset) {
+      if (natW > 0) svgEl.dataset.rvNatW = String(natW);
+      else delete svgEl.dataset.rvNatW;
+      if (minW > 0) svgEl.dataset.rvMinW = String(minW);
+      else delete svgEl.dataset.rvMinW;
+    }
     if (svgEl.style) {
-      svgEl.style.width = "100%";
-      svgEl.style.maxWidth = vbW > 0 ? `min(100%, ${Math.ceil(vbW)}px)` : "100%";
+      if (natW > 0) {
+        svgEl.style.setProperty?.("--rv-vb-w", natW + "px");
+        svgEl.style.setProperty?.("--rv-min-w", minW + "px");
+        svgEl.style.width = minW > 0 ? `clamp(${minW}px, 100%, ${natW}px)` : `min(100%, ${natW}px)`;
+        svgEl.style.maxWidth = "none";
+      } else {
+        svgEl.style.width = "100%";
+        svgEl.style.maxWidth = "100%";
+      }
       svgEl.style.height = "auto";
+    }
+  }
+  function syncRichStageScroll(card) {
+    if (!card) return;
+    const stage = card.querySelector?.(".rv-mermaid-stage, .rv-svg-stage");
+    if (!stage) return;
+    const clientW = stage.clientWidth || 0;
+    const scrollW = stage.scrollWidth || 0;
+    const scrollL = stage.scrollLeft || 0;
+    const maxScroll = scrollW - clientW;
+    const scrollable = maxScroll > 2;
+    let effectiveRight = scrollW;
+    if (scrollable && clientW > 0) {
+      const svg = stage.querySelector?.("svg");
+      if (svg && typeof svg.getBBox === "function") {
+        try {
+          const vb = (svg.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+          const sr = svg.getBoundingClientRect?.();
+          if (vb.length === 4 && vb[2] > 0 && sr && sr.width > 0) {
+            const bb = svg.getBBox();
+            if (bb && bb.width > 0) {
+              const scale = sr.width / vb[2];
+              const paintedRight = Math.ceil((bb.x + bb.width - vb[0]) * scale);
+              if (paintedRight > 0 && paintedRight < effectiveRight) effectiveRight = paintedRight;
+            }
+          }
+        } catch {}
+      }
+    }
+    const paintedFits = scrollable && scrollL === 0 && clientW > 0 && effectiveRight <= clientW + 2;
+    const effectiveScrollable = scrollable && !paintedFits;
+    const canScrollR = effectiveScrollable && scrollL < maxScroll - 4 && (scrollL + clientW) < effectiveRight - 4;
+    card.classList?.toggle("is-painted-fit", paintedFits);
+    card.classList?.toggle("is-scrollable", effectiveScrollable);
+    card.classList?.toggle("can-scroll-l", effectiveScrollable && scrollL > 4);
+    card.classList?.toggle("can-scroll-r", canScrollR);
+    if (effectiveScrollable) {
+      stage.setAttribute?.("tabindex", "0");
+    } else {
+      stage.removeAttribute?.("tabindex");
+    }
+  }
+  const boundRvStageScrolls = new WeakSet();
+  let rvStageRO = null;
+  function bindRichStageScroll(card, stage) {
+    if (!card || !stage) return;
+    if (!boundRvStageScrolls.has(stage)) {
+      boundRvStageScrolls.add(stage);
+      stage.addEventListener?.("scroll", () => syncRichStageScroll(card), { passive: true });
+      if (typeof ResizeObserver === "function") {
+        if (!rvStageRO) {
+          rvStageRO = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+              const c = entry.target?.closest?.(".rv-card");
+              if (c) syncRichStageScroll(c);
+            }
+          });
+        }
+        try { rvStageRO.observe(stage); } catch {}
+      }
+    }
+    syncRichStageScroll(card);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => { if (card.isConnected) syncRichStageScroll(card); });
     }
   }
   function applySanitizedSvg(card, entry, hash) {
@@ -26414,7 +26581,7 @@
     const imported = typeof document?.importNode === "function"
       ? document.importNode(entry.node, true)
       : entry.node.cloneNode(true);
-    applyResponsiveSvgSizing(imported);
+    applyResponsiveSvgSizing(imported, "svg");
     if (typeof stage.replaceChildren === "function") stage.replaceChildren(imported);
     else { stage.innerHTML = ""; stage.appendChild(imported); }
     stage.classList.toggle("is-light-canvas", !!entry.lightCanvas);
@@ -26430,6 +26597,7 @@
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
+    bindRichStageScroll(card, stage);
   }
   function fallbackSvgCard(card) {
     card.classList.remove("is-pending", "is-ready", "is-acts-open");
@@ -26502,103 +26670,107 @@
   }
   function mermaidConfig(isDark) {
     const sans = '-apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif';
-    const edgeInk = isDark ? "#a1a1aa" : "#64645e";
-    const strokeCol = isDark ? "#2d2d34" : "#d8d8d3";
-    const linkCol = isDark ? "#71717a" : "#787872";
+    const bgCol = isDark ? "#111113" : "#ffffff";
+    const inkCol = isDark ? "#ececea" : "#18181b";
+    const edgeInk = isDark ? "#a1a1aa" : "#6b6b66";
+    const strokeCol = isDark ? "#28282f" : "#e2e2de";
+    const linkCol = isDark ? "#666670" : "#8e8e88";
     return {
       startOnLoad: false,
       securityLevel: "strict",
       suppressErrorRendering: true,
       logLevel: 5,
       fontFamily: sans,
+      // Native SVG <text>/<tspan> instead of <foreignObject> prevents blurry 1x WebKit/Safari Retina rasterization.
+      htmlLabels: false,
       theme: "base",
       themeVariables: isDark ? {
         darkMode: true,
         background: "#111113",
         fontFamily: sans,
         fontSize: "13px",
-        primaryColor: "#17171a",
+        primaryColor: "#16161a",
         primaryTextColor: "#ececea",
-        primaryBorderColor: "#2d2d34",
-        secondaryColor: "#1d1d22",
+        primaryBorderColor: "#28282f",
+        secondaryColor: "#1b1b20",
         secondaryTextColor: "#ececea",
-        secondaryBorderColor: "#34343c",
+        secondaryBorderColor: "#2f2f37",
         tertiaryColor: "#141417",
         tertiaryTextColor: "#ececea",
-        tertiaryBorderColor: "#26262c",
-        lineColor: "#71717a",
+        tertiaryBorderColor: "#24242a",
+        lineColor: "#666670",
         textColor: "#ececea",
-        mainBkg: "#17171a",
-        nodeBorder: "#2d2d34",
+        mainBkg: "#16161a",
+        nodeBorder: "#28282f",
         clusterBkg: "#141417",
-        clusterBorder: "#26262c",
-        defaultLinkColor: "#71717a",
+        clusterBorder: "#24242a",
+        defaultLinkColor: "#666670",
         titleColor: "#ececea",
         edgeLabelBackground: "#111113",
-        actorBkg: "#17171a",
-        actorBorder: "#2d2d34",
+        actorBkg: "#16161a",
+        actorBorder: "#28282f",
         actorTextColor: "#ececea",
-        actorLineColor: "#27272e",
+        actorLineColor: "#26262c",
         signalColor: "#a1a1aa",
         signalTextColor: "#ececea",
         labelBoxBkgColor: "#141417",
-        labelBoxBorderColor: "#2d2d34",
+        labelBoxBorderColor: "#28282f",
         labelTextColor: "#ececea",
         loopTextColor: "#a1a1aa",
-        noteBkgColor: "#1c1c21",
-        noteBorderColor: "#2d2d34",
+        noteBkgColor: "#1a1a1f",
+        noteBorderColor: "#28282f",
         noteTextColor: "#ececea",
-        activationBkgColor: "#232329",
-        activationBorderColor: "#52525b",
+        activationBkgColor: "#212127",
+        activationBorderColor: "#4b4b54",
         sequenceNumberColor: "#111113",
         pie1: "#dcdcd9", pie2: "#a8a8a3", pie3: "#76767a", pie4: "#4d4d55", pie5: "#34343b", pie6: "#232329",
         pieStrokeColor: "#111113", pieStrokeWidth: "1px", pieOpacity: "0.95",
         pieSectionTextColor: "#111113", pieTitleTextColor: "#ececea", pieLegendTextColor: "#c8c8c3",
-        cScale0: "#17171a", cScale1: "#1d1d22", cScale2: "#24242b", cScale3: "#2d2d34",
+        cScale0: "#16161a", cScale1: "#1b1b20", cScale2: "#222228", cScale3: "#28282f",
         cScaleLabel0: "#ececea", cScaleLabel1: "#ececea", cScaleLabel2: "#ececea", cScaleLabel3: "#ececea",
       } : {
         darkMode: false,
         background: "#ffffff",
         fontFamily: sans,
         fontSize: "13px",
-        primaryColor: "#fafaf9",
+        primaryColor: "#fbfbfa",
         primaryTextColor: "#18181b",
-        primaryBorderColor: "#d8d8d3",
-        secondaryColor: "#f4f4f2",
+        primaryBorderColor: "#e2e2de",
+        secondaryColor: "#f5f5f3",
         secondaryTextColor: "#18181b",
-        secondaryBorderColor: "#d8d8d3",
+        secondaryBorderColor: "#e2e2de",
         tertiaryColor: "#ffffff",
         tertiaryTextColor: "#18181b",
-        tertiaryBorderColor: "#e6e6e2",
-        lineColor: "#787872",
+        tertiaryBorderColor: "#eaeae6",
+        lineColor: "#8e8e88",
         textColor: "#18181b",
-        mainBkg: "#fafaf9",
-        nodeBorder: "#d8d8d3",
-        clusterBkg: "#fafaf9",
-        clusterBorder: "#e4e4e0",
-        defaultLinkColor: "#787872",
+        mainBkg: "#fbfbfa",
+        nodeBorder: "#e2e2de",
+        clusterBkg: "#fbfbfa",
+        clusterBorder: "#eaeae6",
+        defaultLinkColor: "#8e8e88",
         titleColor: "#18181b",
         edgeLabelBackground: "#ffffff",
-        actorBkg: "#fafaf9",
-        actorBorder: "#d8d8d3",
+        actorBkg: "#fbfbfa",
+        actorBorder: "#e2e2de",
         actorTextColor: "#18181b",
-        actorLineColor: "#e2e2dd",
+        actorLineColor: "#e6e6e2",
         signalColor: "#52524c",
         signalTextColor: "#18181b",
         labelBoxBkgColor: "#ffffff",
-        labelBoxBorderColor: "#e4e4e0",
+        labelBoxBorderColor: "#eaeae6",
         labelTextColor: "#18181b",
-        loopTextColor: "#64645e",
+        loopTextColor: "#6b6b66",
         noteBkgColor: "#f7f7f5",
-        noteBorderColor: "#e2e2dd",
+        noteBorderColor: "#e6e6e2",
         noteTextColor: "#18181b",
         activationBkgColor: "#f2f2ef",
-        activationBorderColor: "#a8a8a1",
+        activationBorderColor: "#b4b4ae",
         sequenceNumberColor: "#ffffff",
         pie1: "#27272a", pie2: "#52525b", pie3: "#8e8e88", pie4: "#bdbdb7", pie5: "#dcdcd8", pie6: "#efefed",
         pieStrokeColor: "#ffffff", pieStrokeWidth: "1px", pieOpacity: "0.95",
         pieSectionTextColor: "#ffffff", pieTitleTextColor: "#18181b", pieLegendTextColor: "#3f3f46",
-        cScale0: "#fafaf9", cScale1: "#f4f4f2", cScale2: "#eaeae6", cScale3: "#dcdcd7",
+        cScale0: "#fbfbfa", cScale1: "#f5f5f3", cScale2: "#ecece8", cScale3: "#e2e2de",
         cScaleLabel0: "#18181b", cScaleLabel1: "#18181b", cScaleLabel2: "#18181b", cScaleLabel3: "#18181b",
       },
       themeCSS: [
@@ -26607,16 +26779,17 @@
         `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
         `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
         `.actor-line { stroke-width: 1px !important; }`,
-        `.nodeLabel, .label, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; letter-spacing: -0.005em; }`,
-        `.edgeLabel, .edgeLabel p, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
-        `.cluster-label .nodeLabel { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; }`,
+        `.nodeLabel, .label, .node text, .node tspan, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; fill: ${inkCol} !important; letter-spacing: -0.005em; }`,
+        `.edgeLabel, .edgeLabel p, .edgeLabel text, .edgeLabel tspan, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.edgeLabel rect, .labelBkg { fill: ${bgCol} !important; opacity: 1 !important; rx: 4px; ry: 4px; }`,
+        `.cluster-label .nodeLabel, .cluster-label text, .cluster-label tspan { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
       ].join("\n"),
-      flowchart: { htmlLabels: true, curve: "basis", padding: 12, nodeSpacing: 36, rankSpacing: 44, useMaxWidth: true },
-      sequence: { useMaxWidth: true, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 44, messageMargin: 34, mirrorActors: false },
-      gantt: { useMaxWidth: true },
-      er: { useMaxWidth: true },
-      state: { useMaxWidth: true },
-      class: { useMaxWidth: true },
+      flowchart: { htmlLabels: false, curve: "basis", padding: 10, nodeSpacing: 22, rankSpacing: 34, useMaxWidth: false },
+      sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 40, messageMargin: 32, mirrorActors: false },
+      gantt: { useMaxWidth: false },
+      er: { useMaxWidth: false },
+      state: { useMaxWidth: false },
+      class: { useMaxWidth: false },
     };
   }
   function loadMermaid() {
@@ -26641,13 +26814,48 @@
     });
     return mermaidLoadPromise;
   }
-  function applyMermaidSvg(card, svg, themeKey, hash) {
+  function isMobileMermaidViewport() {
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function mermaidLayoutKey() {
+    return isMobileMermaidViewport() ? "m" : "d";
+  }
+  function rewriteMermaidLrToTd(code) {
+    const lines = String(code || "").split("\n");
+    let inFrontmatter = false;
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (i === 0 && trimmed === "---") { inFrontmatter = true; continue; }
+      if (inFrontmatter) { if (trimmed === "---") inFrontmatter = false; continue; }
+      if (!trimmed || trimmed.startsWith("%%")) continue;
+      const m = lines[i].match(/^(\s*(?:flowchart|graph)\s+)LR(\b.*)$/i);
+      if (!m) return null;
+      lines[i] = m[1] + "TD" + m[2];
+      return lines.join("\n");
+    }
+    return null;
+  }
+  function extractSvgViewBoxWidth(svgHtml) {
+    const s = String(svgHtml || "");
+    const m = s.match(/\bviewBox\s*=\s*["']\s*[-+0-9.eE]+[\s,]+[-+0-9.eE]+[\s,]+([-+0-9.eE]+)[\s,]+[-+0-9.eE]+\s*["']/i);
+    if (m) {
+      const w = parseFloat(m[1]);
+      if (Number.isFinite(w) && w > 0) return w;
+    }
+    const wm = s.match(/<svg\b[^>]*\bwidth\s*=\s*["']\s*([0-9.]+)(?:px)?\s*["']/i);
+    if (wm) {
+      const w = parseFloat(wm[1]);
+      if (Number.isFinite(w) && w > 0) return w;
+    }
+    return 0;
+  }
+  function applyMermaidSvg(card, svg, themeKey, hash, layoutKey = mermaidLayoutKey()) {
     const stage = card.querySelector?.(".rv-mermaid-stage");
     if (!stage) return;
     stage.innerHTML = svg;
     const svgEl = stage.querySelector?.("svg");
     if (svgEl) {
-      applyResponsiveSvgSizing(svgEl);
+      applyResponsiveSvgSizing(svgEl, "mermaid");
       for (const rect of svgEl.querySelectorAll?.(".node rect, rect.actor, .cluster rect") || []) {
         const w = parseFloat(rect.getAttribute?.("width") || "0");
         const h = parseFloat(rect.getAttribute?.("height") || "0");
@@ -26658,8 +26866,9 @@
       }
     }
     stage.style.minHeight = "";
-    card.dataset.rvRendered = `${themeKey}:${hash}`;
+    card.dataset.rvRendered = `${themeKey}:${layoutKey}:${hash}`;
     card.dataset.rvTheme = themeKey;
+    card.dataset.rvLayout = layoutKey;
     card.classList.remove("is-pending", "is-fallback");
     card.classList.add("is-ready");
     const expandBtn = card.querySelector?.('[data-rv-expand="mermaid"]');
@@ -26670,6 +26879,7 @@
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
+    bindRichStageScroll(card, stage);
   }
   function fallbackMermaidCard(card) {
     card.classList.remove("is-pending", "is-ready", "is-acts-open");
@@ -26686,12 +26896,13 @@
     if (!card || card.dataset?.rvKind !== "mermaid") return;
     const hash = card.dataset.rvHash || "";
     const themeKey = currentVisualTheme();
-    const cacheKey = `${themeKey}:${hash}`;
+    const layoutKey = mermaidLayoutKey();
+    const cacheKey = `${themeKey}:${layoutKey}:${hash}`;
     if (!opts.force && card.dataset.rvRendered === cacheKey) return;
     if (!opts.force && card.dataset.rvRendered === "fallback") return;
     const cachedSvg = mermaidSvgCache.get(cacheKey);
     if (cachedSvg) {
-      applyMermaidSvg(card, cachedSvg, themeKey, hash);
+      applyMermaidSvg(card, cachedSvg, themeKey, hash, layoutKey);
       return;
     }
     if (card.dataset.rvRendering === cacheKey) return;
@@ -26706,10 +26917,11 @@
     mermaidQueue = mermaidQueue.then(async () => {
       if (!card.isConnected) return;
       const curTheme = currentVisualTheme();
-      const curKey = `${curTheme}:${hash}`;
+      const curLayout = mermaidLayoutKey();
+      const curKey = `${curTheme}:${curLayout}:${hash}`;
       const hitNow = mermaidSvgCache.get(curKey);
       if (hitNow) {
-        applyMermaidSvg(card, hitNow, curTheme, hash);
+        applyMermaidSvg(card, hitNow, curTheme, hash, curLayout);
         return;
       }
       let m;
@@ -26725,7 +26937,14 @@
         mermaidInitTheme = curTheme;
       }
       const rid = `collie-mmd-${++mermaidRenderSeq}`;
+      let ridTd = "";
       let tempHost = null;
+      const cleanMermaidId = (id) => {
+        if (!id) return;
+        document.getElementById?.("d" + id)?.remove?.();
+        const sEl = document.getElementById?.(id);
+        if (sEl && !sEl.closest?.(".rv-mermaid-stage")) sEl.remove?.();
+      };
       try {
         if (typeof m.parse === "function") {
           const valid = await m.parse(code, { suppressErrors: true });
@@ -26740,29 +26959,46 @@
           document.body.appendChild(tempHost);
         }
         const res = await m.render(rid, code, tempHost || undefined);
-        const svg = typeof res === "string" ? res : (res?.svg || "");
-        if (tempHost) { tempHost.remove(); tempHost = null; }
-        document.getElementById?.("d" + rid)?.remove?.();
-        const stray = document.getElementById?.(rid);
-        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        let svg = typeof res === "string" ? res : (res?.svg || "");
+        cleanMermaidId(rid);
         if (!svg || !svg.includes("<svg")) {
           if (card.isConnected) fallbackMermaidCard(card);
           return;
         }
+        // On narrow mobile viewports, adapt overly wide horizontal flowchart/graph LR into vertical TD so users read cleanly without horizontal panning.
+        if (curLayout === "m") {
+          const tdCode = rewriteMermaidLrToTd(code);
+          if (tdCode) {
+            const lrW = extractSvgViewBoxWidth(svg);
+            const containerW = (stage?.clientWidth > 0 ? stage.clientWidth : 0) || Math.max(280, (typeof innerWidth === "number" ? innerWidth : 390) - 34);
+            if (lrW > containerW * 1.25) {
+              try {
+                ridTd = `collie-mmd-${++mermaidRenderSeq}`;
+                const tdRes = await m.render(ridTd, tdCode, tempHost || undefined);
+                const tdSvg = typeof tdRes === "string" ? tdRes : (tdRes?.svg || "");
+                cleanMermaidId(ridTd);
+                if (tdSvg && tdSvg.includes("<svg")) {
+                  const tdW = extractSvgViewBoxWidth(tdSvg);
+                  if (tdW > 0 && tdW < lrW * 0.9) svg = tdSvg;
+                }
+              } catch {}
+            }
+          }
+        }
+        if (tempHost) { tempHost.remove(); tempHost = null; }
         if (mermaidSvgCache.size >= MERMAID_CACHE_MAX) {
           const oldest = mermaidSvgCache.keys().next().value;
           if (oldest !== undefined) mermaidSvgCache.delete(oldest);
         }
         mermaidSvgCache.set(curKey, svg);
-        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash);
+        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash, curLayout);
       } catch {
         if (card.isConnected) fallbackMermaidCard(card);
       } finally {
         if (card.dataset.rvRendering === cacheKey) delete card.dataset.rvRendering;
         if (tempHost) tempHost.remove();
-        document.getElementById?.("d" + rid)?.remove?.();
-        const stray = document.getElementById?.(rid);
-        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        cleanMermaidId(rid);
+        cleanMermaidId(ridTd);
         if (typeof requestAnimationFrame === "function") {
           await new Promise((r) => requestAnimationFrame(r));
         }
@@ -26990,6 +27226,7 @@
       buckets.get(k).push(oc);
     }
     const curTheme = currentVisualTheme();
+    const curLayout = mermaidLayoutKey();
     for (const nc of newCards) {
       const kind = nc.dataset?.rvKind || "";
       const hash = nc.dataset?.rvHash || "";
@@ -27000,8 +27237,8 @@
         setRichCardMode(nc, "source");
       }
       if (kind === "mermaid") {
-        const svg = mermaidSvgCache.get(`${curTheme}:${hash}`);
-        if (svg) applyMermaidSvg(nc, svg, curTheme, hash);
+        const svg = mermaidSvgCache.get(`${curTheme}:${curLayout}:${hash}`);
+        if (svg) applyMermaidSvg(nc, svg, curTheme, hash, curLayout);
       } else if (kind === "svg") {
         const entry = svgSanitizedCache.get(hash);
         if (entry) applySanitizedSvg(nc, entry, hash);
@@ -27022,6 +27259,7 @@
     const srcEl = card.querySelector?.(".rv-source");
     if (stage) stage.hidden = showSource;
     if (srcEl) srcEl.hidden = !showSource;
+    if (!showSource && isDiagram) syncRichStageScroll(card);
     const btn = card.querySelector?.('[data-rv-toggle="source"]');
     if (btn) {
       btn.setAttribute("aria-pressed", showSource ? "true" : "false");
@@ -27082,13 +27320,14 @@
     }
     if (!cards.length) return;
     const curTheme = currentVisualTheme();
+    const curLayout = mermaidLayoutKey();
     for (const card of cards) {
       const kind = card.dataset.rvKind;
       const hash = card.dataset.rvHash || "";
       if (kind === "mermaid") {
-        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${hash}`);
-        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${hash}`) {
-          applyMermaidSvg(card, cachedSvg, curTheme, hash);
+        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${curLayout}:${hash}`);
+        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${curLayout}:${hash}`) {
+          applyMermaidSvg(card, cachedSvg, curTheme, hash, curLayout);
           card.dataset.rvWatched = "1";
           continue;
         }
@@ -27127,11 +27366,21 @@
       } catch {}
     }
   }
+  function onRichVisualViewportChange() {
+    const nextLayout = mermaidLayoutKey();
+    for (const card of document.querySelectorAll?.(".rv-mermaid.is-ready") || []) {
+      if (card.dataset?.rvLayout !== nextLayout) renderMermaidCard(card, { force: true });
+    }
+  }
   if (typeof addEventListener === "function") {
     rvLastTheme = currentVisualTheme();
     addEventListener("collie:theme", onRichVisualThemeChange);
   }
   darkMQ?.addEventListener?.("change", onRichVisualThemeChange);
+  try {
+    const rvMobileMQ = typeof matchMedia === "function" ? matchMedia("(max-width: 760px)") : null;
+    rvMobileMQ?.addEventListener?.("change", onRichVisualViewportChange);
+  } catch {}
   document.addEventListener?.("click", (ev) => {
     const toggleBtn = ev.target?.closest?.('[data-rv-toggle="source"]');
     if (toggleBtn) {
@@ -27688,7 +27937,7 @@
             return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
           }).join("")}</tr>`).join("");
           const rowCount = bodyRows.length, colCount = head.length;
-          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          out.push(`<div class="md-table-card" data-table-card data-cols="${colCount}"><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
           continue;
         }
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }

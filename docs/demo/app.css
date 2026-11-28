@@ -78,6 +78,11 @@
   --note-soft: #f7f7f6;
   --danger: #b42318;
   --danger-soft: #fdf3f2;
+  --co-note: #475569;
+  --co-tip: #15803d;
+  --co-important: #6d28d9;
+  --co-warn: #b45309;
+  --co-caution: #b42318;
   --term-bg: #fbfbfa;
   --term-fg: #1b1b1b;
   --code-bg: #f5f5f7;
@@ -168,6 +173,11 @@
     --note-soft: #16161a;
     --danger: #e38c85;
     --danger-soft: #221617;
+    --co-note: #8f9fb3;
+    --co-tip: #58c285;
+    --co-important: #a78bfa;
+    --co-warn: #dfa057;
+    --co-caution: #e38c85;
     --term-bg: #131316;
     --term-fg: #e6e6e3;
     --code-bg: #18181b;
@@ -246,6 +256,11 @@
   --note-soft: #16161a;
   --danger: #e38c85;
   --danger-soft: #221617;
+  --co-note: #8f9fb3;
+  --co-tip: #58c285;
+  --co-important: #a78bfa;
+  --co-warn: #dfa057;
+  --co-caution: #e38c85;
   --term-bg: #131316;
   --term-fg: #e6e6e3;
   --code-bg: #18181b;
@@ -9095,69 +9110,127 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
 .md-task-box svg { width: 10px; height: 10px; stroke-width: 2.5; }
 .md-task-item.is-done .md-task-text { color: var(--fg-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
 
-/* P0-4b: 4-Tier Restrained Callouts */
+/* P0-4b: 5-Tier Frameless Restrained Callouts (2px left bar + monochrome linear SVG + subtle canvas blend) */
 .md-callout {
-  --co-bar: var(--note-bar);
-  --co-bg: var(--note-soft);
-  --co-fg: var(--fg-2);
-  margin: .35em 0 1em; padding: 10px 14px;
-  border-radius: 8px; border: 1px solid var(--line); border-left: 2.5px solid var(--co-bar);
-  background: var(--co-bg); contain: layout style paint;
+  --co-bar: var(--co-note);
+  --co-fg: var(--co-note);
+  margin: 10px 0 14px;
+  padding: 7px 12px 8px 13px;
+  border: 0;
+  border-left: 2px solid var(--co-bar);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--co-bar) 4%, transparent);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  contain: layout style paint;
 }
-.md-callout.is-tip { --co-bar: var(--ok); --co-bg: var(--ok-soft); --co-fg: var(--ok); }
-.md-callout.is-warn { --co-bar: var(--attn); --co-bg: var(--attn-soft); --co-fg: var(--attn); }
-.md-callout.is-caution { --co-bar: var(--danger); --co-bg: var(--danger-soft); --co-fg: var(--danger); }
+:root[data-theme="dark"] .md-callout {
+  background: color-mix(in srgb, var(--co-bar) 6%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .md-callout {
+    background: color-mix(in srgb, var(--co-bar) 6%, transparent);
+  }
+}
+.md-callout.is-tip { --co-bar: var(--co-tip); --co-fg: var(--co-tip); }
+.md-callout.is-important { --co-bar: var(--co-important); --co-fg: var(--co-important); }
+.md-callout.is-warn { --co-bar: var(--co-warn); --co-fg: var(--co-warn); }
+.md-callout.is-caution { --co-bar: var(--co-caution); --co-fg: var(--co-caution); }
 .md-callout-head {
   display: flex; align-items: center; gap: 6px;
-  font-size: 12.5px; font-weight: 600; color: var(--co-fg);
-  margin-bottom: 4px; letter-spacing: .01em;
+  font-size: 12.5px; font-weight: 600; line-height: 1.4; color: var(--co-fg);
+  margin-bottom: 4px; letter-spacing: .005em;
+  min-width: 0;
 }
-.md-callout-head svg.ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex: none; }
-.md-callout-body { font-size: 14px; line-height: 1.65; color: var(--fg); }
+.md-callout-head:last-child { margin-bottom: 0; }
+.md-callout-head > span { min-width: 0; overflow-wrap: break-word; }
+.md-callout-head svg.ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.md-callout-body { font-size: 14px; line-height: 1.65; color: var(--fg); min-width: 0; overflow-wrap: break-word; }
+.md-callout-body > :first-child { margin-top: 0; }
+.md-callout-body > :last-child { margin-bottom: 0; }
 .md-callout-body p { margin: 0 0 .45em; }
 .md-callout-body p:last-child { margin-bottom: 0; }
+.md-callout-body ul,
+.md-callout-body ol { margin: .35em 0 .5em; padding-left: 1.35em; }
+.md-callout-body ul.md-task-list { padding-left: 0; margin: .35em 0 .5em; }
+.md-callout-body code { overflow-wrap: anywhere; word-break: break-word; }
 
-/* P0-4c: Safe Whitelist <details>/<summary> Disclosure */
+/* P0-4c: Frameless Whitelist <details>/<summary> Disclosure (pure GPU transform: rotate() + hairline left guide) */
 details.md-fold {
-  margin: .35em 0 1em;
-  border: 1px solid var(--line); border-radius: 10px;
-  background: var(--bg-2); overflow: hidden; contain: layout style;
+  margin: 8px 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  min-width: 0;
+  max-width: 100%;
+  contain: layout style;
 }
-details.md-fold[open] { border-color: var(--line-2); }
 details.md-fold > summary {
-  list-style: none; display: flex; align-items: center; gap: 8px;
-  padding: 9px 12px; font-size: 13.5px; font-weight: 500; color: var(--fg);
-  cursor: pointer; user-select: none; transition: background .12s;
+  position: relative;
+  list-style: none;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 6px 3px 20px;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--fg-2);
+  cursor: pointer;
+  user-select: none;
+  overflow-wrap: break-word;
+  transition: color .14s ease;
 }
 details.md-fold > summary::-webkit-details-marker { display: none; }
-details.md-fold > summary:hover { background: var(--bg-3); }
-details.md-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+details.md-fold > summary:hover,
+details.md-fold[open] > summary { color: var(--fg); }
+details.md-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 5px; }
 details.md-fold > summary::before {
-  content: ""; inline-size: 14px; block-size: 14px; flex: none;
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6.5px;
+  inline-size: 13px;
+  block-size: 13px;
   background-color: var(--fg-3);
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
-  rotate: -90deg;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  transform: rotate(0deg);
+  transform-origin: center;
+  will-change: transform;
 }
-details.md-fold[open] > summary::before { rotate: 0deg; background-color: var(--fg-2); }
-details.md-fold::details-content {
-  interpolate-size: allow-keywords; overflow: clip; contain: layout;
-}
-details.md-fold:not([open])::details-content { block-size: 0; }
+details.md-fold > summary:hover::before,
+details.md-fold[open] > summary::before { background-color: var(--fg-2); }
+details.md-fold[open] > summary::before { transform: rotate(90deg); }
 @media (prefers-reduced-motion: no-preference) {
-  details.md-fold > summary::before { transition: rotate .18s ease, background-color .14s ease; }
-  details.md-fold::details-content {
-    transition: block-size .22s ease, content-visibility .22s ease allow-discrete, display .22s ease allow-discrete;
+  details.md-fold > summary::before {
+    transition: transform .16s var(--ease-out-expo), background-color .14s ease;
   }
 }
 .md-fold-body {
-  padding: 10px 14px 12px;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
-  font-size: 13.5px; line-height: 1.65; color: var(--fg-2);
+  margin: 4px 0 2px 6px;
+  padding: 4px 0 4px 14px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--fg-2);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 .md-fold-body > :first-child { margin-top: 0; }
 .md-fold-body > :last-child { margin-bottom: 0; }
+@media (max-width: 760px) {
+  .md-callout { margin: 8px 0 12px; padding: 7px 10px 8px 11px; }
+  details.md-fold { margin: 7px 0 11px; }
+  .md-fold-body { margin-left: 5.5px; padding-left: 12px; }
+}
 
 @media (hover: none) and (pointer: coarse) {
   .md-code:hover:not(.is-acts-open):not(:has(:focus-visible)):not(:has(.md-float-acts:focus-within)):not(:has(.mini-btn.is-done)) .md-float-acts,
@@ -9172,6 +9245,7 @@ details.md-fold:not([open])::details-content { block-size: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   .notepane, .notes-scrim, .file-scrim, .reply-receipt > summary::before,
+  details.md-fold > summary::before,
   .md-code-fold-btn svg.ico, .md-table-vp::before, .md-table-vp::after, .gal-cap,
   .md-float-acts, .md-code-tag { transition: none !important; }
 }
@@ -9367,7 +9441,7 @@ details.md-fold:not([open])::details-content { block-size: 0; }
   height: var(--rv-html-h, 240px);
   min-height: 64px;
   max-height: var(--rv-html-max, 460px);
-  background: var(--bg);
+  background: transparent;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -9376,7 +9450,7 @@ details.md-fold:not([open])::details-content { block-size: 0; }
 }
 .rv-html-frame {
   display: block; width: 100%; height: 100%; min-width: 0; max-width: 100%;
-  border: 0; background: var(--bg);
+  border: 0; background: transparent;
 }
 .rv-html-err {
   padding: 10px 12px; font-size: 12.5px; color: var(--fg-3);
@@ -9483,7 +9557,8 @@ details.md-fold:not([open])::details-content { block-size: 0; }
     pre, table, figure, img, svg,
     .code-block, .md-code, .md-table, .md-table-card, .md-math-block,
     .rv-card, .thumbs, .md-img-btn, .snap-card, .artifact-chips,
-    .decision-wrap, .reply-opts, .reply-receipt, .msg-foot, .re, .pin-ind
+    .decision-wrap, .reply-opts, .reply-receipt, .msg-foot, .re, .pin-ind,
+    .md-callout, details.md-fold
   ) {
     animation-name: cm-crisp-in;
   }

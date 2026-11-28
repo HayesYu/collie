@@ -933,3 +933,47 @@ async function testSseNoFlicker() {
 		t.Fatalf("unexpected test output:\n%s", string(out))
 	}
 }
+
+func TestRouterDocIncludesRichReplyGuidance(t *testing.T) {
+	t.Parallel()
+	sp, _, _ := newPendingTestEnv(t)
+	sp.bin = "collie"
+	if err := sp.writeRouterFiles(); err != nil {
+		t.Fatalf("writeRouterFiles: %v", err)
+	}
+	routerBytes, err := os.ReadFile(filepath.Join(sp.routerDir(), "ROUTER.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerStr := string(routerBytes)
+	start := strings.Index(routerStr, "## Talking to the human")
+	end := strings.Index(routerStr, "## Memory")
+	if start < 0 || end <= start {
+		t.Fatalf("ROUTER.md missing expected section boundaries:\n%s", routerStr)
+	}
+	talkingSection := routerStr[start:end]
+	for _, want := range []string{
+		"Markdown tables",
+		"Mermaid diagrams (`mermaid`)",
+		"inline SVG (`svg`)",
+		"lightweight HTML blocks (`html-card`)",
+		"KaTeX math",
+		"fenced code blocks",
+		"`--file`",
+		"plain text",
+		"heavy visualizations or long HTML",
+	} {
+		if !strings.Contains(talkingSection, want) {
+			t.Fatalf("ROUTER.md Talking to the human section missing %q:\n%s", want, talkingSection)
+		}
+	}
+	for _, mirror := range []string{"AGENTS.md", "GEMINI.md", "CLAUDE.md"} {
+		b, err := os.ReadFile(filepath.Join(sp.routerDir(), mirror))
+		if err != nil {
+			t.Fatalf("read %s: %v", mirror, err)
+		}
+		if string(b) != routerStr {
+			t.Fatalf("%s diverged from ROUTER.md", mirror)
+		}
+	}
+}

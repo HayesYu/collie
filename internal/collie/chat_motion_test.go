@@ -276,7 +276,12 @@ class DomNode {
   focus() { doc.activeElement = this; }
   blur() { if (doc.activeElement === this) doc.activeElement = null; }
   scrollTo(opts) { if (opts && typeof opts.top === "number") this.scrollTop = opts.top; }
-  getBoundingClientRect() { return { top: 0, bottom: 40, left: 0, right: 800, width: 800, height: 40 }; }
+  getBoundingClientRect() {
+    if (this.dataset?.id === "e306" || this.id === "unread-sep") {
+      return { top: 2000 - scroller.scrollTop, bottom: 2040 - scroller.scrollTop, left: 0, right: 800, width: 800, height: 40 };
+    }
+    return { top: 0, bottom: 40, left: 0, right: 800, width: 800, height: 40 };
+  }
   matches(sel) { return String(sel).split(",").some((p) => matchSimple(this, p.trim())); }
   closest(sel) {
     let cur = this;
@@ -454,6 +459,7 @@ const doc = {
   activeElement: null,
   hasFocus: () => !mockDocHidden,
   createElement: (tag) => new DomNode(tag),
+  createTextNode: (t) => new TextNode(t),
   createDocumentFragment: () => new DomNode("#fragment"),
   getElementById: (id) => getEl("#" + id),
   querySelector: (sel) => {
@@ -669,14 +675,17 @@ const mkEntry = (n, role, text, extra = {}) => ({
   M.renderSuper();
   assert.equal(superThread._colliePatchStats.lastAnimated, 0, "scrolled-up unread arrival MUST have 0 enter animation");
   assert.equal(scroller.scrollTop, 400, "scrolled-up unread arrival MUST keep 0px scroll drift");
-  assert.equal(jumpBadge.textContent, "1", "jump badge updates to 1");
+  assert.equal(jumpBadge.textContent, "1 未读", "jump badge updates to Stage 1 unread label");
   assert.ok(jumpBtn.classList.contains("nudge-a") || jumpBtn.classList.contains("nudge-b"), "jump button must nudge on unread increment");
   const e307 = mkEntry(307, "collie", "上翻态到达的新未读 2");
   M.setSup({ router: { status: "idle", alive: true }, entries: [...batchEntries, e304, e305, e306, e307], workers: [{ name: "w-lint", kind: "claude", status: "working" }], pending: [{ id: "e4", options: e4.options }], pinned: [], earlier: true });
   M.renderSuper();
-  assert.equal(jumpBadge.textContent, "2", "odometer roll keeps exact textContent=2 even mid-animation");
-  assert.equal(jumpBadge.getAttribute("data-prev"), "1", "odometer roll stores previous count in data-prev");
-  assert.ok(jumpBadge.querySelector(".num-cur"), "odometer roll wraps current number in .num-cur");
+  const sjNum = jumpBadge.querySelector(".sj-n");
+  assert.equal(jumpBadge.textContent, "2 未读", "Stage 1 jump badge updates to 2 未读");
+  assert.ok(sjNum, "Stage 1 badge wraps numeric slot in .sj-n");
+  assert.equal(sjNum.textContent, "2", "odometer roll keeps exact numeric textContent=2 even mid-animation");
+  assert.equal(sjNum.getAttribute("data-prev"), "1", "odometer roll stores previous count in data-prev");
+  assert.ok(sjNum.querySelector(".num-cur"), "odometer roll wraps current number in .num-cur");
 
   // 10) #super-jump Firefox fallback ([data-closing] + getAnimations)
   let resolveJumpAnim;

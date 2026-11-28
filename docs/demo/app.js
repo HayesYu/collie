@@ -24515,7 +24515,7 @@
     let tail = "";
     const count = (x, ch) => x.split(ch).length - 1;
     while (u.length) {
-      if (/[.,;:!?']$/.test(u) ||
+      if (/[.,;:!?'*~]$/.test(u) ||
           (u.endsWith(")") && count(u, "(") < count(u, ")")) ||
           (u.endsWith("]") && count(u, "[") < count(u, "]"))) {
         tail = u.slice(-1) + tail;

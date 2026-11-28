@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -449,8 +450,6 @@ func TestDreamPromptEnvironmentHygieneContractAndNoInternalTerms(t *testing.T) {
 		strings.Join([]string{"byted", "cli"}, ""),
 		strings.Join([]string{"code.", "byted", ".org"}, ""),
 		strings.Join([]string{"byted", "ance"}, ""),
-		strings.Join([]string{"10.37.", "125.77"}, ""),
-		strings.Join([]string{"n37-", "125-077"}, ""),
 		strings.Join([]string{"dor", "ado"}, ""),
 		strings.Join([]string{"arn", "old"}, ""),
 		strings.Join([]string{"byte", "faas"}, ""),
@@ -461,6 +460,14 @@ func TestDreamPromptEnvironmentHygieneContractAndNoInternalTerms(t *testing.T) {
 	for _, bad := range forbidden {
 		if strings.Contains(low, strings.ToLower(bad)) {
 			t.Errorf("dreamPrompt must not contain %q", bad)
+		}
+	}
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`),
+		regexp.MustCompile(`\bn\d+-\d+-\d+\b`),
+	} {
+		if m := re.FindString(low); m != "" {
+			t.Errorf("dreamPrompt must not contain private IP/host pattern %q", m)
 		}
 	}
 }

@@ -46,6 +46,17 @@ assert.ok(
   "#super-thread direct rows must NEVER use content-visibility: auto",
 );
 assert.ok(
+  !/\.app\s*\{[^}]*transition[^;]*height/.test(cssNoComments),
+  ".app must NEVER animate height via CSS transition (would trigger per-frame reflow)",
+);
+assert.ok(
+  cssNoComments.includes(".super-search[hidden]")
+    && cssNoComments.includes("transition-behavior: allow-discrete")
+    && cssNoComments.includes(".super-search:where([hidden], [data-closing])")
+    && /@starting-style\s*\{[\s\S]*?\.ss-card\s*\{/.test(cssNoComments),
+  ".super-search must use compositor @starting-style + allow-discrete + [data-closing] entry/exit motion",
+);
+assert.ok(
   appSrc.includes('window.visualViewport?.addEventListener("resize", scheduleSetVH);')
     && appSrc.includes('window.visualViewport?.addEventListener("scroll", scheduleSetVH);')
     && appSrc.includes('addEventListener("resize", scheduleSetVH);'),
@@ -115,6 +126,7 @@ class DomNode {
       },
       opacity: "",
       transform: "",
+      transition: "",
       top: "",
       overflow: "",
       setProperty(k, v) {
@@ -203,6 +215,7 @@ class DomNode {
     this._attrs.set(k, v);
   }
   getAttribute(k) { return this._attrs.has(k) ? this._attrs.get(k) : null; }
+  hasAttribute(k) { return this._attrs.has(k); }
   removeAttribute(k) {
     if (k === "class") this._classes.clear();
     if (k === "hidden") this.hidden = false;
@@ -420,8 +433,27 @@ for (const id of [
   "wd-composer", "wd-input", "wd-send", "wd-thread", "wd-log",
   "composer", "input", "x-composer", "x-input",
   "v-auto", "v-devices", "v-prefs", "v-ext", "v-file", "detail", "viewer", "screen", "log", "thread",
-  "jump", "gone", "live", "super-search", "lightbox", "toasts", "sheet",
+  "jump", "gone", "live", "super-search", "super-search-btn", "super-search-card", "super-search-input",
+  "super-search-clear", "super-search-close", "super-search-meta", "super-search-panel",
+  "super-search-head", "super-search-list", "super-search-hint", "lightbox", "toasts", "sheet",
 ]) getEl("#" + id);
+
+// Wire #super-search > #super-search-card > input / panel / list / close
+{
+  const ssWrap = getEl("#super-search");
+  const ssCard = getEl("#super-search-card");
+  ssWrap.appendChild(ssCard);
+  ssCard.appendChild(getEl("#super-search-input"));
+  ssCard.appendChild(getEl("#super-search-meta"));
+  ssCard.appendChild(getEl("#super-search-clear"));
+  ssCard.appendChild(getEl("#super-search-close"));
+  const ssPanel = getEl("#super-search-panel");
+  ssPanel.hidden = true;
+  ssPanel.appendChild(getEl("#super-search-head"));
+  ssPanel.appendChild(getEl("#super-search-list"));
+  ssCard.appendChild(ssPanel);
+  ssCard.appendChild(getEl("#super-search-hint"));
+}
 
 for (const [formSel, inputSel, sendSel] of [
   ["#super-composer", "#super-input", ""],
@@ -479,6 +511,7 @@ const doc = {
   querySelectorAll: (sel) => bodyEl.querySelectorAll(sel),
   addEventListener: (t, fn) => { (docListeners.get(t) || docListeners.set(t, []).get(t)).push(fn); },
   removeEventListener: () => {},
+  dispatch: (t, ev = {}) => { for (const fn of [...(docListeners.get(t) || [])]) fn({ type: t, ...ev }); },
 };
 
 let liveES = null;
@@ -491,6 +524,7 @@ class FakeEventSource {
 
 const vvListeners = new Map();
 const fakeVV = {
+  width: 390,
   height: 844,
   offsetTop: 0,
   addEventListener: (t, fn) => { (vvListeners.get(t) || vvListeners.set(t, []).get(t)).push(fn); },
@@ -508,6 +542,8 @@ const flushRAF = () => {
 const fetchCalls = [];
 let modelsCalls = 0;
 let saySeq = 1;
+let mockReducedMotion = false;
+let mockNarrow = true;
 const ctx = vm.createContext({
   console, setTimeout, clearTimeout,
   setInterval: () => 0, clearInterval: () => {},
@@ -534,7 +570,14 @@ const ctx = vm.createContext({
   innerHeight: 844,
   visualViewport: fakeVV,
   document: doc,
-  matchMedia: (q) => ({ matches: /max-width:\s*760px|pointer:\s*coarse|hover:\s*none/.test(q), addEventListener() {} }),
+  matchMedia: (q) => ({
+    matches: /prefers-reduced-motion:\s*reduce/.test(q)
+      ? mockReducedMotion
+      : /max-width:\s*760px|pointer:\s*coarse|hover:\s*none/.test(q)
+        ? mockNarrow
+        : false,
+    addEventListener() {},
+  }),
   addEventListener: (t, fn) => { (winListeners.get(t) || winListeners.set(t, []).get(t)).push(fn); },
   removeEventListener: () => {},
   dispatchEvent: (ev) => { for (const fn of (winListeners.get(ev.type) || [])) fn(ev); },
@@ -706,6 +749,208 @@ const mkEntry = (n, role, text) => ({
   assert.equal(rootEl.style.getPropertyValue("--vh"), "844px", ":root --vh syncs cleanly to 844px after settle");
   assert.equal(superThread._colliePatchStats.renders, rendersBeforeDismiss + 1, "deferred SSE flushes once after keyboard settles");
   assert.ok(superThread.querySelector('.msg[data-id="e201"]'), "deferred SSE message e201 rendered after settle");
+  assert.equal(superForm.style.transform, "", "20-frame progressive dismiss leaves 0 residual transform on #super-composer");
+  assert.equal(superForm.style.transition, "", "20-frame progressive dismiss leaves 0 residual transition on #super-composer");
+
+  // ─── Test C: Bidirectional Pure GPU FLIP Keyboard Open & Dismiss Animation (0 forced reflows) ───
+  const KB_CURVE = "transform 240ms cubic-bezier(0.32, 0.72, 0, 1)";
+
+  // C1: Discrete keyboard OPEN (844 -> 508, delta=-336) while bottom-pinned
+  scroller.scrollHeight = 12000;
+  scroller.clientHeight = 700;
+  scroller.scrollTop = 11300;
+  forcedReflows = [];
+  layoutDirty = false;
+  fakeVV.height = 508;
+  fakeVV.offsetTop = 0;
+  fakeVV.dispatch("resize");
+  flushRAF(); // Frame 1: #app height=508, composer +336px, thread waits for applyPin
+  assert.equal(forcedReflows.length, 0, "discrete keyboard open Frame 1 must perform 0 forced reflows; got " + JSON.stringify(forcedReflows));
+  assert.equal(appEl.style.height, "508px");
+  assert.equal(appEl.classList.contains("kb-flip-open"), true, "keyboard open relaxes clip via .kb-flip-open during lift");
+  assert.equal(superForm.style.transition, "none");
+  assert.equal(superForm.style.transform, "translate3d(0, 336px, 0)", "composer starts +336px down for GPU lift");
+  assert.equal(superThread.style.transform, "", "thread waits for Frame 2 applyPin so 0 blank gap occurs");
+
+  scroller.clientHeight = 364;
+  flushRAF(); // Frame 2: applyPin updates scrollTop -> thread gets +336px in lockstep
+  assert.equal(forcedReflows.length, 0, "discrete keyboard open Frame 2 must perform 0 forced reflows; got " + JSON.stringify(forcedReflows));
+  assert.equal(scroller.scrollTop, 12000);
+  assert.equal(superThread.style.transition, "none");
+  assert.equal(superThread.style.transform, "translate3d(0, 336px, 0)", "bottom-pinned thread lifts in lockstep with composer");
+
+  flushRAF(); // Frame 3: GPU transition starts on both composer and thread
+  assert.equal(superForm.style.transition, KB_CURVE);
+  assert.equal(superForm.style.transform, "translate3d(0, 0, 0)");
+  assert.equal(superThread.style.transition, KB_CURVE);
+  assert.equal(superThread.style.transform, "translate3d(0, 0, 0)");
+
+  superForm.dispatch("transitionend", { propertyName: "transform" });
+  assert.equal(superForm.style.transform, "", "open FLIP clears composer transform on transitionend");
+  assert.equal(superForm.style.transition, "", "open FLIP clears composer transition on transitionend");
+  assert.equal(superThread.style.transform, "", "open FLIP clears thread transform on transitionend");
+  assert.equal(superThread.style.transition, "", "open FLIP clears thread transition on transitionend");
+  assert.equal(appEl.classList.contains("kb-flip-open"), false, "open FLIP removes .kb-flip-open on end");
+
+  // Wait past vvSettleTimer so next discrete jump is not treated as rapid multi-frame burst
+  await wait(160);
+  flushRAF();
+
+  // C2: Discrete keyboard DISMISS (508 -> 844, delta=+336) while bottom-pinned
+  scroller.scrollHeight = 12000;
+  scroller.clientHeight = 364;
+  scroller.scrollTop = 11636;
+  forcedReflows = [];
+  layoutDirty = false;
+  fakeVV.height = 844;
+  fakeVV.offsetTop = 28;
+  fakeVV.dispatch("resize");
+  flushRAF(); // Frame 1: #app height=844, composer & thread jump to -336px
+  assert.equal(forcedReflows.length, 0, "discrete keyboard dismiss Frame 1 must perform 0 forced reflows; got " + JSON.stringify(forcedReflows));
+  assert.equal(appEl.style.height, "844px");
+  assert.equal(superForm.style.transition, "none");
+  assert.equal(superForm.style.transform, "translate3d(0, -336px, 0)", "composer starts -336px up for GPU slide-down");
+  assert.equal(superThread.style.transition, "none");
+  assert.equal(superThread.style.transform, "translate3d(0, -336px, 0)", "bottom-pinned thread starts -336px up in lockstep");
+
+  flushRAF(); // Frame 2: GPU transition starts
+  assert.equal(superForm.style.transition, KB_CURVE);
+  assert.equal(superForm.style.transform, "translate3d(0, 0, 0)");
+  assert.equal(superThread.style.transition, KB_CURVE);
+  assert.equal(superThread.style.transform, "translate3d(0, 0, 0)");
+
+  // Follow-up iOS visualViewport.scroll (offsetTop 28 -> 0, height unchanged) must NOT cancel the dismiss glide!
+  fakeVV.offsetTop = 0;
+  fakeVV.dispatch("scroll");
+  flushRAF();
+  assert.equal(superForm.style.transition, KB_CURVE, "offsetTop-only scroll settle must not abort active dismiss FLIP");
+
+  // Re-focusing an input mid-dismiss immediately cancels inline transform/transition with 0 residue!
+  doc.dispatch("focusin", { target: superInput });
+  assert.equal(superForm.style.transform, "", "focusin mid-dismiss clears composer transform immediately");
+  assert.equal(superForm.style.transition, "", "focusin mid-dismiss clears composer transition immediately");
+  assert.equal(superThread.style.transform, "", "focusin mid-dismiss clears thread transform immediately");
+
+  // C3: Dismiss when scrolled UP in history (scrollTop=5000) moves composer ONLY (0 bogus thread jump) + clamps >360px
+  await wait(160);
+  fakeVV.height = 400;
+  fakeVV.dispatch("resize");
+  flushRAF();
+  flushRAF();
+  superForm.dispatch("transitionend", { propertyName: "transform" });
+  await wait(160);
+
+  scroller.clientHeight = 256;
+  scroller.scrollTop = 5000; // far from bottom -> native clamping won't shift thread
+  fakeVV.height = 844; // +444px -> clamped to 360px!
+  fakeVV.dispatch("resize");
+  flushRAF();
+  assert.equal(superForm.style.transform, "translate3d(0, -360px, 0)", "large jump clamped to max 360px");
+  assert.equal(superThread.style.transform, "", "scrolled-up thread must NOT translate during dismiss");
+  flushRAF();
+  superForm.dispatch("transitionend", { propertyName: "transform" });
+  assert.equal(superForm.style.transform, "");
+
+  // C4: Orientation width change, prefers-reduced-motion, and desktop wide viewport must NOT trigger FLIP
+  await wait(160);
+  fakeVV.width = 844;
+  ctx.innerWidth = 844;
+  fakeVV.height = 390; // rotation: width changed 390 -> 844
+  fakeVV.dispatch("resize");
+  flushRAF();
+  assert.equal(superForm.style.transform, "", "orientation width change must NOT trigger keyboard FLIP");
+
+  // Restore portrait 390x844
+  await wait(160);
+  fakeVV.width = 390;
+  ctx.innerWidth = 390;
+  fakeVV.height = 844;
+  fakeVV.dispatch("resize");
+  flushRAF();
+  assert.equal(superForm.style.transform, "");
+
+  // prefers-reduced-motion: reduce -> 0 FLIP
+  await wait(160);
+  mockReducedMotion = true;
+  fakeVV.height = 508;
+  fakeVV.dispatch("resize");
+  flushRAF();
+  assert.equal(superForm.style.transform, "", "prefers-reduced-motion: reduce must disable keyboard FLIP");
+  flushRAF();
+  mockReducedMotion = false;
+
+  // Desktop (>760px) -> 0 FLIP
+  await wait(160);
+  mockNarrow = false;
+  fakeVV.height = 844;
+  fakeVV.dispatch("resize");
+  flushRAF();
+  assert.equal(superForm.style.transform, "", "desktop viewport (>760px) must disable mobile keyboard FLIP");
+  mockNarrow = true;
+
+  // ─── Test D: Search Bar (#super-search) Open/Close Micro-Motion + Keyboard Open Integration ───
+  await wait(160);
+  const ssBtn = getEl("#super-search-btn");
+  const ssWrap = getEl("#super-search");
+  const ssCard = getEl("#super-search-card");
+  const ssInput = getEl("#super-search-input");
+  const ssClose = getEl("#super-search-close");
+
+  // Open search via top-bar button -> opens overlay, focuses input, and keyboard open FLIPs composer smoothly
+  ssBtn.dispatch("click");
+  assert.equal(ssWrap.hidden, false, "clicking #super-search-btn opens search overlay");
+  assert.equal(ssBtn.getAttribute("aria-expanded"), "true");
+  assert.equal(doc.activeElement, ssInput, "opening search focuses #super-search-input");
+
+  forcedReflows = [];
+  layoutDirty = false;
+  scroller.clientHeight = 700;
+  scroller.scrollTop = 5000; // scrolled up -> composer lifts on Frame 2 directly
+  fakeVV.height = 508;
+  fakeVV.dispatch("resize");
+  flushRAF();
+  assert.equal(forcedReflows.length, 0, "search-triggered keyboard open must perform 0 forced reflows");
+  assert.equal(superForm.style.transform, "translate3d(0, 336px, 0)", "search-triggered keyboard open FLIPs composer upward");
+  flushRAF();
+  assert.equal(superForm.style.transition, KB_CURVE);
+  assert.equal(superForm.style.transform, "translate3d(0, 0, 0)");
+  superForm.dispatch("transitionend", { propertyName: "transform" });
+  assert.equal(superForm.style.transform, "");
+
+  // Close search with Firefox-style [data-closing] exit fallback (when getAnimations exists & allow-discrete probe is false)
+  let resolveExitAnim;
+  const exitDonePromise = new Promise((r) => { resolveExitAnim = r; });
+  ssWrap.getAnimations = () => [{ finished: exitDonePromise }];
+  ssCard.getAnimations = () => [];
+  ssClose.dispatch("click");
+  assert.equal(ssWrap.getAttribute("data-closing"), "", "closing search sets data-closing while exit transition plays");
+  assert.equal(ssWrap.hidden, false, "search remains mounted until exit animation completes in fallback mode");
+  assert.equal(ssBtn.getAttribute("aria-expanded"), "false");
+
+  // Re-opening mid-close cancels exit cleanly
+  ssBtn.dispatch("click");
+  assert.equal(ssWrap.getAttribute("data-closing"), null, "re-opening mid-exit cancels data-closing");
+  assert.equal(ssWrap.hidden, false);
+
+  // Close again and let exit animation finish -> hidden becomes true and data-closing clears
+  let resolveExitAnim2;
+  const exitDonePromise2 = new Promise((r) => { resolveExitAnim2 = r; });
+  ssWrap.getAnimations = () => [{ finished: exitDonePromise2 }];
+  ssClose.dispatch("click");
+  assert.equal(ssWrap.getAttribute("data-closing"), "");
+  resolveExitAnim2();
+  await wait(20);
+  assert.equal(ssWrap.getAttribute("data-closing"), null, "data-closing cleared after exit transition completes");
+  assert.equal(ssWrap.hidden, true, "search hidden after exit transition completes");
+
+  // Reduced motion closes immediately with zero data-closing delay
+  mockReducedMotion = true;
+  ssBtn.dispatch("click");
+  assert.equal(ssWrap.hidden, false);
+  ssClose.dispatch("click");
+  assert.equal(ssWrap.hidden, true, "reduced motion closes search immediately");
+  assert.equal(ssWrap.getAttribute("data-closing"), null);
+  mockReducedMotion = false;
 
   console.log("OK: all mobile send jank & keyboard focus tests passed");
   process.exit(0);

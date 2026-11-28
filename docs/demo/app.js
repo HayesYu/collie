@@ -5328,9 +5328,15 @@
         if (err?.name === "AbortError" || seq !== searchSeq) return;
       }
     };
+    let searchCloseTimer = 0;
+    const cancelPendingSearchClose = () => {
+      if (searchCloseTimer) { clearTimeout(searchCloseTimer); searchCloseTimer = 0; }
+      wrap?.removeAttribute?.("data-closing");
+    };
     const openSuperSearch = (selectExisting = false) => {
       if (!wrap || !input || !btn) return;
-      const wasHidden = wrap.hidden;
+      const wasHidden = !superSearchOpen || wrap.hidden || wrap.hasAttribute?.("data-closing");
+      cancelPendingSearchClose();
       closeCollieThreadsPop({ sync: false });
       closeCollieMenus();
       superSearchOpen = true;
@@ -5345,6 +5351,8 @@
       if (q) {
         if (q === searchQuery && (searchHits.length || !panel.hidden)) showSearchPanel();
         else runSuperSearch(q);
+      } else {
+        window.__collieHideSearchPanel();
       }
     };
     const closeSuperSearch = (refocus = false) => {
@@ -5352,16 +5360,77 @@
       clearTimeout(searchTimer);
       searchAbort?.abort();
       searchSeq++;
-      window.__collieHideSearchPanel();
+      if (searchCloseTimer) { clearTimeout(searchCloseTimer); searchCloseTimer = 0; }
+      const alreadyHidden = wrap.hidden && !wrap.hasAttribute?.("data-closing");
       superSearchOpen = false;
-      wrap.hidden = true;
       btn.classList.remove("on");
       btn.setAttribute("aria-expanded", "false");
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
       syncNotebookVisibility();
       if (refocus && view === "collie") {
         if (!narrow()) $("#super-input")?.focus({ preventScroll: true });
         else btn.focus({ preventScroll: true });
+      } else if (narrow() && document.activeElement === input) {
+        input.blur();
       }
+      if (alreadyHidden) {
+        window.__collieHideSearchPanel();
+        return;
+      }
+      const noMotion = prefersReducedMotion() || document.hidden || typeof wrap.getAnimations !== "function";
+      if (noMotion) {
+        wrap.removeAttribute?.("data-closing");
+        wrap.hidden = true;
+        window.__collieHideSearchPanel();
+        return;
+      }
+      const collectAnims = () => [
+        ...(wrap.getAnimations?.() || []),
+        ...(card?.getAnimations?.() || []),
+      ];
+      if (canTransitionDisplay()) {
+        wrap.removeAttribute?.("data-closing");
+        wrap.hidden = true;
+        if (panel && !panel.hidden) {
+          const anims = collectAnims();
+          if (!anims.length) {
+            window.__collieHideSearchPanel();
+          } else {
+            let done = false;
+            const finishPanel = () => {
+              if (done) return;
+              done = true;
+              if (searchCloseTimer) { clearTimeout(searchCloseTimer); searchCloseTimer = 0; }
+              if (!superSearchOpen && wrap.hidden) window.__collieHideSearchPanel();
+            };
+            searchCloseTimer = setTimeout(finishPanel, 240);
+            Promise.allSettled(anims.map((a) => a.finished)).then(finishPanel);
+          }
+        }
+        return;
+      }
+      wrap.setAttribute("data-closing", "");
+      const anims = collectAnims();
+      if (!anims.length) {
+        wrap.removeAttribute("data-closing");
+        wrap.hidden = true;
+        window.__collieHideSearchPanel();
+        return;
+      }
+      let done = false;
+      const finishClose = () => {
+        if (done) return;
+        done = true;
+        if (searchCloseTimer) { clearTimeout(searchCloseTimer); searchCloseTimer = 0; }
+        if (wrap.hasAttribute?.("data-closing")) {
+          wrap.removeAttribute?.("data-closing");
+          wrap.hidden = true;
+          window.__collieHideSearchPanel();
+        }
+      };
+      searchCloseTimer = setTimeout(finishClose, 240);
+      Promise.allSettled(anims.map((a) => a.finished)).then(finishClose);
     };
     closeSuperSearchFn = closeSuperSearch;
     const selectSearchHit = (id) => {
@@ -5372,7 +5441,7 @@
     };
     btn?.addEventListener("click", (e) => {
       e.preventDefault();
-      if (wrap.hidden) openSuperSearch(false);
+      if (!superSearchOpen || wrap.hidden || wrap.hasAttribute?.("data-closing")) openSuperSearch(false);
       else closeSuperSearch(true);
     });
     clearBtn?.addEventListener("click", () => {
@@ -5448,7 +5517,7 @@
       }
     });
     document.addEventListener("mousedown", (e) => {
-      if (!wrap || wrap.hidden) return;
+      if (!superSearchOpen || !wrap || wrap.hidden || wrap.hasAttribute?.("data-closing")) return;
       if ((card && card.contains(e.target)) || btn?.contains(e.target)) return;
       closeSuperSearch(false);
     });
@@ -5459,7 +5528,7 @@
         openSuperSearch(true);
         return;
       }
-      if (e.key === "Escape" && wrap && !wrap.hidden && !e.isComposing && e.keyCode !== 229) {
+      if (e.key === "Escape" && superSearchOpen && wrap && !wrap.hidden && !wrap.hasAttribute?.("data-closing") && !e.isComposing && e.keyCode !== 229) {
         if (pickOpen || pendingOpen) return;
         e.preventDefault();
         closeSuperSearch(true);
@@ -27611,8 +27680,153 @@
   // Coalesce resize/scroll into one rAF, write non-inheriting height/--vtop on #app
   // (deferring :root --vh until keyboard settle), and keep strict read-before-write
   // so keyboard animations never trigger full-tree recalcs or forced reflows.
-  let lastVH = "", lastVHNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
+  // When mobile Safari reports a single discrete jump (>=100px, open or dismiss),
+  // run a compositor-only GPU FLIP (translate3d) without ever transitioning height.
+  const KB_FLIP_MIN_DELTA = 100;
+  const KB_FLIP_MAX_DELTA = 360;
+  const KB_FLIP_MS = 240;
+  const KB_FLIP_TRANSITION = `transform ${KB_FLIP_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`;
+  let lastVH = "", lastVHNum = 0, lastVWNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
   let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
+  let kbFlipRAF = 0, kbFlipTimer = 0, kbFlipEls = [], kbFlipPrimary = null, kbFlipOnEnd = null;
+  let kbFlipDir = 0, kbFlipFocusedEl = null, kbFlipPendingContent = null;
+  function clearKbFlip() {
+    if (kbFlipRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(kbFlipRAF);
+    }
+    kbFlipRAF = 0;
+    if (kbFlipTimer) {
+      clearTimeout(kbFlipTimer);
+      kbFlipTimer = 0;
+    }
+    if (kbFlipPrimary && kbFlipOnEnd) {
+      kbFlipPrimary.removeEventListener?.("transitionend", kbFlipOnEnd);
+      kbFlipPrimary.removeEventListener?.("transitioncancel", kbFlipOnEnd);
+    }
+    kbFlipPrimary = null;
+    kbFlipOnEnd = null;
+    kbFlipPendingContent = null;
+    kbFlipDir = 0;
+    kbFlipFocusedEl = null;
+    for (const el of kbFlipEls) {
+      if (!el?.style) continue;
+      el.style.transition = "";
+      el.style.transform = "";
+    }
+    kbFlipEls = [];
+    $("#app")?.classList?.remove("kb-flip-open");
+  }
+  function startKbFlipTransition() {
+    kbFlipRAF = 0;
+    if (!kbFlipEls.length) {
+      clearKbFlip();
+      return;
+    }
+    for (const el of kbFlipEls) {
+      if (!el?.style || !el.isConnected) continue;
+      el.style.transition = KB_FLIP_TRANSITION;
+      el.style.transform = "translate3d(0, 0, 0)";
+    }
+    kbFlipPrimary = kbFlipEls.find((e) => e?.isConnected) || null;
+    if (kbFlipPrimary) {
+      kbFlipOnEnd = (ev) => {
+        if (ev && ev.target !== kbFlipPrimary) return;
+        if (ev && ev.propertyName && ev.propertyName !== "transform") return;
+        clearKbFlip();
+      };
+      kbFlipPrimary.addEventListener?.("transitionend", kbFlipOnEnd);
+      kbFlipPrimary.addEventListener?.("transitioncancel", kbFlipOnEnd);
+    }
+    if (kbFlipTimer) clearTimeout(kbFlipTimer);
+    kbFlipTimer = setTimeout(clearKbFlip, KB_FLIP_MS + 70);
+  }
+  function readKbFlipPlan(deltaH, pinInfo) {
+    const deltaPx = Math.min(Math.abs(deltaH), KB_FLIP_MAX_DELTA);
+    const dir = deltaH > 0 ? 1 : -1;
+    const bars = [];
+    let scroller = null;
+    let contentEls = [];
+    const pushVis = (arr, el) => {
+      if (el && el.style && !el.hidden && el.offsetParent) arr.push(el);
+    };
+    if (activeThreadRoot) {
+      pushVis(bars, $("#td-composer"));
+      scroller = $("#td-body");
+      contentEls = [$("#td-list")].filter((e) => e?.style && !e.hidden);
+    } else if (activeWorkerKey) {
+      const wdComp = $("#wd-composer");
+      if (wdComp && !wdComp.hidden) pushVis(bars, wdComp);
+      else pushVis(bars, $("#wd-peek-foot"));
+    } else if (view === "collie") {
+      pushVis(bars, $("#super-composer"));
+      scroller = $("#super-thread")?.parentElement || null;
+      contentEls = [$("#super-thread"), $("#super-working")].filter((e) => e?.style && !e.hidden);
+    } else if (view === "ext") {
+      pushVis(bars, $("#x-composer"));
+      pushVis(bars, $("#v-ext")?.querySelector?.(".ext-bar"));
+      scroller = $("#x-thread")?.parentElement || null;
+      contentEls = [$("#x-thread"), $("#x-working")].filter((e) => e?.style && !e.hidden);
+    } else if (view === "pane") {
+      pushVis(bars, $("#composer"));
+      const keysEl = $("#keys");
+      if (keysEl && curMode() === "screen") pushVis(bars, keysEl);
+    }
+    let contentShiftPx = 0;
+    if (scroller && scroller.offsetParent && contentEls.length) {
+      if (dir > 0) {
+        // Keyboard dismiss (viewport grew): compute exact scrollTop clamp delta without mutating scrollTop.
+        const oldSH = scroller.scrollHeight;
+        const oldCH = scroller.clientHeight;
+        const oldST = scroller.scrollTop;
+        const newMaxST = Math.max(0, oldSH - (oldCH + deltaH));
+        const clampedST = Math.min(oldST, newMaxST);
+        contentShiftPx = Math.min(Math.max(0, oldST - clampedST), deltaPx);
+      } else if (pinInfo.has(scroller)) {
+        // Keyboard open (viewport shrank) & bottom-pinned: applyPin will push scrollTop up.
+        const { sh: oldSH, ch: oldCH, st: oldST } = pinInfo.get(scroller);
+        const newCH = Math.max(0, oldCH - Math.abs(deltaH));
+        const newMaxST = Math.max(0, oldSH - newCH);
+        contentShiftPx = Math.min(Math.max(0, newMaxST - oldST), deltaPx);
+      }
+    }
+    if (contentShiftPx < 2) {
+      contentEls = [];
+      contentShiftPx = 0;
+    }
+    if (!bars.length && !contentEls.length) return null;
+    return { dir, deltaPx, bars, contentEls, contentShiftPx };
+  }
+  function beginKbFlip(plan) {
+    clearKbFlip();
+    if (!plan) return;
+    const { dir, deltaPx, bars, contentEls, contentShiftPx } = plan;
+    kbFlipDir = dir;
+    kbFlipFocusedEl = document.activeElement || null;
+    const startY = dir > 0 ? -deltaPx : deltaPx;
+    if (dir < 0) $("#app")?.classList?.add("kb-flip-open");
+    for (const el of bars) {
+      el.style.transition = "none";
+      el.style.transform = `translate3d(0, ${startY}px, 0)`;
+      kbFlipEls.push(el);
+    }
+    if (dir > 0) {
+      for (const el of contentEls) {
+        el.style.transition = "none";
+        el.style.transform = `translate3d(0, ${-contentShiftPx}px, 0)`;
+        kbFlipEls.push(el);
+      }
+    } else if (contentEls.length && contentShiftPx >= 2) {
+      kbFlipPendingContent = { els: contentEls, shiftPx: contentShiftPx };
+    }
+    kbFlipTimer = setTimeout(clearKbFlip, KB_FLIP_MS + 140);
+    if (!kbFlipPendingContent) {
+      if (typeof requestAnimationFrame === "function") {
+        kbFlipRAF = requestAnimationFrame(startKbFlipTransition);
+      } else {
+        clearKbFlip();
+      }
+    }
+  }
   function hasViewportOverlayOpen() {
     return !!(
       activeThreadRoot || activeWorkerKey || notesOpen || superSearchOpen
@@ -27664,21 +27878,30 @@
   function setVH() {
     const v = window.visualViewport;
     const nextVHNum = Math.round(v ? v.height : innerHeight);
+    const nextVWNum = Math.round((v && typeof v.width === "number" && v.width > 0) ? v.width : innerWidth);
     const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
     const nextVH = nextVHNum + "px";
     const nextVTop = nextVTopNum + "px";
-    if (nextVH === lastVH && nextVTop === lastVTop) return;
+    const widthChanged = !!lastVH && lastVWNum > 0 && Math.abs(nextVWNum - lastVWNum) > 2;
+    if (nextVH === lastVH && nextVTop === lastVTop && !widthChanged) return;
     const root = document.documentElement.style;
     const appEl = $("#app");
     const vhChanged = nextVH !== lastVH;
     const vtopChanged = nextVTop !== lastVTop;
     const isInitial = !lastVH;
-    const vhShrank = !isInitial && nextVHNum < lastVHNum;
+    const prevVHNum = lastVHNum;
+    const deltaH = isInitial ? 0 : (nextVHNum - prevVHNum);
+    const vhShrank = !isInitial && deltaH < 0;
+    const wantKbFlip = vhChanged && !isInitial && !widthChanged
+      && narrow() && !prefersReducedMotion() && !document.hidden
+      && !vvTransitioning && Math.abs(deltaH) >= KB_FLIP_MIN_DELTA;
 
     // 1) Read phase (strictly before any DOM/style writes).
     let screenPinned = false;
     let wdScreenPinned = false;
     const pinTargets = [];
+    const pinInfo = new Map();
+    let kbFlipPlan = null;
     if (vhChanged && !isInitial) {
       screenPinned = view === "pane" && curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
       wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
@@ -27689,14 +27912,24 @@
         for (const el of document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")) {
           if (!el.offsetParent) continue;
           const sh = el.scrollHeight;
-          if (sh - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX) {
+          const ch = el.clientHeight;
+          const st = el.scrollTop;
+          if (sh - st - ch <= AT_BOTTOM_PX) {
             pinTargets.push({ el, sh });
+            pinInfo.set(el, { sh, ch, st });
           }
         }
+      }
+      if (wantKbFlip) {
+        kbFlipPlan = readKbFlipPlan(deltaH, pinInfo);
       }
     }
 
     // 2) Write phase (style mutations only; zero post-write layout reads).
+    if (vhChanged || widthChanged) {
+      clearKbFlip();
+    }
+    lastVWNum = nextVWNum;
     if (vhChanged) {
       lastVH = nextVH;
       lastVHNum = nextVHNum;
@@ -27714,6 +27947,9 @@
       if (appEl?.style) appEl.style.setProperty("--vtop", nextVTop);
       else root.setProperty("--vtop", nextVTop);
     }
+    if (kbFlipPlan) {
+      beginKbFlip(kbFlipPlan);
+    }
 
     // 3) Post-layout pin phase (deferred to next clean frame; zero forced reflow).
     if (pinTargets.length || screenPinned || wdScreenPinned) {
@@ -27727,6 +27963,21 @@
         }
         if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
         if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
+        if (kbFlipPendingContent) {
+          const { els, shiftPx } = kbFlipPendingContent;
+          kbFlipPendingContent = null;
+          for (const el of els) {
+            if (!el?.style || !el.isConnected) continue;
+            el.style.transition = "none";
+            el.style.transform = `translate3d(0, ${shiftPx}px, 0)`;
+            kbFlipEls.push(el);
+          }
+          if (typeof requestAnimationFrame === "function") {
+            kbFlipRAF = requestAnimationFrame(startKbFlipTransition);
+          } else {
+            clearKbFlip();
+          }
+        }
       };
       if (typeof requestAnimationFrame === "function") {
         if (setVHPinRAF) cancelAnimationFrame(setVHPinRAF);
@@ -27744,6 +27995,15 @@
       setVH();
     }
   }
+  document.addEventListener("focusin", (e) => {
+    if (!kbFlipEls.length && !kbFlipPendingContent) return;
+    const t = e.target;
+    if (!t?.matches?.("input, textarea, [contenteditable]")) return;
+    if (kbFlipDir > 0 || t !== kbFlipFocusedEl) clearKbFlip();
+  }, true);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && (kbFlipEls.length || kbFlipPendingContent)) clearKbFlip();
+  });
   window.visualViewport?.addEventListener("resize", scheduleSetVH);
   window.visualViewport?.addEventListener("scroll", scheduleSetVH);
   addEventListener("resize", scheduleSetVH);

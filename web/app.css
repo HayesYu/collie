@@ -359,7 +359,7 @@ body {
   -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
   overflow: hidden;
 }
-[hidden] { display: none !important; }
+[hidden]:not(.super-search, .ss-panel) { display: none !important; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -477,6 +477,13 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
    visible area. Pin the app to that area so the input stays in view. */
 @media (pointer: coarse) {
   .app { position: fixed; top: 0; left: 0; right: 0; transform: translate3d(0, var(--vtop, 0px), 0); }
+}
+@media (max-width: 760px) {
+  /* Keep composer opaque & stacked above chat stream during GPU FLIP keyboard glide,
+     and temporarily relax vertical paint clipping while keyboard-open FLIP lifts from below. */
+  #v-collie .composer { background: var(--bg); z-index: 4; }
+  .app.kb-flip-open .main { overflow: visible; }
+  .app.kb-flip-open #v-collie:not(.is-parked) { contain: layout style; }
 }
 .side {
   display: flex; flex-direction: column; min-height: 0;
@@ -1940,7 +1947,9 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   display: flex; align-items: flex-start; justify-content: center;
   padding: min(12vh, 96px) 16px 24px;
   background: rgba(15, 15, 18, .22);
+  opacity: 1;
 }
+.super-search[hidden] { display: none; }
 :root[data-theme="dark"] .super-search { background: rgba(0, 0, 0, .54); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .super-search { background: rgba(0, 0, 0, .54); }
@@ -1952,6 +1961,8 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   border-radius: 16px; border: 1px solid var(--line);
   background: var(--bg);
   box-shadow: 0 4px 14px rgba(0, 0, 0, .06), 0 24px 64px rgba(0, 0, 0, .14);
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
 }
 :root[data-theme="dark"] .ss-card {
   border-color: var(--line-2);
@@ -1964,13 +1975,37 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .super-search { animation: ss-scrim-in 120ms ease-out; }
-  .ss-card { animation: ss-card-in 150ms cubic-bezier(.22, 1, .36, 1); }
-}
-@keyframes ss-scrim-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes ss-card-in {
-  from { opacity: 0; transform: translate3d(0, -8px, 0) scale(.985); }
-  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  .super-search {
+    transition:
+      display 200ms,
+      opacity 180ms ease-out;
+    transition-behavior: allow-discrete;
+  }
+  .ss-card {
+    transition:
+      opacity 190ms ease-out,
+      transform 210ms cubic-bezier(.32, .72, 0, 1);
+  }
+  .ss-panel {
+    transition:
+      opacity 160ms ease-out,
+      transform 190ms cubic-bezier(.32, .72, 0, 1);
+  }
+  @starting-style {
+    .super-search { opacity: 0; }
+    .ss-card { opacity: 0; transform: translate3d(0, -14px, 0) scale(.975); }
+    .ss-panel { opacity: 0; transform: translate3d(0, -6px, 0); }
+  }
+  .super-search:where([hidden], [data-closing]) {
+    opacity: 0;
+    pointer-events: none;
+    transition-duration: 180ms;
+  }
+  .super-search:where([hidden], [data-closing]) .ss-card {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(.98);
+    transition-duration: 170ms;
+  }
 }
 .ss-bar { flex: none; padding: 0; }
 .ss-field {
@@ -2003,7 +2038,10 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .ss-panel {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   border-top: 1px solid var(--line); background: var(--bg); overflow: hidden;
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
 }
+.ss-panel[hidden] { display: none; }
 .ss-head { display: none; }
 .ss-list {
   flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
@@ -2067,9 +2105,6 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   .ss-clear { min-block-size: 32px; height: 32px; padding: 0 9px; font-size: 12.5px; }
   .ss-item { padding: 10px 12px; }
   .ss-foot-keys { display: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .super-search, .ss-card { animation: none !important; }
 }
 .crew::-webkit-scrollbar { display: none; }
 .crew:empty { display: none; }

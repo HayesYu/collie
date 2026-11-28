@@ -20617,7 +20617,45 @@
     return true;
   }
 
-  const resetDrawerMotion = (el) => {
+  const clearSheetWillChange = (el) => {
+    if (!el) return;
+    clearTimeout(el._wcTimer);
+    el._wcTimer = 0;
+    if (el._wcOnEnd) {
+      el.removeEventListener("transitionend", el._wcOnEnd);
+      el.removeEventListener("transitioncancel", el._wcOnEnd);
+      el._wcOnEnd = null;
+    }
+    if (el.style) el.style.willChange = "";
+  };
+  const promoteSheetWillChange = (el, prop = "transform", settleMs = 0) => {
+    if (!el?.style) return;
+    clearTimeout(el._wcTimer);
+    el._wcTimer = 0;
+    if (el._wcOnEnd) {
+      el.removeEventListener("transitionend", el._wcOnEnd);
+      el.removeEventListener("transitioncancel", el._wcOnEnd);
+      el._wcOnEnd = null;
+    }
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      el.style.willChange = "";
+      return;
+    }
+    el.style.willChange = prop;
+    if (settleMs > 0) {
+      const done = (ev) => {
+        if (ev && ev.target !== el) return;
+        if (ev && ev.propertyName && ev.propertyName !== prop) return;
+        clearSheetWillChange(el);
+      };
+      el._wcOnEnd = done;
+      el.addEventListener("transitionend", done);
+      el.addEventListener("transitioncancel", done);
+      el._wcTimer = setTimeout(done, settleMs);
+    }
+  };
+  const resetDrawerMotion = (el, opts = {}) => {
     if (!el) return;
     clearTimeout(el._sdAnimTimer);
     el._sdAnimTimer = 0;
@@ -20625,6 +20663,7 @@
     el.style?.removeProperty?.("--drawer-close-w");
     el.style.transform = "";
     el.style.opacity = "";
+    if (!opts.keepWillChange) clearSheetWillChange(el);
   };
   const playDrawerTransition = (el, wasDrawerOpen) => {
     if (!el || !isDesktopDrawerViewport()) return;
@@ -20666,15 +20705,15 @@
     const appEl = $("#app");
     const hadFile = !!appEl?.classList?.contains("has-file");
     const wasAnyDrawer = isAnyRightDrawerOpen();
+    const desktopMode = isDesktopDrawerViewport();
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
-    const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
-    const sc = view === "collie" ? viewScroller("collie") : null;
+    const prevVisualShift = desktopMode ? captureCollieVisualShift(wasAnyDrawer, prevOpenW) : 0;
+    const sc = desktopMode && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
     if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
     clearTimeout(paneTimer);
     resetDrawerMotion(pane);
-    const desktopMode = isDesktopDrawerViewport();
     const baseW = unifiedDrawerW();
     if (desktopMode) {
       setFileW(baseW);
@@ -20684,7 +20723,15 @@
     }
     if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
     pane.setAttribute("aria-hidden", "false");
-    if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = false; }
+    if (fileScrim) {
+      fileScrim.classList.remove("is-dragging");
+      fileScrim.style.opacity = "";
+      fileScrim.hidden = false;
+    }
+    if (!desktopMode && !hadFile) {
+      promoteSheetWillChange(pane, "transform", 340);
+      if (fileScrim) promoteSheetWillChange(fileScrim, "opacity", 340);
+    }
     appEl?.classList?.add("has-file");
     syncFileWidenUI();
     syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadFile && desktopMode });
@@ -20698,7 +20745,7 @@
         playDrawerTransition(pane, true);
       }
     }
-    if (lockSnap && view === "collie") {
+    if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
   }
@@ -20707,26 +20754,36 @@
     const hadFile = !!appEl?.classList?.contains("has-file");
     const wasOpen = hadFile || (!!pane && !pane.hidden);
     const switching = !!opts.switching;
-    const sc = wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
+    const desktopMode = isDesktopDrawerViewport();
+    const sc = desktopMode && wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const closingW = _lastFileW || _lastDrawerW || 520;
-    const startOffset = !switching && hadFile ? captureCollieVisualShift(true, closingW) : 0;
+    const startOffset = desktopMode && !switching && hadFile ? captureCollieVisualShift(true, closingW) : 0;
     if (switching) finishDrawerGlide(true);
     fileSeq++;
     clearTimeout(paneTimer);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadFile && isDesktopDrawerViewport() && pane && !pane.hidden;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadFile && desktopMode && pane && !pane.hidden;
+    const overlayCloseAnim = !opts.immediate && !switching && !reduced && !desktopMode && wasOpen && pane && !pane.hidden;
     if (desktopCloseAnim) {
       resetDrawerMotion(pane);
       pane.style.setProperty("--drawer-close-w", closingW + "px");
       pane.classList.add("is-closing");
+    } else if (overlayCloseAnim) {
+      resetDrawerMotion(pane, { keepWillChange: true });
+      promoteSheetWillChange(pane, "transform", 320);
+      if (fileScrim) {
+        fileScrim.classList.remove("is-dragging");
+        fileScrim.style.opacity = "";
+        promoteSheetWillChange(fileScrim, "opacity", 320);
+      }
     }
     appEl?.classList?.remove("has-file");
     if (!switching) syncAppDrawerClasses();
     syncFileWidenUI();
     pane?.setAttribute?.("aria-hidden", "true");
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
-    if (lockSnap && view === "collie") {
+    if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
     let userScrolled = false;
@@ -20739,9 +20796,14 @@
         pane.hidden = true;
         if (pane.style) pane.style.width = "";
       }
-      if (fileScrim) { fileScrim.style.opacity = ""; fileScrim.hidden = true; }
+      if (fileScrim) {
+        fileScrim.classList.remove("is-dragging");
+        clearSheetWillChange(fileScrim);
+        fileScrim.style.opacity = "";
+        fileScrim.hidden = true;
+      }
       if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
-      if (!switching && view === "collie") {
+      if (desktopMode && !switching && view === "collie") {
         const useRestore = lockSnap && !userScrolled ? { restore: lockSnap, once: true } : undefined;
         renderSuper(useRestore);
       }
@@ -20754,7 +20816,7 @@
       const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: pane, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
       if (!glided) paneTimer = setTimeout(hideNow, 170);
     } else {
-      paneTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 280);
+      paneTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
     }
   }
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
@@ -20821,23 +20883,78 @@
     });
     for (const zone of zones) {
       if (!zone) continue;
-      let startY = 0, startX = 0, startT = 0, lastY = 0, pid = null, dragging = false;
-      const resetDrag = () => {
+      let startY = 0, startX = 0, startT = 0, lastY = 0, pid = null;
+      let dragging = false, appliedDrag = false, pendingDy = 0, rafId = 0;
+      let cachedH = 600, cachedFadeDist = 300, cachedThreshold = 120;
+      const cancelFrame = () => {
+        if (rafId && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
+        rafId = 0;
+      };
+      const flushFrame = () => {
+        rafId = 0;
+        if (!dragging) return;
+        if (!appliedDrag) {
+          appliedDrag = true;
+          promoteSheetWillChange(drawerEl, "transform", 0);
+          drawerEl.classList.add("is-dragging");
+          if (scrimEl) {
+            promoteSheetWillChange(scrimEl, "opacity", 0);
+            scrimEl.classList.add("is-dragging");
+          }
+        }
+        const offset = pendingDy;
+        drawerEl.style.transform = `translate3d(0, ${offset}px, 0)`;
+        if (scrimEl) {
+          const ratio = Math.min(1, offset / cachedFadeDist);
+          scrimEl.style.opacity = String(Math.max(0, 1 - ratio));
+        }
+      };
+      const scheduleFrame = () => {
+        if (rafId) return;
+        if (typeof requestAnimationFrame === "function") {
+          rafId = requestAnimationFrame(flushFrame);
+        } else {
+          flushFrame();
+        }
+      };
+      const resetDrag = (keepWillChangeForSettle = false) => {
+        cancelFrame();
         pid = null;
         dragging = false;
+        const hadApplied = appliedDrag;
+        appliedDrag = false;
         drawerEl.classList.remove("is-dragging");
         drawerEl.style.transform = "";
-        if (scrimEl) scrimEl.style.opacity = "";
+        if (scrimEl) {
+          scrimEl.classList.remove("is-dragging");
+          scrimEl.style.opacity = "";
+        }
+        if (hadApplied) {
+          if (keepWillChangeForSettle) {
+            promoteSheetWillChange(drawerEl, "transform", 320);
+            if (scrimEl) promoteSheetWillChange(scrimEl, "opacity", 320);
+          } else {
+            clearSheetWillChange(drawerEl);
+            if (scrimEl) clearSheetWillChange(scrimEl);
+          }
+        }
       };
       zone.addEventListener("pointerdown", (e) => {
         if (innerWidth > 760 || !isOpenFn()) return;
         if (e.pointerType === "mouse" && e.button !== 0) return;
         if (e.target.closest("button:not(.sd-handle):not(.np-handle), a")) return;
+        cancelFrame();
         pid = e.pointerId;
         startY = lastY = e.clientY;
         startX = e.clientX;
         startT = performance.now();
         dragging = false;
+        appliedDrag = false;
+        pendingDy = 0;
+        // Cache layout height once on pointerdown: zero layout reads during pointermove or release.
+        cachedH = drawerEl.offsetHeight || 600;
+        cachedFadeDist = Math.max(240, cachedH * 0.5);
+        cachedThreshold = Math.min(120, cachedH * 0.22);
       });
       zone.addEventListener("pointermove", (e) => {
         if (pid !== e.pointerId) return;
@@ -20847,15 +20964,10 @@
           if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { pid = null; return; }
           if (dy <= 8) return;
           dragging = true;
-          drawerEl.classList.add("is-dragging");
           try { zone.setPointerCapture(e.pointerId); } catch {}
         }
-        const offset = Math.max(0, dy);
-        drawerEl.style.transform = `translate3d(0, ${offset}px, 0)`;
-        if (scrimEl) {
-          const ratio = Math.min(1, offset / Math.max(240, (drawerEl.offsetHeight || 600) * 0.5));
-          scrimEl.style.opacity = String(Math.max(0, 1 - ratio));
-        }
+        pendingDy = Math.max(0, dy);
+        scheduleFrame();
       });
       const finish = (e, cancelled) => {
         if (pid !== e.pointerId) return;
@@ -20863,11 +20975,11 @@
         const dy = Math.max(0, lastY - startY);
         const dt = Math.max(1, performance.now() - startT);
         const vy = dy / dt;
-        const threshold = Math.min(120, (drawerEl.offsetHeight || 600) * 0.22);
-        resetDrag();
+        const shouldClose = wasDragging && !cancelled && (dy > cachedThreshold || (dy > 40 && vy > 0.45));
+        resetDrag(wasDragging);
         if (wasDragging) {
           skipClickUntil = performance.now() + 80;
-          if (!cancelled && (dy > threshold || (dy > 40 && vy > 0.45))) closeFn();
+          if (shouldClose) closeFn();
         }
       };
       zone.addEventListener("pointerup", (e) => finish(e, false));
@@ -21493,6 +21605,15 @@
       syncCollieLeftShift(shiftMode, { immediate: immediate || view !== "collie" || blockedByDrawer });
     }
     if (wasHidden !== !wantOpen) {
+      if (innerWidth <= 760) {
+        if (immediate) {
+          clearSheetWillChange(notesPane);
+          if (notesScrim) clearSheetWillChange(notesScrim);
+        } else {
+          promoteSheetWillChange(notesPane, "transform", 320);
+          if (notesScrim) promoteSheetWillChange(notesScrim, "opacity", 320);
+        }
+      }
       notesPane.classList.toggle("is-handoff-in", !!(wantOpen && opts.fromDrawerClose && !immediate));
       notesPane.classList.toggle("is-hidden", !wantOpen);
     } else if (!wantOpen) {
@@ -22894,9 +23015,10 @@
     const appEl = $("#app");
     const hadThread = !!appEl.classList.contains("has-thread");
     const wasAnyDrawer = isAnyRightDrawerOpen();
+    const desktopMode = innerWidth > THREAD_DESKTOP_MIN;
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
-    const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
-    const sc = view === "collie" ? viewScroller("collie") : null;
+    const prevVisualShift = desktopMode ? captureCollieVisualShift(wasAnyDrawer, prevOpenW) : 0;
+    const sc = desktopMode && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc && !hadThread ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     if (appEl.classList.contains("has-file")) closeFilePane({ immediate: true, switching: true });
     if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
@@ -22916,12 +23038,20 @@
     applyThreadWidth();
     const nextW = _lastThreadW || _lastDrawerW || 432;
     if (tdDrawer.hidden) { tdDrawer.hidden = false; tdDrawer.offsetWidth; }
-    if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = false; }
+    if (tdScrim) {
+      tdScrim.classList.remove("is-dragging");
+      tdScrim.style.opacity = "";
+      tdScrim.hidden = false;
+    }
+    if (!desktopMode && !hadThread && !opts.immediate) {
+      promoteSheetWillChange(tdDrawer, "transform", 340);
+      if (tdScrim) promoteSheetWillChange(tdScrim, "opacity", 340);
+    }
     tdDrawer.setAttribute("aria-hidden", "false");
     $("#v-collie")?.classList?.remove("is-main-focused");
     appEl.classList.add("has-thread");
     syncThreadWideUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadThread && !opts.immediate && innerWidth > THREAD_DESKTOP_MIN });
+    syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadThread && !opts.immediate && desktopMode });
     if (!hadThread && !opts.immediate) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: tdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
@@ -22932,7 +23062,7 @@
         playDrawerTransition(tdDrawer, true);
       }
     }
-    if (innerWidth > THREAD_DESKTOP_MIN) {
+    if (desktopMode) {
       // Quietly hide the main-stream thinking row and clear left focus while side-by-side drawer takes focus.
       const wk = $("#super-working"), st = $("#router-status");
       if (wk) wk.hidden = true;
@@ -22941,7 +23071,7 @@
       if (ae && $("#v-collie")?.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     }
     syncActiveThreadMarks(info);
-    if (lockSnap && view === "collie") {
+    if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
     const hasRestore = typeof opts.restoreScrollTop === "number";
@@ -22961,28 +23091,38 @@
     const wasOpen = !!activeThreadRoot || !tdDrawer.hidden;
     const hadThread = appEl.classList.contains("has-thread");
     const switching = !!opts.switching;
-    const sc = wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
+    const desktopMode = innerWidth > THREAD_DESKTOP_MIN;
+    const sc = desktopMode && wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const closingW = _lastThreadW || _lastDrawerW || 432;
-    const startOffset = !switching && hadThread ? captureCollieVisualShift(true, closingW) : 0;
+    const startOffset = desktopMode && !switching && hadThread ? captureCollieVisualShift(true, closingW) : 0;
     if (switching) finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadThread && innerWidth > THREAD_DESKTOP_MIN && !tdDrawer.hidden;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadThread && desktopMode && !tdDrawer.hidden;
+    const overlayCloseAnim = !opts.immediate && !switching && !reduced && !desktopMode && wasOpen && !tdDrawer.hidden;
     activeThreadRoot = null;
     activeThreadAnchor = "";
     drawerReplyTarget = null;
     tdLastSig = "";
     tdWorkersSig = "";
     tdLastCount = 0;
-    if (tdWorkersEl) { tdWorkersEl.hidden = true; tdWorkersEl.innerHTML = ""; }
+    if (!overlayCloseAnim && tdWorkersEl) { tdWorkersEl.hidden = true; tdWorkersEl.innerHTML = ""; }
     if (desktopCloseAnim) {
       resetDrawerMotion(tdDrawer);
       tdDrawer.style.setProperty("--drawer-close-w", closingW + "px");
       tdDrawer.classList.add("is-closing");
+    } else if (overlayCloseAnim) {
+      resetDrawerMotion(tdDrawer, { keepWillChange: true });
+      promoteSheetWillChange(tdDrawer, "transform", 320);
     } else {
       resetDrawerMotion(tdDrawer);
     }
-    if (tdScrim) tdScrim.style.opacity = "";
+    if (tdScrim) {
+      tdScrim.classList.remove("is-dragging");
+      tdScrim.style.opacity = "";
+      if (overlayCloseAnim) promoteSheetWillChange(tdScrim, "opacity", 320);
+      else clearSheetWillChange(tdScrim);
+    }
     appEl.classList.remove("has-thread");
     appEl.classList.remove("thread-wide");
     if (!switching) syncAppDrawerClasses();
@@ -22990,14 +23130,20 @@
     syncThreadWideUI();
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     tdDrawer.setAttribute("aria-hidden", "true");
-    if (lockSnap && view === "collie") {
+    if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
     clearTimeout(tdHideTimer);
     const hideNow = () => {
       resetDrawerMotion(tdDrawer);
+      if (tdWorkersEl) { tdWorkersEl.hidden = true; tdWorkersEl.innerHTML = ""; }
       tdDrawer.hidden = true;
-      if (tdScrim) { tdScrim.style.opacity = ""; tdScrim.hidden = true; }
+      if (tdScrim) {
+        tdScrim.classList.remove("is-dragging");
+        clearSheetWillChange(tdScrim);
+        tdScrim.style.opacity = "";
+        tdScrim.hidden = true;
+      }
     };
     if (opts.immediate || switching || reduced) {
       hideNow();
@@ -23007,11 +23153,11 @@
       const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: tdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
       if (!glided) tdHideTimer = setTimeout(hideNow, 170);
     } else {
-      tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 260);
+      tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
     }
     if (wasOpen && !switching && opts.rerender !== false && view === "collie") {
       syncActiveThreadMarks();
-      if (hadThread && innerWidth > THREAD_DESKTOP_MIN) {
+      if (hadThread && desktopMode) {
         renderSuper();
       }
     }
@@ -24007,7 +24153,8 @@
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
     const prevVisualShift = captureCollieVisualShift(wasAnyDrawer, prevOpenW);
     const sc = view === "collie" ? viewScroller("collie") : null;
-    const lockSnap = sc && !hadWorker ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    const desktopMode = isDesktopDrawerViewport();
+    const lockSnap = desktopMode && sc && !hadWorker ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     closePick();
     closeDirPick(false);
     if (collieMenuOpen) closeCollieMenus();
@@ -24015,7 +24162,7 @@
     if (superSearchOpen) closeSuperSearchFn?.(false);
     if (appEl.classList.contains("has-file")) closeFilePane({ immediate: true, switching: true });
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
-    if (innerWidth <= THREAD_DESKTOP_MIN) {
+    if (!desktopMode) {
       const ae = document.activeElement;
       if (ae && (!wdDrawer.contains?.(ae) || (switchedTarget && wdComposerOpen && ae === wdInputEl)) && typeof ae.blur === "function") {
         ae.blur();
@@ -24049,15 +24196,27 @@
     }
     applyWorkerWidth();
     const nextW = _lastWorkerW || _lastDrawerW || 480;
-    const handoffScrim = (wasAnyDrawer || closingNotesOverlay) && innerWidth <= THREAD_DESKTOP_MIN;
-    if (wdScrim && !handoffScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
+    const handoffScrim = (wasAnyDrawer || closingNotesOverlay) && !desktopMode;
+    if (wdScrim && !handoffScrim) {
+      wdScrim.classList.remove("is-dragging");
+      wdScrim.style.opacity = "";
+      wdScrim.hidden = false;
+    }
     if (wdDrawer.hidden) { wdDrawer.hidden = false; wdDrawer.offsetWidth; }
+    if (!desktopMode && !hadWorker) {
+      promoteSheetWillChange(wdDrawer, "transform", 340);
+      if (wdScrim) promoteSheetWillChange(wdScrim, "opacity", 340);
+    }
     wdDrawer.setAttribute("aria-hidden", "false");
     appEl.classList.add("has-worker");
-    if (wdScrim && handoffScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = false; }
+    if (wdScrim && handoffScrim) {
+      wdScrim.classList.remove("is-dragging");
+      wdScrim.style.opacity = "";
+      wdScrim.hidden = false;
+    }
     syncWorkerWidenUI();
     if (!closingNotesOverlay) {
-      syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && isDesktopDrawerViewport() });
+      syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && desktopMode });
     }
     if (!hadWorker) {
       if (!wasAnyDrawer) {
@@ -24068,7 +24227,7 @@
         else if (nextW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW });
         playDrawerTransition(wdDrawer, true);
       }
-      if (lockSnap && view === "collie") {
+      if (desktopMode && lockSnap && view === "collie") {
         beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
       }
     }
@@ -24083,13 +24242,15 @@
     const hadWorker = appEl.classList.contains("has-worker");
     const wasOpen = !!activeWorkerKey || !wdDrawer.hidden;
     const switching = !!opts.switching;
-    const sc = wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
+    const desktopMode = isDesktopDrawerViewport();
+    const sc = desktopMode && wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const closingW = _lastWorkerW || _lastDrawerW || 480;
-    const startOffset = !switching && hadWorker ? captureCollieVisualShift(true, closingW) : 0;
+    const startOffset = desktopMode && !switching && hadWorker ? captureCollieVisualShift(true, closingW) : 0;
     if (switching) finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && isDesktopDrawerViewport() && !wdDrawer.hidden;
+    const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadWorker && desktopMode && !wdDrawer.hidden;
+    const overlayCloseAnim = !opts.immediate && !switching && !reduced && !desktopMode && wasOpen && !wdDrawer.hidden;
 
     disarmInterrupt("worker");
     const ae = document.activeElement;
@@ -24100,7 +24261,7 @@
     wdLastLiveTitle = "";
     wdLastLivePaneId = "";
     clearWdLive(prevWdPane);
-    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (!overlayCloseAnim && wdGoneEl) wdGoneEl.hidden = true;
     closeWorkerDrawerStream();
     activeWorkerKey = null;
     wdPaneId = "";
@@ -24114,24 +24275,38 @@
       resetDrawerMotion(wdDrawer);
       wdDrawer.style.setProperty("--drawer-close-w", closingW + "px");
       wdDrawer.classList.add("is-closing");
+    } else if (overlayCloseAnim) {
+      resetDrawerMotion(wdDrawer, { keepWillChange: true });
+      promoteSheetWillChange(wdDrawer, "transform", 320);
     } else {
       resetDrawerMotion(wdDrawer);
     }
-    if (wdScrim) wdScrim.style.opacity = "";
+    if (wdScrim) {
+      wdScrim.classList.remove("is-dragging");
+      wdScrim.style.opacity = "";
+      if (overlayCloseAnim) promoteSheetWillChange(wdScrim, "opacity", 320);
+      else clearSheetWillChange(wdScrim);
+    }
     appEl.classList.remove("has-worker");
     if (!switching) syncAppDrawerClasses();
     syncWorkerWidenUI();
     syncSideActive({ skipBadge: true });
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     wdDrawer.setAttribute("aria-hidden", "true");
-    if (lockSnap && view === "collie") {
+    if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
     clearTimeout(wdHideTimer);
     const hideNow = () => {
       resetDrawerMotion(wdDrawer);
+      if (wdGoneEl) wdGoneEl.hidden = true;
       wdDrawer.hidden = true;
-      if (wdScrim) { wdScrim.style.opacity = ""; wdScrim.hidden = true; }
+      if (wdScrim) {
+        wdScrim.classList.remove("is-dragging");
+        clearSheetWillChange(wdScrim);
+        wdScrim.style.opacity = "";
+        wdScrim.hidden = true;
+      }
     };
     if (opts.immediate || switching || reduced) {
       hideNow();
@@ -24141,7 +24316,7 @@
       const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: wdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
       if (!glided) wdHideTimer = setTimeout(hideNow, 170);
     } else {
-      wdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 320 : 260);
+      wdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
     }
   }
 

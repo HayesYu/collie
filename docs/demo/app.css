@@ -9078,22 +9078,49 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   }
 }
 
-/* P0-4a: Read-only Task List */
-.msg.assistant ul.md-task-list {
-  list-style: none; padding-left: 0; margin: 0 0 1em;
-  display: flex; flex-direction: column; gap: 6px;
+/* P0-4a: Read-only Task List (custom crisp rounded-square SVG checkbox, gentle opacity on completed prose) */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) ul.md-task-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 4px 0 1em;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
-.msg.assistant li.md-task-item {
-  display: flex; align-items: flex-start; gap: 9px; margin: 0; padding-left: 0; line-height: 1.6;
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) li.md-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0;
+  padding-left: 0;
+  line-height: 1.6;
+  min-inline-size: 0;
 }
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) li.md-task-item[data-depth="1"] { padding-inline-start: 22px; }
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) li.md-task-item[data-depth="2"] { padding-inline-start: 44px; }
 .md-task-box {
-  width: 15px; height: 15px; margin-top: 4px; border-radius: 4px; flex: none;
-  border: 1.5px solid var(--line-2); background: var(--bg);
-  display: inline-grid; place-items: center; color: var(--on-accent);
+  inline-size: 16px;
+  block-size: 16px;
+  margin-top: .22em;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  color: var(--fg-3);
 }
-.md-task-item.is-done .md-task-box { background: var(--accent); border-color: var(--accent); }
-.md-task-box svg { width: 10px; height: 10px; stroke-width: 2.5; }
-.md-task-item.is-done .md-task-text { color: var(--fg-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
+.md-task-box .md-task-svg {
+  display: block;
+  inline-size: 16px;
+  block-size: 16px;
+}
+.md-task-item.is-done .md-task-box { color: var(--fg); }
+.md-task-text { min-inline-size: 0; overflow-wrap: break-word; }
+.md-task-item.is-done .md-task-text { color: var(--fg); opacity: .62; text-decoration: none; }
+.msg.user .md-task-box {
+  color: color-mix(in oklab, var(--user-bubble-fg, var(--human-line)) 58%, transparent);
+  --md-task-chk: var(--user-bubble-bg, var(--human-bg));
+}
+.msg.user .md-task-item.is-done .md-task-box { color: var(--user-bubble-fg, var(--human-line)); }
+.msg.user .md-task-item.is-done .md-task-text { color: inherit; opacity: .68; }
 
 /* P0-4b: 4-Tier Restrained Callouts */
 .md-callout {
@@ -9448,6 +9475,390 @@ details.md-fold:not([open])::details-content { block-size: 0; }
   .rv-card, .rv-float-acts, .rv-ico, .rv-mermaid::before, .rv-mermaid::after, .rv-svg::before, .rv-svg::after, .md-code::before, .md-code::after { transition: none !important; }
 }
 
+/* ─── Native Rich Expression Blocks: Metrics KPI Strip, Steps Timeline, Entity Pills, Keycaps & Soft Highlights ─── */
+
+/* 1) Frameless Native KPI Metrics Strip (```metrics) */
+.md-metrics {
+  --md-metric-pos: color-mix(in oklab, var(--ok) 84%, var(--fg-2));
+  --md-metric-neg: color-mix(in oklab, var(--danger) 84%, var(--fg-2));
+  margin: 14px 0 18px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  max-inline-size: 100%;
+  container-type: inline-size;
+  contain: layout style;
+}
+.md-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  row-gap: 16px;
+  column-gap: 0;
+  margin: 0;
+  padding: 0;
+}
+.md-metrics[data-cols="1"] .md-metrics-grid { grid-template-columns: minmax(0, 1fr); }
+.md-metrics[data-cols="2"] .md-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.md-metrics[data-cols="3"] .md-metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.md-metrics[data-cols="4"] .md-metrics-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.md-metric {
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 16px;
+  border-inline-start: 1px solid color-mix(in oklab, var(--line) 88%, transparent);
+}
+.md-metrics[data-cols="1"] .md-metric { padding-inline: 0; border-inline-start: 0; }
+.md-metrics[data-cols="2"] .md-metric:nth-child(2n + 1),
+.md-metrics[data-cols="3"] .md-metric:nth-child(3n + 1),
+.md-metrics[data-cols="4"] .md-metric:nth-child(4n + 1) {
+  padding-inline-start: 0;
+  border-inline-start: 0;
+}
+.md-metrics[data-cols="2"] .md-metric:nth-child(2n),
+.md-metrics[data-cols="3"] .md-metric:nth-child(3n),
+.md-metrics[data-cols="4"] .md-metric:nth-child(4n),
+.md-metric:last-child {
+  padding-inline-end: 0;
+}
+.md-metrics[data-cols="2"] .md-metric:nth-child(n + 3),
+.md-metrics[data-cols="3"] .md-metric:nth-child(n + 4),
+.md-metrics[data-cols="4"] .md-metric:nth-child(n + 5) {
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+}
+.md-metric-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--fg-3);
+  letter-spacing: .01em;
+  overflow-wrap: break-word;
+}
+.md-metric-val {
+  margin: 0;
+  font-size: clamp(19px, 3cqi, 24px);
+  font-weight: 650;
+  line-height: 1.18;
+  letter-spacing: -.022em;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.md-metric-delta {
+  margin: 1px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
+}
+.md-metric-delta.is-pos { color: var(--md-metric-pos); }
+.md-metric-delta.is-neg { color: var(--md-metric-neg); }
+
+@media (max-width: 760px) {
+  .md-metrics { margin: 12px 0 16px; }
+  .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 14px;
+  }
+  .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric {
+    padding: 2px 12px;
+    border-top: 0;
+    border-inline-start: 1px solid color-mix(in oklab, var(--line) 88%, transparent);
+  }
+  .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric:nth-child(2n + 1) {
+    padding-inline-start: 0;
+    padding-inline-end: 12px;
+    border-inline-start: 0;
+  }
+  .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric:nth-child(2n) {
+    padding-inline-start: 12px;
+    padding-inline-end: 0;
+    border-inline-start: 1px solid color-mix(in oklab, var(--line) 88%, transparent);
+  }
+  .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric:nth-child(n + 3) {
+    padding-top: 12px;
+    border-top: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+  }
+  .md-metric-val { font-size: 20px; }
+}
+@supports (container-type: inline-size) {
+  @container (max-width: 520px) {
+    .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metrics-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      row-gap: 14px;
+    }
+    .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric {
+      padding: 2px 12px;
+      border-top: 0;
+      border-inline-start: 1px solid color-mix(in oklab, var(--line) 88%, transparent);
+    }
+    .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric:nth-child(2n + 1) {
+      padding-inline-start: 0;
+      padding-inline-end: 12px;
+      border-inline-start: 0;
+    }
+    .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric:nth-child(2n) {
+      padding-inline-start: 12px;
+      padding-inline-end: 0;
+      border-inline-start: 1px solid color-mix(in oklab, var(--line) 88%, transparent);
+    }
+    .md-metrics:is([data-cols="2"], [data-cols="3"], [data-cols="4"]) .md-metric:nth-child(n + 3) {
+      padding-top: 12px;
+      border-top: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+    }
+    .md-metric-val { font-size: 20px; }
+  }
+}
+
+/* 2) Native Stepper Timeline (```steps, Manus / Linear frameless editorial style) */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) ol.md-steps {
+  list-style: none;
+  margin: 12px 0 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  contain: layout style;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) li.md-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 11px;
+  align-items: start;
+  margin: 0;
+  padding: 0 0 14px;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) li.md-step:last-child { padding-bottom: 0; }
+li.md-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 8.5px;
+  top: 21px;
+  bottom: 2px;
+  inline-size: 1px;
+  background: var(--line);
+}
+li.md-step.is-done:not(:last-child)::before { background: var(--line-2); }
+.md-step-node {
+  position: relative;
+  inline-size: 16px;
+  block-size: 16px;
+  margin-top: 3px;
+  justify-self: center;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+}
+.md-step.is-done .md-step-node {
+  background: var(--fg);
+  color: var(--bg);
+}
+.md-step.is-done .md-step-node svg {
+  display: block;
+  inline-size: 10px;
+  block-size: 10px;
+}
+.md-step.is-active .md-step-node {
+  background: color-mix(in oklab, var(--fg) 10%, transparent);
+  color: var(--fg);
+}
+.md-step.is-active .md-step-dot {
+  display: block;
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  background: var(--fg);
+}
+.md-step.is-active .md-step-node::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  border: 1.5px solid var(--fg);
+  opacity: .24;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .md-step.is-active .md-step-node::after {
+    animation: md-step-pulse 2.4s cubic-bezier(.22, 1, .36, 1) infinite;
+    will-change: transform, opacity;
+  }
+}
+@keyframes md-step-pulse {
+  0% { transform: scale(.88); opacity: .42; }
+  70% { transform: scale(1.75); opacity: 0; }
+  100% { transform: scale(1.75); opacity: 0; }
+}
+.md-step.is-error .md-step-node {
+  background: var(--danger-soft);
+  border: 1.5px solid var(--danger);
+  color: var(--danger);
+}
+.md-step.is-error .md-step-node svg {
+  display: block;
+  inline-size: 10px;
+  block-size: 10px;
+}
+.md-step.is-todo .md-step-node {
+  background: var(--bg);
+  border: 1.5px solid var(--line-2);
+}
+.md-step.is-todo .md-step-dot {
+  display: block;
+  inline-size: 4px;
+  block-size: 4px;
+  border-radius: 50%;
+  background: var(--line-2);
+}
+.md-step-body {
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.md-step-title {
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.5;
+  color: var(--fg);
+  overflow-wrap: break-word;
+}
+.md-step.is-todo .md-step-title { color: var(--fg-2); font-weight: 450; }
+.md-step.is-error .md-step-title { color: var(--danger); }
+.md-step-note {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-3);
+  overflow-wrap: break-word;
+}
+
+/* 3) Inline Entity Pills (GitHub/GitLab PR/MR/Issue/Release + path/to/file.ext:line) */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url.entity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .32em;
+  max-inline-size: 100%;
+  vertical-align: -.14em;
+  padding: .06em .42em .08em .34em;
+  border: 0;
+  border-radius: 5px;
+  background: var(--code-link-bg);
+  color: inherit;
+  font-family: var(--mono);
+  font-size: .84em;
+  line-height: 1.38;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  transition: background-color .14s ease, color .14s ease;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url.entity-pill:is(:hover, :focus-visible) {
+  background: var(--code-link-bg-hover);
+  text-decoration: none;
+}
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url.entity-pill:active {
+  background: var(--code-link-bg-active);
+}
+a.url.entity-pill .ep-ico {
+  inline-size: .96em;
+  block-size: .96em;
+  flex: none;
+  color: var(--code-link-cue);
+  transition: color .14s ease;
+}
+a.url.entity-pill:is(:hover, :focus-visible) .ep-ico { color: var(--code-link-cue-hover); }
+a.url.entity-pill .ep-text { min-inline-size: 0; overflow-wrap: anywhere; }
+a.url.entity-pill .ep-repo { color: var(--fg-2); }
+a.url.entity-pill .ep-ref { font-weight: 550; color: var(--fg); font-variant-numeric: tabular-nums; }
+.msg.user a.url.entity-pill .ep-repo { color: inherit; opacity: .78; }
+.msg.user a.url.entity-pill .ep-ref { color: inherit; }
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) code.code-link.is-fref .fref-line {
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+.msg.user code.code-link.is-fref .fref-line {
+  color: inherit;
+  opacity: .72;
+}
+
+/* 4) Inline Micro-Expressions: Minimalist Keycap (<kbd>) & Eye-Friendly Soft Highlight (==mark==) */
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) kbd.md-kbd {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: .8em;
+  font-weight: 500;
+  line-height: 1.25;
+  padding: .1em .42em .13em;
+  margin: 0 .06em;
+  vertical-align: .05em;
+  color: var(--fg);
+  background: #fafaf9;
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  box-shadow: inset 0 -1px 0 var(--line-2);
+  white-space: nowrap;
+}
+:root[data-theme="dark"] :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) kbd.md-kbd {
+  background: #1c1c21;
+  border-color: #34343b;
+  box-shadow: inset 0 -1px 0 #09090b, inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) kbd.md-kbd {
+    background: #1c1c21;
+    border-color: #34343b;
+    box-shadow: inset 0 -1px 0 #09090b, inset 0 1px 0 rgba(255, 255, 255, .05);
+  }
+}
+.msg.user kbd.md-kbd {
+  color: inherit;
+  background: color-mix(in oklab, var(--user-bubble-fg, var(--human-line)) 12%, transparent);
+  border-color: color-mix(in oklab, var(--user-bubble-fg, var(--human-line)) 26%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--user-bubble-fg, var(--human-line)) 22%, transparent);
+}
+
+:is(.msg, .td-text, .mem-body, .fv-md, .rv-md) mark.md-mark {
+  background: rgba(245, 197, 66, .24);
+  color: inherit;
+  padding: .04em .28em;
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+:root[data-theme="dark"] :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) mark.md-mark {
+  background: rgba(235, 190, 92, .18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) mark.md-mark {
+    background: rgba(235, 190, 92, .18);
+  }
+}
+.msg.user mark.md-mark {
+  background: color-mix(in oklab, var(--user-bubble-fg, var(--human-line)) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url.entity-pill,
+  a.url.entity-pill .ep-ico { transition: none !important; }
+}
+@media (forced-colors: active) {
+  .md-metric { border-color: CanvasText; }
+  li.md-step:not(:last-child)::before { background: CanvasText; }
+  .md-step-node { border: 1.5px solid CanvasText; }
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) a.url.entity-pill { border: 1px solid LinkText; text-decoration: underline; }
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) kbd.md-kbd { border: 1px solid ButtonBorder; box-shadow: none; }
+  :is(.msg, .td-text, .mem-body, .fv-md, .rv-md) mark.md-mark { background-color: Mark; color: MarkText; }
+}
+
 /* ─── Main Chat Micro-Motion (Scheme B Staggered Mist + User Lift + Decision Convergence) ─── */
 @media (prefers-reduced-motion: no-preference) {
   /* 1) Outgoing user bubble: 180ms soft lift from composer (final layout height, zero scrollbar jitter) */
@@ -9482,7 +9893,7 @@ details.md-fold:not([open])::details-content { block-size: 0; }
   #v-collie .say[data-enter^="collie"] .msg.assistant > :is(
     pre, table, figure, img, svg,
     .code-block, .md-code, .md-table, .md-table-card, .md-math-block,
-    .rv-card, .thumbs, .md-img-btn, .snap-card, .artifact-chips,
+    .rv-card, .md-metrics, .md-steps, .thumbs, .md-img-btn, .snap-card, .artifact-chips,
     .decision-wrap, .reply-opts, .reply-receipt, .msg-foot, .re, .pin-ind
   ) {
     animation-name: cm-crisp-in;

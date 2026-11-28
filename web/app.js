@@ -25922,6 +25922,69 @@
     const s = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return s.length > 42 ? s.slice(0, 40) + "…" : s;
   };
+  const ICON_EP_PR = '<svg class="ep-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="3.75" r="1.75"/><circle cx="4.5" cy="12.25" r="1.75"/><circle cx="11.5" cy="12.25" r="1.75"/><path d="M4.5 5.5v5M11.5 10.5V6.25a2 2 0 0 0-2-2H8"/><path d="M9.5 2.75 8 4.25l1.5 1.5"/></svg>';
+  const ICON_EP_ISSUE = '<svg class="ep-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none"/></svg>';
+  const ICON_EP_RELEASE = '<svg class="ep-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.75 7.6V3.5a.75.75 0 0 1 .75-.75h4.1a.75.75 0 0 1 .53.22l5.15 5.15a1 1 0 0 1 0 1.41l-3.75 3.75a1 1 0 0 1-1.41 0L2.97 8.13a.75.75 0 0 1-.22-.53Z"/><circle cx="5.75" cy="5.75" r=".85" fill="currentColor" stroke="none"/></svg>';
+  function parseGitEntityUrl(rawUrl) {
+    let u;
+    try { u = new URL(rawUrl); } catch { return null; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    const host = (u.hostname || "").toLowerCase();
+    const isGitHub = host === "github.com" || host === "www.github.com";
+    const isGitLab = host === "gitlab.com" || host === "www.gitlab.com" || host.startsWith("gitlab.");
+    if (!isGitHub && !isGitLab) return null;
+    const segs = u.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    const safeDecode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+    if (isGitHub) {
+      if (segs.length < 4) return null;
+      const [owner, repo, kindSeg, idSeg] = segs;
+      if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null;
+      const prefix = `${owner}/${repo}`;
+      if (kindSeg === "pull" && /^\d+$/.test(idSeg) && (segs.length === 4 || (segs.length === 5 && /^(?:files|commits|checks)$/.test(segs[4])))) {
+        return { kind: "pr", prefix, sep: "#", ref: idSeg, icon: ICON_EP_PR, kindAria: tx("md.entityPr", "Pull Request") };
+      }
+      if (kindSeg === "issues" && /^\d+$/.test(idSeg) && segs.length === 4) {
+        return { kind: "issue", prefix, sep: "#", ref: idSeg, icon: ICON_EP_ISSUE, kindAria: tx("md.entityIssue", "Issue") };
+      }
+      if (kindSeg === "releases" && idSeg === "tag" && segs.length === 5 && segs[4]) {
+        const tag = safeDecode(segs[4]);
+        if (!tag || /[<>"'\s]/.test(tag)) return null;
+        return { kind: "release", prefix, sep: "@", ref: tag, icon: ICON_EP_RELEASE, kindAria: tx("md.entityRelease", "Release") };
+      }
+      return null;
+    }
+    const dashIdx = segs.indexOf("-");
+    let repoSegs, rest;
+    if (dashIdx >= 2 && dashIdx + 2 < segs.length) {
+      repoSegs = segs.slice(0, dashIdx);
+      rest = segs.slice(dashIdx + 1);
+    } else {
+      const kIdx = segs.findIndex((s, i) => i >= 2 && (s === "merge_requests" || s === "issues" || s === "releases"));
+      if (kIdx < 2 || kIdx + 1 >= segs.length) return null;
+      repoSegs = segs.slice(0, kIdx);
+      rest = segs.slice(kIdx);
+    }
+    if (repoSegs.length < 2 || repoSegs.some((s) => !/^[\w.-]+$/.test(s))) return null;
+    const prefix = repoSegs.length <= 2 ? repoSegs.join("/") : repoSegs.slice(-2).join("/");
+    const [kindSeg, idSeg] = rest;
+    if (kindSeg === "merge_requests" && /^\d+$/.test(idSeg) && (rest.length === 2 || (rest.length === 3 && /^(?:diffs|commits|pipelines)$/.test(rest[2])))) {
+      return { kind: "mr", prefix, sep: "!", ref: idSeg, icon: ICON_EP_PR, kindAria: tx("md.entityMr", "Merge Request") };
+    }
+    if (kindSeg === "issues" && /^\d+$/.test(idSeg) && rest.length === 2) {
+      return { kind: "issue", prefix, sep: "#", ref: idSeg, icon: ICON_EP_ISSUE, kindAria: tx("md.entityIssue", "Issue") };
+    }
+    if (kindSeg === "releases" && idSeg && rest.length === 2) {
+      const tag = safeDecode(idSeg);
+      if (!tag || /[<>"'\s]/.test(tag)) return null;
+      return { kind: "release", prefix, sep: "@", ref: tag, icon: ICON_EP_RELEASE, kindAria: tx("md.entityRelease", "Release") };
+    }
+    return null;
+  }
+  function renderGitEntityPill(rawUrl, ent) {
+    const eu = esc(rawUrl);
+    const fullLabel = `${ent.prefix}${ent.sep}${ent.ref}`;
+    return `<a class="url entity-pill is-${ent.kind}" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}" aria-label="${esc(`${ent.kindAria} ${fullLabel}`)}">${ent.icon}<span class="ep-text"><span class="ep-repo">${esc(ent.prefix)}</span><span class="ep-ref">${esc(ent.sep + ent.ref)}</span></span></a>`;
+  }
   const linkifyUrlMatch = (m) => {
     const raw = unesc(m);
     const cut = raw.search(/[<>"`]/);
@@ -25938,12 +26001,41 @@
       } else break;
     }
     if (!/^https?:\/\/[^\/.\s]/.test(u)) return null;
+    const ent = parseGitEntityUrl(u);
+    if (ent) {
+      return {
+        anchor: renderGitEntityPill(u, ent),
+        suffix: esc(tail + rest),
+      };
+    }
     const eu = esc(u);
     return {
       anchor: `<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`,
       suffix: esc(tail + rest),
     };
   };
+  const FILE_LINE_RE = /(?<![A-Za-z0-9_/.~:\\-])((?:~\/|\/|\.\/)?(?:[\w.\-+@%~]+\/)+[\w.\-+@%~]+\.[A-Za-z][A-Za-z0-9]{0,9}(?:#L\d+(?:-L?\d+)?|:\d+(?:[-:]\d+)?))(?![A-Za-z0-9_\/])/g;
+  function parseFileLineRef(raw) {
+    if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return null;
+    const lm = raw.match(/(?:#L(\d+(?:-L?\d+)?)|:(\d+(?:[-:]\d+)?))$/i);
+    if (!lm) return null;
+    const lineRaw = lm[1] || lm[2];
+    const lineSuffix = lm[0];
+    const base = raw.slice(0, -lineSuffix.length);
+    if (!base || base.startsWith("http:") || base.startsWith("https:")) return null;
+    if (!/^(?:~\/|\/|\.\/)?(?:[\w.\-+@%~\u4e00-\u9fff]+\/)+[\w.\-+@%~\u4e00-\u9fff]*[A-Za-z0-9_\u4e00-\u9fff][\w.\-+@%~\u4e00-\u9fff]*\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(base)) {
+      return null;
+    }
+    const body = base.replace(/^(?:~\/|\/|\.\/)/, "");
+    const segs = body.split("/");
+    if (segs.some((seg) => !seg || seg === "." || /^\.{2,}$/.test(seg))) return null;
+    return { path: base, line: lineRaw, displayLine: lm[1] ? "#L" + lm[1] : ":" + lm[2] };
+  }
+  function renderFileLinePill(ref) {
+    const ep = esc(ref.path);
+    const tip = tx("md.openFileLine", "打开文件 {path} 第 {line} 行", { path: ref.path, line: ref.line });
+    return `<a ${fileLinkAttrs(ref.path, ep, esc(tip))} data-line="${esc(ref.line)}"><code class="code-link is-fref"><span class="fref-path">${ep}</span><span class="fref-line">${esc(ref.displayLine)}</span></code></a>`;
+  }
   function parseInlineCodePath(raw) {
     if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return "";
     const base = raw.replace(/(?:#L\d+(?:-L?\d+)?|:\d+(?:[-:]\d+)?)$/i, "");
@@ -26206,9 +26298,106 @@
     if (tm) title = (tm[1] ?? tm[2] ?? tm[3] ?? "").trim();
     return { title };
   }
-  function renderFencedBlock(info, code) {
+  const ICON_STEP_DONE = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.6"/></svg>';
+  const ICON_STEP_ERR = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 3.1v3.4"/><circle cx="6" cy="9" r=".8" fill="currentColor" stroke="none"/></svg>';
+  function parseMetricsBlock(raw) {
+    const items = [];
+    for (const rawLine of String(raw || "").split("\n")) {
+      const line = rawLine.trim().replace(/^[-*•]\s+/, "");
+      if (!line) continue;
+      if (/^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/.test(line)) continue;
+      let label = "", value = "", delta = "";
+      if (line.includes("|")) {
+        const parts = line.replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((s) => s.trim().replace(/\\\|/g, "|"));
+        if (parts.length < 2) continue;
+        label = parts[0];
+        value = parts[1];
+        delta = parts.slice(2).filter(Boolean).join(" · ");
+      } else {
+        const cm = line.match(/^([^:：]+?)\s*[:：]\s*(.+)$/);
+        if (!cm) continue;
+        label = cm[1].trim();
+        value = cm[2].trim();
+      }
+      if (!label || !value) continue;
+      items.push({ label, value, delta });
+    }
+    return items.length ? items : null;
+  }
+  function classifyMetricDelta(delta) {
+    const d = String(delta || "").trim();
+    if (!d) return "";
+    if (/^(?:[+↑▲↗])/.test(d)) return "is-pos";
+    if (/^(?:[-−↓▼↘])/.test(d)) return "is-neg";
+    return "";
+  }
+  function renderMetricsBlock(raw) {
+    const items = parseMetricsBlock(raw);
+    if (!items) return "";
+    const n = items.length;
+    const cols = n <= 4 ? n : (n <= 6 ? 3 : 4);
+    const body = items.map((it) => {
+      const tone = classifyMetricDelta(it.delta);
+      const deltaHtml = it.delta
+        ? `<dd class="md-metric-delta${tone ? " " + tone : ""}">${esc(it.delta)}</dd>`
+        : "";
+      return `<div class="md-metric"><dt class="md-metric-label">${esc(it.label)}</dt><dd class="md-metric-val">${esc(it.value)}</dd>${deltaHtml}</div>`;
+    }).join("");
+    return `<div class="md-metrics" role="region" aria-label="${esc(tx("md.metricsAria", "核心指标"))}" data-cols="${cols}" data-count="${n}"><dl class="md-metrics-grid">${body}</dl></div>`;
+  }
+  function parseStepsBlock(raw) {
+    const items = [];
+    for (const rawLine of String(raw || "").split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const m = line.match(/^(?:(?:[-*•]|\d+[.)])\s+)?\[([xX~*! ])\]\s+(.+)$/);
+      if (!m) continue;
+      const sig = m[1];
+      const status = (sig === "x" || sig === "X") ? "done"
+        : (sig === "~" || sig === "*") ? "active"
+        : sig === "!" ? "error"
+        : "todo";
+      const rest = m[2].trim();
+      const parts = rest.split(/(?<!\\)\|/).map((s) => s.trim().replace(/\\\|/g, "|"));
+      const title = parts[0] || "";
+      const note = parts.slice(1).filter(Boolean).join(" · ");
+      if (!title) continue;
+      items.push({ status, title, note });
+    }
+    return items.length ? items : null;
+  }
+  function renderStepsBlock(raw, inlineFn = null) {
+    const items = parseStepsBlock(raw);
+    if (!items) return "";
+    const fmt = (s) => (typeof inlineFn === "function" ? inlineFn(esc(s)) : esc(s));
+    const statusLabel = {
+      done: tx("md.stepDone", "已完成"),
+      active: tx("md.stepActive", "进行中"),
+      error: tx("md.stepError", "阻塞或失败"),
+      todo: tx("md.stepTodo", "待办"),
+    };
+    const lis = items.map((it) => {
+      const icon = it.status === "done"
+        ? ICON_STEP_DONE
+        : it.status === "error"
+          ? ICON_STEP_ERR
+          : '<span class="md-step-dot" aria-hidden="true"></span>';
+      const noteHtml = it.note ? `<div class="md-step-note">${fmt(it.note)}</div>` : "";
+      return `<li class="md-step is-${it.status}"><span class="md-step-node" role="img" aria-label="${esc(statusLabel[it.status])}">${icon}</span><div class="md-step-body"><div class="md-step-title">${fmt(it.title)}</div>${noteHtml}</div></li>`;
+    }).join("");
+    return `<ol class="md-steps" aria-label="${esc(tx("md.stepsAria", "执行步骤"))}">${lis}</ol>`;
+  }
+  function renderFencedBlock(info, code, inlineFn = null) {
     const raw = String(code || "").replace(/\n$/, "");
     const fenceTag = String(info || "").trim().split(/[\s{:]/)[0].toLowerCase().replace(/^language-/, "");
+    if (fenceTag === "metrics" && raw.trim()) {
+      const mHtml = renderMetricsBlock(raw);
+      if (mHtml) return mHtml;
+    }
+    if (fenceTag === "steps" && raw.trim()) {
+      const sHtml = renderStepsBlock(raw, inlineFn);
+      if (sHtml) return sHtml;
+    }
     if (fenceTag === "mermaid" && raw.trim()) {
       const hash = richVisualHash("mermaid:" + raw);
       return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("rv.mermaidOpsAria", "Mermaid 图表操作"))}"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="${esc(tx("rv.viewSource", "查看源码"))}" aria-label="${esc(tx("rv.mermaidSourceAria", "查看 Mermaid 源码"))}">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="mermaid" title="${esc(tx("rv.expandFull", "全屏放大"))}" aria-label="${esc(tx("rv.mermaidExpandAria", "全屏放大查看图表"))}" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="${esc(tx("rv.mermaidChart", "Mermaid 图表"))}"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>${esc(tx("rv.mermaidLoading", "渲染图表中…"))}</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
@@ -26225,7 +26414,7 @@
     }
     return renderCodeBlock(info, raw);
   }
-  function extractFencedBlocks(text, blocks) {
+  function extractFencedBlocks(text, blocks, inlineFn = null) {
     const lines = String(text || "").split("\n");
     const out = [];
     for (let i = 0; i < lines.length; i++) {
@@ -26252,7 +26441,7 @@
             }
             bodyLines.push(cl);
           }
-          blocks.push(renderFencedBlock(info, bodyLines.join("\n")));
+          blocks.push(renderFencedBlock(info, bodyLines.join("\n"), inlineFn));
           out.push(`\u0000${blocks.length - 1}\u0000`);
           i = j;
           continue;
@@ -27469,6 +27658,8 @@
   const ICON_MD_COPY = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
   const ICON_MD_CHEV = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
   const ICON_TASK_CHECK = `<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.6"/></svg>`;
+  const ICON_TASK_BOX_DONE = `<svg class="md-task-svg" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="4" fill="currentColor"/><path d="M4.6 8.2 6.9 10.5 11.4 5.6" fill="none" stroke="var(--md-task-chk, var(--bg))" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const ICON_TASK_BOX_TODO = `<svg class="md-task-svg" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
   const CALLOUT_META = {
     NOTE: { cls: "is-note", get label() { return tx("md.callout.NOTE", "说明"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>` },
     TIP: { cls: "is-tip", get label() { return tx("md.callout.TIP", "提示"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>` },
@@ -27628,14 +27819,14 @@
   const DETAILS_CLOSE_RE = /^\s*&lt;\/details&gt;\s*$/i;
   const SUMMARY_LINE_RE = /^\s*&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;\s*$/i;
   const DETAILS_INLINE_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*(?:&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;)?\s*([\s\S]*?)&lt;\/details&gt;\s*$/i;
+  const MD_KBD_RE = /&lt;kbd&gt;((?:(?!&lt;(?:\/?kbd\b|[a-z/!]))[^\n]){1,64})&lt;\/kbd&gt;/gi;
+  const MD_MARK_RE = /(?<![A-Za-z0-9_=])==(?![=\s])([^\n]*?(?<![=\s]))==(?![A-Za-z0-9_=])/g;
   function mdRender(src, opts = null) {
     const blocks = [];
     const mdImgPaths = new Set();
     const rawSrc = String(src || "");
-    let text = extractFencedBlocks(rawSrc.replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks);
-    text = extractMathBlocks(text, blocks);
-    text = esc(text);
     const applyInlineStyle = (t) => t
+      .replace(MD_MARK_RE, '<mark class="md-mark">$1</mark>')
       .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "<strong><em>$1</em></strong>")
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/~~(?=\S)([^~\n]*?\S)~~/g, "<del>$1</del>")
@@ -27664,24 +27855,29 @@
               c = c.slice(1, -1);
             }
             const raw = unesc(c).trim();
-            const cleanP = parseInlineCodePath(raw);
-            if (cleanP) {
-              const ep = esc(cleanP);
-              scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, tx("file.openThisFile", "打开这个文件"))}><code class="code-link">${c}</code></a>`);
-            } else if (isPureHttpUrl(raw)) {
-              const eu = esc(raw);
-              scanned += keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
+            const fref = parseFileLineRef(raw);
+            if (fref) {
+              scanned += keep(renderFileLinePill(fref));
             } else {
-              if (raw && raw !== ROUTER && raw.length >= 2 && raw.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) {
-                _mdCurWorkerCandidates?.add(raw);
-              }
-              const wk = resolveInlineWorker(raw);
-              if (wk) {
-                const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
-                const tip = tx("worker.viewTaskTip", "查看任务：{name}", { name: wk.label && wk.label !== wk.name ? `${wk.label} (${wk.name})` : wk.name });
-                scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
+              const cleanP = parseInlineCodePath(raw);
+              if (cleanP) {
+                const ep = esc(cleanP);
+                scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, tx("file.openThisFile", "打开这个文件"))}><code class="code-link">${c}</code></a>`);
+              } else if (isPureHttpUrl(raw)) {
+                const eu = esc(raw);
+                scanned += keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
               } else {
-                scanned += keep(`<code>${c}</code>`);
+                if (raw && raw !== ROUTER && raw.length >= 2 && raw.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) {
+                  _mdCurWorkerCandidates?.add(raw);
+                }
+                const wk = resolveInlineWorker(raw);
+                if (wk) {
+                  const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
+                  const tip = tx("worker.viewTaskTip", "查看任务：{name}", { name: wk.label && wk.label !== wk.name ? `${wk.label} (${wk.name})` : wk.name });
+                  scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
+                } else {
+                  scanned += keep(`<code>${c}</code>`);
+                }
               }
             }
             i = close + ticks;
@@ -27760,6 +27956,11 @@
         i++;
       }
       let r = scanned
+        .replace(MD_KBD_RE, (m, inner) => {
+          const t = String(inner || "").trim();
+          if (!t || t.includes("\u0001")) return m;
+          return keep(`<kbd class="md-kbd">${t}</kbd>`);
+        })
         .replace(/!\[([^\]\n]*)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, alt, u) => {
           const rawU = unesc(u), eu = esc(rawU);
           const loadCls = decodedThumbs.has(rawU) ? "" : " is-img-loading";
@@ -27773,7 +27974,14 @@
           mdImgPaths.add(p);
           return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc(tx("file.viewImgTip", "查看大图 {name}", { name: p.split("/").pop() || tx("lb.image", "图片") }))}"><img alt="${alt}" decoding="async"${thumbImgAttrs(p, "md-img")}></button>`);
         })
-        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${applyInlineStyle(l)}</a>`))
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => {
+          const rawU = unesc(u);
+          if (unesc(l).trim() === rawU.trim()) {
+            const ent = parseGitEntityUrl(rawU);
+            if (ent) return keep(renderGitEntityPill(rawU, ent));
+          }
+          return keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${applyInlineStyle(l)}</a>`);
+        })
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
         .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
           p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
@@ -27785,6 +27993,10 @@
           const hit = linkifyUrlMatch(m);
           return hit ? keep(hit.anchor) + hit.suffix : m;
         })
+        .replace(FILE_LINE_RE, (m) => {
+          const fref = parseFileLineRef(unesc(m));
+          return fref ? keep(renderFileLinePill(fref)) : m;
+        })
         .replace(FILE_RE, (_, pre, p) => {
           const rawP = unesc(p);
           return `${pre}${keep(`<a ${fileLinkAttrs(rawP, p, tx("file.openThisFile", "打开这个文件"))}>${p}</a>`)}`;
@@ -27793,6 +28005,9 @@
       while (r.includes("\u0001")) r = r.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
       return r;
     };
+    let text = extractFencedBlocks(rawSrc.replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks, inline);
+    text = extractMathBlocks(text, blocks);
+    text = esc(text);
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
     const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
     const renderQuoteBlock = (qLines) => {
@@ -27832,7 +28047,7 @@
       const flushList = () => {
         if (!list) return;
         if (list.kind === "task") {
-          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"><span class="md-task-box" role="img" aria-label="${esc(it.done ? tx("md.taskDone", "已完成") : tx("md.taskTodo", "未完成"))}">${it.done ? ICON_TASK_CHECK : ""}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
+          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"${it.depth ? ` data-depth="${it.depth}"` : ""}><span class="md-task-box" role="img" aria-label="${esc(it.done ? tx("md.taskDone", "已完成") : tx("md.taskTodo", "未完成"))}">${it.done ? ICON_TASK_BOX_DONE : ICON_TASK_BOX_TODO}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
         } else {
           out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`);
         }
@@ -27943,10 +28158,11 @@
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
         if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); flushList(); out.push("<hr>"); continue; }
         if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); const h = Math.min(m[1].length + 1, 4); out.push(`<h${h}>${inline(m[2])}</h${h}>`); continue; }
-        if ((m = line.match(/^\s*[-*•]\s+\[([ xX])\]\s+(.*)$/))) {
+        if ((m = line.match(/^(\s*)[-*+•]\s+\[([ xX])\]\s+(.*)$/))) {
           flushPara();
           if (!list || list.kind !== "task") { flushList(); list = { kind: "task", tag: "ul", items: [], start: 1 }; }
-          list.items.push({ done: m[1] !== " ", text: m[2] });
+          const indentLen = (m[1] || "").replace(/\t/g, "  ").length;
+          list.items.push({ done: m[2] !== " ", text: m[3], depth: Math.min(2, Math.floor(indentLen / 2)) });
           continue;
         }
         if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
@@ -28751,8 +28967,10 @@
     return md(t, { includePathImages: true });
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
-  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|WARNING|CAUTION)\]\s*/i, "").replace(/^\[[ xX]\]\s+/, "").trim()).filter(Boolean).join(" ")
+  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|WARNING|CAUTION)\]\s*/i, "").replace(/^\[[ xX~*!]\]\s+/, "").trim()).filter(Boolean).join(" ")
     .replace(/\\([!"#$%&'()*+,\-.\/:;<=>?@\[\\\]^_`{|}~])/g, "$1")
+    .replace(/<kbd>([^<\n]{1,64})<\/kbd>/gi, "$1")
+    .replace(MD_MARK_RE, "$1")
     .replace(/\*\*|__|~~|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
@@ -28763,6 +28981,10 @@
       .replace(URL_RE, (m) => {
         const hit = linkifyUrlMatch(m);
         return hit ? keep(hit.anchor) + hit.suffix : m;
+      })
+      .replace(FILE_LINE_RE, (m) => {
+        const fref = parseFileLineRef(unesc(m));
+        return fref ? keep(renderFileLinePill(fref)) : m;
       })
       .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a ${fileLinkAttrs(unesc(p), p, tx("file.openThisFile", "打开这个文件"))}>${p}</a>`)}`);
     while (out.includes("\u0001")) out = out.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);

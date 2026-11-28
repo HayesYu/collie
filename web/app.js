@@ -15982,6 +15982,38 @@
     devMode: () => !!store.get("devMode", false),
   };
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
+  const THEME_BG_LIGHT = "#ffffff";
+  const THEME_BG_DARK = "#111113";
+  function syncThemeColor(t, dark) {
+    const color = dark ? THEME_BG_DARK : THEME_BG_LIGHT;
+    const metas = $$('meta[name="theme-color"]');
+    if (!metas.length) return color;
+    if (t === "system" && metas.length >= 2) {
+      const lightMeta = metas.find((m) => m.dataset?.themeColor === "light") || metas[0];
+      const darkMeta = metas.find((m) => m.dataset?.themeColor === "dark") || metas[1];
+      lightMeta.setAttribute("media", "(prefers-color-scheme: light)");
+      lightMeta.content = THEME_BG_LIGHT;
+      darkMeta.setAttribute("media", "(prefers-color-scheme: dark)");
+      darkMeta.content = THEME_BG_DARK;
+      for (const m of metas) {
+        if (m !== lightMeta && m !== darkMeta) {
+          m.setAttribute("media", "not all");
+          m.content = color;
+        }
+      }
+      return color;
+    }
+    metas.forEach((m, i) => {
+      if (i === 0) {
+        m.removeAttribute("media");
+        m.content = color;
+      } else {
+        m.setAttribute("media", "not all");
+        m.content = color;
+      }
+    });
+    return color;
+  }
   function applyLook() {
     const root = document.documentElement;
     const t = prefs.theme(), a = prefs.accent(), x = prefs.text();
@@ -15991,7 +16023,7 @@
     const cs = $('meta[name="color-scheme"]');
     if (cs) cs.content = t === "light" || t === "dark" ? t : "light dark";
     const dark = t === "dark" || (t === "system" && darkMQ.matches);
-    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#111113" : "#ffffff"; });
+    syncThemeColor(t, dark);
     dispatchEvent(new Event("collie:theme"));
   }
   darkMQ.addEventListener("change", applyLook);

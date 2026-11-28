@@ -20416,8 +20416,8 @@
     const cols = Number(card?.getAttribute?.("data-cols") || card?.dataset?.cols || 0);
     return cols >= 1 && cols <= 3;
   }
-  function isMobileWrappedCode() {
-    return typeof innerWidth === "number" && innerWidth <= 760;
+  function isWrappedCodeBlock(block) {
+    return !block?.classList?.contains("is-nowrap");
   }
   function syncTablesBatch(cards) {
     if (!cards || !cards.length) return;
@@ -20530,11 +20530,10 @@
   }
   function syncCodeBlocksBatch(blocks) {
     if (!blocks || !blocks.length) return;
-    const wrapped = isMobileWrappedCode();
     const measured = [];
     for (const block of blocks) {
       if (!block || block.isConnected === false) continue;
-      if (wrapped) {
+      if (isWrappedCodeBlock(block)) {
         measured.push({ block, scrollable: false, canL: false, canR: false });
         continue;
       }
@@ -20597,19 +20596,23 @@
   }
   function hydrateCodeBlocks(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
-    const wrapped = isMobileWrappedCode();
     const toSync = [];
     for (const block of root.querySelectorAll("[data-code-block]")) {
+      const wrapped = isWrappedCodeBlock(block);
       const pre = block.querySelector?.(".md-code-body pre");
-      if (pre && !boundCodeScrolls.has(pre)) {
-        boundCodeScrolls.add(pre);
-        pre.addEventListener?.("scroll", () => {
-          block.classList?.add("is-scroll-ready");
-          syncCodeBlockScroll(block);
-        }, { passive: true });
-        if (!wrapped) observeCodeResize(pre);
+      if (wrapped) {
+        block.classList?.remove("is-scrollable", "can-scroll-l", "can-scroll-r");
+      } else {
+        if (pre && !boundCodeScrolls.has(pre)) {
+          boundCodeScrolls.add(pre);
+          pre.addEventListener?.("scroll", () => {
+            block.classList?.add("is-scroll-ready");
+            syncCodeBlockScroll(block);
+          }, { passive: true });
+          observeCodeResize(pre);
+        }
+        toSync.push(block);
       }
-      if (!wrapped) toSync.push(block);
       if (!block.hasAttribute?.("data-foldable") || block._richHydrated) continue;
       block._richHydrated = true;
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
@@ -27711,8 +27714,8 @@
     const natW = Math.ceil(vbW);
     let minScale = 0;
     if (kind === "mermaid") {
-      // Keep Mermaid 13px node text >= ~11px crisp vector glyphs (never downscaled to 4-7px ants).
-      minScale = 0.85;
+      // Keep Mermaid 14px node text >= 13px crisp native vector glyphs; wide diagrams scroll smoothly instead of shrinking to tiny text.
+      minScale = 0.93;
     } else {
       const minFs = extractSvgMinFontSize(svgEl);
       if (minFs > 0) {
@@ -27943,7 +27946,7 @@
         darkMode: true,
         background: "#111113",
         fontFamily: sans,
-        fontSize: "13px",
+        fontSize: "14px",
         primaryColor: "#16161a",
         primaryTextColor: "#ececea",
         primaryBorderColor: "#28282f",
@@ -27987,7 +27990,7 @@
         darkMode: false,
         background: "#ffffff",
         fontFamily: sans,
-        fontSize: "13px",
+        fontSize: "14px",
         primaryColor: "#fbfbfa",
         primaryTextColor: "#18181b",
         primaryBorderColor: "#e2e2de",
@@ -28034,12 +28037,12 @@
         `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
         `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
         `.actor-line { stroke-width: 1px !important; }`,
-        `.nodeLabel, .label, .node text, .node tspan, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; fill: ${inkCol} !important; letter-spacing: -0.005em; }`,
-        `.edgeLabel, .edgeLabel p, .edgeLabel text, .edgeLabel tspan, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.nodeLabel, .label, .node text, .node tspan, text.actor > tspan { font-weight: 500 !important; font-size: 14px !important; fill: ${inkCol} !important; }`,
+        `.edgeLabel, .edgeLabel p, .edgeLabel text, .edgeLabel tspan, .messageText { font-weight: 400 !important; font-size: 12.5px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
         `.edgeLabel rect, .labelBkg { fill: ${bgCol} !important; opacity: 1 !important; rx: 4px; ry: 4px; }`,
-        `.cluster-label .nodeLabel, .cluster-label text, .cluster-label tspan { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.cluster-label .nodeLabel, .cluster-label text, .cluster-label tspan { font-weight: 500 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
       ].join("\n"),
-      flowchart: { htmlLabels: false, curve: "basis", padding: 10, nodeSpacing: 22, rankSpacing: 34, useMaxWidth: false },
+      flowchart: { htmlLabels: false, curve: "basis", padding: 12, nodeSpacing: 24, rankSpacing: 36, useMaxWidth: false },
       sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 40, messageMargin: 32, mirrorActors: false },
       gantt: { useMaxWidth: false },
       er: { useMaxWidth: false },
@@ -28684,12 +28687,6 @@
     const stageClick = !expandBtn ? ev.target?.closest?.(".rv-mermaid.is-ready .rv-mermaid-stage, .rv-svg.is-ready .rv-svg-stage") : null;
     if (expandBtn || stageClick) {
       const card = (expandBtn || stageClick).closest(".rv-mermaid, .rv-svg");
-      if (stageClick && card && isCoarseRvPointer() && !card.classList.contains("is-acts-open")) {
-        ev.preventDefault();
-        closeOtherRvFloatActs(card);
-        card.classList.add("is-acts-open");
-        return;
-      }
       const isSvgCard = card?.dataset?.rvKind === "svg";
       const svgEl = card?.querySelector?.(isSvgCard ? ".rv-svg-stage svg" : ".rv-mermaid-stage svg");
       if (svgEl) {

@@ -87,10 +87,13 @@ const vm = require("node:vm");
 const root = process.argv[1];
 const appSrc = fs.readFileSync(path.join(root, "web/app.js"), "utf8");
 const cssSrc = fs.readFileSync(path.join(root, "web/app.css"), "utf8");
+const demoCssSrc = fs.readFileSync(path.join(root, "docs/demo/app.css"), "utf8");
 
 // Static CSS contract checks
 assert.ok(cssSrc.includes(".rv-mermaid") && cssSrc.includes(".rv-svg") && cssSrc.includes(".rv-html-card"), "CSS must style Mermaid, SVG, and inline HTML cards");
-assert.ok(cssSrc.includes(".rv-float-acts") && cssSrc.includes(".rv-html-foot") && !cssSrc.includes(".rv-bar {") && !cssSrc.includes(".rv-html-head {"), "CSS must use frameless floating micro-actions instead of persistent top bars");
+assert.ok(cssSrc.includes(".rv-float-acts") && cssSrc.includes(".rv-html-foot") && !cssSrc.includes(".rv-bar {") && !cssSrc.includes(".rv-html-head {"), "CSS must use frameless micro-actions instead of persistent top bars");
+assert.ok(cssSrc.includes(".md-table-card > .md-float-acts {\n  position: static;") && cssSrc.includes("align-self: flex-end;\n  margin: 0 0 4px;") && cssSrc.includes(".rv-float-acts {\n  position: static;\n  z-index: 4;\n  display: inline-flex; align-items: center; gap: 4px;\n  align-self: flex-end;\n  margin: 0 0 4px;") && cssSrc.includes("background: transparent;\n  -webkit-backdrop-filter: none;"), "tables, html-card, and Mermaid/SVG must park transparent micro-actions outside the top-right edge on both desktop and touch without blocking headers/iframes/diagrams");
+assert.ok(demoCssSrc.includes(".md-table-card > .md-float-acts {\n  position: static;") && demoCssSrc.includes(".rv-float-acts {\n  position: static;"), "docs/demo/app.css must stay synced with unified outside top-right micro-actions");
 assert.ok(cssSrc.includes(".rv-mermaid.is-fallback") && cssSrc.includes(".rv-svg.is-fallback"), "CSS must style silent fallback for invalid Mermaid/SVG blocks");
 assert.ok(cssSrc.includes(".lb-svg") && cssSrc.includes(".rv-svg-stage.is-light-canvas"), "CSS must style lightbox SVG stage and dark-mode light canvas fallback");
 assert.ok(cssSrc.includes("--rv-html-max, 460px") && cssSrc.includes("--rv-html-max: 380px"), "CSS must clamp desktop/mobile HTML card heights");
@@ -100,7 +103,16 @@ assert.ok(cssSrc.includes(".md-table-card, .md-math-block,\n    .rv-card,"), "en
 assert.ok(cssSrc.includes(".md-code.has-tag pre"), "code/diff blocks with corner tag must reserve top clearance via static .has-tag class without :has() invalidation");
 assert.ok(cssSrc.includes(".md-table-vp.can-scroll-l thead th:first-child"), "table sticky divider shadow must appear only when horizontally scrolled");
 assert.ok(cssSrc.includes('.md-table-card:is([data-cols="1"], [data-cols="2"], [data-cols="3"]) table {\n    width: 100%; min-width: 0; table-layout: fixed;'), "mobile <=3-col tables must use 100% fixed auto-wrap layout without horizontal scroll");
-assert.ok(cssSrc.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;") && cssSrc.includes(".md-code.is-diff .diff-line.has-sig"), "mobile code and diff blocks must soft-wrap with hanging +/- indent via static .has-sig class");
+assert.ok(cssSrc.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;") && cssSrc.includes(".md-code.is-diff .diff-line.has-sig"), "code and diff blocks must soft-wrap with hanging +/- indent via static .has-sig class");
+{
+  const codeBlockCssIdx = cssSrc.indexOf(".md-code pre,\n.msg .md-code pre {");
+  const mobileCodeMediaIdx = cssSrc.indexOf("@media (max-width: 760px) {", codeBlockCssIdx);
+  assert.ok(codeBlockCssIdx > 0 && mobileCodeMediaIdx > codeBlockCssIdx, "default .md-code pre rules must precede mobile @media");
+  const defaultCodeCss = cssSrc.slice(codeBlockCssIdx, mobileCodeMediaIdx);
+  assert.ok(defaultCodeCss.includes("overflow-x: hidden;") && defaultCodeCss.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;"), "all viewports (desktop, tablet, mobile) must soft-wrap .md-code pre by default");
+  assert.ok(defaultCodeCss.includes(".diff-line {\n") && defaultCodeCss.includes("min-width: 0;") && defaultCodeCss.includes("text-indent: -1.35em;"), "all viewports must soft-wrap diff lines with hanging +/- indent by default");
+  assert.ok(cssSrc.includes(":is(.msg, .td-text, .mem-body, .fv-md, .rv-md) .katex {\n  font-size: 1.18em; line-height: 1.25;") && cssSrc.includes(":is(.msg.assistant, .td-text, .mem-body, .fv-md, .rv-md) .katex { color: var(--fg); }") && cssSrc.includes(".msg.user .katex { color: inherit; }") && cssSrc.includes(".md-math-block .katex { font-size: 1.24em; }") && cssSrc.includes(".katex .mfrac .frac-line { border-bottom-width: max(0.055em, 1px); }"), "KaTeX must use crisp 1.18em/1.24em optical scale, primary ink contrast, and solid fraction rules across all containers");
+}
 assert.ok(cssSrc.includes(".md-table-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;"), "Markdown tables must be frameless and blended natively into the canvas");
 assert.ok(cssSrc.includes(".md-code {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 10px;\n  background: var(--code-bg);"), "code/diff blocks must use borderless soft-surface blending");
 assert.ok(cssSrc.includes(".rv-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n  box-shadow: none;"), "Mermaid/SVG containers must remain completely borderless and transparent");
@@ -531,7 +543,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, rewriteMermaidLrToTd, extractSvgViewBoxWidth, onRichVisualViewportChange, sanitizeSvgElement, applyResponsiveSvgSizing, computeResponsiveSvgMetrics, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks };\n})();"
+  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, rewriteMermaidLrToTd, extractSvgViewBoxWidth, onRichVisualViewportChange, sanitizeSvgElement, applyResponsiveSvgSizing, computeResponsiveSvgMetrics, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks, isWrappedCodeBlock, syncCodeBlocksBatch, hydrateCodeBlocks };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 bootFinished = true;
@@ -615,7 +627,10 @@ async function testMermaidLifecycle() {
   assert.equal(lightCfg.flowchart.useMaxWidth, false, "Flowchart must not force useMaxWidth shrink");
   assert.equal(lightCfg.themeVariables.background, "#ffffff");
   assert.equal(darkCfg.themeVariables.background, "#111113");
+  assert.equal(lightCfg.themeVariables.fontSize, "14px", "Light Mermaid must use crisp 14px base font size");
+  assert.equal(darkCfg.themeVariables.fontSize, "14px", "Dark Mermaid must use crisp 14px base font size");
   assert.ok(lightCfg.themeCSS.includes("stroke-width: 1px") && lightCfg.themeCSS.includes("rx: 8px"), "Mermaid themeCSS enforces 1px hairline strokes and 8px rounded corners");
+  assert.ok(lightCfg.themeCSS.includes("font-weight: 500 !important; font-size: 14px !important;") && !lightCfg.themeCSS.includes("font-weight: 450"), "Mermaid nodes must use standard 500 weight and 14px font size (avoiding synthetic 450 weight)");
 
   // Responsive vector sizing floor: never crush wide Mermaid or text-bearing SVG into tiny blurry ants
   {
@@ -623,7 +638,7 @@ async function testMermaidLifecycle() {
     wideMmd.setAttribute("viewBox", "0 0 960 60");
     const mMetrics = R.computeResponsiveSvgMetrics(wideMmd, "mermaid");
     assert.equal(mMetrics.natW, 960);
-    assert.ok(mMetrics.minW >= 800 && mMetrics.minW <= 960, "wide Mermaid enforces >=0.85 readable scale floor: " + mMetrics.minW);
+    assert.ok(mMetrics.minW >= 890 && mMetrics.minW <= 960, "wide Mermaid enforces >=0.93 readable scale floor (>=13px effective glyphs): " + mMetrics.minW);
     R.applyResponsiveSvgSizing(wideMmd, "mermaid");
     assert.equal(wideMmd.dataset.rvNatW, "960");
     assert.equal(wideMmd.dataset.rvMinW, String(mMetrics.minW));
@@ -1024,11 +1039,47 @@ async function testSseNoFlicker() {
   assert.ok(box._colliePatchStats.lastReused >= 1, "patchSuperThread must report reused historical nodes");
 }
 
+// 6. Default soft-wrap code blocks suppress false-positive codeRO scroll shadows on desktop & mobile
+function testDefaultWrappedCodeNoFalseScrollShadows() {
+  ctx.innerWidth = 1440;
+  const host = makeEl("div");
+  const wrapBlock = makeEl("div");
+  wrapBlock.className = "md-code is-scrollable can-scroll-l can-scroll-r";
+  wrapBlock.setAttribute("data-code-block", "");
+  const wrapBody = makeEl("div"); wrapBody.className = "md-code-body";
+  const wrapPre = makeEl("pre"); wrapPre.scrollWidth = 1200; wrapPre.clientWidth = 600; wrapPre.scrollLeft = 24;
+  wrapBody.appendChild(wrapPre);
+  wrapBlock.appendChild(wrapBody);
+  host.appendChild(wrapBlock);
+
+  assert.equal(R.isWrappedCodeBlock(wrapBlock), true, "default .md-code block is soft-wrapped");
+  R.hydrateCodeBlocks(host);
+  assert.equal(wrapBlock.classList.contains("is-scrollable"), false, "hydrateCodeBlocks clears stale is-scrollable on default soft-wrapped block");
+  assert.equal(wrapBlock.classList.contains("can-scroll-l"), false, "hydrateCodeBlocks clears stale can-scroll-l on default soft-wrapped block");
+  assert.equal(wrapBlock.classList.contains("can-scroll-r"), false, "hydrateCodeBlocks clears stale can-scroll-r on default soft-wrapped block");
+  R.syncCodeBlocksBatch([wrapBlock]);
+  assert.equal(wrapBlock.classList.contains("is-scrollable"), false, "syncCodeBlocksBatch never marks default soft-wrapped code block scrollable");
+  assert.equal(wrapBlock.classList.contains("can-scroll-r"), false, "syncCodeBlocksBatch never adds right scroll shadow on soft-wrapped code block");
+
+  const nowrapBlock = makeEl("div");
+  nowrapBlock.className = "md-code is-nowrap";
+  nowrapBlock.setAttribute("data-code-block", "");
+  const nwBody = makeEl("div"); nwBody.className = "md-code-body";
+  const nwPre = makeEl("pre"); nwPre.scrollWidth = 1200; nwPre.clientWidth = 600; nwPre.scrollLeft = 0;
+  nwBody.appendChild(nwPre);
+  nowrapBlock.appendChild(nwBody);
+  assert.equal(R.isWrappedCodeBlock(nowrapBlock), false, "explicit .is-nowrap opts out of default soft-wrap");
+  R.syncCodeBlocksBatch([nowrapBlock]);
+  assert.equal(nowrapBlock.classList.contains("is-scrollable"), true, "explicit .is-nowrap still detects horizontal scroll");
+  assert.equal(nowrapBlock.classList.contains("can-scroll-r"), true, "explicit .is-nowrap shows right shadow when overflowed");
+}
+
 (async () => {
   await testMermaidLifecycle();
   await testHtmlCards();
   await testSvgSafeDirectRender();
   await testSseNoFlicker();
+  testDefaultWrappedCodeNoFalseScrollShadows();
   console.log("ALL_RICH_VISUALS_TESTS_PASSED");
 })().catch((err) => {
   console.error(err);

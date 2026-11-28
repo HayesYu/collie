@@ -3411,6 +3411,7 @@
       else hideSearchPanel();
       closeCollieMenus();
       closeCollieThreadsPop({ sync: false });
+      clearDrawerReturnStack({ syncHistory: false });
       if (activeThreadRoot) closeThreadDrawer({ rerender: false, immediate: true });
       if (activeWorkerKey) closeWorkerDrawer({ immediate: true });
     }
@@ -3546,7 +3547,10 @@
       }
     }
   }
-  addEventListener("popstate", route);
+  addEventListener("popstate", () => {
+    if (handleDrawerPopState()) return;
+    route();
+  });
   addEventListener("hashchange", route);
   addEventListener("resize", () => { if (booted && !view && !narrow()) route(); });
 
@@ -5545,6 +5549,7 @@
       cancelPendingSearchClose();
       closeCollieThreadsPop({ sync: false });
       closeCollieMenus();
+      clearDrawerReturnStack({ syncHistory: false });
       superSearchOpen = true;
       wrap.hidden = false;
       btn.classList.add("on");
@@ -7740,6 +7745,8 @@
     if (!opts.allowAnyView && view !== "collie") return false;
     if (a.id === "wd-popout" || a.closest?.("#worker-drawer")) return false;
     const href = a.getAttribute?.("href") || "";
+    const ret = (fromThreadRoot || a.closest?.("#thread-drawer")) && activeThreadRoot ? captureThreadReturnTo() : null;
+    const retOpt = ret ? { returnTo: ret } : {};
     const directWorker = String(a.dataset?.openWorker || a.dataset?.worker || "").trim();
     if (directWorker && directWorker !== ROUTER) {
       const paneId = String(a.dataset?.paneId || "").trim()
@@ -7748,7 +7755,7 @@
       const histId = String(a.dataset?.histId || "").trim()
         || (href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "");
       ev.preventDefault();
-      openWorkerDrawer({ worker: directWorker, paneId, histId, fromThreadRoot });
+      openWorkerDrawer({ worker: directWorker, paneId, histId, fromThreadRoot, ...retOpt });
       return true;
     }
     if (a.classList?.contains("event")) {
@@ -7757,7 +7764,7 @@
         const paneId = href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)) : (paneOf(ref) || "");
         const histId = href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)) : "";
         ev.preventDefault();
-        openWorkerDrawer({ worker: ref, paneId, histId, fromThreadRoot });
+        openWorkerDrawer({ worker: ref, paneId, histId, fromThreadRoot, ...retOpt });
         return true;
       }
     }
@@ -7765,7 +7772,7 @@
       const wName = decodeURIComponent(href.slice(4)).trim();
       if (wName && wName !== ROUTER) {
         ev.preventDefault();
-        openWorkerDrawer({ worker: wName, paneId: paneOf(wName) || "", fromThreadRoot });
+        openWorkerDrawer({ worker: wName, paneId: paneOf(wName) || "", fromThreadRoot, ...retOpt });
         return true;
       }
     }
@@ -7775,7 +7782,7 @@
         const ag = find(paneId);
         const wName = ag && ag.name && ag.name !== ROUTER ? ag.name : "";
         ev.preventDefault();
-        openWorkerDrawer({ worker: wName, paneId, fromThreadRoot });
+        openWorkerDrawer({ worker: wName, paneId, fromThreadRoot, ...retOpt });
         return true;
       }
     }
@@ -7785,7 +7792,7 @@
       const wName = String(a.dataset?.ref || hRec?.name || "").trim();
       if (wName && wName !== ROUTER && !wName.startsWith("h:") && (getWorkerLookup().byName.has(wName) || a.classList?.contains("event") || a.closest?.(".mem-crew"))) {
         ev.preventDefault();
-        openWorkerDrawer({ worker: wName, histId, fromThreadRoot });
+        openWorkerDrawer({ worker: wName, histId, fromThreadRoot, ...retOpt });
         return true;
       }
     }
@@ -8358,7 +8365,9 @@
     const openFileBtn = ev.target.closest("[data-open-file]");
     if (openFileBtn) {
       ev.preventDefault();
-      openFile(openFileBtn.dataset.openFile);
+      const fromThread = (opts.inDrawer || !!openFileBtn.closest?.("#thread-drawer")) && !!activeThreadRoot;
+      const ret = fromThread ? captureThreadReturnTo() : null;
+      openFile(openFileBtn.dataset.openFile, ret ? { returnTo: ret } : undefined);
       return true;
     }
     const ack = ev.target.closest(".reply-ack[data-ack]");
@@ -18766,7 +18775,7 @@
     body.innerHTML = wrapCard ? `<div class="rv-code-card">${inner}</div>${cut}` : `${inner}${cut}`;
     return lang;
   }
-  async function openFile(path) {
+  async function openFile(path, opts = {}) {
     if (IMG_EXT.test(path)) { openLightbox([{ path }], 0); return; }
     const body = $("#fv-body"), seq = ++fileSeq;
     fvCur = null;
@@ -18777,7 +18786,7 @@
     $("#fv-name").textContent = path.split("/").pop();
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
-    showFilePane();
+    showFilePane(opts);
     const tries = fileTries();
     if (isHtml) {
       let hf = null;
@@ -20417,7 +20426,14 @@
           location.hash = wideFileHash(path, rvCur?.machine || "");
           return;
         }
-        openFile(path);
+        const htmlOrigin = a.closest?.("#thread-drawer") && activeThreadRoot
+          ? { returnTo: captureThreadReturnTo() }
+          : (a.closest?.("#notes-pane") && notesOpen)
+            ? (() => { const ret = captureNotesReturnTo(); if (!isWideNotesViewport()) sidePaneOverlay = ""; return ret ? { returnTo: ret } : undefined; })()
+            : (a.closest?.("#file-view") || a.closest?.("#worker-drawer"))
+              ? { preserveReturnStack: true }
+              : undefined;
+        openFile(path, htmlOrigin);
         return;
       }
       e.preventDefault();
@@ -20430,7 +20446,14 @@
         location.hash = wideFileHash(path, rvCur?.machine || "");
         return;
       }
-      openFile(path);
+      const fileOrigin = a.closest?.("#thread-drawer") && activeThreadRoot
+        ? { returnTo: captureThreadReturnTo() }
+        : (a.closest?.("#notes-pane") && notesOpen)
+          ? (() => { const ret = captureNotesReturnTo(); if (!isWideNotesViewport()) sidePaneOverlay = ""; return ret ? { returnTo: ret } : undefined; })()
+          : (a.closest?.("#file-view") || a.closest?.("#worker-drawer"))
+            ? { preserveReturnStack: true }
+            : undefined;
+      openFile(path, fileOrigin);
       return;
     }
     const wideImg = e.target.closest(".rv-img img[data-wide-img]");
@@ -20973,10 +20996,286 @@
       el._wcTimer = setTimeout(done, settleMs);
     }
   };
+
+  // ───────────────────────────── Mobile Lightweight Drawer Return Stack (returnTo)
+  // Zero stacked multi-drawer DOM: only one drawer is rendered at a time;
+  // parent origin is kept in a tiny acyclic in-memory stack (max depth 2: notes -> thread).
+  const DRAWER_RETURN_MAX_W = 1000;
+  const DRAWER_RETURN_LABELS = {
+    notes: "小本本",
+    thread: "话题",
+  };
+  const isDrawerReturnStackEnabled = () => innerWidth <= DRAWER_RETURN_MAX_W;
+  let drawerReturnStack = [];
+  let drawerHistoryGen = 0;
+  let _pendingDrawerUnwind = 0;
+  let _pendingDrawerUnwindTimer = 0;
+  let _notesReturnAnimTimer = 0;
+
+  function drawerReturnMeta(entry) {
+    const kind = entry?.kind === "thread" ? "thread" : "notes";
+    const label = DRAWER_RETURN_LABELS[kind];
+    return { kind, label, ariaLabel: `返回${label}`, title: `返回${label}` };
+  }
+  function peekDrawerReturn() {
+    return drawerReturnStack.length ? drawerReturnStack[drawerReturnStack.length - 1] : null;
+  }
+  function captureNotesReturnTo() {
+    if (!isDrawerReturnStackEnabled() || !notesOpen) return null;
+    return {
+      kind: "notes",
+      tab: sidePaneActiveMode === "threads" ? "threads" : "notes",
+      scrollTop: npBodyEl ? Math.max(0, Math.round(npBodyEl.scrollTop || 0)) : 0,
+    };
+  }
+  function captureThreadReturnTo() {
+    if (!isDrawerReturnStackEnabled() || !activeThreadRoot) return null;
+    return {
+      kind: "thread",
+      entryId: activeThreadRoot,
+      anchorId: activeThreadAnchor || activeThreadRoot,
+      scrollTop: tdBodyEl ? Math.max(0, Math.round(tdBodyEl.scrollTop || 0)) : 0,
+    };
+  }
+  function syncDrawerBackButtons() {
+    const top = isDrawerReturnStackEnabled() ? peekDrawerReturn() : null;
+    const meta = top ? drawerReturnMeta(top) : null;
+    const activeKind = activeThreadRoot ? "thread"
+      : activeWorkerKey ? "worker"
+      : ($("#app")?.classList?.contains("has-file") ? "file" : "");
+    for (const [kind, btnId, lblId] of [
+      ["file", "#fv-return", "#fv-return-label"],
+      ["thread", "#td-return", "#td-return-label"],
+      ["worker", "#wd-return", "#wd-return-label"],
+    ]) {
+      const btn = $(btnId);
+      if (!btn) continue;
+      const show = !!(meta && activeKind === kind && meta.kind !== kind);
+      btn.hidden = !show;
+      if (show) {
+        btn.dataset.returnKind = meta.kind;
+        btn.setAttribute("aria-label", meta.ariaLabel);
+        btn.title = meta.title;
+        const lbl = $(lblId);
+        if (lbl) lbl.textContent = meta.label;
+      } else {
+        delete btn.dataset.returnKind;
+      }
+    }
+  }
+  function currentDrawerHistoryDepth() {
+    if (!drawerHistoryGen) return 0;
+    const st = history.state;
+    if (st && st.collieDrawerGen === drawerHistoryGen) {
+      return Math.max(0, Number(st.collieDrawerDepth) || 0);
+    }
+    return 0;
+  }
+  function pushDrawerHistoryDepth(depth) {
+    if (depth <= 0 || typeof history?.pushState !== "function") return;
+    if (!drawerHistoryGen || depth === 1) drawerHistoryGen++;
+    try {
+      const base = history.state && typeof history.state === "object" ? history.state : {};
+      const nextState = { ...base, collieIdx: navCur, collieDrawerGen: drawerHistoryGen, collieDrawerDepth: depth };
+      if (base.collieDrawerGen === drawerHistoryGen && Number(base.collieDrawerDepth) === depth) {
+        history.replaceState(nextState, "", location.href);
+      } else {
+        history.pushState(nextState, "", location.href);
+      }
+    } catch {}
+  }
+  function unwindDrawerHistoryTo(targetDepth) {
+    const curDepth = currentDrawerHistoryDepth();
+    const delta = curDepth - Math.max(0, targetDepth);
+    if (delta <= 0) return;
+    _pendingDrawerUnwind++;
+    clearTimeout(_pendingDrawerUnwindTimer);
+    _pendingDrawerUnwindTimer = setTimeout(() => { _pendingDrawerUnwind = 0; _pendingDrawerUnwindTimer = 0; }, 160);
+    try {
+      if (delta === 1 && typeof history.back === "function") history.back();
+      else if (typeof history.go === "function") history.go(-delta);
+      else if (typeof history.back === "function") history.back();
+    } catch {
+      _pendingDrawerUnwind = Math.max(0, _pendingDrawerUnwind - 1);
+    }
+  }
+  function clearDrawerReturnStack(opts = {}) {
+    const hadStack = drawerReturnStack.length > 0;
+    drawerReturnStack = [];
+    if (opts.syncHistory) {
+      unwindDrawerHistoryTo(0);
+    } else if (hadStack || currentDrawerHistoryDepth() > 0) {
+      drawerHistoryGen++;
+    }
+    syncDrawerBackButtons();
+  }
+  function trimDrawerReturnToKind(keepKind) {
+    if (!isDrawerReturnStackEnabled()) {
+      clearDrawerReturnStack({ syncHistory: false });
+      return;
+    }
+    const prevLen = drawerReturnStack.length;
+    drawerReturnStack = drawerReturnStack.filter((e) => e.kind === keepKind);
+    if (drawerReturnStack.length < prevLen) {
+      unwindDrawerHistoryTo(drawerReturnStack.length);
+    }
+    syncDrawerBackButtons();
+  }
+  function pushDrawerReturn(entry) {
+    if (!entry || !isDrawerReturnStackEnabled()) return false;
+    if (entry.kind !== "notes" && entry.kind !== "thread") return false;
+    // Enforce acyclic hierarchy (notes -> thread) with max depth 2.
+    if (entry.kind === "notes") {
+      drawerReturnStack = [entry];
+    } else {
+      const notesBase = drawerReturnStack.find((e) => e.kind === "notes");
+      drawerReturnStack = notesBase ? [notesBase, entry] : [entry];
+    }
+    pushDrawerHistoryDepth(drawerReturnStack.length);
+    return true;
+  }
+  function applyDrawerReturnOnOpen(opts = {}) {
+    if (opts.restoring) return;
+    if (!isDrawerReturnStackEnabled()) {
+      if (drawerReturnStack.length) clearDrawerReturnStack({ syncHistory: false });
+      return;
+    }
+    if (opts.returnTo) {
+      pushDrawerReturn(opts.returnTo);
+    } else if (!opts.preserveReturnStack) {
+      if (drawerReturnStack.length) clearDrawerReturnStack({ syncHistory: false });
+    }
+  }
+  function holdScrimImmediate(scrimEl) {
+    if (!scrimEl) return;
+    scrimEl.classList.add("is-scrim-hold");
+    const release = () => scrimEl.classList.remove("is-scrim-hold");
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => requestAnimationFrame(release));
+    } else {
+      release();
+    }
+  }
+  function clearMobileSheetSwap(drawerEl) {
+    if (!drawerEl) return;
+    clearTimeout(drawerEl._sdSwapTimer);
+    drawerEl._sdSwapTimer = 0;
+    drawerEl.classList.remove("is-drill-in", "is-return-in");
+  }
+  function playMobileSheetSwap(drawerEl, dir) {
+    if (!drawerEl || !isDrawerReturnStackEnabled()) return;
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    const cls = dir === "return" ? "is-return-in" : "is-drill-in";
+    clearMobileSheetSwap(drawerEl);
+    drawerEl.classList.add(cls);
+    drawerEl._sdSwapTimer = setTimeout(() => {
+      drawerEl._sdSwapTimer = 0;
+      drawerEl.classList.remove(cls);
+    }, 220);
+  }
+  function restoreDrawerReturnEntry(entry) {
+    if (!entry) return false;
+    if (entry.kind === "notes") {
+      const targetTab = entry.tab === "threads" ? "threads" : "notes";
+      sidePaneActiveMode = targetTab;
+      sidePaneOverlay = targetTab;
+      if (targetTab === "threads") {
+        const entries = chatEntries();
+        renderCollieThreadsMenu(computeReplyThreads(entries), entries);
+      }
+      holdScrimImmediate(notesScrim);
+      clearMobileSheetSwap(notesPane);
+      const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduced && notesPane) {
+        notesPane.classList.add("is-return-in");
+        clearTimeout(_notesReturnAnimTimer);
+        _notesReturnAnimTimer = setTimeout(() => {
+          _notesReturnAnimTimer = 0;
+          notesPane.classList.remove("is-return-in");
+        }, 220);
+      }
+      syncNotebookVisibility({ immediate: reduced });
+      const targetScrollTop = Math.max(0, Number(entry.scrollTop) || 0);
+      const restoreScroll = () => {
+        if (npBodyEl && notesOpen) npBodyEl.scrollTop = targetScrollTop;
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(restoreScroll);
+      else restoreScroll();
+      syncDrawerBackButtons();
+      return true;
+    }
+    if (entry.kind === "thread" && entry.entryId) {
+      const info = computeReplyThreads(chatEntries());
+      const resolved = resolveThread(info, entry.entryId, entry.anchorId || entry.entryId);
+      if (!resolved) return false;
+      openThreadDrawer(resolved.rootId, "", entry.anchorId || resolved.rootId, {
+        restoring: true,
+        restoreScrollTop: Math.max(0, Number(entry.scrollTop) || 0),
+      });
+      return !!activeThreadRoot;
+    }
+    return false;
+  }
+  function popDrawerReturnStack(opts = {}) {
+    if (!isDrawerReturnStackEnabled() || !drawerReturnStack.length) return false;
+    const fromHistory = !!opts.fromHistory;
+    const targetDepth = typeof opts.targetDepth === "number"
+      ? Math.max(0, Math.min(opts.targetDepth, drawerReturnStack.length - 1))
+      : drawerReturnStack.length - 1;
+    let entry = null;
+    while (drawerReturnStack.length > targetDepth) {
+      entry = drawerReturnStack.pop();
+    }
+    const appEl = $("#app");
+    if (appEl?.classList?.contains("has-file")) closeFilePane({ immediate: true, switching: true });
+    if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
+    if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
+    if (!fromHistory) unwindDrawerHistoryTo(drawerReturnStack.length);
+    while (entry) {
+      if (restoreDrawerReturnEntry(entry)) return true;
+      entry = drawerReturnStack.pop() || null;
+      if (!fromHistory && entry) unwindDrawerHistoryTo(drawerReturnStack.length);
+    }
+    syncAppDrawerClasses();
+    syncNotebookVisibility({ immediate: true });
+    syncDrawerBackButtons();
+    return false;
+  }
+  function handleDrawerPopState() {
+    if (_pendingDrawerUnwind > 0) {
+      _pendingDrawerUnwind--;
+      if (_pendingDrawerUnwind === 0) {
+        clearTimeout(_pendingDrawerUnwindTimer);
+        _pendingDrawerUnwindTimer = 0;
+      }
+      return view === "collie" && location.hash === "#/collie";
+    }
+    if (!isDrawerReturnStackEnabled() || !drawerReturnStack.length) return false;
+    if (view === "collie" && location.hash !== "#/collie") {
+      clearDrawerReturnStack({ syncHistory: false });
+      return false;
+    }
+    const targetDepth = currentDrawerHistoryDepth();
+    if (targetDepth < drawerReturnStack.length) {
+      popDrawerReturnStack({ fromHistory: true, targetDepth });
+      return true;
+    }
+    return false;
+  }
+  for (const id of ["#fv-return", "#td-return", "#wd-return"]) {
+    $(id)?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      popDrawerReturnStack();
+    });
+  }
+
   const resetDrawerMotion = (el, opts = {}) => {
     if (!el) return;
     clearTimeout(el._sdAnimTimer);
     el._sdAnimTimer = 0;
+    clearMobileSheetSwap(el);
     el.classList.remove("is-closing", "is-entering", "is-switching", "is-dragging");
     el.style?.removeProperty?.("--drawer-close-w");
     el.style.transform = "";
@@ -21019,17 +21318,23 @@
     fvWidenBtn.setAttribute("aria-label", lbl);
     syncAppDrawerClasses();
   }
-  function showFilePane() {
+  function showFilePane(opts = {}) {
     const appEl = $("#app");
     const hadFile = !!appEl?.classList?.contains("has-file");
     const wasAnyDrawer = isAnyRightDrawerOpen();
     const desktopMode = isDesktopDrawerViewport();
+    const closingNotesOverlay = !isWideNotesViewport() && notesOpen;
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
     const prevVisualShift = desktopMode ? captureCollieVisualShift(wasAnyDrawer, prevOpenW) : 0;
     const sc = desktopMode && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    applyDrawerReturnOnOpen(opts);
     if (activeThreadRoot) closeThreadDrawer({ immediate: true, rerender: false, switching: true });
     if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
+    if (closingNotesOverlay) {
+      sidePaneOverlay = "";
+      syncNotebookVisibility({ immediate: true });
+    }
     clearTimeout(paneTimer);
     resetDrawerMotion(pane);
     const baseW = unifiedDrawerW();
@@ -21039,11 +21344,16 @@
       if (pane?.style) pane.style.width = "";
       clearCollieShiftInline();
     }
-    if (pane.hidden) { pane.hidden = false; pane.offsetWidth; }
+    const mobileSwap = !desktopMode && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
+    if (pane.hidden) {
+      pane.hidden = false;
+      if (!mobileSwap) pane.offsetWidth;
+    }
     pane.setAttribute("aria-hidden", "false");
     if (fileScrim) {
       fileScrim.classList.remove("is-dragging");
       fileScrim.style.opacity = "";
+      if (mobileSwap) holdScrimImmediate(fileScrim);
       fileScrim.hidden = false;
     }
     if (!desktopMode && !hadFile) {
@@ -21052,8 +21362,13 @@
     }
     appEl?.classList?.add("has-file");
     syncFileWidenUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadFile && desktopMode });
-    if (!hadFile) {
+    syncDrawerBackButtons();
+    if (!closingNotesOverlay) {
+      syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadFile && desktopMode });
+    }
+    if (mobileSwap && !hadFile) {
+      playMobileSheetSwap(pane, opts.restoring ? "return" : "drill");
+    } else if (!hadFile) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift });
         if (!glided) playDrawerTransition(pane, false);
@@ -21073,6 +21388,15 @@
     const wasOpen = hadFile || (!!pane && !pane.hidden);
     const switching = !!opts.switching;
     const desktopMode = isDesktopDrawerViewport();
+    const dismissAll = !!opts.dismissAll;
+    if (!switching && !opts.immediate && !dismissAll && hadFile && isDrawerReturnStackEnabled() && drawerReturnStack.length > 0) {
+      if (popDrawerReturnStack()) return;
+    }
+    if (!switching && (dismissAll || opts.immediate)) {
+      clearDrawerReturnStack({ syncHistory: dismissAll });
+    }
+    const ae = document.activeElement;
+    if (ae && pane?.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     const sc = desktopMode && wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const closingW = _lastFileW || _lastDrawerW || 520;
@@ -21099,6 +21423,7 @@
     appEl?.classList?.remove("has-file");
     if (!switching) syncAppDrawerClasses();
     syncFileWidenUI();
+    if (!switching) syncDrawerBackButtons();
     pane?.setAttribute?.("aria-hidden", "true");
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     if (desktopMode && lockSnap && view === "collie") {
@@ -21138,7 +21463,7 @@
     }
   }
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
-  fileScrim?.addEventListener("click", () => closeFilePane());
+  fileScrim?.addEventListener("click", () => closeFilePane({ dismissAll: true }));
   fvWidenBtn?.addEventListener("click", () => {
     if (!isDesktopDrawerViewport() || pane?.hidden) return;
     finishDrawerGlide(true);
@@ -21213,6 +21538,7 @@
         if (!dragging) return;
         if (!appliedDrag) {
           appliedDrag = true;
+          clearMobileSheetSwap(drawerEl);
           promoteSheetWillChange(drawerEl, "transform", 0);
           drawerEl.classList.add("is-dragging");
           if (scrimEl) {
@@ -21934,8 +22260,15 @@
       }
       notesPane.classList.toggle("is-handoff-in", !!(wantOpen && opts.fromDrawerClose && !immediate));
       notesPane.classList.toggle("is-hidden", !wantOpen);
+      if (!wantOpen) {
+        clearTimeout(_notesReturnAnimTimer);
+        _notesReturnAnimTimer = 0;
+        notesPane.classList.remove("is-return-in");
+      }
     } else if (!wantOpen) {
-      notesPane.classList.remove("is-handoff-in");
+      clearTimeout(_notesReturnAnimTimer);
+      _notesReturnAnimTimer = 0;
+      notesPane.classList.remove("is-handoff-in", "is-return-in");
     }
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
     notesPane.setAttribute("aria-label", isThreads ? "小本本 · 话题" : "小本本");
@@ -22047,10 +22380,12 @@
   notesBtn?.addEventListener("click", () => {
     if (view !== "collie") return;
     if (notesOpen) {
+      clearDrawerReturnStack({ syncHistory: true });
       if (isWideNotesViewport()) persistSidePanePref("none");
       else sidePaneOverlay = "";
       syncNotebookVisibility();
     } else {
+      clearDrawerReturnStack({ syncHistory: true });
       closeAllColliePopovers();
       const targetMode = sidePaneActiveMode === "threads" ? "threads" : "notes";
       if (isWideNotesViewport()) persistSidePanePref(targetMode);
@@ -22067,9 +22402,9 @@
       const hadWorker = !!activeWorkerKey;
       const hadFile = !!$("#app")?.classList?.contains("has-file");
       if (hadThread || hadWorker || hadFile) {
-        if (hadThread) closeThreadDrawer({ rerender: true });
-        if (hadWorker) closeWorkerDrawer();
-        if (hadFile) closeFilePane();
+        if (hadThread) closeThreadDrawer({ rerender: true, dismissAll: true });
+        if (hadWorker) closeWorkerDrawer({ dismissAll: true });
+        if (hadFile) closeFilePane({ dismissAll: true });
       } else {
         syncNotebookVisibility();
       }
@@ -22124,8 +22459,12 @@
     if (fBtn) {
       ev.preventDefault();
       const fp = fBtn.dataset.npFile;
-      if (!isWideNotesViewport()) sidePaneOverlay = "";
-      if (fp) openFile(fp);
+      if (fp) {
+        const isImg = IMG_EXT.test(fp);
+        const ret = !isImg ? captureNotesReturnTo() : null;
+        if (!isWideNotesViewport() && !isImg) sidePaneOverlay = "";
+        openFile(fp, ret ? { returnTo: ret } : undefined);
+      }
       return;
     }
     const tBtn = ev.target.closest("[data-np-task]");
@@ -22136,11 +22475,13 @@
       const taskTitle = tBtn.dataset.npTitle || "";
       const taskNote = tBtn.dataset.npNote || "";
       const taskPath = tBtn.dataset.npPath || "";
+      const ret = worker ? captureNotesReturnTo() : null;
       if (!isWideNotesViewport()) sidePaneOverlay = "";
       if (worker) {
-        openWorkerDrawer({ worker, title: taskTitle, note: taskNote, entryId, taskPath });
+        openWorkerDrawer({ worker, title: taskTitle, note: taskNote, entryId, taskPath, ...(ret ? { returnTo: ret } : {}) });
         return;
       }
+      clearDrawerReturnStack({ syncHistory: false });
       if (!isWideNotesViewport()) syncNotebookVisibility();
       if (entryId) {
         jumpToEntry(entryId);
@@ -22191,6 +22532,13 @@
       clearCollieShiftInline();
       syncCollieTopHeight();
       syncNotebookVisibility({ immediate: true });
+    }
+    if (wChanged) {
+      if (!isDrawerReturnStackEnabled() && drawerReturnStack.length) {
+        clearDrawerReturnStack({ syncHistory: false });
+      } else {
+        syncDrawerBackButtons();
+      }
     }
     const desktopMode = isDesktopDrawerViewport();
     if (!desktopMode) {
@@ -22428,8 +22776,9 @@
     e.stopPropagation();
     const rootId = item.dataset.thPick;
     const latestId = item.dataset.thLatest || "";
+    const ret = rootId ? captureNotesReturnTo() : null;
     if (!isWideNotesViewport()) sidePaneOverlay = "";
-    if (rootId) openThreadDrawer(rootId, latestId, latestId);
+    if (rootId) openThreadDrawer(rootId, latestId, latestId, ret ? { returnTo: ret } : undefined);
   });
 
   const tdDrawer = $("#thread-drawer");
@@ -23334,12 +23683,18 @@
     const hadThread = !!appEl.classList.contains("has-thread");
     const wasAnyDrawer = isAnyRightDrawerOpen();
     const desktopMode = innerWidth > THREAD_DESKTOP_MIN;
+    const closingNotesOverlay = !isWideNotesViewport() && notesOpen;
     const prevOpenW = wasAnyDrawer ? (_drawerGlideState ? _drawerGlideState.targetW : _lastDrawerW) : 0;
     const prevVisualShift = desktopMode ? captureCollieVisualShift(wasAnyDrawer, prevOpenW) : 0;
     const sc = desktopMode && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc && !hadThread ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    applyDrawerReturnOnOpen(opts);
     if (appEl.classList.contains("has-file")) closeFilePane({ immediate: true, switching: true });
     if (activeWorkerKey) closeWorkerDrawer({ immediate: true, switching: true });
+    if (closingNotesOverlay) {
+      sidePaneOverlay = "";
+      syncNotebookVisibility({ immediate: true });
+    }
     clearTimeout(tdHideTimer);
     resetDrawerMotion(tdDrawer);
     const switched = activeThreadRoot !== realRoot;
@@ -23355,10 +23710,15 @@
     }
     applyThreadWidth();
     const nextW = _lastThreadW || _lastDrawerW || 432;
-    if (tdDrawer.hidden) { tdDrawer.hidden = false; tdDrawer.offsetWidth; }
+    const mobileSwap = !isDesktopDrawerViewport() && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
+    if (tdDrawer.hidden) {
+      tdDrawer.hidden = false;
+      if (!mobileSwap) tdDrawer.offsetWidth;
+    }
     if (tdScrim) {
       tdScrim.classList.remove("is-dragging");
       tdScrim.style.opacity = "";
+      if (mobileSwap) holdScrimImmediate(tdScrim);
       tdScrim.hidden = false;
     }
     if (!desktopMode && !hadThread && !opts.immediate) {
@@ -23369,8 +23729,13 @@
     $("#v-collie")?.classList?.remove("is-main-focused");
     appEl.classList.add("has-thread");
     syncThreadWideUI();
-    syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadThread && !opts.immediate && desktopMode });
-    if (!hadThread && !opts.immediate) {
+    syncDrawerBackButtons();
+    if (!closingNotesOverlay) {
+      syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadThread && !opts.immediate && desktopMode });
+    }
+    if (mobileSwap && !hadThread && !opts.immediate) {
+      playMobileSheetSwap(tdDrawer, opts.restoring ? "return" : "drill");
+    } else if (!hadThread && !opts.immediate) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: tdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
         if (!glided) playDrawerTransition(tdDrawer, false);
@@ -23410,6 +23775,15 @@
     const hadThread = appEl.classList.contains("has-thread");
     const switching = !!opts.switching;
     const desktopMode = innerWidth > THREAD_DESKTOP_MIN;
+    const dismissAll = !!opts.dismissAll;
+    if (!switching && !opts.immediate && !dismissAll && activeThreadRoot && isDrawerReturnStackEnabled() && drawerReturnStack.length > 0) {
+      if (popDrawerReturnStack()) return;
+    }
+    if (!switching && (dismissAll || opts.immediate)) {
+      clearDrawerReturnStack({ syncHistory: dismissAll });
+    }
+    const ae = document.activeElement;
+    if (ae && tdDrawer.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     const sc = desktopMode && wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const closingW = _lastThreadW || _lastDrawerW || 432;
@@ -23446,6 +23820,7 @@
     if (!switching) syncAppDrawerClasses();
     $("#v-collie")?.classList?.remove("is-main-focused");
     syncThreadWideUI();
+    if (!switching) syncDrawerBackButtons();
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     tdDrawer.setAttribute("aria-hidden", "true");
     if (desktopMode && lockSnap && view === "collie") {
@@ -23482,7 +23857,7 @@
   }
   function locateFromDrawer(msgId) {
     if (!msgId) return;
-    if (innerWidth <= THREAD_DESKTOP_MIN && activeThreadRoot) closeThreadDrawer();
+    if (innerWidth <= THREAD_DESKTOP_MIN && activeThreadRoot) closeThreadDrawer({ dismissAll: true });
     requestAnimationFrame(() => jumpToEntry(msgId));
   }
 
@@ -23515,7 +23890,7 @@
       else syncThreadWideUI();
     }, { passive: true });
     tdCloseBtn?.addEventListener("click", () => closeThreadDrawer());
-    tdScrim?.addEventListener("click", () => closeThreadDrawer());
+    tdScrim?.addEventListener("click", () => closeThreadDrawer({ dismissAll: true }));
     bindDrawerSheetDrag(tdDrawer, tdScrim, [tdHandleBtn, tdHeadEl], () => !!activeThreadRoot, () => closeThreadDrawer());
     tdWorkersEl?.addEventListener("click", (e) => {
       const a = e.target.closest("a.td-worker[data-td-worker]");
@@ -23525,7 +23900,8 @@
       const href = a.getAttribute?.("href") || "";
       const paneId = href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)).trim() : "";
       const histId = href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "";
-      openWorkerDrawer({ worker: a.dataset.tdWorker, paneId, histId, fromThreadRoot: activeThreadRoot || "" });
+      const ret = captureThreadReturnTo();
+      openWorkerDrawer({ worker: a.dataset.tdWorker, paneId, histId, fromThreadRoot: activeThreadRoot || "", ...(ret ? { returnTo: ret } : {}) });
     });
     tdLocateRootBtn?.addEventListener("click", () => {
       const info = computeReplyThreads(chatEntries());
@@ -24458,11 +24834,13 @@
     const wantMode = opts.mode && ["chat", "screen", "log"].includes(opts.mode) ? opts.mode : "";
     const modeChanged = !!(wantMode && wantMode !== wdMode);
     if (hadWorker && !switchedTarget && !wdDrawer.hidden && !modeChanged) {
+      applyDrawerReturnOnOpen(opts);
       if (opts.fromThreadRoot !== undefined) wdFromThread = opts.fromThreadRoot || "";
       if (opts.title !== undefined) wdTaskTitle = opts.title || "";
       if (opts.note !== undefined) wdTaskNote = opts.note || "";
       syncWorkerDrawerMeta();
       syncWorkerSendBtn();
+      syncDrawerBackButtons();
       syncSideActive({ skipBadge: true });
       return;
     }
@@ -24473,6 +24851,7 @@
     const sc = view === "collie" ? viewScroller("collie") : null;
     const desktopMode = isDesktopDrawerViewport();
     const lockSnap = desktopMode && sc && !hadWorker ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    applyDrawerReturnOnOpen(opts);
     closePick();
     closeDirPick(false);
     if (collieMenuOpen) closeCollieMenus();
@@ -24514,13 +24893,18 @@
     }
     applyWorkerWidth();
     const nextW = _lastWorkerW || _lastDrawerW || 480;
+    const mobileSwap = !desktopMode && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
     const handoffScrim = (wasAnyDrawer || closingNotesOverlay) && !desktopMode;
     if (wdScrim && !handoffScrim) {
       wdScrim.classList.remove("is-dragging");
       wdScrim.style.opacity = "";
+      if (mobileSwap) holdScrimImmediate(wdScrim);
       wdScrim.hidden = false;
     }
-    if (wdDrawer.hidden) { wdDrawer.hidden = false; wdDrawer.offsetWidth; }
+    if (wdDrawer.hidden) {
+      wdDrawer.hidden = false;
+      if (!mobileSwap) wdDrawer.offsetWidth;
+    }
     if (!desktopMode && !hadWorker) {
       promoteSheetWillChange(wdDrawer, "transform", 340);
       if (wdScrim) promoteSheetWillChange(wdScrim, "opacity", 340);
@@ -24530,13 +24914,17 @@
     if (wdScrim && handoffScrim) {
       wdScrim.classList.remove("is-dragging");
       wdScrim.style.opacity = "";
+      if (mobileSwap) holdScrimImmediate(wdScrim);
       wdScrim.hidden = false;
     }
     syncWorkerWidenUI();
+    syncDrawerBackButtons();
     if (!closingNotesOverlay) {
       syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && desktopMode });
     }
-    if (!hadWorker) {
+    if (mobileSwap && !hadWorker) {
+      playMobileSheetSwap(wdDrawer, opts.restoring ? "return" : "drill");
+    } else if (!hadWorker) {
       if (!wasAnyDrawer) {
         const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
         if (!glided) playDrawerTransition(wdDrawer, false);
@@ -24561,6 +24949,13 @@
     const wasOpen = !!activeWorkerKey || !wdDrawer.hidden;
     const switching = !!opts.switching;
     const desktopMode = isDesktopDrawerViewport();
+    const dismissAll = !!opts.dismissAll;
+    if (!switching && !opts.immediate && !dismissAll && activeWorkerKey && isDrawerReturnStackEnabled() && drawerReturnStack.length > 0) {
+      if (popDrawerReturnStack()) return;
+    }
+    if (!switching && (dismissAll || opts.immediate)) {
+      clearDrawerReturnStack({ syncHistory: dismissAll });
+    }
     const sc = desktopMode && wasOpen && !switching && view === "collie" ? viewScroller("collie") : null;
     const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const closingW = _lastWorkerW || _lastDrawerW || 480;
@@ -24608,6 +25003,7 @@
     appEl.classList.remove("has-worker");
     if (!switching) syncAppDrawerClasses();
     syncWorkerWidenUI();
+    if (!switching) syncDrawerBackButtons();
     syncSideActive({ skipBadge: true });
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     wdDrawer.setAttribute("aria-hidden", "true");
@@ -24640,7 +25036,7 @@
 
   if (wdDrawer) {
     wdCloseBtn?.addEventListener("click", () => closeWorkerDrawer());
-    wdScrim?.addEventListener("click", () => closeWorkerDrawer());
+    wdScrim?.addEventListener("click", () => closeWorkerDrawer({ dismissAll: true }));
     bindDrawerSheetDrag(wdDrawer, wdScrim, [$("#wd-handle"), wdDrawer.querySelector(".wd-head")], () => !!activeWorkerKey, () => closeWorkerDrawer());
     wdWidenBtn?.addEventListener("click", () => {
       if (innerWidth <= THREAD_DESKTOP_MIN || !activeWorkerKey) return;
@@ -24680,7 +25076,23 @@
     });
     wdThreadBtn?.addEventListener("click", () => {
       const rootId = wdThreadBtn.dataset.wdThread || "";
-      if (rootId) openThreadFromAnywhere(rootId, "");
+      if (!rootId) return;
+      if (view === "collie" && isDrawerReturnStackEnabled()) {
+        const top = peekDrawerReturn();
+        if (top?.kind === "thread") {
+          const info = computeReplyThreads(chatEntries());
+          const wantRoot = resolveThread(info, rootId, rootId)?.rootId || rootId;
+          const topRoot = resolveThread(info, top.entryId, top.entryId)?.rootId || top.entryId;
+          if (wantRoot === topRoot) {
+            popDrawerReturnStack();
+            return;
+          }
+        }
+        trimDrawerReturnToKind("notes");
+        openThreadDrawer(rootId, "", rootId, { preserveReturnStack: true });
+        return;
+      }
+      openThreadFromAnywhere(rootId, "");
     });
     wdInterruptBtn?.addEventListener("click", () => {
       if (!wdPaneId) return;

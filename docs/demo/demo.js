@@ -607,7 +607,7 @@
   // ───────────────────────────── scripted replies
   let demoN = 0;
   const seenSayIds = new Map();
-  function collieSay(text, re, clientMsgId, pick = false) {
+  function collieSay(text, re, clientMsgId, pick = false, inPlace = false) {
     if (clientMsgId && seenSayIds.has(clientMsgId)) return seenSayIds.get(clientMsgId);
     const all = [...earlierEntries, ...entries];
     const q = re && all.find((e) => e.id === re && (e.role === "collie" || e.role === "user"));
@@ -619,10 +619,14 @@
       colliePickAnswer(text, q);
       return q.id;
     }
+    const isInPlace = !pick && !!inPlace && !!q;
     if (q && q.role === "collie" && q.options?.length && !q.pick) {
-      q.pick = { state: "custom", text, at: new Date().toISOString() };
+      q.pick = { state: "custom", text, at: new Date().toISOString(), ...(isInPlace ? { in_place: true } : {}) };
     }
-    const mine = entry("user", text, q ? { re: { entry: q.id, who: q.role === "user" ? "你" : "Collie", text: q.text } } : {});
+    const mine = entry("user", text, {
+      ...(q ? { re: { entry: q.id, who: q.role === "user" ? "你" : "Collie", text: q.text } } : {}),
+      ...(isInPlace ? { in_place: true } : {}),
+    });
     if (clientMsgId) seenSayIds.set(clientMsgId, mine.id);
     entries.push(mine); routerStatus = "working"; pushAll(); collieAnswer(text, mine);
     return mine.id;
@@ -1307,7 +1311,10 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       demoUploads.set(path, { blob, name: rawName, size: blob.size || 0 });
       return json({ path, name: rawName, size: blob.size || 0 });
     }
-    if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "", body.re, body.client_msg_id, !!body.pick), picked: !!body.pick });
+    if (p === "/api/super/say") {
+      const inPlace = !!body.in_place && !!body.re && !body.pick;
+      return json({ ok: true, entry: collieSay(body.text || "", body.re, body.client_msg_id, !!body.pick, inPlace), ...(body.pick ? { picked: true } : {}), ...(inPlace ? { in_place: true } : {}) });
+    }
     if (p === "/api/external") return json({ sessions: external });
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });

@@ -704,11 +704,30 @@ const mkEntry = (n, role, text, extra = {}) => ({
   const sepVisualTop = sepNode.y - scroller.scrollTop;
   assert.ok(sepVisualTop >= 12 && sepVisualTop <= 16, "divider top breathing room must be 12-16px, got " + sepVisualTop);
   assert.equal(getEl("#super-jump").hidden, false, "jump button must appear when anchored above bottom");
-  assert.equal(getEl("#super-jump-badge").hidden, false, "jump badge must appear when unread > 0");
-  assert.equal(getEl("#super-jump-badge").textContent, "6", "jump badge must show compact unread count");
-  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部，6 条未读", "jump aria-label must describe unread count");
-  assert.equal(getEl("#super-jump").title, "回到底部，6 条未读", "jump title must describe unread count");
+  // Already anchored at #unread-sep: Stage 2 pure circular button (no piled text), preserves exact count in aria-label.
+  assert.equal(getEl("#super-jump").dataset.stage, "latest", "anchored at unread-sep switches to stage 2 (latest)");
+  assert.equal(getEl("#super-jump").classList.contains("stage-unread"), false, "stage 2 omits stage-unread pill class");
+  assert.equal(getEl("#super-jump-badge").hidden, true, "stage 2 keeps pure circular button without badge text");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新，余 6 条未读", "stage 2 aria-label preserves exact unread count");
+  assert.equal(getEl("#super-jump").title, "跳到最新，余 6 条未读", "stage 2 title preserves exact unread count");
   assert.equal(getEl("#super-jump").classList.contains("has-unread"), true, "jump button must carry has-unread class");
+  // Scrolled above #unread-sep: Stage 1 compact unread pill ("↓ 6 未读").
+  const anchoredTop2 = scroller.scrollTop;
+  scroller.scrollTop = 0;
+  T.updateSuperJump();
+  assert.equal(getEl("#super-jump").dataset.stage, "unread-start", "above unread-sep switches to stage 1 (unread-start)");
+  assert.equal(getEl("#super-jump").classList.contains("stage-unread"), true, "stage 1 adds stage-unread pill class");
+  assert.equal(getEl("#super-jump-badge").hidden, false, "stage 1 shows compact unread pill text");
+  assert.equal(getEl("#super-jump-badge").textContent, "6 未读", "stage 1 shows compact 6 未读");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到未读开头，6 条未读", "stage 1 aria-label describes unread jump");
+  // Stage 1 click glides back to #unread-sep without clearing unread, then flips to Stage 2.
+  getEl("#super-jump").dispatch("click");
+  await wait(30);
+  assert.equal(serverLastRead, "e4", "stage 1 click must NOT prematurely advance server cursor");
+  assert.ok(Math.abs(sepNode.y - scroller.scrollTop - 14) <= 2, "stage 1 click lands at #unread-sep (~14px pad)");
+  assert.equal(getEl("#super-jump").dataset.stage, "latest", "after stage 1 lands, button switches to stage 2");
+  scroller.scrollTop = anchoredTop2;
+  T.updateSuperJump();
   await wait(520);
   assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "must not advance cursor while stopped above bottom");
 
@@ -720,16 +739,16 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(scroller.scrollTop, scrollBeforeDrawer, "closing thread drawer must keep 0px scroll drift");
   assert.equal(fetchCalls.filter((c) => c.url === "/api/chat/read").length, 0, "drawer toggle must not prematurely advance read cursor");
 
-  // 4) Clicking jump button scrolls to bottom and immediately advances server + local cursor.
+  // 4) Clicking jump button (Stage 2) scrolls to bottom and immediately advances server + local cursor.
   getEl("#super-jump").dispatch("click");
   await wait(30);
-  assert.equal(serverLastRead, "e12", "clicking jump button must immediately POST /api/chat/read to e12");
+  assert.equal(serverLastRead, "e12", "clicking stage 2 jump button must immediately POST /api/chat/read to e12");
   assert.equal(JSON.parse(storage.get("collie.chatReadEntryId")), "e12", "localStorage cursor updated to e12");
-  assert.equal(scroller.scrollTop, scroller.scrollHeight, "clicking jump button must land at bottom");
+  assert.equal(scroller.scrollTop, scroller.scrollHeight, "clicking stage 2 jump button must land at bottom");
   assert.equal(getEl("#super-jump").hidden, true, "jump button must hide at bottom");
   assert.equal(getEl("#super-jump-badge").hidden, true, "jump badge must hide after read");
   assert.equal(getEl("#super-jump-badge").textContent, "", "jump badge must clear after read");
-  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部", "jump aria-label resets after read");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新", "jump aria-label resets after read");
 
   // 4b) Scrolled up with 0 unread: pure circular icon button without badge text.
   scroller.scrollTop = 0;
@@ -738,7 +757,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(getEl("#super-jump-badge").hidden, true, "badge stays hidden when 0 unread");
   assert.equal(getEl("#super-jump-badge").textContent, "", "no text rendered when 0 unread");
   assert.equal(getEl("#super-jump").classList.contains("has-unread"), false, "has-unread cleared when 0 unread");
-  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部", "aria-label is 回到底部 when 0 unread");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新", "aria-label is 跳到最新 when 0 unread");
   scroller.scrollTop = scroller.scrollHeight;
   T.updateSuperJump();
 
@@ -791,7 +810,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.ok(!threadBox.innerHTML.includes('id="unread-sep"'), "stale localStorage cursor must be discarded");
   assert.equal(scroller.scrollTop, scroller.scrollHeight, "stale cursor reset sticks to bottom");
 
-  // 10) Unread > 99 caps badge display at 99+ while preserving exact count in aria-label/title.
+  // 10) Unread > 99 caps Stage 1 badge display at 99+ 未读 while preserving exact count in aria-label/title.
   const hugeEntries = [mkEntry(1, "collie", "read baseline")];
   for (let i = 2; i <= 106; i++) hugeEntries.push(mkEntry(i, "collie", "unread " + i));
   serverLastRead = "e1";
@@ -799,10 +818,13 @@ const mkEntry = (n, role, text, extra = {}) => ({
   T.setSup({ router: { status: "idle" }, entries: hugeEntries, workers: [], pending: [], pinned: [], last_read_entry_id: "e1" });
   T.renderSuper({ force: true, unreadAnchor: true });
   assert.equal(getEl("#super-jump").hidden, false, "jump button shown for 105 unread");
-  assert.equal(getEl("#super-jump-badge").hidden, false, "badge shown for 105 unread");
-  assert.equal(getEl("#super-jump-badge").textContent, "99+", "badge caps at 99+");
-  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "回到底部，105 条未读", "aria-label preserves exact 105 unread count");
-  assert.equal(getEl("#super-jump").title, "回到底部，105 条未读", "title preserves exact 105 unread count");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新，余 105 条未读", "stage 2 aria-label preserves exact 105 unread count");
+  scroller.scrollTop = 0;
+  T.updateSuperJump();
+  assert.equal(getEl("#super-jump-badge").hidden, false, "stage 1 badge shown for 105 unread when scrolled above divider");
+  assert.equal(getEl("#super-jump-badge").textContent, "99+ 未读", "stage 1 badge caps at 99+ 未读");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到未读开头，105 条未读", "stage 1 aria-label preserves exact 105 unread count");
+  assert.equal(getEl("#super-jump").title, "跳到未读开头，105 条未读", "stage 1 title preserves exact 105 unread count");
 
   // 11) P1 Sidebar subtle unread pill on non-main views (mutually exclusive with amber pending).
   assert.ok(cssSrc.includes(".count-pill.unread"), "CSS must define subtle .count-pill.unread style");
@@ -1016,11 +1038,11 @@ const mkEntry = (n, role, text, extra = {}) => ({
   assert.equal(T.getReadState().readCursorId, "e4", "client read cursor stays at e4");
   assert.ok(threadBox.innerHTML.includes('id="unread-sep" data-first-unread="e7"'), "unread divider stays intact above e7");
   assert.equal(getEl("#super-jump").hidden, false, "jump pill stays visible after off-bottom opt click");
-  assert.equal(getEl("#super-jump-badge").textContent, "6", "unread count remains 6 until user reads lower messages");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新，余 6 条未读", "unread count remains 6 until user reads lower messages");
   assert.ok(threadBox.innerHTML.includes('class="reply-receipt') && threadBox.innerHTML.includes("已选：") && threadBox.innerHTML.includes("按方案 A 推进"), "e7 shows settled inline receipt");
   assert.ok(!threadBox.innerHTML.includes('data-opt="按方案 A 推进"'), "e7 option buttons collapse after selection");
 
-  // SSE delivers persisted e7.pick + new Collie follow-up below viewport (no user bubble): still 0px scroll drift and badge ticks 6 -> 7.
+  // SSE delivers persisted e7.pick + new Collie follow-up below viewport (no user bubble): still 0px scroll drift and unread ticks 6 -> 7.
   const collieFollowId = "e" + (++saySeq);
   const afterSseEntries = [
     ...optUnreadEntries.map((x) => (x.id === "e7" ? { ...x, pick: { state: "picked", text: "按方案 A 推进", at: new Date().toISOString() } } : x)),
@@ -1038,7 +1060,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   await wait(30);
   assert.equal(scroller.scrollTop, scrollBeforeOpt, "SSE echo + Collie follow-up keep 0px scroll drift");
   assert.equal(serverLastRead, "e4", "SSE echo does not advance read cursor");
-  assert.equal(getEl("#super-jump-badge").textContent, "7", "new Collie reply increments unread badge 6 -> 7");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新，余 7 条未读", "new Collie reply increments unread count 6 -> 7");
   assert.ok(threadBox.innerHTML.includes("reply-receipt") && threadBox.innerHTML.includes("按方案 A 推进"), "inline receipt persists cleanly after SSE");
 
   // Clicking jump button afterwards scrolls to bottom and advances read cursor to the latest reply.
@@ -1266,7 +1288,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   const sep17 = layoutNodes.find((x) => x.isSep);
   assert.ok(sep17 && sep17.y - scroller.scrollTop >= 12 && sep17.y - scroller.scrollTop <= 16, "returning to foreground anchors #unread-sep at 14px");
   assert.equal(serverLastRead, "e20", "returning to foreground with >1 screen unreads must NOT silently mark all read");
-  assert.equal(getEl("#super-jump-badge").textContent, "8", "jump badge reflects 8 unreads");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新，余 8 条未读", "jump aria-label reflects 8 unreads");
 
   // 18) P0-2: (a) Thread drawer reply when main chat is near bottom advances cursor;
   // (b) Scrolling unread messages past top of viewport (bottom <= top + 24) advances read cursor to highest scrolled-past unread.
@@ -1299,7 +1321,7 @@ const mkEntry = (n, role, text, extra = {}) => ({
   T.maybeAdvanceReadByScroll();
   await wait(520);
   assert.equal(serverLastRead, "e8", "scrolling past e7 & e8 must advance server read cursor to e8");
-  assert.equal(getEl("#super-jump-badge").textContent, "4", "remaining unread badge drops 6 -> 4 (e9..e12)");
+  assert.equal(getEl("#super-jump").getAttribute("aria-label"), "跳到最新，余 4 条未读", "remaining unread drops 6 -> 4 (e9..e12)");
 
   // 19) P1-1: Clicking #super-jump then scrolling up + new SSE unreads migrates sessionUnreadMarkerId forward.
   fetchCalls.length = 0;

@@ -11373,7 +11373,7 @@
     const joinUrl = peerInviteJoinURL(inv);
     const name = inv?.hub_name || fallbackName || tx("peer.myCollie", "我的边牧");
     if (!joinUrl) return inv?.invite_code || "";
-    return tx("peer.shareText", "来加我的 Collie 好狗友「{name}」，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
+    return tx("peer.shareText", "来和我的 Collie「{name}」成为好狗友，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
   }
 
   function parsePeerInviteClient(raw, selfHubId = "") {

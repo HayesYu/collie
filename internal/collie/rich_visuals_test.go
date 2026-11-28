@@ -97,7 +97,7 @@ assert.ok(demoCssSrc.includes(".md-table-card > .md-float-acts {\n  position: st
 assert.ok(cssSrc.includes(".rv-mermaid.is-fallback") && cssSrc.includes(".rv-svg.is-fallback"), "CSS must style silent fallback for invalid Mermaid/SVG blocks");
 assert.ok(cssSrc.includes(".lb-svg") && cssSrc.includes(".rv-svg-stage.is-light-canvas"), "CSS must style lightbox SVG stage and dark-mode light canvas fallback");
 assert.ok(cssSrc.includes("--rv-html-max, 460px") && cssSrc.includes("--rv-html-max: 380px"), "CSS must clamp desktop/mobile HTML card heights");
-assert.ok(cssSrc.includes("#super-thread > .say {\n    grid-template-columns: minmax(0, 1fr);"), "mobile main chat must reclaim avatar rail for full-width rich blocks");
+assert.ok(cssSrc.includes(".say { display: grid; grid-template-columns: var(--say-av, 26px) minmax(0, 1fr); gap: var(--say-gap, 12px); align-items: start; }") && cssSrc.includes("#v-collie {\n    --say-av: 22px;\n    --say-gap: 8px;\n  }"), "mobile main chat must keep Collie avatar inline beside first line on a compact 22px + 8px rail without stacking avatar above prose");
 assert.ok(cssSrc.includes(".rv-mermaid-stage svg,\n.rv-svg-stage svg {\n  display: block;\n  width: clamp(var(--rv-min-w, 0px), 100%, var(--rv-vb-w, 100%));\n  max-width: none;"), "Mermaid/SVG stages must enforce readable clamp() vector sizing without crushing wide diagrams");
 assert.ok(cssSrc.includes(".md-table-card, .md-math-block,\n    .rv-card,"), "entry blur animation must skip .md-table-card and .rv-card to keep crisp edges");
 assert.ok(cssSrc.includes(".md-code.has-tag pre"), "code/diff blocks with corner tag must reserve top clearance via static .has-tag class without :has() invalidation");

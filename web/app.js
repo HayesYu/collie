@@ -1477,8 +1477,7 @@
   const canBrowserNotify = () => notifyEnvState().active;
   const pageInBackground = () => !!document.hidden || (typeof document.hasFocus === "function" && !document.hasFocus());
   function collieNotifySummary(text) {
-    const cleaned = String(text || "")
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(String(text || ""), " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     for (const raw of cleaned.split("\n")) {
@@ -3399,8 +3398,7 @@
     if (!raw) return { goal: "", full: "" };
     const hit = _goalTaskCache.get(raw);
     if (hit !== undefined) return hit;
-    const cleaned = raw
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(raw, " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     const rawLines = cleaned.split("\n");
@@ -3665,12 +3663,18 @@
     }
     const seen = new Set();
     const out = [];
-    const add = (raw) => {
+    const add = (raw, explicit = false) => {
       const p = String(raw || "").trim();
       if (!p || /^https?:\/\//i.test(p)) return;
       if (/\/\.collie\/(?:uploads|images|router\/memory|router\/dreams)\//i.test(p)) return;
       const key = p.toLowerCase();
-      if (seen.has(key)) return;
+      if (seen.has(key)) {
+        if (explicit) {
+          const prevItem = out.find((x) => x.path.toLowerCase() === key);
+          if (prevItem) prevItem.explicit = true;
+        }
+        return;
+      }
       seen.add(key);
       const name = p.split("/").pop() || p;
       const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
@@ -3679,21 +3683,23 @@
         path: p,
         name,
         ext,
+        explicit: !!explicit,
         isHtml: ext === "html" || ext === "htm",
         isCsv: ext === "csv" || ext === "tsv",
       });
     };
     if (files) {
-      for (const fp of files) add(fp);
+      for (const fp of files) add(fp, true);
     }
     if (text) {
       for (const m of String(text).matchAll(SNAP_PATH_RE)) {
-        if (m[1]) add(m[1]);
+        if (m[1]) add(m[1], false);
       }
     }
     _artifactExtractCache.set(e, { text, filesKey, items: out });
     return out;
   }
+  const MAX_INLINE_HTML_CARDS = 3;
   function renderEntryArtifacts(e, openPathOverride) {
     const items = extractEntryArtifacts(e);
     if (!items.length) return "";
@@ -3706,21 +3712,34 @@
     if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit) {
       return cached.html;
     }
-    const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
     const chevSVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
     const renderChip = (it) => {
       const act = activeMatch === it.path;
       return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "预览 ") + it.name)}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>`;
     };
+    const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
     let html;
-    if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
-      html = `<div class="msg-files">${renderChip(primary)}</div>`;
-    } else {
-      const primaryAct = activeMatch === primary.path;
-      const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
-      const rest = items.filter((it) => it.path !== primary.path);
+    if (inlineHtmlItems.length > 0) {
+      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
+      const rest = items.filter((it) => !inlineSet.has(it.path));
       const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-      html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc((primaryAct ? "正在预览 " : "预览 ") + primary.name)}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+      html = inlineHtmlItems.map((it, idx) => {
+        const act = activeMatch === it.path;
+        const hash = richVisualHash("html-file:" + it.path);
+        const chipsHere = idx === inlineHtmlItems.length - 1 ? extraChips : "";
+        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(it.name)} 操作"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="在抽屉打开" aria-label="在抽屉打开 ${esc(it.name)}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="在新窗口打开" aria-label="在新窗口打开 ${esc(it.name)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>加载预览中…</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "在抽屉打开 ") + it.name)}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">在抽屉打开</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button></div>${chipsHere}</section>`;
+      }).join("");
+    } else {
+      const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
+      if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
+        html = `<div class="msg-files">${renderChip(primary)}</div>`;
+      } else {
+        const primaryAct = activeMatch === primary.path;
+        const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
+        const rest = items.filter((it) => it.path !== primary.path);
+        const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
+        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc((primaryAct ? "正在预览 " : "预览 ") + primary.name)}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+      }
     }
     _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, html });
     return html;
@@ -3747,8 +3766,7 @@
   }
   function firstCleanThreadLine(text) {
     const rawText = String(text || "");
-    const cleaned = rawText
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(rawText, " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     for (const raw of cleaned.split("\n")) {
@@ -3756,19 +3774,18 @@
       if (line) return line;
     }
     if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
-    if (/```/.test(rawText)) return "代码片段";
+    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return "代码片段";
     return stripThreadMarkdownLine(plainLine(rawText));
   }
   function collapseThreadMarkdown(text) {
     const rawText = String(text || "");
-    const cleaned = rawText
-      .replace(/```[^\n`]*\n?([\s\S]*?)(?:```|$)/g, " ")
+    const cleaned = stripFencedBlocks(rawText, " ")
       .replace(/\[image:[^\]]+\]/g, " ")
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     const lines = cleaned.split("\n").map(stripThreadMarkdownLine).filter(Boolean);
     if (lines.length) return lines.join(" ").replace(/\s+/g, " ").trim();
     if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
-    if (/```/.test(rawText)) return "代码片段";
+    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return "代码片段";
     return stripThreadMarkdownLine(plainLine(rawText));
   }
   function threadCleanText(e) {
@@ -5342,11 +5359,16 @@
     const msgEl = el.querySelector?.(".msg.assistant");
     if (!msgEl) return null;
     const prevPinned = !!el.classList?.contains("is-pinned");
+    const prevCont = !!el.classList?.contains("cont");
     const nextCls = `say${item.cont ? " cont" : ""}${item.pinned ? " is-pinned" : ""}${item.claps > 0 ? " has-claps" : ""}`;
     if (el.className !== nextCls) el.className = nextCls;
+    if (prevCont !== !!item.cont) {
+      const av = el.querySelector?.(":scope > .avatar") || el.querySelector?.(".avatar");
+      if (av) av.innerHTML = item.cont ? "" : `<img src="/icon.svg" alt="">`;
+    }
     if (item.rootId) el.dataset.threadRoot = item.rootId;
     else delete el.dataset.threadRoot;
-    let layoutChanged = prevPinned !== !!item.pinned;
+    let layoutChanged = prevPinned !== !!item.pinned || prevCont !== !!item.cont;
     const curPin = msgEl.querySelector?.(":scope > .pin-ind") || msgEl.querySelector?.(".pin-ind");
     if (item.pinned && !curPin) {
       const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
@@ -5360,6 +5382,21 @@
     const oldFoot = (lastCh && (lastCh.classList?.contains("msg-foot") || lastCh.classList?.contains("msg-acts")))
       ? lastCh
       : msgEl.querySelector?.(":scope > .msg-foot, :scope > .msg-acts");
+    if (item.optsHtml !== undefined && el._collieOptsHtml !== item.optsHtml) {
+      const oldOpts = msgEl.querySelector?.(":scope > .reply-opts, :scope > .reply-receipt");
+      if (item.optsHtml) {
+        const newOpts = parseSuperNode(item.optsHtml);
+        if (newOpts) {
+          if (oldOpts && oldOpts.parentNode === msgEl) msgEl.replaceChild(newOpts, oldOpts);
+          else if (oldFoot && oldFoot.parentNode === msgEl) msgEl.insertBefore(newOpts, oldFoot);
+          else msgEl.appendChild(newOpts);
+        }
+      } else if (oldOpts && oldOpts.parentNode === msgEl) {
+        msgEl.removeChild(oldOpts);
+      }
+      el._collieOptsHtml = item.optsHtml;
+      layoutChanged = true;
+    }
     const curEntry = oldFoot?.querySelector?.(".thread-entry");
     const curCount = curEntry?.querySelector?.(".te-count");
     const wantHasEntry = !!(item.teRoot && item.teCount > 0);
@@ -5461,6 +5498,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
@@ -5473,6 +5511,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
@@ -5485,6 +5524,7 @@
           el._collieKey = it.key;
           el._collieSig = it.sig;
           if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+          if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
           if (it.entryId !== undefined) el._collieEntryId = it.entryId;
           nodeMap.set(it.key, el);
           frag.appendChild(el);
@@ -5548,6 +5588,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
@@ -5561,6 +5602,7 @@
             el._collieKey = it.key;
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
             nodeMap.set(it.key, el);
             frag.appendChild(el);
@@ -5574,6 +5616,7 @@
           el._collieKey = it.key;
           el._collieSig = it.sig;
           if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+          if (it.optsHtml !== undefined) el._collieOptsHtml = it.optsHtml;
           if (it.entryId !== undefined) el._collieEntryId = it.entryId;
           nodeMap.set(it.key, el);
           frag.appendChild(el);
@@ -5619,7 +5662,9 @@
             fresh._collieKey = it.key;
             fresh._collieSig = it.sig;
             if (it.msgSig !== undefined) fresh._collieMsgSig = it.msgSig;
+            if (it.optsHtml !== undefined) fresh._collieOptsHtml = it.optsHtml;
             if (it.entryId !== undefined) fresh._collieEntryId = it.entryId;
+            carryRichVisualState(el, fresh);
             const wasCursor = el === cursor;
             if (el.parentNode === box) box.replaceChild(fresh, el);
             el = fresh;
@@ -5895,6 +5940,7 @@
     }
 
     const curDayStamp = dayBounds();
+    const openFilePathNow = !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "";
     // Fast structural key for #super-thread body: skip item diffing when completely unchanged.
     const nextBodyKey = [
       isEmptyChat ? "E" : "L",
@@ -5907,7 +5953,6 @@
       dismissedLocal.size ? [...dismissedLocal].join(",") : "",
       pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.state || "picked"}:${v.text}`).join(",") : "",
       openInlineDecisionId || "",
-      !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "",
       pinList.map((p) => p.id).join(","),
       clapLocalFingerprint(),
       superThreadWorkerFingerprint(),
@@ -5927,6 +5972,7 @@
 
     if (!force && nextBodyKey === superBodyKey && (!canPatchSuperDom(box) || box.firstElementChild)) {
       renderPendingBar();
+      syncActiveFileMarks(box, openFilePathNow);
       if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
@@ -6094,10 +6140,10 @@
             const qSig = qi ? qi.sig : "";
             const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
             const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
-            const artifactsHtml = renderEntryArtifacts(e, openFilePath);
+            const artifactsHtml = renderEntryArtifacts(e, "");
             const claps = effectiveClaps(e.id, e);
-            const msgSig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${e.text || ""}`;
-            const sig = `${msgSig}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|cl:${claps}`;
+            const msgSig = `c|${e.id || ""}|${at}|${curDayStamp}|${qSig}|${artifactsHtml}|${e.text || ""}`;
+            const sig = `${msgSig}|${cont ? 1 : 0}|${optsHtml}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|cl:${claps}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
               const acts = msgActs(e, at, pinned, entryBtn ? "" : eRoot, claps);
@@ -6107,6 +6153,7 @@
               key: eKey,
               sig,
               msgSig,
+              optsHtml,
               canPromoteCollieInPlace: true,
               cont,
               pinned,
@@ -6199,6 +6246,8 @@
       }
       if (domMutated) {
         renderPendingBar();
+        syncActiveFileMarks(box, openFilePathNow);
+        observeRichVisuals(box);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (flashEntry.until > Date.now() && flashEntry.id) {
           const fid = CSS.escape(flashEntry.id);
@@ -6212,12 +6261,14 @@
         }
       } else if (!busyChanged && !crewChanged && !shouldApplyUnreadAnchor && !holdRestore && !forceBottom) {
         renderPendingBar();
+        syncActiveFileMarks(box, openFilePathNow);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
         updateSuperJump();
         return;
       } else {
         renderPendingBar();
+        syncActiveFileMarks(box, openFilePathNow);
         syncActiveThreadMarks(curThreadInfo, { skipMenu: true });
         if (activeThreadRoot) syncThreadDrawer();
       }
@@ -11948,7 +11999,7 @@
       const nodes = [];
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
         const p = n.parentElement;
-        if (!p || p.closest?.("form.mem-edit, textarea, button, mark.mem-hl, .mem-ins-acts, .mem-ins-tag, .katex-mathml")) continue;
+        if (!p || p.closest?.("form.mem-edit, textarea, button, mark.mem-hl, .mem-ins-acts, .mem-ins-tag, .katex-mathml, .rv-card")) continue;
         if (n.nodeValue && n.nodeValue.trim()) nodes.push(n);
       }
       for (const textNode of nodes) {
@@ -12426,6 +12477,7 @@
     if (!detailsEl.isConnected || !file) return;
     viewEl.removeAttribute("data-mem-lazy");
     viewEl.innerHTML = md(file.text || "");
+    observeRichVisuals(viewEl);
     if (wantEdit && !detailsEl.querySelector?.(".mem-tools")) {
       viewEl.insertAdjacentHTML?.("afterend", memToolsHTML(file, wantCrew));
     }
@@ -12801,6 +12853,7 @@
         hydrateMemoryFold(openFold);
       }
     }
+    observeRichVisuals(content);
     applyMemoryHighlights(content, memQueryTerms(memQuery));
   }
   function needsRemoteMemorySearch(data) {
@@ -17391,6 +17444,7 @@
     if (MD_EXT.test(path)) {
       syncFileBar("fv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl, wideHref: wHref });
       body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
+      observeRichVisuals(body);
       body.scrollTop = body.scrollLeft = 0;
       if (view === "collie") renderSuper();
       return;
@@ -17482,6 +17536,7 @@
     } else if (MD_EXT.test(path)) {
       syncFileBar("rv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl });
       body.innerHTML = `<article class="msg assistant rv-md" id="rv-code-src">${md(text)}</article>${cut}`;
+      observeRichVisuals(body);
     } else {
       const lang = renderCodeBody(body, path, text, cut, "rv-code-src", true);
       syncFileBar("rv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl });
@@ -17929,7 +17984,7 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, .thumb, img")) return;
+    if (m && e.target.closest("a, button, summary, details, input, .thumb, img, .rv-card")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
@@ -17968,12 +18023,15 @@
     for (const m of ms) {
       const t = m.target;
       if (NO_THUMB_IDS.has(t?.id) || isScreenDomTarget(t)) continue;
-      for (const n of m.addedNodes) triggerThumbLoads(n);
+      for (const n of m.addedNodes) {
+        triggerThumbLoads(n);
+        observeRichVisuals(n);
+      }
     }
   }).observe(document.body, { childList: true, subtree: true });
 
   // ───────────────────────────── fullscreen image lightbox
-  const lightbox = $("#lightbox"), lbStage = $("#lb-stage"), lbImg = $("#lb-img");
+  const lightbox = $("#lightbox"), lbStage = $("#lb-stage"), lbImg = $("#lb-img"), lbSvg = $("#lb-svg");
   const lbName = $("#lb-name"), lbCount = $("#lb-count"), lbMeta = $("#lb-meta"), lbStatus = $("#lb-status");
   const lbZoomBtn = $("#lb-zoom"), lbZoomPct = $("#lb-zoom-pct"), lbOpenLink = $("#lb-open"), lbDlLink = $("#lb-dl");
   const lbPrevBtn = $("#lb-prev"), lbNextBtn = $("#lb-next"), lbCloseBtn = $("#lb-close");
@@ -18047,10 +18105,13 @@
       else lbDlLink.removeAttribute("download");
     }
   }
+  const lbActiveMedia = () => (lbSvg && !lbSvg.hidden ? lbSvg : lbImg);
+  const lbHasMedia = () => !lbImg.hidden || !!(lbSvg && !lbSvg.hidden);
   function clampLbPan() {
     if (lbScale <= 1.005) { lbScale = 1; lbX = 0; lbY = 0; return; }
     const st = lbStage.getBoundingClientRect();
-    const bw = lbImg.offsetWidth || 0, bh = lbImg.offsetHeight || 0;
+    const media = lbActiveMedia();
+    const bw = media?.offsetWidth || 0, bh = media?.offsetHeight || 0;
     const maxX = Math.max(0, (bw * lbScale - st.width) / 2 + 24);
     const maxY = Math.max(0, (bh * lbScale - st.height) / 2 + 24);
     lbX = Math.min(maxX, Math.max(-maxX, lbX));
@@ -18061,7 +18122,9 @@
     const zoomed = lbScale > 1.005;
     lightbox.classList.toggle("is-zoomed", zoomed);
     if (immediate) lightbox.classList.add("no-anim");
-    lbImg.style.transform = zoomed ? `translate3d(${lbX.toFixed(1)}px, ${lbY.toFixed(1)}px, 0) scale(${lbScale.toFixed(3)})` : "";
+    const tf = zoomed ? `translate3d(${lbX.toFixed(1)}px, ${lbY.toFixed(1)}px, 0) scale(${lbScale.toFixed(3)})` : "";
+    if (lbImg) lbImg.style.transform = lbImg.hidden ? "" : tf;
+    if (lbSvg) lbSvg.style.transform = lbSvg.hidden ? "" : tf;
     if (immediate) requestAnimationFrame(() => lightbox.classList.remove("no-anim"));
     if (lbZoomBtn) {
       lbZoomBtn.classList.toggle("zoomed", zoomed);
@@ -18075,6 +18138,7 @@
     }
   }
   function targetLbZoomScale() {
+    if (lbSvg && !lbSvg.hidden) return 2;
     const bw = lbImg.offsetWidth || 0, nw = lbImg.naturalWidth || 0;
     if (bw > 0 && nw > 0 && !lbImg.classList.contains("is-svg")) {
       const ratio = nw / bw;
@@ -18102,7 +18166,7 @@
     applyLbTransform(immediate);
   }
   function toggleLbZoom(clientX, clientY) {
-    if (lbImg.hidden || lbZoomBtn?.disabled) return;
+    if (!lbHasMedia() || lbZoomBtn?.disabled) return;
     if (lbScale > 1.005) zoomLbTo(1);
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
@@ -18147,11 +18211,53 @@
     lbCount.hidden = !multi;
     if (multi) lbCount.textContent = `${lbIdx + 1} / ${lbItems.length}`;
 
-    const name = cleanImgName(item.path || item.url, item.alt || "图片");
-    lbName.textContent = item.alt && !item.path ? item.alt : name;
+    const name = item.title || cleanImgName(item.path || item.url, item.alt || "图片");
+    lbName.textContent = item.title || (item.alt && !item.path ? item.alt : name);
     lbCurMeta = null;
     updateLbMeta();
     setLbReady(false);
+    if (lbSvg) {
+      lbSvg.hidden = true;
+      lbSvg.innerHTML = "";
+      lbSvg.style.transform = "";
+    }
+
+    // 0. Inline SVG diagram (e.g. Mermaid / safe SVG fullscreen inspection)
+    if ((item.svgNode || item.svgHtml) && lbSvg) {
+      lbImg.hidden = true;
+      lbImg.removeAttribute("src");
+      lbStatus.hidden = true;
+      lbSvg.classList.toggle("is-light-canvas", !!item.lightCanvas);
+      if (item.svgNode && typeof document.importNode === "function") {
+        lbSvg.replaceChildren(document.importNode(item.svgNode, true));
+      } else {
+        lbSvg.innerHTML = item.svgHtml;
+      }
+      const mountedSvg = lbSvg.querySelector?.("svg");
+      if (mountedSvg) {
+        mountedSvg.removeAttribute("height");
+        mountedSvg.setAttribute("width", "100%");
+        if (mountedSvg.style) {
+          mountedSvg.style.width = "100%";
+          mountedSvg.style.maxWidth = "100%";
+          mountedSvg.style.height = "auto";
+        }
+      }
+      lbSvg.hidden = false;
+      const svgRaw = item.svgHtml || (item.svgNode ? item.svgNode.outerHTML : "");
+      lbCurMeta = { isSvg: true, width: 0, height: 0, size: svgRaw.length };
+      updateLbMeta();
+      const svgFile = svgRaw.includes("xmlns=")
+        ? svgRaw
+        : svgRaw.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+      let blobUrl = "";
+      try {
+        blobUrl = URL.createObjectURL(new Blob([svgFile], { type: "image/svg+xml;charset=utf-8" }));
+        lbTempUrl = blobUrl;
+      } catch {}
+      setLbReady(true, blobUrl, item.dlName || "diagram.svg");
+      return;
+    }
 
     const isSvg = /\.svg(?:$|[?#])/i.test(item.path || item.url || "");
     lbImg.classList.toggle("is-svg", isSvg);
@@ -18296,6 +18402,7 @@
       lightbox.returnValue = "";
       lightbox.removeAttribute("data-closing");
       lightbox.classList.remove("is-zoomed", "is-dragging", "no-anim");
+      if (lbSvg) { lbSvg.hidden = true; lbSvg.classList.remove("is-light-canvas"); lbSvg.innerHTML = ""; lbSvg.style.transform = ""; }
       lbSeq++;
       releaseLbTempUrl();
       lbImg.onload = lbImg.onerror = null;
@@ -18324,12 +18431,12 @@
       if (!lightbox.open || lightbox.hasAttribute("data-closing") || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "ArrowLeft" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx - 1); }
       else if (ev.key === "ArrowRight" && lbItems.length > 1) { ev.preventDefault(); showLbSlide(lbIdx + 1); }
-      else if (ev.key === "+" || ev.key === "=") { ev.preventDefault(); if (!lbImg.hidden) zoomLbTo(lbScale * 1.35); }
-      else if (ev.key === "-") { ev.preventDefault(); if (!lbImg.hidden) zoomLbTo(lbScale / 1.35); }
+      else if (ev.key === "+" || ev.key === "=") { ev.preventDefault(); if (lbHasMedia()) zoomLbTo(lbScale * 1.35); }
+      else if (ev.key === "-") { ev.preventDefault(); if (lbHasMedia()) zoomLbTo(lbScale / 1.35); }
       else if (ev.key === "0") { ev.preventDefault(); zoomLbTo(1); }
     });
     lightbox.addEventListener("wheel", (ev) => {
-      if (lbImg.hidden || lbZoomBtn?.disabled) return;
+      if (!lbHasMedia() || lbZoomBtn?.disabled) return;
       ev.preventDefault();
       const factor = Math.exp(-ev.deltaY * 0.0022);
       zoomLbTo(lbScale * factor, ev.clientX, ev.clientY, true);
@@ -18338,6 +18445,7 @@
     // Pointer gestures on stage: backdrop light-dismiss, click-to-zoom, 1-finger pan, 2-finger pinch & 1x swipe.
     const ptrs = new Map();
     let gesture = null;
+    const hitLbMedia = (target) => !!(target && (target === lbImg || (lbSvg && !lbSvg.hidden && (target === lbSvg || lbSvg.contains(target)))));
     lbStage.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0 && ev.pointerType === "mouse") return;
       ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
@@ -18357,14 +18465,14 @@
         panX0: lbX, panY0: lbY,
         target: ev.target, moved: false,
       };
-      if (lbScale > 1.005 && ev.target === lbImg) {
+      if (lbScale > 1.005 && hitLbMedia(ev.target)) {
         try { lbStage.setPointerCapture(ev.pointerId); } catch {}
       }
     });
     lbStage.addEventListener("pointermove", (ev) => {
       if (!ptrs.has(ev.pointerId)) return;
       ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-      if (ptrs.size === 2 && gesture?.kind === "pinch" && !lbImg.hidden) {
+      if (ptrs.size === 2 && gesture?.kind === "pinch" && lbHasMedia()) {
         const [a, b] = [...ptrs.values()];
         const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
         const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
@@ -18392,7 +18500,7 @@
         gesture = null;
         const dx = ev.clientX - g.startX, dy = ev.clientY - g.startY;
         if (!g.moved) {
-          if (g.target === lbImg && !lbImg.hidden) {
+          if (hitLbMedia(g.target) && lbHasMedia()) {
             toggleLbZoom(ev.clientX, ev.clientY);
           } else if (g.target === lbStage && ev.target === lbStage) {
             closeLightbox();
@@ -21017,6 +21125,7 @@
             fresh._tdKey = it.key;
             fresh._tdSig = it.sig;
             if (it.msgSig !== undefined) fresh._tdMsgSig = it.msgSig;
+            carryRichVisualState(el, fresh);
             const wasCursor = el === cursor;
             if (el.parentNode === box) box.replaceChild(fresh, el);
             el = fresh;
@@ -21229,12 +21338,14 @@
           }
         }
         patchThreadDrawerList(tdListEl, th.rootId, items);
+        observeRichVisuals(tdListEl);
         if (prepAnchor && prepAnchor.isConnected && typeof prepAnchor.getBoundingClientRect === "function") {
           const delta = prepAnchor.getBoundingClientRect().top - prepTop;
           if (Math.abs(delta) > 0.5) tdBodyEl.scrollTop += delta;
         }
       } else {
         tdListEl.innerHTML = items.map((it) => it.render()).join("");
+        observeRichVisuals(tdListEl);
       }
     }
     updateThreadTargetBanner(th, info.byId);
@@ -22947,14 +23058,1128 @@
     }
     return -1;
   };
+  // ───────────────────────────── rich visuals (lazy offline Mermaid + sandboxed HTML cards)
+  const RV_MERMAID_SCRIPT = "vendor/mermaid/mermaid.min.js";
+  const ICON_RV_CODE = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+  const ICON_RV_VISUAL = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+  const ICON_RV_EXPAND = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6"/></svg>';
+  const ICON_RV_DRAWER = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>';
+  const ICON_RV_NEWWIN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M17 13v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h4"/></svg>';
+  function richVisualHash(str) {
+    const s = String(str || "");
+    let h1 = 0x811c9dc5 >>> 0;
+    let h2 = (0x9e3779b1 ^ s.length) >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+      h2 = Math.imul(h2 ^ ((c + i) & 0xffff), 2246822519) >>> 0;
+    }
+    return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
+  }
+  function stripFencedBlocks(src, replacement = " ") {
+    const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+      if (m) {
+        const fenceCh = m[2][0];
+        const fenceLen = m[2].length;
+        const info = m[3];
+        if (!(fenceCh === "`" && info.includes("`"))) {
+          const closeRe = new RegExp(`^ {0,3}${fenceCh}{${fenceLen},}[ \\t]*$`);
+          let j = i + 1;
+          while (j < lines.length && !closeRe.test(lines[j])) j++;
+          if (replacement) out.push(replacement);
+          i = j;
+          continue;
+        }
+      }
+      out.push(line);
+    }
+    return out.join("\n");
+  }
+  function parseHtmlCardInfo(info) {
+    const raw = String(info || "").trim();
+    if (!raw) return null;
+    const tokens = raw.split(/\s+/);
+    const first = tokens[0].toLowerCase().replace(/^language-/, "");
+    let rest = [];
+    if (first === "html-card") {
+      rest = tokens.slice(1);
+    } else if (first === "html" || first === "htm") {
+      let matched = false;
+      for (let i = 1; i < tokens.length; i++) {
+        const low = tokens[i].toLowerCase();
+        if (!matched && (low === "preview" || low === "card")) {
+          matched = true;
+        } else {
+          rest.push(tokens[i]);
+        }
+      }
+      if (!matched) return null;
+    } else {
+      return null;
+    }
+    let title = rest.join(" ").trim();
+    const tm = title.match(/^title=(?:"([^"]*)"|'([^']*)'|(\S+))$/i);
+    if (tm) title = (tm[1] ?? tm[2] ?? tm[3] ?? "").trim();
+    return { title };
+  }
+  function renderFencedBlock(info, code) {
+    const raw = String(code || "").replace(/\n$/, "");
+    const fenceTag = String(info || "").trim().split(/[\s{:]/)[0].toLowerCase().replace(/^language-/, "");
+    if (fenceTag === "mermaid" && raw.trim()) {
+      const hash = richVisualHash("mermaid:" + raw);
+      return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="Mermaid 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 Mermaid 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="mermaid" title="全屏放大" aria-label="全屏放大查看图表" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="Mermaid 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染图表中…</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
+    }
+    if (fenceTag === "svg" && raw.trim()) {
+      const hash = richVisualHash("svg:" + raw);
+      return `<div class="rv-card rv-svg is-pending" data-rv-kind="svg" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="SVG 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 SVG 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="svg" title="全屏放大" aria-label="全屏放大查看 SVG" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-svg-stage" role="img" aria-label="SVG 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染 SVG 中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></div>`;
+    }
+    const htmlCard = parseHtmlCardInfo(info);
+    if (htmlCard && raw.trim()) {
+      const hash = richVisualHash("html-code:" + raw);
+      const label = htmlCard.title || "HTML 卡片";
+      return `<section class="rv-card rv-html-card is-pending" data-rv-kind="html-code" data-rv-hash="${hash}" data-rv-mode="preview" data-rv-title="${esc(label)}" aria-label="${esc(label)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(label)} 操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 HTML 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-open-code-win="1" title="在新窗口打开" aria-label="在新窗口打开 ${esc(label)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>渲染卡片中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></section>`;
+    }
+    const lang = detectCodeLang(info, false);
+    return `<pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${lang ? highlightCode(raw, lang.id) : esc(raw)}</code></pre>`;
+  }
+  function extractFencedBlocks(text, blocks) {
+    const lines = String(text || "").split("\n");
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // CommonMark §4.5: fenced code block opens only at line start (0-3 spaces) with 3+ ` or ~.
+      const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+      if (m) {
+        const indent = m[1].length;
+        const fenceCh = m[2][0];
+        const fenceLen = m[2].length;
+        const info = m[3];
+        // Backtick code fence info strings cannot contain backticks (preserves 4-backtick inline code spans like ```` ```mermaid ````).
+        if (!(fenceCh === "`" && info.includes("`"))) {
+          const closeRe = new RegExp(`^ {0,3}${fenceCh}{${fenceLen},}[ \\t]*$`);
+          const bodyLines = [];
+          let j = i + 1;
+          for (; j < lines.length; j++) {
+            if (closeRe.test(lines[j])) break;
+            let cl = lines[j];
+            if (indent > 0) {
+              let strip = 0;
+              while (strip < indent && strip < cl.length && cl[strip] === " ") strip++;
+              cl = cl.slice(strip);
+            }
+            bodyLines.push(cl);
+          }
+          blocks.push(renderFencedBlock(info, bodyLines.join("\n")));
+          out.push(`\u0000${blocks.length - 1}\u0000`);
+          i = j;
+          continue;
+        }
+      }
+      out.push(line);
+    }
+    return out.join("\n");
+  }
+
+  let _lastFileMarkGen = -1, _lastFileMarkPath = null;
+  function syncActiveFileMarks(box, openFilePath) {
+    if (!box) return;
+    const cur = openFilePath || "";
+    if (_lastFileMarkGen === superDomGen && _lastFileMarkPath === cur) return;
+    _lastFileMarkGen = superDomGen;
+    _lastFileMarkPath = cur;
+    for (const btn of box.querySelectorAll?.(".snap-head[data-open-file], .snap-chip[data-open-file]") || []) {
+      const p = btn.dataset?.openFile || "";
+      const active = !!(cur && p === cur);
+      const wasActive = !!btn.classList?.contains("is-active");
+      if (active === wasActive) continue;
+      btn.classList.toggle("is-active", active);
+      const chev = btn.querySelector?.(".snap-chev, .snap-chip-chev");
+      if (chev) {
+        const dot = chev.querySelector?.(".snap-act-dot");
+        if (active && !dot && typeof document?.createElement === "function") {
+          const d = document.createElement("span");
+          d.className = "snap-act-dot";
+          chev.insertBefore(d, chev.firstChild);
+        } else if (!active && dot) {
+          dot.remove();
+        }
+      }
+    }
+  }
+
+  const mermaidSvgCache = new Map();
+  const MERMAID_CACHE_MAX = 200;
+  const svgSanitizedCache = new Map();
+  const SVG_CACHE_MAX = 200;
+  const SVG_BLOCKED_TAGS = new Set([
+    "script", "foreignobject", "iframe", "object", "embed", "applet",
+    "base", "meta", "link", "frame", "frameset", "handler", "listener",
+    "form", "input", "button", "textarea", "select", "audio", "video", "canvas",
+  ]);
+  const SVG_SMIL_TAGS = new Set(["animate", "set", "animatemotion", "animatetransform", "animatecolor"]);
+  const SVG_URL_ATTRS = new Set(["href", "xlink:href", "src", "action", "formaction", "poster"]);
+  const SVG_PAINT_URL_ATTRS = new Set(["fill", "stroke", "filter", "clip-path", "mask", "marker-start", "marker-mid", "marker-end", "cursor"]);
+  function isUnsafeProtocol(raw) {
+    const norm = String(raw || "").replace(/[\u0000-\u0020]+/g, "").toLowerCase();
+    return /^(?:javascript|vbscript|data|file):/i.test(norm);
+  }
+  function sanitizeSvgCssText(css) {
+    return String(css || "")
+      .replace(/@import\b[^;]*;?/gi, "")
+      .replace(/expression\s*\([^)]*\)/gi, "")
+      .replace(/(?:javascript|vbscript)\s*:/gi, "")
+      .replace(/(?:behavior|-moz-binding)\s*:[^;"]*;?/gi, "")
+      .replace(/url\s*\(\s*(['"]?)(?!#)[^)]*\1\s*\)/gi, "none");
+  }
+  function svgNeedsLightCanvas(svgEl) {
+    const raw = svgEl?.outerHTML || "";
+    if (!raw) return false;
+    if (/currentColor|prefers-color-scheme|--collie-/i.test(raw)) return false;
+    // Detect explicit dark background rect covering the canvas
+    if (/<rect\b[^>]*fill\s*=\s*["']\s*(?:#(?:0[0-9a-f]|1[0-9a-f]|2[0-9a-f])[0-9a-f]{3,5}|#(?:0|1|2)[0-9a-f]{2}|black|rgb\(\s*[0-4]\d)/i.test(raw)) {
+      return false;
+    }
+    // Detect explicit light stroke/fill meant for dark canvas
+    if (/(?:stroke|fill)\s*=\s*["']\s*(?:#(?:d|e|f)[0-9a-f]{2,5}|white)/i.test(raw) && !/(?:stroke|fill)\s*=\s*["']\s*(?:#(?:0|1|2|3)[0-9a-f]{2,5}|black)/i.test(raw)) {
+      return false;
+    }
+    return true;
+  }
+  function sanitizeSvgElement(raw) {
+    const src = String(raw || "").trim();
+    if (!src || !/<svg[\s>]/i.test(src)) return null;
+    if (typeof DOMParser !== "function") return null;
+    // Inject SVG / XLink XML namespaces BEFORE parsing so DOMParser creates true SVGElement nodes (not null-namespace XML elements).
+    let xmlSrc = src;
+    if (!/<svg\b[^>]*\bxmlns\s*=/i.test(xmlSrc)) {
+      xmlSrc = xmlSrc.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    if (/\bxlink:/i.test(xmlSrc) && !/<svg\b[^>]*\bxmlns:xlink\s*=/i.test(xmlSrc)) {
+      xmlSrc = xmlSrc.replace(/<svg\b/i, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+    }
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(xmlSrc, "image/svg+xml");
+    } catch {
+      return null;
+    }
+    if (!doc || !doc.documentElement) return null;
+    if (doc.getElementsByTagName?.("parsererror")?.length) return null;
+    if (doc.getElementsByTagNameNS?.("*", "parsererror")?.length) return null;
+    const root = doc.documentElement;
+    if ((root.localName || root.tagName || "").toLowerCase() !== "svg") return null;
+
+    const cleanNode = (node) => {
+      const children = [...(node.childNodes || [])];
+      for (const ch of children) {
+        if (ch.nodeType === 8) { ch.remove?.(); continue; } // drop comments
+        if (ch.nodeType !== 1) continue;
+        const tag = (ch.localName || ch.tagName || "").toLowerCase();
+        if (SVG_BLOCKED_TAGS.has(tag)) {
+          ch.remove?.();
+          continue;
+        }
+        if (SVG_SMIL_TAGS.has(tag)) {
+          const targetAttr = (ch.getAttribute?.("attributeName") || "").trim();
+          const vals = [ch.getAttribute?.("to"), ch.getAttribute?.("from"), ch.getAttribute?.("values"), ch.getAttribute?.("by")].join(" ");
+          if (/^(?:on|href$|xlink:href$|src$|action$|formaction$|style$)/i.test(targetAttr) || /(?:javascript|vbscript|data)\s*:/i.test(vals.replace(/[\u0000-\u0020]+/g, ""))) {
+            ch.remove?.();
+            continue;
+          }
+        }
+        for (const attr of [...(ch.attributes || [])]) {
+          const name = String(attr.name || "");
+          const low = name.toLowerCase();
+          const val = String(attr.value || "");
+          if (/^on/i.test(low) || low === "srcdoc" || low === "formaction" || low === "action") {
+            ch.removeAttribute(name);
+            continue;
+          }
+          if (SVG_URL_ATTRS.has(low) || low.endsWith(":href")) {
+            const trimmed = val.trim();
+            const safeFrag = trimmed.startsWith("#");
+            const safeHttp = tag === "a" && /^https?:\/\//i.test(trimmed);
+            if (isUnsafeProtocol(trimmed) || (!safeFrag && !safeHttp)) {
+              ch.removeAttribute(name);
+              continue;
+            }
+            if (tag === "a" && safeHttp) {
+              ch.setAttribute("target", "_blank");
+              ch.setAttribute("rel", "noopener noreferrer");
+            }
+          } else if (low === "style") {
+            const cleanedStyle = sanitizeSvgCssText(val).trim();
+            if (cleanedStyle) ch.setAttribute(name, cleanedStyle);
+            else ch.removeAttribute(name);
+          } else if (SVG_PAINT_URL_ATTRS.has(low)) {
+            if (/url\s*\(/i.test(val) && !/^\s*url\s*\(\s*['"]?#[A-Za-z0-9_.:-]+\s*['"]?\s*\)\s*$/i.test(val)) {
+              ch.removeAttribute(name);
+            }
+          }
+        }
+        if (tag === "style") {
+          ch.textContent = sanitizeSvgCssText(ch.textContent || "");
+        } else {
+          cleanNode(ch);
+        }
+      }
+    };
+    // Sanitize root <svg> attributes first
+    for (const attr of [...(root.attributes || [])]) {
+      const name = String(attr.name || "");
+      const low = name.toLowerCase();
+      const val = String(attr.value || "");
+      if (/^on/i.test(low) || low === "srcdoc" || low === "formaction" || low === "action" || SVG_URL_ATTRS.has(low) || low.endsWith(":href")) {
+        root.removeAttribute(name);
+      } else if (low === "style") {
+        const cleanedStyle = sanitizeSvgCssText(val).trim();
+        if (cleanedStyle) root.setAttribute(name, cleanedStyle);
+        else root.removeAttribute(name);
+      }
+    }
+    cleanNode(root);
+    if (!root.getAttribute("xmlns")) root.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    if (!root.getAttribute("viewBox")) {
+      const rw = parseFloat(root.getAttribute("width") || "");
+      const rh = parseFloat(root.getAttribute("height") || "");
+      if (Number.isFinite(rw) && rw > 0 && Number.isFinite(rh) && rh > 0) {
+        root.setAttribute("viewBox", `0 0 ${rw} ${rh}`);
+      }
+    }
+    root.removeAttribute("height");
+    return { node: root, lightCanvas: svgNeedsLightCanvas(root) };
+  }
+  function applyResponsiveSvgSizing(svgEl) {
+    if (!svgEl) return;
+    let vbW = 0;
+    const vb = (svgEl.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) vbW = vb[2];
+    if (!vbW) {
+      const aw = parseFloat(svgEl.getAttribute?.("width") || "");
+      if (Number.isFinite(aw) && aw > 0) vbW = aw;
+    }
+    svgEl.removeAttribute?.("height");
+    svgEl.setAttribute?.("width", "100%");
+    if (svgEl.style) {
+      svgEl.style.width = "100%";
+      svgEl.style.maxWidth = vbW > 0 ? `min(100%, ${Math.ceil(vbW)}px)` : "100%";
+      svgEl.style.height = "auto";
+    }
+  }
+  function applySanitizedSvg(card, entry, hash) {
+    const stage = card.querySelector?.(".rv-svg-stage");
+    if (!stage || !entry?.node) return;
+    const imported = typeof document?.importNode === "function"
+      ? document.importNode(entry.node, true)
+      : entry.node.cloneNode(true);
+    applyResponsiveSvgSizing(imported);
+    if (typeof stage.replaceChildren === "function") stage.replaceChildren(imported);
+    else { stage.innerHTML = ""; stage.appendChild(imported); }
+    stage.classList.toggle("is-light-canvas", !!entry.lightCanvas);
+    card.dataset.rvRendered = `svg:${hash}`;
+    card.dataset.rvLightCanvas = entry.lightCanvas ? "1" : "0";
+    card.classList.remove("is-pending", "is-fallback");
+    card.classList.add("is-ready");
+    const expandBtn = card.querySelector?.('[data-rv-expand="svg"]');
+    if (expandBtn) expandBtn.hidden = false;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = false;
+    const showSource = card.dataset.rvMode === "source";
+    stage.hidden = showSource;
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = !showSource;
+  }
+  function fallbackSvgCard(card) {
+    card.classList.remove("is-pending", "is-ready", "is-acts-open");
+    card.classList.add("is-fallback");
+    card.dataset.rvRendered = "fallback";
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = true;
+    const stage = card.querySelector?.(".rv-svg-stage");
+    if (stage) stage.hidden = true;
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = false;
+  }
+  function renderSvgCard(card) {
+    if (!card || card.dataset?.rvKind !== "svg") return;
+    const hash = card.dataset.rvHash || "";
+    const sig = `svg:${hash}`;
+    if (card.dataset.rvRendered === sig || card.dataset.rvRendered === "fallback") return;
+    let entry = svgSanitizedCache.get(hash);
+    if (entry === undefined) {
+      const code = (card.querySelector?.(".rv-source code")?.textContent || "").trim();
+      entry = sanitizeSvgElement(code) || null;
+      if (svgSanitizedCache.size >= SVG_CACHE_MAX) {
+        const oldest = svgSanitizedCache.keys().next().value;
+        if (oldest !== undefined) svgSanitizedCache.delete(oldest);
+      }
+      svgSanitizedCache.set(hash, entry);
+    }
+    if (!entry) { fallbackSvgCard(card); return; }
+    applySanitizedSvg(card, entry, hash);
+  }
+  const htmlFileCache = new Map();
+  const htmlFileInflight = new Map();
+  const HTML_FILE_CACHE_MAX = 40;
+  const HTML_FILE_CACHE_TTL_MS = 60000;
+  const rvHeightCache = new Map();
+  const RV_HEIGHT_CACHE_MAX = 200;
+  const htmlCardFrames = new Map();
+  let mermaidLoadPromise = null;
+  let mermaidQueue = Promise.resolve();
+  let mermaidRenderSeq = 0;
+  let mermaidInitTheme = "";
+  let rvFrameSeq = 0;
+  let rvLastTheme = "";
+
+  function currentVisualTheme() {
+    const t = document?.documentElement?.dataset?.theme;
+    if (t === "dark") return "dark";
+    if (t === "light") return "light";
+    return darkMQ?.matches ? "dark" : "light";
+  }
+  function isCompactHtmlCard(card) {
+    if (typeof innerWidth === "number" && innerWidth <= 760) return true;
+    return !!card?.closest?.("#thread-drawer, .td-text, #file-view");
+  }
+  function rvHeightMax(card) {
+    return isCompactHtmlCard(card) ? 380 : 460;
+  }
+  function rvHeightKey(card) {
+    const h = card?.dataset?.rvHash || "";
+    if (!h) return "";
+    return `${isCompactHtmlCard(card) ? "c" : "w"}:${h}`;
+  }
+  function rvRandToken() {
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+      const a = new Uint32Array(2);
+      crypto.getRandomValues(a);
+      return a[0].toString(36) + a[1].toString(36);
+    }
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+  function mermaidConfig(isDark) {
+    const sans = '-apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif';
+    const edgeInk = isDark ? "#a1a1aa" : "#64645e";
+    const strokeCol = isDark ? "#2d2d34" : "#d8d8d3";
+    const linkCol = isDark ? "#71717a" : "#787872";
+    return {
+      startOnLoad: false,
+      securityLevel: "strict",
+      suppressErrorRendering: true,
+      logLevel: 5,
+      fontFamily: sans,
+      theme: "base",
+      themeVariables: isDark ? {
+        darkMode: true,
+        background: "#111113",
+        fontFamily: sans,
+        fontSize: "13px",
+        primaryColor: "#17171a",
+        primaryTextColor: "#ececea",
+        primaryBorderColor: "#2d2d34",
+        secondaryColor: "#1d1d22",
+        secondaryTextColor: "#ececea",
+        secondaryBorderColor: "#34343c",
+        tertiaryColor: "#141417",
+        tertiaryTextColor: "#ececea",
+        tertiaryBorderColor: "#26262c",
+        lineColor: "#71717a",
+        textColor: "#ececea",
+        mainBkg: "#17171a",
+        nodeBorder: "#2d2d34",
+        clusterBkg: "#141417",
+        clusterBorder: "#26262c",
+        defaultLinkColor: "#71717a",
+        titleColor: "#ececea",
+        edgeLabelBackground: "#111113",
+        actorBkg: "#17171a",
+        actorBorder: "#2d2d34",
+        actorTextColor: "#ececea",
+        actorLineColor: "#27272e",
+        signalColor: "#a1a1aa",
+        signalTextColor: "#ececea",
+        labelBoxBkgColor: "#141417",
+        labelBoxBorderColor: "#2d2d34",
+        labelTextColor: "#ececea",
+        loopTextColor: "#a1a1aa",
+        noteBkgColor: "#1c1c21",
+        noteBorderColor: "#2d2d34",
+        noteTextColor: "#ececea",
+        activationBkgColor: "#232329",
+        activationBorderColor: "#52525b",
+        sequenceNumberColor: "#111113",
+        pie1: "#dcdcd9", pie2: "#a8a8a3", pie3: "#76767a", pie4: "#4d4d55", pie5: "#34343b", pie6: "#232329",
+        pieStrokeColor: "#111113", pieStrokeWidth: "1px", pieOpacity: "0.95",
+        pieSectionTextColor: "#111113", pieTitleTextColor: "#ececea", pieLegendTextColor: "#c8c8c3",
+        cScale0: "#17171a", cScale1: "#1d1d22", cScale2: "#24242b", cScale3: "#2d2d34",
+        cScaleLabel0: "#ececea", cScaleLabel1: "#ececea", cScaleLabel2: "#ececea", cScaleLabel3: "#ececea",
+      } : {
+        darkMode: false,
+        background: "#ffffff",
+        fontFamily: sans,
+        fontSize: "13px",
+        primaryColor: "#fafaf9",
+        primaryTextColor: "#18181b",
+        primaryBorderColor: "#d8d8d3",
+        secondaryColor: "#f4f4f2",
+        secondaryTextColor: "#18181b",
+        secondaryBorderColor: "#d8d8d3",
+        tertiaryColor: "#ffffff",
+        tertiaryTextColor: "#18181b",
+        tertiaryBorderColor: "#e6e6e2",
+        lineColor: "#787872",
+        textColor: "#18181b",
+        mainBkg: "#fafaf9",
+        nodeBorder: "#d8d8d3",
+        clusterBkg: "#fafaf9",
+        clusterBorder: "#e4e4e0",
+        defaultLinkColor: "#787872",
+        titleColor: "#18181b",
+        edgeLabelBackground: "#ffffff",
+        actorBkg: "#fafaf9",
+        actorBorder: "#d8d8d3",
+        actorTextColor: "#18181b",
+        actorLineColor: "#e2e2dd",
+        signalColor: "#52524c",
+        signalTextColor: "#18181b",
+        labelBoxBkgColor: "#ffffff",
+        labelBoxBorderColor: "#e4e4e0",
+        labelTextColor: "#18181b",
+        loopTextColor: "#64645e",
+        noteBkgColor: "#f7f7f5",
+        noteBorderColor: "#e2e2dd",
+        noteTextColor: "#18181b",
+        activationBkgColor: "#f2f2ef",
+        activationBorderColor: "#a8a8a1",
+        sequenceNumberColor: "#ffffff",
+        pie1: "#27272a", pie2: "#52525b", pie3: "#8e8e88", pie4: "#bdbdb7", pie5: "#dcdcd8", pie6: "#efefed",
+        pieStrokeColor: "#ffffff", pieStrokeWidth: "1px", pieOpacity: "0.95",
+        pieSectionTextColor: "#ffffff", pieTitleTextColor: "#18181b", pieLegendTextColor: "#3f3f46",
+        cScale0: "#fafaf9", cScale1: "#f4f4f2", cScale2: "#eaeae6", cScale3: "#dcdcd7",
+        cScaleLabel0: "#18181b", cScaleLabel1: "#18181b", cScaleLabel2: "#18181b", cScaleLabel3: "#18181b",
+      },
+      themeCSS: [
+        `svg { background: transparent !important; }`,
+        `.node rect, .node circle, .node ellipse, .node polygon, .node path, rect.actor, .cluster rect, .note { stroke: ${strokeCol} !important; stroke-width: 1px !important; }`,
+        `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
+        `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
+        `.actor-line { stroke-width: 1px !important; }`,
+        `.nodeLabel, .label, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; letter-spacing: -0.005em; }`,
+        `.edgeLabel, .edgeLabel p, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.cluster-label .nodeLabel { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; }`,
+      ].join("\n"),
+      flowchart: { htmlLabels: true, curve: "basis", padding: 12, nodeSpacing: 36, rankSpacing: 44, useMaxWidth: true },
+      sequence: { useMaxWidth: true, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 44, messageMargin: 34, mirrorActors: false },
+      gantt: { useMaxWidth: true },
+      er: { useMaxWidth: true },
+      state: { useMaxWidth: true },
+      class: { useMaxWidth: true },
+    };
+  }
+  function loadMermaid() {
+    const existing = typeof mermaid !== "undefined" ? mermaid : globalThis.mermaid;
+    if (existing && typeof existing.render === "function") return Promise.resolve(existing);
+    if (mermaidLoadPromise) return mermaidLoadPromise;
+    if (typeof document === "undefined" || !document.head) return Promise.reject(new Error("mermaid DOM unavailable"));
+    mermaidLoadPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = RV_MERMAID_SCRIPT;
+      s.async = true;
+      s.onload = () => {
+        const m = typeof mermaid !== "undefined" ? mermaid : globalThis.mermaid;
+        if (m && typeof m.render === "function") resolve(m);
+        else { mermaidLoadPromise = null; reject(new Error("mermaid unavailable")); }
+      };
+      s.onerror = () => {
+        mermaidLoadPromise = null;
+        reject(new Error("mermaid script load failed"));
+      };
+      document.head.appendChild(s);
+    });
+    return mermaidLoadPromise;
+  }
+  function applyMermaidSvg(card, svg, themeKey, hash) {
+    const stage = card.querySelector?.(".rv-mermaid-stage");
+    if (!stage) return;
+    stage.innerHTML = svg;
+    const svgEl = stage.querySelector?.("svg");
+    if (svgEl) {
+      applyResponsiveSvgSizing(svgEl);
+      for (const rect of svgEl.querySelectorAll?.(".node rect, rect.actor, .cluster rect") || []) {
+        const w = parseFloat(rect.getAttribute?.("width") || "0");
+        const h = parseFloat(rect.getAttribute?.("height") || "0");
+        if ((!w || w >= 18) && (!h || h >= 18)) {
+          rect.setAttribute?.("rx", "8");
+          rect.setAttribute?.("ry", "8");
+        }
+      }
+    }
+    stage.style.minHeight = "";
+    card.dataset.rvRendered = `${themeKey}:${hash}`;
+    card.dataset.rvTheme = themeKey;
+    card.classList.remove("is-pending", "is-fallback");
+    card.classList.add("is-ready");
+    const expandBtn = card.querySelector?.('[data-rv-expand="mermaid"]');
+    if (expandBtn) expandBtn.hidden = false;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = false;
+    const showSource = card.dataset.rvMode === "source";
+    stage.hidden = showSource;
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = !showSource;
+  }
+  function fallbackMermaidCard(card) {
+    card.classList.remove("is-pending", "is-ready", "is-acts-open");
+    card.classList.add("is-fallback");
+    card.dataset.rvRendered = "fallback";
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = true;
+    const stage = card.querySelector?.(".rv-mermaid-stage");
+    if (stage) { stage.hidden = true; stage.style.minHeight = ""; }
+    const srcEl = card.querySelector?.(".rv-source");
+    if (srcEl) srcEl.hidden = false;
+  }
+  function renderMermaidCard(card, opts = {}) {
+    if (!card || card.dataset?.rvKind !== "mermaid") return;
+    const hash = card.dataset.rvHash || "";
+    const themeKey = currentVisualTheme();
+    const cacheKey = `${themeKey}:${hash}`;
+    if (!opts.force && card.dataset.rvRendered === cacheKey) return;
+    if (!opts.force && card.dataset.rvRendered === "fallback") return;
+    const cachedSvg = mermaidSvgCache.get(cacheKey);
+    if (cachedSvg) {
+      applyMermaidSvg(card, cachedSvg, themeKey, hash);
+      return;
+    }
+    if (card.dataset.rvRendering === cacheKey) return;
+    const code = (card.querySelector?.(".rv-source code")?.textContent || "").trim();
+    if (!code) { fallbackMermaidCard(card); return; }
+    card.dataset.rvRendering = cacheKey;
+    const stage = card.querySelector?.(".rv-mermaid-stage");
+    if (stage && card.classList.contains("is-ready")) {
+      const h = stage.offsetHeight || 0;
+      if (h > 40) stage.style.minHeight = h + "px";
+    }
+    mermaidQueue = mermaidQueue.then(async () => {
+      if (!card.isConnected) return;
+      const curTheme = currentVisualTheme();
+      const curKey = `${curTheme}:${hash}`;
+      const hitNow = mermaidSvgCache.get(curKey);
+      if (hitNow) {
+        applyMermaidSvg(card, hitNow, curTheme, hash);
+        return;
+      }
+      let m;
+      try {
+        m = await loadMermaid();
+      } catch {
+        if (card.isConnected) fallbackMermaidCard(card);
+        return;
+      }
+      if (!card.isConnected) return;
+      if (mermaidInitTheme !== curTheme) {
+        m.initialize(mermaidConfig(curTheme === "dark"));
+        mermaidInitTheme = curTheme;
+      }
+      const rid = `collie-mmd-${++mermaidRenderSeq}`;
+      let tempHost = null;
+      try {
+        if (typeof m.parse === "function") {
+          const valid = await m.parse(code, { suppressErrors: true });
+          if (valid === false) {
+            if (card.isConnected) fallbackMermaidCard(card);
+            return;
+          }
+        }
+        if (typeof document?.createElement === "function" && document.body) {
+          tempHost = document.createElement("div");
+          tempHost.style.cssText = "position:fixed;left:-99999px;top:0;width:820px;visibility:hidden;pointer-events:none;";
+          document.body.appendChild(tempHost);
+        }
+        const res = await m.render(rid, code, tempHost || undefined);
+        const svg = typeof res === "string" ? res : (res?.svg || "");
+        if (tempHost) { tempHost.remove(); tempHost = null; }
+        document.getElementById?.("d" + rid)?.remove?.();
+        const stray = document.getElementById?.(rid);
+        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        if (!svg || !svg.includes("<svg")) {
+          if (card.isConnected) fallbackMermaidCard(card);
+          return;
+        }
+        if (mermaidSvgCache.size >= MERMAID_CACHE_MAX) {
+          const oldest = mermaidSvgCache.keys().next().value;
+          if (oldest !== undefined) mermaidSvgCache.delete(oldest);
+        }
+        mermaidSvgCache.set(curKey, svg);
+        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash);
+      } catch {
+        if (card.isConnected) fallbackMermaidCard(card);
+      } finally {
+        if (card.dataset.rvRendering === cacheKey) delete card.dataset.rvRendering;
+        if (tempHost) tempHost.remove();
+        document.getElementById?.("d" + rid)?.remove?.();
+        const stray = document.getElementById?.(rid);
+        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        if (typeof requestAnimationFrame === "function") {
+          await new Promise((r) => requestAnimationFrame(r));
+        }
+      }
+    });
+  }
+  function collieThemeVarsCss() {
+    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057}:where(html,body){background-color:var(--collie-bg);color:var(--collie-fg)}</style>`;
+  }
+  function buildSandboxedCardSrcdoc(rawHtml, { frameId, token, isFragment, isDark }) {
+    const src = String(rawHtml || "");
+    const theme = isDark ? "dark" : "light";
+    const safeId = JSON.stringify(frameId);
+    const safeTok = JSON.stringify(token);
+    const safeTheme = JSON.stringify(theme);
+    const varsStyle = collieThemeVarsCss();
+    const bridge = `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});document.addEventListener("click",function(ev){try{if(ev.target&&ev.target.closest&&ev.target.closest("a,button,input,select,textarea,summary,label,[role=button]"))return;parent.postMessage({type:"collie:card-tap",id:ID,token:TOK},"*");}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`;
+    const hasDoc = /<!doctype\s+html|<html[\s>]/i.test(src);
+    if (!hasDoc && isFragment) {
+      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:var(--collie-bg);color:var(--collie-fg);font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif;overflow-x:hidden}</style></head><body>${src}${bridge}</body></html>`;
+    }
+    let out = src;
+    if (/<html\b[^>]*>/i.test(out)) {
+      out = out.replace(/<html\b([^>]*)>/i, (m, attrs) => {
+        const nextAttrs = /\bdata-theme\s*=/i.test(attrs) ? attrs : `${attrs} data-theme="${theme}"`;
+        return `<html${nextAttrs}>`;
+      });
+    }
+    const metaCS = /<meta\b[^>]*name\s*=\s*["']color-scheme["']/i.test(out) ? "" : `<meta name="color-scheme" content="${theme}">`;
+    const headInject = metaCS + varsStyle;
+    if (/<head\b[^>]*>/i.test(out)) {
+      out = out.replace(/<head\b[^>]*>/i, (m) => m + headInject);
+    } else if (/<html\b[^>]*>/i.test(out)) {
+      out = out.replace(/<html\b[^>]*>/i, (m) => m + `<head>${headInject}</head>`);
+    } else {
+      out = headInject + out;
+    }
+    if (/<\/body>/i.test(out)) return out.replace(/<\/body>/i, bridge + "</body>");
+    if (/<\/html>/i.test(out)) return out.replace(/<\/html>/i, bridge + "</html>");
+    return out + bridge;
+  }
+  async function getCachedHtmlFile(path) {
+    const now = Date.now();
+    const hit = htmlFileCache.get(path);
+    if (hit && now - hit.at < HTML_FILE_CACHE_TTL_MS) return hit.data;
+    let p = htmlFileInflight.get(path);
+    if (!p) {
+      p = fetchHtmlFile(path).then((data) => {
+        htmlFileInflight.delete(path);
+        if (data) {
+          if (htmlFileCache.size >= HTML_FILE_CACHE_MAX) {
+            const oldest = htmlFileCache.keys().next().value;
+            if (oldest !== undefined) htmlFileCache.delete(oldest);
+          }
+          htmlFileCache.set(path, { data, at: Date.now() });
+        }
+        return data;
+      }).catch((err) => {
+        htmlFileInflight.delete(path);
+        throw err;
+      });
+      htmlFileInflight.set(path, p);
+    }
+    return p;
+  }
+  function pruneDisconnectedHtmlFrames() {
+    for (const [id, rec] of htmlCardFrames) {
+      if (!rec?.iframe?.isConnected) htmlCardFrames.delete(id);
+    }
+  }
+  async function mountHtmlCard(card) {
+    if (!card) return;
+    const kind = card.dataset?.rvKind;
+    if (kind !== "html-file" && kind !== "html-code") return;
+    const hash = card.dataset.rvHash || "";
+    if (card.dataset.rvMountedHash === hash) return;
+    if (card.dataset.rvMounting === hash) return;
+    const stage = card.querySelector?.("[data-rv-stage]");
+    if (!stage) return;
+    const hKey = rvHeightKey(card);
+    const prevH = hKey ? rvHeightCache.get(hKey) : 0;
+    if (prevH && !stage.style.height) stage.style.height = prevH + "px";
+
+    card.dataset.rvMounting = hash;
+    let rawHtml = "";
+    let title = card.dataset.rvTitle || "HTML 预览";
+    if (kind === "html-file") {
+      const path = card.dataset.rvPath || "";
+      title = baseFileName(path);
+      try {
+        const hf = await getCachedHtmlFile(path);
+        if (!card.isConnected) return;
+        if (!hf || typeof hf.htmlText !== "string") {
+          card.classList.remove("is-pending");
+          card.classList.add("is-error");
+          stage.innerHTML = `<div class="rv-html-err">未找到这个 HTML 文件，可点下方「在抽屉打开」重试。</div>`;
+          stage.style.height = "auto";
+          delete card.dataset.rvMounting;
+          return;
+        }
+        rawHtml = hf.htmlText;
+      } catch (err) {
+        if (!card.isConnected) return;
+        card.classList.remove("is-pending");
+        card.classList.add("is-error");
+        stage.innerHTML = `<div class="rv-html-err">${esc(err?.message || "加载 HTML 预览失败")}</div>`;
+        stage.style.height = "auto";
+        delete card.dataset.rvMounting;
+        return;
+      }
+    } else {
+      rawHtml = card.querySelector?.(".rv-source code")?.textContent || "";
+    }
+    if (!card.isConnected) return;
+    pruneDisconnectedHtmlFrames();
+    const frameId = `rvf-${++rvFrameSeq}`;
+    const token = rvRandToken();
+    const curTheme = currentVisualTheme();
+    const iframe = document.createElement("iframe");
+    iframe.className = "rv-html-frame";
+    iframe.setAttribute("sandbox", HTML_SANDBOX_ATTR);
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    iframe.setAttribute("allow", "focus-without-user-activation 'none'");
+    iframe.setAttribute("loading", "lazy");
+    iframe.setAttribute("title", title);
+    if (iframe.style) iframe.style.colorScheme = curTheme;
+    const pinnedOrigin = typeof Origin === "function" ? new Origin() : null;
+    htmlCardFrames.set(frameId, {
+      iframe, card, stage, hash, token,
+      pinnedOrigin, originPinned: false,
+      updates: 0, lastH: prevH || 0,
+    });
+    stage.innerHTML = "";
+    stage.appendChild(iframe);
+    iframe.srcdoc = buildSandboxedCardSrcdoc(rawHtml, {
+      frameId, token,
+      isFragment: kind === "html-code",
+      isDark: curTheme === "dark",
+    });
+    card.dataset.rvMountedHash = hash;
+    delete card.dataset.rvMounting;
+    card.classList.remove("is-pending", "is-error");
+    card.classList.add("is-ready");
+  }
+  function isCoarseRvPointer() {
+    try {
+      if (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) return true;
+    } catch {}
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function closeOtherRvFloatActs(exceptCard) {
+    for (const open of document.querySelectorAll?.(".rv-card.is-acts-open") || []) {
+      if (open !== exceptCard) open.classList.remove("is-acts-open");
+    }
+  }
+  function handleRichCardMessage(ev) {
+    const data = ev?.data;
+    if (!data || typeof data !== "object") return;
+    const isBridge = data.type === "collie:card-height";
+    const isCardTap = data.type === "collie:card-tap";
+    const isUserResize = data.type === "collie:resize";
+    if (!isBridge && !isCardTap && !isUserResize) return;
+    let rec = null;
+    if ((isBridge || isCardTap) && typeof data.id === "string") {
+      rec = htmlCardFrames.get(data.id) || null;
+      if (!rec || data.token !== rec.token) return;
+    } else if (isUserResize) {
+      for (const r of htmlCardFrames.values()) {
+        if (r?.iframe?.contentWindow && ev.source === r.iframe.contentWindow) { rec = r; break; }
+      }
+    }
+    if (!rec || !rec.iframe?.isConnected || !rec.iframe.contentWindow || ev.source !== rec.iframe.contentWindow) return;
+    // Pin and verify opaque sandbox origin via Origin API when supported (prevents "null" === "null" spoofing).
+    if (typeof Origin === "function" && typeof Origin.from === "function") {
+      try {
+        const senderOrigin = Origin.from(ev);
+        if (!rec.originPinned) {
+          rec.pinnedOrigin = senderOrigin;
+          rec.originPinned = true;
+        } else if (!senderOrigin.isSameOrigin(rec.pinnedOrigin)) {
+          return;
+        }
+      } catch {
+        // Synthetic MessageEvent in tests lacks browser-internal origin; event.source already matched rec.iframe.contentWindow.
+      }
+    }
+    if (isCardTap) {
+      if (isCoarseRvPointer() && rec.card) {
+        const next = !rec.card.classList.contains("is-acts-open");
+        closeOtherRvFloatActs(next ? rec.card : null);
+        rec.card.classList.toggle("is-acts-open", next);
+      }
+      return;
+    }
+    const rawH = Number(data.height);
+    if (!Number.isFinite(rawH) || rawH <= 0) return;
+    if (rec.updates >= 24) return;
+    const maxH = rvHeightMax(rec.card);
+    const clamped = Math.round(Math.max(64, Math.min(maxH, rawH + 2)));
+    if (Math.abs(clamped - (rec.lastH || 0)) < 4) return;
+    rec.updates++;
+    rec.lastH = clamped;
+    rec.stage.style.height = clamped + "px";
+    const hk = rvHeightKey(rec.card);
+    if (hk) {
+      if (rvHeightCache.size >= RV_HEIGHT_CACHE_MAX) {
+        const oldest = rvHeightCache.keys().next().value;
+        if (oldest !== undefined) rvHeightCache.delete(oldest);
+      }
+      rvHeightCache.set(hk, clamped);
+    }
+  }
+  if (typeof addEventListener === "function") {
+    addEventListener("message", handleRichCardMessage);
+  }
+  function carryRichVisualState(oldEl, newEl) {
+    if (!oldEl || !newEl) return;
+    const oldCards = oldEl.querySelectorAll?.(".rv-card[data-rv-hash]");
+    const newCards = newEl.querySelectorAll?.(".rv-card[data-rv-hash]");
+    if (!oldCards?.length || !newCards?.length) return;
+    const buckets = new Map();
+    for (const oc of oldCards) {
+      const k = `${oc.dataset?.rvKind || ""}:${oc.dataset?.rvHash || ""}`;
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push(oc);
+    }
+    const curTheme = currentVisualTheme();
+    for (const nc of newCards) {
+      const kind = nc.dataset?.rvKind || "";
+      const hash = nc.dataset?.rvHash || "";
+      const q = buckets.get(`${kind}:${hash}`);
+      const oc = q?.shift();
+      if (!oc) continue;
+      if (oc.dataset?.rvMode === "source") {
+        setRichCardMode(nc, "source");
+      }
+      if (kind === "mermaid") {
+        const svg = mermaidSvgCache.get(`${curTheme}:${hash}`);
+        if (svg) applyMermaidSvg(nc, svg, curTheme, hash);
+      } else if (kind === "svg") {
+        const entry = svgSanitizedCache.get(hash);
+        if (entry) applySanitizedSvg(nc, entry, hash);
+      } else if (kind === "html-file" || kind === "html-code") {
+        const oh = oc.querySelector?.("[data-rv-stage]")?.style?.height;
+        const ns = nc.querySelector?.("[data-rv-stage]");
+        if (oh && ns) ns.style.height = oh;
+      }
+    }
+  }
+  function setRichCardMode(card, mode) {
+    if (!card) return;
+    const kind = card.dataset?.rvKind || "";
+    const isDiagram = kind === "mermaid" || kind === "svg";
+    const showSource = mode === "source";
+    card.dataset.rvMode = showSource ? "source" : (isDiagram ? "diagram" : "preview");
+    const stage = card.querySelector?.(".rv-mermaid-stage, .rv-svg-stage, .rv-html-stage");
+    const srcEl = card.querySelector?.(".rv-source");
+    if (stage) stage.hidden = showSource;
+    if (srcEl) srcEl.hidden = !showSource;
+    const btn = card.querySelector?.('[data-rv-toggle="source"]');
+    if (btn) {
+      btn.setAttribute("aria-pressed", showSource ? "true" : "false");
+      btn.classList.toggle("on", showSource);
+      if (btn.classList?.contains("rv-ico")) {
+        btn.innerHTML = showSource ? ICON_RV_VISUAL : ICON_RV_CODE;
+      } else {
+        btn.textContent = showSource ? (isDiagram ? "图表" : "预览") : "源码";
+      }
+      const lbl = showSource ? (isDiagram ? "切回图表" : "切回预览") : "查看源码";
+      btn.title = lbl;
+      btn.setAttribute("aria-label", lbl);
+    }
+  }
+  function activateRichCard(card) {
+    if (!card || !card.isConnected) return;
+    const kind = card.dataset?.rvKind;
+    if (kind === "mermaid") renderMermaidCard(card);
+    else if (kind === "svg") renderSvgCard(card);
+    else if (kind === "html-file" || kind === "html-code") mountHtmlCard(card);
+  }
+  const rvRootObservers = typeof WeakMap === "function" ? new WeakMap() : null;
+  let rvDefaultObserver = null;
+  function getRichVisualObserver(card) {
+    if (typeof IntersectionObserver !== "function") return null;
+    const scroller = card?.closest?.(".viewer, #td-body, #fv-body, #rv-scroller, .mem-scroll, #v-memory") || null;
+    if (scroller && rvRootObservers) {
+      let obs = rvRootObservers.get(scroller);
+      if (!obs) {
+        obs = new IntersectionObserver((entries, io) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            io.unobserve(entry.target);
+            activateRichCard(entry.target);
+          }
+        }, { root: scroller, rootMargin: "360px 0px" });
+        rvRootObservers.set(scroller, obs);
+      }
+      return obs;
+    }
+    if (!rvDefaultObserver) {
+      rvDefaultObserver = new IntersectionObserver((entries, io) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          io.unobserve(entry.target);
+          activateRichCard(entry.target);
+        }
+      }, { rootMargin: "360px 0px" });
+    }
+    return rvDefaultObserver;
+  }
+  function observeRichVisuals(root) {
+    if (!root || root.nodeType !== 1) return;
+    const cards = [];
+    if (root.classList?.contains("rv-card") && root.dataset?.rvKind) cards.push(root);
+    if (root.childElementCount > 0) {
+      for (const c of root.querySelectorAll?.(".rv-card[data-rv-kind]") || []) cards.push(c);
+    }
+    if (!cards.length) return;
+    const curTheme = currentVisualTheme();
+    for (const card of cards) {
+      const kind = card.dataset.rvKind;
+      const hash = card.dataset.rvHash || "";
+      if (kind === "mermaid") {
+        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${hash}`);
+        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${hash}`) {
+          applyMermaidSvg(card, cachedSvg, curTheme, hash);
+          card.dataset.rvWatched = "1";
+          continue;
+        }
+      } else if (kind === "svg") {
+        const cachedEntry = svgSanitizedCache.get(hash);
+        if (cachedEntry && card.dataset.rvRendered !== `svg:${hash}`) {
+          applySanitizedSvg(card, cachedEntry, hash);
+          card.dataset.rvWatched = "1";
+          continue;
+        }
+      } else if (kind === "html-file" || kind === "html-code") {
+        const hk = rvHeightKey(card);
+        const prevH = hk ? rvHeightCache.get(hk) : 0;
+        const st = card.querySelector?.("[data-rv-stage]");
+        if (prevH && st && !st.style.height) st.style.height = prevH + "px";
+      }
+      if (card.dataset.rvWatched === "1") continue;
+      card.dataset.rvWatched = "1";
+      const obs = getRichVisualObserver(card);
+      if (obs) obs.observe(card);
+      else activateRichCard(card);
+    }
+  }
+  function onRichVisualThemeChange() {
+    const nextTheme = currentVisualTheme();
+    if (nextTheme === rvLastTheme) return;
+    rvLastTheme = nextTheme;
+    for (const card of document.querySelectorAll?.(".rv-mermaid.is-ready") || []) {
+      if (card.dataset?.rvTheme !== nextTheme) renderMermaidCard(card, { force: true });
+    }
+    pruneDisconnectedHtmlFrames();
+    for (const rec of htmlCardFrames.values()) {
+      if (rec.iframe?.style) rec.iframe.style.colorScheme = nextTheme;
+      try {
+        rec.iframe?.contentWindow?.postMessage({ type: "collie-theme", theme: nextTheme }, "*");
+      } catch {}
+    }
+  }
+  if (typeof addEventListener === "function") {
+    rvLastTheme = currentVisualTheme();
+    addEventListener("collie:theme", onRichVisualThemeChange);
+  }
+  darkMQ?.addEventListener?.("change", onRichVisualThemeChange);
+  document.addEventListener?.("click", (ev) => {
+    const toggleBtn = ev.target?.closest?.('[data-rv-toggle="source"]');
+    if (toggleBtn) {
+      const card = toggleBtn.closest(".rv-card");
+      if (card) {
+        ev.preventDefault();
+        const nextMode = card.dataset.rvMode === "source" ? "visual" : "source";
+        setRichCardMode(card, nextMode);
+        if (nextMode !== "source") activateRichCard(card);
+      }
+      return;
+    }
+    const expandBtn = ev.target?.closest?.('[data-rv-expand="mermaid"], [data-rv-expand="svg"]');
+    const stageClick = !expandBtn ? ev.target?.closest?.(".rv-mermaid.is-ready .rv-mermaid-stage, .rv-svg.is-ready .rv-svg-stage") : null;
+    if (expandBtn || stageClick) {
+      const card = (expandBtn || stageClick).closest(".rv-mermaid, .rv-svg");
+      if (stageClick && card && isCoarseRvPointer() && !card.classList.contains("is-acts-open")) {
+        ev.preventDefault();
+        closeOtherRvFloatActs(card);
+        card.classList.add("is-acts-open");
+        return;
+      }
+      const isSvgCard = card?.dataset?.rvKind === "svg";
+      const svgEl = card?.querySelector?.(isSvgCard ? ".rv-svg-stage svg" : ".rv-mermaid-stage svg");
+      if (svgEl) {
+        ev.preventDefault();
+        closeOtherRvFloatActs(null);
+        openLightbox([{
+          svgNode: svgEl.cloneNode(true),
+          svgHtml: svgEl.outerHTML,
+          lightCanvas: isSvgCard && card.dataset.rvLightCanvas === "1",
+          title: isSvgCard ? "SVG 图表" : "Mermaid 图表",
+          alt: isSvgCard ? "SVG 图表" : "Mermaid 图表",
+          dlName: isSvgCard ? "diagram.svg" : "mermaid-diagram.svg",
+        }], 0);
+      }
+      return;
+    }
+    if (!ev.target?.closest?.(".rv-card")) {
+      closeOtherRvFloatActs(null);
+    }
+    const openWinBtn = ev.target?.closest?.("[data-rv-open-win]");
+    if (openWinBtn) {
+      ev.preventDefault();
+      const path = openWinBtn.dataset.rvOpenWin || "";
+      if (!path) return;
+      const cached = htmlFileCache.get(path)?.data;
+      const curMachine = cached?.machine || fileContextMachine() || "";
+      const isRemoteHub = !!hubOf(curMachine);
+      const isDemoNoStatic = !!(window.__collieDemo && !window.__collieDemoHtmlUrl?.(path));
+      if ((isStandaloneMode() || isRemoteHub || isDemoNoStatic) && typeof cached?.htmlText === "string") {
+        if (!openSandboxedHtmlWindow(baseFileName(cached.path || path), cached.htmlText)) {
+          toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+        }
+        return;
+      }
+      if (isRemoteHub) {
+        const win = window.open("", "_blank");
+        if (win) { try { win.opener = null; } catch {} }
+        openSandboxedHtmlRemote(path, win);
+        return;
+      }
+      const win = window.open(htmlFileURL(path, curMachine), "_blank");
+      if (win) { try { win.opener = null; } catch {} return; }
+      toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+      return;
+    }
+    const openCodeWinBtn = ev.target?.closest?.("[data-rv-open-code-win]");
+    if (openCodeWinBtn) {
+      ev.preventDefault();
+      const card = openCodeWinBtn.closest(".rv-html-card");
+      const rawHtml = card?.querySelector?.(".rv-source code")?.textContent || "";
+      if (!rawHtml.trim()) return;
+      const title = card?.dataset?.rvTitle || "HTML 卡片";
+      const docHtml = buildSandboxedCardSrcdoc(rawHtml, {
+        frameId: "win", token: "", isFragment: true, isDark: currentVisualTheme() === "dark",
+      });
+      if (!openSandboxedHtmlWindow(title, docHtml)) {
+        toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+      }
+    }
+  });
+
   function mdRender(src) {
     const blocks = [];
-    let text = String(src || "").replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, info, code) => {
-      const raw = code.replace(/\n$/, "");
-      const lang = detectCodeLang(info, false);
-      blocks.push(`<pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${lang ? highlightCode(raw, lang.id) : esc(raw)}</code></pre>`);
-      return `\u0000${blocks.length - 1}\u0000`;
-    });
+    let text = extractFencedBlocks(String(src || "").replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks);
     text = extractMathBlocks(text, blocks);
     text = esc(text);
     const inline = (s) => {
@@ -22976,7 +24201,7 @@
           }
           if (close > i + ticks) {
             let c = s.slice(i + ticks, close);
-            if (ticks > 1 && c.length >= 2 && c.startsWith(" ") && c.endsWith(" ") && c.trim()) {
+            if (c.length >= 2 && c[0] === " " && c[c.length - 1] === " " && /[^ ]/.test(c)) {
               c = c.slice(1, -1);
             }
             const raw = unesc(c).trim();
@@ -23902,7 +25127,7 @@
   // under it, so you need not open each one.
   const IMG_PATH = /(?:^|[\s(（`"'：:，、,;；>])((?:~|\/)[^\s`"'()（）<>，、,;；]*\.(?:png|jpe?g|gif|webp|svg))(?=$|[\s)）`"'，。、,;；!?！？])/gim;
   function imagesIn(t) {
-    const clean = String(t || "").replace(/```[\s\S]*?```/g, " ").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, " ");
+    const clean = stripFencedBlocks(String(t || ""), " ").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, " ");
     const ps = [...new Set([...clean.matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
     return ps.length ? `<span class="thumbs">${ps.map(thumbBtn).join("")}</span>` : "";
   }

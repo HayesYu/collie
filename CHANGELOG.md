@@ -4,6 +4,48 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.13 (2026-11-28)
+
+### Highlights
+
+- **Native `pi` & `omp` (`oh-my-pi`) Worker Support (`internal/collie/{bridge_common.go,acp_bridge.go,omp_bridge.go,pi_rpc_bridge.go,agents.go,models.go,server.go,chat.go,titles.go,super.go,superapi.go,cli.go}`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Extracted shared bridge runtime primitives into `bridge_common.go` (CLI flag parsing, PTY raw/bracketed-paste input framing, `.panes` metadata, JSONL transcript helpers, Herdr socket lifecycle reporting, and numbered approval menus) with zero regression for `doubao` and `cursor`.
+  - Added `omp_bridge.go` driving native `omp acp` over the shared ACP v1 runtime: places all global flags before `acp`, always passes `--allow-home`, maps `AskPermissions` explicitly to `--approval-mode always-ask` vs `--approval-mode yolo`, translates `--effort` to `--thinking`, and reads `thinking`/`thought_level` `configOptions`.
+  - Added lightweight `pi_rpc_bridge.go` driving native `pi --mode rpc` JSONL with zero external `pi-acp` dependency: handles `get_state` handshake, `agent_settled` turn settling (with `agent_end` fallback), same-cwd `--session` resume + `get_messages` transcript backfill, `extension_ui_request` menus (`select`/`confirm` via Collie's numbered approval UI, auto-cancelling `input`/`editor` to avoid headless hangs), and `clear_queue` + `abort` interruption.
+  - Added fast read-only model/thinking discovery (`pi --list-models --offline` + `settings.json`, `omp models --json` + `config.yml`), kept `pi`/`omp` Worker-only in `router_kind` guards, and updated the Web UI launcher to a clean 4×2 desktop / 2×4 mobile grid with matching SVG glyphs and localized `off`/`auto` effort labels.
+- **0ms Cold-Start Instant Paint Snapshot Cache (`web/{cache.js,app.js,index.html}`, `internal/collie/server.go`, `scripts/demo.sh`, `docs/demo/`)**:
+  - Added `web/cache.js` providing origin + token-hash scoped `localStorage` SWR snapshots (200 KB cap with automatic trimming and `QuotaExceededError` fallback) so cold-start and PWA reopen paint the latest conversation and sidebar at **0ms** instead of waiting on initial network fetches, then reconcile live state in-place with zero DOM jump and clean logout/auth invalidation.
+- **Full Chinese / English Bilingual UI & Converged "Collie's Pals" Naming (`web/{i18n.js,app.js,quota.js,index.html}`, `docs/join/index.html`, `internal/collie/server.go`, `scripts/demo/`, `docs/demo/`)**:
+  - Added `web/i18n.js` with 1,552 key-for-key Chinese & English entries (pre-paint `<head>` locale initialization with zero flash, automatic system-language detection, live zero-reload switching in Preferences across all views, modals, drawers, quota popover, and `/join/` invite landing page).
+  - Converged Peer Hub naming consistently across both languages to **「Collie 的好狗友 / 狗友」** and **「Collie's Pals / Pals」**, with backward-compatible localization for historical event text.
+- **Mobile 60 FPS Drawers, Bidirectional Keyboard GPU FLIP, Seamless Top Immersion & Lightweight Drawer Return Stack (`web/{index.html,app.css,app.js,quota.css,quota.js}`, `docs/demo/`)**:
+  - **60 FPS Mobile Drawer Drag & Dismiss**: Eliminated 7 mobile drawer frame-drop culprits (removed expensive `backdrop-filter` blur on scrims/dialogs, replaced `:has(.notepane.is-dragging)` full-tree invalidation with direct `.notes-scrim.is-dragging`, switched grabber pills to GPU `scaleX`, removed heavy shadows, cached heights on `pointerdown`, coalesced drags inside `rAF` with pure `translate3d`, and guarded `will-change` promotion/cleanup) — keeping all 4 mobile drawers at 60 FPS with 0 forced reflows.
+  - **Bidirectional Keyboard GPU FLIP & Search Motion**: Added pure-GPU 240ms `translate3d` FLIP transitions for iOS/mobile keyboard expand and dismiss alongside smooth search-bar fade/slide motion (0 forced reflows).
+  - **Seamless Top Immersion & Minimalist「小本本」/「Notes」**: Eliminated iOS status-bar / safe-area color seams by unifying `html`, `.app`, `.main`, `.collie-top`, and mobile `.side`/`.login` under `--bg` with pre-paint `theme-color` meta syncing, and refined the header「小本本」(`Notes`) trigger to crisp pure text with no icon on both desktop and mobile.
+  - **Lightweight Mobile Drawer Return Stack**: Added an acyclic single-DOM drawer return stack (`≤1000px`, max depth 2) with native back-history integration and pure-GPU drill/return swaps — drilling from Notes into a file/thread/worker shows `< 小本本` (`< Notes`), and drilling from a thread into a file/worker shows `< 话题` (`< Thread`), restoring the parent tab and scroll position on return.
+
+### Client / API Changes
+
+- **New Worker Agent Kinds (backward compatible)**:
+  - `pi` (display name `Pi`, binary `pi`)
+  - `omp` (display name `Oh My Pi`, input alias `oh-my-pi`, binary `omp`)
+- **Capability & State Endpoints (backward compatible)**:
+  - `X-Collie-Agents`, `GET /api/state`, `GET /api/events` (`state` SSE), and `GET /api/devices` now include `"pi"` and `"omp"` in `machines[].agents`.
+- **Agent Creation, Dispatch & Settings (backward compatible)**:
+  - `POST /api/agents`, `POST /api/super/spawn`, `POST /api/super/say`, `POST /api/super/settings` (`worker_kind`), and `GET /api/transcript?kind=...&session=<id>` accept `"pi"`, `"omp"`, and alias `"oh-my-pi"`.
+  - **Worker-only guard**: `POST /api/super/settings` rejects `"pi"`, `"omp"`, and `"oh-my-pi"` for `router_kind` (preserving the existing `router_kind` and returning HTTP `200`, matching `doubao` and `cursor`).
+- **Model Discovery (`GET /api/models?kind=pi|omp`) (backward compatible)**:
+  - Model `id` uses `<provider>/<model>` format.
+  - `efforts` may include `"off"`, `"minimal"` (`pi`), or `"auto"` (`omp`) in addition to standard levels; non-reasoning models explicitly return `"efforts": []`.
+- **Structured Chat & Herdr Reporting (backward compatible)**:
+  - Transcripts are stored at `~/.collie/transcripts/{pi,omp}/<session_id>.jsonl` using the existing `patch` protocol (`user`/`assistant`/`tool`/`ask`).
+  - Bridges report `source: "collie:pi"` / `"collie:omp"`, `agent: "pi"` / `"omp"`, and `resume_argv: ["collie", "_bridge", "pi"|"omp", ...]`.
+- **Embedded Web Assets (`web/*`) (backward compatible)**:
+  - Added `/i18n.js` and `/cache.js` to embedded `web.FS` and `Server.webBuild()` build-hash calculation.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.12 (2026-11-28)
 
 ### Highlights

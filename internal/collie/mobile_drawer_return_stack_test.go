@@ -209,6 +209,7 @@ function firePopstate() {
   for (const fn of [...(winListeners.get("popstate") || [])]) fn({ type: "popstate", state: ctx.history.state });
 }
 let timers = [];
+const fetchedFileUrls = [];
 const ctx = {
   console, Math, Date, JSON, Set, Map, RegExp, Error, Promise, URL, URLSearchParams, Object, Array, Number, String, Boolean,
   setTimeout: (fn) => { const id = timers.length + 1; timers.push({ id, fn, cleared: false }); return id; },
@@ -270,7 +271,27 @@ const ctx = {
   dispatchEvent(ev) { for (const fn of [...(winListeners.get(ev.type) || [])]) fn(ev); },
   fetch: async (url) => {
     if (String(url).includes("/api/file")) {
-      return { ok: true, status: 200, headers: { get: (k) => k.toLowerCase() === "content-type" ? "text/plain" : "" }, blob: async () => new Blob(["# Notes\nhello world"]) };
+      fetchedFileUrls.push(String(url));
+      const u = new URL(String(url), "http://127.0.0.1:7788");
+      const reqPath = u.searchParams.get("path") || "";
+      const text = reqPath.includes("no-worker.md")
+        ? "# 无 Worker 任务详情\n- **状态**：待人工确认\n- [ ] 检查最终交付物\n"
+        : "# Notes\nhello world";
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (k) => {
+            const lk = k.toLowerCase();
+            if (lk === "content-type") return "application/octet-stream";
+            if (lk === "x-file-kind") return "text";
+            if (lk === "x-file-size") return String(new Blob([text]).size);
+            if (lk === "x-file-path") return encodeURIComponent(reqPath);
+            return "";
+          },
+        },
+        blob: async () => new Blob([text]),
+      };
     }
     return { ok: true, status: 200, json: async () => ({ ok: true, date: "2026-11-28", tasks: [], artifacts: [], timers: [], messages: [] }) };
   },
@@ -423,6 +444,56 @@ assert.equal(T.getNotesOpen(), true, "closing file drawer returns to notes");
 assert.equal(T.getSidePaneActiveMode(), "notes");
 assert.equal(npBody.scrollTop, 92);
 
+// ── Case 3b: 小本本「进行中」无 Worker (空心点) 任务 -> 直接在 #file-view 打开任务 .md + < 小本本 返回 ──
+openMobileNotes("notes", 124);
+fetchedFileUrls.length = 0;
+const npIdleTask = makeEl("np-idle-task", "BUTTON");
+npIdleTask.dataset.npTask = "no-worker";
+npIdleTask.dataset.npWorker = "";
+npIdleTask.dataset.npEntry = "";
+npIdleTask.dataset.npTitle = "无 Worker 任务详情";
+npIdleTask.dataset.npPath = "tasks/no-worker.md";
+npIdleTask.dataset.npFilePath = "~/.collie/router/memory/tasks/no-worker.md";
+npIdleTask.closest = (sel) => (sel === "[data-np-task]" ? npIdleTask : null);
+
+const histBeforeIdleTask = histIdx;
+notesPane.dispatch("click", { target: npIdleTask, button: 0 });
+assert.equal(ctx.location.hash, "#/collie", "clicking hollow-dot task must stay on #/collie and NOT jump to #/auto");
+assert.equal(T.getView(), "collie");
+assert.equal(getEl("#app").classList.contains("has-file"), true, "hollow-dot task opens #file-view directly");
+assert.equal(visibleDrawerCount(), 1, "zero stacked drawers when task opens #file-view");
+assert.equal(fvBack.hidden, false, "#fv-return visible for hollow-dot task opened from 小本本");
+assert.equal(getEl("#fv-return-label").textContent, "小本本");
+assert.equal(fvBack.getAttribute("aria-label"), "返回小本本");
+assert.deepEqual(T.getReturnStack(), [{ kind: "notes", tab: "notes", scrollTop: 124 }]);
+assert.equal(histIdx, histBeforeIdleTask + 1);
+assert.equal(fetchedFileUrls.length, 1, "must fetch task markdown via /api/file");
+assert.ok(decodeURIComponent(fetchedFileUrls[0]).includes("path=~/.collie/router/memory/tasks/no-worker.md"), "must pass full ~/ or absolute file_path to /api/file: " + fetchedFileUrls[0]);
+
+// Click < 小本本 returns cleanly to 小本本 with scrollTop=124 and unwinds history
+fvBack.dispatch("click");
+assert.equal(getEl("#app").classList.contains("has-file"), false);
+assert.equal(T.getNotesOpen(), true, "clicking < 小本本 restores 小本本");
+assert.equal(T.getSidePaneActiveMode(), "notes");
+assert.equal(npBody.scrollTop, 124, "restores 小本本 scrollTop after viewing task markdown");
+assert.equal(T.getReturnStack().length, 0);
+assert.equal(histIdx, histBeforeIdleTask);
+
+// Task with NO worker, NO file_path (only legacy relative tasks/... path) and NO entry_id falls back to #/auto memory tab
+fetchedFileUrls.length = 0;
+const npLegacyTask = makeEl("np-legacy-task", "BUTTON");
+npLegacyTask.dataset.npTask = "legacy-only";
+npLegacyTask.dataset.npWorker = "";
+npLegacyTask.dataset.npEntry = "";
+npLegacyTask.dataset.npPath = "tasks/legacy-only.md";
+npLegacyTask.dataset.npFilePath = "";
+npLegacyTask.closest = (sel) => (sel === "[data-np-task]" ? npLegacyTask : null);
+notesPane.dispatch("click", { target: npLegacyTask, button: 0 });
+assert.equal(fetchedFileUrls.length, 0, "must never pass bare relative tasks/... path to /api/file");
+assert.equal(ctx.location.hash, "#/auto", "falls back to #/auto only when both worker and openable task file path are absent");
+ctx.location.hash = "#/collie";
+T.route();
+
 // ── Case 4: 话题抽屉 (scrollTop=180) -> 文件预览抽屉 (both [data-open-file] and a.fpath) -> returns to 话题 ──
 T.closeFilePane({ immediate: true });
 T.setSidePaneOverlay("");
@@ -556,8 +627,21 @@ T.closeWorkerDrawer({ immediate: true });
 
 T.openThreadDrawer("e1", "e3", "e3");
 getEl("#td-list").dispatch("click", { target: tdFileBtn, button: 0 });
+assert.equal(getEl("#app").classList.contains("has-file"), true);
 assert.equal(T.getReturnStack().length, 0, "desktop thread->file does not push returnTo stack");
 assert.equal(fvBack.hidden, true, "desktop never shows #fv-back");
+T.closeFilePane({ immediate: true });
+
+// Desktop (>1000px) hollow-dot task click opens #file-view directly without jumping to #/auto or pushing mobile stack
+T.setSidePanePref("notes");
+T.syncNotebookVisibility({ immediate: true });
+fetchedFileUrls.length = 0;
+notesPane.dispatch("click", { target: npIdleTask, button: 0 });
+assert.equal(ctx.location.hash, "#/collie", "desktop hollow-dot task must not jump to #/auto");
+assert.equal(getEl("#app").classList.contains("has-file"), true, "desktop hollow-dot task opens #file-view");
+assert.equal(T.getReturnStack().length, 0, "desktop hollow-dot task never pushes mobile returnTo stack");
+assert.equal(fvBack.hidden, true, "desktop never shows #fv-return");
+assert.equal(fetchedFileUrls.length, 1);
 T.closeFilePane({ immediate: true });
 
 // Resizing from mobile with active stack to desktop (>1000px) auto-clears stack & hides back buttons

@@ -28,6 +28,7 @@ type notebookTask struct {
 	Worker    string    `json:"worker,omitempty"`
 	EntryID   string    `json:"entry_id,omitempty"`
 	Path      string    `json:"path,omitempty"`
+	FilePath  string    `json:"file_path,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
@@ -307,6 +308,9 @@ func (s *Server) superNotebook(w http.ResponseWriter, r *http.Request) {
 	var rawTasks []rawTaskFile
 	if matches, _ := filepath.Glob(filepath.Join(tasksDir, "*.md")); len(matches) > 0 {
 		for _, p := range matches {
+			if !pathWithinDir(tasksDir, p) {
+				continue
+			}
 			fi, err := os.Stat(p)
 			if err != nil || fi.IsDir() {
 				continue
@@ -350,6 +354,10 @@ func (s *Server) superNotebook(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+		taskFilePath := rf.path
+		if abs, err := filepath.Abs(rf.path); err == nil {
+			taskFilePath = abs
+		}
 		taskItems = append(taskItems, notebookTask{
 			ID:        stem,
 			Title:     title,
@@ -358,6 +366,7 @@ func (s *Server) superNotebook(w http.ResponseWriter, r *http.Request) {
 			Worker:    matchedWorker,
 			EntryID:   matchedEntry,
 			Path:      "tasks/" + base,
+			FilePath:  s.tilde(filepath.ToSlash(taskFilePath)),
 			UpdatedAt: rf.mod,
 		})
 	}

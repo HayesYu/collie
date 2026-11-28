@@ -23671,7 +23671,7 @@
       const noteHtml = tk.note
         ? `<div class="np-fold" style="--stagger: 35ms"><div class="np-fold-inner"><div class="np-item-note">${esc(tk.note)}</div></div></div>`
         : "";
-      return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" data-np-title="${esc(tk.title || "")}" data-np-note="${esc(tk.note || "")}" data-np-path="${esc(tk.path || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><div class="np-item-main"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span></div>${noteHtml}</button></li>`;
+      return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" data-np-title="${esc(tk.title || "")}" data-np-note="${esc(tk.note || "")}" data-np-path="${esc(tk.path || "")}" data-np-file-path="${esc(tk.file_path || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><div class="np-item-main"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span></div>${noteHtml}</button></li>`;
     };
     const tasksListEl = $("#np-tasks-list");
     if (tasksListEl) {
@@ -24076,12 +24076,20 @@
       const taskTitle = tBtn.dataset.npTitle || "";
       const taskNote = tBtn.dataset.npNote || "";
       const taskPath = tBtn.dataset.npPath || "";
-      const ret = worker ? captureNotesReturnTo() : null;
-      if (!isWideNotesViewport()) sidePaneOverlay = "";
+      const taskFilePath = tBtn.dataset.npFilePath || (/^(?:~\/|\/)/.test(taskPath) ? taskPath : "");
       if (worker) {
+        const ret = captureNotesReturnTo();
+        if (!isWideNotesViewport()) sidePaneOverlay = "";
         openWorkerDrawer({ worker, title: taskTitle, note: taskNote, entryId, taskPath, ...(ret ? { returnTo: ret } : {}) });
         return;
       }
+      if (taskFilePath) {
+        const ret = captureNotesReturnTo();
+        if (!isWideNotesViewport()) sidePaneOverlay = "";
+        openFile(taskFilePath, ret ? { returnTo: ret } : undefined);
+        return;
+      }
+      if (!isWideNotesViewport()) sidePaneOverlay = "";
       clearDrawerReturnStack({ syncHistory: false });
       if (!isWideNotesViewport()) syncNotebookVisibility();
       if (entryId) {

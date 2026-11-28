@@ -18964,7 +18964,7 @@
     grip.addEventListener("pointercancel", up, { once: true });
   });
 
-  // Shared mobile bottom-sheet drag-to-dismiss helper for all three unified right drawers.
+  // Shared mobile bottom-sheet drag-to-dismiss helper for the unified right drawers and mobile notebook sheet.
   function bindDrawerSheetDrag(drawerEl, scrimEl, zones, isOpenFn, closeFn) {
     if (!drawerEl) return;
     let skipClickUntil = 0;
@@ -18986,7 +18986,7 @@
       zone.addEventListener("pointerdown", (e) => {
         if (innerWidth > 760 || !isOpenFn()) return;
         if (e.pointerType === "mouse" && e.button !== 0) return;
-        if (e.target.closest("button:not(.sd-handle), a")) return;
+        if (e.target.closest("button:not(.sd-handle):not(.np-handle), a")) return;
         pid = e.pointerId;
         startY = lastY = e.clientY;
         startX = e.clientX;
@@ -19654,6 +19654,10 @@
     }
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
     notesPane.setAttribute("aria-label", isThreads ? "小本本 · 话题" : "小本本");
+    if (!wantOpen) {
+      const ae = document.activeElement;
+      if (ae && notesPane.contains?.(ae) && typeof ae.blur === "function") ae.blur();
+    }
     notesPane.setAttribute("aria-hidden", wantOpen ? "false" : "true");
     if ("inert" in notesPane) notesPane.inert = !wantOpen;
     npSecTasksEl?.setAttribute("aria-labelledby", isThreads ? "np-tab-threads" : "np-tab-notes");
@@ -19793,9 +19797,14 @@
     syncNotebookVisibility();
   };
   $("#np-close")?.addEventListener("click", hideNotebookFromCard);
-  $("#np-back")?.addEventListener("click", hideNotebookFromCard);
-  $("#np-handle")?.addEventListener("click", hideNotebookFromCard);
   notesScrim?.addEventListener("click", hideNotebookFromCard);
+  bindDrawerSheetDrag(
+    notesPane,
+    notesScrim,
+    [$("#np-handle"), npHeadEl],
+    () => notesOpen && !isWideNotesViewport(),
+    () => hideNotebookFromCard(),
+  );
   npTabNotesBtn?.addEventListener("click", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -19816,7 +19825,7 @@
     (nextTab === "threads" ? npTabThreadsBtn : npTabNotesBtn)?.focus?.();
   });
   notesPane?.addEventListener("click", (ev) => {
-    if (ev.target.closest("#np-close, #np-back, #np-handle")) return;
+    if (ev.target.closest("#np-close, #np-handle")) return;
     const tabBtn = ev.target.closest("[data-np-tab]");
     if (tabBtn) {
       ev.preventDefault();

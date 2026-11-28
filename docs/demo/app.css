@@ -3420,9 +3420,31 @@ dialog.lightbox.is-dragging .lb-stage, dialog.lightbox.is-dragging .lb-img { cur
   width: min(92vw, 1080px);
   padding: 10px;
 }
-dialog.lightbox.is-zoomed .lb-img { cursor: grab; border-radius: 4px; }
-dialog.lightbox.is-dragging .lb-img, dialog.lightbox.no-anim .lb-img { transition: none; }
-@media (prefers-reduced-motion: reduce) { .lb-img { transition: none; } }
+.lb-svg {
+  display: block;
+  text-align: center;
+  width: min(92vw, 1080px);
+  max-width: min(92vw, calc(100vw - 32px));
+  max-height: min(86dvh, calc(var(--vh) - 76px));
+  padding: 24px 28px;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 56px rgba(0, 0, 0, .48), 0 0 0 1px rgba(255, 255, 255, .10);
+  cursor: zoom-in;
+  transform-origin: center center;
+  transition: transform .16s cubic-bezier(.22, 1, .36, 1), border-radius .16s;
+}
+.lb-svg[hidden] { display: none; }
+.lb-svg.is-light-canvas { background: #f4f4f2; color: #111111; }
+.lb-svg svg { display: block; width: 100%; max-width: 100%; height: auto; margin: 0 auto; }
+dialog.lightbox.is-zoomed .lb-img, dialog.lightbox.is-zoomed .lb-svg { cursor: grab; border-radius: 4px; }
+dialog.lightbox.is-dragging .lb-img, dialog.lightbox.no-anim .lb-img,
+dialog.lightbox.is-dragging .lb-svg, dialog.lightbox.no-anim .lb-svg { transition: none; }
+dialog.lightbox.is-dragging .lb-svg { cursor: grabbing !important; }
+@media (prefers-reduced-motion: reduce) { .lb-img, .lb-svg { transition: none; } }
 .lb-status {
   display: inline-flex; align-items: center; gap: 10px; max-width: min(420px, 86vw);
   padding: 12px 18px; border-radius: 12px;
@@ -3455,6 +3477,7 @@ dialog.lightbox.is-dragging .lb-img, dialog.lightbox.no-anim .lb-img { transitio
   .lb-stage { padding: max(52px, calc(env(safe-area-inset-top) + 46px)) 12px max(16px, calc(env(safe-area-inset-bottom) + 12px)); }
   .lb-img { max-width: min(92vw, calc(100vw - 20px)); max-height: min(86dvh, calc(var(--vh) - 68px)); }
   .lb-img.is-svg { padding: 6px; }
+  .lb-svg { width: min(94vw, calc(100vw - 20px)); max-width: min(94vw, calc(100vw - 20px)); max-height: min(84dvh, calc(var(--vh) - 72px)); padding: 12px 14px; }
   .lb-nav { width: 36px; height: 36px; background: rgba(18, 18, 22, .64); }
   .lb-nav.prev { left: 8px; }
   .lb-nav.next { right: 8px; }
@@ -7307,6 +7330,154 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
 }
 @media (prefers-reduced-motion: reduce) {
   .notepane, .notes-scrim, .file-scrim, .reply-receipt > summary::before { transition: none !important; }
+}
+
+/* ─── Rich visuals: offline lazy Mermaid diagrams & inline sandboxed HTML cards ─── */
+.rv-card {
+  margin: .45em 0 1em;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+  max-width: 100%;
+  transition: border-color .15s ease;
+}
+.rv-card:hover { border-color: var(--line-2); }
+.rv-card.snap-card { margin: 8px 0 6px; border-radius: 12px; }
+.rv-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 34px; padding: 5px 8px 5px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-2) 65%, var(--bg));
+  min-width: 0;
+}
+.rv-tag-group { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
+.rv-tag {
+  font: 550 11px/1 var(--mono); letter-spacing: .02em;
+  color: var(--fg-2); flex: none;
+}
+.rv-title {
+  font-size: 12.5px; font-weight: 500; color: var(--fg);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rv-acts {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+}
+.rv-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  height: 24px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--fg-2);
+  font: 500 11.5px/1 var(--sans); cursor: pointer; white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.rv-btn:hover { background: var(--bg-3); color: var(--fg); border-color: var(--line); }
+.rv-btn.on { background: var(--bg-3); color: var(--fg); border-color: var(--line-2); }
+.rv-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 28%, transparent); outline-offset: 1px; }
+.rv-ico-btn { width: 24px; padding: 0; }
+.rv-ico-btn svg { width: 13.5px; height: 13.5px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Mermaid & SVG diagram stages & silent fallback */
+.rv-mermaid-stage, .rv-svg-stage {
+  display: block;
+  text-align: center;
+  padding: 16px 14px;
+  min-height: 88px;
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
+  background: var(--bg);
+}
+.rv-mermaid.is-ready .rv-mermaid-stage,
+.rv-svg.is-ready .rv-svg-stage { cursor: zoom-in; }
+.rv-mermaid-stage svg,
+.rv-svg-stage svg {
+  display: block; width: 100%; max-width: 100%; height: auto; margin: 0 auto;
+}
+:root[data-theme="dark"] .rv-svg-stage.is-light-canvas {
+  background: #f4f4f2; color: #111111;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rv-svg-stage.is-light-canvas {
+    background: #f4f4f2; color: #111111;
+  }
+}
+.rv-mermaid-skeleton, .rv-html-skeleton {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; min-height: 76px;
+  color: var(--fg-3); font-size: 12px;
+}
+.rv-card .rv-source {
+  margin: 0; border: 0; border-radius: 0;
+  max-height: 380px;
+}
+.rv-mermaid.is-fallback,
+.rv-svg.is-fallback {
+  border: 0; border-radius: 0; background: transparent;
+}
+.rv-mermaid.is-fallback .rv-source,
+.rv-svg.is-fallback .rv-source {
+  border: 1px solid var(--line); border-radius: 10px; max-height: none;
+}
+
+/* Inline sandboxed HTML card (attachments & ```html-card) */
+.rv-html-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-2) 65%, var(--bg));
+  padding-right: 8px;
+  min-width: 0;
+}
+.rv-html-head .snap-head {
+  flex: 1; min-width: 0; background: transparent;
+  padding: 7px 6px 7px 11px;
+}
+.rv-html-head .snap-head:hover { background: transparent; }
+.rv-html-head .snap-head.is-active { background: transparent; }
+.rv-html-head .snap-ico { width: 24px; height: 24px; border-radius: 6px; }
+.rv-html-head .snap-ico svg { width: 13.5px; height: 13.5px; }
+.rv-html-head .snap-title { font-size: 12.5px; }
+.rv-html-head .snap-meta { font-size: 11px; }
+.rv-html-head .snap-chev { display: none; }
+.rv-html-head .snap-head.is-active .snap-chev { display: inline-flex; }
+.rv-html-head .snap-head.is-active .snap-chev svg { display: none; }
+.rv-html-acts { gap: 4px; }
+.rv-html-acts .rv-btn {
+  border-color: var(--line); background: var(--bg);
+}
+.rv-html-acts .rv-btn:hover { background: var(--bg-2); border-color: var(--line-2); }
+.rv-html-stage {
+  position: relative;
+  width: 100%;
+  height: var(--rv-html-h, 300px);
+  min-height: 120px;
+  max-height: var(--rv-html-max, 460px);
+  background: var(--bg);
+  overflow: hidden;
+}
+.rv-html-card.is-error .rv-html-stage {
+  height: auto; min-height: 0;
+}
+.rv-html-frame {
+  display: block; width: 100%; height: 100%; min-width: 0; max-width: 100%;
+  border: 0; background: var(--bg);
+}
+.rv-html-err {
+  padding: 12px 14px; font-size: 12.5px; color: var(--fg-3);
+}
+.td-text .rv-html-stage,
+#file-view .rv-html-stage {
+  --rv-html-h: 250px;
+  --rv-html-max: 380px;
+}
+.td-text .rv-html-head .snap-meta { display: none; }
+@media (max-width: 760px) {
+  .rv-bar { padding: 5px 6px 5px 10px; }
+  .rv-mermaid-stage, .rv-svg-stage { padding: 12px 10px; }
+  .rv-html-head { flex-wrap: wrap; row-gap: 4px; padding: 6px 8px; }
+  .rv-html-head .snap-head { padding: 0; }
+  .rv-html-head .snap-meta { display: none; }
+  .rv-html-acts { width: 100%; justify-content: flex-end; }
+  .rv-html-stage { --rv-html-h: 240px; --rv-html-max: 380px; }
 }
 
 /* demo only */

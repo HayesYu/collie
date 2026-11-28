@@ -356,7 +356,7 @@ func TestRemoteSameNamePaneIsolation(t *testing.T) {
 
 func TestWorkerGCIdleTimeoutScopeAndMaxPerCycle(t *testing.T) {
 	resetHistoryForTest(t)
-	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	mkTime := func(d time.Duration) *time.Time { ts := now.Add(-d); return &ts }
 
 	workDir := t.TempDir()
@@ -434,7 +434,7 @@ func TestWorkerGCIdleTimeoutScopeAndMaxPerCycle(t *testing.T) {
 
 func TestWorkerGCStartupEmptyShellAndSoftCapLRU(t *testing.T) {
 	resetHistoryForTest(t)
-	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	mkTime := func(d time.Duration) *time.Time { ts := now.Add(-d); return &ts }
 
 	// Part A: Startup empty-shell failure >= 30m (even without Session).
@@ -506,7 +506,7 @@ func TestWorkerGCStartupEmptyShellAndSoftCapLRU(t *testing.T) {
 
 func TestWorkerGCSafetyVetoes(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	oldIdle := now.Add(-150 * time.Minute)
 
 	// 1) Screen background task / running / timer / dialog vetoes.
@@ -585,7 +585,7 @@ func TestWorkerGCSafetyVetoes(t *testing.T) {
 
 func TestWorkerGCTwoPhaseHibernatingAndCrashReconcile(t *testing.T) {
 	resetHistoryForTest(t)
-	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	oldIdle := now.Add(-150 * time.Minute)
 
 	// Subtest 1: Verify Hibernating=true is persisted to SQLite BEFORE workspace.close runs,
@@ -660,7 +660,7 @@ func TestWorkerGCTwoPhaseHibernatingAndCrashReconcile(t *testing.T) {
 
 func TestEndedArchiveCap200AndLosslessResume(t *testing.T) {
 	resetHistoryForTest(t)
-	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	workDir := t.TempDir()
 
 	local := &gcMockNode{panes: []gcMockPane{

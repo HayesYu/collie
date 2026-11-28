@@ -112,6 +112,12 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path s
 				setHTMLSandboxHeaders(resp.Header)
 				return nil
 			}
+			if r.URL.Path == "/api/file" && r.URL.Query().Get("download") != "1" && r.URL.Query().Get("as") == "video" && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
+				if ct, ok := videoMIME(r.URL.Query().Get("path")); ok && (resp.Header.Get("X-File-Kind") == "video" || strings.HasPrefix(resp.Header.Get("Content-Type"), "video/")) {
+					setVideoHeaders(resp.Header, ct)
+					return nil
+				}
+			}
 			if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 				if isUpdate && resp.StatusCode != http.StatusOK {
 					raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

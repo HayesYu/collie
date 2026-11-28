@@ -1322,7 +1322,7 @@
   function isAnyMobileSheetAnimating() {
     for (const id of ["#worker-drawer", "#thread-drawer", "#file-view"]) {
       const el = $(id);
-      if (el && (el.classList?.contains("is-sheet-opening") || (el._slideSettleAt && el._slideSettleAt > performance.now() + 16))) {
+      if (el && (el.classList?.contains("is-sheet-opening") || el.classList?.contains("is-sheet-prep") || (el._slideSettleAt && el._slideSettleAt > performance.now() + 16))) {
         return true;
       }
     }
@@ -4263,6 +4263,50 @@
     if (!p || !failedFileGalleryImgs.delete(p)) return;
     failedFileGalleryVer++;
   }
+  const failedMediaVideos = new Set();
+  let failedMediaVideosVer = 0;
+  const videoDims = new Map();
+  const videoBlobs = new Map();
+  function markMediaVideoFailed(p) {
+    if (!p || failedMediaVideos.has(p)) return;
+    if (failedMediaVideos.size >= 300) {
+      const oldest = failedMediaVideos.values().next().value;
+      if (oldest !== undefined) failedMediaVideos.delete(oldest);
+    }
+    failedMediaVideos.add(p);
+    failedMediaVideosVer++;
+  }
+  function clearMediaVideoFailed(p) {
+    if (!p || !failedMediaVideos.delete(p)) return;
+    failedMediaVideosVer++;
+  }
+  function cleanAttachName(rawPath) {
+    const base = String(rawPath || "").split(/[?#]/)[0].split("/").pop() || String(rawPath || "");
+    return base.replace(/^[0-9a-f]{6}-(?=.+)/i, "");
+  }
+  const ATT_ICO_DOC = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>`;
+  const ATT_ICO_SHEET = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M9.5 9.5v10"/></svg>`;
+  const ATT_ICO_CODE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="m13.5 5.5-3 13"/></svg>`;
+  const ATT_ICO_ARCHIVE = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="4" rx="1.2"/><path d="M5.5 8.5v9.5a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8.5"/><path d="M10 12.5h4"/></svg>`;
+  const ATT_ICO_AUDIO = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4M9 7v10M13 5v14M17 8v8M21 11v2"/></svg>`;
+  const ATT_ICO_VIDEO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg>`;
+  const ATT_ICO_HTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.8 12h16.4"/><path d="M12 3.5a12.5 12.5 0 0 1 0 17M12 3.5a12.5 12.5 0 0 0 0 17"/></svg>`;
+  const ATT_ICO_IMG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.4"/><path d="M20.5 15.5l-4.5-4.5L7.5 19.5"/></svg>`;
+  const ATT_ICO_FILE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`;
+  function fileCategoryInfo(name, extHint = "") {
+    const clean = cleanAttachName(name);
+    const rawExt = String(extHint || (clean.includes(".") ? clean.split(".").pop() : "")).trim().toLowerCase();
+    const extLabel = (rawExt ? rawExt.slice(0, 6) : "file").toUpperCase();
+    if (rawExt === "html" || rawExt === "htm") return { kind: "html", icon: ATT_ICO_HTML, extLabel };
+    if (IMG_EXT.test(clean) || IMG_EXT.test("." + rawExt)) return { kind: "img", icon: ATT_ICO_IMG, extLabel };
+    if (VIDEO_EXT.test(clean) || VIDEO_EXT.test("." + rawExt)) return { kind: "video", icon: ATT_ICO_VIDEO, extLabel };
+    if (AUDIO_EXT.test(clean) || AUDIO_EXT.test("." + rawExt)) return { kind: "audio", icon: ATT_ICO_AUDIO, extLabel };
+    if (ARCHIVE_EXT.test(clean) || ARCHIVE_EXT.test("." + rawExt)) return { kind: "archive", icon: ATT_ICO_ARCHIVE, extLabel };
+    if (SHEET_EXT.test(clean) || SHEET_EXT.test("." + rawExt)) return { kind: "sheet", icon: ATT_ICO_SHEET, extLabel };
+    if (CODE_EXT.test(clean) || CODE_EXT.test("." + rawExt)) return { kind: "code", icon: ATT_ICO_CODE, extLabel };
+    if (DOC_EXT.test(clean) || DOC_EXT.test("." + rawExt)) return { kind: "doc", icon: ATT_ICO_DOC, extLabel };
+    return { kind: "file", icon: ATT_ICO_FILE, extLabel };
+  }
   function extractEntryArtifacts(e) {
     if (!e || e.role !== "collie") return [];
     const text = e.text || "";
@@ -4290,15 +4334,16 @@
       seen.add(key);
       const name = p.split("/").pop() || p;
       const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
-      if (!ext) return;
+      if (!ext && !explicit) return;
       out.push({
         path: p,
-        name,
+        name: cleanAttachName(name),
         ext,
         explicit: !!explicit,
         isHtml: ext === "html" || ext === "htm",
         isCsv: ext === "csv" || ext === "tsv",
         isImg: IMG_EXT.test(name),
+        isVideo: VIDEO_EXT.test(name),
       });
     };
     if (files) {
@@ -4315,7 +4360,74 @@
   const ARTIFACT_CHEV_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
   function renderArtifactChipHtml(it, activeMatch = "") {
     const act = !!(activeMatch && activeMatch === it.path);
-    return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapPreview", "预览 {name}", { name: it.name }))}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>`;
+    const displayName = cleanAttachName(it.name || it.path);
+    const { kind, icon, extLabel } = fileCategoryInfo(displayName, it.ext);
+    const isHtml = !!(it.isHtml || kind === "html");
+    return `<button type="button" class="snap-chip${isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-kind="${kind}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: displayName }) : tx("file.snapPreview", "预览 {name}", { name: displayName }))}"><span class="snap-chip-ico" aria-hidden="true">${icon}</span><span class="snap-chip-name">${esc(displayName)}</span><span class="snap-chip-ext">${esc(extLabel)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>`;
+  }
+  function renderUserFileChipHtml(path, activeMatch = "") {
+    const name = cleanAttachName(path);
+    const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
+    return renderArtifactChipHtml({ path, name, ext, isHtml: ext === "html" || ext === "htm" }, activeMatch);
+  }
+  function renderVideoCardHtml(path, name = "") {
+    const displayName = cleanAttachName(name || path);
+    const ext = (displayName.includes(".") ? displayName.split(".").pop() : "mp4").toLowerCase();
+    const ep = esc(path);
+    const en = esc(displayName);
+    const dim = videoDims.get(path);
+    const w = dim?.w || 640;
+    const h = dim?.h || 360;
+    const readyCls = dim ? " is-ready" : "";
+    const openTip = tx("file.videoOpenTip", "在文件抽屉打开视频 {name}", { name: displayName });
+    return `<figure class="att-video-card${readyCls}" data-video-card="${ep}" data-file-name="${en}" data-file-ext="${esc(ext)}"><video class="att-video-el" controls playsinline webkit-playsinline preload="metadata" loading="lazy" width="${w}" height="${h}" data-video-path="${ep}" aria-label="${esc(tx("file.videoAria", "视频 {name}", { name: displayName }))}"></video><div class="att-video-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: displayName }))}"><button type="button" class="rv-ico" data-open-file="${ep}" title="${esc(openTip)}" aria-label="${esc(openTip)}">${ICON_RV_DRAWER}</button></div></figure>`;
+  }
+  function renderVideoGroupHtml(videoPaths, extraCls = "", activeMatch = "") {
+    if (!videoPaths?.length) return "";
+    const active = videoPaths.filter((p) => !failedMediaVideos.has(p));
+    const failed = videoPaths.filter((p) => failedMediaVideos.has(p));
+    const listHtml = active.length
+      ? `<div class="att-video-list" data-count="${active.length}">${active.map((p) => renderVideoCardHtml(p)).join("")}</div>`
+      : "";
+    const fallbackHtml = failed.length
+      ? `<div class="msg-files att-video-fallbacks">${failed.map((p) => renderUserFileChipHtml(p, activeMatch)).join("")}</div>`
+      : "";
+    return `<div class="att-video-wrap${extraCls ? " " + extraCls : ""}" data-video-wrap>${listHtml}${fallbackHtml}</div>`;
+  }
+  function degradeVideoCard(card) {
+    if (!card || card.dataset?.degraded === "1") return;
+    if (card.dataset) card.dataset.degraded = "1";
+    const path = card.dataset?.videoCard || card.querySelector?.("video")?.dataset?.videoPath || "";
+    if (!path) return;
+    const name = cleanAttachName(card.dataset?.fileName || path);
+    const ext = card.dataset?.fileExt || (name.includes(".") ? name.split(".").pop().toLowerCase() : "mp4");
+    markMediaVideoFailed(path);
+    const cachedBlob = videoBlobs.get(path);
+    if (cachedBlob) {
+      videoBlobs.delete(path);
+      try { URL.revokeObjectURL(cachedBlob); } catch {}
+    }
+    const list = card.closest?.(".att-video-list") || null;
+    const wrap = card.closest?.("[data-video-wrap]") || null;
+    card.remove?.();
+    if (typeof document !== "undefined" && typeof document.createElement === "function") {
+      let fallbacks = wrap?.querySelector?.(".att-video-fallbacks") || null;
+      if (!fallbacks) {
+        fallbacks = document.createElement("div");
+        fallbacks.className = "msg-files att-video-fallbacks";
+        if (wrap) wrap.appendChild(fallbacks);
+        else if (list?.parentElement) list.parentElement.insertBefore(fallbacks, list.nextSibling);
+      }
+      const existing = [...(fallbacks.querySelectorAll?.(".snap-chip[data-open-file]") || [])];
+      if (!existing.some((el) => el.dataset?.openFile === path)) {
+        fallbacks.appendChild(createArtifactChipEl(path, name, ext));
+      }
+    }
+    if (list) {
+      const rem = list.querySelectorAll?.(".att-video-card")?.length || 0;
+      if (list.dataset) list.dataset.count = String(rem);
+      if (rem === 0) list.hidden = true;
+    }
   }
   function fileGallerySizeClass(n) {
     return n === 1 ? "is-1" : n === 2 ? "is-2" : n === 3 ? "is-3" : n === 4 ? "is-4" : "is-many";
@@ -4348,12 +4460,14 @@
   function createArtifactChipEl(path, name, ext) {
     const el = document.createElement("button");
     el.type = "button";
-    const normExt = String(ext || "").toLowerCase();
-    el.className = "snap-chip" + (normExt === "html" || normExt === "htm" ? " is-html" : "");
+    const displayName = cleanAttachName(name || path);
+    const { kind, icon, extLabel } = fileCategoryInfo(displayName, ext);
+    el.className = "snap-chip" + (kind === "html" ? " is-html" : "");
+    el.dataset.kind = kind;
     el.dataset.openFile = path;
     el.title = path;
-    el.setAttribute("aria-label", tx("file.snapPreview", "预览 {name}", { name }));
-    el.innerHTML = `<span class="snap-chip-ext">${esc((normExt || "FILE").toUpperCase())}</span><span class="snap-chip-name">${esc(name)}</span><span class="snap-chip-chev" aria-hidden="true">${ARTIFACT_CHEV_SVG}</span>`;
+    el.setAttribute("aria-label", tx("file.snapPreview", "预览 {name}", { name: displayName }));
+    el.innerHTML = `<span class="snap-chip-ico" aria-hidden="true">${icon}</span><span class="snap-chip-name">${esc(displayName)}</span><span class="snap-chip-ext">${esc(extLabel)}</span><span class="snap-chip-chev" aria-hidden="true">${ARTIFACT_CHEV_SVG}</span>`;
     return el;
   }
   function createPromotedFileTileEl(path, name, ext) {
@@ -4474,7 +4588,7 @@
     const hasExplicit = Array.isArray(e.files) && e.files.length > 0;
     const lang = curLang();
     const cached = _artifactRenderCache.get(e);
-    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit && cached.failVer === failedFileGalleryVer && cached.lang === lang) {
+    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit && cached.failVer === failedFileGalleryVer && cached.vidFailVer === failedMediaVideosVer && cached.lang === lang) {
       return cached.html;
     }
     const renderChip = (it) => renderArtifactChipHtml(it, activeMatch);
@@ -4488,55 +4602,57 @@
       }).join("");
     };
     const inlineImgItems = items.filter((it) => it.isImg && it.explicit);
+    const inlineVideoItems = items.filter((it) => it.isVideo && it.explicit);
     const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
     let html;
-    if (inlineImgItems.length > 0) {
+    if (inlineImgItems.length > 0 || inlineVideoItems.length > 0 || inlineHtmlItems.length > 0) {
       const inlineSet = new Set([
         ...inlineImgItems.map((it) => it.path),
+        ...inlineVideoItems.map((it) => it.path),
         ...inlineHtmlItems.map((it) => it.path),
       ]);
       const otherItems = items.filter((it) => !inlineSet.has(it.path));
-      const activeImgs = inlineImgItems.filter((it) => !failedFileGalleryImgs.has(it.path));
-      const failedImgs = inlineImgItems.filter((it) => failedFileGalleryImgs.has(it.path));
-      const fallbackHtml = failedImgs.length
-        ? `<div class="msg-files file-gallery-fallbacks">${failedImgs.map(renderChip).join("")}</div>`
+      let galleryHtml = "";
+      if (inlineImgItems.length > 0) {
+        const activeImgs = inlineImgItems.filter((it) => !failedFileGalleryImgs.has(it.path));
+        const failedImgs = inlineImgItems.filter((it) => failedFileGalleryImgs.has(it.path));
+        const fallbackHtml = failedImgs.length
+          ? `<div class="msg-files file-gallery-fallbacks">${failedImgs.map(renderChip).join("")}</div>`
+          : "";
+        galleryHtml = activeImgs.length > 0
+          ? `<div class="file-gallery-wrap" data-file-gallery-wrap>${renderFileImageGallery(activeImgs)}${fallbackHtml}</div>`
+          : fallbackHtml;
+      }
+      const videoHtml = inlineVideoItems.length > 0
+        ? renderVideoGroupHtml(inlineVideoItems.map((it) => it.path), "file-videos", activeMatch)
         : "";
-      const galleryHtml = activeImgs.length > 0
-        ? `<div class="file-gallery-wrap" data-file-gallery-wrap>${renderFileImageGallery(activeImgs)}${fallbackHtml}</div>`
-        : fallbackHtml;
       let restHtml = "";
       if (inlineHtmlItems.length > 0) {
         restHtml = renderHtmlCards(inlineHtmlItems, otherItems);
       } else if (otherItems.length > 0) {
         restHtml = `<div class="msg-files">${otherItems.map(renderChip).join("")}</div>`;
       }
-      html = galleryHtml + restHtml;
-    } else if (inlineHtmlItems.length > 0) {
-      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
-      const rest = items.filter((it) => !inlineSet.has(it.path));
-      html = renderHtmlCards(inlineHtmlItems, rest);
+      html = galleryHtml + videoHtml + restHtml;
     } else {
-      const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
-      if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
-        html = `<div class="msg-files">${renderChip(primary)}</div>`;
-      } else {
-        const primaryAct = activeMatch === primary.path;
-        const metaTag = primary.isHtml ? tx("file.snapHtmlReport", "HTML 交互报告") : primary.isCsv ? tx("file.snapCsvData", "{ext} 表格数据", { ext: primary.ext.toUpperCase() }) : primary.ext.toUpperCase();
-        const rest = items.filter((it) => it.path !== primary.path);
+      const primaryHtml = items.find((x) => x.isHtml);
+      if (primaryHtml) {
+        const primaryAct = activeMatch === primaryHtml.path;
+        const metaTag = tx("file.snapHtmlReport", "HTML 交互报告");
+        const rest = items.filter((it) => it.path !== primaryHtml.path);
         const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primary.name }) : tx("file.snapPreview", "预览 {name}", { name: primary.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>${extraChips}</section>`;
+        html = `<section class="snap-card" aria-label="${esc(primaryHtml.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primaryHtml.path)}" title="${esc(primaryHtml.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primaryHtml.name }) : tx("file.snapPreview", "预览 {name}", { name: primaryHtml.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primaryHtml.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primaryHtml.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>${extraChips}</section>`;
+      } else {
+        html = `<div class="msg-files">${items.map(renderChip).join("")}</div>`;
       }
     }
-    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, failVer: failedFileGalleryVer, lang, html });
+    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, failVer: failedFileGalleryVer, vidFailVer: failedMediaVideosVer, lang, html });
     return html;
   }
   function threadEntryPlainText(e) {
     let t = String(e?.text || "");
     if (e?.role === "user") {
-      const cut = t.indexOf("\n\n[The human picked");
-      if (cut >= 0) t = t.slice(0, cut);
-      const att = t.lastIndexOf("附件：\n");
-      if (att >= 0) t = t.slice(0, att).trim() || tx("collie.attachMsg", "附件消息");
+      const split = splitUserAttachmentBlock(t);
+      t = split.paths.length ? (split.body.trim() || tx("collie.attachMsg", "附件消息")) : split.body;
     }
     return t;
   }
@@ -5383,10 +5499,8 @@
     if (!e) return "";
     let t = String(e.text || "");
     if (e.role === "user") {
-      const cut = t.indexOf("\n\n[The human picked");
-      if (cut >= 0) t = t.slice(0, cut);
-      const att = t.lastIndexOf("附件：\n");
-      if (att >= 0) t = (t.slice(0, att).trim() + " 📎").trim();
+      const split = splitUserAttachmentBlock(t);
+      t = split.paths.length ? (split.body.trim() + " 📎").trim() : split.body;
     }
     return plainLine(t.replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")).slice(0, 120) || plainLine(t).slice(0, 120);
   }
@@ -7393,7 +7507,8 @@
             const qi = analyzeQuote(e, ei);
             const qSig = qi ? qi.sig : "";
             const inPlaceHtml = renderInPlaceReceipts(e, eKey);
-            const msgSig = `u:${curLang()}:${qSig}|${inPlaceHtml}|${e.text || ""}`;
+            const vidVerSig = VIDEO_EXT.test(e.text || "") ? `|vf:${failedMediaVideosVer}` : "";
+            const msgSig = `u:${curLang()}:${qSig}|${inPlaceHtml}${vidVerSig}|${e.text || ""}`;
             const sig = `u|${e.id || ""}|${at}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${msgSig}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -7418,13 +7533,13 @@
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
                 const parts = parseUserParts(e.text);
                 const quoteHtml = renderQuoteHtml(qi, e);
-                const mediaHtml = renderUserMedia(parts.imgs);
+                const mediaHtml = renderUserAttachments(parts);
                 const idTitleAttrs = `data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}`;
                 const quoteCls = quoteHtml ? " has-quote" : "";
                 if (mediaHtml && !parts.hasBubbleContent) {
                   return `<div class="mine is-media-only${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}<div class="msg user is-media-only" ${idTitleAttrs}>${mediaHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
                 }
-                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}${parts.attHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
+                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
               },
             });
             lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
@@ -8239,40 +8354,30 @@
     </div>`;
   }
 
-  function openWorkerFromLink(a, ev, fromThreadRoot = "", opts = {}) {
-    if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return false;
-    if (!opts.allowAnyView && view !== "collie") return false;
-    if (a.id === "wd-popout" || a.closest?.("#worker-drawer")) return false;
+  function extractWorkerTargetFromEl(a) {
+    if (!a || a.id === "wd-popout" || a.closest?.("#worker-drawer")) return null;
     const href = a.getAttribute?.("href") || "";
-    const ret = (fromThreadRoot || a.closest?.("#thread-drawer")) && activeThreadRoot ? captureThreadReturnTo() : null;
-    const retOpt = ret ? { returnTo: ret } : {};
-    const directWorker = String(a.dataset?.openWorker || a.dataset?.worker || "").trim();
+    const directWorker = String(a.dataset?.openWorker || a.dataset?.worker || a.dataset?.tdWorker || a.dataset?.npWorker || "").trim();
     if (directWorker && directWorker !== ROUTER) {
       const paneId = String(a.dataset?.paneId || "").trim()
         || (href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)).trim() : "")
         || paneOf(directWorker) || "";
       const histId = String(a.dataset?.histId || "").trim()
         || (href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)).trim() : "");
-      ev.preventDefault();
-      openWorkerDrawer({ worker: directWorker, paneId, histId, fromThreadRoot, ...retOpt });
-      return true;
+      return { worker: directWorker, paneId, histId };
     }
     if (a.classList?.contains("event")) {
       const ref = String(a.dataset?.ref || "").trim();
       if (ref && ref !== ROUTER && !ref.startsWith("h:") && !ref.startsWith("peer-req:")) {
         const paneId = href.startsWith("#/p/") ? decodeURIComponent(href.slice(4)) : (paneOf(ref) || "");
         const histId = href.startsWith("#/h/") ? decodeURIComponent(href.slice(4)) : "";
-        ev.preventDefault();
-        openWorkerDrawer({ worker: ref, paneId, histId, fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: ref, paneId, histId };
       }
     }
     if (href.startsWith("#/w/")) {
       const wName = decodeURIComponent(href.slice(4)).trim();
       if (wName && wName !== ROUTER) {
-        ev.preventDefault();
-        openWorkerDrawer({ worker: wName, paneId: paneOf(wName) || "", fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: wName, paneId: paneOf(wName) || "", histId: "" };
       }
     }
     if (href.startsWith("#/p/")) {
@@ -8280,9 +8385,7 @@
       if (paneId) {
         const ag = find(paneId);
         const wName = ag && ag.name && ag.name !== ROUTER ? ag.name : "";
-        ev.preventDefault();
-        openWorkerDrawer({ worker: wName, paneId, fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: wName, paneId, histId: "" };
       }
     }
     if (href.startsWith("#/h/")) {
@@ -8290,12 +8393,22 @@
       const hRec = histId ? hist.find((x) => x.id === histId) : null;
       const wName = String(a.dataset?.ref || hRec?.name || "").trim();
       if (wName && wName !== ROUTER && !wName.startsWith("h:") && (getWorkerLookup().byName.has(wName) || a.classList?.contains("event") || a.closest?.(".mem-crew"))) {
-        ev.preventDefault();
-        openWorkerDrawer({ worker: wName, histId, fromThreadRoot, ...retOpt });
-        return true;
+        return { worker: wName, paneId: "", histId };
       }
     }
-    return false;
+    return null;
+  }
+
+  function openWorkerFromLink(a, ev, fromThreadRoot = "", opts = {}) {
+    if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return false;
+    if (!opts.allowAnyView && view !== "collie") return false;
+    const target = extractWorkerTargetFromEl(a);
+    if (!target) return false;
+    const ret = (fromThreadRoot || a.closest?.("#thread-drawer")) && activeThreadRoot ? captureThreadReturnTo() : null;
+    const retOpt = ret ? { returnTo: ret } : {};
+    ev.preventDefault();
+    openWorkerDrawer({ worker: target.worker, paneId: target.paneId, histId: target.histId, fromThreadRoot, ...retOpt });
+    return true;
   }
 
   $("#super-thread").addEventListener("mousedown", (e) => { if (e.target.closest(".ask button")) e.preventDefault(); });
@@ -9388,7 +9501,7 @@
     feishu: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 17.5V6.8l7.2 4.2L19 5.5v10.2c0 1.4-.9 2.6-2.3 2.9L9.8 20c-2.6.5-4.8-1-4.8-2.5Z"/><path d="M12.2 11 19 15.2"/></svg>`,
     github: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.5 1.4-4.5-2.3-6.2-2.8m12.4 5.6v-3.5a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.3a4.9 4.9 0 0 0-1.3-3.4 4.6 4.6 0 0 0-.1-3.4s-1.1-.3-3.5 1.3a12.1 12.1 0 0 0-6.4 0C6.5 2.6 5.4 2.9 5.4 2.9a4.6 4.6 0 0 0-.1 3.4A4.9 4.9 0 0 0 4 9.7c0 4.9 3 6 5.8 6.3a3 3 0 0 0-.8 2.3v3.5"/></svg>`,
     gitforge: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.2"/><circle cx="6.5" cy="17.5" r="2.2"/><circle cx="17.5" cy="9.5" r="2.2"/><path d="M6.5 8.7v6.6M17.5 11.7c0 3.2-2.2 5.8-8.8 5.8"/></svg>`,
-    peers: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3ZM8 13a3 3 0 1 0-3-3 3 3 0 0 0 3 3Z"/><path d="M2 19a5 5 0 0 1 10 0M13 19a4.5 4.5 0 0 1 9 0"/></svg>`,
+    peers: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.5V11l2.6-3.5L7.8 10.2h2.4l.6 2.6-2.2 1.4v3.3"/><path d="M21 17.5V11l-2.6-3.5-2.2 2.7h-2.4l-.6 2.6 2.2 1.4v3.3"/><path d="M12 6.8c-.6-1.1-2.2-1-2.2.2 0 1 2.2 2.2 2.2 2.2s2.2-1.2 2.2-2.2c0-1.2-1.6-1.3-2.2-.2z"/></svg>`,
   };
   const getIntCliHintCard = () => ({
     kind: "gitforge-cli-hint",
@@ -18707,7 +18820,7 @@
     const env = parseWorkerPromptEnvelope(bodyRaw, { fullTask: isFirstUser ? fullTask : "" });
     const useRich = env.useMarkdown || env.collapsible;
     if (!useRich) {
-      return `<div class="msg user">${parts.textHtml}${parts.attHtml}</div>`;
+      return `<div class="msg user">${parts.textHtml}</div>`;
     }
     const renderedHtml = env.body ? (env.useMarkdown ? md(env.body) : linkUserFiles(esc(env.body))) : parts.textHtml;
     const cls = ["msg", "user"];
@@ -18723,9 +18836,9 @@
         + `</div>`
       : "";
     if (!env.collapsible) {
-      return `<div class="${cls.join(" ")}">${kickerHtml}${renderedHtml}${parts.attHtml}</div>`;
+      return `<div class="${cls.join(" ")}">${kickerHtml}${renderedHtml}</div>`;
     }
-    return `<div class="${cls.join(" ")}" data-prompt-key="${esc(promptKey)}">${kickerHtml}<div class="wd-prompt-body" id="${esc(bodyId)}">${renderedHtml}${parts.attHtml}</div><button type="button" class="wd-prompt-toggle" aria-expanded="false" aria-controls="${esc(bodyId)}"><span class="wd-pt-more">${esc(tx("worker.promptExpand", "展开完整指令"))}</span><span class="wd-pt-less">${esc(tx("worker.promptCollapse", "收起指令"))}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>`;
+    return `<div class="${cls.join(" ")}" data-prompt-key="${esc(promptKey)}">${kickerHtml}<div class="wd-prompt-body" id="${esc(bodyId)}">${renderedHtml}</div><button type="button" class="wd-prompt-toggle" aria-expanded="false" aria-controls="${esc(bodyId)}"><span class="wd-pt-more">${esc(tx("worker.promptExpand", "展开完整指令"))}</span><span class="wd-pt-less">${esc(tx("worker.promptCollapse", "收起指令"))}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>`;
   }
 
   function syncExpandedPrompts(el) {
@@ -18823,7 +18936,7 @@
     }
     if (m.kind === "user") {
       const parts = parseUserParts(m.text);
-      const mediaHtml = renderUserMedia(parts.imgs);
+      const mediaHtml = renderUserAttachments(parts);
       const bubbleHtml = renderWorkerUserBubble(parts, el, i, g.isFirstUser, fullTask);
       if (mediaHtml && !parts.hasBubbleContent) {
         return `<div class="msg user is-media-only">${mediaHtml}</div>`;
@@ -18836,17 +18949,53 @@
     return `<div class="msg assistant">${md(m.text)}</div>`;
   }
 
+  function triggerWdContentReveal(el) {
+    if (!el?.classList) return;
+    clearTimeout(el._revealTimer);
+    el._revealTimer = 0;
+    if (el._revealOnEnd) {
+      el.removeEventListener?.("animationend", el._revealOnEnd);
+      el._revealOnEnd = null;
+    }
+    el.classList.remove("is-content-reveal");
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    el.classList.add("is-content-reveal");
+    const done = (ev) => {
+      if (ev && ev.target !== el) return;
+      clearTimeout(el._revealTimer);
+      el._revealTimer = 0;
+      if (el._revealOnEnd) {
+        el.removeEventListener?.("animationend", el._revealOnEnd);
+        el._revealOnEnd = null;
+      }
+      el.classList.remove("is-content-reveal");
+    };
+    el._revealOnEnd = done;
+    el.addEventListener?.("animationend", done);
+    el._revealTimer = setTimeout(done, 210);
+  }
+
   function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。"), drawOpts = null) {
     const wasChunking = !!el._chunking;
+    const wasBackfilling = !!el._backfilling;
     clearTimeout(el._chunkTimer);
     el._chunkTimer = 0;
     el._chunking = false;
+    el._backfilling = false;
+    el._startBackfill = null;
+    const hadSkel = !!(drawOpts?.revealFromSkel && el.querySelector?.(".thread-skel"));
+    const skipSyncScroll = !!drawOpts?.skipSyncScroll;
     const rest = el._restore;
     // Just opened: start at the latest message, unless restoring a scroll position.
-    const was = rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || wasChunking || nearBottom(el));
+    const was = skipSyncScroll ? true : (rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || wasChunking || nearBottom(el)));
     if (msgs.length) el._fresh = false;
     const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
-    if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._rawMsgsSig = ""; el._blocks = null; el._lazyRuns = null; return; }
+    if (!msgs.length) {
+      el.innerHTML = `<div class="thread-empty">${empty}</div>`;
+      el._sig = ""; el._rawMsgsSig = ""; el._tailRawSig = ""; el._tailCacheKey = ""; el._blocks = null; el._lazyRuns = null;
+      return;
+    }
     const fullTask = el.id === "wd-thread"
       ? (resolveWorkerContext().supW?.task || "")
       : (el.id === "thread" && current ? (getWorkerLookup().byPane.get(current)?.task || "") : "");
@@ -18855,25 +19004,32 @@
     el._lazyRuns = lazyRuns;
     bindLazyToolRuns(el);
 
-    // Only use tail-first chunked mount for genuinely huge (>60-group) threads on initial cold open;
-    // normal worker transcripts (<=60 groups) commit atomically in one frame after slide settle so
-    // scrollHeight / scrollTop never thrash and active SSE patches never reset progressive chunks.
-    const useProgressive = !!(drawOpts?.progressive && !wasChunking && groups.length > 60 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
+    const wantTailGroups = typeof drawOpts?.tailGroups === "number" && drawOpts.tailGroups > 0 ? drawOpts.tailGroups : 0;
+    const useTailWindow = !!(wantTailGroups && !wasBackfilling && !el._sig && groups.length > wantTailGroups && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
+    const useProgressive = useTailWindow || !!(drawOpts?.progressive && !wasChunking && groups.length > 60 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
     if (useProgressive) {
       el._chunking = true;
       const blocks = new Array(groups.length);
-      const tailCount = Math.min(groups.length, 12);
+      const tailCount = Math.min(groups.length, useTailWindow ? wantTailGroups : 12);
       const tailStart = Math.max(0, groups.length - tailCount);
       for (let gi = tailStart; gi < groups.length; gi++) {
         blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
       }
       el.innerHTML = blocks.slice(tailStart).join("");
-      syncExpandedPrompts(el);
-      hydrateRichContent(el);
-      stick(el, true);
+      if (hadSkel) triggerWdContentReveal(el);
+      if (drawOpts?.cacheKey) el._tailCacheKey = drawOpts.cacheKey;
+      if (drawOpts?.rawSig) el._tailRawSig = drawOpts.rawSig;
+      if (!skipSyncScroll) {
+        syncExpandedPrompts(el);
+        hydrateRichContent(el);
+        stick(el, true);
+      }
       let curStart = tailStart;
+      let backfillStarted = false;
       const finishAll = () => {
         el._chunking = false;
+        el._backfilling = false;
+        el._startBackfill = null;
         if (el._loadingEarlier) {
           const rowHtml = `<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`;
           blocks.unshift(rowHtml);
@@ -18893,7 +19049,8 @@
       };
       const prependNext = () => {
         el._chunkTimer = 0;
-        if (drawOpts?.isAlive && !drawOpts.isAlive()) { el._chunking = false; return; }
+        if (drawOpts?.isAlive && !drawOpts.isAlive()) { el._chunking = false; el._backfilling = false; el._startBackfill = null; return; }
+        el._backfilling = true;
         const nextStart = Math.max(0, curStart - 10);
         for (let gi = nextStart; gi < curStart; gi++) {
           blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
@@ -18923,7 +19080,19 @@
           finishAll();
         }
       };
-      el._chunkTimer = setTimeout(prependNext, 32);
+      const startBackfill = () => {
+        if (backfillStarted || !el._chunking) return;
+        backfillStarted = true;
+        if (drawOpts?.isAlive && !drawOpts.isAlive()) { el._chunking = false; el._backfilling = false; el._startBackfill = null; return; }
+        el._backfilling = true;
+        el._chunkTimer = setTimeout(prependNext, 16);
+      };
+      el._startBackfill = startBackfill;
+      if (!drawOpts?.deferBackfill) {
+        backfillStarted = true;
+        el._backfilling = true;
+        el._chunkTimer = setTimeout(prependNext, 32);
+      }
       return;
     }
 
@@ -18932,7 +19101,8 @@
     const sig = blocks.join("");
     if (sig === el._sig) return;
     el._sig = sig;
-    if (drawOpts?.rawSig) el._rawMsgsSig = drawOpts.rawSig;
+    if (drawOpts?.rawSig) { el._rawMsgsSig = drawOpts.rawSig; el._tailRawSig = drawOpts.rawSig; }
+    if (drawOpts?.cacheKey) el._tailCacheKey = drawOpts.cacheKey;
     const old = el._blocks;
     if (old && el.children.length === old.length && el.lastElementChild === el._last) {
       // Keep what did not change (and its open/closed state); redraw from
@@ -18944,7 +19114,9 @@
     } else {
       el.innerHTML = sig;
     }
+    if (hadSkel) triggerWdContentReveal(el);
     el._blocks = blocks; el._last = el.lastElementChild;
+    if (skipSyncScroll) return;
     syncExpandedPrompts(el);
     hydrateRichContent(el);
     if (rest && !rest.atBottom) {
@@ -19455,6 +19627,12 @@
   // ───────────────────────────── file viewer
   // A file an agent mentions opens here, read-only, from the computer it is on.
   const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+  const VIDEO_EXT = /\.(mp4|mov|webm|m4v)$/i;
+  const AUDIO_EXT = /\.(mp3|wav|m4a|ogg|flac|aac|opus)$/i;
+  const ARCHIVE_EXT = /\.(zip|tar|gz|tgz|bz2|xz|7z|rar|zst)$/i;
+  const SHEET_EXT = /\.(csv|tsv|xlsx?|ods|json|ya?ml|toml|xml)$/i;
+  const CODE_EXT = /\.(js|mjs|cjs|ts|tsx|jsx|go|py|rs|java|kt|c|cc|cpp|h|hpp|sh|bash|zsh|sql|css|scss|ini|env|rb|php|swift|dart|vue|svelte|diff|patch|log)$/i;
+  const DOC_EXT = /\.(pdf|docx?|pptx?|rtf|txt|md|markdown|mdx|epub)$/i;
   const MD_EXT = /\.(md|markdown|mdx)$/i;
   const HTML_EXT = /\.html?$/i;
   const CSV_EXT = /\.(csv|tsv)$/i;
@@ -19470,6 +19648,69 @@
     }
     return `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=html`;
   };
+  const videoFileURL = (path, machine = "") => `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=video`;
+  async function probeVideoFile(path, tries = fileTries()) {
+    for (const m of tries) {
+      const q = videoFileURL(path, m);
+      const r = routeReq(q);
+      const res = await authFetch(r.url, {
+        method: "HEAD",
+        headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {},
+        credentials: r.hub ? "omit" : "same-origin",
+      }, !!r.hub);
+      if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
+      if (res.status === 404) continue;
+      if (res.status === 413) {
+        return { kind: "video", tooBig: true, size: +res.headers.get("X-File-Size") || (FILE_DL_MAX + 1), path, machine: m };
+      }
+      if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || tx("file.cantOpen", "打不开这个文件")); }
+      return {
+        kind: "video",
+        tooBig: false,
+        size: +res.headers.get("X-File-Size") || +res.headers.get("Content-Length") || 0,
+        path: decodeURIComponent(res.headers.get("X-File-Path") || path),
+        machine: m,
+      };
+    }
+    return null;
+  }
+  async function bindVideoSource(video, path, machine = "", onFail = null) {
+    if (!video || !path) return;
+    const q = videoFileURL(path, machine);
+    const r = routeReq(q);
+    if (!window.__collieDemo && !r.hub) {
+      video.dataset.videoMachine = machine || "";
+      video.src = q + "#t=0.001";
+      return;
+    }
+    const cached = videoBlobs.get(path);
+    if (cached) {
+      video.src = cached + "#t=0.001";
+      return;
+    }
+    try {
+      const res = await authFetch(r.url, {
+        headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {},
+        credentials: r.hub ? "omit" : "same-origin",
+      }, !!r.hub);
+      if (res.status === 401 && !r.hub) { showLogin(); return; }
+      if (!res.ok) throw new Error("video-fetch-failed");
+      const blob = await res.blob();
+      const u = URL.createObjectURL(blob);
+      if (videoBlobs.size >= 12) {
+        const oldestKey = videoBlobs.keys().next().value;
+        if (oldestKey !== undefined) {
+          const oldUrl = videoBlobs.get(oldestKey);
+          videoBlobs.delete(oldestKey);
+          try { URL.revokeObjectURL(oldUrl); } catch {}
+        }
+      }
+      videoBlobs.set(path, u);
+      video.src = u + "#t=0.001";
+    } catch {
+      onFail?.();
+    }
+  }
   const fileLinkAttrs = (rawPath, escapedPath, titleText, extraCls = "") => {
     const ext = extraCls ? ` ${extraCls}` : "";
     return HTML_EXT.test(rawPath)
@@ -19810,12 +20051,44 @@
     body.classList.remove("is-code", "is-html", "is-csv");
     const initMachine = fileContextMachine() || "";
     const isHtml = HTML_EXT.test(path);
-    syncFileBar("fv", { isHtml, langLabel: isHtml ? "HTML" : "", wideHref: isHtml ? htmlFileURL(path, initMachine) : wideFileHash(path, initMachine) });
-    $("#fv-name").textContent = path.split("/").pop();
+    const isVideo = VIDEO_EXT.test(path);
+    const vExt = isVideo ? (cleanAttachName(path).split(".").pop() || "mp4").toUpperCase() : "";
+    syncFileBar("fv", { isHtml, langLabel: isHtml ? "HTML" : vExt, wideHref: isHtml ? htmlFileURL(path, initMachine) : wideFileHash(path, initMachine) });
+    $("#fv-name").textContent = cleanAttachName(path);
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">${esc(tx("common.reading", "读取中…"))}</p>`;
     showFilePane(opts);
     const tries = fileTries();
+    if (isVideo) {
+      let vf = null;
+      try {
+        vf = await probeVideoFile(path, tries);
+      } catch (e) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+      if (seq !== fileSeq) return;
+      if (!vf) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
+      const where = (state.machines || []).length > 1 || vf.machine ? machineName(vf.machine) + " · " : "";
+      $("#fv-path").textContent = where + vf.path + (vf.size ? " · " + fmtSize(vf.size) : "");
+      const canDl = !vf.size || vf.size <= FILE_DL_MAX;
+      fvCur = { reqPath: path, path: vf.path, machine: vf.machine || "", kind: "video", size: vf.size, rawText: "", truncated: false };
+      syncFileBar("fv", { langLabel: vExt, downloadable: canDl, wideHref: wideFileHash(path, vf.machine || "") });
+      if (vf.tooBig) {
+        body.innerHTML = `<p class="fv-note">${esc(tx("file.videoTooBig", "视频超过 100 MB，无法在线预览（可点右上角下载原件）。"))}</p>`;
+        if (view === "collie") syncActiveFileMarks($("#super-thread"), vf.path || path);
+        return;
+      }
+      body.innerHTML = `<div class="fv-video"><video class="att-video-el" controls playsinline webkit-playsinline preload="metadata" width="640" height="360" aria-label="${esc(tx("file.videoAria", "视频 {name}", { name: cleanAttachName(path) }))}"></video></div>`;
+      const vid = body.querySelector("video");
+      if (vid) {
+        const showErr = () => {
+          if (seq !== fileSeq) return;
+          body.innerHTML = `<p class="fv-note">${esc(tx("file.videoCantPlay", "这段视频暂时无法在浏览器直接播放（可点右上角下载原件）。"))}</p>`;
+        };
+        vid.addEventListener("error", showErr, { once: true });
+        bindVideoSource(vid, path, vf.machine || "", showErr);
+      }
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), vf.path || path);
+      return;
+    }
     if (isHtml) {
       let hf = null;
       try {
@@ -19916,6 +20189,36 @@
     document.title = `${name} · Collie`;
     body.innerHTML = `<p class="fv-note muted">${esc(tx("common.reading", "读取中…"))}</p>`;
     const tries = [...new Set([machineHint, ...fileTries()])];
+    if (VIDEO_EXT.test(path)) {
+      let vf = null;
+      try {
+        vf = await probeVideoFile(path, tries);
+      } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+      if (seq !== wideSeq || view !== "file") return;
+      if (!vf) { body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
+      const where = (state.machines || []).length > 1 || vf.machine ? machineName(vf.machine) + " · " : "";
+      $("#rv-path").textContent = where + vf.path + (vf.size ? " · " + fmtSize(vf.size) : "");
+      const canDl = !vf.size || vf.size <= FILE_DL_MAX;
+      const vExt = (cleanAttachName(path).split(".").pop() || "mp4").toUpperCase();
+      rvCur = { reqPath: path, path: vf.path, machine: vf.machine || "", kind: "video", size: vf.size, rawText: "", truncated: false };
+      syncFileBar("rv", { langLabel: vExt, downloadable: canDl });
+      if (vf.tooBig) {
+        body.innerHTML = `<p class="fv-note">${esc(tx("file.videoTooBig", "视频超过 100 MB，无法在线预览（可点右上角下载原件）。"))}</p>`;
+        return;
+      }
+      body.innerHTML = `<div class="rv-video"><video class="att-video-el" controls playsinline webkit-playsinline preload="metadata" width="640" height="360" aria-label="${esc(tx("file.videoAria", "视频 {name}", { name: cleanAttachName(path) }))}"></video></div>`;
+      const vid = body.querySelector("video");
+      if (vid) {
+        const showErr = () => {
+          if (seq !== wideSeq || view !== "file") return;
+          body.innerHTML = `<p class="fv-note">${esc(tx("file.videoCantPlay", "这段视频暂时无法在浏览器直接播放（可点右上角下载原件）。"))}</p>`;
+        };
+        vid.addEventListener("error", showErr, { once: true });
+        bindVideoSource(vid, path, vf.machine || "", showErr);
+      }
+      if (restore) restoreSimpleScroll(sc, restore); else sc.scrollTop = 0;
+      return;
+    }
     if (HTML_EXT.test(path)) {
       let hf = null;
       try {
@@ -20501,7 +20804,7 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, textarea, label, .reply-inline, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
+    if (m && e.target.closest("a, button, summary, details, input, textarea, label, video, .att-video-card, .reply-inline, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
@@ -20626,6 +20929,114 @@
       for (const tile of affected) degradeFileGalleryTile(tile);
       if (collieInitialAnchor) applyInitialAnchor();
     }
+  }, true);
+  // Viewport-aware lazy video hydration (Safari / Firefox fallback for native loading="lazy")
+  // + zero-CLS intrinsic dimension caching + graceful error degradation to unified file cards.
+  const observedVideos = new WeakSet();
+  const videoIOByRoot = new WeakMap();
+  let videoViewportIO = null;
+  function hydrateVideoEl(video) {
+    if (!video || video.tagName !== "VIDEO") return;
+    const p = video.dataset?.videoPath || "";
+    if (!p || video.dataset?.videoBound === "1") return;
+    const card = video.closest?.(".att-video-card") || null;
+    if (failedMediaVideos.has(p)) {
+      if (card) degradeVideoCard(card);
+      return;
+    }
+    if (video.dataset) video.dataset.videoBound = "1";
+    const ctxMachine = fileContextMachine() || "";
+    bindVideoSource(video, p, ctxMachine, () => {
+      if (card) degradeVideoCard(card);
+    });
+  }
+  function getVideoObserver(scrollRoot) {
+    if (typeof IntersectionObserver !== "function") return null;
+    const onEntries = (entries, io) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const target = entry.target;
+        io.unobserve(target);
+        observedVideos.delete(target);
+        const vid = target.tagName === "VIDEO" ? target : target.querySelector?.("video.att-video-el");
+        if (vid) hydrateVideoEl(vid);
+      }
+    };
+    if (!scrollRoot) {
+      if (!videoViewportIO) videoViewportIO = new IntersectionObserver(onEntries, { root: null, rootMargin: "400px 0px" });
+      return videoViewportIO;
+    }
+    let io = videoIOByRoot.get(scrollRoot);
+    if (!io) {
+      try {
+        io = new IntersectionObserver(onEntries, { root: scrollRoot, rootMargin: "400px 0px" });
+      } catch {
+        return getVideoObserver(null);
+      }
+      videoIOByRoot.set(scrollRoot, io);
+    }
+    return io;
+  }
+  function observeVideos(root) {
+    if (!root || root.nodeType !== 1) return;
+    const vids = root.tagName === "VIDEO" && root.classList?.contains("att-video-el")
+      ? [root]
+      : [...(root.querySelectorAll?.("video.att-video-el[data-video-path]") || [])];
+    for (const vid of vids) {
+      if (vid.dataset?.videoBound === "1" || vid.getAttribute?.("src")) continue;
+      const card = vid.closest?.(".att-video-card") || vid;
+      if (typeof IntersectionObserver === "function") {
+        if (observedVideos.has(card)) continue;
+        const scrollRoot = card.closest?.(".scroller, #td-body, #fv-body, #rv-scroller, .wd-body") || null;
+        const io = getVideoObserver(scrollRoot);
+        if (io) {
+          observedVideos.add(card);
+          io.observe(card);
+          continue;
+        }
+      }
+      hydrateVideoEl(vid);
+    }
+  }
+  document.addEventListener("loadedmetadata", (e) => {
+    const vid = e.target;
+    if (vid?.tagName !== "VIDEO" || !vid.classList?.contains("att-video-el")) return;
+    const p = vid.dataset?.videoPath || "";
+    const vw = vid.videoWidth || 0;
+    const vh = vid.videoHeight || 0;
+    if (vw > 0 && vh > 0) {
+      vid.width = vw;
+      vid.height = vh;
+      if (p) {
+        if (videoDims.size >= 200) {
+          const oldest = videoDims.keys().next().value;
+          if (oldest !== undefined) videoDims.delete(oldest);
+        }
+        videoDims.set(p, { w: vw, h: vh });
+      }
+    }
+    vid.closest?.(".att-video-card")?.classList?.add("is-ready");
+  }, true);
+  document.addEventListener("error", (e) => {
+    const vid = e.target;
+    if (vid?.tagName !== "VIDEO" || !vid.classList?.contains("att-video-el")) return;
+    const card = vid.closest?.(".att-video-card");
+    if (!card) return;
+    const p = vid.dataset?.videoPath || card.dataset?.videoCard || "";
+    if (p && vid.dataset?.videoMachine && vid.dataset?.videoRetried !== "1") {
+      vid.dataset.videoRetried = "1";
+      vid.dataset.videoMachine = "";
+      vid.src = videoFileURL(p, "") + "#t=0.001";
+      return;
+    }
+    const affected = new Set([card]);
+    if (p && typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+      for (const el of document.querySelectorAll(".att-video-card[data-video-card]")) {
+        if (el.dataset?.videoCard === p) affected.add(el);
+      }
+    }
+    for (const c of affected) degradeVideoCard(c);
+    if (collieInitialAnchor) applyInitialAnchor();
   }, true);
 
   // ───────────────────────────── rich rendering transient UI state & interactions
@@ -20994,6 +21405,7 @@
   function hydrateRichContent(root) {
     if (!root || root.nodeType !== 1) return;
     observeThumbs(root);
+    observeVideos(root);
     hydrateCodeBlocks(root);
     hydrateDetails(root);
     hydrateTables(root);
@@ -21820,6 +22232,24 @@
       e.preventDefault();
       const { items, index } = collectGallery(mb, { url: mb.dataset.imgUrl, alt: mb.dataset.imgAlt || "" });
       openLightbox(items, index);
+      return;
+    }
+    const openBtn = !e.defaultPrevented ? e.target.closest("[data-open-file]") : null;
+    if (openBtn) {
+      e.preventDefault();
+      const fp = openBtn.dataset.openFile || "";
+      if (fp) {
+        if (view === "file") {
+          location.hash = wideFileHash(fp, rvCur?.machine || "");
+          return;
+        }
+        const origin = openBtn.closest?.("#thread-drawer") && activeThreadRoot
+          ? { returnTo: captureThreadReturnTo() }
+          : (openBtn.closest?.("#file-view") || openBtn.closest?.("#worker-drawer"))
+            ? { preserveReturnStack: true }
+            : undefined;
+        openFile(fp, origin);
+      }
       return;
     }
     const a = e.target.closest("a.fpath");
@@ -22742,16 +23172,23 @@
 
   function clearMobileSheetOpen(el) {
     if (!el) return;
+    if (el._sdPrepRAF1 && typeof cancelAnimationFrame === "function") cancelAnimationFrame(el._sdPrepRAF1);
+    if (el._sdPrepRAF2 && typeof cancelAnimationFrame === "function") cancelAnimationFrame(el._sdPrepRAF2);
+    el._sdPrepRAF1 = 0;
+    el._sdPrepRAF2 = 0;
+    el._onPrepFrame = null;
     clearTimeout(el._sdOpenTimer);
     el._sdOpenTimer = 0;
     el._slideSettleAt = 0;
     if (el._sdOpenOnEnd) {
+      el.removeEventListener?.("transitionend", el._sdOpenOnEnd);
+      el.removeEventListener?.("transitioncancel", el._sdOpenOnEnd);
       el.removeEventListener?.("animationend", el._sdOpenOnEnd);
       el.removeEventListener?.("animationcancel", el._sdOpenOnEnd);
       el._sdOpenOnEnd = null;
     }
-    const wasOpening = !!el.classList?.contains("is-sheet-opening");
-    el.classList?.remove("is-sheet-opening", "is-scrim-opening");
+    const wasOpening = !!el.classList?.contains("is-sheet-opening") || !!el.classList?.contains("is-sheet-prep");
+    el.classList?.remove("is-sheet-prep", "is-sheet-opening", "is-scrim-prep", "is-scrim-opening");
     if (wasOpening && !isAnyMobileSheetAnimating()) {
       flushDeferredSheetUpdates();
       if (!isLayoutGliding()) flushPostGlideRichSync();
@@ -22771,11 +23208,23 @@
       if (drawerEl === wdDrawer) flushWdPendingLive();
       return;
     }
-    drawerEl._slideSettleAt = performance.now() + 310;
-    promoteSheetWillChange(drawerEl, "transform", 360);
-    drawerEl.classList?.add("is-sheet-opening");
+    const mobile = innerWidth <= 760;
+    const durMs = mobile ? 340 : 280;
+    const scrimDurMs = mobile ? 320 : 240;
+    // Two-phase GPU layer prime: Frame 0 paints offscreen at translate3d(0, 100%, 0)
+    // (waking content-visibility: hidden, mounting header + tail content, uploading the GPU layer),
+    // then rAF #2 removes .is-sheet-prep so CoreAnimation starts CSS transition at true t=0ms (0% jump).
+    drawerEl._slideSettleAt = performance.now() + durMs + 60;
+    promoteSheetWillChange(drawerEl, "transform", 0);
+    drawerEl.classList?.add("is-sheet-opening", "is-sheet-prep");
+    if (scrimEl) {
+      promoteSheetWillChange(scrimEl, "opacity", 0);
+      scrimEl.classList?.add("is-scrim-opening", "is-scrim-prep");
+    }
     const doneDrawer = (ev) => {
       if (ev && ev.target !== drawerEl) return;
+      if (ev && drawerEl.classList?.contains("is-sheet-prep")) return;
+      if (ev && ev.propertyName && ev.propertyName !== "transform") return;
       clearMobileSheetOpen(drawerEl);
       clearSheetWillChange(drawerEl);
       const cb = drawerEl._onSlideSettled;
@@ -22784,21 +23233,51 @@
       if (drawerEl === wdDrawer) flushWdPendingLive();
     };
     drawerEl._sdOpenOnEnd = doneDrawer;
+    drawerEl.addEventListener?.("transitionend", doneDrawer);
+    drawerEl.addEventListener?.("transitioncancel", doneDrawer);
     drawerEl.addEventListener?.("animationend", doneDrawer);
     drawerEl.addEventListener?.("animationcancel", doneDrawer);
-    drawerEl._sdOpenTimer = setTimeout(doneDrawer, 330);
+    drawerEl._sdOpenTimer = setTimeout(doneDrawer, durMs + 120);
     if (scrimEl) {
-      promoteSheetWillChange(scrimEl, "opacity", 360);
-      scrimEl.classList?.add("is-scrim-opening");
       const doneScrim = (ev) => {
         if (ev && ev.target !== scrimEl) return;
+        if (ev && scrimEl.classList?.contains("is-scrim-prep")) return;
+        if (ev && ev.propertyName && ev.propertyName !== "opacity") return;
         clearMobileSheetOpen(scrimEl);
         clearSheetWillChange(scrimEl);
       };
       scrimEl._sdOpenOnEnd = doneScrim;
+      scrimEl.addEventListener?.("transitionend", doneScrim);
+      scrimEl.addEventListener?.("transitioncancel", doneScrim);
       scrimEl.addEventListener?.("animationend", doneScrim);
       scrimEl.addEventListener?.("animationcancel", doneScrim);
-      scrimEl._sdOpenTimer = setTimeout(doneScrim, 350);
+      scrimEl._sdOpenTimer = setTimeout(doneScrim, scrimDurMs + 130);
+    }
+    const releasePrep = () => {
+      drawerEl._sdPrepRAF1 = 0;
+      drawerEl._sdPrepRAF2 = 0;
+      if (!drawerEl.classList?.contains("is-sheet-prep")) return;
+      const latePrep = drawerEl._onPrepFrame;
+      drawerEl._onPrepFrame = null;
+      if (latePrep) latePrep();
+      drawerEl._slideSettleAt = performance.now() + durMs + 30;
+      drawerEl.classList.remove("is-sheet-prep");
+      if (scrimEl) scrimEl.classList?.remove("is-scrim-prep");
+    };
+    if (typeof requestAnimationFrame === "function") {
+      drawerEl._sdPrepRAF1 = requestAnimationFrame(() => {
+        drawerEl._sdPrepRAF1 = 0;
+        if (!drawerEl.classList?.contains("is-sheet-prep")) return;
+        const prepFn = drawerEl._onPrepFrame;
+        drawerEl._onPrepFrame = null;
+        if (prepFn) prepFn();
+        drawerEl._sdPrepRAF2 = requestAnimationFrame(releasePrep);
+      });
+    } else {
+      const prepFn = drawerEl._onPrepFrame;
+      drawerEl._onPrepFrame = null;
+      if (prepFn) prepFn();
+      releasePrep();
     }
   }
   const resetDrawerMotion = (el, opts = {}) => {
@@ -23724,7 +24203,7 @@
       const noteHtml = tk.note
         ? `<div class="np-fold" style="--stagger: 35ms"><div class="np-fold-inner"><div class="np-item-note">${esc(tk.note)}</div></div></div>`
         : "";
-      return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" data-np-title="${esc(tk.title || "")}" data-np-note="${esc(tk.note || "")}" data-np-path="${esc(tk.path || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><div class="np-item-main"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span></div>${noteHtml}</button></li>`;
+      return `<li><button type="button" class="np-item" data-np-task="${esc(tk.id)}" data-np-entry="${esc(tk.entry_id || "")}" data-np-worker="${esc(tk.worker || "")}" data-np-title="${esc(tk.title || "")}" data-np-note="${esc(tk.note || "")}" data-np-path="${esc(tk.path || "")}" data-np-file-path="${esc(tk.file_path || "")}" title="${esc(tk.note ? tk.title + " · " + tk.note : tk.title)}"><div class="np-item-main"><span class="np-dot ${dotCls}" aria-hidden="true"></span><span class="np-item-title">${esc(tk.title)}</span></div>${noteHtml}</button></li>`;
     };
     const tasksListEl = $("#np-tasks-list");
     if (tasksListEl) {
@@ -24129,12 +24608,20 @@
       const taskTitle = tBtn.dataset.npTitle || "";
       const taskNote = tBtn.dataset.npNote || "";
       const taskPath = tBtn.dataset.npPath || "";
-      const ret = worker ? captureNotesReturnTo() : null;
-      if (!isWideNotesViewport()) sidePaneOverlay = "";
+      const taskFilePath = tBtn.dataset.npFilePath || (/^(?:~\/|\/)/.test(taskPath) ? taskPath : "");
       if (worker) {
+        const ret = captureNotesReturnTo();
+        if (!isWideNotesViewport()) sidePaneOverlay = "";
         openWorkerDrawer({ worker, title: taskTitle, note: taskNote, entryId, taskPath, ...(ret ? { returnTo: ret } : {}) });
         return;
       }
+      if (taskFilePath) {
+        const ret = captureNotesReturnTo();
+        if (!isWideNotesViewport()) sidePaneOverlay = "";
+        openFile(taskFilePath, ret ? { returnTo: ret } : undefined);
+        return;
+      }
+      if (!isWideNotesViewport()) sidePaneOverlay = "";
       clearDrawerReturnStack({ syncHistory: false });
       if (!isWideNotesViewport()) syncNotebookVisibility();
       if (entryId) {
@@ -24526,10 +25013,7 @@
     const hit = _cleanTextCache.get(ck);
     if (hit !== undefined) return hit;
     if (role === "user") {
-      const cut = t.indexOf("\n\n[The human picked");
-      if (cut >= 0) t = t.slice(0, cut);
-      const att = t.lastIndexOf("附件：\n");
-      if (att >= 0) t = t.slice(0, att);
+      t = splitUserAttachmentBlock(t).body;
     }
     const out = t
       .replace(/```[\s\S]*?```/g, " ")
@@ -25888,6 +26372,10 @@
   let wdPendingLive = null;
   let wdPrewarmTimer = 0;
   const wdLiveCache = new Map();
+  const wdHistoryInflight = new Map();
+  const wdHistoryEarlier = new Map();
+  const wdHistoryFetchedAt = new Map();
+  const WD_MOBILE_TAIL_GROUPS = 8;
   let wdShowRaw = false;
   let wdPeekMode = "";
   let wdMoreClosedAt = 0;
@@ -25962,18 +26450,84 @@
     const hasFiles = !!(wdComposerEl?._files?.length);
     wdSendBtn.disabled = !!sending || (!hasText && !hasFiles);
   }
-  function resolveWorkerContext() {
+  function resolveWorkerContextFor(workerName, paneHint = "", histHint = "") {
     const { byName, byPane } = getWorkerLookup();
-    const supW = (wdWorkerName ? byName.get(wdWorkerName) : null) || (wdPaneId ? byPane.get(wdPaneId) : null) || null;
-    const livePaneId = (wdPaneId && find(wdPaneId) ? wdPaneId : "")
-      || (wdWorkerName ? (paneOf(wdWorkerName) || "") : "")
+    const supW = (workerName ? byName.get(workerName) : null) || (paneHint ? byPane.get(paneHint) : null) || null;
+    const livePaneId = (paneHint && find(paneHint) ? paneHint : "")
+      || (workerName ? (paneOf(workerName) || "") : "")
       || (supW && !supW.ended && supW.pane_id && find(supW.pane_id) ? supW.pane_id : "");
     const liveAgent = livePaneId ? find(livePaneId) : null;
-    const name = wdWorkerName || liveAgent?.name || supW?.name || "";
+    const name = workerName || liveAgent?.name || supW?.name || "";
     const past = !liveAgent && name
-      ? (workerHist(name, supW?.created_at || 0) || getHistIndex().byName.get(name)?.[0]?.h || (wdHistId ? hist.find((x) => x.id === wdHistId) : null) || null)
-      : (wdHistId ? hist.find((x) => x.id === wdHistId) : null);
+      ? (workerHist(name, supW?.created_at || 0) || getHistIndex().byName.get(name)?.[0]?.h || (histHint ? hist.find((x) => x.id === histHint) : null) || null)
+      : (histHint ? hist.find((x) => x.id === histHint) : null);
     return { supW, livePaneId, liveAgent, name, past };
+  }
+  function resolveWorkerContext() {
+    return resolveWorkerContextFor(wdWorkerName, wdPaneId, wdHistId);
+  }
+  function fetchWdTranscript(past) {
+    if (!past?.id) return Promise.resolve(null);
+    const cacheKey = "h:" + past.id;
+    const existing = wdHistoryInflight.get(cacheKey);
+    if (existing && (performance.now() - existing.ts) < 10000) return existing.promise;
+    const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
+    if (past.machine) q.set("machine", past.machine);
+    const promise = api("/api/transcript?" + q).then((r) => {
+      const nextMsgs = r?.messages || [];
+      const nextEarlier = r?.earlier || 0;
+      keepThread(cacheKey, nextMsgs);
+      wdHistoryEarlier.set(cacheKey, nextEarlier);
+      wdHistoryFetchedAt.set(cacheKey, performance.now());
+      while (wdHistoryEarlier.size > 24) wdHistoryEarlier.delete(wdHistoryEarlier.keys().next().value);
+      while (wdHistoryFetchedAt.size > 24) wdHistoryFetchedAt.delete(wdHistoryFetchedAt.keys().next().value);
+      return { messages: nextMsgs, earlier: nextEarlier, q };
+    }).finally(() => {
+      if (wdHistoryInflight.get(cacheKey)?.promise === promise) wdHistoryInflight.delete(cacheKey);
+    });
+    wdHistoryInflight.set(cacheKey, { promise, ts: performance.now() });
+    while (wdHistoryInflight.size > 6) wdHistoryInflight.delete(wdHistoryInflight.keys().next().value);
+    return promise;
+  }
+  function prefetchWdHistory(past) {
+    if (!past?.id) return;
+    const cacheKey = "h:" + past.id;
+    const fetchedAt = wdHistoryFetchedAt.get(cacheKey) || 0;
+    if (threadCache.has(cacheKey) && (performance.now() - fetchedAt) < 5000) return;
+    if (wdHistoryInflight.has(cacheKey)) return;
+    fetchWdTranscript(past).then((res) => {
+      const msgs = res?.messages;
+      if (!msgs || !msgs.length) return;
+      // Pre-compile tail assistant markdown in tiny <=3ms slices so click-open hits 100% mdCache.
+      const todo = [];
+      for (let i = msgs.length - 1; i >= 0 && todo.length < WD_MOBILE_TAIL_GROUPS; i--) {
+        const m = msgs[i];
+        if (m && m.kind !== "user" && m.kind !== "tool" && m.kind !== "ask" && m.kind !== "compaction" && m.text) {
+          const rawKey = String(m.text);
+          if (!mdCache.has(rawKey)) todo.push(rawKey);
+        }
+      }
+      if (!todo.length) return;
+      let idx = 0;
+      const step = () => {
+        const t0 = performance.now();
+        while (idx < todo.length) {
+          md(todo[idx++]);
+          if (performance.now() - t0 >= 3) break;
+        }
+        if (idx < todo.length) setTimeout(step, 8);
+      };
+      step();
+    }).catch(() => {});
+  }
+  function prefetchWdFromTarget(targetEl) {
+    if (!targetEl?.closest) return;
+    const link = targetEl.closest('a[data-open-worker], a.chip[data-worker], a.td-worker[data-td-worker], button.np-item[data-np-worker], a.event[href], a.need[href], .ask-head a[href], a[href^="#/w/"], a[href^="#/p/"], a[href^="#/h/"]');
+    if (!link) return;
+    const target = extractWorkerTargetFromEl(link);
+    if (!target) return;
+    const { liveAgent, past } = resolveWorkerContextFor(target.worker, target.paneId, target.histId);
+    if (!liveAgent && past?.id) prefetchWdHistory(past);
   }
   function isWdShell() {
     const v = wdPaneId ? find(wdPaneId) : null;
@@ -26161,9 +26715,18 @@
     clearTimeout(wdThreadEl._chunkTimer);
     wdThreadEl._chunkTimer = 0;
     wdThreadEl._chunking = false;
-    wdThreadEl._sig = ""; wdThreadEl._rawMsgsSig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._lazyRuns = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
+    wdThreadEl._startBackfill = null;
+    clearTimeout(wdThreadEl._revealTimer);
+    wdThreadEl._revealTimer = 0;
+    if (wdThreadEl._revealOnEnd) {
+      wdThreadEl.removeEventListener?.("animationend", wdThreadEl._revealOnEnd);
+      wdThreadEl._revealOnEnd = null;
+    }
+    wdThreadEl.classList?.remove("is-content-reveal");
+    wdThreadEl._sig = ""; wdThreadEl._rawMsgsSig = ""; wdThreadEl._tailRawSig = ""; wdThreadEl._tailCacheKey = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._lazyRuns = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
     wdThreadEl._renderedCacheKey = "";
     wdThreadEl._fresh = true;
+    wdThreadEl._trackedAtBottom = true;
     wdLastLive = null; wdShowRaw = false;
   }
   function resetWdChat() {
@@ -26201,6 +26764,7 @@
       if (wdScreenEl) { wdScreenEl.scrollTop = 0; wdScreenEl.scrollLeft = 0; }
     }
   }
+  const isWdSheetPrepping = () => !isDesktopDrawerViewport() && !!wdDrawer?.classList?.contains("is-sheet-prep");
   const isWdSlidePending = () => !isDesktopDrawerViewport() && !!wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16;
   const isWdSheetAnimating = () => !isDesktopDrawerViewport() && (!!wdDrawer?.classList?.contains("is-sheet-opening") || isWdSlidePending());
   const wdScreenNearBottom = () => {
@@ -26680,7 +27244,7 @@
         flushWdPendingLive();
       };
       wdDrawer._onSlideSettled = runOnce;
-      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(360, Math.ceil(remain) + 25));
+      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(480, Math.ceil(remain) + 25));
       return true;
     }
     if (wdDrawer) wdDrawer._slideSettleAt = 0;
@@ -26689,10 +27253,55 @@
     flushWdPendingLive();
     return false;
   }
+  function mountWdThread(msgs, emptyMsg, opts = {}) {
+    if (!wdThreadEl) return;
+    const { cacheKey = "", rawSig = "", isAlive = null, allowReveal = false } = opts;
+    const mobile = !isDesktopDrawerViewport();
+    const alive = () => !isAlive || isAlive();
+    const paintNow = (tailOnlyPrepping) => {
+      if (!alive()) return;
+      drawThread(msgs, wdThreadEl, emptyMsg, {
+        tailGroups: mobile ? WD_MOBILE_TAIL_GROUPS : 0,
+        deferBackfill: tailOnlyPrepping,
+        skipSyncScroll: tailOnlyPrepping,
+        revealFromSkel: !tailOnlyPrepping && allowReveal,
+        cacheKey,
+        rawSig,
+        isAlive: alive,
+      });
+      if (!wdThreadEl._chunking) {
+        wdThreadEl._renderedCacheKey = cacheKey;
+        wdThreadEl._rawMsgsSig = rawSig;
+      }
+      if (tailOnlyPrepping && wdDrawer) {
+        wdDrawer._onPrepFrame = () => {
+          if (!alive()) return;
+          syncExpandedPrompts(wdThreadEl);
+          stick(wdThreadEl, true);
+        };
+        scheduleAfterWdSlide(() => {
+          if (!alive()) return;
+          hydrateRichContent(wdThreadEl);
+          wdThreadEl._startBackfill?.();
+        });
+      }
+    };
+    if (mobile && isWdSheetPrepping()) {
+      paintNow(true);
+      return;
+    }
+    if (mobile && isWdSlidePending()) {
+      prewarmWdThreadMd(msgs, alive);
+      scheduleAfterWdSlide(() => paintNow(false));
+      return;
+    }
+    paintNow(false);
+  }
   async function loadWdHistory(past, supW, opts = {}) {
     if (!wdThreadEl) return;
     const seq = ++wdSeq;
     const preserve = !!opts.preserve;
+    const alive = () => seq === wdSeq && !!activeWorkerKey;
     clearTimeout(wdSkelTimer);
     wdSkelTimer = 0;
     clearTimeout(wdDrawer?._deferredDrawTimer);
@@ -26713,60 +27322,14 @@
     const cacheKey = "h:" + past.id;
     const cached = threadCache.get(cacheKey);
     const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
-    if (!sameRendered) {
-      resetWdChatStateOnly();
-      clearWdLive(wdPaneId);
-      if (cached) {
-        const cachedRawSig = workerMsgsRawSig(cached, 0);
-        const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 120;
-        const paintCached = () => {
-          if (seq !== wdSeq || !activeWorkerKey) return;
-          drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
-            progressive: mobileProgressive,
-            cacheKey,
-            rawSig: cachedRawSig,
-            isAlive: () => seq === wdSeq && !!activeWorkerKey,
-          });
-          if (!wdThreadEl._chunking) {
-            wdThreadEl._renderedCacheKey = cacheKey;
-            wdThreadEl._rawMsgsSig = cachedRawSig;
-          }
-          wdThreadEl._fresh = true;
-        };
-        if (isWdSlidePending()) {
-          wdThreadEl.innerHTML = SKELETON;
-          prewarmWdThreadMd(cached, () => seq === wdSeq && !!activeWorkerKey);
-          scheduleAfterWdSlide(paintCached);
-        } else {
-          paintCached();
-        }
-      } else if (preserve && wdThreadEl.childElementCount > 0) {
-        wdSkelTimer = setTimeout(() => {
-          wdSkelTimer = 0;
-          if (seq === wdSeq && activeWorkerKey && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
-        }, 140);
-      } else {
-        wdThreadEl.innerHTML = SKELETON;
-      }
-    } else {
-      clearWdLive(wdPaneId);
-    }
-    try {
-      const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
-      if (past.machine) q.set("machine", past.machine);
-      const r = await api("/api/transcript?" + q);
-      if (seq !== wdSeq || !activeWorkerKey) return;
-      clearTimeout(wdSkelTimer);
-      wdSkelTimer = 0;
-      const nextMsgs = r.messages || [];
-      const nextEarlier = r.earlier || 0;
-      const nextRawSig = workerMsgsRawSig(nextMsgs, nextEarlier);
+    const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
+    if (past.machine) q.set("machine", past.machine);
+    const bindHistoryMeta = (msgs, earlier) => {
       resetEarlier(wdThreadEl, (c) => `/api/transcript?${q}&before=${c}`);
-      wdThreadEl._msgs = nextMsgs;
-      wdThreadEl._liveEarlier = nextEarlier;
-      keepThread(cacheKey, nextMsgs);
+      wdThreadEl._msgs = msgs;
+      wdThreadEl._liveEarlier = earlier || 0;
       wdThreadEl._redraw = () => {
-        if (seq === wdSeq && activeWorkerKey) {
+        if (alive()) {
           const allMsgs = threadMsgs(wdThreadEl);
           const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
           drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), { rawSig: curRawSig });
@@ -26774,32 +27337,68 @@
           wdThreadEl._rawMsgsSig = curRawSig;
         }
       };
+    };
+    const emptyMsg = tx("worker.noMsgs", "这个任务会话没有消息记录。");
+    if (!sameRendered) {
+      resetWdChatStateOnly();
+      clearWdLive(wdPaneId);
+      if (cached) {
+        const cachedEarlier = wdHistoryEarlier.get(cacheKey) || 0;
+        const cachedRawSig = workerMsgsRawSig(cached, cachedEarlier);
+        bindHistoryMeta(cached, cachedEarlier);
+        if (isWdSheetPrepping() || !isWdSlidePending()) {
+          mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: false });
+          wdThreadEl._fresh = true;
+          const fetchedAt = wdHistoryFetchedAt.get(cacheKey) || 0;
+          if (fetchedAt && (performance.now() - fetchedAt) < 3000) return;
+        } else {
+          wdThreadEl.innerHTML = SKELETON;
+          mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: true });
+          wdThreadEl._fresh = true;
+        }
+      } else if (preserve && wdThreadEl.childElementCount > 0) {
+        wdSkelTimer = setTimeout(() => {
+          wdSkelTimer = 0;
+          if (alive() && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
+        }, 140);
+      } else {
+        wdThreadEl.innerHTML = SKELETON;
+      }
+    } else {
+      clearWdLive(wdPaneId);
+      if (isWdSheetPrepping() && wdDrawer) {
+        wdDrawer._onPrepFrame = () => {
+          if (!alive() || !wdThreadEl) return;
+          if (wdThreadEl._trackedAtBottom !== false && wdThreadEl.scrollTop === 0 && wdThreadEl.scrollHeight > wdThreadEl.clientHeight) {
+            markProgrammaticScroll(80);
+            wdThreadEl.scrollTop = wdThreadEl.scrollHeight;
+          }
+        };
+      }
+    }
+    try {
+      const r = await fetchWdTranscript(past);
+      if (!alive() || !r) return;
+      clearTimeout(wdSkelTimer);
+      wdSkelTimer = 0;
+      const nextMsgs = r.messages || [];
+      const nextEarlier = r.earlier || 0;
+      const nextRawSig = workerMsgsRawSig(nextMsgs, nextEarlier);
+      bindHistoryMeta(nextMsgs, nextEarlier);
       // Warm reopen fast-path: identical transcript skips re-parsing markdown and forced scrollHeight reads completely.
       if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === nextRawSig && wdThreadEl._sig) {
         return;
       }
-      const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && nextMsgs.length > 120;
-      if (isWdSlidePending()) prewarmWdThreadMd(nextMsgs, () => seq === wdSeq && !!activeWorkerKey);
-      scheduleAfterWdSlide(() => {
-        if (seq !== wdSeq || !activeWorkerKey) return;
-        const allMsgs = threadMsgs(wdThreadEl);
-        const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
-        if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
-          return;
-        }
-        drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
-          progressive: mobileProgressive,
-          cacheKey,
-          rawSig: curRawSig,
-          isAlive: () => seq === wdSeq && !!activeWorkerKey,
+      // Frame-0 tail already mounted with the exact same transcript: keep tail untouched and finish backfill after slide.
+      if (wdThreadEl._tailCacheKey === cacheKey && wdThreadEl._tailRawSig && wdThreadEl._tailRawSig === nextRawSig && wdThreadEl._startBackfill) {
+        scheduleAfterWdSlide(() => {
+          if (alive()) wdThreadEl._startBackfill?.();
         });
-        if (!wdThreadEl._chunking) {
-          wdThreadEl._renderedCacheKey = cacheKey;
-          wdThreadEl._rawMsgsSig = curRawSig;
-        }
-      });
+        return;
+      }
+      mountWdThread(threadMsgs(wdThreadEl), emptyMsg, { cacheKey, rawSig: nextRawSig, isAlive: alive, allowReveal: true });
     } catch (err) {
-      if (seq !== wdSeq || !activeWorkerKey) return;
+      if (!alive()) return;
       clearTimeout(wdSkelTimer);
       wdSkelTimer = 0;
       if (sameRendered) return;
@@ -26828,6 +27427,8 @@
       const cacheKey = "p:" + id;
       const cached = threadCache.get(cacheKey);
       const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
+      const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
+      const emptyMsg = tx("worker.waitingOutput", "等待任务输出…");
       if (!sameRendered) {
         resetWdChatStateOnly();
       }
@@ -26836,38 +27437,32 @@
       if (!sameRendered) {
         if (cached) {
           const cachedRawSig = workerMsgsRawSig(cached, 0);
-          const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 120;
-          const paintCached = () => {
-            if (seq !== wdSeq || !activeWorkerKey || wdPaneId !== id) return;
-            drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
-              progressive: mobileProgressive,
-              cacheKey,
-              rawSig: cachedRawSig,
-              isAlive: () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id,
-            });
-            if (!wdThreadEl._chunking) {
-              wdThreadEl._renderedCacheKey = cacheKey;
-              wdThreadEl._rawMsgsSig = cachedRawSig;
-            }
+          if (isWdSheetPrepping() || !isWdSlidePending()) {
+            mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: false });
             wdThreadEl._fresh = true;
-          };
-          if (isWdSlidePending()) {
-            wdThreadEl.innerHTML = SKELETON;
-            prewarmWdThreadMd(cached, () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id);
-            scheduleAfterWdSlide(paintCached);
           } else {
-            paintCached();
+            wdThreadEl.innerHTML = SKELETON;
+            mountWdThread(cached, emptyMsg, { cacheKey, rawSig: cachedRawSig, isAlive: alive, allowReveal: true });
+            wdThreadEl._fresh = true;
           }
         } else if (preserve && wdThreadEl.childElementCount > 0) {
           wdSkelTimer = setTimeout(() => {
             wdSkelTimer = 0;
-            if (seq === wdSeq && activeWorkerKey && wdPaneId === id && !wdThreadEl._msgs) {
+            if (alive() && !wdThreadEl._msgs) {
               wdThreadEl.innerHTML = SKELETON;
             }
           }, 140);
         } else {
           wdThreadEl.innerHTML = SKELETON;
         }
+      } else if (isWdSheetPrepping() && wdDrawer) {
+        wdDrawer._onPrepFrame = () => {
+          if (!alive() || !wdThreadEl) return;
+          if (wdThreadEl._trackedAtBottom !== false && wdThreadEl.scrollTop === 0 && wdThreadEl.scrollHeight > wdThreadEl.clientHeight) {
+            markProgrammaticScroll(80);
+            wdThreadEl.scrollTop = wdThreadEl.scrollHeight;
+          }
+        };
       }
       const cachedLive = wdLiveCache.get(id);
       if (cachedLive) drawWdLive(cachedLive);
@@ -26878,12 +27473,11 @@
         wdLiveEl._html = "";
         wdLiveEl._lastTail = "";
       }
-      const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
       wdThreadEl._redraw = () => {
         if (!alive()) return;
         const allMsgs = threadMsgs(wdThreadEl);
         const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
-        drawThread(allMsgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), { rawSig: curRawSig });
+        drawThread(allMsgs, wdThreadEl, emptyMsg, { rawSig: curRawSig });
         wdThreadEl._renderedCacheKey = cacheKey;
         wdThreadEl._rawMsgsSig = curRawSig;
       };
@@ -26896,24 +27490,13 @@
         if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
           return;
         }
-        const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && !wdThreadEl._chunking && msgs.length > 120;
-        if (isWdSlidePending()) prewarmWdThreadMd(msgs, alive);
-        scheduleAfterWdSlide(() => {
-          if (!alive()) return;
-          if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
-            return;
-          }
-          drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
-            progressive: mobileProgressive,
-            cacheKey,
-            rawSig: curRawSig,
-            isAlive: alive,
+        if (wdThreadEl._tailCacheKey === cacheKey && wdThreadEl._tailRawSig && wdThreadEl._tailRawSig === curRawSig && wdThreadEl._startBackfill) {
+          scheduleAfterWdSlide(() => {
+            if (alive()) wdThreadEl._startBackfill?.();
           });
-          if (!wdThreadEl._chunking) {
-            wdThreadEl._renderedCacheKey = cacheKey;
-            wdThreadEl._rawMsgsSig = curRawSig;
-          }
-        });
+          return;
+        }
+        mountWdThread(msgs, emptyMsg, { cacheKey, rawSig: curRawSig, isAlive: alive, allowReveal: true });
       };
       wdStream.addEventListener("reset", () => { if (alive()) resetWdChatStateOnly(); });
       wdStream.addEventListener("patch", (e) => alive() && showPane(applyPatch(wdThreadEl, JSON.parse(e.data))));
@@ -27232,10 +27815,19 @@
     clearTimeout(wdDrawer._deferredDrawTimer);
     wdDrawer._deferredDrawTimer = 0;
     wdDrawer._onSlideSettled = null;
+    wdDrawer._onPrepFrame = null;
     wdDrawer._slideSettleAt = 0;
     cancelWdPrewarm();
     clearTimeout(wdThreadEl?._chunkTimer);
-    if (wdThreadEl) { wdThreadEl._chunkTimer = 0; wdThreadEl._chunking = false; }
+    if (wdThreadEl) {
+      wdThreadEl._chunkTimer = 0;
+      wdThreadEl._chunking = false;
+      wdThreadEl._backfilling = false;
+      wdThreadEl._startBackfill = null;
+      wdThreadEl._tailCacheKey = "";
+      wdThreadEl._tailRawSig = "";
+      wdThreadEl.classList?.remove("is-content-reveal");
+    }
     if (wdLogEl) wdLogEl._lastText = "";
     wdSeq++;
     const prevWdPane = wdPaneId || wdLastLivePaneId;
@@ -27489,6 +28081,14 @@
     wdLogEl?.addEventListener("scroll", () => {
       if (curWdMode() !== "log" || !wdJumpBtn) return;
       wdJumpBtn.hidden = wdLogEl.scrollHeight - wdLogEl.scrollTop - wdLogEl.clientHeight < 40;
+    }, { passive: true });
+    wdThreadEl?.addEventListener("scroll", () => {
+      if (!wdThreadEl || wdDrawer.hidden) return;
+      wdThreadEl._trackedAtBottom = (wdThreadEl.scrollHeight - wdThreadEl.scrollTop - wdThreadEl.clientHeight) < 80;
+    }, { passive: true });
+    document.addEventListener("pointerdown", (e) => {
+      if (view !== "collie" || (e.pointerType !== "touch" && e.button !== 0)) return;
+      prefetchWdFromTarget(e.target);
     }, { passive: true });
     wdJumpBtn?.addEventListener("click", () => {
       if (curWdMode() === "screen") {
@@ -30201,6 +30801,7 @@
   const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
   const FILE_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
   const IMG_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-4.5-4.5L7 20"/></svg>';
+  const VIDEO_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg>';
   const EXT_MIME = {
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
     webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml", avif: "image/avif",
@@ -30606,30 +31207,208 @@
     }
   }
 
+  let fileChipSeq = 0;
+  function xhrUploadOnce(url, blob, { hub = null, onProgress = null, onUploadLoad = null, setAbort = null } = {}) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let done = false;
+      const finish = (fn, val) => {
+        if (done) return;
+        done = true;
+        setAbort?.(null);
+        fn(val);
+      };
+      setAbort?.({
+        abort() {
+          if (done) return;
+          try { xhr.abort(); } catch {}
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          err.aborted = true;
+          finish(reject, err);
+        },
+      });
+      xhr.open("POST", url, true);
+      xhr.withCredentials = !hub;
+      if (hub) xhr.setRequestHeader("Authorization", "Bearer " + hub.token);
+      if (xhr.upload) {
+        xhr.upload.onprogress = (ev) => {
+          if (done || !onProgress) return;
+          onProgress(ev);
+        };
+        xhr.upload.onload = () => {
+          if (done || !onUploadLoad) return;
+          onUploadLoad();
+        };
+      }
+      xhr.onload = () => {
+        const status = xhr.status || 0;
+        if (status === 0) {
+          finish(reject, new TypeError("NetworkError"));
+          return;
+        }
+        let data = {};
+        if (xhr.responseText) {
+          try { data = JSON.parse(xhr.responseText); } catch {}
+        }
+        finish(resolve, {
+          ok: status >= 200 && status < 300,
+          status,
+          statusText: xhr.statusText || "",
+          data,
+        });
+      };
+      xhr.onerror = () => finish(reject, new TypeError("NetworkError"));
+      xhr.ontimeout = () => {
+        const err = new Error("timeout");
+        err.name = "AbortError";
+        finish(reject, err);
+      };
+      xhr.onabort = () => {
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        err.aborted = true;
+        finish(reject, err);
+      };
+      try {
+        xhr.send(blob);
+      } catch (err) {
+        finish(reject, err);
+      }
+    });
+  }
+  async function authUpload(up, blob, opts = {}) {
+    if (typeof XMLHttpRequest !== "function") {
+      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+      opts.setAbort?.(ctrl);
+      const init = {
+        method: "POST",
+        body: blob,
+        credentials: up.hub ? "omit" : "same-origin",
+        headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
+      };
+      if (ctrl) init.signal = ctrl.signal;
+      try {
+        const res = await authFetch(up.url, init, !!up.hub);
+        const data = await res.json().catch(() => ({}));
+        return { ok: !!res.ok, status: res.status || 0, statusText: res.statusText || "", data };
+      } finally {
+        opts.setAbort?.(null);
+      }
+    }
+    let res = await xhrUploadOnce(up.url, blob, { ...opts, hub: up.hub });
+    if (!up.hub && res.status === 401 && !opts.isAborted?.() && await restoreSession()) {
+      opts.onReset?.();
+      res = await xhrUploadOnce(up.url, blob, { ...opts, hub: up.hub });
+    }
+    if (!up.hub && (res.status === 401 || res.status === 403)) {
+      clearSnapCache();
+    }
+    return res;
+  }
+
   function bindFiles(form, machine, opts = {}) {
     const box = $(".files", form), picker = $('input[type="file"]', form);
     if (!box || !picker) return;
     form._files = [];
-    const iconFor = (f) => (f.isImage ? IMG_SVG : FILE_SVG);
+    const iconFor = (f) => (f.isImage ? IMG_SVG : VIDEO_EXT.test(f.name || "") || (f.mime || "").startsWith("video/") ? VIDEO_SVG : FILE_SVG);
+    const uploadLabelOf = (f) => {
+      if (f.err) return f.errTag || tx("up.failTag", "失败");
+      if (f.path) return fmtSize(f.size);
+      if (f.phase === "processing") return tx("up.processing", "处理中…");
+      if (f.determinate) return `${f.pct}%`;
+      return tx("up.uploading", "上传中");
+    };
+    const uploadTipOf = (f) => {
+      if (f.err) return f.err;
+      if (f.path) return f.path;
+      if (f.phase === "processing") return tx("up.processingTip", "已传完，正在等待服务端保存…");
+      if (f.determinate) return tx("up.uploadingPct", "上传中 {pct}%", { pct: f.pct });
+      return tx("up.uploadingEllipsis", "上传中…");
+    };
+    const progressScaleOf = (f) => {
+      if (f.phase === "processing") return 1;
+      if (!f.determinate) return 0;
+      return Math.max(0, Math.min(1, Math.round((f.progress || 0) * 1000) / 1000));
+    };
     const draw = () => {
       box.hidden = !form._files.length;
       box.innerHTML = form._files.map((f, i) => {
-        const cls = f.err ? "err" : f.path ? "" : "busy";
-        const tip = f.err || f.path || tx("up.uploadingEllipsis", "上传中…");
-        const status = f.err ? (f.errTag || tx("up.failTag", "失败")) : f.path ? fmtSize(f.size) : tx("up.uploading", "上传中");
+        const busy = !f.err && !f.path;
+        const isProc = busy && f.phase === "processing";
+        const cls = f.err ? "err" : busy ? (isProc ? "busy is-proc" : "busy") : "";
+        const tip = uploadTipOf(f);
+        const status = uploadLabelOf(f);
         const media = (f.thumb && !f.thumbFailed)
           ? `<img class="fi-thumb" src="${f.thumb}" alt="" data-fi="${i}">`
           : iconFor(f);
         const retryBtn = (f.err && f.retryable && f.blob)
           ? `<button type="button" class="retry" data-retry="${i}" title="${esc(tx("up.retryTitle", "重新上传"))}" aria-label="${esc(tx("up.retryAria", "重新上传 {name}", { name: f.name }))}">${esc(tx("common.retry", "重试"))}</button>`
           : "";
-        return `<span class="file ${cls}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="${esc(tx("common.remove", "移除"))}" aria-label="${esc(tx("up.removeAria", "移除 {name}", { name: f.name }))}">×</button></span>`;
+        const rmTitle = busy ? tx("up.cancelTitle", "取消上传") : tx("common.remove", "移除");
+        const rmAria = busy
+          ? tx("up.cancelAria", "取消上传 {name}", { name: f.name })
+          : tx("up.removeAria", "移除 {name}", { name: f.name });
+        let progHtml = "";
+        if (busy) {
+          const det = !!f.determinate;
+          const scale = progressScaleOf(f);
+          const pCls = isProc ? "fi-prog is-proc" : det ? "fi-prog" : "fi-prog is-indet";
+          const ariaNow = (det || isProc) ? ` aria-valuenow="${isProc ? 100 : f.pct}"` : "";
+          const fillStyle = (det || isProc) ? ` style="transform:scaleX(${scale})"` : "";
+          progHtml = `<span class="${pCls}" role="progressbar" aria-valuemin="0" aria-valuemax="100"${ariaNow} aria-label="${esc(tip)}"><span class="fi-prog-fill"${fillStyle}></span></span>`;
+          f._paintKey = `${f.phase}|${det ? 1 : 0}|${scale}|${status}`;
+        } else {
+          f._paintKey = "";
+        }
+        return `<span class="file${cls ? " " + cls : ""}" data-fid="${esc(f.id)}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="${esc(rmTitle)}" aria-label="${esc(rmAria)}">×</button>${progHtml}</span>`;
       }).join("");
       opts.onChange?.(form._files);
+    };
+    const patchProgress = (f) => {
+      if (f.removed || !f.uploading) return;
+      const label = uploadLabelOf(f);
+      const scale = progressScaleOf(f);
+      const phase = f.phase;
+      const det = !!f.determinate;
+      const paintKey = `${phase}|${det ? 1 : 0}|${scale}|${label}`;
+      if (f._paintKey === paintKey) return;
+      f._paintKey = paintKey;
+      const chip = box.querySelector?.(`.file[data-fid="${f.id}"]`);
+      if (chip && chip.dataset?.fid === f.id) {
+        const tip = uploadTipOf(f);
+        chip.title = tip;
+        chip.classList?.toggle?.("is-proc", phase === "processing");
+        const fsEl = chip.querySelector?.(".fs");
+        if (fsEl && fsEl.textContent !== label) fsEl.textContent = label;
+        const progEl = chip.querySelector?.(".fi-prog");
+        if (progEl) {
+          progEl.classList?.toggle?.("is-indet", !det && phase !== "processing");
+          progEl.classList?.toggle?.("is-proc", phase === "processing");
+          progEl.setAttribute?.("aria-label", tip);
+          if (det || phase === "processing") {
+            progEl.setAttribute?.("aria-valuenow", String(phase === "processing" ? 100 : f.pct));
+          } else {
+            progEl.removeAttribute?.("aria-valuenow");
+          }
+        }
+        const fillEl = chip.querySelector?.(".fi-prog-fill");
+        if (fillEl?.style) {
+          if (det || phase === "processing") fillEl.style.transform = `scaleX(${scale})`;
+          else fillEl.style.transform = "";
+        }
+        return;
+      }
+      draw();
     };
     const uploadEntry = async (f) => {
       if (f.removed || !f.blob) return;
       f.uploading = true;
+      f.phase = "uploading";
+      f.progress = 0;
+      f.pct = 0;
+      f.determinate = false;
+      f._paintKey = "";
       f.err = "";
       f.errTag = "";
       f.retryable = false;
@@ -30637,31 +31416,83 @@
       const m = machine();
       f.machine = m || "";
       const up = routeReq(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
-      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
-      f.abort = ctrl;
+      let activeAbort = null;
+      const setAbort = (handle) => {
+        activeAbort = handle;
+        f.abort = handle;
+      };
       try {
-        const init = {
-          method: "POST",
-          body: f.blob,
-          credentials: up.hub ? "omit" : "same-origin",
-          headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
-        };
-        if (ctrl) init.signal = ctrl.signal;
-        const res = await authFetch(up.url, init, !!up.hub);
-        if (res.status === 401 && !up.hub) { showLogin(); return; }
-        const d = await res.json().catch(() => ({}));
+        const res = await authUpload(up, f.blob, {
+          setAbort,
+          isAborted: () => !!f.removed,
+          onReset: () => {
+            if (f.removed) return;
+            f.phase = "uploading";
+            f.progress = 0;
+            f.pct = 0;
+            f.determinate = false;
+            patchProgress(f);
+          },
+          onProgress: (ev) => {
+            if (f.removed) return;
+            const loaded = Number(ev?.loaded) || 0;
+            const total = (ev?.lengthComputable && ev.total > 0)
+              ? Number(ev.total)
+              : (f.size > 0 && loaded <= f.size * 1.1 ? f.size : 0);
+            if (total > 0) {
+              const raw = Math.max(0, Math.min(1, loaded / total));
+              f.determinate = true;
+              if (raw >= 1) {
+                f.progress = 1;
+                f.pct = 99;
+                f.phase = "processing";
+              } else {
+                f.progress = raw;
+                f.pct = Math.min(99, Math.max(0, Math.round(raw * 100)));
+                f.phase = "uploading";
+              }
+            } else {
+              f.determinate = false;
+              f.phase = "uploading";
+            }
+            patchProgress(f);
+          },
+          onUploadLoad: () => {
+            if (f.removed || f.path || f.err) return;
+            f.determinate = true;
+            f.progress = 1;
+            f.pct = 99;
+            f.phase = "processing";
+            patchProgress(f);
+          },
+        });
+        if (f.removed) return;
+        if (res.status === 401 && !up.hub) {
+          const info = friendlyUploadError(null, 401, res.data?.error || res.statusText, up.hub);
+          f.err = info.msg;
+          f.errTag = info.tag;
+          f.retryable = false;
+          f.phase = "error";
+          showLogin();
+          return;
+        }
+        const d = res.data || {};
         if (!res.ok) {
           const info = friendlyUploadError(null, res.status, d.error || res.statusText, up.hub);
           if (!f.removed) {
             f.err = info.msg;
             f.errTag = info.tag;
             f.retryable = info.retryable && !!f.blob;
+            f.phase = "error";
             toast(`${shortFileName(f.name)}：${f.err}`, "attn");
           }
           return;
         }
         if (!f.removed) {
           f.path = d.path;
+          f.progress = 1;
+          f.pct = 100;
+          f.phase = "done";
           if (typeof d.size === "number" && d.size > 0) f.size = d.size;
           if (f.isImage && f.path && f.blob && !thumbs.get(f.path)) {
             try {
@@ -30670,14 +31501,15 @@
           }
         }
       } catch (err) {
-        if (f.removed) return;
+        if (f.removed || err?.aborted) return;
         const info = friendlyUploadError(err, 0, "", up.hub);
         f.err = info.msg;
         f.errTag = info.tag;
         f.retryable = info.retryable && !!f.blob;
+        f.phase = "error";
         toast(`${shortFileName(f.name)}：${f.err}`, "attn");
       } finally {
-        if (f.abort === ctrl) f.abort = null;
+        if (f.abort === activeAbort) f.abort = null;
         f.uploading = false;
         if (!f.removed) draw();
       }
@@ -30695,6 +31527,7 @@
           || cands[0].prebuilt;
         const primaryMime = guessMime(primary) || String(primary?._itemType || "").toLowerCase();
         const f = {
+          id: "fi" + (++fileChipSeq),
           name: primary?.name || (isImageFile(primary) || primaryMime.startsWith("image/") ? tx("up.pastedImgPng", "粘贴的图片.png") : tx("up.file", "文件")),
           size: primary?.size || 0,
           isImage: isImageFile(primary) || primaryMime.startsWith("image/"),
@@ -30708,6 +31541,11 @@
           errTag: "",
           retryable: false,
           uploading: true,
+          phase: "preparing",
+          progress: 0,
+          pct: 0,
+          determinate: false,
+          _paintKey: "",
           removed: false,
           abort: null,
         };
@@ -30866,7 +31704,9 @@
     if (!files?.length) return text;
     await Promise.all(files.map((f) => f.done));
     if (files.some((f) => f.err)) throw new Error(fileErrHint(files));
-    return formatWithFiles(files, text);
+    const ready = files.filter((f) => f.path);
+    if (ready.length !== files.length) throw new Error(tx("up.failed", "上传失败，请稍后重试"));
+    return formatWithFiles(ready, text);
   }
   // Images a Collie message points at (a screenshot a worker took) show
   // under it, so you need not open each one.
@@ -30920,31 +31760,81 @@
     while (out.includes("\u0001")) out = out.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
     return out;
   };
+  function splitUserAttachmentBlock(raw) {
+    let t = String(raw || "");
+    let suffix = "";
+    const pickCut = t.indexOf("\n\n[The human picked");
+    if (pickCut >= 0) {
+      suffix = t.slice(pickCut);
+      t = t.slice(0, pickCut);
+    }
+    const looksLikePath = (line) => /^(?:\/|~\/|\.\.?\/|[A-Za-z]:\\)/.test(line);
+    let body = t;
+    let paths = [];
+    const mlIdx = t.lastIndexOf("附件：\n");
+    const mlAltIdx = t.lastIndexOf("附件:\n");
+    const blockIdx = Math.max(mlIdx, mlAltIdx);
+    if (blockIdx >= 0 && (blockIdx === 0 || t[blockIdx - 1] === "\n")) {
+      const after = t.slice(blockIdx + 4);
+      const cand = after.split("\n").map((p) => p.trim()).filter(Boolean);
+      if (cand.length > 0 && cand.every((line) => !line.startsWith("[The human picked"))) {
+        body = t.slice(0, blockIdx).trimEnd();
+        paths = cand;
+      }
+    } else {
+      const m = t.match(/(?:^|\n)附件[：:][ \t]*((?:\/|~\/)[^\n]*(?:\n(?:\/|~\/)[^\n]*)*)\s*$/);
+      if (m && m[1]) {
+        const cand = m[1].split("\n").map((p) => p.trim()).filter((line) => line && looksLikePath(line));
+        if (cand.length > 0) {
+          body = t.slice(0, m.index).trimEnd();
+          paths = cand;
+        }
+      }
+    }
+    return { body, paths, suffix };
+  }
   function parseUserParts(raw) {
-    const t = String(raw || "");
-    const i = t.lastIndexOf("附件：\n");
-    let bodyRaw = i >= 0 ? t.slice(0, i).trimEnd() : t;
+    const split = splitUserAttachmentBlock(raw);
+    let bodyRaw = split.body;
     const imgs = [];
-    const rest = [];
+    const videos = [];
+    const files = [];
+    const seen = new Set();
+    const pushUnique = (rawPath) => {
+      const p = String(rawPath || "").trim();
+      if (!p) return;
+      const k = p.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      if (IMG_EXT.test(p)) imgs.push(p);
+      else if (VIDEO_EXT.test(p)) videos.push(p);
+      else files.push(p);
+    };
     if (bodyRaw.includes("[image:")) {
       bodyRaw = bodyRaw.replace(IMG_TOKEN, (_, p) => {
-        if (p) imgs.push(p);
+        if (p) pushUnique(p);
         return "";
       }).replace(/^\n+|\n+$/g, "");
     }
-    if (i >= 0) {
-      const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
-      for (const p of paths) {
-        if (IMG_EXT.test(p)) imgs.push(p);
-        else rest.push(p);
-      }
-    }
-    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
+    for (const p of split.paths) pushUnique(p);
     const textHtml = bodyRaw ? linkUserFiles(esc(bodyRaw)) : "";
-    const attHtml = rest.length
-      ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>`
+    const attHtml = files.length
+      ? `<div class="att">${files.map((p) => renderUserFileChipHtml(p)).join("")}</div>`
       : "";
-    return { imgs, bodyRaw, textHtml, attHtml, hasBubbleContent: !!(textHtml || attHtml) };
+    const videoHtml = videos.length
+      ? renderVideoGroupHtml(videos, "mine-videos")
+      : "";
+    return {
+      imgs,
+      videos,
+      files,
+      bodyRaw,
+      textHtml,
+      attHtml,
+      videoHtml,
+      hasBubbleContent: !!textHtml,
+      hasAttachments: !!(imgs.length || videos.length || files.length),
+    };
   }
   function renderUserMedia(imgs) {
     if (!imgs.length) return "";
@@ -30953,15 +31843,14 @@
       : "is-grid-3";
     return `<div class="mine-media ${gridCls}" data-count="${imgs.length}"><span class="thumbs">${imgs.map(thumbBtn).join("")}</span></div>`;
   }
+  function renderUserAttachments(parts) {
+    if (!parts) return "";
+    return renderUserMedia(parts.imgs) + (parts.videoHtml || "") + (parts.attHtml || "");
+  }
   function userText(t) {
-    const i = t.lastIndexOf("附件：\n");
-    if (i < 0) return withImages(linkUserFiles(esc(t)));
-    const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
-    const imgs = paths.filter((p) => IMG_EXT.test(p)), rest = paths.filter((p) => !IMG_EXT.test(p));
-    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
-    return withImages(linkUserFiles(esc(t.slice(0, i).trimEnd())))
-      + (imgs.length ? `<span class="thumbs">${imgs.map(thumbBtn).join("")}</span>` : "")
-      + (rest.length ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>` : "");
+    const parts = parseUserParts(t);
+    const imgsHtml = parts.imgs.length ? `<span class="thumbs">${parts.imgs.map(thumbBtn).join("")}</span>` : "";
+    return (parts.textHtml || "") + imgsHtml + (parts.videoHtml || "") + (parts.attHtml || "");
   }
 
   // Safari on macOS fires compositionend before the confirming Enter keydown
@@ -30998,9 +31887,11 @@
     const growFn = opts.grow || grow;
     const btn = opts.sendBtn || $(".send", form);
     let sending = false;
+    const hasUploading = () => !!(form._files || []).some((f) => f.uploading || (!f.path && !f.err));
     const syncBtn = () => {
       if (opts.syncSendBtn) opts.syncSendBtn(sending);
       else if (btn) btn.disabled = sending;
+      if (btn) btn.classList?.toggle?.("is-wait-upload", !sending && !String(input.value || "").trim() && hasUploading());
     };
     if (machine) {
       bindFiles(form, machine, {
@@ -31080,6 +31971,10 @@
         return;
       }
       const draft = input.value;
+      if (!draft.trim() && curFiles.some((f) => f.uploading || (!f.path && !f.err))) {
+        toast(tx("up.waitUploading", "附件还在上传中，请稍候完成再发送"), "attn");
+        return;
+      }
       if (!opts.allowEmpty && !draft.trim() && !curFiles.length) return;
       let ctx;
       if (opts.beforeSend) {
@@ -31573,7 +32468,7 @@
     }
   }
   function applyWideBaseHeight(h) {
-    for (const sel of ["#app", ".side", "#side-full", "#file-view", "#thread-drawer", "#worker-drawer", "#notes-pane"]) {
+    for (const sel of [".side", "#side-full"]) {
       const st = $(sel)?.style;
       if (typeof st?.setProperty !== "function") continue;
       if (h) {
@@ -31636,6 +32531,7 @@
   }
   function setVH() {
     const v = window.visualViewport, isN = narrow();
+    const appEl = $("#app");
     const nextVHNum = Math.round(v ? v.height : innerHeight);
     const nextVWNum = Math.round((v && typeof v.width === "number" && v.width > 0) ? v.width : innerWidth);
     const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
@@ -31644,43 +32540,51 @@
     const widthChanged = !!lastVH && lastVWNum > 0 && Math.abs(nextVWNum - lastVWNum) > 2;
     const modeChg = lastNarrow !== null && lastNarrow !== isN;
 
-    // On real iPadOS Safari/PWA (>760px), opening the soft keyboard shrinks BOTH
-    // window.innerHeight (layout viewport) and visualViewport.height, often on staggered frames.
-    // Lock wideBaseH at the keyboard-closed full-screen baseline on touch viewports so:
-    //  1) #app / .side / .side-full / .side-rail stay pinned to full screen height (.side-foot & .sr-foot never lift),
-    //  2) --kb-inset = wideBaseH - min(vv.height, innerHeight) - offsetTop stays strictly monotonic across desync,
-    //  3) :root --vh has 0 writes on keyboard open & dismiss (0 full-document recalc / WebKit flash).
+    // On real iPadOS Safari/PWA (>760px), opening the soft keyboard may either:
+    //  (a) shrink layout viewport / window.innerHeight / #app.clientHeight alongside visualViewport.height, or
+    //  (b) keep #app at full screen height while visualViewport shrinks and/or pans (offsetTop > 0).
+    // Never size #app taller than the layout viewport (which causes iPadOS document focus-scroll & blank screen).
+    // Keep #app strictly at height: 100% (overflow: clip), pin ONLY .side / #side-full to --side-full-h so
+    // .side-foot/.sr-foot stay anchored behind the keyboard, and compute --kb-top / --kb-inset strictly from
+    // #app's rendered height (appH) so #v-collie & drawers always fit [offsetTop, offsetTop + visH] with 0
+    // double-shrink and 0 :root --vh writes across keyboard open/dismiss/settle.
+    const rawAppH = (!isN && !modeChg && appEl && !appEl.hidden && !appEl.style?.height
+      && typeof appEl.clientHeight === "number" && appEl.clientHeight > 0)
+      ? Math.round(appEl.clientHeight)
+      : 0;
+    const appH = !isN ? (rawAppH > 0 ? rawAppH : fh) : fh;
     const coarsePrimary = !isN && isCoarsePrimary();
     const tabletTouch = !isN && isTabletTouchLockEligible();
     const editable = !isN && isEditableFocused();
     let nextBaseH = 0;
     let nextSideLockH = "";
     if (!isN) {
-      const maxCurH = Math.max(fh, nextVHNum);
+      const maxCurH = Math.max(fh, appH, nextVHNum);
       if (!lastBaseH || widthChanged || modeChg) {
         nextBaseH = maxCurH;
       } else if (maxCurH >= lastBaseH) {
         nextBaseH = maxCurH;
       } else {
-        const drop = lastBaseH - fh;
-        const keepLock = (coarsePrimary && (editable || drop >= 100 || lastKI > 0))
-          || (tabletTouch && (editable || drop >= 100 || lastKI > 0));
+        const drop = lastBaseH - Math.min(fh, appH);
+        const keepLock = (coarsePrimary && (editable || drop >= 100 || lastKI > 0 || lastVHNum < lastBaseH))
+          || (tabletTouch && (editable || drop >= 100 || lastKI > 0 || lastVHNum < lastBaseH));
         nextBaseH = keepLock ? lastBaseH : maxCurH;
       }
-      const kbActive = !zoomed && (Math.min(nextVHNum, fh) < nextBaseH || nextVTopNum > 0);
+      const kbActive = !zoomed && (Math.min(nextVHNum, appH) < nextBaseH || nextVTopNum > 0);
       const alwaysLockBase = coarsePrimary || (tabletTouch && typeof matchMedia === "function" && matchMedia("(hover: none)").matches);
       nextSideLockH = (alwaysLockBase || (tabletTouch && kbActive)) ? (nextBaseH + "px") : "";
     }
 
-    const visH = (!isN && !zoomed) ? Math.min(nextVHNum, fh) : nextVHNum;
-    const kt = (!isN && !zoomed) ? nextVTopNum : 0;
-    const ki = (!isN && !zoomed) ? Math.max(0, nextBaseH - visH - kt) : 0;
+    const visH = (!isN && !zoomed) ? Math.min(nextVHNum, appH) : nextVHNum;
+    const maxPan = !isN ? Math.max(0, appH - visH) : 0;
+    const kt = (!isN && !zoomed) ? Math.min(nextVTopNum, maxPan) : 0;
+    const ki = (!isN && !zoomed) ? Math.max(0, appH - visH - kt) : 0;
     const nextVH = visH + "px", nextVTop = nextVTopNum + "px";
     const vhChanged = nextVH !== lastVH, vtopChanged = nextVTop !== lastVTop;
     const kbChg = ki !== lastKI || kt !== lastKT;
     const baseChg = nextBaseH !== lastBaseH, lockChg = nextSideLockH !== lastSideLockH;
     if (!vhChanged && !vtopChanged && !widthChanged && !modeChg && !kbChg && !baseChg && !lockChg) return;
-    const root = document.documentElement.style, appEl = $("#app");
+    const root = document.documentElement.style;
     const isInitial = !lastVH, prevVHNum = lastVHNum, deltaH = isInitial ? 0 : (visH - prevVHNum);
     const vhShrank = !isInitial && deltaH < 0;
     const wantKbFlip = vhChanged && !isInitial && !widthChanged
@@ -31690,7 +32594,8 @@
     // 1) Read phase (strictly before any DOM/style writes — zero forced synchronous reflow).
     let screenPinned = false, wdScreenPinned = false, kbFlipPlan = null, activeInline = null;
     const pinTargets = [], pinInfo = new Map();
-    const curScrollY = (!isN && !isInitial && !vhShrank && !ki && !kt) ? (window.scrollY || 0) : 0;
+    const curScrollY = (!isN && !isInitial && !ki && !kt) ? (window.scrollY || 0) : 0;
+    const curAppScrollTop = (!isN && appEl) ? (appEl.scrollTop || 0) : 0;
     const colSc = view === "collie" ? viewScroller("collie") : null;
     if ((vhChanged || widthChanged) && !isInitial) {
       if (vhShrank && !widthChanged) {
@@ -31762,6 +32667,7 @@
         setRootVH(ov ? nextVH : (nextBaseH + "px"));
       }
       if (!isInitial && vhChanged) noteViewportHeightTick();
+      if (curAppScrollTop > 0 && appEl) appEl.scrollTop = 0;
       if (curScrollY > 0) {
         try { window.scrollTo?.(0, 0); } catch {}
       }

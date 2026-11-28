@@ -1218,10 +1218,10 @@ func cors(h http.Handler) http.Handler {
 			hd := w.Header()
 			hd.Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			hd.Add("Vary", "Origin")
-			hd.Set("Access-Control-Expose-Headers", "X-Collie-Web, X-File-Kind, X-File-Size, X-File-Path, Content-Disposition")
+			hd.Set("Access-Control-Expose-Headers", "X-Collie-Web, X-File-Kind, X-File-Size, X-File-Path, Content-Disposition, Content-Range, Accept-Ranges")
 			if r.Method == http.MethodOptions {
-				hd.Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE")
-				hd.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				hd.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE")
+				hd.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Range")
 				hd.Set("Access-Control-Max-Age", "600")
 				w.WriteHeader(http.StatusNoContent)
 				return

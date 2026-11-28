@@ -4,6 +4,42 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.18 (2026-11-28)
+
+### Highlights
+
+- **iPad Landscape Keyboard Blank-Screen & Sidebar Scroll-Shift Fix (`web/{app.css,app.js}`, `internal/collie/ipad_sidebar_overlay_kb_test.go`, `docs/demo/`)**:
+  - Locked `html` and `body` (`overflow: hidden; overflow: clip; overscroll-behavior: none`) and kept `>760px` `.app` strictly at `height: 100%` (`grid-template-rows: minmax(0, 100%)`), scoping `--side-full-h` exclusively to `.side` and `#side-full` so opening the iPadOS soft keyboard never pushes the sidebar behind the status bar or lifts `.side-foot` above the keyboard, while `≤1180px` `.side-drawer` and `≤1359px` `.notepane` keep their composers pinned above the keyboard.
+  - Recomputed wide `--kb-top` and `--kb-inset` in `setVH()` against `#app`'s actual rendered height (`appH`), eliminating double-shrink blank screens when iPadOS shrinks `window.innerHeight` and accurately framing `#v-collie` and drawers when `visualViewport` pans, with `0` `:root --vh` writes and `0` forced reflows.
+- **60 FPS iOS Safari Mobile Worker Drawer Opening (`web/{app.css,app.js}`, `internal/collie/{mobile_worker_drawer_jank_test.go,mobile_drawer_drag_fps_test.go,mobile_expand_anim_fps_test.go}`, `docs/demo/`)**:
+  - Added a two-phase offscreen GPU layer prime (`.is-sheet-prep` → `rAF #1` → `rAF #2`) with pure CSS `transform`/`opacity` transitions (`340ms` mobile, `280ms` tablet) and `@starting-style` fallback so Frame 1 launches cleanly without initial frame skips or mid-flight drag-reversal glitches.
+  - Added passive `pointerdown` early transcript prefetch (deduplicated in-flight fetch + `≤3ms` micro-slice tail Markdown prewarm) and immediate Frame-0 visible tail-window mounting (last 8 groups, write-only with zero sync reflows; rich hydration and older history backfill deferred until `transitionend`), eliminating blank-white skeleton ghosts, post-slide stalls, and 1-frame text pop-in, while restoring bottom scroll across `content-visibility: hidden` warm reopens.
+- **Mobile Inline Collie Avatar Alignment (`web/app.css`, `internal/collie/{mobile_avatar_inline_test.go,rich_visuals_test.go}`, `docs/demo/`)**:
+  - Unified `.say`, `.avatar`, `.event`, `.event:has(> .wstate)`, and `.working-row.say` onto shared `--say-av` / `--say-gap` custom properties (`26px + 12px` desktop/tablet, `22px + 8px` mobile `≤760px`) so the Collie avatar stays inline beside line 1 of assistant messages and consecutive replies retain clean spine alignment.
+- **Real-Time GPU Attachment Upload Progress Bar (`web/{app.css,app.js,i18n.js}`, `scripts/demo/demo.js`, `internal/collie/upload_progress_test.go`, `docs/demo/`)**:
+  - Upgraded attachment uploads across all 5 composers to `XMLHttpRequest` (`xhr.upload.onprogress`), patching attachment chips in-place with a 2px bottom pure-GPU `transform: scaleX()` progress bar (`0` forced reflow, `0` `innerHTML` rebuilds), `tabular-nums` percentage (`0%–99%` → processing → file size), mid-flight `×` cancellation via `xhr.abort()`, empty-send upload guard with wait toast, error retry recovery, and full light/dark + reduced-motion + zh/en i18n support.
+- **Unified Inline Video Cards & Monochrome File Attachment Cards (`internal/collie/{files.go,files_test.go,hub.go,server.go,unified_attachment_cards_test.go}`, `web/{app.css,app.js,i18n.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Added native streaming video playback (`GET/HEAD /api/file?as=video`) for `.mp4`/`.m4v`/`.mov`/`.webm` (up to 100 MB) using `http.ServeContent` with HTTP `Range` (`206 Partial Content` / `416`), `Accept-Ranges: bytes`, `Content-Security-Policy: sandbox`, `X-File-Kind: video`, cross-machine node forwarding, implicit hub-to-node fallback, and expanded CORS headers.
+  - Unified user and assistant video attachments into rounded inline video cards (Safari `playsinline`, `#t=0.001` first frame, lazy `IntersectionObserver`, `0`-CLS cached dimensions, graceful fallback to file cards) and unified generic non-image/non-HTML/non-video attachments into a single monochrome category-icon file card system detached cleanly from dark user bubbles (stripping 6-hex upload prefixes), plus inline video preview in `#file-view` / `#reader-view` and global `[data-open-file]` handling across drawers.
+- **Direct Markdown Preview for Worker-Less Notebook Tasks (`internal/collie/{notebook.go,mobile_drawer_return_stack_test.go,v0292_ui_test.go}`, `web/app.js`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Emitted additive `tasks[].file_path` in `GET /api/super/notebook` (normalized with `~/` and guarded by `pathWithinDir`), allowing worker-less hollow-dot notebook tasks to open their `.md` file directly in `#file-view` while preserving the `< Notes` return stack.
+- **Unified Pals Nose-Boop Dogs + Heart SVG Icon (`web/{index.html,app.js}`, `internal/collie/v0311_peer_modal_test.go`, `docs/demo/`)**:
+  - Replaced all 5 Pals icon slots (`#nav-peers`, `#rail-peers`, and `INT_ICONS.peers` across the Integrations card, modal header, and empty state) with a unified 24×24 thin-stroke nose-boop dogs + heart SVG.
+- **Test Reliability (`internal/collie/worker_gc_test.go`)**:
+  - Replaced hardcoded `2026-11-28 12:00 UTC` timestamps with relative `time.Now()` so worker GC tests stay deterministic across wall-clock dates.
+
+### Client / API Changes
+
+- **`GET/HEAD /api/file?as=video` (additive)**:
+  - Streams allowlisted video attachments (`.mp4`, `.m4v`, `.mov`, `.webm`; max 100 MB) with native HTTP `Range` (`206 Partial Content` / `416`), `Accept-Ranges: bytes`, `Content-Type: video/*`, `Content-Security-Policy: sandbox`, `X-File-Kind: video`, `X-File-Size`, and `X-File-Path`, including cross-machine remote node forwarding and hub-to-node fallback when `machine` is omitted.
+  - `/api/*` CORS preflight and response headers now allow `HEAD` and `Range` and expose `Content-Range` and `Accept-Ranges`.
+  - Existing `/api/file` default JSON, `?download=1`, `?as=html`, and `?as=image` modes are unchanged.
+- **`GET /api/super/notebook` (additive, backward compatible)**:
+  - Adds optional field `tasks[].file_path` (`string`, `omitempty`) containing the `~/`-normalized or absolute task Markdown path directly usable with `GET /api/file?path=...`; existing `tasks[].path` (`tasks/<slug>.md`) is unchanged.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.17 (2026-11-28)
 
 ### Highlights

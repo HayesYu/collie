@@ -433,6 +433,7 @@
     files: [
       memFile("instructions.md", "# 你的约定\n- 发布说明用中文，每条一句话\n- 跑测试优先用 devbox，界面相关的活放 macbook\n- 动生产数据库前先问我\n- (inferred) 排查接口问题时先给根因和复现命令，再贴代码改动\n- (inferred) 合并 PR 前希望同步确认单元测试和明暗主题截图", 60 * 24, 1843),
       memFile("tasks/v1.4-release.md", "# v1.4 发布\n目标：整理 v1.3 以来的 27 个提交写发布说明（重点提醒配置项改名与 Node 22 起步），定位并修复 /orders 分页同一秒内记录重复的偶发失败（fix-flaky-test），回归通过后一起开 PR。\n- [x] 发布说明（release-notes）\n- [ ] 分页测试修复（fix-flaky-test）\n- [ ] 开 PR", 6, 2253),
+      memFile("tasks/mobile-lcp.md", "# 手机端首屏 LCP 与资源瀑布图\n- **状态**：排在 `/orders` 分页索引上线后启动\n- **目标**：梳理移动端首屏关键请求链路，把 LCP 压到 1.5s 以内\n- [ ] 抓取 390×844 弱网瀑布图\n- [ ] 检查字体与首屏脚本阻塞项\n- [ ] 输出优化前后对比报告", 18),
       memFile("tasks/done/dark-mode-fix.md", "# 首页暗色模式修复\n- [x] 定位对比度问题\n- [x] 合入修复（ux-polish）\n已完成：11 月 18 日合入。", 50),
       memFile("tasks/done/ci-cache.md", "# CI 缓存提速\n- [x] 缓存依赖目录\n已完成：构建从 9 分钟降到 4 分钟。", 90),
       memFile("notes/index.md", "# 笔记索引\n- shop-api.md：订单服务，怎么跑测试、分页的坑\n- shop-web.md：前端，怎么起、发布说明放哪\n- agents.md：哪个 agent 在哪台电脑上好用\n- machines.md：devbox 和 macbook 各装了什么", 60 * 30, 1638),
@@ -804,9 +805,9 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     return {
       date: today,
       tasks: [
-        { id: "v1.4-release", title: "v1.4 发布与 /orders 分页修复", note: "fix-flaky-test 已定位，待开 PR", tone: "live", worker: "fix-flaky-test" },
+        { id: "v1.4-release", title: "v1.4 发布与 /orders 分页修复", note: "fix-flaky-test 已定位，待开 PR", tone: "live", worker: "fix-flaky-test", path: "tasks/v1.4-release.md", file_path: "~/.collie/router/memory/tasks/v1.4-release.md" },
         { id: "migrations-cleanup", title: "旧回滚脚本处理待拍板", note: "等待你确认归档或删除", tone: "attn", entry_id: entries[5]?.id || "" },
-        { id: "mobile-lcp", title: "手机端首屏 LCP 与资源瀑布图", note: "排在分页索引上线后启动", tone: "idle" },
+        { id: "mobile-lcp", title: "手机端首屏 LCP 与资源瀑布图", note: "排在分页索引上线后启动", tone: "idle", path: "tasks/mobile-lcp.md", file_path: "~/.collie/router/memory/tasks/mobile-lcp.md" },
         { id: "dark-mode", title: "首页暗色模式适配", note: "claude-1 在 macbook 编写 Header 切换", tone: "live", worker: "claude-1" },
       ],
       artifacts: [
@@ -824,6 +825,88 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
   const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
   const demoUploads = new Map();
   let demoUploadSeq = 0;
+  const saveDemoUpload = (rawName, body) => {
+    const clean = (rawName || "file.png").replace(/^.*[\\/]/, "") || "file.png";
+    const blob = body instanceof Blob ? body : new Blob([body || ""]);
+    const id = String(++demoUploadSeq).padStart(6, "0");
+    const path = `/home/alex/.collie/uploads/demo/${id}-${clean}`;
+    demoUploads.set(path, { blob, name: clean, size: blob.size || 0 });
+    return { path, name: clean, size: blob.size || 0 };
+  };
+  const RealXHR = window.XMLHttpRequest;
+  if (typeof RealXHR === "function") {
+    window.XMLHttpRequest = function DemoXMLHttpRequest() {
+      const inner = new RealXHR();
+      let mockUrl = null;
+      let timers = [];
+      let aborted = false;
+      const upload = { onprogress: null, onload: null };
+      const xhr = {
+        upload,
+        readyState: 0,
+        status: 0,
+        statusText: "",
+        responseText: "",
+        withCredentials: false,
+        onload: null,
+        onerror: null,
+        onabort: null,
+        ontimeout: null,
+        open(method, url, async = true) {
+          const u = new URL(String(url || ""), location.href);
+          const idx = u.pathname.indexOf("/api/");
+          if (String(method || "").toUpperCase() === "POST" && idx >= 0 && u.pathname.slice(idx) === "/api/uploads") {
+            mockUrl = u;
+            xhr.readyState = 1;
+            return;
+          }
+          mockUrl = null;
+          inner.open(method, url, async);
+        },
+        setRequestHeader(k, v) { if (!mockUrl) inner.setRequestHeader(k, v); },
+        abort() {
+          if (!mockUrl) { inner.abort(); return; }
+          aborted = true;
+          timers.forEach((id) => clearTimeout(id));
+          timers = [];
+          xhr.readyState = 0;
+          xhr.status = 0;
+          xhr.onabort?.();
+        },
+        send(body) {
+          if (!mockUrl) {
+            inner.withCredentials = xhr.withCredentials;
+            inner.onload = () => { xhr.readyState = inner.readyState; xhr.status = inner.status; xhr.statusText = inner.statusText; xhr.responseText = inner.responseText; xhr.onload?.(); };
+            inner.onerror = () => xhr.onerror?.();
+            inner.onabort = () => xhr.onabort?.();
+            inner.ontimeout = () => xhr.ontimeout?.();
+            inner.send(body);
+            return;
+          }
+          const total = Math.max(1, body?.size || body?.byteLength || 1024);
+          const steps = [[90, 0.28], [210, 0.66], [330, 1]];
+          for (const [ms, frac] of steps) {
+            timers.push(setTimeout(() => {
+              if (aborted) return;
+              const loaded = Math.round(total * frac);
+              upload.onprogress?.({ lengthComputable: true, loaded, total });
+              if (frac >= 1) upload.onload?.();
+            }, ms));
+          }
+          timers.push(setTimeout(() => {
+            if (aborted) return;
+            const info = saveDemoUpload(mockUrl.searchParams.get("name"), body);
+            xhr.readyState = 4;
+            xhr.status = 200;
+            xhr.statusText = "OK";
+            xhr.responseText = JSON.stringify(info);
+            xhr.onload?.();
+          }, 440));
+        },
+      };
+      return xhr;
+    };
+  }
   const realFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     const u = new URL(typeof input === "string" ? input : input.url, location.href);
@@ -1324,12 +1407,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       return json({ ok: true, mode: mode === "replace" ? "replace" : "merge", imported: memory.files.length, backup: `pre-import-${stamp}.zip` });
     }
     if (p === "/api/uploads" && method === "POST") {
-      const rawName = (q.get("name") || "file.png").replace(/^.*[\\/]/, "") || "file.png";
-      const blob = init.body instanceof Blob ? init.body : new Blob([init.body || ""]);
-      const id = String(++demoUploadSeq).padStart(6, "0");
-      const path = `/home/alex/.collie/uploads/demo/${id}-${rawName}`;
-      demoUploads.set(path, { blob, name: rawName, size: blob.size || 0 });
-      return json({ path, name: rawName, size: blob.size || 0 });
+      return json(saveDemoUpload(q.get("name"), init.body));
     }
     if (p === "/api/super/say") {
       const inPlace = !!body.in_place && !!body.re && !body.pick;
@@ -1360,6 +1438,13 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       if (demoUploads.has(fp)) {
         const up = demoUploads.get(fp);
         const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(up.name);
+        const isVid = /\.(mp4|mov|webm|m4v)$/i.test(up.name);
+        const as = q.get("as") || "";
+        if (!dl && as === "video" && isVid) {
+          const ext = (up.name.split(".").pop() || "").toLowerCase();
+          const ct = ext === "mov" ? "video/quicktime" : ext === "webm" ? "video/webm" : "video/mp4";
+          return new Response(up.blob, { headers: { "Content-Type": ct, "Accept-Ranges": "bytes", "X-File-Kind": "video", "X-File-Size": String(up.size), "X-File-Path": encodeURIComponent(fp) } });
+        }
         return new Response(up.blob, { headers: { "X-File-Kind": dl ? "download" : (isImg ? "image" : "text"), "X-File-Size": String(up.size), "X-File-Path": encodeURIComponent(fp), ...dlHead(up.name) } });
       }
       const demoImgs = [
@@ -1392,6 +1477,15 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       }
       if (!mach && /(?:internal\/orders\/)?list\.go$/.test(fp)) {
         return new Response(ordersListGo, { headers: { "X-File-Kind": dl ? "download" : "text", "X-File-Size": String(new Blob([ordersListGo]).size), "X-File-Path": encodeURIComponent("~/code/shop-api/internal/orders/list.go"), ...dlHead("list.go") } });
+      }
+      const memTaskM = /^(?:~|\/home\/alex)\/\.collie\/router\/memory\/(tasks\/[^/]+\.md)$/.exec(fp);
+      if (!mach && memTaskM) {
+        const mf = (memory.files || []).find((x) => x.name === memTaskM[1]);
+        if (mf) {
+          const txt = mf.text || "";
+          const name = memTaskM[1].split("/").pop() || "task.md";
+          return new Response(txt, { headers: { "X-File-Kind": dl ? "download" : "text", "X-File-Size": String(new Blob([txt]).size), "X-File-Path": encodeURIComponent("~/.collie/router/memory/" + memTaskM[1]), ...dlHead(name) } });
+        }
       }
       return json({ error: "找不到这个文件" }, 404);
     }

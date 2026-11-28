@@ -19,6 +19,7 @@ const (
 	fileTextMax     = 1 << 20
 	fileHTMLMax     = 5 << 20
 	fileImageMax    = 20 << 20
+	fileVideoMax    = 100 << 20
 	fileDownloadMax = 100 << 20
 	htmlSandboxCSP  = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
 )
@@ -28,10 +29,30 @@ func isHTMLPath(p string) bool {
 	return ext == ".html" || ext == ".htm"
 }
 
+func videoMIME(p string) (string, bool) {
+	switch strings.ToLower(path.Ext(strings.TrimSpace(p))) {
+	case ".mp4", ".m4v":
+		return "video/mp4", true
+	case ".mov":
+		return "video/quicktime", true
+	case ".webm":
+		return "video/webm", true
+	default:
+		return "", false
+	}
+}
+
 func setHTMLSandboxHeaders(h http.Header) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Del("Content-Disposition")
 	h.Set("Content-Security-Policy", htmlSandboxCSP)
+	h.Set("Cache-Control", "no-store")
+}
+
+func setVideoHeaders(h http.Header, ct string) {
+	h.Set("Content-Type", ct)
+	h.Del("Content-Disposition")
+	h.Set("Content-Security-Policy", "sandbox")
 	h.Set("Cache-Control", "no-store")
 }
 
@@ -66,6 +87,16 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "仅支持直接打开 .html 或 .htm 文件"})
 		return
 	}
+	var videoCT string
+	if !download && as == "video" {
+		ctRaw, okRaw := videoMIME(rawPath)
+		ctExp, okExp := videoMIME(p)
+		if !okRaw || !okExp || ctRaw != ctExp {
+			writeJSON(w, 400, map[string]any{"error": "仅支持在线播放 .mp4 / .mov / .webm / .m4v 视频文件"})
+			return
+		}
+		videoCT = ctExp
+	}
 	fi, err := os.Stat(p)
 	switch {
 	case os.IsNotExist(err):
@@ -74,6 +105,9 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !download && as == "html" && s.tryRemoteHTMLFile(w, r, rawPath) {
+				return
+			}
+			if !download && as == "video" && s.tryRemoteVideoFile(w, r, rawPath, videoCT) {
 				return
 			}
 		}
@@ -88,6 +122,10 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if download && fi.Size() > fileDownloadMax {
 		writeJSON(w, 413, map[string]any{"error": "文件超过 100 MB，无法通过网页直接下载"})
+		return
+	}
+	if !download && as == "video" && fi.Size() > fileVideoMax {
+		writeJSON(w, 413, map[string]any{"error": "视频超过 100 MB，无法在线预览"})
 		return
 	}
 	f, err := os.Open(p)
@@ -108,6 +146,16 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 		h.Set("X-File-Size", strconv.FormatInt(fi.Size(), 10))
 		h.Set("X-File-Path", url.PathEscape(s.tilde(p)))
 		io.Copy(w, io.LimitReader(f, fileDownloadMax))
+		return
+	}
+
+	if as == "video" {
+		h := w.Header()
+		setVideoHeaders(h, videoCT)
+		h.Set("X-File-Kind", "video")
+		h.Set("X-File-Size", strconv.FormatInt(fi.Size(), 10))
+		h.Set("X-File-Path", url.PathEscape(s.tilde(p)))
+		http.ServeContent(w, r, path.Base(p), fi.ModTime(), f)
 		return
 	}
 
@@ -232,6 +280,60 @@ func (s *Server) tryRemoteHTMLFile(w http.ResponseWriter, r *http.Request, rawPa
 		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, io.LimitReader(resp.Body, fileHTMLMax+4096))
+		return true
+	}
+	return false
+}
+
+// tryRemoteVideoFile looks across connected online nodes when a direct ?as=video
+// request hits the hub without a machine parameter and the video is not on hub.
+// Range / If-Range headers are forwarded so Safari / iOS <video> seeking works.
+func (s *Server) tryRemoteVideoFile(w http.ResponseWriter, r *http.Request, rawPath, videoCT string) bool {
+	for _, m := range s.herdr.Machines() {
+		if m.Local || !m.Online {
+			continue
+		}
+		client, err := s.herdr.Client(m.ID)
+		if err != nil {
+			continue
+		}
+		u := "http://node/api/file?as=video&path=" + url.QueryEscape(rawPath)
+		method := r.Method
+		if method != http.MethodHead {
+			method = http.MethodGet
+		}
+		req, err := http.NewRequestWithContext(r.Context(), method, u, nil)
+		if err != nil {
+			continue
+		}
+		for _, k := range []string{"Range", "If-Range", "If-Modified-Since", "If-Unmodified-Since"} {
+			if v := r.Header.Get(k); v != "" {
+				req.Header.Set(k, v)
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			resp.Body.Close()
+			continue
+		}
+		defer resp.Body.Close()
+		h := w.Header()
+		for _, k := range []string{"Content-Type", "Content-Range", "Accept-Ranges", "Content-Length", "Last-Modified", "Content-Security-Policy", "Cache-Control", "X-File-Kind", "X-File-Size", "X-File-Path"} {
+			if v := resp.Header.Get(k); v != "" {
+				h.Set(k, v)
+			}
+		}
+		if (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) &&
+			(resp.Header.Get("X-File-Kind") == "video" || strings.HasPrefix(resp.Header.Get("Content-Type"), "video/")) {
+			setVideoHeaders(h, videoCT)
+		}
+		w.WriteHeader(resp.StatusCode)
+		if method != http.MethodHead {
+			io.Copy(w, io.LimitReader(resp.Body, fileVideoMax+4096))
+		}
 		return true
 	}
 	return false

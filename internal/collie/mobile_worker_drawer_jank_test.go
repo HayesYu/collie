@@ -28,12 +28,15 @@ for (const [name, src] of [["web/app.css", cssSrc], ["docs/demo/app.css", demoCs
   assert.ok(!/#wd-thread[^{]*\{[^}]*content-visibility:\s*auto/.test(src), name + " must never apply content-visibility: auto to #wd-thread");
   assert.ok(src.includes("#wd-thread > .msg,\n#wd-thread > .tools,\n#wd-thread > .mine-group,\n#wd-thread > .ask-card {\n  contain: layout style;\n}"), name + " must isolate #wd-thread rows with contain: layout style");
 
-  // 1b) Mobile & tablet sheet opening keyframes disable competing CSS transitions cleanly
-  const openingDrawerMatches = src.match(/\.side-drawer\.is-sheet-opening\s*\{[^}]*transition:\s*none\s*!important;/g) || [];
-  assert.ok(openingDrawerMatches.length >= 2, name + " must disable CSS transition on .side-drawer.is-sheet-opening for both <=1180px and <=760px");
-  const openingScrimMatches = src.match(/\.drawer-scrim\.is-scrim-opening\s*\{[^}]*transition:\s*none\s*!important;/g) || [];
-  assert.ok(openingScrimMatches.length >= 2, name + " must disable CSS transition on .drawer-scrim.is-scrim-opening for both <=1180px and <=760px");
-  assert.ok(/\.side-drawer\.is-sheet-opening\s*\{[^}]*backface-visibility:\s*hidden;/.test(src), name + " mobile .side-drawer.is-sheet-opening must set backface-visibility: hidden");
+  // 1b) Mobile & tablet sheet opening uses two-phase GPU prep + pure transform/opacity transitions + @starting-style fallback
+  const prepDrawerMatches = src.match(/\.side-drawer\.is-sheet-prep\s*\{[^}]*transition:\s*none\s*!important;/g) || [];
+  assert.ok(prepDrawerMatches.length >= 2, name + " must disable CSS transition on .side-drawer.is-sheet-prep for both <=1180px and <=760px");
+  const prepScrimMatches = src.match(/\.drawer-scrim\.is-scrim-prep\s*\{[^}]*transition:\s*none\s*!important;/g) || [];
+  assert.ok(prepScrimMatches.length >= 2, name + " must disable CSS transition on .drawer-scrim.is-scrim-prep for both <=1180px and <=760px");
+  assert.ok(/\.side-drawer\.is-sheet-opening:not\(\.is-sheet-prep\)\s*\{[^}]*backface-visibility:\s*hidden;[^}]*transition:\s*transform 340ms cubic-bezier\(\.32, \.72, 0, 1\);/.test(src), name + " mobile .side-drawer.is-sheet-opening must use 340ms iOS sheet curve with backface-visibility: hidden");
+  assert.ok(src.includes("@starting-style") && src.includes(".app.has-worker .workerpane.is-sheet-opening:not(.is-sheet-prep)"), name + " must declare @starting-style fallback for sheet opening transitions");
+  assert.ok(src.includes("@keyframes wd-content-reveal") && src.includes("#wd-thread.is-content-reveal"), name + " cold-loaded worker transcript must reveal via pure-GPU opacity fade");
+  assert.ok(/\.wd-thread \.thread-skel\s*\{[^}]*margin-top:\s*0;/.test(src), name + " .wd-thread .thread-skel must top-align cleanly without leaving an empty upper void");
 
   // 1c) Mobile sheet open pauses background #v-collie and in-sheet skeleton/dot animations
   assert.ok(src.includes(".side-drawer.is-sheet-opening .thread-skel .sk") && src.includes(":is(.app.has-worker, .app.has-thread, .app.has-file) #v-collie .working-row"), name + " mobile sheet open must pause background and skeleton ambient animations");
@@ -51,6 +54,8 @@ for (const [name, src] of [["web/app.js", appSrc], ["docs/demo/app.js", demoAppS
   assert.ok(src.includes("if (isLayoutGliding() || isAnyMobileSheetAnimating()) return;"), name + " tableRO/codeRO syncs must defer while mobile sheets animate");
   assert.ok(!src.includes("if (w <= 0) { el._roLastW = 0; continue; }"), name + " tableRO/codeRO must preserve _roLastW across content-visibility: hidden reopen");
   assert.ok(src.includes("function prewarmWdThreadMd(") && src.includes("function cancelWdPrewarm()"), name + " must prewarm uncached assistant markdown purely in JS micro-slices during slide");
+  assert.ok(src.includes("function prefetchWdHistory(") && src.includes("function prefetchWdFromTarget(") && src.includes("function mountWdThread("), name + " must support pointerdown worker transcript prefetch and Frame-0 tail mount");
+  assert.ok(src.includes("const isWdSheetPrepping =") && src.includes("WD_MOBILE_TAIL_GROUPS"), name + " worker drawer must mount mobile tail window during Frame-0 prep before slide starts");
   assert.ok(src.includes("const isWdSlidePending =") && src.includes("function computeWdTermFontSize(") && src.includes("function applyWdTermFontSize("), name + " worker terminal must align slide deferral, initial font size, and measured cellH");
   assert.ok(src.includes("function flushWdPendingLive()"), name + " drawWdLive must defer during mobile slide and flush on settle");
   assert.ok(src.includes("wdLogEl._lastText"), name + " #wd-log stream updates must short-circuit identical frames");
@@ -120,6 +125,7 @@ function makeEl(id = "", tagName = "DIV") {
     querySelector: (sel) => {
       if (sel in el._qs) return el._qs[sel];
       if (sel === ".in-active-thread") return null;
+      if (sel === ".thread-skel") return _html.includes("thread-skel") ? makeEl("skel") : null;
       return getEl(id + ":" + sel);
     },
     querySelectorAll: () => [],
@@ -161,6 +167,7 @@ for (const id of [
   }
 }
 getEl("#notes-pane").classList.add("is-hidden");
+getEl("#super-thread").parentElement = getEl("#v-collie");
 
 // Wire #wd-live querySelector(".live-working") dynamically based on innerHTML
 const wdLiveEl = getEl("#wd-live");
@@ -222,6 +229,8 @@ const timers = new Map();
 let timerSeq = 1;
 let roCallbacks = [];
 const noop = () => {};
+let fetchCalls = [];
+let nextTranscriptResp = { messages: [], earlier: 0 };
 const ctx = {
   console,
   setTimeout: (fn, ms = 0) => { const id = timerSeq++; timers.set(id, { fn, ms, kind: "timer" }); return id; },
@@ -254,7 +263,13 @@ const ctx = {
     paddingTop: "8px", paddingBottom: "24px", paddingLeft: "10px", paddingRight: "10px",
     getPropertyValue: (k) => (k === "--mono" ? "monospace" : ""),
   }),
-  fetch: async () => ({ ok: true, json: async () => ({}), text: async () => "" }),
+  fetch: async (url) => {
+    fetchCalls.push(String(url));
+    if (String(url).includes("/api/transcript")) {
+      return { ok: true, json: async () => nextTranscriptResp, text: async () => JSON.stringify(nextTranscriptResp) };
+    }
+    return { ok: true, json: async () => ({}), text: async () => "{}" };
+  },
   addEventListener: noop, removeEventListener: noop, dispatchEvent: noop,
   document: {
     documentElement: makeEl("html", "HTML"),
@@ -282,13 +297,26 @@ const ctx = {
 ctx.window = ctx;
 ctx.globalThis = ctx;
 
+function flushKind(kind) {
+  let ran = 0;
+  for (const [id, item] of [...timers.entries()]) {
+    if (item.kind !== kind) continue;
+    timers.delete(id);
+    item.fn();
+    ran++;
+  }
+  return ran;
+}
+
 const marker = "  boot();\n})();";
 const expose = [
   "  globalThis.__wdJankTest = {",
   "    setState: (s) => { state = s; },",
   "    setSup: (s) => { sup = s; },",
+  "    setHist: (h) => { hist = h; },",
   "    setView: (v) => { view = v; },",
   "    openWorkerDrawer, closeWorkerDrawer, drawWdLive, drawWdScreen, fitWdTerm, drawThread,",
+  "    prefetchWdHistory, prefetchWdFromTarget, isWdSheetPrepping,",
   "    isWdSlidePending, isWdSheetAnimating, isAnyMobileSheetAnimating, scheduleLiveUpdates,",
   "    getDeferredSheetMask: () => deferredSheetMask,",
   "    getLiveUpdateMask: () => liveUpdateMask,",
@@ -317,10 +345,16 @@ T.setState({
 T.setSup({
   router: { alive: true, status: "idle", pane_id: "w1:p1", kind: "claude" },
   entries: [],
-  workers: [{ name: "wk-live", label: "Live Worker", kind: "codex", cwd: "/tmp/work", pane_id: "w5:p1", status: "working" }],
+  workers: [
+    { name: "wk-live", label: "Live Worker", kind: "codex", cwd: "/tmp/work", pane_id: "w5:p1", status: "working" },
+    { name: "wk-hist", label: "Hist Worker", kind: "antigravity", cwd: "/tmp/work", ended: true, status: "idle" },
+  ],
 });
+T.setHist([
+  { id: "h-wk-hist", name: "wk-hist", kind: "agy", session: "sess-1", cwd: "/tmp/work" },
+]);
 
-// ─── 3a) openWorkerDrawer flushes pending --vh timer, skips kbFlip while opening, defers live updates ───
+// ─── 3a) openWorkerDrawer flushes pending --vh timer, primes Frame-0 GPU layer, skips kbFlip, defers live updates ───
 T.setPendingVH("780px");
 assert.equal(T.hasRootVHTimer(), true, "setup pending rootVHSyncTimer");
 reflowReads = [];
@@ -329,9 +363,23 @@ T.openWorkerDrawer({ worker: "wk-live" });
 assert.equal(reflowReads.length, 0, "openWorkerDrawer on mobile must trigger zero forced reflows: " + reflowReads.join(","));
 assert.equal(T.hasRootVHTimer(), false, "openWorkerDrawer must flush stale rootVHSyncTimer before unhiding");
 assert.equal(ctx.document.documentElement.style.getPropertyValue("--vh"), "780px", "root --vh updated synchronously before sheet opens");
-assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), true, "worker drawer starts GPU sheet opening animation");
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), true, "worker drawer starts GPU sheet opening state");
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-prep"), true, "worker drawer holds Frame-0 offscreen GPU prep class");
+assert.equal(getEl("#worker-scrim").classList.contains("is-scrim-prep"), true, "worker scrim holds Frame-0 prep class");
 assert.equal(T.isAnyMobileSheetAnimating(), true, "isAnyMobileSheetAnimating reports active slide");
 assert.equal(T.readKbFlipPlan(-144, null), null, "readKbFlipPlan must skip keyboard FLIP while #worker-drawer.is-sheet-opening is active");
+
+// Stale transitioncancel while still in Frame-0 .is-sheet-prep must be ignored!
+getEl("#worker-drawer").dispatch("transitioncancel", { propertyName: "transform" });
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), true, "stale transitioncancel during is-sheet-prep must not abort open");
+
+// Flush rAF #1 and rAF #2 -> releases .is-sheet-prep cleanly so GPU transition runs from true 0%
+flushKind("raf");
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-prep"), true, "rAF #1 keeps .is-sheet-prep for Frame-0 paint");
+flushKind("raf");
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-prep"), false, "rAF #2 releases .is-sheet-prep to begin GPU transition");
+assert.equal(getEl("#worker-scrim").classList.contains("is-scrim-prep"), false, "rAF #2 releases .is-scrim-prep in lockstep");
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), true, ".is-sheet-opening remains active during GPU transition");
 
 // Background SSE live updates must defer during opening slide
 T.scheduleLiveUpdates(T.LIVE_SUPER | T.LIVE_SIDE);
@@ -347,11 +395,11 @@ assert.equal(liveInnerHTMLWrites, 0, "drawWdLive during opening slide must not t
 assert.ok(T.getWdPendingLive(), "drawWdLive queues pending live payload for post-slide flush");
 trackReflow = false;
 
-// Settle opening animation via animationend
-nowMs += 280;
-getEl("#worker-drawer").dispatch("animationend");
-assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), false, "animationend clears .is-sheet-opening");
-assert.equal(T.getDeferredSheetMask(), 0, "animationend flushes deferred background live updates");
+// Settle opening transition via transitionend(transform)
+nowMs += 350;
+getEl("#worker-drawer").dispatch("transitionend", { propertyName: "transform" });
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), false, "transitionend clears .is-sheet-opening");
+assert.equal(T.getDeferredSheetMask(), 0, "transitionend flushes deferred background live updates");
 assert.equal(wdLiveEl.hidden, false, "post-slide flush reveals #wd-live");
 assert.equal(wdLiveEl.classList.contains("is-working"), true, "#wd-live marks .is-working");
 assert.equal(liveInnerHTMLWrites, 1, "initial .live-working mounts once via innerHTML");
@@ -373,6 +421,8 @@ T.setWdMode("screen");
 nowMs = 3000;
 termOps.length = 0;
 T.openWorkerDrawer({ worker: "wk-live", mode: "screen" });
+flushKind("raf");
+flushKind("raf");
 assert.equal(T.getWdTerm(), null, "terminal cold open defers xterm mount until after mobile slide settles");
 assert.equal(T.isWdSlidePending(), true, "isWdSlidePending true right after open");
 
@@ -384,8 +434,8 @@ assert.equal(T.getWdPendingScreen(), frame1, "frame buffered in wdPendingScreen"
 
 // CRITICAL REGRESSION: advance clock past _slideSettleAt - 16 while .is-sheet-opening is STILL on drawer!
 // Must NEVER throw RangeError: Maximum call stack size exceeded.
-nowMs = 3300;
-assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), true, ".is-sheet-opening still present before animationend");
+nowMs = 3450;
+assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-opening"), true, ".is-sheet-opening still present before transitionend");
 assert.equal(T.isWdSlidePending(), false, "isWdSlidePending aligned with scheduleAfterWdSlide threshold");
 T.drawWdScreen(frame1);
 const term = T.getWdTerm();
@@ -395,7 +445,7 @@ assert.ok(ctorOp && ctorOp.fs === 7.5, "ensureWdTerm precomputes mobile fontSize
 assert.ok(termOps.some((o) => o.op === "measure"), "ensureWdTerm measures real cell height immediately after open");
 
 // Scroll up in terminal -> incoming frame with same head must preserve viewportY (savedLine)
-getEl("#worker-drawer").dispatch("animationend");
+getEl("#worker-drawer").dispatch("transitionend", { propertyName: "transform" });
 term.buffer.active.baseY = 40;
 term.buffer.active.viewportY = 10;
 termOps.length = 0;
@@ -403,6 +453,96 @@ const frame2 = { text: Array.from({ length: 85 }, (_, i) => "line " + i).join("\
 T.drawWdScreen(frame2);
 assert.ok(!termOps.some((o) => o.op === "scrollToBottom"), "scrolled-up terminal must not snap to bottom on appended frame");
 assert.equal(term.buffer.active.viewportY, 10, "scrolled-up terminal preserves saved viewportY line");
+
+// ─── 3d) pointerdown prefetch + Frame-0 tail mount (0 skeleton, 0 sync reflow, deferred offscreen backfill) ───
+(async () => {
+  T.closeWorkerDrawer({ immediate: true });
+  T.setWdMode("chat");
+  nowMs = 5000;
+  fetchCalls = [];
+  nextTranscriptResp = {
+    messages: Array.from({ length: 24 }, (_, i) => ({
+      kind: i % 2 === 0 ? "user" : "assistant",
+      text: "Worker message #" + (i + 1),
+    })),
+    earlier: 0,
+  };
+  T.prefetchWdHistory({ id: "h-wk-hist", name: "wk-hist", kind: "agy", session: "sess-1", cwd: "/tmp/work" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(fetchCalls.length, 1, "prefetchWdHistory fires exactly one /api/transcript request");
+
+  // 100ms later user finger lifts -> click opens worker drawer
+  nowMs = 5100;
+  reflowReads = [];
+  trackReflow = true;
+  T.openWorkerDrawer({ worker: "wk-hist", histId: "h-wk-hist" });
+  trackReflow = false;
+  const wdThread = getEl("#wd-thread");
+  assert.equal(reflowReads.length, 0, "prefetched mobile openWorkerDrawer triggers 0 synchronous forced reflows: " + reflowReads.join(","));
+  assert.equal(fetchCalls.length, 1, "recent (<3s) prefetched transcript skips redundant /api/transcript request");
+  assert.ok(!wdThread.innerHTML.includes("thread-skel"), "prefetched mobile open mounts real tail content on Frame 0 instead of skeleton");
+  assert.ok(wdThread.innerHTML.includes("Worker message #24"), "Frame-0 tail includes latest message #24");
+  assert.ok(!wdThread.innerHTML.includes("Worker message #1<"), "Frame-0 tail defers older messages above viewport until slide settles");
+
+  // Release Frame-0 prep -> GPU slide runs with real content, older messages still deferred
+  flushKind("raf");
+  flushKind("raf");
+  assert.equal(getEl("#worker-drawer").classList.contains("is-sheet-prep"), false, "rAF #2 launches GPU slide with real tail content");
+  assert.ok(!wdThread.innerHTML.includes("Worker message #1<"), "older messages do not backfill mid-slide");
+
+  // Settle transition -> older messages backfill smoothly offscreen
+  nowMs += 360;
+  getEl("#worker-drawer").dispatch("transitionend", { propertyName: "transform" });
+  for (let step = 0; step < 6; step++) flushKind("timer");
+  assert.ok(wdThread.innerHTML.includes("Worker message #1"), "post-slide offscreen backfill mounts full history cleanly");
+
+  // ─── 3e) Cold open without prefetch: mounts tail fast on settle + triggers GPU .is-content-reveal fade ───
+  T.closeWorkerDrawer({ immediate: true });
+  T.setSup({
+    router: { alive: true, status: "idle", pane_id: "w1:p1", kind: "claude" },
+    entries: [],
+    workers: [
+      { name: "wk-cold", label: "Cold Worker", kind: "antigravity", cwd: "/tmp/work", ended: true, status: "idle" },
+    ],
+  });
+  T.setHist([
+    { id: "h-wk-cold", name: "wk-cold", kind: "agy", session: "sess-cold", cwd: "/tmp/work" },
+  ]);
+  nowMs = 7000;
+  fetchCalls = [];
+  let resolveCold = null;
+  const origFetch = ctx.fetch;
+  ctx.fetch = (url) => {
+    fetchCalls.push(String(url));
+    return new Promise((res) => { resolveCold = res; });
+  };
+  T.openWorkerDrawer({ worker: "wk-cold", histId: "h-wk-cold" });
+  flushKind("raf");
+  flushKind("raf");
+  assert.ok(wdThread.innerHTML.includes("thread-skel"), "cold open without prefetch shows skeleton while transcript is in flight");
+  // Network returns mid-slide -> still defers DOM swap until slide settles
+  nowMs += 80;
+  const coldPayload = {
+    messages: Array.from({ length: 20 }, (_, i) => ({ kind: i % 2 === 0 ? "user" : "assistant", text: "Cold msg #" + (i + 1) })),
+    earlier: 0,
+  };
+  resolveCold({
+    ok: true,
+    json: async () => coldPayload,
+    text: async () => JSON.stringify(coldPayload),
+  });
+  await new Promise((r) => setImmediate(r));
+  assert.ok(wdThread.innerHTML.includes("thread-skel"), "mid-slide transcript arrival waits for transitionend before swapping DOM");
+  nowMs += 300;
+  getEl("#worker-drawer").dispatch("transitionend", { propertyName: "transform" });
+  assert.ok(!wdThread.innerHTML.includes("thread-skel"), "transitionend swaps skeleton to tail messages immediately");
+  assert.ok(wdThread.innerHTML.includes("Cold msg #20"), "cold settle mounts tail message #20 first");
+  assert.ok(!wdThread.innerHTML.includes("Cold msg #1<"), "cold settle mounts tail window first instead of blocking on full history");
+  assert.equal(wdThread.classList.contains("is-content-reveal"), true, "replacing skeleton triggers pure-GPU .is-content-reveal opacity fade");
+  for (let step = 0; step < 6; step++) flushKind("timer");
+  assert.ok(wdThread.innerHTML.includes("Cold msg #1"), "cold open offscreen backfill completes full transcript");
+  ctx.fetch = origFetch;
+})().catch((err) => { console.error(err); process.exit(1); });
 `
 	cmd := exec.Command("node", "-e", script)
 	cmd.Dir = filepath.Join("..", "..")

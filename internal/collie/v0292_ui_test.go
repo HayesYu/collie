@@ -2,10 +2,15 @@ package collie
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -254,6 +259,14 @@ func TestSuperNotebookAPI(t *testing.T) {
 	if len(nb.Tasks) != 2 {
 		t.Fatalf("expected 2 tasks from memory/tasks/*.md, got %+v", nb.Tasks)
 	}
+	for _, tk := range nb.Tasks {
+		if !strings.HasPrefix(tk.Path, "tasks/") {
+			t.Fatalf("expected memory-relative Path tasks/..., got %+v", tk)
+		}
+		if !strings.HasPrefix(tk.FilePath, "~/router/memory/tasks/") {
+			t.Fatalf("expected FilePath normalized with ~/, got %+v", tk)
+		}
+	}
 	if len(nb.Artifacts) != 2 {
 		t.Fatalf("expected 2 artifacts (excluding uploads), got %+v", nb.Artifacts)
 	}
@@ -277,6 +290,102 @@ func TestSuperNotebookAPI(t *testing.T) {
 	}
 	if len(nb.Timers) != 2 || nb.Timers[0].ID != "tm_soon" || nb.Timers[1].ID != "tm_late" {
 		t.Fatalf("expected sorted enabled timers [tm_soon, tm_late], got %+v", nb.Timers)
+	}
+}
+
+func TestSuperNotebookTaskFilePathReadableByAPIFile(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		separateHome   bool
+		wantPathPrefix string
+	}{
+		{name: "default_under_home", separateHome: false, wantPathPrefix: "~/.collie/router/memory/tasks/"},
+		{name: "custom_collie_home_outside_home", separateHome: true, wantPathPrefix: "/"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			userHome := t.TempDir()
+			collieDir := filepath.Join(userHome, ".collie")
+			if tc.separateHome {
+				collieDir = filepath.Join(t.TempDir(), "isolated-data")
+			}
+			if err := os.MkdirAll(collieDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			db, err := openDB(filepath.Join(collieDir, "herd.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { db.Close() })
+			st, err := loadState(db, collieDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := &Server{
+				token: "test-tok",
+				home:  userHome,
+				web:   fstest.MapFS{"index.html": {Data: []byte("ok")}, "app.js": {Data: []byte("")}, "app.css": {Data: []byte("")}},
+			}
+			sp := &Super{s: srv, db: db, dir: collieDir, st: st, subs: map[chan struct{}]bool{}}
+			srv.sup = sp
+			handler := srv.Routes()
+
+			tasksDir := filepath.Join(sp.memDir(), "tasks")
+			if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			wantBody := "# 无 Worker 排期任务\n- **状态**：待人工评审\n- [ ] 核对字段边界\n"
+			if err := os.WriteFile(filepath.Join(tasksDir, "review-plan.md"), []byte(wantBody), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Symlink escaping tasksDir must be ignored by superNotebook.
+			outsidePath := filepath.Join(t.TempDir(), "escape.md")
+			if err := os.WriteFile(outsidePath, []byte("# Secret Outside\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Symlink(outsidePath, filepath.Join(tasksDir, "escape-link.md"))
+
+			get := func(target string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(http.MethodGet, target, nil)
+				req.Header.Set("Authorization", "Bearer test-tok")
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				return rec
+			}
+
+			recNb := get("/api/super/notebook")
+			if recNb.Code != 200 {
+				t.Fatalf("GET /api/super/notebook = %d: %s", recNb.Code, recNb.Body.String())
+			}
+			var nb notebookView
+			if err := json.Unmarshal(recNb.Body.Bytes(), &nb); err != nil {
+				t.Fatalf("unmarshal notebook: %v", err)
+			}
+			if len(nb.Tasks) != 1 {
+				t.Fatalf("expected exactly 1 safe task (excluding symlink escape), got %+v", nb.Tasks)
+			}
+			tk := nb.Tasks[0]
+			if tk.Path != "tasks/review-plan.md" {
+				t.Fatalf("tk.Path = %q, want tasks/review-plan.md", tk.Path)
+			}
+			if !strings.HasPrefix(tk.FilePath, tc.wantPathPrefix) || !strings.HasSuffix(tk.FilePath, "/router/memory/tasks/review-plan.md") {
+				t.Fatalf("unexpected tk.FilePath = %q (want prefix %q)", tk.FilePath, tc.wantPathPrefix)
+			}
+
+			recFile := get("/api/file?path=" + url.QueryEscape(tk.FilePath))
+			if recFile.Code != 200 {
+				t.Fatalf("GET /api/file?path=%s = %d: %s", tk.FilePath, recFile.Code, recFile.Body.String())
+			}
+			if gotKind := recFile.Header().Get("X-File-Kind"); gotKind != "text" {
+				t.Fatalf("X-File-Kind = %q, want text", gotKind)
+			}
+			if recFile.Body.String() != wantBody {
+				t.Fatalf("GET /api/file body mismatch:\ngot:  %q\nwant: %q", recFile.Body.String(), wantBody)
+			}
+		})
 	}
 }
 

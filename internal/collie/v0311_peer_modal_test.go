@@ -50,6 +50,19 @@ assert.ok(appSrc.includes('id="peer-scan-capture"') && appSrc.includes('capture=
 assert.ok(cssSrc.includes(".pm-paste-box") && cssSrc.includes(".pm-paste-btn"), "peer paste box and button styles must be defined");
 assert.ok(demoSrc.includes("100.64.0.18:7788"), "demo.js peer mock should stay synced");
 
+// Unified Pals nose-boop dogs + heart icon across expanded sidebar, collapsed rail, integrations/modal, and demo
+const bt = String.fromCharCode(96);
+const palsDogSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.5V11l2.6-3.5L7.8 10.2h2.4l.6 2.6-2.2 1.4v3.3"/><path d="M21 17.5V11l-2.6-3.5-2.2 2.7h-2.4l-.6 2.6 2.2 1.4v3.3"/><path d="M12 6.8c-.6-1.1-2.2-1-2.2.2 0 1 2.2 2.2 2.2 2.2s2.2-1.2 2.2-2.2c0-1.2-1.6-1.3-2.2-.2z"/></svg>';
+const navPeersMatch = htmlSrc.match(/id="nav-peers"[\s\S]*?<\/button>/);
+const railPeersMatch = htmlSrc.match(/id="rail-peers"[\s\S]*?<\/button>/);
+assert.ok(navPeersMatch && navPeersMatch[0].includes(palsDogSvg), "#nav-peers must use the nose-boop dogs SVG icon");
+assert.ok(railPeersMatch && railPeersMatch[0].includes(palsDogSvg), "#rail-peers must use the nose-boop dogs SVG icon");
+assert.ok(appSrc.includes("peers: " + bt + palsDogSvg + bt), "INT_ICONS.peers must use the nose-boop dogs SVG icon");
+assert.ok(!htmlSrc.includes("M3.5 18.5c.8-3 3-4.5 5.5-4.5") && !appSrc.includes("M16 11a3 3 0 1 0-3-3"), "legacy two-person peers SVG paths must be fully removed");
+const demoHtmlSrc = fs.readFileSync("docs/demo/index.html", "utf8");
+const demoAppSrc = fs.readFileSync("docs/demo/app.js", "utf8");
+assert.ok(demoHtmlSrc.includes(palsDogSvg) && demoAppSrc.includes("peers: " + bt + palsDogSvg + bt), "docs/demo must stay synced with the nose-boop dogs SVG icon");
+
 // ─── 2. Runtime VM Tests ───
 function makeClassList() {
   const set = new Set();

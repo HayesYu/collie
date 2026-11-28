@@ -235,7 +235,7 @@ assert.equal(ctx.location.search, "", "protocol handler ?peer_invite= must be st
 T.setSup({ router: { alive: true, pending: false }, peers_summary: { total: 1, active: 0, pending_incoming: 2, enabled: true } });
 T.renderRouterPendingBars();
 assert.equal(getEl("#peer-req-bar").hidden, false);
-assert.ok(getEl("#peer-req-bar").innerHTML.includes("收到 2 条好友边牧申请"));
+assert.ok(getEl("#peer-req-bar").innerHTML.includes("收到 2 条狗友申请"));
 assert.equal(T.peerCardSummary(null).stateLbl, "2 条待审批");
 
 T.setSup({ router: { alive: true, pending: false }, peers_summary: { total: 1, active: 1, pending_incoming: 0, enabled: true } });

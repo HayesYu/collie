@@ -1132,7 +1132,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
           if (Array.isArray(obj.a) && obj.a[0]) parsedAddr = obj.a[0].includes("://") ? obj.a[0] : "http://" + obj.a[0];
         }
       } catch {}
-      const np = { id, hub_id: parsedHubId, name: body.name || parsedName || "新好友的边牧", addrs: [parsedAddr], primary_addr: parsedAddr, mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const np = { id, hub_id: parsedHubId, name: body.name || parsedName || (window.CollieI18n?.getLang?.() === "en" ? "New Pal" : "新狗友"), addrs: [parsedAddr], primary_addr: parsedAddr, mode: body.mode || "advise", status: "pending_outgoing", protocol_ver: 1, today_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       demoPeers.push(np);
       pushAll();
       return json({ ok: true, pending: true, peer: np });
@@ -1511,7 +1511,13 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
   if (!/[?&]clean\b/.test(location.search)) {
     addEventListener("DOMContentLoaded", () => {
       const b = document.createElement("a");
-      b.href = "../"; b.className = "demo-badge"; b.textContent = "演示 · 数据是虚构的 · 返回主页";
+      b.href = "../"; b.className = "demo-badge";
+      const syncDemoBadge = () => {
+        b.textContent = window.CollieI18n ? window.CollieI18n.t("demo.badge", null, "演示 · 数据是虚构的 · 返回主页") : "演示 · 数据是虚构的 · 返回主页";
+        document.title = window.CollieI18n ? window.CollieI18n.t("demo.title", null, "Collie 演示") : "Collie 演示";
+      };
+      syncDemoBadge();
+      window.CollieI18n?.onChange?.(syncDemoBadge);
       document.body.append(b);
     });
   }

@@ -12,12 +12,26 @@
   const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", doubao: "Doubao", cursor: "Cursor", pi: "Pi", omp: "Oh My Pi" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
-  const FMT_HHMM = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }) : null;
-  const FMT_MD = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" }) : null;
-  const FMT_FULL = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
+  const interp = (tpl, vars) => (!vars ? String(tpl ?? "") : String(tpl ?? "").replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) => (vars[k] !== undefined && vars[k] !== null ? String(vars[k]) : m)));
+  const tx = (key, zh, vars) => (window.CollieI18n ? window.CollieI18n.t(key, vars, zh) : interp(zh, vars));
+  const curLang = () => (window.CollieI18n ? window.CollieI18n.getLang() : "zh");
+  const curLocale = () => (window.CollieI18n ? window.CollieI18n.locale() : "zh-CN");
+  const locInt = (s) => (window.CollieI18n?.localizeIntegrationField ? window.CollieI18n.localizeIntegrationField(s) : String(s ?? ""));
+  const locEv = (s) => (window.CollieI18n?.localizeEventText ? window.CollieI18n.localizeEventText(s) : String(s ?? ""));
+  let FMT_HHMM = null, FMT_MD = null, FMT_FULL = null;
   const _hhmmCache = new Map();
   const _fullTimeCache = new Map();
   const _mdCache = new Map();
+  function rebuildTimeFormatters() {
+    const loc = curLocale();
+    FMT_HHMM = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(loc, { hour: "2-digit", minute: "2-digit", hour12: false }) : null;
+    FMT_MD = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(loc, { month: "numeric", day: "numeric" }) : null;
+    FMT_FULL = typeof Intl !== "undefined" ? new Intl.DateTimeFormat(loc, { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : null;
+    _hhmmCache.clear();
+    _fullTimeCache.clear();
+    _mdCache.clear();
+  }
+  rebuildTimeFormatters();
   let _dayBoundsAt = 0, _todayStart = 0, _yestStart = 0, _tomorrowStart = 0, _dayStamp = "";
   function dayBounds() {
     const now = Date.now();
@@ -52,9 +66,9 @@
     dayBounds();
     const hm = hhmm(ms);
     if (ms >= _todayStart && ms < _tomorrowStart) return hm;
-    if (ms >= _yestStart && ms < _todayStart) return "昨天 " + hm;
+    if (ms >= _yestStart && ms < _todayStart) return tx("common.yesterdayTime", "昨天 {hm}", { hm });
     const d = new Date(ms);
-    return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+    return tx("common.monthDayTime", "{m}月{d}日 {hm}", { m: d.getMonth() + 1, d: d.getDate(), hm });
   };
   const fullTime = (t) => {
     const ms = typeof t === "number" ? t : +new Date(t);
@@ -111,16 +125,28 @@
     collie: '<img src="icon.svg" alt="" style="width:20px;height:20px">',
   };
   const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity", doubao: "doubao", cursor: "cursor", pi: "pi", omp: "omp", "oh-my-pi": "omp" };
-  const STATUS_LABEL = {
+  const STATUS_ZH = {
     idle: "空闲", working: "工作中", waiting: "在等后台任务", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
     asleep: "休眠中", starting: "启动中", gone: "已退出", failed: "启动失败",
   };
+  const STATUS_LABEL = new Proxy(STATUS_ZH, {
+    get(target, prop) {
+      if (typeof prop !== "string" || !Object.prototype.hasOwnProperty.call(target, prop)) return target[prop];
+      return tx("st." + prop, target[prop]);
+    },
+  });
   const ROUTER = "collie";
   // Collie is one conversation to the human; the session behind it is an
   // implementation detail. "done" just means a turn ended: it is idle.
-  const COLLIE_STATUS = { asleep: "休眠中", starting: "正在唤醒", working: "在想…", blocked: "等你确认", failed: "出错了", dreaming: "在做梦…" };
-  const SOURCE_LABEL = { worker: "派出的 agent", chat: "对话", timer: "定时", system: "Collie" };
-  const collieStatus = (s) => COLLIE_STATUS[s] || "空闲";
+  const COLLIE_STATUS_ZH = { asleep: "休眠中", starting: "正在唤醒", working: "在想…", blocked: "等你确认", failed: "出错了", dreaming: "在做梦…" };
+  const SOURCE_ZH = { worker: "派出的 agent", chat: "对话", timer: "定时", system: "Collie" };
+  const SOURCE_LABEL = new Proxy(SOURCE_ZH, {
+    get(target, prop) {
+      if (typeof prop !== "string" || !Object.prototype.hasOwnProperty.call(target, prop)) return target[prop];
+      return tx("src." + prop, target[prop]);
+    },
+  });
+  const collieStatus = (s) => (Object.prototype.hasOwnProperty.call(COLLIE_STATUS_ZH, s) ? tx("collie.st." + s, COLLIE_STATUS_ZH[s]) : tx("collie.st.idle", "空闲"));
   const collieDot = (s) => (s === "done" || s === "unknown" ? "idle" : s === "dreaming" ? "starting" : s || "asleep");
   const glyph = (v) => v.name === ROUTER ? GLYPHS.collie : !v.is_agent ? GLYPHS.shell : (GLYPHS[v.kind] || GLYPHS.agent);
 
@@ -134,7 +160,7 @@
     if (v === webBuild || updateFlow.phase === "restarting" || document.getElementById("update-bar")) return;
     const bar = document.createElement("button");
     bar.id = "update-bar"; bar.type = "button";
-    bar.textContent = "Collie 有新版本，点这里刷新";
+    bar.textContent = tx("common.updateReload", "Collie 有新版本，点这里刷新");
     bar.onclick = () => location.reload();
     document.body.append(bar);
   }
@@ -323,9 +349,9 @@
         throw abErr;
       }
       if (err?.name === "TimeoutError" || err?.name === "AbortError") {
-        throw new Error(opts.timeoutMessage || "请求超时，请检查网络后重试", { cause: err });
+        throw new Error(opts.timeoutMessage || tx("common.networkTimeout", "请求超时，请检查网络后重试"), { cause: err });
       }
-      throw new Error(opts.networkMessage || "网络连接中断，请检查服务是否在线后重试", { cause: err });
+      throw new Error(opts.networkMessage || tx("common.networkLost", "网络连接中断，请检查服务是否在线后重试"), { cause: err });
     } finally {
       if (combinedAbort) combinedAbort();
       t.clear();
@@ -342,7 +368,7 @@
       try { data = await res.json(); } catch {}
     }
     if (res.status === 401) {
-      if (r.hub) throw new Error(`${r.hub.name} 不认这个浏览器了，在「设备」里重新添加它`);
+      if (r.hub) throw new Error(tx("common.remoteHubUnauth", "{name} 不认这个浏览器了，在「设备」里重新添加它", { name: r.hub.name }));
       if (!opts._retried && await restoreSession()) {
         return api(path, { ...opts, _retried: true });
       }
@@ -546,35 +572,35 @@
   const dirPop = document.createElement("div");
   dirPop.className = "dir-pop"; dirPop.id = "dir-pop"; dirPop.hidden = true;
   dirPop.setAttribute("role", "dialog");
-  dirPop.setAttribute("aria-label", "选择目录");
+  dirPop.setAttribute("aria-label", tx("dir.title", "选择目录"));
   dirPop.innerHTML = `
     <header class="dp-head">
-      <span class="dp-title">选择目录</span>
+      <span class="dp-title" data-i18n="dir.title">${esc(tx("dir.title", "选择目录"))}</span>
       <span class="dp-mach" id="dp-mach"></span>
       <span class="spacer"></span>
-      <button type="button" class="dp-close" id="dp-close" aria-label="关闭目录选择器" title="关闭 (Esc)">
+      <button type="button" class="dp-close" id="dp-close" data-i18n-aria="dir.closeAria" data-i18n-title="common.closeEsc" aria-label="${esc(tx("dir.closeAria", "关闭目录选择器"))}" title="${esc(tx("common.closeEsc", "关闭 (Esc)"))}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </header>
     <div class="dp-sheet-input">
-      <input type="text" id="dp-sheet-input" class="mono" placeholder="~ 或输入任意目录路径" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-    </div>
-    <div class="dp-sec" id="dp-recent-sec" hidden>
-      <div class="dp-sec-h">常用 / 最近</div>
+      <input type="text" id="dp-sheet-input" class="mono" data-i18n-placeholder="set.cwdPh" placeholder="${esc(tx("set.cwdPh", "~ 或输入任意目录路径"))}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        </div>
+        <div class="dp-sec" id="dp-recent-sec" hidden>
+          <div class="dp-sec-h" data-i18n="dir.recent">${esc(tx("dir.recent", "常用 / 最近"))}</div>
       <div class="dp-recent" id="dp-recent"></div>
     </div>
     <div class="dp-nav">
-      <button type="button" class="dp-nav-btn" id="dp-up" title="上一级" aria-label="上一级">
+      <button type="button" class="dp-nav-btn" id="dp-up" data-i18n-title="dir.up" data-i18n-aria="dir.up" title="${esc(tx("dir.up", "上一级"))}" aria-label="${esc(tx("dir.up", "上一级"))}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6M7 11l5-5 5 5"/></svg>
       </button>
-      <div class="dp-crumbs" id="dp-crumbs" aria-label="当前路径"></div>
-      <button type="button" class="dp-nav-btn" id="dp-hidden-btn" title="显示以 . 开头的隐藏目录" aria-pressed="false">.*</button>
+      <div class="dp-crumbs" id="dp-crumbs" data-i18n-aria="dir.crumbsAria" aria-label="${esc(tx("dir.crumbsAria", "当前路径"))}"></div>
+      <button type="button" class="dp-nav-btn" id="dp-hidden-btn" data-i18n-title="dir.hiddenTitle" title="${esc(tx("dir.hiddenTitle", "显示以 . 开头的隐藏目录"))}" aria-pressed="false">.*</button>
     </div>
     <div class="dp-body" id="dp-body"></div>
     <div class="dp-note" id="dp-note" hidden></div>
     <footer class="dp-foot">
       <span class="dp-cur" id="dp-cur">~</span>
-      <button type="button" class="btn primary small dp-use" id="dp-use">选定当前目录</button>
+      <button type="button" class="btn primary small dp-use" id="dp-use" data-i18n="dir.useCur">${esc(tx("dir.useCur", "选定当前目录"))}</button>
     </footer>`;
   document.body.append(dirBack, dirPop);
 
@@ -683,7 +709,7 @@
       if ((a.machine || "") === (machine || "") && a.cwd) push(a.cwd, tildeForMachine(a.cwd, machine, home), "");
     }
     for (const d of store.get(dirRecentKey(machine), [])) push(d, tildeForMachine(d, machine, home), "");
-    if (!out.length) push("~", "~", "主目录");
+    if (!out.length) push("~", "~", tx("dir.home", "主目录"));
     return out.slice(0, 10);
   }
 
@@ -692,7 +718,7 @@
     const machine = dirCtx.machine || "";
     const mInfo = (state.machines || []).find((m) => m.id === machine);
     const mOnline = dirCtx.data ? !dirCtx.data.offline : (mInfo ? (mInfo.local ? state.ok !== false : !!mInfo.online) : true);
-    const mLabel = mInfo ? (mInfo.local ? `${mInfo.name}（hub）` : mInfo.name) : (machine || "本机");
+    const mLabel = mInfo ? (mInfo.local ? mInfo.name + tx("common.hubSuffix", "（hub）") : mInfo.name) : (machine || tx("common.localMachine", "本机"));
     $("#dp-mach", dirPop).innerHTML = `<span class="dot ${mOnline ? "online" : "offline"}"></span><span>${esc(mLabel)}</span>`;
 
     const data = dirCtx.data;
@@ -725,18 +751,18 @@
 
     const body = $("#dp-body", dirPop);
     if (dirCtx.loading && !data) {
-      body.innerHTML = '<div class="dp-empty">正在读取目录…</div>';
+      body.innerHTML = `<div class="dp-empty">${esc(tx("dir.reading", "正在读取目录…"))}</div>`;
     } else if (data?.offline) {
-      body.innerHTML = '<div class="dp-empty">这台电脑当前离线，可点上方常用目录或直接手动输入路径</div>';
+      body.innerHTML = `<div class="dp-empty">${esc(tx("dir.offline", "这台电脑当前离线，可点上方常用目录或直接手动输入路径"))}</div>`;
     } else if (data && data.dirs.length) {
       const hi = dirCtx.hiIndex;
-      body.innerHTML = `<ul class="dp-list" role="listbox" aria-label="子目录">${data.dirs.map((d, i) =>
+      body.innerHTML = `<ul class="dp-list" role="listbox" aria-label="${esc(tx("dir.subdirsAria", "子目录"))}">${data.dirs.map((d, i) =>
         `<li><button type="button" class="dp-item${i === hi ? " hi" : ""}" role="option" aria-selected="${i === hi}" data-dp-enter="${esc(d)}"><span class="dp-ico">${DIR_FOLDER_SVG}</span><span class="dp-name">${esc(d)}</span>${DIR_CHEV_SVG}</button></li>`
       ).join("")}</ul>`;
     } else if (data) {
-      body.innerHTML = `<div class="dp-empty">${data.prefix ? `「${esc(data.prefix)}」下没有匹配的子目录，可直接手输使用` : "当前目录下没有子目录"}</div>`;
+      body.innerHTML = `<div class="dp-empty">${data.prefix ? esc(tx("dir.noMatch", "「{prefix}」下没有匹配的子目录，可直接手输使用", { prefix: data.prefix })) : esc(tx("dir.noSubdirs", "当前目录下没有子目录"))}</div>`;
     } else {
-      body.innerHTML = '<div class="dp-empty">可直接输入任意目录路径</div>';
+      body.innerHTML = `<div class="dp-empty">${esc(tx("dir.typeAny", "可直接输入任意目录路径"))}</div>`;
     }
 
     const noteEl = $("#dp-note", dirPop);
@@ -751,7 +777,7 @@
     $("#dp-cur", dirPop).textContent = commitPath;
     $("#dp-cur", dirPop).title = commitPath;
     useBtn.dataset.dpCommit = commitPath;
-    useBtn.textContent = data && !data.exists && curVal ? "使用此路径" : "选定当前目录";
+    useBtn.textContent = data && !data.exists && curVal ? tx("dir.usePath", "使用此路径") : tx("dir.useCur", "选定当前目录");
     positionDirPop();
   }
 
@@ -794,7 +820,7 @@
       ctx.data = {
         path: p || "~", display: p || "~", browse_path: p || "~", browse_display: p || "~",
         exists: false, offline: true, dirs: [], recent: [],
-        note: "无法读取目录列表，仍可直接手动输入路径",
+        note: tx("dir.cantList", "无法读取目录列表，仍可直接手动输入路径"),
       };
       renderDirPop();
     }
@@ -920,8 +946,8 @@
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "dir-field-btn";
-    btn.title = "浏览并选择目录";
-    btn.setAttribute("aria-label", "浏览并选择目录");
+    btn.title = tx("dir.browseTitle", "浏览并选择目录");
+      btn.setAttribute("aria-label", tx("dir.browseTitle", "浏览并选择目录"));
     btn.setAttribute("aria-expanded", "false");
     btn.innerHTML = DIR_FOLDER_SVG;
     wrap.append(btn);
@@ -1060,8 +1086,8 @@
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "toast-x";
-    closeBtn.setAttribute("aria-label", "关闭通知");
-    closeBtn.title = "关闭";
+    closeBtn.setAttribute("aria-label", tx("common.dismissNotif", "关闭通知"));
+    closeBtn.title = tx("common.close", "关闭");
     closeBtn.textContent = "×";
     t.append(body, closeBtn);
     t.dataset.msg = text;
@@ -1150,8 +1176,8 @@
   function deviceName() {
     const ua = navigator.userAgent;
     const dev = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android"
-      : /Macintosh/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "设备";
-    const br = /EdgA?\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "浏览器";
+      : /Macintosh/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : tx("common.device", "设备");
+    const br = /EdgA?\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : tx("common.browser", "浏览器");
     return `${dev} · ${br}`;
   }
   async function pair(code) {
@@ -1163,7 +1189,7 @@
       body: JSON.stringify({ code, kind: "browser", name: deviceName() }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "配对失败");
+    if (!res.ok) throw new Error(data.error || tx("login.pairFailed", "配对失败"));
     if (data.token) {
       if (prevTok !== String(data.token).trim()) clearSnapCache();
       authBackup.set(data.token);
@@ -1193,14 +1219,14 @@
         syncLoginTip();
       }
       input.setAttribute("aria-invalid", "true");
-      $("#login-error").textContent = isPair ? err.message : "令牌不对";
+      $("#login-error").textContent = isPair ? err.message : tx("login.badToken", "令牌不对");
       input.focus();
     } finally {
       if (btn) btn.disabled = false;
     }
   });
   async function doLogout() {
-    if (!confirm("确定退出当前浏览器的登录状态吗？")) return;
+    if (!confirm(tx("login.logoutConfirm", "确定退出当前浏览器的登录状态吗？"))) return;
     clearSnapCache();
     authBackup.clear();
     try { await fetch("/api/logout", { method: "POST", credentials: "same-origin" }); } catch {}
@@ -1230,7 +1256,7 @@
     return { ...localState,
       agents: [...(localState.agents || []), ...parts.flatMap((p) => p.agents)],
       shells: [...(localState.shells || []), ...parts.flatMap((p) => p.shells)],
-      machines: [...(localState.machines && localState.machines.length ? localState.machines : [{ id: "", name: "本机", local: true, online: localState.ok }]),
+      machines: [...(localState.machines && localState.machines.length ? localState.machines : [{ id: "", name: tx("common.localMachine", "本机"), local: true, online: localState.ok }]),
         ...parts.flatMap((p) => p.machines)] };
   }
   function setLocalState(next) {
@@ -1659,20 +1685,20 @@
     if (window.isSecureContext === false) {
       return {
         supported: false, insecure: true, permission: "unsupported", active: false, warn: true,
-        text: "当前为非 HTTPS 内网地址，浏览器禁止桌面通知；通过本机 127.0.0.1 或 HTTPS 打开即可生效",
+        text: tx("notify.insecure", "当前为非 HTTPS 内网地址，浏览器禁止桌面通知；通过本机 127.0.0.1 或 HTTPS 打开即可生效"),
       };
     }
     if (!("Notification" in window)) {
       return {
         supported: false, insecure: false, permission: "unsupported", active: false, warn: true,
-        text: "当前浏览器不支持桌面通知（手机上通常需要先添加到主屏幕）",
+        text: tx("notify.unsupported", "当前浏览器不支持桌面通知（手机上通常需要先添加到主屏幕）"),
       };
     }
     const perm = Notification.permission || "default";
     if (perm === "denied") {
       return {
         supported: true, insecure: false, permission: "denied", active: false, warn: true,
-        text: "已被浏览器拦截，请在地址栏左侧站点设置中重新开启",
+        text: tx("notify.denied", "已被浏览器拦截，请在地址栏左侧站点设置中重新开启"),
       };
     }
     if (perm === "granted") {
@@ -1680,13 +1706,13 @@
       return {
         supported: true, insecure: false, permission: "granted", active, warn: false,
         text: active
-          ? "已开启：页面在后台时，Collie 回复、agent 完成或需要你确认都会弹桌面通知"
-          : "已关闭：开启后，页面在后台时 Collie 回复和 agent 状态变化会弹桌面通知",
+          ? tx("notify.enabled", "已开启：页面在后台时，Collie 回复、agent 完成或需要你确认都会弹桌面通知")
+          : tx("notify.disabled", "已关闭：开启后，页面在后台时 Collie 回复和 agent 状态变化会弹桌面通知"),
       };
     }
     return {
       supported: true, insecure: false, permission: "default", active: false, warn: false,
-      text: "开启后会请求浏览器授权；页面在后台时，Collie 回复、agent 完成或需要你确认都会弹桌面通知",
+      text: tx("notify.default", "开启后会请求浏览器授权；页面在后台时，Collie 回复、agent 完成或需要你确认都会弹桌面通知"),
     };
   }
   const canBrowserNotify = () => notifyEnvState().active;
@@ -1700,7 +1726,7 @@
       if (line) return line.length > 120 ? line.slice(0, 120) + "…" : line;
     }
     const fallback = plainLine(text);
-    return fallback ? (fallback.length > 120 ? fallback.slice(0, 120) + "…" : fallback) : "Collie 有新回复";
+    return fallback ? (fallback.length > 120 ? fallback.slice(0, 120) + "…" : fallback) : tx("notify.newReply", "Collie 有新回复");
   }
   let collieNotifyPrimed = false;
   let lastCollieNotifyNum = 0;
@@ -1747,15 +1773,15 @@
     }
     try {
       const n = new Notification("Collie", {
-        body: "浏览器通知工作正常，Collie 回复和 agent 状态变化会这样提醒你。",
+        body: tx("notify.testBody", "浏览器通知工作正常，Collie 回复和 agent 状态变化会这样提醒你。"),
         icon: "/icon.svg",
         tag: "collie-test",
       });
       n.onclick = () => { try { focus(); } catch {} location.hash = "#/collie"; };
-      toast("已发送测试通知");
+      toast(tx("notify.testSent", "已发送测试通知"));
       return true;
     } catch (err) {
-      toast("发送通知失败：" + (err?.message || "浏览器拒绝了通知"), "attn");
+      toast(tx("notify.testFail", "发送通知失败：{msg}", { msg: err?.message || tx("notify.testRejected", "浏览器拒绝了通知") }), "attn");
       return false;
     }
   }
@@ -1764,9 +1790,9 @@
     for (const a of next.agents) {
       const before = prevStatus.get(a.pane_id);
       if (before && before !== a.status) {
-        if (a.status === "blocked") ping(`${title(a)} 需要你确认`, a, "attn");
+        if (a.status === "blocked") ping(tx("notify.agentBlocked", "{name} 需要你确认", { name: title(a) }), a, "attn");
         else if (before === "working" && (a.status === "done" || a.status === "idle") && !isWorker(a.name) && a.name !== ROUTER) {
-          ping(`${title(a)} 完成了`, a);
+          ping(tx("notify.agentDone", "{name} 完成了", { name: title(a) }), a);
         }
       }
     }
@@ -1809,15 +1835,15 @@
   const clampClaps = (n) => Math.max(0, Math.min(MAX_CLAPS, Math.floor(Number(n) || 0)));
   const clapTitle = (n) => {
     const c = clampClaps(n);
-    if (c <= 0) return "点赞（可连点）";
-    if (c >= MAX_CLAPS) return `已赞满 ${c} 次（右键或长按清零）`;
-    return `已赞 ${c} 次（可继续连点，右键或长按清零）`;
+    if (c <= 0) return tx("clap.emptyTitle", "点赞（可连点）");
+    if (c >= MAX_CLAPS) return tx("clap.fullTitle", "已赞满 {n} 次（右键或长按清零）", { n: c });
+    return tx("clap.countTitle", "已赞 {n} 次（可继续连点，右键或长按清零）", { n: c });
   };
   const clapAriaLabel = (n) => {
     const c = clampClaps(n);
-    if (c <= 0) return "给这条回复点赞";
-    if (c >= MAX_CLAPS) return `已赞满 ${c} 次，右键或长按清零`;
-    return `已点赞 ${c} 次，再次点击可累加，右键或长按清零`;
+    if (c <= 0) return tx("clap.emptyAria", "给这条回复点赞");
+    if (c >= MAX_CLAPS) return tx("clap.fullAria", "已赞满 {n} 次，右键或长按清零", { n: c });
+    return tx("clap.countAria", "已点赞 {n} 次，再次点击可累加，右键或长按清零", { n: c });
   };
   function serverClapsOf(id, entry = null) {
     if (entry && typeof entry.claps === "number") return clampClaps(entry.claps);
@@ -2022,7 +2048,7 @@
         fl.setAttribute("aria-hidden", "true");
         btn.appendChild(fl);
       }
-      fl.textContent = capped ? `上限 ${MAX_CLAPS}` : `+${burstCount}`;
+      fl.textContent = capped ? tx("clap.cap", "上限 {n}", { n: MAX_CLAPS }) : `+${burstCount}`;
       bSt.floatAlt = !bSt.floatAlt;
       fl.classList.remove("pop-a", "pop-b");
       fl.classList.add(bSt.floatAlt ? "pop-a" : "pop-b");
@@ -2080,7 +2106,7 @@
         clapPending.delete(id);
         applyClapDomInPlace(id, serverClapsOf(id));
       }
-      toast(err?.message || "点赞保存失败", "attn");
+      toast(err?.message || tx("clap.saveFailed", "点赞保存失败"), "attn");
     } finally {
       if (clapPending.get(id) === st) {
         st.inflight = false;
@@ -2151,7 +2177,7 @@
     st.reset = true;
     st.ackUntil = 0;
     applyClapDomInPlace(id, 0);
-    toast("已取消点赞", "");
+    toast(tx("clap.cleared", "已取消点赞"), "");
     flushClap(id, false);
     return true;
   }
@@ -2524,7 +2550,7 @@
   function itemSpec(v, workerThreadMap = null, allEntries = null) {
     const where = (state.machines || []).length > 1 ? machineName(v.machine) + " · " : "";
     const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
-    const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
+    const sub = v.name === ROUTER ? tx("side.routerBlockedSub", "Collie 停在一个对话框上")
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
     const label = v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
     const isRealAgent = v.is_agent && v.name !== ROUTER;
@@ -2549,10 +2575,10 @@
     const statusTitle = STATUS_LABEL[v.status] || v.status;
     const card = `<a class="${itemCls}" href="${href}"${workerAttr}${paneAttr} title="${esc(cardTitle)}">
       <span class="glyph">${glyph(v)}</span>
-      <span class="body"><div class="name">${isCollieWorker ? `<span class="nm" title="${esc(nmTitle)}">${esc(label)}</span><span class="by-collie">Collie 派出</span>` : esc(label)}</div>${line2Html}</span>
+      <span class="body"><div class="name">${isCollieWorker ? `<span class="nm" title="${esc(nmTitle)}">${esc(label)}</span><span class="by-collie">${esc(tx("side.byCollie", "Collie 派出"))}</span>` : esc(label)}</div>${line2Html}</span>
       <span class="dot ${esc(v.status)}" title="${esc(statusTitle)}"></span></a>`;
-    const thTip = linked ? (linked.title ? `打开关联话题：${linked.title}` : "打开关联话题抽屉") : "";
-    const thAria = linked ? (linked.title ? `打开 ${label} 关联的话题抽屉：${linked.title}` : `打开 ${label} 关联的话题抽屉`) : "";
+    const thTip = linked ? (linked.title ? tx("side.openLinkedThread", "打开关联话题：{title}", { title: linked.title }) : tx("side.openLinkedThreadDefault", "打开关联话题抽屉")) : "";
+    const thAria = linked ? (linked.title ? tx("side.openLinkedThreadAria", "打开 {label} 关联的话题抽屉：{title}", { label, title: linked.title }) : tx("side.openLinkedThreadAriaDefault", "打开 {label} 关联的话题抽屉", { label })) : "";
     const html = !linked
       ? `<li>${card}</li>`
       : `<li class="item-wrap">${card}<button type="button" class="item-th-btn" data-agent-thread="${esc(linked.rootId)}" data-agent-focus="${esc(linked.focusId)}" aria-expanded="false" title="${esc(thTip)}" aria-label="${esc(thAria)}">${ICON_TOPIC}</button></li>`;
@@ -2574,14 +2600,14 @@
     return itemSpec(v, workerThreadMap, allEntries).html;
   }
 
-  const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
+  const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || tx("common.localMachine", "本机");
   const isCollieOwned = (v) => v.name === ROUTER || isWorker(v.name);
 
   // "09:00", "明天 09:00", "11月24日 09:00".
   function whenShort(at) {
     const d = new Date(at), hm = d.toTimeString().slice(0, 5);
     const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 864e5);
-    return days === 0 ? hm : days === 1 ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+    return days === 0 ? hm : days === 1 ? tx("common.tomorrowTime", "明天 {hm}", { hm }) : tx("common.monthDayTime", "{m}月{d}日 {hm}", { m: d.getMonth() + 1, d: d.getDate(), hm });
   }
   function formatAutoNavSub(s) {
     const intSum = s?.integrations_summary || {};
@@ -2594,18 +2620,18 @@
       ? Math.max(0, s.timers_count)
       : (s?.follow?.next ? 1 : 0);
     if (intErr > 0) {
-      const text = timersCount > 0 ? `${intErr} 接入异常 · ${timersCount} 定时` : `${intErr} 接入异常`;
-      return { text, err: true, title: `${intErr} 个外部接入异常，点开检查接入状态` };
+      const text = timersCount > 0 ? tx("side.autoErrTimers", "{err} 接入异常 · {timers} 定时", { err: intErr, timers: timersCount }) : tx("side.autoErrOnly", "{err} 接入异常", { err: intErr });
+      return { text, err: true, title: tx("side.autoErrTip", "{err} 个外部接入异常，点开检查接入状态", { err: intErr }) };
     }
     if (peerPendingIn > 0) {
-      const text = timersCount > 0 ? `${peerPendingIn} 条好友申请 · ${timersCount} 定时` : `${peerPendingIn} 条好友申请`;
-      return { text, err: false, title: `收到 ${peerPendingIn} 条好友边牧申请，点击去审批` };
+      const text = timersCount > 0 ? tx("side.autoPeerReqTimers", "{n} 条狗友申请 · {timers} 定时", { n: peerPendingIn, timers: timersCount }) : tx("side.autoPeerReqOnly", "{n} 条狗友申请", { n: peerPendingIn });
+      return { text, err: false, title: tx("side.autoPeerReqTip", "收到 {n} 条狗友申请，点击去审批", { n: peerPendingIn }) };
     }
     const parts = [];
-    if (okCount > 0) parts.push(`${okCount} 接入`);
-    if (timersCount > 0) parts.push(`${timersCount} 定时`);
+    if (okCount > 0) parts.push(tx("side.autoIntCount", "{n} 接入", { n: okCount }));
+    if (timersCount > 0) parts.push(tx("side.autoTimerCount", "{n} 定时", { n: timersCount }));
     if (parts.length) return { text: parts.join(" · "), err: false, title: "" };
-    return { text: "接入与定时", err: false, title: "" };
+    return { text: tx("side.autoSubDefault", "接入与定时"), err: false, title: "" };
   }
   let sideRenderedOnce = false;
   function syncNavPendingBadge(allEntries = null) {
@@ -2618,14 +2644,14 @@
       np.classList.add("attn");
       np.classList.remove("unread");
       setText(np, pend.length > 99 ? "99+" : String(pend.length));
-      const lbl = `${pend.length} 条待处理`;
+      const lbl = tx("side.pendingCount", "{n} 条待处理", { n: pend.length });
       if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
     } else if (unreadCount > 0) {
       np.hidden = false;
       np.classList.remove("attn");
       np.classList.add("unread");
       setText(np, unreadCount > 99 ? "99+" : String(unreadCount));
-      const lbl = `${unreadCount} 条未读`;
+      const lbl = tx("side.unreadCount", "{n} 条未读", { n: unreadCount });
       if (np.title !== lbl) { np.title = lbl; np.setAttribute("aria-label", lbl); }
     } else {
       np.hidden = true;
@@ -2715,7 +2741,7 @@
     $("#attention-group").hidden = blocked.length === 0;
     patchKeyedList($("#attention"), blocked.map((a) => itemSpec(a, wtMap, allEntries)));
 
-    const machines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
+    const machines = (state.machines || [{ id: "", name: tx("common.localMachine", "本机"), local: true, online: state.ok }]);
     const multi = machines.length > 1;
 
     renderSessions(wtMap, allEntries);
@@ -2726,23 +2752,24 @@
     const online = machines.filter((m) => m.local ? state.ok : m.online).length;
     setConnDotState(online > 0);
     const devStatus = !online
-      ? "herdr 不可用"
+      ? tx("side.herdrUnavailable", "herdr 不可用")
       : multi
-        ? `${online}/${machines.length} 台电脑在线`
-        : (state.agents.length ? `本机在线 · ${state.agents.length} 个 agent` : "本机在线");
+        ? tx("side.machinesOnline", "{online}/{total} 台电脑在线", { online, total: machines.length })
+        : (state.agents.length ? tx("side.localOnlineAgents", "本机在线 · {n} 个 agent", { n: state.agents.length }) : tx("side.localOnline", "本机在线"));
     setText($("#herdr-status"), devStatus);
     if (!state.ok && state.error && $("#herdr-status")) $("#herdr-status").title = state.error;
-    const devTip = !state.ok && state.error ? `设备与连接 · ${state.error}` : `设备与连接 · ${devStatus}`;
+    const devTip = !state.ok && state.error ? tx("side.devTip", "设备与连接 · {text}", { text: state.error }) : tx("side.devTip", "设备与连接 · {text}", { text: devStatus });
     for (const el of [$("#nav-devices"), $("#rail-devices")]) {
       if (el && el.title !== devTip) el.title = devTip;
     }
-    const wantDocTitle = blocked.length ? `(${blocked.length}) Collie` : "Collie";
+    const baseDocTitle = window.__collieDemo ? tx("demo.title", "Collie 演示") : tx("app.title", "Collie");
+    const wantDocTitle = blocked.length ? `(${blocked.length}) ${baseDocTitle}` : baseDocTitle;
     if (view !== "file" && document.title !== wantDocTitle) document.title = wantDocTitle;
 
     const r = sup.router || {};
     const active = sup.workers.filter((w) => !w.ended);
     const running = active.filter(workerBusy).length;
-    setText($("#nav-collie-sub"), collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : ""));
+    setText($("#nav-collie-sub"), collieStatus(r.status) + (running ? tx("side.runningTasks", " · {n} 个任务在跑", { n: running }) : active.length ? tx("side.dispatchedTasks", " · 派出 {n} 个", { n: active.length }) : ""));
     const autoSub = formatAutoNavSub(sup);
     const autoSubEl = $("#nav-auto-sub");
     if (autoSubEl) {
@@ -2751,7 +2778,7 @@
       autoSubEl.classList.toggle("is-err", autoSub.err);
       autoSubEl.classList.remove("follow");
     }
-    const autoTip = autoSub.title || `自动化 · ${autoSub.text}`;
+    const autoTip = autoSub.title || tx("side.autoTip", "自动化 · {text}", { text: autoSub.text });
     for (const el of [$("#nav-auto"), $("#rail-auto")]) {
       if (el && el.title !== autoTip) el.title = autoTip;
     }
@@ -2763,7 +2790,7 @@
     if (nie) {
       nie.hidden = intErr === 0;
       setText(nie, intErr || "");
-      const errTitle = intErr ? `${intErr} 个外部接入异常` : "";
+      const errTitle = intErr ? tx("side.autoErrShort", "{err} 个外部接入异常", { err: intErr }) : "";
       if (nie.title !== errTitle) nie.title = errTitle;
     }
     const hasAutoDot = intErr > 0 || (sup.queued || 0) > 0;
@@ -2773,7 +2800,7 @@
     if (railAutoDot) railAutoDot.hidden = !hasAutoDot;
     const peerPending = Number(sup.peers_summary?.pending_incoming) || 0;
     const peerActive = Number(sup.peers_summary?.active) || 0;
-    const peerTip = peerPending > 0 ? `好友边牧 · ${peerPending} 条好友申请` : peerActive > 0 ? `好友边牧 · ${peerActive} 位在线` : "好友边牧";
+    const peerTip = peerPending > 0 ? tx("side.palsTipReq", "狗友 · {n} 条狗友申请", { n: peerPending }) : peerActive > 0 ? tx("side.palsTipOnline", "狗友 · {n} 位在线", { n: peerActive }) : tx("side.pals", "狗友");
     for (const el of [$("#nav-peers"), $("#rail-peers")]) {
       if (el && el.title !== peerTip) el.title = peerTip;
     }
@@ -3565,8 +3592,8 @@
     const r = sup.router || {};
     const show = !!(r.alive && r.pending);
     const busy = isRouterBusy(r);
-    const text = busy ? "Collie 启动设置已更新（当前正在忙碌，重启后生效）" : "Collie 启动设置已更新 · 重启后生效";
-    const html = show ? `<span class="dot blocked" aria-hidden="true"></span><span class="rp-text">${esc(text)}</span><button type="button" class="rp-btn" data-act="router-restart-apply">点此重启生效</button>` : "";
+    const text = busy ? tx("collie.pendingRouterBusy", "Collie 启动设置已更新（当前正在忙碌，重启后生效）") : tx("collie.pendingRouterIdle", "Collie 启动设置已更新 · 重启后生效");
+    const html = show ? `<span class="dot blocked" aria-hidden="true"></span><span class="rp-text">${esc(text)}</span><button type="button" class="rp-btn" data-act="router-restart-apply">${esc(tx("collie.pendingRouterApply", "点此重启生效"))}</button>` : "";
     for (const el of [$("#collie-pending-bar"), $("#settings-pending-bar")]) {
       if (!el) continue;
       el.hidden = !show;
@@ -3576,7 +3603,7 @@
     if (peerReqBar) {
       const pin = Number(sup.peers_summary?.pending_incoming) || 0;
       const pHtml = pin > 0
-        ? `<span class="dot blocked" aria-hidden="true"></span><span class="rp-text">收到 ${pin} 条好友边牧申请，通过后即可双向协作</span><button type="button" class="rp-btn" data-peer-open="list">去审批</button>`
+        ? `<span class="dot blocked" aria-hidden="true"></span><span class="rp-text">${esc(tx("collie.peerReqBar", "收到 {n} 条狗友申请，通过后即可双向协作", { n: pin }))}</span><button type="button" class="rp-btn" data-peer-open="list">${esc(tx("common.review", "去审批"))}</button>`
         : "";
       peerReqBar.hidden = pin <= 0;
       if (peerReqBar._html !== pHtml) { peerReqBar._html = pHtml; peerReqBar.innerHTML = pHtml; }
@@ -3598,10 +3625,10 @@
     }
     if (el._key !== key) return;
     const parts = [];
-    if (model) parts.push(esc(model.split("/").pop()) + (r.model ? "" : "（默认）"));
-    if (r.effort) parts.push("思考 " + esc(EFFORT_LABEL[r.effort] || r.effort));
+    if (model) parts.push(esc(model.split("/").pop()) + (r.model ? "" : esc(tx("common.defaultParen", "（默认）"))));
+    if (r.effort) parts.push(esc(tx("effort.prefix", "思考 {v}", { v: EFFORT_LABEL[r.effort] || r.effort })));
     el.innerHTML = parts.join(" · ");
-    el.title = `Collie 自己用的模型${model ? "：" + model : ""}${r.effort ? "，思考强度 " + r.effort : ""}（自动化 → 设置 → Collie 自己）`;
+    el.title = tx("collie.modelTitle", "Collie 自己用的模型{model}{effort}（自动化 → 设置 → Collie 自己）", { model: model ? tx("collie.modelColon", "：{model}", { model }) : "", effort: r.effort ? tx("collie.effortComma", "，思考强度 {effort}", { effort: r.effort }) : "" });
   }
   // A worker's comings and goings: its spawn line shows where it stands, and
   // a dialog waiting on the human shows as a card below. Reports and errors stay.
@@ -3679,7 +3706,7 @@
   const ICON_TD_LOCATE = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>`;
   const ICON_TD_USER = `<svg viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.2 24.4c.4-6.8 5.2-11.2 14.4-11.4 7.2-.2 12.2 2.5 13.8 8.3"/><path d="M18.2 24.4c9.2-3.2 22.2-4.2 35-2.4"/><path d="M43.2 21.5c.2 2.4.8 4.2 3.6 7.4.6.7.1 1.7-.9 2l-2 .5c.2 2.8-.8 5.2-3.6 6.4-2.8 1.2-6.4 1-9.2-.3"/><path d="M20.2 24c-1.6 3.8-1.2 7.8 1.8 10.4"/><path d="M24.2 35.2c.2 2.4-.2 4.6-.8 6.4-5.4 2-9.2 5.8-10.9 11.9"/><path d="M23.4 41.6c4.2 3.6 10.2 3.8 15.2.6 4.6 2.1 8.5 5.6 10.9 11.3"/></g><circle cx="39.4" cy="27.2" r="1.45" fill="currentColor" stroke="none"/></svg>`;
   const entryKey = (e) => (e && (e.id || e._localId)) || "";
-  const threadWhoLabel = (e) => (e?.role === "user" ? "你" : "Collie");
+  const threadWhoLabel = (e) => (e?.role === "user" ? tx("common.you", "你") : "Collie");
   const isWorkerActiveStatus = (w) => !!w && !w.ended && ["working", "starting", "waiting", "blocked"].includes(w.status);
   const META_PAREN_TOKEN_RE = /^(?:claude|codex|agy|antigravity|doubao|cursor|pi|omp|oh-my-pi|shell|hub|local|mac|macbook|devbox|linux|darwin|amd64|arm64|worker|agent|main|worktree|v?\d+(?:\.\d+)*|#t\d+|t\d+)$/i;
   function isMetaParen(inner) {
@@ -4004,15 +4031,15 @@
         const taId = (inDrawer ? "ri-td-" : "ri-") + e.id;
         const pill = inlinePillLayout(savedDraft);
         return `<div class="decision-wrap" data-decision="${esc(e.id)}"><div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
-          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}"${inlineOpen ? " hidden" : ""}>${ICON_EDIT_MINI}<span>补充一句</span>${hasDraft ? `<span class="draft-dot" aria-label="有草稿"></span>` : ""}</button><form class="reply-inline${pill.multi ? " is-multiline" : ""}" data-inline-box="${esc(e.id)}" style="--ri-w:${pill.width}px"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">补充一句</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="1" placeholder="补充一句…" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-acts"><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="取消 (Esc)" aria-label="取消">${ICON_CLOSE_MINI}</button><button type="submit" class="reply-inline-send" data-inline-send="${esc(e.id)}" title="发送 (Enter)" aria-label="发送"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div></div>`;
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}"${inlineOpen ? " hidden" : ""}>${ICON_EDIT_MINI}<span>${esc(tx("collie.addNote", "补充一句"))}</span>${hasDraft ? `<span class="draft-dot" aria-label="${esc(tx("collie.hasDraft", "有草稿"))}"></span>` : ""}</button><form class="reply-inline${pill.multi ? " is-multiline" : ""}" data-inline-box="${esc(e.id)}" style="--ri-w:${pill.width}px"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">${esc(tx("collie.addNote", "补充一句"))}</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="1" placeholder="${esc(tx("collie.addNotePlaceholder", "补充一句…"))}" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-acts"><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="${esc(tx("common.cancelEsc", "取消 (Esc)"))}" aria-label="${esc(tx("common.cancel", "取消"))}">${ICON_CLOSE_MINI}</button><button type="submit" class="reply-inline-send" data-inline-send="${esc(e.id)}" title="${esc(tx("common.sendEnter", "发送 (Enter)"))}" aria-label="${esc(tx("common.send", "发送"))}"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div></div>`;
       }
       const res = resolveDecisionInfo(e, idx, allEntries);
       if (res) {
         const isDismissed = res.state === "dismissed";
         const isCustom = res.state === "custom";
         const isInPlaceCustom = isCustom && !!res.inPlace;
-        const lbl = isDismissed ? "已划掉" : isInPlaceCustom ? "" : isCustom ? "已回复" : "已选：";
-        const val = isDismissed ? "暂不处理" : isInPlaceCustom ? plainLine(res.text || "") : isCustom ? "" : (res.text || "");
+        const lbl = isDismissed ? tx("collie.receiptDismissed", "已划掉") : isInPlaceCustom ? "" : isCustom ? tx("collie.receiptReplied", "已回复") : tx("collie.receiptPicked", "已选：");
+    const val = isDismissed ? tx("collie.receiptDismissedVal", "暂不处理") : isInPlaceCustom ? plainLine(res.text || "") : isCustom ? "" : (res.text || "");
         const atStr = res.at ? hhmm(res.at) : "";
         const origHtml = optList.map((o) => {
           const hit = !isDismissed && !isCustom && o === res.text;
@@ -4022,12 +4049,12 @@
         const valHtml = val ? `<span class="rr-val">${esc(val)}</span>` : "";
         const justSettled = !isDismissed && justSettledDecisions.has(e.id);
         const noteHtml = isInPlaceCustom && res.text ? `<div class="rr-custom-note">${esc(res.text)}</div>` : "";
-        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"${justSettled ? ' data-just-settled="1"' : ""}><summary>${ICON_RECEIPT_CHK}${lblHtml}${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body">${noteHtml}<div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
+        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"${justSettled ? ' data-just-settled="1"' : ""}><summary>${ICON_RECEIPT_CHK}${lblHtml}${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body">${noteHtml}<div class="rr-body-cap">${esc(tx("collie.origOptions", "原候选选项"))}</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
       }
       return "";
     }
     if (e.check && entryPendingNow(allEntries, idx, e.id, pendIds, false)) {
-      return `<div class="reply-opts reply-check" data-entry="${esc(e.id)}"><button type="button" class="reply-ack" data-ack="${esc(e.id)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已处理</button></div>`;
+      return `<div class="reply-opts reply-check" data-entry="${esc(e.id)}"><button type="button" class="reply-ack" data-ack="${esc(e.id)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>${esc(tx("collie.handledBtn", "已处理"))}</button></div>`;
     }
     return "";
   }
@@ -4097,7 +4124,7 @@
     const chevSVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
     const renderChip = (it) => {
       const act = activeMatch === it.path;
-      return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "预览 ") + it.name)}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>`;
+      return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapPreview", "预览 {name}", { name: it.name }))}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>`;
     };
     const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
     let html;
@@ -4109,7 +4136,7 @@
         const act = activeMatch === it.path;
         const hash = richVisualHash("html-file:" + it.path);
         const chipsHere = idx === inlineHtmlItems.length - 1 ? extraChips : "";
-        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(it.name)} 操作"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="在抽屉打开" aria-label="在抽屉打开 ${esc(it.name)}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="在新窗口打开" aria-label="在新窗口打开 ${esc(it.name)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>加载预览中…</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "在抽屉打开 ") + it.name)}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">在抽屉打开</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button></div>${chipsHere}</section>`;
+        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: it.name }))}"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}" aria-label="${esc(tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="${esc(tx("file.snapOpenNewWin", "在新窗口打开"))}" aria-label="${esc(tx("file.snapOpenNewWinName", "在新窗口打开 {name}", { name: it.name }))}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>${esc(tx("file.snapLoading", "加载预览中…"))}</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button></div>${chipsHere}</section>`;
       }).join("");
     } else {
       const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
@@ -4117,10 +4144,10 @@
         html = `<div class="msg-files">${renderChip(primary)}</div>`;
       } else {
         const primaryAct = activeMatch === primary.path;
-        const metaTag = primary.isHtml ? "HTML 交互报告" : primary.isCsv ? `${primary.ext.toUpperCase()} 表格数据` : primary.ext.toUpperCase();
+        const metaTag = primary.isHtml ? tx("file.snapHtmlReport", "HTML 交互报告") : primary.isCsv ? tx("file.snapCsvData", "{ext} 表格数据", { ext: primary.ext.toUpperCase() }) : primary.ext.toUpperCase();
         const rest = items.filter((it) => it.path !== primary.path);
         const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc((primaryAct ? "正在预览 " : "预览 ") + primary.name)}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primary.name }) : tx("file.snapPreview", "预览 {name}", { name: primary.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
       }
     }
     _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, html });
@@ -4132,7 +4159,7 @@
       const cut = t.indexOf("\n\n[The human picked");
       if (cut >= 0) t = t.slice(0, cut);
       const att = t.lastIndexOf("附件：\n");
-      if (att >= 0) t = t.slice(0, att).trim() || "附件消息";
+      if (att >= 0) t = t.slice(0, att).trim() || tx("collie.attachMsg", "附件消息");
     }
     return t;
   }
@@ -4155,8 +4182,8 @@
       const line = stripThreadMarkdownLine(raw);
       if (line) return line;
     }
-    if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
-    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return "代码片段";
+    if (/\[image:[^\]]+\]/.test(rawText)) return tx("collie.imageMsg", "图片消息");
+    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return tx("collie.codeSnippet", "代码片段");
     return stripThreadMarkdownLine(plainLine(rawText));
   }
   function collapseThreadMarkdown(text) {
@@ -4166,8 +4193,8 @@
       .replace(/\[([^\]\n]+)\]\([^)\n]+\)/g, "$1");
     const lines = cleaned.split("\n").map(stripThreadMarkdownLine).filter(Boolean);
     if (lines.length) return lines.join(" ").replace(/\s+/g, " ").trim();
-    if (/\[image:[^\]]+\]/.test(rawText)) return "图片消息";
-    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return "代码片段";
+    if (/\[image:[^\]]+\]/.test(rawText)) return tx("collie.imageMsg", "图片消息");
+    if (/^[ \t]{0,3}(?:`{3,}|~{3,})/m.test(rawText)) return tx("collie.codeSnippet", "代码片段");
     return stripThreadMarkdownLine(plainLine(rawText));
   }
   function threadCleanText(e) {
@@ -4179,7 +4206,7 @@
   // Strip leading `ascii-worker-name（中文主题）...` or `` `ascii-worker-name`（中文主题）... ``
   // so thread titles foreground the human topic instead of raw worker IDs.
   const WORKER_TOPIC_PREFIX_RE = /^([a-z][a-z0-9]*(?:[-_][a-z0-9]+)+|[a-z]+\d+[a-z0-9]*)\s*(?:（([^）\n]+)）|\(([^)\n]+)\))(.*)$/;
-  function threadTitleFromText(text, fallback = "话题线") {
+  function threadTitleFromText(text, fallback = tx("drawer.threadTitle", "话题线")) {
     const clean = firstCleanThreadLine(text);
     if (!clean) return fallback;
     const m = clean.match(WORKER_TOPIC_PREFIX_RE);
@@ -4206,7 +4233,7 @@
     if (!e) return "";
     const who = threadWhoLabel(e);
     const body = collapseThreadMarkdown(threadEntryPlainText(e));
-    const text = body || (e.role === "user" ? "附件消息" : "新回复");
+    const text = body || (e.role === "user" ? tx("collie.attachMsg", "附件消息") : tx("collie.newReply", "新回复"));
     const clipped = text.length > 90 ? text.slice(0, 90) + "…" : text;
     return `${who}：${clipped}`;
   }
@@ -4546,7 +4573,7 @@
         if (!byId.has(pid) && !missingRoots.has(pid)) {
           missingRoots.set(pid, {
             id: pid,
-            who: cur.re?.who || "历史消息",
+            who: cur.re?.who || tx("collie.historyMsg", "历史消息"),
             text: cur.re?.text || "",
             missing: true,
           });
@@ -4834,10 +4861,10 @@
     const isStage1 = stage === "unread-start";
     const compactCount = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
     const ariaText = isStage1
-      ? `跳到未读开头，${unreadCount} 条未读`
+      ? tx("collie.jumpUnreadStart", "跳到未读开头，{n} 条未读", { n: unreadCount })
       : unreadCount > 0
-        ? `跳到最新，余 ${unreadCount} 条未读`
-        : "跳到最新";
+        ? tx("collie.jumpLatestUnread", "跳到最新，余 {n} 条未读", { n: unreadCount })
+        : tx("collie.jumpLatest", "跳到最新");
     const badgeEl = $("#super-jump-badge", btn);
     if (badgeEl) {
       if (isStage1 && compactCount) {
@@ -4846,12 +4873,13 @@
           if (!numEl) {
             numEl = document.createElement("span");
             numEl.className = "sj-n";
-            badgeEl.replaceChildren(numEl, document.createTextNode(" 未读"));
+            badgeEl.replaceChildren(numEl, document.createTextNode(tx("collie.unreadPillSuffix", " 未读")));
           }
           rollCounterSlot(numEl, compactCount, unreadIncreased);
         } else {
-          const nextText = `${compactCount} 未读`;
-          const nextHtml = `<span class="sj-n">${compactCount}</span> 未读`;
+          const unreadSuf = tx("collie.unreadPillSuffix", " 未读");
+          const nextText = `${compactCount}${unreadSuf}`;
+          const nextHtml = `<span class="sj-n">${compactCount}</span>${esc(unreadSuf)}`;
           if (badgeEl.textContent !== nextText || badgeEl.innerHTML !== nextHtml) {
             badgeEl.textContent = nextText;
             badgeEl.innerHTML = nextHtml;
@@ -4994,7 +5022,7 @@
     }
     return added.length ? [...base, ...added] : base;
   }
-  const pinDisplaySummary = (p) => (p.role === "user" && p.summary && !p.summary.startsWith("你：") ? "你：" + p.summary : p.summary || "");
+  const pinDisplaySummary = (p) => { const yc = tx("common.youColon", "你："); return (p.role === "user" && p.summary && !p.summary.startsWith(yc) && !p.summary.startsWith("你：") ? yc + p.summary : p.summary || ""); };
   async function togglePin(id, forceVal) {
     if (!id) return;
     const cur = activePinned().some((p) => p.id === id);
@@ -5050,29 +5078,29 @@
     const activeItem = lastPend || shownPin;
     const sum = lastPend ? lastPend.summary : pinDisplaySummary(shownPin);
     const activeBothPin = !!(lastPend && pinIds.has(lastPend.id));
-    const barSig = `${total}:${P}:${M}:${activeItem?.id || ""}:${activeBothPin ? 1 : 0}:${sum}`;
+    const barSig = `${curLang()}:${total}:${P}:${M}:${activeItem?.id || ""}:${activeBothPin ? 1 : 0}:${sum}`;
     if (barSig !== pendingBarSig) {
       pendingBarSig = barSig;
       const lead = P
-        ? `<span class="pending-dot" aria-hidden="true"></span>${activeBothPin ? `<span class="pending-both-pin" title="已钉住" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-label">待处理</span><span class="pending-sep" aria-hidden="true">·</span>`
-        : `<span class="pending-pin-ico" aria-hidden="true">${ICON_PIN}</span><span class="visually-hidden">已钉住：</span>`;
+        ? `<span class="pending-dot" aria-hidden="true"></span>${activeBothPin ? `<span class="pending-both-pin" title="${esc(tx("collie.pinned", "已钉住"))}" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-label">${esc(tx("collie.pending", "待处理"))}</span><span class="pending-sep" aria-hidden="true">·</span>`
+      : `<span class="pending-pin-ico" aria-hidden="true">${ICON_PIN}</span><span class="visually-hidden">${esc(tx("collie.pinnedColon", "已钉住："))}</span>`;
       const mainBtn = `<button type="button" class="pending-main" data-goto-pending="${esc(activeItem.id)}" title="${esc(sum)}">${lead}<span class="pending-sum">${esc(sum)}</span></button>`;
       if (total === 1) {
         const xBtn = lastPend
-          ? `<button type="button" class="pending-x" data-dismiss="${esc(activeItem.id)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>`
-          : `<button type="button" class="pending-x" data-unpin="${esc(activeItem.id)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>`;
+          ? `<button type="button" class="pending-x" data-dismiss="${esc(activeItem.id)}" title="${esc(tx("collie.markHandled", "标为已处理"))}" aria-label="${esc(tx("collie.markHandled", "标为已处理"))}">${ICON_X}</button>`
+      : `<button type="button" class="pending-x" data-unpin="${esc(activeItem.id)}" title="${esc(tx("collie.unpin", "取消钉住"))}" aria-label="${esc(tx("collie.unpin", "取消钉住"))}">${ICON_X}</button>`;
         bar.innerHTML = `${mainBtn}${xBtn}`;
       } else {
         const moreTitle = P && M
-          ? `查看全部 ${P} 条待处理与 ${M} 条已钉住消息`
+          ? tx("collie.viewAllPendingPin", "查看全部 {p} 条待处理与 {m} 条已钉住消息", { p: P, m: M })
           : P
-            ? `查看全部 ${P} 条待处理消息`
-            : `查看全部 ${M} 条已钉住消息`;
+            ? tx("collie.viewAllPending", "查看全部 {p} 条待处理消息", { p: P })
+            : tx("collie.viewAllPin", "查看全部 {m} 条已钉住消息", { m: M });
         const moreAria = P && M
-          ? `展开全部 ${P} 条待处理与 ${M} 条已钉住消息`
+          ? tx("collie.expandAllPendingPin", "展开全部 {p} 条待处理与 {m} 条已钉住消息", { p: P, m: M })
           : P
-            ? `展开全部 ${P} 条待处理消息`
-            : `展开全部 ${M} 条已钉住消息`;
+            ? tx("collie.expandAllPending", "展开全部 {p} 条待处理消息", { p: P })
+            : tx("collie.expandAllPin", "展开全部 {m} 条已钉住消息", { m: M });
         bar.innerHTML = `${mainBtn}<button type="button" class="pending-more" data-toggle-pending aria-expanded="${pendingOpen}" aria-controls="pending-list" title="${esc(moreTitle)}" aria-label="${esc(moreAria)}"><span class="pending-count">${total}</span><svg class="pending-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14l5-5 5 5"/></svg></button>`;
       }
     } else {
@@ -5080,6 +5108,7 @@
     }
     if (total >= 2 && pendingOpen) {
       const listSig = JSON.stringify([
+        curLang(),
         P ? "" : (shownPin?.id || ""),
         pend.map((p) => [p.id, p.summary, p.at, pinIds.has(p.id) ? 1 : 0]),
         pinsOnly.map((p) => [p.id, p.summary, p.at, p.role]),
@@ -5088,8 +5117,8 @@
         pendingListSig = listSig;
         const pendRows = [...pend].reverse().map((p) => `<div class="pending-item">
           <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(p.summary)}">
-            <span class="pending-dot" aria-hidden="true"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="已钉住" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
-          </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="标为已处理" aria-label="标为已处理">${ICON_X}</button>
+            <span class="pending-dot" aria-hidden="true"></span>${pinIds.has(p.id) ? `<span class="pending-both-pin" title="${esc(tx("collie.pinned", "已钉住"))}" aria-hidden="true">${ICON_PIN}</span>` : ""}<span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+          </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="${esc(tx("collie.markHandled", "标为已处理"))}" aria-label="${esc(tx("collie.markHandled", "标为已处理"))}">${ICON_X}</button>
         </div>`);
         const pinRows = [...pinsOnly].reverse().map((p) => {
           const ps = pinDisplaySummary(p);
@@ -5097,7 +5126,7 @@
           return `<div class="pending-item is-pin${isCur ? " is-active" : ""}">
           <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" data-pick-pin="${esc(p.id)}" title="${esc(ps)}">
             <span class="pending-pin-ico" aria-hidden="true">${ICON_PIN}</span><span class="pending-sum">${esc(ps)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
-          </button><button type="button" class="pending-x" data-unpin="${esc(p.id)}" title="取消钉住" aria-label="取消钉住">${ICON_X}</button>
+          </button><button type="button" class="pending-x" data-unpin="${esc(p.id)}" title="${esc(tx("collie.unpin", "取消钉住"))}" aria-label="${esc(tx("collie.unpin", "取消钉住"))}">${ICON_X}</button>
         </div>`;
         });
         const sep = pendRows.length && pinRows.length ? `<div class="pending-list-sep" role="separator"></div>` : "";
@@ -5325,7 +5354,7 @@
       m = document.querySelector(sel);
       if (!ok) break;
     }
-    if (!m) { toast("这条消息太早了，已经不在这里"); return; }
+    if (!m) { toast(tx("collie.msgTooOld", "这条消息太早了，已经不在这里")); return; }
     if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
     setCollieBottomStick(false);
     collieForceBottomUntil = 0;
@@ -5409,7 +5438,7 @@
       if (!ok) break;
     }
     if (seq !== jumpSeq) return;
-    if (!id) { toast("这条记录太早了，已经不在这里"); return; }
+    if (!id) { toast(tx("collie.recTooOld", "这条记录太早了，已经不在这里")); return; }
     await jumpToEntry(id, opts);
   }
 
@@ -5434,7 +5463,7 @@
     const hintEl = $("#super-search-hint");
     const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
     if (btn && matchMedia("(pointer: fine)").matches) {
-      btn.title = `搜索对话 (${isMac ? "⌘K" : "Ctrl+K"})`;
+      btn.title = tx("collie.searchShortcut", "搜索对话 ({key})", { key: isMac ? "⌘K" : "Ctrl+K" });
     }
     const highlightSnippet = (snippet, q) => {
       const text = String(snippet || "");
@@ -5484,26 +5513,26 @@
       if (!q) {
         metaEl.hidden = true;
         metaEl.textContent = "";
-        if (hintEl) hintEl.textContent = "多词用空格分隔";
+        if (hintEl) hintEl.textContent = tx("search.hintDefault", "多词用空格分隔");
         listEl.innerHTML = "";
         searchIdx = -1;
         window.__collieHideSearchPanel();
         return;
       }
       metaEl.hidden = false;
-      metaEl.textContent = hasMore ? `${hits.length}/${total} 条` : `${total} 条`;
+      metaEl.textContent = hasMore ? tx("search.countMore", "{shown}/{total} 条", { shown: hits.length, total }) : tx("search.countTotal", "{total} 条", { total });
       if (!hits.length) {
-        if (hintEl) hintEl.textContent = "换个关键词或减少筛选词试试";
-        listEl.innerHTML = `<div class="ss-empty">没有找到包含「${esc(q)}」的对话</div>`;
+        if (hintEl) hintEl.textContent = tx("search.hintEmpty", "换个关键词或减少筛选词试试");
+      listEl.innerHTML = `<div class="ss-empty">${esc(tx("search.empty", "没有找到包含「{q}」的对话", { q }))}</div>`;
         searchIdx = -1;
         showSearchPanel();
         input.removeAttribute("aria-activedescendant");
         return;
       }
-      if (hintEl) hintEl.textContent = hasMore ? `共 ${total} 条命中，展示最近 ${hits.length} 条` : "回车或点击直接定位到消息";
+      if (hintEl) hintEl.textContent = hasMore ? tx("search.hintMore", "共 {total} 条命中，展示最近 {shown} 条", { total, shown: hits.length }) : tx("search.hintJump", "回车或点击直接定位到消息");
       searchIdx = 0;
       listEl.innerHTML = hits.map((h, i) => {
-        const who = h.role === "user" ? "你" : "Collie";
+        const who = h.role === "user" ? tx("common.you", "你") : "Collie";
         const at = +new Date(h.at) || 0;
         return `<button type="button" class="ss-item${i === 0 ? " active" : ""}" id="ss-opt-${i}" role="option" aria-selected="${i === 0}" data-hit-id="${esc(h.id)}">
           <div class="ss-top"><span class="ss-who ${h.role === "user" ? "user" : "collie"}">${who}</span><span class="ss-when"${at ? ` title="${esc(fullTime(at))}"` : ""}>${esc(at ? sepTime(at) : "")}</span></div>
@@ -5909,7 +5938,7 @@
     let layoutChanged = prevPinned !== !!item.pinned;
     const curPin = el.querySelector?.(".pin-ind");
     if (item.pinned && !curPin) {
-      const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
+      const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>${esc(tx("collie.pinned", "已钉住"))}</span></div>`);
       if (pinEl) el.insertBefore(pinEl, el.firstElementChild || msgEl);
       layoutChanged = true;
     } else if (!item.pinned && curPin && curPin.parentNode === el) {
@@ -5923,7 +5952,7 @@
     if (!layoutChanged && item.teRoot && item.teCount > 0 && curEntry && curCount
       && curEntry.dataset?.openThread === item.teRoot && curEntry.dataset?.focusMsg === item.key
       && el._collieEntryId === (item.entryId || "")) {
-      const nextLbl = `${item.teCount} 条回复`;
+      const nextLbl = tx("collie.repliesCount", "{n} 条回复", { n: item.teCount });
       if (curCount.textContent !== nextLbl) curCount.textContent = nextLbl;
     } else {
       const footHtml = item.renderFoot ? item.renderFoot() : "";
@@ -5960,7 +5989,7 @@
     let layoutChanged = prevPinned !== !!item.pinned || prevCont !== !!item.cont;
     const curPin = msgEl.querySelector?.(":scope > .pin-ind") || msgEl.querySelector?.(".pin-ind");
     if (item.pinned && !curPin) {
-      const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>`);
+      const pinEl = parseSuperNode(`<div class="pin-ind">${ICON_PIN}<span>${esc(tx("collie.pinned", "已钉住"))}</span></div>`);
       if (pinEl) msgEl.insertBefore(pinEl, msgEl.firstElementChild);
       layoutChanged = true;
     } else if (!item.pinned && curPin && curPin.parentNode === msgEl) {
@@ -6000,7 +6029,7 @@
       && oldFocusRoot === wantFocusRoot;
     if (sameFootStructure) {
       if (wantHasEntry && curCount) {
-        const nextLbl = `${item.teCount} 条回复`;
+        const nextLbl = tx("collie.repliesCount", "{n} 条回复", { n: item.teCount });
         if (curCount.textContent !== nextLbl) curCount.textContent = nextLbl;
       }
       const clapBtn = oldFoot.querySelector?.(".clap-btn[data-clap]");
@@ -6424,10 +6453,10 @@
   function resolveSuperBusy(r, allEntries, opts = {}) {
     if (hydratedFromCache && !liveSuperSynced) return null;
     const rawBusy = r.replied ? null : {
-      working: "Collie 在想…",
-      starting: "Collie 正在醒来…",
-      blocked: "Collie 在等你在电脑上确认",
-      dreaming: "Collie 在做梦，整理完记忆会自己醒来",
+      working: tx("collie.banner.working", "Collie 在想…"),
+      starting: tx("collie.banner.starting", "Collie 正在醒来…"),
+      blocked: tx("collie.banner.blocked", "Collie 在等你在电脑上确认"),
+      dreaming: tx("collie.banner.dreaming", "Collie 在做梦，整理完记忆会自己醒来"),
     }[r.status] || null;
     const collieId = latestCollieEntryId(allEntries);
     const gotNewCollieReply = !!(collieId && superLastCollieId && collieId !== superLastCollieId);
@@ -6698,7 +6727,7 @@
     const st = $("#router-status");
     const stCls = "status " + collieDot(r.status);
     if (st.className !== stCls) st.className = stCls;
-    setHTML(st, `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`);
+    setHTML(st, `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? tx("collie.st.wrapping", "在收尾") : collieStatus(r.status))}`);
     // While Collie is busy on a human turn (or blocked/dreaming), show the indicator
     // where its next message will appear; quiet background inspections stay in header,
     // and desktop side-by-side focus drawer keeps the left stream calm without a mirrored thinking row.
@@ -6724,15 +6753,15 @@
       if (wk.dataset) delete wk.dataset.entering;
     }
     wk.hidden = !busy;
-    setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条排队中` : "");
+    setText($("#router-queue"), sup.paused ? tx("collie.paused", "已暂停投递") : routerQueued() ? tx("collie.queued", "{n} 条排队中", { n: routerQueued() }) : "");
     const cx = $("#router-ctx");
-    setText(cx, r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "");
+    setText(cx, r.handover ? tx("collie.handover", "正在交接记忆…") : r.alive && r.context ? tx("collie.ctx", "上下文 {pct}%", { pct: r.context }) : "");
     cx.classList.toggle("warn", !!r.handover || (!!r.alive && Number(r.context) >= 75));
-    const cxTitle = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
+    const cxTitle = r.rotate_at > 0 ? tx("collie.ctxTitleAuto", "用到 {pct}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话", { pct: r.rotate_at }) : tx("collie.ctxTitleOff", "自动换会话已关闭（自动化 → 设置）");
     if (cx.title !== cxTitle) cx.title = cxTitle;
     renderRouterModel(r);
     renderRouterPendingBars();
-    const pauseLabel = sup.paused ? "恢复投递" : "暂停投递";
+    const pauseLabel = sup.paused ? tx("collie.menuResume", "恢复投递") : tx("collie.menuPause", "暂停投递");
     $$('[data-act="pause"]').forEach((b) => setText(b, pauseLabel));
 
     const active = sup.workers.filter((w) => !w.ended);
@@ -6780,6 +6809,7 @@
     const openFilePathNow = !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "";
     // Fast structural key for #super-thread body: skip item diffing when completely unchanged.
     const nextBodyKey = [
+      curLang(),
       isEmptyChat ? "E" : "L",
       entriesFingerprint(allEntries),
       sessionUnreadMarkerId || "",
@@ -6823,20 +6853,20 @@
     } else {
       const items = [];
       if (olderShowRow) {
-        items.push({ key: "__earlier__", sig: "earlier", render: () => `<div class="earlier-row">加载中…</div>` });
+        items.push({ key: "__earlier__", sig: "earlier|" + curLang(), render: () => `<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>` });
       }
       if (isEmptyChat) {
         items.push({
           key: "__hello__",
-          sig: "hello",
+          sig: "hello|" + curLang(),
           render: () => `<div class="hello"><img src="icon.svg" alt="">
-        <h3>一个入口，管一群 agent</h3>
-        <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
-        <div class="ideas">
-          <button data-idea="看一下 ~/agent-workspace 里最近改动最多的三个项目，各派一个 agent 检查有没有失败的测试，最后给我一句话总结。">并行检查三个项目的测试</button>
-          <button data-idea="每天早上 9 点帮我看一下各个任务的进展，有卡住的就告诉我。">每天 9 点汇报进展</button>
-          <button data-idea="以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。">把 GitHub 评论变成任务</button>
-        </div></div>`,
+          <h3>${esc(tx("collie.welcomeTitle", "一个入口，管一群 agent"))}</h3>
+          <p>${esc(tx("collie.welcomeDesc", "把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。"))}</p>
+          <div class="ideas">
+            <button data-idea="${esc(tx("collie.idea1Text", "看一下 ~/agent-workspace 里最近改动最多的三个项目，各派一个 agent 检查有没有失败的测试，最后给我一句话总结。"))}">${esc(tx("collie.idea1Label", "并行检查三个项目的测试"))}</button>
+            <button data-idea="${esc(tx("collie.idea2Text", "每天早上 9 点帮我看一下各个任务的进展，有卡住的就告诉我。"))}">${esc(tx("collie.idea2Label", "每天 9 点汇报进展"))}</button>
+            <button data-idea="${esc(tx("collie.idea3Text", "以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。"))}">${esc(tx("collie.idea3Label", "把 GitHub 评论变成任务"))}</button>
+          </div></div>`,
         });
       } else {
         let prev = "", lastAt = 0;
@@ -6887,7 +6917,7 @@
         const renderThreadEntryBtn = (eKey, rootId, replyCount) => {
           if (!rootId || !replyCount) return "";
           return `<button type="button" class="thread-entry" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(eKey)}" aria-expanded="false">` +
-            `${ICON_THREAD_BRANCH}<span class="te-count">${replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
+            `${ICON_THREAD_BRANCH}<span class="te-count">${esc(tx("collie.repliesCount", "{n} 条回复", { n: replyCount }))}</span>${ICON_THREAD_CHEV}</button>`;
         };
         const inPlaceByTarget = new Map();
         for (let ii = 0; ii < allEntries.length; ii++) {
@@ -6933,8 +6963,8 @@
             const uId = e.id;
             items.push({
               key: "__unread__",
-              sig: `unread:${uId}`,
-              render: () => `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(uId)}" role="separator" aria-label="以下为未读消息"><span>以下为未读消息</span></div>`,
+              sig: `unread:${curLang()}:${uId}`,
+              render: () => `<div class="unread-sep" id="unread-sep" data-first-unread="${esc(uId)}" role="separator" aria-label="${esc(tx("collie.unreadSep", "以下为未读消息"))}"><span>${esc(tx("collie.unreadSep", "以下为未读消息"))}</span></div>`,
             });
             prev = "";
             prevCollieRoot = "";
@@ -6976,7 +7006,7 @@
             const qi = analyzeQuote(e, ei);
             const qSig = qi ? qi.sig : "";
             const inPlaceHtml = renderInPlaceReceipts(e, eKey);
-            const msgSig = `u:${qSig}|${inPlaceHtml}|${e.text || ""}`;
+            const msgSig = `u:${curLang()}:${qSig}|${inPlaceHtml}|${e.text || ""}`;
             const sig = `u|${e.id || ""}|${at}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${msgSig}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -6997,7 +7027,7 @@
               at,
               renderFoot,
               render: () => {
-                const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
+                const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>${esc(tx("collie.pinned", "已钉住"))}</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
                 const parts = parseUserParts(e.text);
                 const quoteHtml = renderQuoteHtml(qi, e);
@@ -7019,7 +7049,7 @@
             const inPlaceHtml = renderInPlaceReceipts(e, eKey);
             const artifactsHtml = renderEntryArtifacts(e, "");
             const claps = effectiveClaps(e.id, e);
-            const msgSig = `c|${e.id || ""}|${at}|${curDayStamp}|${qSig}|${artifactsHtml}|${inPlaceHtml}|${e.text || ""}`;
+            const msgSig = `c|${curLang()}|${e.id || ""}|${at}|${curDayStamp}|${qSig}|${artifactsHtml}|${inPlaceHtml}|${e.text || ""}`;
             const sig = `${msgSig}|${cont ? 1 : 0}|${optsHtml}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|cl:${claps}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -7042,7 +7072,7 @@
               teCount,
               renderFoot,
               render: () => {
-                const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
+                const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>${esc(tx("collie.pinned", "已钉住"))}</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
                 return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${renderCollieBody(e.text)}${artifactsHtml}${optsHtml}${inPlaceHtml}${renderFoot()}</div></div>`;
               },
@@ -7056,11 +7086,11 @@
             const past = !hid && e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
             const isPeerReq = typeof e.ref === "string" && e.ref.startsWith("peer-req:");
             const pane = !hid && !past && !isPeerReq && e.ref ? paneOf(e.ref) : null;
-            const hTitle = e.text?.includes("做梦") ? "翻看做梦前的对话" : "翻看交接前的对话";
+            const hTitle = e.text?.includes("做梦") ? tx("collie.evDreamHist", "翻看做梦前的对话") : tx("collie.evHandoverHist", "翻看交接前的对话");
             const evHref = hid ? `#/h/${encodeURIComponent(hid)}`
               : past ? `#/h/${encodeURIComponent(past.id)}`
               : (!isPeerReq && pane) ? `#/p/${encodeURIComponent(pane)}` : "";
-            const evTitle = hid ? hTitle : past ? "看它的完整记录" : isPeerReq ? "点击打开好友边牧审批" : "";
+            const evTitle = hid ? hTitle : past ? tx("collie.evFullRecord", "看它的完整记录") : isPeerReq ? tx("collie.evPeerReq", "点击打开狗友审批") : "";
             const evTagName = evHref ? "a" : isPeerReq ? "button" : "div";
             const tag = evTagName === "a" ? `a href="${evHref}"${evTitle ? ` title="${evTitle}"` : ""}`
               : evTagName === "button" ? `button type="button" title="${evTitle}"` : "div";
@@ -7068,10 +7098,11 @@
             const busyW = w && workerBusy(w);
             const stuck = w && !w.ended && w.status === "blocked";
             const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busyW ? "running" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
-            const wstate = w ? (w.ended ? "已结束" : busyW ? "还在跑" : stuck ? "等你确认" : "") : "";
+            const wstate = w ? (w.ended ? tx("st.ended", "已结束") : busyW ? tx("collie.evStillRunning", "还在跑") : stuck ? tx("st.blocked", "等你确认") : "") : "";
             const whenStr = hhmm(at || e.at);
             const cls = `event${e.tone === "error" ? " error" : ""}${isPeerReq ? " is-peer-req" : ""}`;
-            const msgSig = `ev|${e.id || ""}|${e.ref || ""}|${e.tone || ""}|${evTagName}|${whenStr}|${e.text || ""}`;
+            const evDisplayText = locEv(e.text);
+            const msgSig = `ev|${curLang()}|${e.id || ""}|${e.ref || ""}|${e.tone || ""}|${evTagName}|${whenStr}|${evDisplayText}`;
             const sig = `${msgSig}|${evHref}|${evTitle}|${tone}|${wstate}`;
             items.push({
               key: eKey,
@@ -7087,7 +7118,7 @@
               render: () => {
                 const idAttr = e.id ? ` data-id="${esc(e.id)}"` : "";
                 const refAttr = e.ref ? ` data-ref="${esc(e.ref)}"` : "";
-                return `<${tag} class="${cls}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${whenStr}</span><span>${esc(e.text)}</span>${wstate ? `<span class="wstate">${wstate}</span>` : ""}</${evTagName}>`;
+                return `<${tag} class="${cls}"${idAttr}${refAttr}><span class="dot ${tone}"></span><span class="when">${whenStr}</span><span>${esc(evDisplayText)}</span>${wstate ? `<span class="wstate">${esc(wstate)}</span>` : ""}</${evTagName}>`;
               },
             });
           }
@@ -7099,8 +7130,8 @@
           if (got?.a) return superAskHTML(got.a, a);
           return `<a class="need" href="#/p/${encodeURIComponent(a.pane_id)}">
         <span class="dot blocked"></span>
-        <span class="body"><div class="name">${esc(title(a))} 等你确认</div><div class="sub">${esc(a.name === ROUTER ? "它停在一个对话框上，处理后才能继续" : (KIND_LABEL[a.kind] || a.kind) + " · " + tilde(a.cwd))}</div></span>
-        <span class="go">处理 →</span></a>`;
+        <span class="body"><div class="name">${esc(tx("collie.blockedNeedsYou", "{name} 等你确认", { name: title(a) }))}</div><div class="sub">${esc(a.name === ROUTER ? tx("collie.blockedRouterSub", "它停在一个对话框上，处理后才能继续") : (KIND_LABEL[a.kind] || a.kind) + " · " + tilde(a.cwd))}</div></span>
+        <span class="go">${esc(tx("collie.blockedHandle", "处理 →"))}</span></a>`;
         }).join("") + `</div>`;
         items.push({ key: "__needs__", sig: "needs:" + needsHtml, render: () => needsHtml });
       }
@@ -7730,13 +7761,13 @@
     const body = blocks.map((b) => b.code ? `<pre class="ctx-code">${esc(b.text)}</pre>` : `<p>${esc(b.text)}</p>`).join("");
     const choices = a.choices || [];
     return `<div class="ask" data-pane="${esc(agent.pane_id)}">
-      <div class="ask-head"><span class="dot blocked"></span><span class="who">${esc(title(agent))}</span><span>需要你确认</span><span class="spacer"></span>
-        <a href="#/p/${encodeURIComponent(agent.pane_id)}">打开 →</a></div>
+      <div class="ask-head"><span class="dot blocked"></span><span class="who">${esc(title(agent))}</span><span>${esc(tx("collie.askNeedsConfirm", "需要你确认"))}</span><span class="spacer"></span>
+        <a href="#/p/${encodeURIComponent(agent.pane_id)}">${esc(tx("collie.askOpen", "打开 →"))}</a></div>
       <div class="ask-q"><div class="q">${esc(q)}</div>${body ? `<div class="ctx">${body}</div>` : ""}</div>
       ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button type="button" class="choice ${c.current ? "current" : ""}" data-choice="${i}">
           <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}${c.desc ? `<span class="d">${esc(c.desc)}</span>` : ""}</span></button>`).join("")}</div>
-        <div class="ask-keys"><button type="button" data-k="esc">Esc 取消</button></div>`
-      : `<div class="ask-keys"><button type="button" data-k="up">↑</button><button type="button" data-k="down">↓</button><button type="button" data-k="esc">Esc</button><button type="button" class="go" data-k="enter">确认 ↵</button></div>`}
+        <div class="ask-keys"><button type="button" data-k="esc">${esc(tx("collie.askEscCancel", "Esc 取消"))}</button></div>`
+        : `<div class="ask-keys"><button type="button" data-k="up">↑</button><button type="button" data-k="down">↓</button><button type="button" data-k="esc">Esc</button><button type="button" class="go" data-k="enter">${esc(tx("collie.askConfirm", "确认 ↵"))}</button></div>`}
     </div>`;
   }
 
@@ -7841,7 +7872,8 @@
   });
 
   // Models and thinking efforts each agent offers, per computer (asked once per page).
-  const EFFORT_LABEL = { off: "关闭", none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极致", auto: "自动" };
+  const EFFORT_ZH = { off: "关闭", none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极致", auto: "自动" };
+  const EFFORT_LABEL = new Proxy(EFFORT_ZH, { get(t, p) { return typeof p === "string" && Object.prototype.hasOwnProperty.call(t, p) ? tx("effort." + p, t[p]) : t[p]; } });
   const AGY_EFFORT_RE = /-(low|medium|high|xhigh|max)$/i;
   const PI_THINKING_SUFFIX_RE = /:(off|minimal|low|medium|high|xhigh|max|auto)$/i;
   function agyRejectsEffort(model) {
@@ -7917,28 +7949,28 @@
     const d = ov.d;
     const ms = (state.machines || []).filter((m) => !m.hub);
     const defMachineObj = ms.find((m) => m.id === d.machine);
-    const defMachineName = defMachineObj ? defMachineObj.name : (d.machine || "本机");
+    const defMachineName = defMachineObj ? defMachineObj.name : (d.machine || tx("common.localMachine", "本机"));
     const defKindLabel = KIND_LABEL[d.kind] || d.kind || "Claude";
-    const defModelShort = d.model ? d.model.split("/").pop() : "默认模型";
+    const defModelShort = d.model ? d.model.split("/").pop() : tx("common.defaultModel", "默认模型");
     const defParts = [ms.length > 1 ? defMachineName : "", defKindLabel, defModelShort].filter(Boolean);
-    const fallbackDesc = `按记忆偏好优先，未命中时兜底：${defParts.join(" · ")}（点击可临时指定本次派活目标）`;
+    const fallbackDesc = tx("collie.dispatchFallbackTip", "按记忆偏好优先，未命中时兜底：{parts}（点击可临时指定本次派活目标）", { parts: defParts.join(" · ") });
 
     if (expanded) {
-      if (lbl) lbl.textContent = ov.any ? "本次派活" : "派活";
-      toggle.title = "收起本次派活选项";
+      if (lbl) lbl.textContent = ov.any ? tx("collie.dispatchOverrideLabel", "本次派活") : tx("collie.dispatchLabel", "派活");
+      toggle.title = tx("collie.dispatchCollapseTip", "收起本次派活选项");
       toggle.setAttribute("aria-description", fallbackDesc);
     } else if (ov.any) {
       const chosen = [];
       if (ov.machineChanged && lastTargetEffState.machineName) chosen.push(lastTargetEffState.machineName);
       if (ov.kindChanged || ov.modelChanged || ov.effortChanged) chosen.push(KIND_LABEL[ov.t.kind] || ov.t.kind);
       if (ov.modelChanged && lastTargetEffState.modelLabel) chosen.push(lastTargetEffState.modelLabel);
-      if (ov.effortChanged && ov.eff) chosen.push("思考:" + (EFFORT_LABEL[ov.eff] || ov.eff));
-      if (lbl) lbl.textContent = "本次 · " + (chosen.filter(Boolean).join(" · ") || "已指定");
-      const tip = `已临时覆盖本次派活：${chosen.filter(Boolean).join(" · ")}（点击展开调整，或点右侧恢复默认）`;
+      if (ov.effortChanged && ov.eff) chosen.push(tx("effort.colonPrefix", "思考:{v}", { v: EFFORT_LABEL[ov.eff] || ov.eff }));
+      if (lbl) lbl.textContent = tx("collie.dispatchChosen", "本次 · {parts}", { parts: chosen.filter(Boolean).join(" · ") || tx("collie.dispatchSpecified", "已指定") });
+      const tip = tx("collie.dispatchOverrideTip", "已临时覆盖本次派活：{parts}（点击展开调整，或点右侧恢复默认）", { parts: chosen.filter(Boolean).join(" · ") });
       toggle.title = tip;
       toggle.setAttribute("aria-description", tip);
     } else {
-      if (lbl) lbl.textContent = "派活 · 默认";
+      if (lbl) lbl.textContent = tx("collie.dispatchDefault", "派活 · 默认");
       toggle.title = fallbackDesc;
       toggle.setAttribute("aria-description", fallbackDesc);
     }
@@ -7961,7 +7993,7 @@
     // What was picked here over the defaults: picking only an agent leaves the
     // computer at its default, not unset.
     const t = targetNow();
-    const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
+    const ms = (state.machines || [{ id: "", name: tx("common.localMachine", "本机"), local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
     const sig = `${t.machine}|${t.kind}|${t.model ?? ""}|${t.effort ?? ""}|${targetDefault.machine}|${targetDefault.kind}|${targetDefault.model}|${targetDefault.effort}|${state.ok}|${ms.map((m) => `${m.id}:${m.name}:${m.online}:${(m.agents || []).join(",")}`).join(";")}`;
     if (!fresh && sig === _renderTargetSig) {
       updateDispatchBar();
@@ -7971,11 +8003,11 @@
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
-      data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
+      data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? esc(tx("collie.defaultSuffixDot", " · 默认")) : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
     const have = ms.find((m) => m.id === t.machine)?.agents;
     fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["doubao", "Doubao"], ["cursor", "Cursor"], ["pi", "Pi"], ["omp", "Oh My Pi"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
-      const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
+      const sub = [missing ? tx("collie.notInstalledHere", "这台电脑没装") : "", k === targetDefault.kind ? tx("common.default", "默认") : ""].filter(Boolean).join(" · ");
       return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${sub}"` : ""} ${missing && k !== t.kind ? "disabled" : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`;
     }).join(""));
     mSel.value = t.machine; kSel.value = t.kind;
@@ -7983,7 +8015,7 @@
     syncPick(mSel); syncPick(kSel);
     mSel._pick?.classList.toggle("changed", t.machine !== targetDefault.machine);
     kSel._pick?.classList.toggle("changed", t.kind !== targetDefault.kind);
-    lastTargetEffState.machineName = ms.find((m) => m.id === t.machine)?.name || (t.machine || "本机");
+    lastTargetEffState.machineName = ms.find((m) => m.id === t.machine)?.name || (t.machine || tx("common.localMachine", "本机"));
     lastTargetEffState.manyMachines = ms.length > 1;
     updateDispatchBar();
     renderModelChips();
@@ -8001,9 +8033,9 @@
     const list = [...(info.models || [])];
     if (model && !list.some((m) => m.id === model)) list.unshift({ id: model });
     const short = (id) => id.split("/").pop();
-    const mark = (v, dv) => (v === dv ? " · 默认" : "");
+    const mark = (v, dv) => (v === dv ? tx("collie.defaultSuffixDot", " · 默认") : "");
     const defName = defaultModelName(info);
-    let html = d.model ? "" : `<option value="" data-short="${esc(defName ? "默认 · " + defName : "默认模型")}" data-sub="${esc(defName ? "现在是 " + defName + " · 默认" : "agent 自己的设置 · 默认")}">默认</option>`;
+    let html = d.model ? "" : `<option value="" data-short="${esc(defName ? tx("collie.defaultModelShort", "默认 · {name}", { name: defName }) : tx("common.defaultModel", "默认模型"))}" data-sub="${esc(defName ? tx("collie.nowModelDefault", "现在是 {name} · 默认", { name: defName }) : tx("collie.agentOwnSettingDot", "agent 自己的设置 · 默认"))}">${esc(tx("common.default", "默认"))}</option>`;
     html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc((m.label && m.label !== m.id ? m.id : "") + mark(m.id, d.model))}" ${m.id === model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
     if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
     mSel.value = model;
@@ -8011,8 +8043,8 @@
     const eff = effs.includes(effort) ? effort : "";
     const defOwn = effs.includes(d.effort) ? d.effort : "";
     const defE = defOwn || (effs.includes(info.default_effort) ? info.default_effort : "") || "";
-    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="${esc(defOwn ? "派活默认" : "agent 自己的设置")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>`;
-    ehtml += effs.map((e) => `<option value="${esc(e)}" data-short="思考 · ${esc(EFFORT_LABEL[e] || e)}" data-sub="${esc(e)}" ${e === eff ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
+    let ehtml = `<option value="" data-short="${esc(tx("effort.chipPrefix", "思考 · {v}", { v: EFFORT_LABEL[defE] || defE || tx("common.default", "默认") }))}" data-sub="${esc(defOwn ? tx("collie.dispatchDefSub", "派活默认") : tx("collie.agentOwnSettingShort", "agent 自己的设置"))}">${esc(tx("collie.defaultWithVal", "默认（{val}）", { val: EFFORT_LABEL[defE] || defE || tx("effort.agentOwn", "agent 自己定") }))}</option>`;
+    ehtml += effs.map((e) => `<option value="${esc(e)}" data-short="${esc(tx("effort.chipPrefix", "思考 · {v}", { v: EFFORT_LABEL[e] || e }))}" data-sub="${esc(e)}" ${e === eff ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
     if (eSel._html !== ehtml) { eSel._html = ehtml; eSel.innerHTML = ehtml; }
     eSel.value = eff && eff !== defOwn ? eff : "";
     const hideEff = effs.length === 0;
@@ -8065,7 +8097,7 @@
   };
   const setReply = (e, opts = {}) => {
     const mode = opts.mode === "supplement" ? "supplement" : "quote";
-    replyTo = e ? { entry: e.id, who: e.role === "user" ? "你" : "Collie", text: e.text, mode } : null;
+    replyTo = e ? { entry: e.id, who: e.role === "user" ? tx("common.you", "你") : "Collie", text: e.text, mode } : null;
     replyToSetLatestId = e ? latestPersistedEntryId() : "";
     replyToHadPick = !!(e && e.pick);
     if (e && view === "collie") {
@@ -8076,7 +8108,7 @@
     box.hidden = !e;
     if (e) {
       const whoEl = $(".re-who", box);
-      if (whoEl) whoEl.textContent = mode === "supplement" ? "回复 ·" : replyTo.who;
+      if (whoEl) whoEl.textContent = mode === "supplement" ? tx("collie.replyPrefix", "回复 ·") : replyTo.who;
       $(".re-t", box).textContent = reLine(e.text);
       if (opts.focus !== false) $("#super-input").focus({ preventScroll: true });
     }
@@ -8267,7 +8299,7 @@
     } else if (r?.entry && shouldCommitRead) {
       commitChatRead(r.entry, { immediate: true });
     }
-    if (!sup.router?.alive) toast("正在唤醒 Collie…");
+    if (!sup.router?.alive) toast(tx("collie.waking", "正在唤醒 Collie…"));
   }
 
   function ensureInlineCardVisible(sc, entryId) {
@@ -8688,7 +8720,7 @@
   let peerScanRAF = 0;
   let pendingPeerInvite = "";
   const PEER_JOIN_BASE = "https://lihuanyu0w0.github.io/collie/join/#";
-  const PEER_MODES = [
+  const PEER_MODES_ZH = [
     {
       id: "advise",
       label: "先查清，草稿给我审",
@@ -8711,27 +8743,38 @@
       desc: "先评估并提议方案，动手和回复都等你拍板",
     },
   ];
-  const peerModeInfo = (id) => PEER_MODES.find((m) => m.id === id) || PEER_MODES[0];
-  const PEER_MODE_TEXT = Object.fromEntries(PEER_MODES.map((m) => [m.id, m.label]));
-  const INT_STATUS_TEXT = {
+  const getPeerModes = () => PEER_MODES_ZH.map((m) => ({
+    id: m.id,
+    label: tx(`peer.mode.${m.id}.label`, m.label),
+    short: tx(`peer.mode.${m.id}.short`, m.short),
+    rec: m.rec ? tx("common.recommended", m.rec) : "",
+    desc: tx(`peer.mode.${m.id}.desc`, m.desc),
+  }));
+  const peerModeInfo = (id) => {
+    const list = getPeerModes();
+    return list.find((m) => m.id === id) || list[0];
+  };
+  const PEER_MODE_TEXT = new Proxy({}, { get(_t, p) { return typeof p === "string" ? peerModeInfo(p).label : undefined; } });
+  const INT_STATUS_ZH = {
     connected: "已连通",
     connecting: "连接中",
     error: "连接异常",
     unconfigured: "未配置",
     disabled: "已暂停",
   };
+  const INT_STATUS_TEXT = new Proxy(INT_STATUS_ZH, { get(t, p) { return typeof p === "string" && Object.prototype.hasOwnProperty.call(t, p) ? tx("int.st." + p, t[p]) : t[p]; } });
   const INT_ICONS = {
     feishu: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 17.5V6.8l7.2 4.2L19 5.5v10.2c0 1.4-.9 2.6-2.3 2.9L9.8 20c-2.6.5-4.8-1-4.8-2.5Z"/><path d="M12.2 11 19 15.2"/></svg>`,
     github: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.5 1.4-4.5-2.3-6.2-2.8m12.4 5.6v-3.5a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.3a4.9 4.9 0 0 0-1.3-3.4 4.6 4.6 0 0 0-.1-3.4s-1.1-.3-3.5 1.3a12.1 12.1 0 0 0-6.4 0C6.5 2.6 5.4 2.9 5.4 2.9a4.6 4.6 0 0 0-.1 3.4A4.9 4.9 0 0 0 4 9.7c0 4.9 3 6 5.8 6.3a3 3 0 0 0-.8 2.3v3.5"/></svg>`,
     gitforge: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.2"/><circle cx="6.5" cy="17.5" r="2.2"/><circle cx="17.5" cy="9.5" r="2.2"/><path d="M6.5 8.7v6.6M17.5 11.7c0 3.2-2.2 5.8-8.8 5.8"/></svg>`,
     peers: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3ZM8 13a3 3 0 1 0-3-3 3 3 0 0 0 3 3Z"/><path d="M2 19a5 5 0 0 1 10 0M13 19a4.5 4.5 0 0 1 9 0"/></svg>`,
   };
-  const INT_CLI_HINT_CARD = {
+  const getIntCliHintCard = () => ({
     kind: "gitforge-cli-hint",
-    name: "自定义代码托管 CLI",
-    subtitle: "可插拔本机 CLI 适配器 · 零公网门槛",
-    description: "在 ~/.collie/providers/ 放入声明式 JSON 插件，即可免公网追踪任意自建或企业 Git 平台的 MR 评审、评论 @我 与流水线失败。",
-  };
+    name: tx("int.customCliName", "自定义代码托管 CLI"),
+    subtitle: tx("int.customCliSub", "可插拔本机 CLI 适配器 · 零公网门槛"),
+    description: tx("int.customCliDesc", "在 ~/.collie/providers/ 放入声明式 JSON 插件，即可免公网追踪任意自建或企业 Git 平台的 MR 评审、评论 @我 与流水线失败。"),
+  });
   $("#auto-tabs").addEventListener("click", (e) => {
     const t = e.target.closest("button")?.dataset.tab;
     if (!t) return;
@@ -8813,9 +8856,9 @@
   function formatLarkStatusText(l, mode) {
     if (!l) return "";
     if (mode === "integrations") {
-      return l.ready ? `已就绪：发给 ${l.who || "本机登录用户"}（以机器人身份）` : `${l.problem}，当前不可用`;
+      return l.ready ? tx("int.larkReadyInt", "已就绪：发给 {who}（以机器人身份）", { who: l.who || tx("int.larkLocalUser", "本机登录用户") }) : tx("int.larkProblemInt", "{problem}，当前不可用", { problem: l.problem });
     }
-    return l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
+    return l.ready ? tx("int.larkReadySet", "发给 {who}（以机器人身份）", { who: l.who || tx("int.larkCliUser", "lark-cli 登录的人") }) : tx("int.larkProblemSet", "{problem}，所以不会发", { problem: l.problem });
   }
 
   function loadLarkStatus(sel, mode, fresh = false) {
@@ -9025,9 +9068,10 @@
     row.classList.toggle("is-expandable", expandable);
     btn.hidden = !expandable;
     btn.setAttribute("aria-expanded", expanded ? "true" : "false");
-    btn.setAttribute("aria-label", `${expanded ? "收起" : "展开"} #${id}`);
+    const togTxt = expanded ? tx("common.collapse", "收起") : tx("common.expand", "展开");
+    btn.setAttribute("aria-label", `${togTxt} #${id}`);
     const lbl = btn.querySelector(".inbox-toggle-lbl");
-    if (lbl) lbl.textContent = expanded ? "收起" : "展开";
+    if (lbl) lbl.textContent = togTxt;
     return expandable;
   }
   function syncInboxRows(rows) {
@@ -9048,9 +9092,10 @@
       m.row.classList.toggle("is-expandable", m.expandable);
       m.btn.hidden = !m.expandable;
       m.btn.setAttribute("aria-expanded", m.expanded ? "true" : "false");
-      m.btn.setAttribute("aria-label", `${m.expanded ? "收起" : "展开"} #${m.id}`);
+      const togTxt = m.expanded ? tx("common.collapse", "收起") : tx("common.expand", "展开");
+      m.btn.setAttribute("aria-label", `${togTxt} #${m.id}`);
       const lbl = m.btn.querySelector(".inbox-toggle-lbl");
-      if (lbl) lbl.textContent = m.expanded ? "收起" : "展开";
+      if (lbl) lbl.textContent = togTxt;
     }
   }
   function syncInboxOverflow(root = $("#auto-body")) {
@@ -9130,13 +9175,13 @@
           curFoot.dataset.inboxSentinel = "more";
           curFoot.classList.remove("is-done");
           const st = curFoot.querySelector?.(".inbox-feed-status");
-          if (st) st.textContent = "正在加载更多…";
+          if (st) st.textContent = tx("inbox.loadingMore", "正在加载更多…");
         } else {
           curFoot.removeAttribute?.("data-inbox-sentinel");
           delete curFoot.dataset.inboxSentinel;
           curFoot.classList.add("is-done");
           const st = curFoot.querySelector?.(".inbox-feed-status");
-          if (st) st.textContent = `已显示全部 ${curShown.length} 条`;
+          if (st) st.textContent = tx("inbox.allShown", "已显示全部 {n} 条", { n: curShown.length });
         }
       }
       inboxLoadingMore = false;
@@ -9500,16 +9545,16 @@
   }
   function intTimeHint(item, st) {
     if (st === "unconfigured") {
-      if (item.extra?.provider_type === "cli") return "本机 CLI 插件就绪";
-      return "尚未连接";
+      if (item.extra?.provider_type === "cli") return tx("int.cliPluginReady", "本机 CLI 插件就绪");
+      return tx("int.notConnected", "尚未连接");
     }
-    if (st === "disabled") return "已关闭接入";
-    if (st === "connecting") return item.health?.detail || "正在连接…";
-    if (st === "error") return item.health?.last_error ? item.health.last_error.slice(0, 32) : "需要检查配置";
-    if (item.health?.last_active_at) return `${ago(item.health.last_active_at)}活跃`;
-    if (item.health?.last_ok_at) return `${ago(item.health.last_ok_at)}连通`;
-    if (item.extra?.engine === "gitforge") return item.health?.detail || "轮询就绪";
-    return "长连接在线";
+    if (st === "disabled") return tx("int.closed", "已关闭接入");
+    if (st === "connecting") return item.health?.detail ? locInt(item.health.detail) : tx("int.connectingHint", "正在连接…");
+    if (st === "error") return item.health?.last_error ? item.health.last_error.slice(0, 32) : tx("int.checkConfig", "需要检查配置");
+    if (item.health?.last_active_at) return tx("int.activeAgo", "{ago}活跃", { ago: ago(item.health.last_active_at) });
+    if (item.health?.last_ok_at) return tx("int.okAgo", "{ago}连通", { ago: ago(item.health.last_ok_at) });
+    if (item.extra?.engine === "gitforge") return item.health?.detail ? locInt(item.health.detail) : tx("int.pollingReady", "轮询就绪");
+    return tx("int.wsOnline", "长连接在线");
   }
   function peerCardSummary(pr) {
     const enabled = pr ? pr.enabled !== false : (sup.peers_summary ? sup.peers_summary.enabled !== false : true);
@@ -9522,30 +9567,30 @@
     if (pendingIn > 0) {
       return {
         enabled, total, active, paused, pendingIn, pendingOut,
-        state: "paused", stateLbl: `${pendingIn} 条待审批`,
-        hint: active > 0 ? `${active} 位好友直连 · 有新申请` : "有好友申请待你通过",
-        act: "去审批 ›",
+        state: "paused", stateLbl: tx("peer.sum.pendingState", "{n} 条待审批", { n: pendingIn }),
+        hint: active > 0 ? tx("peer.sum.pendingHintWithActive", "{n} 位狗友直连 · 有新申请", { n: active }) : tx("peer.sum.pendingHint", "有狗友申请待你通过"),
+        act: tx("common.reviewChev", "去审批 ›"),
       };
     }
     if (!enabled) {
-      return { enabled, total, active, paused, pendingIn, pendingOut, state: "disabled", stateLbl: "已暂停", hint: "收件箱暂停接收", act: "管理 ›" };
+      return { enabled, total, active, paused, pendingIn, pendingOut, state: "disabled", stateLbl: tx("int.st.disabled", "已暂停"), hint: tx("peer.sum.pausedHint", "收件箱暂停接收"), act: tx("common.manage", "管理 ›") };
     }
     if (total === 0) {
-      return { enabled, total, active, paused, pendingIn, pendingOut, state: "unconfigured", stateLbl: "未配对", hint: "分享名片链接或扫码加好友", act: "去添加 ›" };
+      return { enabled, total, active, paused, pendingIn, pendingOut, state: "unconfigured", stateLbl: tx("peer.sum.unpairedState", "未配对"), hint: tx("peer.sum.unpairedHint", "分享名片链接或扫码加狗友"), act: tx("common.addChev", "去添加 ›") };
     }
     if (active === 0 && pendingOut > 0) {
-      return { enabled, total, active, paused, pendingIn, pendingOut, state: "connecting", stateLbl: "等待通过", hint: `${pendingOut} 条申请待对方通过`, act: "查看 ›" };
+      return { enabled, total, active, paused, pendingIn, pendingOut, state: "connecting", stateLbl: tx("peer.sum.waitingState", "等待通过"), hint: tx("peer.sum.waitingHint", "{n} 条申请待对方通过", { n: pendingOut }), act: tx("common.viewChev", "查看 ›") };
     }
     if (active === 0) {
-      return { enabled, total, active, paused, pendingIn, pendingOut, state: "disabled", stateLbl: "已暂停", hint: `${paused} 位好友已暂停`, act: "管理 ›" };
+      return { enabled, total, active, paused, pendingIn, pendingOut, state: "disabled", stateLbl: tx("int.st.disabled", "已暂停"), hint: tx("peer.sum.pausedPeersHint", "{n} 位狗友已暂停", { n: paused }), act: tx("common.manage", "管理 ›") };
     }
     const extra = [];
-    if (paused > 0) extra.push(`${paused} 位暂停`);
-    if (pendingOut > 0) extra.push(`${pendingOut} 条待通过`);
+    if (paused > 0) extra.push(tx("peer.sum.extraPaused", "{n} 位暂停", { n: paused }));
+    if (pendingOut > 0) extra.push(tx("peer.sum.extraOut", "{n} 条待通过", { n: pendingOut }));
     return {
-      enabled, total, active, paused, pendingIn, pendingOut, state: "connected", stateLbl: "已连通",
-      hint: extra.length ? `${active} 位活跃 · ${extra.join(" · ")}` : `${active} 位好友直连`,
-      act: "管理 ›",
+      enabled, total, active, paused, pendingIn, pendingOut, state: "connected", stateLbl: tx("int.st.connected", "已连通"),
+      hint: extra.length ? tx("peer.sum.activeExtraHint", "{n} 位活跃 · {extra}", { n: active, extra: extra.join(" · ") }) : tx("peer.sum.activeHint", "{n} 位狗友直连", { n: active }),
+      act: tx("common.manage", "管理 ›"),
     };
   }
   function integrationsHTML(r, pr = peersPayload) {
@@ -9557,26 +9602,26 @@
     const peerList = Array.isArray(pr?.peers) ? pr.peers : [];
     const okCount = live.filter((x) => intEffectiveState(x) === "connected").length + (hasWebhook ? 1 : 0) + (peerInfo.state === "connected" ? 1 : 0);
     const errCount = live.filter((x) => intEffectiveState(x) === "error").length;
-    const summaryText = `已连通 ${okCount} 项 · ${errCount > 0 ? `${errCount} 项需处理` : "运行正常"}`;
+    const summaryText = errCount > 0 ? tx("int.summaryErr", "已连通 {ok} 项 · {err} 项需处理", { ok: okCount, err: errCount }) : tx("int.summaryOk", "已连通 {ok} 项 · 运行正常", { ok: okCount });
     const hookURL = `${location.origin}/hooks/ci?key=${encodeURIComponent(r?.hook_key || "")}`;
     const advPill = hasWebhook
-      ? `<span class="sdot connected" aria-hidden="true"></span><span style="color:var(--fg);font-weight:500">已配置推送</span>`
+      ? `<span class="sdot connected" aria-hidden="true"></span><span style="color:var(--fg);font-weight:500">${esc(tx("int.advConfigured", "已配置推送"))}</span>`
       : notify.notify_lark
-        ? `<span class="sdot disabled" aria-hidden="true"></span><span>仅兜底开启</span>`
-        : `<span class="sdot unconfigured" aria-hidden="true"></span><span>未配置</span>`;
+        ? `<span class="sdot disabled" aria-hidden="true"></span><span>${esc(tx("int.advFallback", "仅兜底开启"))}</span>`
+        : `<span class="sdot unconfigured" aria-hidden="true"></span><span>${esc(tx("int.advNone", "未配置"))}</span>`;
 
     const peerCard = `<article class="int-card is-peer-featured" id="peer-int-card">
         <div class="int-card-top">
           <span class="int-logo">${INT_ICONS.peers}</span>
           <div class="int-head">
-            <h3 class="int-title"><button type="button" class="int-card-hit" data-peer-open="auto" aria-label="配置 好友边牧">好友边牧</button></h3>
-            <p class="int-sub">受控点对点收件箱 · 扫码加好友</p>
+            <h3 class="int-title"><button type="button" class="int-card-hit" data-peer-open="auto" aria-label="${esc(tx("peer.cardConfigAria", "配置 Collie 的好狗友"))}">${esc(tx("peer.title", "Collie 的好狗友"))}</button></h3>
+            <p class="int-sub">${esc(tx("peer.cardSub", "受控点对点收件箱 · 扫码加狗友"))}</p>
           </div>
           <div class="int-switch-wrap">
-            <button type="button" class="switch" role="switch" aria-checked="${peerInfo.enabled ? "true" : "false"}" aria-label="开关 好友边牧收件箱" data-peer-global-toggle></button>
+            <button type="button" class="switch" role="switch" aria-checked="${peerInfo.enabled ? "true" : "false"}" aria-label="${esc(tx("peer.cardToggleAria", "开关 狗友收件箱"))}" data-peer-global-toggle></button>
           </div>
         </div>
-        <p class="int-desc">各自保留本机工作区与记忆，只收发受控消息；默认先帮你查清并拟好草稿，确认后才回复对方。</p>
+        <p class="int-desc">${esc(tx("peer.cardDesc", "各自保留本机工作区与记忆，只收发受控消息；默认先帮你查清并拟好草稿，确认后才回复对方。"))}</p>
         <div class="int-foot">
           <span class="int-status is-${esc(peerInfo.state)}">
             <span class="sdot ${esc(peerInfo.state)}" aria-hidden="true"></span>
@@ -9587,22 +9632,22 @@
       </article>`;
 
     const peerOverview = peerList.length ? `
-      <section class="peer-ov-card" aria-label="已配对好友边牧速览">
+      <section class="peer-ov-card" aria-label="${esc(tx("peer.overviewAria", "已配对狗友速览"))}">
         <div class="peer-ov-head">
           <div class="peer-ov-title">
-            <span>已配对的好友边牧</span>
-            <span class="peer-ov-sub">${peerList.length} 位 · 内网 / Tailscale 直连</span>
+            <span>${esc(tx("peer.overviewTitle", "已配对的狗友"))}</span>
+            <span class="peer-ov-sub">${esc(tx("peer.overviewSub", "{n} 位 · 内网 / Tailscale 直连", { n: peerList.length }))}</span>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button type="button" class="btn small" data-peer-open="friends">管理权限</button>
-            <button type="button" class="btn primary small" data-peer-open="card">我的名片</button>
+            <button type="button" class="btn small" data-peer-open="friends">${esc(tx("peer.managePerms", "管理权限"))}</button>
+            <button type="button" class="btn primary small" data-peer-open="card">${esc(tx("peer.myCard", "我的名片"))}</button>
           </div>
         </div>
         <ul class="peer-ov-list">${peerList.slice().sort((a, b) => (a.status === "pending_incoming" ? -1 : 0) - (b.status === "pending_incoming" ? -1 : 0)).map((p) => {
           const isIn = p.status === "pending_incoming";
           const isOut = p.status === "pending_outgoing";
           const stDot = isIn ? "paused" : isOut ? "connecting" : p.status === "active" ? (peerInfo.enabled ? "connected" : "disabled") : p.status === "paused" ? "paused" : "disabled";
-          const stLbl = isIn ? "待你审批" : isOut ? "等待对方通过" : p.status === "active" ? (peerInfo.enabled ? "已连通" : "总开关已暂停") : p.status === "paused" ? "已暂停" : "对方已解绑";
+          const stLbl = isIn ? tx("peer.row.pendingIn", "待你审批") : isOut ? tx("peer.row.pendingOut", "等待对方通过") : p.status === "active" ? (peerInfo.enabled ? tx("int.st.connected", "已连通") : tx("peer.row.globalPaused", "总开关已暂停")) : p.status === "paused" ? tx("int.st.disabled", "已暂停") : tx("peer.row.revoked", "对方已解绑");
           return `<li class="peer-ov-row">
             <div class="peer-ov-main">
               <div class="peer-ov-name"><span class="sdot ${stDot}" aria-hidden="true"></span><span>${esc(p.name)}</span><span class="mono">@${esc(p.id)}</span></div>
@@ -9610,35 +9655,37 @@
                 <span class="peer-ov-mode">${esc(PEER_MODE_TEXT[p.mode] || p.mode)}</span>
                 <span>${esc(stLbl)}</span>
                 ${p.primary_addr ? `<span class="mono">${esc(p.primary_addr)}</span>` : ""}
-                ${!isIn && !isOut ? `<span>今日 ${Number(p.today_count) || 0} 条</span>` : ""}
+                ${!isIn && !isOut ? `<span>${esc(tx("peer.row.todayCount", "今日 {n} 条", { n: Number(p.today_count) || 0 }))}</span>` : ""}
               </div>
             </div>
-            <button type="button" class="btn ${isIn ? "primary" : "ghost"} small" data-peer-open="list">${isIn ? "去审批" : "管理 ›"}</button>
+            <button type="button" class="btn ${isIn ? "primary" : "ghost"} small" data-peer-open="list">${esc(isIn ? tx("common.review", "去审批") : tx("common.manage", "管理 ›"))}</button>
           </li>`;
         }).join("")}</ul>
       </section>` : "";
 
+    const cliHintCard = getIntCliHintCard();
     const cards = peerCard + live.map((item) => {
       const st = intEffectiveState(item);
-      const actLabel = st === "error" ? "去修复 ›" : st === "unconfigured" ? "去配置 ›" : "配置 ›";
+      const actLabel = st === "error" ? tx("common.fixChev", "去修复 ›") : st === "unconfigured" ? tx("common.setupChev", "去配置 ›") : tx("common.configChev", "配置 ›");
+      const iName = locInt(item.name);
       return `<article class="int-card${st === "error" ? " is-error" : ""}">
         <div class="int-card-top">
           <span class="int-logo">${INT_ICONS[item.kind] || INT_ICONS.gitforge}</span>
           <div class="int-head">
-            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-open="${esc(item.kind)}" aria-label="配置 ${esc(item.name)}">${esc(item.name)}</button></h3>
-            <p class="int-sub">${esc(item.subtitle || "")}</p>
+            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-open="${esc(item.kind)}" aria-label="${esc(tx("int.cardConfigAria", "配置 {name}", { name: iName }))}">${esc(iName)}</button></h3>
+            <p class="int-sub">${esc(locInt(item.subtitle || ""))}</p>
           </div>
           <div class="int-switch-wrap">
-            <button type="button" class="switch" role="switch" aria-checked="${item.enabled ? "true" : "false"}" aria-label="开关 ${esc(item.name)}" data-int-toggle="${esc(item.kind)}"></button>
+            <button type="button" class="switch" role="switch" aria-checked="${item.enabled ? "true" : "false"}" aria-label="${esc(tx("int.cardToggleAria", "开关 {name}", { name: iName }))}" data-int-toggle="${esc(item.kind)}"></button>
           </div>
         </div>
-        <p class="int-desc">${esc(item.description || "")}</p>
+        <p class="int-desc">${esc(locInt(item.description || ""))}</p>
         <div class="int-foot">
           <span class="int-status is-${esc(st)}">
             <span class="sdot ${esc(st)}" aria-hidden="true"></span>
             <span class="int-status-txt"><span class="int-state-lbl">${esc(INT_STATUS_TEXT[st] || st)}</span> · ${esc(intTimeHint(item, st))}</span>
           </span>
-          <span class="int-act" aria-hidden="true">${actLabel}</span>
+          <span class="int-act" aria-hidden="true">${esc(actLabel)}</span>
         </div>
       </article>`;
     }).join("") + (!hasCLIProvider ? `
@@ -9646,59 +9693,59 @@
         <div class="int-card-top">
           <span class="int-logo">${INT_ICONS.gitforge}</span>
           <div class="int-head">
-            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-cli-hint aria-label="${esc(INT_CLI_HINT_CARD.name)}">${esc(INT_CLI_HINT_CARD.name)}</button></h3>
-            <p class="int-sub">${esc(INT_CLI_HINT_CARD.subtitle)}</p>
+            <h3 class="int-title"><button type="button" class="int-card-hit" data-int-cli-hint aria-label="${esc(cliHintCard.name)}">${esc(cliHintCard.name)}</button></h3>
+            <p class="int-sub">${esc(cliHintCard.subtitle)}</p>
           </div>
-          <span class="int-coming-pill">可插拔</span>
+          <span class="int-coming-pill">${esc(tx("int.pluggable", "可插拔"))}</span>
         </div>
-        <p class="int-desc">${esc(INT_CLI_HINT_CARD.description)}</p>
+        <p class="int-desc">${esc(cliHintCard.description)}</p>
         <div class="int-foot">
           <span class="int-status is-unconfigured">
             <span class="sdot unconfigured" aria-hidden="true"></span>
-            <span class="int-status-txt"><span class="int-state-lbl">未发现插件</span> · ~/.collie/providers/</span>
+            <span class="int-status-txt"><span class="int-state-lbl">${esc(tx("int.noPlugin", "未发现插件"))}</span> · ~/.collie/providers/</span>
           </span>
-          <span class="int-act" aria-hidden="true">说明</span>
+          <span class="int-act" aria-hidden="true">${esc(tx("int.guide", "说明"))}</span>
         </div>
       </article>` : "");
 
     return `<div class="int-intro-row">
         <span class="int-summary-stat">${esc(summaryText)}</span>
       </div>
-      <section class="int-grid" aria-label="可用接入">${cards}</section>
+      <section class="int-grid" aria-label="${esc(tx("int.gridAria", "可用接入"))}">${cards}</section>
       ${peerOverview}
       <details class="adv-fold" id="int-adv-fold">
         <summary>
-          <span class="adv-sum-title">自定义通知与本地脚本（高级）</span>
-          <span class="adv-sum-desc">单向群机器人推送 · 本地脚本触发入口 · 旧版 lark-cli 兜底</span>
+          <span class="adv-sum-title">${esc(tx("int.advTitle", "自定义通知与本地脚本（高级）"))}</span>
+          <span class="adv-sum-desc">${esc(tx("int.advDesc", "单向群机器人推送 · 本地脚本触发入口 · 旧版 lark-cli 兜底"))}</span>
           <span class="adv-sum-right">${advPill}</span>
         </summary>
         <div class="adv-inner">
           <div class="adv-block">
             <div class="adv-block-head">
-              <span class="adv-block-title">通用单向推送地址</span>
-              <button type="button" class="btn small" data-int-adv-save>保存地址</button>
+              <span class="adv-block-title">${esc(tx("int.advWebhookTitle", "通用单向推送地址"))}</span>
+              <button type="button" class="btn small" data-int-adv-save>${esc(tx("int.advWebhookSave", "保存地址"))}</button>
             </div>
-            <p class="adv-block-hint">把 Collie 的提醒推送到任意群机器人或通知地址；你正在浏览 Collie 网页时自动静默。</p>
+            <p class="adv-block-hint">${esc(tx("int.advWebhookHint", "把 Collie 的提醒推送到任意群机器人或通知地址；你正在浏览 Collie 网页时自动静默。"))}</p>
             <div class="adv-url-row">
               <input id="int-adv-webhook" type="url" value="${esc(notify.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" autocomplete="off" spellcheck="false">
-              <button type="button" class="btn small" data-int-adv-test>发送测试提醒</button>
+              <button type="button" class="btn small" data-int-adv-test>${esc(tx("int.advWebhookTest", "发送测试提醒"))}</button>
             </div>
           </div>
           <div class="adv-block">
-            <span class="adv-block-title">本地脚本事件入口</span>
-            <p class="adv-block-hint">给本地 CI、定时脚本或监控工具向 Collie 推送事件，带上密钥直接 POST JSON 即可。</p>
+            <span class="adv-block-title">${esc(tx("int.advScriptTitle", "本地脚本事件入口"))}</span>
+            <p class="adv-block-hint">${esc(tx("int.advScriptHint", "给本地 CI、定时脚本或监控工具向 Collie 推送事件，带上密钥直接 POST JSON 即可。"))}</p>
             <div class="int-code-line">
               <span id="int-local-hook-url">${esc(hookURL)}</span>
-              <button type="button" class="btn ghost small" data-copy="${esc(hookURL)}">复制</button>
+              <button type="button" class="btn ghost small" data-copy="${esc(hookURL)}">${esc(tx("common.copy", "复制"))}</button>
             </div>
           </div>
           <div class="adv-block">
             <div class="int-toggle-row">
               <div class="tl">
-                <b>保留本机 lark-cli 单向提醒作为兜底</b>
-                <small>仅在未启用上方「飞书机器人」长连接时生效，启用长连接后会自动接管双向卡片推送。<span id="int-adv-lark-who"></span></small>
+                <b>${esc(tx("int.advLarkTitle", "保留本机 lark-cli 单向提醒作为兜底"))}</b>
+                <small>${esc(tx("int.advLarkHint", "仅在未启用上方「飞书机器人」长连接时生效，启用长连接后会自动接管双向卡片推送。"))}<span id="int-adv-lark-who"></span></small>
               </div>
-              <button type="button" class="switch" role="switch" aria-checked="${notify.notify_lark ? "true" : "false"}" aria-label="保留本机 lark-cli 兜底" data-int-adv-lark></button>
+              <button type="button" class="switch" role="switch" aria-checked="${notify.notify_lark ? "true" : "false"}" aria-label="${esc(tx("int.advLarkAria", "保留本机 lark-cli 兜底"))}" data-int-adv-lark></button>
             </div>
           </div>
         </div>
@@ -9715,7 +9762,7 @@
   function formatOnboardRemaining(sec) {
     const s = Math.max(0, Math.floor(Number(sec) || 0));
     const m = Math.floor(s / 60), r = s % 60;
-    return m > 0 ? `${m} 分 ${String(r).padStart(2, "0")} 秒` : `${r} 秒`;
+    return m > 0 ? tx("common.minSec", "{m} 分 {s} 秒", { m, s: String(r).padStart(2, "0") }) : tx("common.sec", "{n} 秒", { n: r });
   }
 
   function onboardRemainingSec(d) {
@@ -9988,7 +10035,7 @@
           intModalDraft.allow_open_id = item.config?.allow_open_id || pairing.captured_open_id;
           clearInterval(intPairTimer);
           intPairTimer = null;
-          toast("已自动捕获并锁定你的飞书 OpenID");
+          toast(tx("fs.pairCaptured", "已自动捕获并锁定你的飞书 OpenID"));
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } else if (!pairing.active) {
           clearInterval(intPairTimer);
@@ -10026,16 +10073,16 @@
     if (sample.action && mode === sample._mode) return sample.action;
     const k = sample.kind || "pr";
     if (mode === "notify") {
-      if (k === "ci") return "按当前模式：仅推送失败摘要和直达链接，不唤醒 Collie";
-      if (k === "issue" || k === "mention") return "按当前模式：仅把评论/讨论摘要提醒你，不唤醒 Collie";
-      return `按当前模式：仅把 ${termPR} 摘要发给你，不唤醒 Collie`;
+      if (k === "ci") return tx("gf.hintNotifyCi", "按当前模式：仅推送失败摘要和直达链接，不唤醒 Collie");
+      if (k === "issue" || k === "mention") return tx("gf.hintNotifyMention", "按当前模式：仅把评论/讨论摘要提醒你，不唤醒 Collie");
+      return tx("gf.hintNotifyPr", "按当前模式：仅把 {pr} 摘要发给你，不唤醒 Collie", { pr: termPR });
     }
     if (mode === "agent") {
-      return `按当前模式：若已有 Agent 订阅该 ${termPR} 则直接投递继续修；否则自动转交 Collie 先只读调研汇报`;
+      return tx("gf.hintRoute", "按当前模式：若已有 Agent 订阅该 {pr} 则直接投递继续修；否则自动转交 Collie 先只读调研汇报", { pr: termPR });
     }
-    if (k === "ci") return "按当前模式：Collie 自动拉取失败日志定位原因，给修复拍板选项（不擅自修改远端）";
-    if (k === "issue" || k === "mention") return "按当前模式：Collie 结合上下文调研并拟好建议选项，严禁擅自评论";
-    return `按当前模式：Collie 自动调研 ${termPR} 改动与评审意见并给拍板选项，严禁擅自评论或合并`;
+    if (k === "ci") return tx("gf.hintAdviseCi", "按当前模式：Collie 自动拉取失败日志定位原因，给修复拍板选项（不擅自修改远端）");
+    if (k === "issue" || k === "mention") return tx("gf.hintAdviseMention", "按当前模式：Collie 结合上下文调研并拟好建议选项，严禁擅自评论");
+    return tx("gf.hintAdvisePr", "按当前模式：Collie 自动调研 {pr} 改动与评审意见并给拍板选项，严禁擅自评论或合并", { pr: termPR });
   }
 
   function renderIntModal(item) {
@@ -10122,14 +10169,14 @@
           d.swapOpen = false;
           d.onboardSource = "";
           const doneTitle = wasSwap
-            ? (wasExisting ? "已更换并绑定新的飞书机器人" : "已新建并切换为新的飞书机器人")
-            : (wasExisting || d.configured ? "已完成已有应用的权限与双长连接补齐" : "已完成飞书机器人创建与长连接接入");
+            ? (wasExisting ? tx("fs.doneSwapExisting", "已更换并绑定新的飞书机器人") : tx("fs.doneSwapCreate", "已新建并切换为新的飞书机器人"))
+            : (wasExisting || d.configured ? tx("fs.doneRepair", "已完成已有应用的权限与双长连接补齐") : tx("fs.doneCreate", "已完成飞书机器人创建与长连接接入"));
           const doneMsg = wasSwap
-            ? "已原子替换应用凭据并重载长连接，原有安全白名单与只读监听群已自动保留；可点下方「测试连通 · 发验证卡片」校验。"
-            : "凭据已按 0600 权限安全保存并自动拉起长连接，可点下方「测试连通 · 发验证卡片」校验；若企业开启应用发布审批，待管理员通过后即可收发消息。";
+            ? tx("fs.doneSwapNote", "已原子替换应用凭据并重载长连接，原有安全白名单与只读监听群已自动保留；可点下方「测试连通 · 发验证卡片」校验。")
+            : tx("fs.doneCreateNote", "凭据已按 0600 权限安全保存并自动拉起长连接，可点下方「测试连通 · 发验证卡片」校验；若企业开启应用发布审批，待管理员通过后即可收发消息。");
           const toastMsg = wasSwap
-            ? "已更换飞书机器人并重载长连接"
-            : (wasExisting || d.configured ? "已补齐飞书应用权限并重载长连接" : "飞书机器人已自动配置并启动长连接");
+            ? tx("fs.doneSwapToast", "已更换飞书机器人并重载长连接")
+            : (wasExisting || d.configured ? tx("fs.doneRepairToast", "已补齐飞书应用权限并重载长连接") : tx("fs.doneCreateToast", "飞书机器人已自动配置并启动长连接"));
           try {
             const r = await api("/api/super/integrations");
             intPayload = r;
@@ -10180,13 +10227,13 @@
     const isObTerminalErr = !!(ob && (ob.state === "denied" || ob.state === "expired" || ob.state === "error"));
 
     $("#int-modal-icon").innerHTML = INT_ICONS[d.kind] || INT_ICONS.gitforge;
-    $("#int-modal-title").textContent = item?.name || "飞书机器人";
-    $("#int-modal-sub").textContent = item?.subtitle || "长连接双向对话 · 零公网门槛";
+    $("#int-modal-title").textContent = item?.name ? locInt(item.name) : tx("fs.title", "飞书机器人");
+    $("#int-modal-sub").textContent = item?.subtitle ? locInt(item.subtitle) : tx("fs.sub", "长连接双向对话 · 零公网门槛");
     $("#int-modal-state").innerHTML = `<span class="sdot ${esc(st)}" aria-hidden="true"></span><span>${esc(INT_STATUS_TEXT[st] || st)}</span>`;
 
     const testRow = () => {
       if (d.testState === "testing") {
-        return `<span class="int-test-status" role="status"><span class="int-spinner" aria-hidden="true"></span><span>正在校验应用凭据并尝试发送验证卡片…</span></span>`;
+        return `<span class="int-test-status" role="status"><span class="int-spinner" aria-hidden="true"></span><span>${esc(tx("fs.testing", "正在校验应用凭据并尝试发送验证卡片…"))}</span></span>`;
       }
       if (d.testState === "ok") {
         return `<span class="int-test-status ok" role="status"><svg viewBox="0 0 24 24" style="width:15px;height:15px" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>${esc(d.testMsg)}</span></span>`;
@@ -10194,13 +10241,13 @@
       if (d.testState === "err") {
         return `<span class="int-test-status err" role="status">${esc(d.testMsg)}</span>`;
       }
-      return `<span class="int-test-status muted">不会写入正式对话或唤醒 Collie</span>`;
+      return `<span class="int-test-status muted">${esc(tx("fs.testHint", "不会写入正式对话或唤醒 Collie"))}</span>`;
     };
 
     const pairBanner = d.pairing?.active ? `
       <div class="int-pair-box" role="status">
-        <span>等待私信配对中（剩余约 ${Math.max(1, d.pairing.remaining_sec || 120)} 秒）：请用飞书给机器人发任意一条私信，系统将自动锁定你的 OpenID。</span>
-        <button type="button" class="btn ghost small" id="fs-pair-cancel">取消</button>
+        <span>${esc(tx("fs.pairingWait", "等待私信配对中（剩余约 {sec} 秒）：请用飞书给机器人发任意一条私信，系统将自动锁定你的 OpenID。", { sec: Math.max(1, d.pairing.remaining_sec || 120) }))}</span>
+      <button type="button" class="btn ghost small" id="fs-pair-cancel">${esc(tx("common.cancel", "取消"))}</button>
       </div>` : "";
 
     const presets = d.onboardPresets || getFeishuOnboardPresets(item);
@@ -10227,26 +10274,26 @@
       const nameLen = runeCount(nameVal.trim());
       const descLen = runeCount(descVal.trim());
       return `
-        <div class="int-persona-box" aria-label="飞书机器人默认人设">
+        <div class="int-persona-box" aria-label="${esc(tx("fs.personaBoxAria", "飞书机器人默认人设"))}">
           <div class="int-persona-head">
             <div class="int-persona-preview">
-              ${avSrc ? `<img class="int-persona-av" id="fs-ob-av-preview" src="${esc(avSrc)}" alt="${esc(activeAvatar?.label || "边牧头像")}" width="44" height="44">` : ""}
+              ${avSrc ? `<img class="int-persona-av" id="fs-ob-av-preview" src="${esc(avSrc)}" alt="${esc(activeAvatar?.label || tx("fs.avatarAlt", "边牧头像"))}" width="44" height="44">` : ""}
               <div class="int-persona-meta">
                 <div class="int-persona-name-row">
                   <strong class="int-persona-name" id="fs-ob-name-preview">${esc(effectiveDisplayName())}</strong>
-                  ${!presets.owner_name ? `<span class="int-persona-auto-tag" id="fs-ob-auto-tag"${isUsingAutoOwnerName ? "" : " hidden"}>扫码自动填入姓名</span>` : ""}
+                  ${!presets.owner_name ? `<span class="int-persona-auto-tag" id="fs-ob-auto-tag"${isUsingAutoOwnerName ? "" : " hidden"}>${esc(tx("fs.scanAutoName", "扫码自动填入姓名"))}</span>` : ""}
                 </div>
                 <p class="int-persona-desc" id="fs-ob-desc-preview">${esc(effectiveDisplayDesc())}</p>
               </div>
             </div>
             <button type="button" class="btn ghost small int-persona-toggle" id="fs-ob-persona-toggle" aria-expanded="${d.onboardPersonaOpen ? "true" : "false"}" aria-controls="fs-ob-persona-edit">
-              ${d.onboardPersonaOpen ? "收起" : "微调"}
+              ${esc(d.onboardPersonaOpen ? tx("common.collapse", "收起") : tx("fs.tweak", "微调"))}
             </button>
           </div>
 
           <div class="int-avatar-bar">
             <fieldset class="int-avatar-picker">
-              <legend class="sr-only">选择默认边牧头像配色</legend>
+              <legend class="sr-only">${esc(tx("fs.avatarLegend", "选择默认边牧头像配色"))}</legend>
               <div class="int-avatar-list">
                 ${avatars.map((av) => {
                   const checked = av.id === activeAvatar?.id;
@@ -10264,9 +10311,9 @@
                 }).join("")}
               </div>
             </fieldset>
-            <button type="button" class="btn ghost small int-avatar-rand" id="fs-ob-avatar-rand" title="随机换一款领巾配色">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-              <span>随机</span>
+            <button type="button" class="btn ghost small int-avatar-rand" id="fs-ob-avatar-rand" title="${esc(tx("fs.avatarRandTitle", "随机换一款领巾配色"))}">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+                  <span>${esc(tx("fs.avatarRand", "随机"))}</span>
             </button>
           </div>
 
@@ -10274,23 +10321,23 @@
             <div class="int-persona-edit" id="fs-ob-persona-edit">
               <div class="int-field">
                 <div class="int-field-head">
-                  <label class="int-field-label" for="fs-ob-name">机器人名字</label>
+                  <label class="int-field-label" for="fs-ob-name">${esc(tx("fs.botNameLabel", "机器人名字"))}</label>
                   <span class="int-char-cnt tnum${nameLen > limits.name_max ? " is-over" : ""}" id="fs-ob-name-cnt">${nameLen || runeCount(effectiveDisplayName())} / ${limits.name_max}</span>
                 </div>
-                <input id="fs-ob-name" name="feishu_bot_name" type="text" value="${esc(nameVal)}" maxlength="${limits.name_max}" placeholder="${esc(presets.fallback_name || "我的边牧 · Collie")}（留空则扫码自动填入你的飞书名）" aria-describedby="fs-ob-name-help${d.onboardNameErr ? " fs-ob-name-err" : ""}" ${d.onboardNameErr ? `aria-invalid="true"` : ""} autocomplete="off">
+                <input id="fs-ob-name" name="feishu_bot_name" type="text" value="${esc(nameVal)}" maxlength="${limits.name_max}" placeholder="${esc(tx("fs.botNamePh", "{fallback}（留空则扫码自动填入你的飞书名）", { fallback: presets.fallback_name || tx("fs.defaultName", "我的边牧 · Collie") }))}" aria-describedby="fs-ob-name-help${d.onboardNameErr ? " fs-ob-name-err" : ""}" ${d.onboardNameErr ? `aria-invalid="true"` : ""} autocomplete="off">
                 ${d.onboardNameErr ? `<p class="int-field-err" id="fs-ob-name-err" role="alert">${esc(d.onboardNameErr)}</p>` : ""}
-                <p class="int-field-help" id="fs-ob-name-help">默认按 <code>{user}的边牧 · Collie</code> 随扫码账号自动命名，拿不到姓名时兜底「${esc(presets.fallback_name || "我的边牧 · Collie")}」。</p>
+                <p class="int-field-help" id="fs-ob-name-help">${tx("fs.botNameHelpHtml", "默认按 <code>{tpl}</code> 随扫码账号自动命名，拿不到姓名时兜底「{fallback}」。", { tpl: esc(presets.name_template || "{user}的边牧 · Collie"), fallback: esc(presets.fallback_name || tx("fs.defaultName", "我的边牧 · Collie")) })}</p>
               </div>
               <div class="int-field">
                 <div class="int-field-head">
-                  <label class="int-field-label" for="fs-ob-desc">机器人签名 / 简介</label>
+                  <label class="int-field-label" for="fs-ob-desc">${esc(tx("fs.botDescLabel", "机器人签名 / 简介"))}</label>
                   <span class="int-char-cnt tnum${descLen > limits.desc_max ? " is-over" : ""}" id="fs-ob-desc-cnt">${descLen} / ${limits.desc_max}</span>
                 </div>
                 <textarea id="fs-ob-desc" name="feishu_bot_desc" rows="2" maxlength="${limits.desc_max}" placeholder="${esc(presets.default_desc)}" aria-describedby="fs-ob-desc-help${d.onboardDescErr ? " fs-ob-desc-err" : ""}" ${d.onboardDescErr ? `aria-invalid="true"` : ""}>${esc(descVal)}</textarea>
                 ${d.onboardDescErr ? `<p class="int-field-err" id="fs-ob-desc-err" role="alert">${esc(d.onboardDescErr)}</p>` : ""}
                 <div class="int-persona-edit-foot">
-                  <p class="int-field-help" id="fs-ob-desc-help">默认附带 Collie 主页链接，${wizardRegion === "intl" ? "海外 Lark 上限 240 字" : "国内飞书上限 120 字"}。</p>
-                  <button type="button" class="btn ghost small" id="fs-ob-persona-reset">恢复默认</button>
+                  <p class="int-field-help" id="fs-ob-desc-help">${esc(wizardRegion === "intl" ? tx("fs.botDescHelpIntl", "默认附带 Collie 主页链接，海外 Lark 上限 240 字。") : tx("fs.botDescHelpCn", "默认附带 Collie 主页链接，国内飞书上限 120 字。"))}</p>
+                  <button type="button" class="btn ghost small" id="fs-ob-persona-reset">${esc(tx("common.resetDefault", "恢复默认"))}</button>
                 </div>
               </div>
             </div>` : ""}
@@ -10306,40 +10353,40 @@
       const waitAvSrc = safeAvatarSrc(waitAv);
       const waitName = (ob.name && ob.name !== presets.name_template) ? ob.name : effectiveDisplayName();
       const targetHint = isExisting
-        ? (ob.client_id ? `确认页已自动定位应用 <code>${esc(ob.client_id)}</code>，点确认即可一键补齐最小 IM 权限与事件/卡片双长连接。` : "在确认页选择你的已有飞书应用并确认，将自动补齐最小 IM 权限与事件/卡片双长连接。")
-        : "用飞书 App 扫码或在浏览器打开确认页，点「创建」即可自动带入默认边牧头像、人设、双长连接与白名单。";
-      const statusText = ob.state === "domain_switched"
-        ? (ob.region === "intl"
-          ? "检测到海外 Lark 账号，已自动切至 Lark 域等待确认（剩余 "
-          : "检测到国内飞书账号，已自动切至飞书域等待确认（剩余 ")
-        : (isExisting ? "等待你在飞书中确认补齐（剩余 " : "等待你在飞书中确认创建（剩余 ");
+        ? (ob.client_id ? tx("fs.obHintExistingWithIdHtml", "确认页已自动定位应用 <code>{id}</code>，点确认即可一键补齐最小 IM 权限与事件/卡片双长连接。", { id: esc(ob.client_id) }) : esc(tx("fs.obHintExisting", "在确认页选择你的已有飞书应用并确认，将自动补齐最小 IM 权限与事件/卡片双长连接。")))
+          : esc(tx("fs.obHintCreate", "用飞书 App 扫码或在浏览器打开确认页，点「创建」即可自动带入默认边牧头像、人设、双长连接与白名单。"));
+        const statusText = ob.state === "domain_switched"
+          ? (ob.region === "intl"
+            ? tx("fs.obWaitIntl", "检测到海外 Lark 账号，已自动切至 Lark 域等待确认（剩余 ")
+            : tx("fs.obWaitCn", "检测到国内飞书账号，已自动切至飞书域等待确认（剩余 "))
+          : (isExisting ? tx("fs.obWaitExisting", "等待你在飞书中确认补齐（剩余 ") : tx("fs.obWaitCreate", "等待你在飞书中确认创建（剩余 "));
       return `
         <div class="int-onboard-wait">
           ${!isExisting && waitAvSrc ? `
             <div class="int-onboard-persona-pill">
               <img src="${esc(waitAvSrc)}" alt="" width="24" height="24">
-              <span>已附带默认人设：<strong>${esc(waitName)}</strong>（${esc(waitAv?.label || "")}）</span>
+              <span>${tx("fs.obPersonaAttachedHtml", "已附带默认人设：<strong>{name}</strong>（{av}）", { name: esc(waitName), av: esc(waitAv?.label || "") })}</span>
             </div>` : ""}
           <div class="int-onboard-qr-row">
-            ${safeQR ? `<div class="int-qr-frame"><img src="${esc(safeQR)}" alt="飞书一键确认二维码" width="144" height="144"></div>` : ""}
+            ${safeQR ? `<div class="int-qr-frame"><img src="${esc(safeQR)}" alt="${esc(tx("fs.obQrAlt", "飞书一键确认二维码"))}" width="144" height="144"></div>` : ""}
             <div class="int-onboard-actions">
               <p class="int-onboard-guide">${targetHint}</p>
               <div class="int-onboard-btns">
-                ${safeHref ? `<a class="btn primary int-ob-open" href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">在浏览器打开确认页 ↗</a>` : ""}
+                ${safeHref ? `<a class="btn primary int-ob-open" href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">${esc(tx("fs.obOpenBrowser", "在浏览器打开确认页 ↗"))}</a>` : ""}
                 ${safeHref ? `
                   <span class="int-copy-wrap">
-                    <button type="button" class="btn int-copy-btn" command="--copy" commandfor="fs-ob-url-src">复制确认链接</button>
+                    <button type="button" class="btn int-copy-btn" command="--copy" commandfor="fs-ob-url-src">${esc(tx("fs.obCopyUrl", "复制确认链接"))}</button>
                     <span class="int-copy-tip" role="status"></span>
                   </span>
                   <span id="fs-ob-url-src" class="sr-only">${esc(safeHref)}</span>` : ""}
               </div>
-              ${ob.user_code ? `<p class="int-onboard-code">确认码：<code>${esc(ob.user_code)}</code></p>` : ""}
+              ${ob.user_code ? `<p class="int-onboard-code">${tx("fs.obCodeHtml", "确认码：<code>{code}</code>", { code: esc(ob.user_code) })}</p>` : ""}
             </div>
           </div>
           <div class="int-onboard-status${ob.state === "domain_switched" ? " is-switched" : ""}" role="status">
             <span class="int-spinner" aria-hidden="true"></span>
             <span class="int-onboard-status-txt">${statusText}<span id="fs-ob-countdown" class="tnum">${esc(formatOnboardRemaining(onboardRemainingSec(d)))}</span>）…</span>
-            <button type="button" class="btn ghost small" id="fs-ob-cancel-btn">取消</button>
+            <button type="button" class="btn ghost small" id="fs-ob-cancel-btn">${esc(tx("common.cancel", "取消"))}</button>
           </div>
         </div>`;
     };
@@ -10347,25 +10394,25 @@
     const renderOnboardTerminal = () => {
       if (!isObTerminalErr) return "";
       const fallbackMsg = ob.state === "denied"
-        ? "你已取消本次飞书授权确认，可随时重新发起。"
-        : ob.state === "expired"
-          ? "确认二维码已过期，请重新生成。"
-          : "一键开通未完成，请重试或改用手动填写。";
+        ? tx("fs.obCancelled", "你已取消本次飞书授权确认，可随时重新发起。")
+          : ob.state === "expired"
+            ? tx("fs.obExpired", "确认二维码已过期，请重新生成。")
+            : tx("fs.obFailed", "一键开通未完成，请重试或改用手动填写。");
       return `
         <div class="int-onboard-err" role="status">
           <span class="sdot error" aria-hidden="true"></span>
           <span class="int-onboard-err-txt">${esc(ob.error || fallbackMsg)}</span>
-          <button type="button" class="btn ghost small" id="fs-ob-retry-btn">重新生成</button>
+          <button type="button" class="btn ghost small" id="fs-ob-retry-btn">${esc(tx("fs.obRegen", "重新生成"))}</button>
         </div>`;
     };
 
     const credentialsFieldsHTML = (includeRegion = true) => `
       ${includeRegion ? `
         <div class="int-field">
-          <span class="int-field-label">平台区域</span>
-          <div class="seg" role="group" aria-label="平台区域">
-            <button type="button" class="${d.region === "cn" ? "on" : ""}" data-fs-region="cn">国内飞书</button>
-            <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">海外 Lark</button>
+          <span class="int-field-label">${esc(tx("fs.regionLabel", "平台区域"))}</span>
+        <div class="seg" role="group" aria-label="${esc(tx("fs.regionLabel", "平台区域"))}">
+          <button type="button" class="${d.region === "cn" ? "on" : ""}" data-fs-region="cn">${esc(tx("fs.regionCn", "国内飞书"))}</button>
+          <button type="button" class="${d.region === "intl" ? "on" : ""}" data-fs-region="intl">${esc(tx("fs.regionIntl", "海外 Lark"))}</button>
           </div>
         </div>` : ""}
       <div class="int-field">
@@ -10373,40 +10420,40 @@
         <input id="fs-app-id" value="${esc(d.app_id)}" placeholder="cli_xxxxxxxxxxxx" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
       </div>
       <div class="int-field">
-        <label class="int-field-label" for="fs-app-secret">App Secret <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></label>
-        <input id="fs-app-secret" type="password" value="${esc(d.app_secret)}" placeholder="${d.secret_set ? "已保存在本机 secrets.json（留空则保持不变）" : "粘贴应用的 App Secret"}" autocomplete="new-password">
-        <p class="int-field-help">凭据以 <code>0600</code> 权限单独落盘，界面、接口与日志永不回显明文。</p>
+        <label class="int-field-label" for="fs-app-secret">App Secret <span class="opt">${esc(d.secret_set ? tx("fs.secretSaved", "已安全保存在本机") : tx("common.required", "必填"))}</span></label>
+        <input id="fs-app-secret" type="password" value="${esc(d.app_secret)}" placeholder="${esc(d.secret_set ? tx("fs.secretPhSaved", "已保存在本机 secrets.json（留空则保持不变）") : tx("fs.secretPhNew", "粘贴应用的 App Secret"))}" autocomplete="new-password">
+        <p class="int-field-help">${tx("fs.secretHelpHtml", "凭据以 <code>0600</code> 权限单独落盘，界面、接口与日志永不回显明文。")}</p>
       </div>`;
 
     const allowlistFieldsHTML = `
       <div class="int-field">
-        <label class="int-field-label" for="fs-openid">允许对话的本人 OpenID <span class="opt">强烈建议</span></label>
+        <label class="int-field-label" for="fs-openid">${esc(tx("fs.openIdLabel", "允许对话的本人 OpenID"))} <span class="opt">${esc(tx("fs.strongRec", "强烈建议"))}</span></label>
         <div class="int-input-row has-multi">
-          <input id="fs-openid" value="${esc(d.allow_open_id)}" placeholder="ou_xxxxxxxxxxxx，多个逗号隔开" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
-          <button type="button" class="btn small" id="fs-detect-id" title="从本机 lark-cli 读取当前登录账号">自动填入</button>
-          <button type="button" class="btn small" id="fs-pair-btn" ${d.pairing?.active ? "disabled" : ""} title="给机器人发一条私信自动抓拍锁定">私信配对</button>
+          <input id="fs-openid" value="${esc(d.allow_open_id)}" placeholder="${esc(tx("fs.openIdPh", "ou_xxxxxxxxxxxx，多个逗号隔开"))}" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+          <button type="button" class="btn small" id="fs-detect-id" title="${esc(tx("fs.detectIdTitle", "从本机 lark-cli 读取当前登录账号"))}">${esc(tx("fs.detectIdBtn", "自动填入"))}</button>
+          <button type="button" class="btn small" id="fs-pair-btn" ${d.pairing?.active ? "disabled" : ""} title="${esc(tx("fs.pairBtnTitle", "给机器人发一条私信自动抓拍锁定"))}">${esc(tx("fs.pairBtn", "私信配对"))}</button>
         </div>
         ${pairBanner}
-        <p class="int-field-help">仅白名单账号可唤醒 Collie 与点击卡片拍板按钮，防止他人借机器人操作你的电脑。</p>
+        <p class="int-field-help">${esc(tx("fs.openIdHelp", "仅白名单账号可唤醒 Collie 与点击卡片拍板按钮，防止他人借机器人操作你的电脑。"))}</p>
       </div>
       <div class="int-field">
-        <label class="int-field-label" for="fs-feedback-chats">只读反馈监听群 Chat ID <span class="opt">可选</span></label>
-        <textarea id="fs-feedback-chats" name="feedback_chat_ids" rows="2" placeholder="oc_xxxxxxxxxxxx，多个逗号或换行隔开" aria-describedby="fs-feedback-help" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">${esc(d.feedback_chat_ids)}</textarea>
-        <p class="int-field-help" id="fs-feedback-help">仅在群内 @Collie 时以只读建议送入主会话，不响应普通闲聊、不授予执行权限。</p>
+        <label class="int-field-label" for="fs-feedback-chats">${esc(tx("fs.feedbackLabel", "只读反馈监听群 Chat ID"))} <span class="opt">${esc(tx("common.optional", "可选"))}</span></label>
+        <textarea id="fs-feedback-chats" name="feedback_chat_ids" rows="2" placeholder="${esc(tx("fs.feedbackPh", "oc_xxxxxxxxxxxx，多个逗号或换行隔开"))}" aria-describedby="fs-feedback-help" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">${esc(d.feedback_chat_ids)}</textarea>
+        <p class="int-field-help" id="fs-feedback-help">${esc(tx("fs.feedbackHelp", "仅在群内 @Collie 时以只读建议送入主会话，不响应普通闲聊、不授予执行权限。"))}</p>
       </div>
       <div class="int-toggle-row">
         <div class="tl">
-          <b>群聊中仅响应 @Collie</b>
-          <small>私信默认直接回复；拉进群后只有 @机器人 才会触发。在群里直接 @机器人 且未引用消息时，若已开通可选权限 <code>im:message.group_msg</code> 会自动附带最近群聊上下文（未开通则自动降级）。</small>
+          <b>${esc(tx("fs.mentionOnlyTitle", "群聊中仅响应 @Collie"))}</b>
+          <small>${tx("fs.mentionOnlyDescHtml", "私信默认直接回复；拉进群后只有 @机器人 才会触发。在群里直接 @机器人 且未引用消息时，若已开通可选权限 <code>im:message.group_msg</code> 会自动附带最近群聊上下文（未开通则自动降级）。")}</small>
         </div>
-        <button type="button" class="switch" id="fs-mention-sw" role="switch" aria-checked="${d.group_mention_only ? "true" : "false"}" aria-label="群聊中仅响应 @Collie"></button>
+        <button type="button" class="switch" id="fs-mention-sw" role="switch" aria-checked="${d.group_mention_only ? "true" : "false"}" aria-label="${esc(tx("fs.mentionOnlyTitle", "群聊中仅响应 @Collie"))}"></button>
       </div>
       <div class="int-toggle-row">
         <div class="tl">
-          <b>飞书对话立即同步卡片</b>
-          <small>从飞书发出的消息会立刻回传交互卡片，不受「网页在线静默」限制。</small>
+          <b>${esc(tx("fs.instantSyncTitle", "飞书对话立即同步卡片"))}</b>
+          <small>${esc(tx("fs.instantSyncDesc", "从飞书发出的消息会立刻回传交互卡片，不受「网页在线静默」限制。"))}</small>
         </div>
-        <button type="button" class="switch" id="fs-sync-sw" role="switch" aria-checked="${d.instant_chat_sync ? "true" : "false"}" aria-label="飞书对话立即同步卡片"></button>
+        <button type="button" class="switch" id="fs-sync-sw" role="switch" aria-checked="${d.instant_chat_sync ? "true" : "false"}" aria-label="${esc(tx("fs.instantSyncTitle", "飞书对话立即同步卡片"))}"></button>
       </div>`;
 
     const isSwapObActive = isConfigured && d.onboardSource === "swap";
@@ -10417,47 +10464,47 @@
       const regAttr = isSwap ? "data-fs-swap-region" : "data-fs-region";
       const curReg = isSwap ? wizardRegion : d.region;
       return `
-        <section class="int-onboard-card${isSwap ? " int-swap-card" : ""}" ${isSwap ? `id="fs-swap-panel" ` : ""}aria-label="${isSwap ? "更换飞书机器人向导" : "飞书一键开通向导"}">
+        <section class="int-onboard-card${isSwap ? " int-swap-card" : ""}" ${isSwap ? `id="fs-swap-panel" ` : ""}aria-label="${esc(isSwap ? tx("fs.swapAria", "更换飞书机器人向导") : tx("fs.obAria", "飞书一键开通向导"))}">
           <div class="int-onboard-head">
             <div class="int-onboard-title-row">
-              <span class="int-onboard-title">${isSwap ? "更换飞书机器人" : "一键接入飞书机器人"}</span>
-              <span class="int-onboard-badge">${isSwap ? "无缝换绑" : "推荐"}</span>
+              <span class="int-onboard-title">${esc(isSwap ? tx("fs.swapTitle", "更换飞书机器人") : tx("fs.obTitle", "一键接入飞书机器人"))}</span>
+              <span class="int-onboard-badge">${esc(isSwap ? tx("fs.swapBadge", "无缝换绑") : tx("common.recommended", "推荐"))}</span>
             </div>
-            <p class="int-onboard-desc">${isSwap
-              ? "新机器人扫码确认后才原子替换凭据并重载长连接，自动保留原有安全白名单与只读监听群；中途取消不影响当前机器人。"
-              : "扫码或在浏览器确认，自动完成创建或绑定应用、开启机器人、配置最小消息权限、启用事件与卡片双长连接，并自动锁定你的安全白名单。"}</p>
+            <p class="int-onboard-desc">${esc(isSwap
+              ? tx("fs.swapDesc", "新机器人扫码确认后才原子替换凭据并重载长连接，自动保留原有安全白名单与只读监听群；中途取消不影响当前机器人。")
+              : tx("fs.obDesc", "扫码或在浏览器确认，自动完成创建或绑定应用、开启机器人、配置最小消息权限、启用事件与卡片双长连接，并自动锁定你的安全白名单。"))}</p>
           </div>
 
           ${showWait ? renderOnboardWaiting() : `
             <div class="int-onboard-opts">
               <div class="int-onboard-row">
                 <div class="int-field">
-                  <span class="int-field-label">平台区域</span>
-                  <div class="seg" role="group" aria-label="平台区域">
-                    <button type="button" class="${curReg === "cn" ? "on" : ""}" ${regAttr}="cn">国内飞书</button>
-                    <button type="button" class="${curReg === "intl" ? "on" : ""}" ${regAttr}="intl">海外 Lark</button>
+                  <span class="int-field-label">${esc(tx("fs.regionLabel", "平台区域"))}</span>
+                  <div class="seg" role="group" aria-label="${esc(tx("fs.regionLabel", "平台区域"))}">
+                    <button type="button" class="${curReg === "cn" ? "on" : ""}" ${regAttr}="cn">${esc(tx("fs.regionCn", "国内飞书"))}</button>
+                    <button type="button" class="${curReg === "intl" ? "on" : ""}" ${regAttr}="intl">${esc(tx("fs.regionIntl", "海外 Lark"))}</button>
                   </div>
                 </div>
                 <div class="int-field">
-                  <span class="int-field-label">${isSwap ? "换绑方式" : "开通方式"}</span>
-                  <div class="seg" role="group" aria-label="${isSwap ? "飞书换绑方式" : "飞书开通方式"}">
-                    <button type="button" class="${d.onboardMode === "create" ? "on" : ""}" data-fs-ob-mode="create">新建应用</button>
-                    <button type="button" class="${d.onboardMode === "existing" ? "on" : ""}" data-fs-ob-mode="existing">绑定已有应用</button>
+                  <span class="int-field-label">${esc(isSwap ? tx("fs.swapModeLabel", "换绑方式") : tx("fs.obModeLabel", "开通方式"))}</span>
+                  <div class="seg" role="group" aria-label="${esc(isSwap ? tx("fs.swapModeAria", "飞书换绑方式") : tx("fs.obModeAria", "飞书开通方式"))}">
+                    <button type="button" class="${d.onboardMode === "create" ? "on" : ""}" data-fs-ob-mode="create">${esc(tx("fs.modeCreate", "新建应用"))}</button>
+                    <button type="button" class="${d.onboardMode === "existing" ? "on" : ""}" data-fs-ob-mode="existing">${esc(tx("fs.modeExisting", "绑定已有应用"))}</button>
                   </div>
                 </div>
               </div>
               ${d.onboardMode === "existing" ? `
                 <div class="int-field">
-                  <label class="int-field-label" for="fs-ob-client-id">已有应用 App ID <span class="opt">可选</span></label>
-                  <input id="fs-ob-client-id" value="${esc(d.onboardClientId)}" placeholder="留空可在飞书确认页直接选择已有应用，或填入 cli_…" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+                  <label class="int-field-label" for="fs-ob-client-id">${esc(tx("fs.existingIdLabel", "已有应用 App ID"))} <span class="opt">${esc(tx("common.optional", "可选"))}</span></label>
+                  <input id="fs-ob-client-id" value="${esc(d.onboardClientId)}" placeholder="${esc(tx("fs.existingIdPh", "留空可在飞书确认页直接选择已有应用，或填入 cli_…"))}" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
                 </div>` : renderPersonaBox()}
               <div class="int-onboard-cta">
                 <button type="button" class="btn primary" id="fs-ob-start-btn" ${d.onboardStarting || (isSwap && isRepairObActive && isObWaiting) ? "disabled" : ""}>
-                  ${d.onboardStarting ? "正在生成确认码…" : (isSwap
-                    ? (d.onboardMode === "existing" ? "扫码绑定并替换" : "扫码新建并替换")
-                    : (d.onboardMode === "existing" ? "一键绑定并补齐权限" : "一键开通飞书"))}
+                  ${esc(d.onboardStarting ? tx("fs.obGenCode", "正在生成确认码…") : (isSwap
+                    ? (d.onboardMode === "existing" ? tx("fs.swapGoExisting", "扫码绑定并替换") : tx("fs.swapGoCreate", "扫码新建并替换"))
+                    : (d.onboardMode === "existing" ? tx("fs.obGoExisting", "一键绑定并补齐权限") : tx("fs.obGoCreate", "一键开通飞书"))))}
                 </button>
-                <span class="int-onboard-hint">${isSwap ? "确认前原机器人持续在线 · 自动保留白名单与监听群" : "零公网地址 · 自动配好双长连接与白名单"}</span>
+                <span class="int-onboard-hint">${esc(isSwap ? tx("fs.swapHint", "确认前原机器人持续在线 · 自动保留白名单与监听群") : tx("fs.obHint", "零公网地址 · 自动配好双长连接与白名单"))}</span>
               </div>
               ${showTerm ? renderOnboardTerminal() : ""}
             </div>`}
@@ -10469,29 +10516,29 @@
         ${st === "error" && d.health?.last_error ? `
           <div class="int-modal-alert" role="alert">
             <span class="sdot error" aria-hidden="true"></span>
-            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+            <div><strong>${esc(tx("fs.connErrPrefix", "连接异常："))}</strong>${esc(d.health.last_error)}</div>
           </div>` : ""}
 
         ${renderOnboardWizard(false)}
 
         <details class="int-manual-fold" id="fs-manual-fold" ${d.manualOpen ? "open" : ""}>
           <summary>
-            <span class="int-manual-title">手动填写 App ID / App Secret</span>
-            <span class="int-manual-hint">已有凭据或受限租户兜底</span>
+            <span class="int-manual-title">${esc(tx("fs.manualTitle", "手动填写 App ID / App Secret"))}</span>
+            <span class="int-manual-hint">${esc(tx("fs.manualHint", "已有凭据或受限租户兜底"))}</span>
           </summary>
           <div class="int-manual-body">
             <div class="int-sec">
               ${credentialsFieldsHTML(false)}
             </div>
             <div class="int-sec">
-              <div class="int-sec-title">安全白名单与对话方式</div>
+              <div class="int-sec-title">${esc(tx("fs.secSecurity", "安全白名单与对话方式"))}</div>
               ${allowlistFieldsHTML}
             </div>
             <div class="int-sec">
-              <div class="int-sec-title">连通自检</div>
+              <div class="int-sec-title">${esc(tx("fs.secTest", "连通自检"))}</div>
               <div class="int-test-box">
                 <div class="int-test-head">
-                  <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
+                  <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>${esc(tx("fs.testBtn", "测试连通 · 发验证卡片"))}</button>
                   ${testRow()}
                 </div>
               </div>
@@ -10504,23 +10551,23 @@
         ${st === "error" && d.health?.last_error ? `
           <div class="int-modal-alert" role="alert">
             <span class="sdot error" aria-hidden="true"></span>
-            <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+            <div><strong>${esc(tx("fs.connErrPrefix", "连接异常："))}</strong>${esc(d.health.last_error)}</div>
           </div>` : ""}
 
         ${d.onboardDoneMsg ? `
           <div class="int-onboard-done" role="status">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
             <div>
-              <strong>${esc(d.onboardDoneTitle || "已完成飞书接入")}</strong>
+              <strong>${esc(d.onboardDoneTitle || tx("fs.doneDefault", "已完成飞书接入"))}</strong>
               <p>${esc(d.onboardDoneMsg)}</p>
             </div>
           </div>` : ""}
 
         <section class="int-sec">
           <div class="int-sec-head">
-            <h3 class="int-sec-title">应用凭据（主动出站长连接，无需公网地址）</h3>
+            <h3 class="int-sec-title">${esc(tx("fs.secCreds", "应用凭据（主动出站长连接，无需公网地址）"))}</h3>
             <button type="button" class="btn ghost small int-swap-btn" id="fs-swap-toggle-btn" aria-expanded="${d.swapOpen ? "true" : "false"}" aria-controls="fs-swap-panel" ${d.saving ? "disabled" : ""}>
-              ${d.swapOpen ? "收起" : "更换机器人"}
+              ${esc(d.swapOpen ? tx("common.collapse", "收起") : tx("fs.swapBtn", "更换机器人"))}
             </button>
           </div>
           ${d.swapOpen ? renderOnboardWizard(true) : ""}
@@ -10528,17 +10575,17 @@
         </section>
 
         <section class="int-sec">
-          <h3 class="int-sec-title">安全白名单与对话方式</h3>
+          <h3 class="int-sec-title">${esc(tx("fs.secSecurity", "安全白名单与对话方式"))}</h3>
           ${allowlistFieldsHTML}
         </section>
 
         <section class="int-sec">
-          <h3 class="int-sec-title">连通自检与一键补齐</h3>
+          <h3 class="int-sec-title">${esc(tx("fs.secTestRepair", "连通自检与一键补齐"))}</h3>
           <div class="int-test-box">
             <div class="int-test-head">
-              <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>测试连通 · 发验证卡片</button>
-              <button type="button" class="btn" id="fs-ob-repair-btn" ${d.onboardStarting || isObWaiting ? "disabled" : ""} title="带当前 App ID 唤起飞书确认页，一键补齐最小 IM 权限与事件/卡片双长连接">
-                ${d.onboardStarting && isRepairObActive ? "生成确认码…" : "一键补齐权限/回调"}
+              <button type="button" class="btn" id="fs-test-btn" ${d.testState === "testing" ? "disabled" : ""}>${esc(tx("fs.testBtn", "测试连通 · 发验证卡片"))}</button>
+              <button type="button" class="btn" id="fs-ob-repair-btn" ${d.onboardStarting || isObWaiting ? "disabled" : ""} title="${esc(tx("fs.repairTitle", "带当前 App ID 唤起飞书确认页，一键补齐最小 IM 权限与事件/卡片双长连接"))}">
+              ${esc(d.onboardStarting && isRepairObActive ? tx("fs.obGenCodeShort", "生成确认码…") : tx("fs.repairBtn", "一键补齐权限/回调"))}
               </button>
             </div>
             ${testRow()}
@@ -10551,10 +10598,10 @@
     const renderFeishuFoot = () => {
       const showSave = isConfigured || d.manualOpen || !!d.app_id.trim() || !!d.app_secret.trim();
       $("#int-modal-foot").innerHTML = `
-        ${isConfigured ? `<button type="button" class="btn ghost small" id="fs-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>` : ""}
+        ${isConfigured ? `<button type="button" class="btn ghost small" id="fs-reset-btn" ${d.saving ? "disabled" : ""}>${esc(tx("fs.resetConfig", "清空配置"))}</button>` : ""}
         <div class="int-sheet-foot-right">
-          <button type="button" class="btn" id="fs-cancel-btn">${showSave ? "取消" : "关闭"}</button>
-          ${showSave ? `<button type="button" class="btn primary" id="fs-save-btn" ${d.saving ? "disabled" : ""}>${d.saving ? "保存中…" : "保存并应用"}</button>` : ""}
+          <button type="button" class="btn" id="fs-cancel-btn">${esc(showSave ? tx("common.cancel", "取消") : tx("common.close", "关闭"))}</button>
+          ${showSave ? `<button type="button" class="btn primary" id="fs-save-btn" ${d.saving ? "disabled" : ""}>${esc(d.saving ? tx("common.saving", "保存中…") : tx("fs.saveApply", "保存并应用"))}</button>` : ""}
         </div>
       `;
       $("#fs-reset-btn")?.addEventListener("click", handleReset);
@@ -10585,11 +10632,11 @@
       let descErr = "";
       if (nameTrim) {
         const n = runeCount(nameTrim);
-        if (n < limits.name_min) nameErr = `机器人名字至少需要 ${limits.name_min} 个字符`;
-        else if (n > limits.name_max) nameErr = `机器人名字不能超过 ${limits.name_max} 个字符`;
+        if (n < limits.name_min) nameErr = tx("fs.nameTooShort", "机器人名字至少需要 {n} 个字符", { n: limits.name_min });
+      else if (n > limits.name_max) nameErr = tx("fs.nameTooLong", "机器人名字不能超过 {n} 个字符", { n: limits.name_max });
       }
       if (descTrim && runeCount(descTrim) > limits.desc_max) {
-        descErr = `机器人简介不能超过 ${limits.desc_max} 个字符`;
+        descErr = tx("fs.descTooLong", "机器人简介不能超过 {n} 个字符", { n: limits.desc_max });
       }
       d.onboardNameErr = nameErr;
       d.onboardDescErr = descErr;
@@ -10637,7 +10684,7 @@
       } catch (err) {
         if (!intModal?.open || intModalKind !== "feishu" || intModalDraft !== d) return;
         d.onboardStarting = false;
-        d.onboard = { state: "error", mode, client_id: clientID || "", error: err.message || "发起飞书一键开通失败" };
+        d.onboard = { state: "error", mode, client_id: clientID || "", error: err.message || tx("fs.obStartErr", "发起飞书一键开通失败") };
         d.onboardDeadlineMs = 0;
         renderIntModal(item);
       }
@@ -10744,9 +10791,9 @@
       const n = runeCount(String(d.onboardName || "").trim());
       const prevErr = d.onboardNameErr;
       d.onboardNameErr = n > 0 && n < limits.name_min
-        ? `机器人名字至少需要 ${limits.name_min} 个字符`
-        : n > limits.name_max
-          ? `机器人名字不能超过 ${limits.name_max} 个字符`
+        ? tx("fs.nameTooShort", "机器人名字至少需要 {n} 个字符", { n: limits.name_min })
+              : n > limits.name_max
+                ? tx("fs.nameTooLong", "机器人名字不能超过 {n} 个字符", { n: limits.name_max })
           : "";
       if (d.onboardNameErr !== prevErr) renderIntModal(item);
     });
@@ -10769,7 +10816,7 @@
     $("#fs-ob-desc")?.addEventListener("blur", () => {
       const n = runeCount(String(d.onboardDesc || "").trim());
       const prevErr = d.onboardDescErr;
-      d.onboardDescErr = n > limits.desc_max ? `机器人简介不能超过 ${limits.desc_max} 个字符` : "";
+      d.onboardDescErr = n > limits.desc_max ? tx("fs.descTooLong", "机器人简介不能超过 {n} 个字符", { n: limits.desc_max }) : "";
       if (d.onboardDescErr !== prevErr) renderIntModal(item);
     });
     $("#fs-ob-persona-reset")?.addEventListener("click", () => {
@@ -10819,9 +10866,9 @@
           d.allow_open_id = res.open_id;
           const inp = $("#fs-openid");
           if (inp) inp.value = d.allow_open_id;
-          toast(`已识别本机飞书账号${res.who ? `（${res.who}）` : ""}并填入`);
+          toast(tx("fs.detectedToast", "已识别本机飞书账号{who}并填入", { who: res.who ? ` (${res.who})` : "" }));
         } else {
-          toast(res.problem || "未检测到本机 lark-cli 登录账号，可使用「私信配对」", "attn");
+          toast(res.problem || tx("fs.detectNoneToast", "未检测到本机 lark-cli 登录账号，可使用「私信配对」"), "attn");
         }
       } catch (err) { toast(err.message, "attn"); }
     });
@@ -10832,7 +10879,7 @@
         d.pairing = { active: true, remaining_sec: 120 };
         renderIntModal(item);
         startPairPoll();
-        toast(res.message || "已开启 2 分钟私信配对");
+        toast(res.message || tx("fs.pairStartedToast", "已开启 2 分钟私信配对"));
       } catch (err) { toast(err.message, "attn"); }
     });
     $("#fs-pair-cancel")?.addEventListener("click", async () => {
@@ -10848,7 +10895,7 @@
     $("#fs-test-btn")?.addEventListener("click", async () => {
       if (!d.app_id.trim() || (!d.secret_set && !d.app_secret.trim())) {
         d.testState = "err";
-        d.testMsg = "请先填写 App ID 和 App Secret 再测试连通";
+        d.testMsg = tx("fs.testNeedCreds", "请先填写 App ID 和 App Secret 再测试连通");
         renderIntModal(item);
         return;
       }
@@ -10861,7 +10908,7 @@
         });
         if (!intModal.open || intModalKind !== "feishu") return;
         d.testState = res.ok ? "ok" : "err";
-        d.testMsg = res.message || (res.ok ? "测试连通成功" : "测试失败");
+        d.testMsg = res.message || (res.ok ? tx("fs.testOk", "测试连通成功") : tx("fs.testFail", "测试失败"));
         renderIntModal(item);
       } catch (err) {
         if (!intModal.open || intModalKind !== "feishu") return;
@@ -10884,7 +10931,7 @@
             config: { region: "cn", app_id: "", allow_open_id: "", feedback_chat_ids: [], group_mention_only: true, instant_chat_sync: true },
           },
         });
-        toast("已清空飞书本地配置与凭据");
+        toast(tx("fs.clearedToast", "已清空飞书本地配置与凭据"));
         await closeIntModal("reset");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
@@ -10906,7 +10953,7 @@
             secrets: draftSecretsPayload(),
           },
         });
-        toast(hasCreds ? "飞书长连接配置已保存并热重载" : "配置已保存（补充凭据后自动启用）");
+        toast(hasCreds ? tx("fs.savedReloadToast", "飞书长连接配置已保存并热重载") : tx("fs.savedPendingToast", "配置已保存（补充凭据后自动启用）"));
         await closeIntModal("saved");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
@@ -10929,57 +10976,57 @@
 
     $("#int-modal-icon").innerHTML = INT_ICONS[d.kind] || INT_ICONS.gitforge;
     $("#int-modal-title").textContent = item?.name || d.kind;
-    $("#int-modal-sub").textContent = item?.subtitle || "代码托管主动追踪 · 零公网门槛";
+    $("#int-modal-sub").textContent = item?.subtitle ? locInt(item.subtitle) : tx("gf.sub", "代码托管主动追踪 · 零公网门槛");
     $("#int-modal-state").innerHTML = `<span class="sdot ${esc(st)}" aria-hidden="true"></span><span>${esc(INT_STATUS_TEXT[st] || st)}</span>`;
 
     const renderProbeBox = () => {
       if (d.probeState === "probing") {
-        return `<div class="int-probe-box" role="status"><span class="int-spinner" aria-hidden="true"></span><span class="int-probe-body">正在探测本机登录态…</span></div>`;
+        return `<div class="int-probe-box" role="status"><span class="int-spinner" aria-hidden="true"></span><span class="int-probe-body">${esc(tx("gf.probing", "正在探测本机登录态…"))}</span></div>`;
       }
       if (d.probeState === "ok" && d.probe?.ready) {
-        const who = d.probe.user ? `<strong>@${esc(d.probe.user)}</strong>` : "已登录";
+        const who = d.probe.user ? `<strong>@${esc(d.probe.user)}</strong>` : esc(tx("gf.loggedIn", "已登录"));
         const cliTag = extra.cli_label ? `（${esc(extra.cli_label)}）` : "";
         return `<div class="int-probe-box" role="status">
           <span class="sdot connected" aria-hidden="true"></span>
-          <span class="int-probe-body">已检测到本机账号 ${who}${cliTag}，自动复用登录态，Collie 自身不落盘明文令牌。</span>
-          <button type="button" class="btn ghost small" id="gf-reprobe-btn">重测</button>
+          <span class="int-probe-body">${tx("gf.probeOkHtml", "已检测到本机账号 {who}{cli}，自动复用登录态，Collie 自身不落盘明文令牌。", { who, cli: cliTag })}</span>
+          <button type="button" class="btn ghost small" id="gf-reprobe-btn">${esc(tx("gf.reprobe", "重测"))}</button>
         </div>`;
       }
       if (d.probeState === "err") {
         return `<div class="int-probe-box" role="status">
           <span class="sdot error" aria-hidden="true"></span>
-          <span class="int-probe-body">${esc(d.probe?.problem || "未检测到本机登录态")}</span>
-          <button type="button" class="btn ghost small" id="gf-reprobe-btn">重试</button>
+          <span class="int-probe-body">${esc(d.probe?.problem || tx("gf.probeNone", "未检测到本机登录态"))}</span>
+          <button type="button" class="btn ghost small" id="gf-reprobe-btn">${esc(tx("common.retry", "重试"))}</button>
         </div>`;
       }
       return `<div class="int-probe-box">
         <span class="sdot unconfigured" aria-hidden="true"></span>
-        <span class="int-probe-body">点击检测本机 CLI 登录态，自动复用现有凭据。</span>
-        <button type="button" class="btn ghost small" id="gf-reprobe-btn">检测</button>
+        <span class="int-probe-body">${esc(tx("gf.probeIdle", "点击检测本机 CLI 登录态，自动复用现有凭据。"))}</span>
+          <button type="button" class="btn ghost small" id="gf-reprobe-btn">${esc(tx("gf.probeBtn", "检测"))}</button>
       </div>`;
     };
 
     const authSection = isGitHub ? `
       <section class="int-sec">
-        <h3 class="int-sec-title">认证方式（主动条件轮询，无需公网地址）</h3>
+        <h3 class="int-sec-title">${esc(tx("gf.secAuth", "认证方式（主动条件轮询，无需公网地址）"))}</h3>
         <div class="int-field">
-          <span class="int-field-label">令牌来源</span>
-          <div class="seg" role="group" aria-label="GitHub 认证方式">
-            <button type="button" class="${d.auth_mode === "gh" ? "on" : ""}" data-gf-auth="gh">复用本机 gh 登录</button>
-            <button type="button" class="${d.auth_mode === "pat" ? "on" : ""}" data-gf-auth="pat">个人令牌（PAT）</button>
+          <span class="int-field-label">${esc(tx("gf.tokenSrc", "令牌来源"))}</span>
+          <div class="seg" role="group" aria-label="${esc(tx("gf.authAria", "GitHub 认证方式"))}">
+            <button type="button" class="${d.auth_mode === "gh" ? "on" : ""}" data-gf-auth="gh">${esc(tx("gf.authGh", "复用本机 gh 登录"))}</button>
+            <button type="button" class="${d.auth_mode === "pat" ? "on" : ""}" data-gf-auth="pat">${esc(tx("gf.authPat", "个人令牌（PAT）"))}</button>
           </div>
         </div>
         ${d.auth_mode === "gh" ? renderProbeBox() : `
           <div class="int-field">
-            <label class="int-field-label" for="gf-pat">Fine-grained PAT <span class="opt">${d.secret_set ? "已安全保存在本机" : "必填"}</span></label>
-            <input id="gf-pat" type="password" value="${esc(d.pat)}" placeholder="${d.secret_set ? "已保存在本机 secrets.json（留空则保持不变）" : "粘贴只读 Fine-grained PAT"}" autocomplete="new-password">
-            <p class="int-field-help">只需勾选 Notifications、Pull requests、Issues、Actions 只读权限，以 <code>0600</code> 权限单独落盘。</p>
+            <label class="int-field-label" for="gf-pat">Fine-grained PAT <span class="opt">${esc(d.secret_set ? tx("fs.secretSaved", "已安全保存在本机") : tx("common.required", "必填"))}</span></label>
+            <input id="gf-pat" type="password" value="${esc(d.pat)}" placeholder="${esc(d.secret_set ? tx("fs.secretPhSaved", "已保存在本机 secrets.json（留空则保持不变）") : tx("gf.patPhNew", "粘贴只读 Fine-grained PAT"))}" autocomplete="new-password">
+            <p class="int-field-help">${tx("gf.patHelpHtml", "只需勾选 Notifications、Pull requests、Issues、Actions 只读权限，以 <code>0600</code> 权限单独落盘。")}</p>
           </div>`}
       </section>` : `
       <section class="int-sec">
-        <h3 class="int-sec-title">本机 CLI 连接（声明式插件加载，无需公网地址）</h3>
+        <h3 class="int-sec-title">${esc(tx("gf.secCli", "本机 CLI 连接（声明式插件加载，无需公网地址）"))}</h3>
         ${renderProbeBox()}
-        ${extra.provider_path ? `<p class="int-field-help">插件声明位置：<code>${esc(extra.provider_path)}</code></p>` : ""}
+        ${extra.provider_path ? `<p class="int-field-help">${tx("gf.cliPathHtml", "插件声明位置：<code>{path}</code>", { path: esc(extra.provider_path) })}</p>` : ""}
       </section>`;
 
     const suggested = Array.isArray(d.probe?.repos)
@@ -10987,18 +11034,18 @@
       : [];
 
     const eventCheckboxes = pr === "MR" ? `
-      <label class="int-check-item"><input type="checkbox" data-gf-ev="mr" ${d.events.mr !== false ? "checked" : ""}> 指派给我的 MR 评审</label>
-      <label class="int-check-item"><input type="checkbox" data-gf-ev="mention" ${d.events.mention !== false ? "checked" : ""}> 评论 @我</label>
-      <label class="int-check-item"><input type="checkbox" data-gf-ev="ci" ${d.events.ci !== false ? "checked" : ""}> 流水线 / CI 失败</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="mr" ${d.events.mr !== false ? "checked" : ""}> ${esc(tx("gf.evMr", "指派给我的 MR 评审"))}</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="mention" ${d.events.mention !== false ? "checked" : ""}> ${esc(tx("gf.evMention", "评论 @我"))}</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="ci" ${d.events.ci !== false ? "checked" : ""}> ${esc(tx("gf.evCiMr", "流水线 / CI 失败"))}</label>
     ` : `
-      <label class="int-check-item"><input type="checkbox" data-gf-ev="pr" ${d.events.pr !== false ? "checked" : ""}> PR 变更与评审</label>
-      <label class="int-check-item"><input type="checkbox" data-gf-ev="issue" ${d.events.issue !== false ? "checked" : ""}> Issue 讨论</label>
-      <label class="int-check-item"><input type="checkbox" data-gf-ev="ci" ${d.events.ci !== false ? "checked" : ""}> CI 构建失败</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="pr" ${d.events.pr !== false ? "checked" : ""}> ${esc(tx("gf.evPr", "PR 变更与评审"))}</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="issue" ${d.events.issue !== false ? "checked" : ""}> ${esc(tx("gf.evIssue", "Issue 讨论"))}</label>
+      <label class="int-check-item"><input type="checkbox" data-gf-ev="ci" ${d.events.ci !== false ? "checked" : ""}> ${esc(tx("gf.evCiPr", "CI 构建失败"))}</label>
     `;
 
     const testRow = () => {
       if (d.testState === "testing") {
-        return `<span class="int-test-status" role="status"><span class="int-spinner" aria-hidden="true"></span><span>正在校验身份并试拉最近 3 条动态…</span></span>`;
+        return `<span class="int-test-status" role="status"><span class="int-spinner" aria-hidden="true"></span><span>${esc(tx("gf.testing", "正在校验身份并试拉最近 3 条动态…"))}</span></span>`;
       }
       if (d.testState === "ok") {
         return `<span class="int-test-status ok" role="status"><svg viewBox="0 0 24 24" style="width:15px;height:15px" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>${esc(d.testMsg)}</span></span>`;
@@ -11006,17 +11053,17 @@
       if (d.testState === "err") {
         return `<span class="int-test-status err" role="status">${esc(d.testMsg)}</span>`;
       }
-      return `<span class="int-test-status muted">仅只读预览，不推进水位线、不写收件箱也不唤醒 Collie</span>`;
+      return `<span class="int-test-status muted">${esc(tx("gf.testHint", "仅只读预览，不推进水位线、不写收件箱也不唤醒 Collie"))}</span>`;
     };
 
     const sampleHTML = d.samples !== null ? `
       <div class="int-preview-shell" id="gf-preview">
-        <div class="int-preview-cap"><span>试拉到的最近 ${d.samples.length} 条命中动态</span><span>只读预览</span></div>
+        <div class="int-preview-cap"><span>${esc(tx("gf.previewCap", "试拉到的最近 {n} 条命中动态", { n: d.samples.length }))}</span><span>${esc(tx("gf.previewTag", "只读预览"))}</span></div>
         ${d.samples.length ? `<ul class="int-forge-list">${d.samples.map((ev) => {
           const safeHref = /^https?:\/\//i.test(ev.url || "") ? ev.url : "";
           const titleEl = safeHref
-            ? `<a class="int-forge-title" href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">${esc(ev.title || "(无标题)")}</a>`
-            : `<div class="int-forge-title">${esc(ev.title || "(无标题)")}</div>`;
+            ? `<a class="int-forge-title" href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">${esc(ev.title || tx("gf.noTitle", "(无标题)"))}</a>`
+            : `<div class="int-forge-title">${esc(ev.title || tx("gf.noTitle", "(无标题)"))}</div>`;
           const timeLbl = ev.at && !String(ev.at).startsWith("0001-") ? ago(ev.at) : "";
           const metaLeft = [ev.repo, ev.tag].filter(Boolean).join(" · ");
           return `<li class="int-forge-item">
@@ -11027,65 +11074,65 @@
             ${titleEl}
             <div class="int-forge-plan">${esc(forgeModeActionPreview(d.handle_mode, ev, pr))}</div>
           </li>`;
-        }).join("")}</ul>` : `<p class="int-preview-empty">连通正常，当前筛选条件和关注仓库下暂无近期命中动态。</p>`}
+        }).join("")}</ul>` : `<p class="int-preview-empty">${esc(tx("gf.previewEmpty", "连通正常，当前筛选条件和关注仓库下暂无近期命中动态。"))}</p>`}
       </div>` : "";
 
     $("#int-modal-body").innerHTML = `
       ${st === "error" && d.health?.last_error ? `
         <div class="int-modal-alert" role="alert">
           <span class="sdot error" aria-hidden="true"></span>
-          <div><strong>连接异常：</strong>${esc(d.health.last_error)}</div>
+          <div><strong>${esc(tx("fs.connErrPrefix", "连接异常："))}</strong>${esc(d.health.last_error)}</div>
         </div>` : ""}
 
       ${authSection}
 
       <section class="int-sec">
-        <h3 class="int-sec-title">关注范围与过滤</h3>
+        <h3 class="int-sec-title">${esc(tx("gf.secScope", "关注范围与过滤"))}</h3>
         <div class="int-toggle-row">
           <div class="tl">
-            <b>所有指派给我的 ${esc(pr)} 评审与评论 @我</b>
-            <small>首次开启自动记录水位线不回灌旧积压；自动跳过本人评论与常见机器人。</small>
+            <b>${esc(tx("gf.watchMentionsTitle", "所有指派给我的 {pr} 评审与评论 @我", { pr }))}</b>
+            <small>${esc(tx("gf.watchMentionsSub", "首次开启自动记录水位线不回灌旧积压；自动跳过本人评论与常见机器人。"))}</small>
           </div>
-          <button type="button" class="switch" id="gf-mentions-sw" role="switch" aria-checked="${d.watch_mentions ? "true" : "false"}" aria-label="关注所有指派给我的评审与评论"></button>
+          <button type="button" class="switch" id="gf-mentions-sw" role="switch" aria-checked="${d.watch_mentions ? "true" : "false"}" aria-label="${esc(tx("gf.watchMentionsAria", "关注所有指派给我的评审与评论"))}"></button>
         </div>
         <div class="int-field">
-          <label class="int-field-label" for="gf-repo-input">重点关注的仓库 <span class="opt">可选</span></label>
-          ${d.repos.length ? `<div class="int-repo-tags">${d.repos.map((r) => `<span class="int-repo-tag"><span>${esc(r)}</span><button type="button" data-gf-rm-repo="${esc(r)}" aria-label="移除 ${esc(r)}">×</button></span>`).join("")}</div>` : ""}
+          <label class="int-field-label" for="gf-repo-input">${esc(tx("gf.reposLabel", "重点关注的仓库"))} <span class="opt">${esc(tx("common.optional", "可选"))}</span></label>
+          ${d.repos.length ? `<div class="int-repo-tags">${d.repos.map((r) => `<span class="int-repo-tag"><span>${esc(r)}</span><button type="button" data-gf-rm-repo="${esc(r)}" aria-label="${esc(tx("gf.removeRepoAria", "移除 {repo}", { repo: r }))}">×</button></span>`).join("")}</div>` : ""}
           <div class="int-input-row">
-            <input id="gf-repo-input" placeholder="输入 org/repo 回车添加" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
-            <button type="button" class="btn small" id="gf-add-repo">添加</button>
+            <input id="gf-repo-input" placeholder="${esc(tx("gf.repoPh", "输入 org/repo 回车添加"))}" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+            <button type="button" class="btn small" id="gf-add-repo">${esc(tx("common.add", "添加"))}</button>
           </div>
-          ${suggested.length ? `<div class="int-repo-suggest"><span class="int-repo-suggest-lbl">快捷添加：</span>${suggested.map((r) => `<button type="button" class="int-repo-pick" data-gf-pick-repo="${esc(r)}">+ ${esc(r)}</button>`).join("")}</div>` : ""}
+          ${suggested.length ? `<div class="int-repo-suggest"><span class="int-repo-suggest-lbl">${esc(tx("gf.quickAdd", "快捷添加："))}</span>${suggested.map((r) => `<button type="button" class="int-repo-pick" data-gf-pick-repo="${esc(r)}">+ ${esc(r)}</button>`).join("")}</div>` : ""}
         </div>
         <div class="int-field">
-          <span class="int-field-label">关注的动态类型</span>
+          <span class="int-field-label">${esc(tx("gf.evTypes", "关注的动态类型"))}</span>
           <div class="int-check-row">${eventCheckboxes}</div>
         </div>
       </section>
 
       <section class="int-sec">
-        <h3 class="int-sec-title">收到新动态后如何处理</h3>
-        <div class="int-mode-list" role="radiogroup" aria-label="${esc(item?.name || d.kind)} 事件处理模式">
+        <h3 class="int-sec-title">${esc(tx("gf.secHandle", "收到新动态后如何处理"))}</h3>
+        <div class="int-mode-list" role="radiogroup" aria-label="${esc(tx("gf.handleAria", "{name} 事件处理模式", { name: item?.name || d.kind }))}">
           <label class="int-mode-opt">
             <input type="radio" name="gf_mode" value="notify" ${d.handle_mode === "notify" ? "checked" : ""}>
-            <span><b>仅汇总提醒我</b><small>写入收件箱并推送精简摘要与直达链接，不唤醒 Collie，零模型消耗。</small></span>
+            <span><b>${esc(tx("gf.modeNotifyTitle", "仅汇总提醒我"))}</b><small>${esc(tx("gf.modeNotifyDesc", "写入收件箱并推送精简摘要与直达链接，不唤醒 Collie，零模型消耗。"))}</small></span>
           </label>
           <label class="int-mode-opt">
             <input type="radio" name="gf_mode" value="advise" ${d.handle_mode === "advise" ? "checked" : ""}>
-            <span><b>让 Collie 自动调研并出建议（不擅自合并/评论）<span class="rec">推荐</span></b><small>只读阅读 diff、评审意见或失败日志并给出拍板按钮，严禁未经确认擅自操作远端。</small></span>
+            <span><b>${esc(tx("gf.modeAdviseTitle", "让 Collie 自动调研并出建议（不擅自合并/评论）"))}<span class="rec">${esc(tx("common.recommended", "推荐"))}</span></b><small>${esc(tx("gf.modeAdviseDesc", "只读阅读 diff、评审意见或失败日志并给出拍板按钮，严禁未经确认擅自操作远端。"))}</small></span>
           </label>
           <label class="int-mode-opt">
             <input type="radio" name="gf_mode" value="agent" ${d.handle_mode === "agent" ? "checked" : ""}>
-            <span><b>交给已订阅该 ${esc(pr)} 的 Agent 直接处理</b><small>若已有在线 Agent 订阅该 ${esc(pr)} 来源则直接投递继续修；否则自动转交 Collie 先调研。</small></span>
+            <span><b>${esc(tx("gf.modeRouteTitle", "交给已订阅该 {pr} 的 Agent 直接处理", { pr }))}</b><small>${esc(tx("gf.modeRouteDesc", "若已有在线 Agent 订阅该 {pr} 来源则直接投递继续修；否则自动转交 Collie 先调研。", { pr }))}</small></span>
           </label>
         </div>
       </section>
 
       <section class="int-sec">
-        <h3 class="int-sec-title">连通自检与试拉</h3>
+        <h3 class="int-sec-title">${esc(tx("gf.secTest", "连通自检与试拉"))}</h3>
         <div class="int-test-box">
           <div class="int-test-head">
-            <button type="button" class="btn" id="gf-test-btn" ${d.testState === "testing" ? "disabled" : ""}>立即试拉最近 3 条</button>
+            <button type="button" class="btn" id="gf-test-btn" ${d.testState === "testing" ? "disabled" : ""}>${esc(tx("gf.testBtn", "立即试拉最近 3 条"))}</button>
             ${testRow()}
           </div>
           ${sampleHTML}
@@ -11094,10 +11141,10 @@
     `;
 
     $("#int-modal-foot").innerHTML = `
-      ${isConfigured ? `<button type="button" class="btn ghost small" id="gf-reset-btn" ${d.saving ? "disabled" : ""}>清空配置</button>` : ""}
+      ${isConfigured ? `<button type="button" class="btn ghost small" id="gf-reset-btn" ${d.saving ? "disabled" : ""}>${esc(tx("fs.resetConfig", "清空配置"))}</button>` : ""}
       <div class="int-sheet-foot-right">
-        <button type="button" class="btn" id="gf-cancel-btn">取消</button>
-        <button type="button" class="btn primary" id="gf-save-btn" ${d.saving ? "disabled" : ""}>${d.saving ? "保存中…" : "保存并应用"}</button>
+        <button type="button" class="btn" id="gf-cancel-btn">${esc(tx("common.cancel", "取消"))}</button>
+        <button type="button" class="btn primary" id="gf-save-btn" ${d.saving ? "disabled" : ""}>${esc(d.saving ? tx("common.saving", "保存中…") : tx("fs.saveApply", "保存并应用"))}</button>
       </div>
     `;
 
@@ -11131,7 +11178,7 @@
       const inp = $("#gf-repo-input");
       if (!inp) return;
       const v = inp.value.trim().replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
-      if (!v || !v.includes("/")) { toast("请按 org/repo 格式输入", "attn"); inp.focus(); return; }
+      if (!v || !v.includes("/")) { toast(tx("gf.repoBadFmt", "请按 org/repo 格式输入"), "attn"); inp.focus(); return; }
       if (!d.repos.includes(v)) d.repos.push(v);
       renderIntModal(item);
       $("#gf-repo-input")?.focus();
@@ -11172,7 +11219,7 @@
     $("#gf-test-btn")?.addEventListener("click", async () => {
       if (isGitHub && d.auth_mode === "pat" && !d.secret_set && !d.pat.trim()) {
         d.testState = "err";
-        d.testMsg = "请先填写 Fine-grained PAT 再试拉";
+        d.testMsg = tx("gf.testNeedPat", "请先填写 Fine-grained PAT 再试拉");
         renderIntModal(item);
         return;
       }
@@ -11185,7 +11232,7 @@
         });
         if (!intModal.open || intModalKind !== item.kind) return;
         d.testState = res.ok ? "ok" : "err";
-        d.testMsg = res.message || (res.ok ? "试拉成功" : "试拉失败");
+        d.testMsg = res.message || (res.ok ? tx("gf.testOk", "试拉成功") : tx("gf.testFail", "试拉失败"));
         if (res.ok) {
           const list = Array.isArray(res.detail?.samples) ? res.detail.samples : [];
           d.samples = list.map((s) => ({ ...s, _mode: d.handle_mode }));
@@ -11216,7 +11263,7 @@
             config: { configured: false, auth_mode: isGitHub ? "gh" : "cli", watch_mentions: true, repos: [], handle_mode: "advise" },
           },
         });
-        toast(`已清空 ${item.name} 配置`);
+        toast(tx("gf.clearedToast", "已清空 {name} 配置", { name: locInt(item.name) }));
         await closeIntModal("reset");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
@@ -11231,7 +11278,7 @@
     $("#gf-save-btn")?.addEventListener("click", async () => {
       const hasCreds = !isGitHub || d.auth_mode !== "pat" || d.secret_set || !!d.pat.trim();
       if (!hasCreds) {
-        toast("请填写个人令牌（PAT）或切换为复用本机 gh 登录", "attn");
+        toast(tx("gf.needPatOrGh", "请填写个人令牌（PAT）或切换为复用本机 gh 登录"), "attn");
         $("#gf-pat")?.focus();
         return;
       }
@@ -11245,7 +11292,7 @@
             secrets: draftSecretsPayload(),
           },
         });
-        toast(`${item.name} 主动追踪配置已保存并热重载`);
+        toast(tx("gf.savedToast", "{name} 主动追踪配置已保存并热重载", { name: locInt(item.name) }));
         await closeIntModal("saved");
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
@@ -11322,11 +11369,11 @@
     return "";
   }
 
-  function peerShareText(inv, fallbackName = "我的边牧") {
+  function peerShareText(inv, fallbackName = tx("peer.myCollie", "我的边牧")) {
     const joinUrl = peerInviteJoinURL(inv);
-    const name = inv?.hub_name || fallbackName || "我的边牧";
+    const name = inv?.hub_name || fallbackName || tx("peer.myCollie", "我的边牧");
     if (!joinUrl) return inv?.invite_code || "";
-    return `来加我的 Collie 好友边牧「${name}」，点击链接即可发起申请：\n${joinUrl}`;
+    return tx("peer.shareText", "来加我的 Collie 好狗友「{name}」，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
   }
 
   function parsePeerInviteClient(raw, selfHubId = "") {
@@ -11335,10 +11382,10 @@
     const s = extractPeerInviteCode(trimmed);
     const isV2 = s.startsWith(PEER_INVITE_V2_PREFIX);
     const isV1 = !isV2 && s.startsWith(PEER_INVITE_V1_PREFIX);
-    if (!isV2 && !isV1) return { error: `请粘贴好友分享链接（/join/#...）或 ${PEER_INVITE_V2_PREFIX}... 邀请码` };
+    if (!isV2 && !isV1) return { error: tx("peer.parseErrFormat", "请粘贴狗友分享链接（/join/#...）或 {prefix}... 邀请码", { prefix: PEER_INVITE_V2_PREFIX }) };
     const prefix = isV2 ? PEER_INVITE_V2_PREFIX : PEER_INVITE_V1_PREFIX;
     const b64 = s.slice(prefix.length).trim().replace(/-/g, "+").replace(/_/g, "/");
-    if (!b64) return { error: "邀请码内容为空" };
+    if (!b64) return { error: tx("peer.parseErrEmpty", "邀请码内容为空") };
     try {
       const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
       const bin = atob(padded);
@@ -11362,23 +11409,23 @@
           exp: Number(rawObj?.e || 0) || 0,
         };
         if (!obj.code || !obj.hub_id || !obj.addrs.length) {
-          return { error: "名片信息缺少必要字段，请检查是否复制完整" };
+          return { error: tx("peer.parseErrFields", "名片信息缺少必要字段，请检查是否复制完整") };
         }
       } else {
         obj = rawObj;
         if (!obj || obj.v !== 1 || !obj.code || !obj.hub_id || !Array.isArray(obj.addrs) || !obj.addrs.length) {
-          return { error: "名片信息缺少必要字段，请检查是否复制完整" };
+          return { error: tx("peer.parseErrFields", "名片信息缺少必要字段，请检查是否复制完整") };
         }
       }
       if (selfHubId && obj.hub_id === selfHubId) {
-        return { error: "不能添加自己的边牧（Hub 标识与本机相同）" };
+        return { error: tx("peer.parseErrSelf", "不能添加自己的边牧（Hub 标识与本机相同）") };
       }
       if (obj.exp && Number(obj.exp) > 0 && Date.now() / 1000 > Number(obj.exp)) {
-        return { error: "该旧版限时邀请码已过期，请让对方分享新版长期有效名片" };
+        return { error: tx("peer.parseErrExpired", "该旧版限时邀请码已过期，请让对方分享新版长期有效名片") };
       }
       return { ok: true, inviteCode: s, payload: obj };
     } catch {
-      return { error: "名片解码失败，请确认粘贴完整" };
+      return { error: tx("peer.parseErrDecode", "名片解码失败，请确认粘贴完整") };
     }
   }
 
@@ -11464,7 +11511,7 @@
       d.inviteLoading = false;
       d.inviteErr = "";
       patchPeerQRCard();
-      if (reset) toast("已重置名片密钥，旧链接已失效");
+      if (reset) toast(tx("peer.resetToast", "已重置名片密钥，旧链接已失效"));
     } catch (err) {
       if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d || seq !== d.inviteSeq) return;
       d.inviteLoading = false;
@@ -11569,12 +11616,12 @@
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      d.scanNote = "当前设备或浏览器未提供摄像头访问接口，请改用「识别图片」或直接粘贴邀请码。";
+      d.scanNote = tx("peer.scanNoCamApi", "当前设备或浏览器未提供摄像头访问接口，请改用「识别图片」或直接粘贴邀请码。");
       patchPeerScanPanel();
       return;
     }
     if (typeof window.BarcodeDetector !== "function") {
-      d.scanNote = "当前浏览器暂不支持原生二维码实时解码（BarcodeDetector）；请用系统相机扫描名片二维码后粘贴邀请码，或更换 Chrome/Edge。";
+      d.scanNote = tx("peer.scanNoDetector", "当前浏览器暂不支持原生二维码实时解码（BarcodeDetector）；请用系统相机扫描名片二维码后粘贴邀请码，或更换 Chrome/Edge。");
       patchPeerScanPanel();
       return;
     }
@@ -11584,13 +11631,13 @@
         ? await window.BarcodeDetector.getSupportedFormats()
         : ["qr_code"];
       if (Array.isArray(fmts) && fmts.length && !fmts.includes("qr_code")) {
-        d.scanNote = "当前系统不支持 qr_code 原生解码，请直接粘贴好友发来的邀请码。";
+        d.scanNote = tx("peer.scanNoQrFormat", "当前系统不支持 qr_code 原生解码，请直接粘贴狗友发来的邀请码。");
         patchPeerScanPanel();
         return;
       }
       detector = new window.BarcodeDetector({ formats: ["qr_code"] });
     } catch {
-      d.scanNote = "原生扫码引擎初始化失败，请上传二维码图片或直接粘贴邀请码。";
+      d.scanNote = tx("peer.scanInitErr", "原生扫码引擎初始化失败，请上传二维码图片或直接粘贴邀请码。");
       patchPeerScanPanel();
       return;
     }
@@ -11631,7 +11678,7 @@
                   d.pairName = parsed.payload.hub_name;
                 }
                 patchPeerScanPanel();
-                toast("已扫码识别好友边牧名片");
+                toast(tx("peer.scanSuccessToast", "已扫码识别狗友名片"));
                 return;
               }
             }
@@ -11644,11 +11691,11 @@
       stopPeerCameraScan();
       const name = err?.name || "";
       if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-        d.scanNote = "未授予摄像头权限，可上传二维码截图或直接粘贴邀请码。";
+        d.scanNote = tx("peer.scanPermDenied", "未授予摄像头权限，可上传二维码截图或直接粘贴邀请码。");
       } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-        d.scanNote = "未检测到可用摄像头，请直接粘贴好友的邀请链接或识别图片。";
+        d.scanNote = tx("peer.scanNoCam", "未检测到可用摄像头，请直接粘贴狗友的邀请链接或识别图片。");
       } else {
-        d.scanNote = `无法打开摄像头（${err?.message || name || "设备受限"}），请识别图片或粘贴邀请码。`;
+        d.scanNote = tx("peer.scanOpenErr", "无法打开摄像头（{reason}），请识别图片或粘贴邀请码。", { reason: err?.message || name || tx("peer.scanDeviceLimited", "设备受限") });
       }
       patchPeerScanPanel();
     }
@@ -11658,7 +11705,7 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !file) return;
     if (typeof window.BarcodeDetector !== "function") {
-      d.scanNote = "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或名片码。";
+      d.scanNote = tx("peer.imgNoDetector", "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或名片码。");
       patchPeerScanPanel();
       $("#peer-paste-input")?.focus();
       return;
@@ -11666,14 +11713,14 @@
     try {
       const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
       const bmp = typeof createImageBitmap === "function" ? await createImageBitmap(file) : null;
-      if (!bmp) throw new Error("浏览器不支持读取图片位图");
+      if (!bmp) throw new Error(tx("peer.imgNoBitmap", "浏览器不支持读取图片位图"));
       try {
         const codes = await detector.detect(bmp);
         const hit = (codes || [])
           .map((c) => extractPeerInviteCode(String(c?.rawValue || "").trim()))
           .find((v) => isCanonicalPeerInvite(v));
         if (!hit) {
-          d.scanNote = "未在图片中识别到有效的 Collie 好友名片二维码，请确认图片清晰或直接粘贴分享链接。";
+          d.scanNote = tx("peer.imgNoQr", "未在图片中识别到有效的 Collie 狗友名片二维码，请确认图片清晰或直接粘贴分享链接。");
           patchPeerScanPanel();
           return;
         }
@@ -11685,12 +11732,12 @@
           d.pairName = parsed.payload.hub_name;
         }
         patchPeerScanPanel();
-        toast("已从图片识别好友边牧名片");
+        toast(tx("peer.imgSuccessToast", "已从图片识别狗友名片"));
       } finally {
         bmp.close?.();
       }
     } catch (err) {
-      d.scanNote = `图片识别失败（${err?.message || "不支持该格式"}），请直接粘贴邀请码。`;
+      d.scanNote = tx("peer.imgErr", "图片识别失败（{reason}），请直接粘贴邀请码。", { reason: err?.message || tx("peer.imgUnsupported", "不支持该格式") });
       patchPeerScanPanel();
     }
   }
@@ -11866,7 +11913,7 @@
     }
     const roleMenu = supportsFocusGroup() ? "" : ' role="menu"';
     const roleItem = supportsFocusGroup() ? "" : ' role="menuitemradio"';
-    pop.innerHTML = `<div class="pm-pop-list" focusgroup="menu nomemory"${roleMenu}>${PEER_MODES.map((m) => `
+    pop.innerHTML = `<div class="pm-pop-list" focusgroup="menu nomemory"${roleMenu}>${getPeerModes().map((m) => `
       <button type="button" class="pm-pop-item${m.id === cur ? " is-selected" : ""}"${roleItem} aria-checked="${m.id === cur}" data-pm-pick-mode="${m.id}">
         <div class="pm-pop-item-body">
           <div class="pm-pop-item-title">
@@ -11891,7 +11938,7 @@
           d.genMode = next;
           patchPeerQRCard();
           await ensurePeerInvite(false);
-          toast(`默认接待方式已设为「${peerModeInfo(next).short}」`);
+          toast(tx("peer.defaultModeSaved", "默认接待方式已设为「{mode}」", { mode: peerModeInfo(next).short }));
         } else if (tgt.kind === "add") {
           d.pairMode = next;
           patchPeerScanPanel();
@@ -11912,7 +11959,7 @@
             d._dataSig = peerDataSig(pr);
             d.busyPeerId = "";
             patchPeerHeaderAndList();
-            toast(`已调整「${p.name}」为${peerModeInfo(next).short}`);
+            toast(tx("peer.peerModeSaved", "已调整「{name}」为{mode}", { name: p.name, mode: peerModeInfo(next).short }));
             if (view === "auto" && autoTab === "integrations") loadAuto();
           } catch (err) {
             if (intModalDraft === d) {
@@ -11940,16 +11987,16 @@
     pop.innerHTML = `<div class="pm-pop-list" focusgroup="menu nomemory"${roleMenu}>
       ${!isRevoked ? `<button type="button" class="pm-pop-act"${roleItem} data-pm-act="ping" ${pingBusy ? "disabled" : ""}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14 0M8.5 16.05a6 6 0 0 1 7 0"/><circle cx="12" cy="19.5" r=".8" fill="currentColor" stroke="none"/></svg>
-        <span>${pingBusy ? "探测中…" : "测试连通"}</span>
+        <span>${esc(pingBusy ? tx("peer.pingBusy", "探测中…") : tx("peer.pingBtn", "测试连通"))}</span>
       </button>` : ""}
       <button type="button" class="pm-pop-act"${roleItem} data-pm-act="addr">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>
-        <span>${showAddr ? "隐藏连接详情" : "查看连接详情"}</span>
+        <span>${esc(showAddr ? tx("peer.hideAddr", "隐藏连接详情") : tx("peer.showAddr", "查看连接详情"))}</span>
       </button>
       <hr class="pm-pop-div">
       <button type="button" class="pm-pop-act is-danger"${roleItem} data-pm-act="revoke">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg>
-        <span>移除 / 拉黑</span>
+        <span>${esc(tx("peer.removeBlock", "移除 / 拉黑"))}</span>
       </button>
     </div>`;
 
@@ -11961,14 +12008,14 @@
         try { pop.hidePopover(); } catch {}
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
         if (act === "ping") {
-          d.pingState[p.id] = { busy: true, ok: false, msg: "探测中…" };
+          d.pingState[p.id] = { busy: true, ok: false, msg: tx("peer.pingBusy", "探测中…") };
           patchPeerHeaderAndList();
           try {
             const res = await api(`/api/super/peers/${encodeURIComponent(p.id)}/ping`, { method: "POST" });
             const latTxt = Number(res.latency_ms) > 0 ? `${res.latency_ms}ms` : "<1ms";
             d.pingState[p.id] = res.ok
-              ? { busy: false, ok: true, msg: `已连通 · ${latTxt}${res.paused ? "（对方暂停）" : ""}` }
-              : { busy: false, ok: false, msg: res.error || "连接失败" };
+              ? { busy: false, ok: true, msg: tx("peer.pingOk", "已连通 · {lat}{paused}", { lat: latTxt, paused: res.paused ? tx("peer.pingRemotePaused", "（对方暂停）") : "" }) }
+        : { busy: false, ok: false, msg: res.error || tx("peer.pingFailed", "连接失败") };
             if (res.ok) {
               const pr = await api("/api/super/peers").catch(() => null);
               if (pr && intModalDraft === d) { peersPayload = pr; d.data = pr; d._dataSig = peerDataSig(pr); }
@@ -12048,7 +12095,7 @@
   function patchPeerQRCard() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: "我的边牧", addrs: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), addrs: [] };
     const inv = d.invite;
     const plate = $("#peer-qr-plate");
     const qrTarget = peerInviteJoinURL(inv) || inv?.invite_code || "";
@@ -12059,22 +12106,22 @@
         plate.classList.toggle("is-pulse", !!d.inviteLoading);
         let imgEl = $("#peer-qr-img", plate);
         if (!imgEl) {
-          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="好友边牧名片二维码" src="${qrSrc}">`;
+          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="${esc(tx("peer.qrImgAlt", "狗友名片二维码"))}" src="${qrSrc}">`;
         } else if (imgEl.getAttribute("src") !== qrSrc) {
           imgEl.setAttribute("src", qrSrc);
         }
       } else {
         plate.classList.remove("is-pulse");
         if (d.inviteLoading) {
-          plate.innerHTML = `<span class="int-spinner" aria-label="正在加载二维码"></span>`;
+          plate.innerHTML = `<span class="int-spinner" aria-label="${esc(tx("peer.qrLoadingAria", "正在加载二维码"))}"></span>`;
         } else {
-          plate.innerHTML = `<div class="pm-qr-fallback"><span>${d.inviteErr ? "加载失败" : "等待加载"}</span><button type="button" class="btn xs" id="peer-invite-retry">重试</button></div>`;
+          plate.innerHTML = `<div class="pm-qr-fallback"><span>${esc(d.inviteErr ? tx("common.loadFailed", "加载失败") : tx("peer.qrWaiting", "等待加载"))}</span><button type="button" class="btn xs" id="peer-invite-retry">${esc(tx("common.retry", "重试"))}</button></div>`;
           $("#peer-invite-retry", plate)?.addEventListener("click", () => ensurePeerInvite(false));
         }
       }
     }
 
-    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || "我的边牧";
+    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || tx("peer.myCollie", "我的边牧");
     setText($("#peer-hub-name-text"), displayName);
     if (!d.editingHubName) {
       const inp = $("#peer-hub-name");
@@ -12101,7 +12148,7 @@
     }
     const codeEl = $("#peer-adv-code");
     if (codeEl) {
-      setText(codeEl, inv?.invite_code || (d.inviteLoading ? "加载中…" : "-"));
+      setText(codeEl, inv?.invite_code || (d.inviteLoading ? tx("common.loading", "加载中…") : "-"));
       codeEl.title = inv?.invite_code || "";
     }
     setText($("#peer-adv-hub-id"), inv?.hub_id || data.hub_id || "-");
@@ -12123,9 +12170,9 @@
     const scanBtn = $("#peer-scan-toggle");
     if (scanBtn) {
       scanBtn.hidden = !secureCtx && !mobileClient;
-      scanBtn.title = (!secureCtx && mobileClient) ? "拍照识别二维码" : "";
+      scanBtn.title = (!secureCtx && mobileClient) ? tx("peer.scanPhotoTitle", "拍照识别二维码") : "";
     }
-    setText($("#peer-scan-toggle-lbl"), d.scanning ? "停止扫码" : "扫码");
+    setText($("#peer-scan-toggle-lbl"), d.scanning ? tx("peer.scanStop", "停止扫码") : tx("peer.scanStart", "扫码"));
     const stageSlot = $("#peer-scan-stage-slot");
     if (stageSlot) {
       if (d.scanning) {
@@ -12134,8 +12181,8 @@
             <video id="peer-scan-video" autoplay playsinline muted></video>
             <div class="pm-scan-reticle" aria-hidden="true"></div>
             <div class="pm-scan-bar">
-              <span>将镜头对准好友的名片二维码</span>
-              <button type="button" id="peer-scan-stop-inline">停止</button>
+              <span>${esc(tx("peer.scanAimHint", "将镜头对准狗友的名片二维码"))}</span>
+              <button type="button" id="peer-scan-stop-inline">${esc(tx("peer.scanStopBtn", "停止"))}</button>
             </div>
           </div>`;
           $("#peer-scan-stop-inline", stageSlot)?.addEventListener("click", () => {
@@ -12181,11 +12228,11 @@
           <div class="pm-parsed-left">
             <span class="pm-sdot ok" aria-hidden="true"></span>
             <div>
-              <div class="pm-parsed-title">已识别「${esc(parsed.payload.hub_name || parsed.payload.hub_id)}」的名片</div>
-              <div class="pm-parsed-sub">点下方按钮即可向对方发送好友申请</div>
+              <div class="pm-parsed-title">${esc(tx("peer.parsedTitle", "已识别「{name}」的名片", { name: parsed.payload.hub_name || parsed.payload.hub_id }))}</div>
+              <div class="pm-parsed-sub">${esc(tx("peer.parsedSub", "点下方按钮即可向对方发送狗友申请"))}</div>
             </div>
           </div>
-          <button type="button" class="btn ghost xs" id="peer-clear-parsed-btn">更换 / 扫码</button>`;
+          <button type="button" class="btn ghost xs" id="peer-clear-parsed-btn">${esc(tx("peer.parsedChange", "更换 / 扫码"))}</button>`;
         $("#peer-clear-parsed-btn", parsedSlot)?.addEventListener("click", () => {
           d.pasteRaw = "";
           d.pairName = "";
@@ -12215,14 +12262,14 @@
     const submitBtn = $("#peer-pair-submit");
     if (submitBtn) {
       submitBtn.disabled = !(!d.pairing && !!parsed?.ok);
-      setText(submitBtn, d.pairing ? "正在发送申请…" : "发送好友申请");
+      setText(submitBtn, d.pairing ? tx("peer.sendReqBusy", "正在发送申请…") : tx("peer.sendReqBtn", "发送狗友申请"));
     }
   }
 
   function patchPeerHeaderAndList() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: "我的边牧", enabled: true, addrs: [], peers: [], blocklist: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
     const incoming = peers.filter((p) => p.status === "pending_incoming");
     const outgoing = peers.filter((p) => p.status === "pending_outgoing");
@@ -12246,12 +12293,12 @@
 
     const blocklistHTML = blocklist.length ? `
       <details class="pm-fold" style="margin-top:6px">
-        <summary>已拉黑 (${blocklist.length})</summary>
+        <summary>${esc(tx("peer.blocklistSummary", "已拉黑 ({n})", { n: blocklist.length }))}</summary>
         <div class="pm-adv-box">
           ${blocklist.map((b) => `
             <div class="pm-adv-row">
               <span style="font-size:12.5px;color:var(--pm-fg-2)">${esc(b.name || b.hub_id)} <span class="mono" style="font-size:11px;color:var(--pm-fg-3)">${esc(b.hub_id)}</span></span>
-              <button type="button" class="btn ghost xs" data-peer-unblock="${esc(b.hub_id)}">解除</button>
+              <button type="button" class="btn ghost xs" data-peer-unblock="${esc(b.hub_id)}">${esc(tx("peer.unblockBtn", "解除"))}</button>
             </div>`).join("")}
         </div>
       </details>` : "";
@@ -12260,11 +12307,11 @@
       slot.innerHTML = `
         <div class="pm-empty-state">
           <div class="pm-empty-glyph" aria-hidden="true">${INT_ICONS.peers}</div>
-          <h3>还没有好友边牧</h3>
-          <p>把你的名片分享给信任的伙伴，或粘贴对方发来的邀请链接。对方仅能向收件箱发消息，无法触碰你的终端与文件。</p>
+          <h3>${esc(tx("peer.emptyTitle", "还没有好狗友"))}</h3>
+          <p>${esc(tx("peer.emptyDesc", "把你的名片分享给信任的伙伴，或粘贴对方发来的邀请链接。对方仅能向收件箱发消息，无法触碰你的终端与文件。"))}</p>
           <div class="pm-empty-acts">
-            <button type="button" class="btn primary sm" data-peer-jump-tab="card">查看我的名片</button>
-            <button type="button" class="btn sm" data-peer-jump-tab="add">添加好友</button>
+            <button type="button" class="btn primary sm" data-peer-jump-tab="card">${esc(tx("peer.emptyViewCard", "查看我的名片"))}</button>
+            <button type="button" class="btn sm" data-peer-jump-tab="add">${esc(tx("peer.emptyAdd", "添加狗友"))}</button>
           </div>
         </div>
         ${blocklistHTML}`;
@@ -12273,15 +12320,15 @@
     }
 
     const incomingHTML = incoming.length ? `
-      <section class="pm-req-group" aria-label="待审批好友申请">
+      <section class="pm-req-group" aria-label="${esc(tx("peer.reqGroupAria", "待审批狗友申请"))}">
         <div class="pm-sec-eyebrow is-attn">
-          <span>待你审批 · ${incoming.length}</span>
-          <span class="pm-sec-eyebrow-note">通过前零收发权限</span>
+          <span>${esc(tx("peer.reqGroupTitle", "待你审批 · {n}", { n: incoming.length }))}</span>
+          <span class="pm-sec-eyebrow-note">${esc(tx("peer.reqGroupNote", "通过前零收发权限"))}</span>
         </div>
         ${incoming.map((p) => {
           const busy = d.busyPeerId === p.id;
           const selMode = d.approveModes[p.id] || p.mode || "advise";
-          const metaNote = p.created_at ? `请求添加好友 · ${ago(p.created_at)}` : "请求添加好友";
+          const metaNote = p.created_at ? tx("peer.reqMetaAgo", "请求成为狗友 · {ago}", { ago: ago(p.created_at) }) : tx("peer.reqMeta", "请求成为狗友");
           return `<article class="pm-req-card">
             <div class="pm-req-top">
               <div class="pm-peer-ident">
@@ -12297,10 +12344,10 @@
               </button>
             </div>
             <div class="pm-req-acts">
-              <button type="button" class="btn primary sm" data-peer-approve="${esc(p.id)}" ${busy ? "disabled" : ""}>${busy ? "处理中…" : "通过"}</button>
-              <button type="button" class="btn sm" data-peer-reject="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝</button>
+              <button type="button" class="btn primary sm" data-peer-approve="${esc(p.id)}" ${busy ? "disabled" : ""}>${esc(busy ? tx("peer.processing", "处理中…") : tx("peer.approve", "通过"))}</button>
+              <button type="button" class="btn sm" data-peer-reject="${esc(p.id)}" ${busy ? "disabled" : ""}>${esc(tx("peer.reject", "拒绝"))}</button>
               <span class="spacer"></span>
-              <button type="button" class="btn ghost xs pm-danger" data-peer-reject-block="${esc(p.id)}" ${busy ? "disabled" : ""}>拒绝并拉黑</button>
+              <button type="button" class="btn ghost xs pm-danger" data-peer-reject-block="${esc(p.id)}" ${busy ? "disabled" : ""}>${esc(tx("peer.rejectBlock", "拒绝并拉黑"))}</button>
             </div>
           </article>`;
         }).join("")}
@@ -12315,11 +12362,11 @@
               <span class="pm-sdot wait" aria-hidden="true"></span>
               <div class="pm-peer-name-col">
                 <div class="pm-peer-name">${esc(p.name)}</div>
-                <div class="pm-peer-meta"><span>已发申请，等待对方通过</span></div>
+                <div class="pm-peer-meta"><span>${esc(tx("peer.outWaiting", "已发申请，等待对方通过"))}</span></div>
               </div>
             </div>
             <div class="pm-friend-controls">
-              <button type="button" class="btn ghost xs" data-peer-cancel="${esc(p.id)}" ${busy ? "disabled" : ""}>撤回</button>
+              <button type="button" class="btn ghost xs" data-peer-cancel="${esc(p.id)}" ${busy ? "disabled" : ""}>${esc(tx("peer.withdraw", "撤回"))}</button>
             </div>
           </div>
         </div>`;
@@ -12330,12 +12377,12 @@
       const globalOff = data.enabled === false;
       const dotCls = isRevoked || (p.status === "active" && globalOff) ? "muted" : isPaused ? "attn" : "ok";
       const statusText = isRevoked
-        ? "对方已解除 / 拒绝"
-        : isPaused
-          ? "已暂停接收"
-          : globalOff
-            ? "总开关已暂停"
-            : `今日 ${Number(p.today_count) || 0} 条${p.last_ok_at ? ` · ${ago(p.last_ok_at)}` : ""}`;
+        ? tx("peer.revokedStatus", "对方已解除 / 拒绝")
+          : isPaused
+            ? tx("peer.pausedStatus", "已暂停接收")
+            : globalOff
+              ? tx("peer.row.globalPaused", "总开关已暂停")
+              : tx("peer.todayActive", "今日 {n} 条{ago}", { n: Number(p.today_count) || 0, ago: p.last_ok_at ? ` · ${ago(p.last_ok_at)}` : "" });
       const ping = d.pingState[p.id];
       const showAddr = !!d.showAddrIds[p.id];
       const confirming = d.confirmRevokeId === p.id;
@@ -12356,14 +12403,14 @@
             </div>
           </div>
           <div class="pm-friend-controls">
-            ${!isRevoked ? `<button type="button" class="pm-pick is-quiet" aria-expanded="false" data-peer-mode-target="peer" data-peer-id="${esc(p.id)}" title="调整接待方式" ${busy ? "disabled" : ""}>
+            ${!isRevoked ? `<button type="button" class="pm-pick is-quiet" aria-expanded="false" data-peer-mode-target="peer" data-peer-id="${esc(p.id)}" title="${esc(tx("peer.adjustModeTitle", "调整接待方式"))}" ${busy ? "disabled" : ""}>
               <span class="pm-pick-txt pm-lbl-desktop">${esc(mInfo.short)}</span>
               <span class="pm-pick-txt pm-lbl-mobile">${esc(mInfo.label)}</span>
               <svg class="pm-pick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
             </button>` : ""}
             <div class="pm-friend-ctrl-tail">
-              ${!isRevoked ? `<button type="button" class="switch" role="switch" aria-checked="${!isPaused ? "true" : "false"}" aria-label="${isPaused ? "恢复接收" : "暂停接收"} ${esc(p.name)}" data-peer-pause="${esc(p.id)}" title="${isPaused ? "点击恢复接收" : "点击暂停接收"}" ${busy ? "disabled" : ""}></button>` : ""}
-              <button type="button" class="icon-btn" aria-expanded="false" data-peer-more="${esc(p.id)}" aria-label="更多操作 ${esc(p.name)}" title="更多操作" ${busy ? "disabled" : ""}>
+              ${!isRevoked ? `<button type="button" class="switch" role="switch" aria-checked="${!isPaused ? "true" : "false"}" aria-label="${esc((isPaused ? tx("peer.resumeRecv", "恢复接收") : tx("peer.pauseRecv", "暂停接收")) + " " + p.name)}" data-peer-pause="${esc(p.id)}" title="${esc(isPaused ? tx("peer.resumeRecvTitle", "点击恢复接收") : tx("peer.pauseRecvTitle", "点击暂停接收"))}" ${busy ? "disabled" : ""}></button>` : ""}
+              <button type="button" class="icon-btn" aria-expanded="false" data-peer-more="${esc(p.id)}" aria-label="${esc(tx("peer.moreActsAria", "更多操作 {name}", { name: p.name }))}" title="${esc(tx("peer.moreActsTitle", "更多操作"))}" ${busy ? "disabled" : ""}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>
               </button>
             </div>
@@ -12371,15 +12418,15 @@
         </div>
         ${showAddr ? `<div class="pm-addr-drawer">
           <span>${esc(addrSummary || "-")}</span>
-          <button type="button" class="btn ghost xs" data-peer-hide-addr="${esc(p.id)}">收起</button>
+          <button type="button" class="btn ghost xs" data-peer-hide-addr="${esc(p.id)}">${esc(tx("common.collapse", "收起"))}</button>
         </div>` : ""}
         ${confirming ? `<div class="pm-inline-confirm" role="alert">
-          <span>断开与 <strong>${esc(p.name)}</strong> 的连接？</span>
-          <div class="pm-inline-confirm-btns">
-            <button type="button" class="btn ghost xs" data-peer-cancel-revoke>取消</button>
-            <button type="button" class="btn pm-danger xs" data-peer-do-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>仅移除</button>
-            <button type="button" class="btn pm-danger xs" data-peer-do-block="${esc(p.id)}" ${busy ? "disabled" : ""}>移除并拉黑</button>
-          </div>
+          <span>${tx("peer.revokeConfirm", "断开与 <strong>{name}</strong> 的连接？", { name: esc(p.name) })}</span>
+            <div class="pm-inline-confirm-btns">
+              <button type="button" class="btn ghost xs" data-peer-cancel-revoke>${esc(tx("common.cancel", "取消"))}</button>
+              <button type="button" class="btn pm-danger xs" data-peer-do-revoke="${esc(p.id)}" ${busy ? "disabled" : ""}>${esc(tx("peer.revokeOnly", "仅移除"))}</button>
+              <button type="button" class="btn pm-danger xs" data-peer-do-block="${esc(p.id)}" ${busy ? "disabled" : ""}>${esc(tx("peer.revokeAndBlock", "移除并拉黑"))}</button>
+            </div>
         </div>` : ""}
       </div>`;
     }).join("");
@@ -12390,7 +12437,7 @@
       ${blocklistHTML}
       <div class="pm-privacy-foot">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.6-3.8"/></svg>
-        <span>好友仅能向收件箱发消息，无法访问本机终端、文件与记忆</span>
+        <span>${esc(tx("peer.footerPrivacy", "狗友仅能向收件箱发消息，无法访问本机终端、文件与记忆"))}</span>
       </div>`;
 
     bindPeerListEvents(slot);
@@ -12414,16 +12461,18 @@
   function renderPeerModal() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: "我的边牧", enabled: true, addrs: [], peers: [], blocklist: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
     const pendingInCnt = peers.filter((x) => x.status === "pending_incoming").length;
 
     bindPeerPopoverGlobals();
 
-    if (!d._mounted) {
+    $("#int-modal-title").textContent = tx("peer.title", "Collie 的好狗友");
+    if (!d._mounted || d._mountedLang !== curLang()) {
       d._mounted = true;
+      d._mountedLang = curLang();
       $("#int-modal-icon").innerHTML = INT_ICONS.peers;
-      $("#int-modal-title").textContent = "好友边牧";
+      $("#int-modal-title").textContent = tx("peer.title", "Collie 的好狗友");
       $("#int-modal-sub").textContent = "";
       $("#int-modal-state").innerHTML = "";
 
@@ -12432,18 +12481,18 @@
         tabsEl.hidden = false;
         tabsEl.setAttribute("role", "tablist");
         tabsEl.setAttribute("focusgroup", "tablist nomemory");
-        tabsEl.setAttribute("aria-label", "好友边牧视图");
+        tabsEl.setAttribute("aria-label", tx("peer.tabsAria", "Collie 的好狗友视图"));
         tabsEl.innerHTML = `
           <button type="button" role="tab" id="peer-tab-friends" data-peer-tab="friends" aria-selected="${d.tab === "friends"}" ${d.tab === "friends" ? "focusgroupstart" : ""}>
-            <span>好友</span>
+            <span>${esc(tx("peer.tabFriends", "狗友"))}</span>
             <span class="pm-tab-count" id="peer-tab-friends-cnt" ${peers.length === 0 || pendingInCnt > 0 ? "hidden" : ""}>${peers.length}</span>
-            <span class="pm-tab-pending-pill" id="peer-tab-pending-badge" title="待审批申请" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span>
+            <span class="pm-tab-pending-pill" id="peer-tab-pending-badge" title="${esc(tx("peer.tabPendingTitle", "待审批申请"))}" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span>
           </button>
           <button type="button" role="tab" id="peer-tab-card" data-peer-tab="card" aria-selected="${d.tab === "card"}" ${d.tab === "card" ? "focusgroupstart" : ""}>
-            <span>我的名片</span>
+            <span>${esc(tx("peer.tabCard", "我的名片"))}</span>
           </button>
           <button type="button" role="tab" id="peer-tab-add" data-peer-tab="add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""}>
-            <span>添加好友</span>
+            <span>${esc(tx("peer.tabAdd", "添加狗友"))}</span>
           </button>`;
       }
 
@@ -12453,27 +12502,27 @@
         </div>
         <div class="pm-panel" id="peer-panel-card" role="tabpanel" aria-labelledby="peer-tab-card" ${d.tab === "card" ? "" : "hidden"}>
           <div class="pm-panel-pad">
-            <section class="pm-card-hero" aria-label="我的边牧名片">
-              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="边牧名片二维码"></div>
+            <section class="pm-card-hero" aria-label="${esc(tx("peer.cardHeroAria", "我的边牧名片"))}">
+              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="${esc(tx("peer.qrPlateAria", "狗友名片二维码"))}"></div>
               <div class="pm-card-info">
                 <div class="pm-inline-name-row">
-                  <button type="button" class="pm-inline-name-btn" id="peer-name-display-btn" title="点击修改名片昵称">
-                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || "我的边牧")}</span>
+                  <button type="button" class="pm-inline-name-btn" id="peer-name-display-btn" title="${esc(tx("peer.editNameTitle", "点击修改名片昵称"))}">
+                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || tx("peer.myCollie", "我的边牧"))}</span>
                     <svg class="pm-inline-name-pencil" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
                   </button>
                   <form class="pm-inline-name-editor" id="peer-name-editor-form" hidden>
-                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="名片昵称" placeholder="输入边牧昵称" value="${esc(d.hubNameInput)}">
-                    <button type="submit" class="icon-btn" id="peer-hub-name-save" aria-label="保存昵称" title="保存 (Enter)">
+                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="${esc(tx("peer.nameInputAria", "名片昵称"))}" placeholder="${esc(tx("peer.nameInputPlaceholder", "输入边牧昵称"))}" value="${esc(d.hubNameInput)}">
+                    <button type="submit" class="icon-btn" id="peer-hub-name-save" aria-label="${esc(tx("peer.saveNameAria", "保存昵称"))}" title="${esc(tx("peer.saveNameTitle", "保存 (Enter)"))}">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
                     </button>
                   </form>
                 </div>
-                <p class="pm-card-desc">扫码或点链接发起申请，经你同意后接通。</p>
+                <p class="pm-card-desc">${esc(tx("peer.cardDescShort", "扫码或点链接发起申请，经你同意后接通。"))}</p>
                 <p class="pm-card-err" id="peer-card-err" role="alert" hidden></p>
                 <div class="pm-card-cta-row">
                   <button type="button" class="btn primary" id="peer-copy-invite" disabled>
                     <svg id="peer-copy-invite-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                    <span id="peer-copy-invite-lbl">复制邀请链接</span>
+                    <span id="peer-copy-invite-lbl">${esc(tx("peer.copyInviteBtn", "复制邀请链接"))}</span>
                   </button>
                 </div>
               </div>
@@ -12481,8 +12530,8 @@
 
             <div class="pm-setting-row first">
               <div class="pm-setting-copy">
-                <div class="pm-setting-label">新好友默认接待</div>
-                <div class="pm-setting-sub">对方来信时边牧的默认处理方式</div>
+                <div class="pm-setting-label">${esc(tx("peer.defaultModeLabel", "新狗友默认接待"))}</div>
+                <div class="pm-setting-sub">${esc(tx("peer.defaultModeSub", "狗友来信时的默认处理方式"))}</div>
               </div>
               <button type="button" class="pm-pick" id="peer-default-mode-btn" aria-expanded="false" data-peer-mode-target="default">
                 <span class="pm-pick-txt" id="peer-default-mode-label">${esc(peerModeInfo(d.genMode).label)}</span>
@@ -12491,39 +12540,39 @@
             </div>
 
             <details class="pm-fold" id="peer-adv-details">
-              <summary>连接与高级详情</summary>
+              <summary>${esc(tx("peer.advSummary", "连接与高级详情"))}</summary>
               <div class="pm-adv-box">
                 <div class="pm-adv-row">
-                  <span class="pm-adv-k">直连地址</span>
+                  <span class="pm-adv-k">${esc(tx("peer.advAddrs", "直连地址"))}</span>
                   <div class="pm-adv-v">
                     <span class="pm-adv-code" id="peer-adv-addrs">-</span>
-                    <button type="button" class="btn ghost xs" id="peer-adv-copy-addrs">复制</button>
+                    <button type="button" class="btn ghost xs" id="peer-adv-copy-addrs">${esc(tx("common.copy", "复制"))}</button>
                   </div>
                 </div>
                 <div class="pm-adv-row">
-                  <span class="pm-adv-k">名片码</span>
+                  <span class="pm-adv-k">${esc(tx("peer.advCode", "名片码"))}</span>
                   <div class="pm-adv-v">
                     <span class="pm-adv-code" id="peer-adv-code">-</span>
-                    <button type="button" class="btn ghost xs" id="peer-adv-copy-code">复制</button>
+                    <button type="button" class="btn ghost xs" id="peer-adv-copy-code">${esc(tx("common.copy", "复制"))}</button>
                   </div>
                 </div>
                 <div class="pm-adv-row">
-                  <span class="pm-adv-k">本机标识</span>
+                  <span class="pm-adv-k">${esc(tx("peer.advHubId", "本机标识"))}</span>
                   <div class="pm-adv-v">
                     <span class="pm-adv-code" id="peer-adv-hub-id">${esc(data.hub_id || "-")}</span>
                   </div>
                 </div>
                 <div class="pm-adv-row">
-                  <span class="pm-adv-k">名片密钥</span>
+                  <span class="pm-adv-k">${esc(tx("peer.advSecret", "名片密钥"))}</span>
                   <div class="pm-adv-v">
-                    <button type="button" class="btn xs" id="peer-reset-ask">重置名片</button>
+                    <button type="button" class="btn xs" id="peer-reset-ask">${esc(tx("peer.resetBtn", "重置名片"))}</button>
                   </div>
                 </div>
                 <div class="pm-reset-confirm" id="peer-reset-confirm" hidden>
-                  <span>旧二维码与链接将立即失效，不影响已配对好友。</span>
+                  <span>${esc(tx("peer.resetWarn", "旧二维码与链接将立即失效，不影响已配对狗友。"))}</span>
                   <div class="pm-inline-confirm-btns">
-                    <button type="button" class="btn ghost xs" id="peer-reset-cancel">取消</button>
-                    <button type="button" class="btn pm-danger xs" id="peer-reset-do">确认重置</button>
+                    <button type="button" class="btn ghost xs" id="peer-reset-cancel">${esc(tx("common.cancel", "取消"))}</button>
+                    <button type="button" class="btn pm-danger xs" id="peer-reset-do">${esc(tx("peer.resetConfirmBtn", "确认重置"))}</button>
                   </div>
                 </div>
               </div>
@@ -12535,15 +12584,15 @@
             <div class="pm-add-block">
               <div id="peer-add-input-wrap">
                 <div class="pm-field-head">
-                  <label class="pm-field-label" for="peer-paste-input">邀请链接或名片码</label>
+                  <label class="pm-field-label" for="peer-paste-input">${esc(tx("peer.addInputLabel", "邀请链接或名片码"))}</label>
                   <div class="pm-scan-inline">
                     <button type="button" class="pm-scan-link" id="peer-scan-toggle">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></svg>
-                      <span id="peer-scan-toggle-lbl">扫码</span>
+                      <span id="peer-scan-toggle-lbl">${esc(tx("peer.scanStart", "扫码"))}</span>
                     </button>
                     <button type="button" class="pm-scan-link" id="peer-scan-img-btn">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 15-4.5-4.5a1.5 1.5 0 0 0-2.1 0L6 19"/></svg>
-                      <span>识别图片</span>
+                      <span>${esc(tx("peer.addImgBtn", "识别图片"))}</span>
                     </button>
                     <input id="peer-scan-file" type="file" accept="image/*" class="visually-hidden">
                     <input id="peer-scan-capture" type="file" accept="image/*" capture="environment" class="visually-hidden">
@@ -12552,10 +12601,10 @@
                 <div id="peer-scan-stage-slot" hidden></div>
                 <div class="pm-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
                 <div class="pm-paste-box">
-                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="粘贴好友分享的邀请链接、整段文案或名片码">${esc(d.pasteRaw)}</textarea>
-                  <button type="button" class="pm-paste-btn" id="peer-paste-btn" title="从剪贴板粘贴邀请码">
+                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="${esc(tx("peer.addPlaceholder", "粘贴狗友分享的邀请链接、整段文案或名片码"))}">${esc(d.pasteRaw)}</textarea>
+                  <button type="button" class="pm-paste-btn" id="peer-paste-btn" title="${esc(tx("peer.pasteTitle", "从剪贴板粘贴邀请码"))}">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>
-                    <span>粘贴</span>
+                    <span>${esc(tx("peer.pasteBtn", "粘贴"))}</span>
                   </button>
                 </div>
               </div>
@@ -12566,15 +12615,15 @@
               <div>
                 <div class="pm-setting-row" style="padding-top:4px">
                   <div class="pm-setting-copy">
-                    <label class="pm-setting-label" for="peer-pair-name">备注名</label>
-                    <div class="pm-setting-sub">可选，留空自动使用对方昵称</div>
+                    <label class="pm-setting-label" for="peer-pair-name">${esc(tx("peer.aliasLabel", "备注名"))}</label>
+                    <div class="pm-setting-sub">${esc(tx("peer.aliasSub", "可选，留空自动使用对方昵称"))}</div>
                   </div>
-                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="例如：周远的边牧">
+                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="${esc(tx("peer.aliasPlaceholder", "例如：周远的边牧"))}">
                 </div>
                 <div class="pm-setting-row last">
                   <div class="pm-setting-copy">
-                    <div class="pm-setting-label">对他的接待方式</div>
-                    <div class="pm-setting-sub">配对通过后生效，随时可调整</div>
+                    <div class="pm-setting-label">${esc(tx("peer.theirModeLabel", "对它的接待方式"))}</div>
+                    <div class="pm-setting-sub">${esc(tx("peer.theirModeSub", "配对通过后生效，随时可调整"))}</div>
                   </div>
                   <button type="button" class="pm-pick" id="peer-add-mode-btn" aria-expanded="false" data-peer-mode-target="add">
                     <span class="pm-pick-txt" id="peer-add-mode-label">${esc(peerModeInfo(d.pairMode).label)}</span>
@@ -12584,8 +12633,8 @@
               </div>
 
               <div class="pm-add-foot">
-                <span class="pm-add-foot-note">须对方点「通过」才正式接通</span>
-                <button type="button" class="btn primary" id="peer-pair-submit" disabled>发送好友申请</button>
+                <span class="pm-add-foot-note">${esc(tx("peer.addFootNote", "须对方点「通过」才正式接通"))}</span>
+                <button type="button" class="btn primary" id="peer-pair-submit" disabled>${esc(tx("peer.sendReqBtn", "发送狗友申请"))}</button>
               </div>
             </div>
           </div>
@@ -12670,7 +12719,7 @@
         d.invitesByMode = {};
         d.savingHubName = false;
         await ensurePeerInvite(false);
-        toast("已更新名片昵称并刷新二维码");
+        toast(tx("peer.nameUpdatedToast", "已更新名片昵称并刷新二维码"));
       } catch (err) {
         d.savingHubName = false;
         if (intModalDraft === d) patchPeerQRCard();
@@ -12711,23 +12760,23 @@
     // Primary CTA: copy invite link
     $("#peer-copy-invite")?.addEventListener("click", async () => {
       if (!d.invite?.invite_code) return;
-      const share = peerShareText(d.invite, d.data?.hub_name || "我的边牧");
+      const share = peerShareText(d.invite, d.data?.hub_name || tx("peer.myCollie", "我的边牧"));
       const ok = await copyText(share);
       if (!ok) {
-        toast("复制失败，请展开下方高级详情手动复制名片码", "attn");
+        toast(tx("peer.copyInviteFail", "复制失败，请展开下方高级详情手动复制名片码"), "attn");
         return;
       }
-      toast("已复制邀请链接，发给好友即可申请");
+      toast(tx("peer.copyInviteOk", "已复制邀请链接，发给狗友即可申请"));
       const lbl = $("#peer-copy-invite-lbl");
       const ico = $("#peer-copy-invite-ico");
-      if (lbl) setText(lbl, "已复制链接");
+      if (lbl) setText(lbl, tx("peer.copiedInviteBtn", "已复制链接"));
       if (ico) ico.innerHTML = `<path d="M5 13l4 4L19 7"/>`;
       clearTimeout(peerCopyBtnTimer);
       peerCopyBtnTimer = setTimeout(() => {
         if (!intModal?.open || intModalKind !== "peers") return;
         const l = $("#peer-copy-invite-lbl");
         const i = $("#peer-copy-invite-ico");
-        if (l) setText(l, "复制邀请链接");
+        if (l) setText(l, tx("peer.copyInviteBtn", "复制邀请链接"));
         if (i) i.innerHTML = `<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>`;
       }, 1800);
     });
@@ -12737,12 +12786,12 @@
       const addrs = (d.invite?.addrs?.length ? d.invite.addrs : d.data?.addrs) || [];
       if (!addrs.length) return;
       const ok = await copyText(addrs.map((a) => String(a).replace(/^https?:\/\//, "")).join(" · "));
-      toast(ok ? "已复制直连地址" : "复制失败", ok ? undefined : "attn");
+      toast(ok ? tx("peer.copiedAddrs", "已复制直连地址") : tx("common.copyFailed", "复制失败"), ok ? undefined : "attn");
     });
     $("#peer-adv-copy-code")?.addEventListener("click", async () => {
       if (!d.invite?.invite_code) return;
       const ok = await copyText(d.invite.invite_code);
-      toast(ok ? "已复制名片码" : "复制失败", ok ? undefined : "attn");
+      toast(ok ? tx("peer.copiedCode", "已复制名片码") : tx("common.copyFailed", "复制失败"), ok ? undefined : "attn");
     });
     $("#peer-reset-ask")?.addEventListener("click", () => {
       d.resetConfirm = true;
@@ -12819,7 +12868,7 @@
         toast(toastMsg);
       };
       if (typeof navigator === "undefined" || typeof navigator.clipboard?.readText !== "function") {
-        focusFallback("当前浏览器不支持一键读取剪贴板，请长按下方输入框粘贴", "请长按输入框粘贴邀请码");
+        focusFallback(tx("peer.pasteUnsupportedNote", "当前浏览器不支持一键读取剪贴板，请长按下方输入框粘贴"), tx("peer.pasteUnsupportedToast", "请长按输入框粘贴邀请码"));
         return;
       }
       try {
@@ -12827,18 +12876,18 @@
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
         const text = String(raw || "").trim();
         if (!text) {
-          focusFallback("剪贴板为空，请先复制好友的邀请链接或名片码", "剪贴板为空，请先复制邀请码");
+          focusFallback(tx("peer.pasteEmptyNote", "剪贴板为空，请先复制狗友的邀请链接或名片码"), tx("peer.pasteEmptyToast", "剪贴板为空，请先复制邀请码"));
           return;
         }
         const parsed = applyPeerPasteRaw(text);
         if (parsed?.ok) {
-          toast(`已粘贴并识别「${parsed.payload.hub_name || parsed.payload.hub_id}」的名片`);
+          toast(tx("peer.pasteParsedToast", "已粘贴并识别「{name}」的名片", { name: parsed.payload.hub_name || parsed.payload.hub_id }));
         } else if (parsed?.error) {
           $("#peer-paste-input")?.focus();
         }
       } catch {
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
-        focusFallback("未获取剪贴板权限，请长按下方输入框粘贴", "请长按输入框粘贴邀请码");
+        focusFallback(tx("peer.pasteDeniedNote", "未获取剪贴板权限，请长按下方输入框粘贴"), tx("peer.pasteUnsupportedToast", "请长按输入框粘贴邀请码"));
       }
     };
 
@@ -12876,8 +12925,8 @@
         switchPeerTab("friends");
         patchPeerScanPanel();
         toast(res.pending
-          ? `已向「${res.peer?.name || "好友边牧"}」发送好友申请`
-          : `已与「${res.peer?.name || "好友边牧"}」完成双向直连配对`);
+          ? tx("peer.sentReqToast", "已向「{name}」发送狗友申请", { name: res.peer?.name || tx("peer.short", "狗友") })
+          : tx("peer.pairedToast", "已与「{name}」完成双向直连配对", { name: res.peer?.name || tx("peer.short", "狗友") }));
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
@@ -12940,7 +12989,7 @@
           delete d.approveModes[pid];
           d.busyPeerId = "";
           patchPeerHeaderAndList();
-          toast(`已通过「${res.peer?.name || "好友边牧"}」的申请`);
+          toast(tx("peer.approvedToast", "已通过「{name}」的狗友申请", { name: res.peer?.name || tx("peer.short", "狗友") }));
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
           if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
@@ -12965,7 +13014,7 @@
         delete d.approveModes[pid];
         d.busyPeerId = "";
         patchPeerHeaderAndList();
-        toast(block ? "已拒绝申请并拉黑该边牧" : "已拒绝该好友申请");
+        toast(block ? tx("peer.rejectedBlockToast", "已拒绝申请并拉黑该狗友") : tx("peer.rejectedToast", "已拒绝该狗友申请"));
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
         if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
@@ -12989,7 +13038,7 @@
           d._dataSig = peerDataSig(pr);
           d.busyPeerId = "";
           patchPeerHeaderAndList();
-          toast("已撤回好友申请");
+          toast(tx("peer.withdrawnToast", "已撤回狗友申请"));
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
           if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
@@ -13014,7 +13063,7 @@
           d._dataSig = peerDataSig(pr);
           d.busyPeerId = "";
           patchPeerHeaderAndList();
-          toast(nextStatus === "paused" ? "已暂停接收该好友来信" : "已恢复接收该好友来信");
+          toast(nextStatus === "paused" ? tx("peer.pausedPeerToast", "已暂停接收该狗友来信") : tx("peer.resumedPeerToast", "已恢复接收该狗友来信"));
           if (view === "auto" && autoTab === "integrations") loadAuto();
         } catch (err) {
           if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
@@ -13041,7 +13090,7 @@
         d.confirmRevokeId = "";
         d.busyPeerId = "";
         patchPeerHeaderAndList();
-        toast(block ? "已移除并拉黑该好友" : "已移除该好友");
+        toast(block ? tx("peer.removedBlockToast", "已移除并拉黑该狗友") : tx("peer.removedToast", "已移除该狗友"));
         if (view === "auto" && autoTab === "integrations") loadAuto();
       } catch (err) {
         if (intModalDraft === d) { d.busyPeerId = ""; patchPeerHeaderAndList(); }
@@ -13062,7 +13111,7 @@
           d.data = pr;
           d._dataSig = peerDataSig(pr);
           patchPeerHeaderAndList();
-          toast("已解除拉黑");
+          toast(tx("peer.unblockedToast", "已解除拉黑"));
         } catch (err) { toast(err.message, "attn"); }
       });
     });
@@ -13097,7 +13146,7 @@
   const dayTime = (t) => {
     const d = new Date(t), today = new Date().toDateString(), tmr = new Date(Date.now() + 864e5).toDateString();
     const hm = d.toTimeString().slice(0, 5);
-    return d.toDateString() === today ? "今天 " + hm : d.toDateString() === tmr ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+    return d.toDateString() === today ? tx("common.todayTime", "今天 {hm}", { hm }) : d.toDateString() === tmr ? tx("common.tomorrowTime", "明天 {hm}", { hm }) : tx("common.monthDayTime", "{m}月{d}日 {hm}", { m: d.getMonth() + 1, d: d.getDate(), hm });
   };
 
   function clearMemoryHighlights() {
@@ -13454,12 +13503,12 @@
   function instructionsPreviewHTML(f, terms) {
     const parsed = parseInstructions(f.text);
     const undoBar = memInsUndo ? `<div class="mem-ins-undo" role="status">
-        <span class="mem-ins-undo-msg">已移除「${esc(memInsUndo.label)}」</span>
-        <button type="button" class="mem-ins-btn" data-act="mem-ins-undo">撤销</button>
+        <span class="mem-ins-undo-msg">${esc(tx("mem.insUndoMsg", "已移除「{label}」", { label: memInsUndo.label }))}</span>
+        <button type="button" class="mem-ins-btn" data-act="mem-ins-undo">${esc(tx("common.undo", "撤销"))}</button>
       </div>` : "";
     if (!parsed.total) {
       if (parsed.extraBlocks.length) return undoBar + md(f.text);
-      return `${undoBar}<div class="mem-ins-empty muted">还没有长期约定。聊天里直接告诉 Collie「以后都……」，它会记在这里；也可以点下方「编辑」直接写。</div>`;
+      return `${undoBar}<div class="mem-ins-empty muted">${esc(tx("mem.insEmptyDetail", "还没有长期约定。聊天里直接告诉 Collie「以后都……」，它会记在这里；也可以点下方「编辑」直接写。"))}</div>`;
     }
     const renderItem = (item) => {
       const itemHit = terms.length > 0 && matchMemoryItem("", "", item.raw, terms).matched;
@@ -13467,25 +13516,25 @@
         ? `<span class="mem-ins-sec">${esc(item.section)}</span>`
         : "";
       return `<li class="mem-ins-item${item.inferred ? " is-inferred" : ""}${itemHit ? " is-match" : ""}" data-line="${item.startLine}" data-end-line="${item.endLine}">
-        ${item.inferred ? `<span class="mem-ins-tag">推断</span>` : `<span class="mem-ins-bullet" aria-hidden="true"></span>`}
+        ${item.inferred ? `<span class="mem-ins-tag">${esc(tx("mem.insInferredTag", "推断"))}</span>` : `<span class="mem-ins-bullet" aria-hidden="true"></span>`}
         <div class="mem-ins-main">
           <div class="mem-ins-text">${md(item.md)}</div>
           ${secTag}
         </div>
         <div class="mem-ins-acts">
-          <button type="button" class="mem-ins-btn" data-act="mem-ins-edit" data-line="${item.startLine}" data-end-line="${item.endLine}" title="在原文中定位编辑">编辑</button>
-          ${item.inferred ? `<button type="button" class="mem-ins-btn is-del" data-act="mem-ins-del" data-line="${item.startLine}" data-end-line="${item.endLine}" title="删除这条推断习惯并保存">删掉</button>` : ""}
+          <button type="button" class="mem-ins-btn" data-act="mem-ins-edit" data-line="${item.startLine}" data-end-line="${item.endLine}" title="${esc(tx("mem.insEditTitle", "在原文中定位编辑"))}">${esc(tx("common.edit", "编辑"))}</button>
+          ${item.inferred ? `<button type="button" class="mem-ins-btn is-del" data-act="mem-ins-del" data-line="${item.startLine}" data-end-line="${item.endLine}" title="${esc(tx("mem.insDelTitle", "删除这条推断习惯并保存"))}">${esc(tx("mem.insDelBtn", "删掉"))}</button>` : ""}
         </div>
       </li>`;
     };
     const explicitBlock = parsed.explicit.length ? `<section class="mem-ins-group" data-ins-group="explicit">
-        <div class="mem-ins-gh"><span>你亲口说的<span class="mem-ins-gh-cnt">${parsed.explicit.length}</span></span></div>
+        <div class="mem-ins-gh"><span>${esc(tx("mem.insExplicitHeading", "你亲口说的"))}<span class="mem-ins-gh-cnt">${parsed.explicit.length}</span></span></div>
         <ul class="mem-ins-list">${parsed.explicit.map(renderItem).join("")}</ul>
       </section>` : "";
     const inferredBlock = parsed.inferred.length ? `<section class="mem-ins-group" data-ins-group="inferred">
         <div class="mem-ins-gh">
-          <span>Collie 从对话中推断的<span class="mem-ins-gh-cnt">${parsed.inferred.length}</span></span>
-          <span class="mem-ins-gh-note">原文标有 <code>(inferred)</code> · 猜错可一键删掉或编辑</span>
+          <span>${esc(tx("mem.insInferredHeading", "Collie 从对话中推断的"))}<span class="mem-ins-gh-cnt">${parsed.inferred.length}</span></span>
+        <span class="mem-ins-gh-note">${tx("mem.insInferredNoteHtml", "原文标有 <code>(inferred)</code> · 猜错可一键删掉或编辑")}</span>
         </div>
         <ul class="mem-ins-list">${parsed.inferred.map(renderItem).join("")}</ul>
       </section>` : "";
@@ -13495,7 +13544,9 @@
     return `<div class="mem-ins-wrap">${undoBar}${explicitBlock}${inferredBlock}${extraBlock}</div>`;
   }
 
-  const DONE_WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const DONE_WEEKDAY_KEYS = ["timer.weekdaySun", "timer.weekdayMon", "timer.weekdayTue", "timer.weekdayWed", "timer.weekdayThu", "timer.weekdayFri", "timer.weekdaySat"];
+  const DONE_WEEKDAY_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const doneWeekday = (idx) => tx(DONE_WEEKDAY_KEYS[idx] || "", DONE_WEEKDAY_ZH[idx] || "");
   function resolveDoneDate(f) {
     if (f?.mod) {
       const d = new Date(f.mod);
@@ -13518,7 +13569,7 @@
     for (const item of items || []) {
       const f = item?.f || item;
       const d = resolveDoneDate(f);
-      let key = "done:unknown", label = "更早", kind = "month";
+      let key = "done:unknown", label = tx("mem.bucketEarlier", "更早"), kind = "month";
       if (d) {
         const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
         const itemDay = new Date(y, m, day);
@@ -13526,18 +13577,18 @@
         if (diffDays < 7) {
           kind = "day";
           key = `done:day:${y}-${pad2(m + 1)}-${pad2(day)}`;
-          if (diffDays <= 0) label = "今天";
-          else if (diffDays === 1) label = "昨天";
-          else label = `${pad2(m + 1)}-${pad2(day)} ${DONE_WEEKDAYS[d.getDay()]}`;
+          if (diffDays <= 0) label = tx("mem.bucketToday", "今天");
+          else if (diffDays === 1) label = tx("mem.bucketYesterday", "昨天");
+          else label = `${pad2(m + 1)}-${pad2(day)} ${doneWeekday(d.getDay())}`;
         } else if (y === nowY && m === nowM) {
           kind = "week";
           const weekIdx = Math.floor((day - 1) / 7) + 1;
           key = `done:week:${y}-${pad2(m + 1)}-w${weekIdx}`;
-          label = `${m + 1} 月第 ${weekIdx} 周`;
+          label = tx("mem.bucketWeek", "{m} 月第 {w} 周", { y, m: m + 1, w: weekIdx });
         } else {
           kind = "month";
           key = `done:month:${y}-${pad2(m + 1)}`;
-          label = `${y} 年 ${m + 1} 月`;
+          label = tx("mem.bucketMonth", "{y} 年 {m} 月", { y, m: m + 1 });
         }
       }
       let bucket = map.get(key);
@@ -13617,7 +13668,7 @@
   }
 
   function memToolsHTML(f, wantCrew) {
-    return `<div class="mem-tools">${wantCrew ? renderMemCrewHTML(f.text) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button type="button" class="btn small" data-act="mem-edit">编辑</button></div>`;
+    return `<div class="mem-tools">${wantCrew ? renderMemCrewHTML(f.text) : ""}<span class="muted grow">${esc(tx("mem.updatedAt", "{time} 更新", { time: dayTime(f.mod) }))}</span><button type="button" class="btn small" data-act="mem-edit">${esc(tx("common.edit", "编辑"))}</button></div>`;
   }
 
   function resolveCachedMemFile(path, kind = "file") {
@@ -13644,7 +13695,7 @@
     const reqPath = kind === "dream" ? `dreams/${path}` : path;
     const res = await api(`/api/super/memory/file?path=${encodeURIComponent(reqPath)}`);
     const f = res?.file;
-    if (!f) throw new Error("未找到记忆文件");
+    if (!f) throw new Error(tx("mem.notFound", "未找到记忆文件"));
     const entry = { text: f.text || "", size: f.size ?? existing?.size ?? 0, mod: f.mod || existing?.mod, preview: f.preview || existing?.preview || "" };
     memFileCache.set(reqPath, entry);
     if (existing) {
@@ -13665,7 +13716,7 @@
       form.className = "mem-edit";
       form.hidden = true;
       form.innerHTML = `<textarea name="text" spellcheck="false"></textarea>
-        <div class="form-actions"><span class="muted grow">Collie 下次读这个文件时生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存</button></div>`;
+        <div class="form-actions"><span class="muted grow">${esc(tx("mem.editEffectNote", "Collie 下次读这个文件时生效。"))}</span><button type="button" class="btn small" data-act="mem-cancel">${esc(tx("common.cancel", "取消"))}</button><button class="btn primary small">${esc(tx("common.save", "保存"))}</button></div>`;
       box.append(form);
     }
     const ta = form.querySelector?.("textarea");
@@ -13689,14 +13740,14 @@
     const hasBody = cached && !cached.summary_only && (typeof cached.text === "string") && (cached.text.length > 0 || cached.size === 0);
     if (!hasBody) {
       viewEl.dataset.memLoading = "1";
-      viewEl.innerHTML = `<div class="mem-lazy-hint muted">加载正文…</div>`;
+      viewEl.innerHTML = `<div class="mem-lazy-hint muted">${esc(tx("mem.loadingBody", "加载正文…"))}</div>`;
     }
     let file = cached;
     try {
       if (!hasBody) file = await ensureMemFileText(path, kind);
     } catch (err) {
       delete viewEl.dataset.memLoading;
-      if (detailsEl.isConnected) viewEl.innerHTML = `<div class="mem-lazy-hint muted">${esc(err.message || "加载失败")}</div>`;
+      if (detailsEl.isConnected) viewEl.innerHTML = `<div class="mem-lazy-hint muted">${esc(err.message || tx("common.loadFailed", "加载失败"))}</div>`;
       return;
     }
     delete viewEl.dataset.memLoading;
@@ -13715,10 +13766,10 @@
     const doneBuckets = bucketDoneMemoryItems(doneItems);
     const bucketsHtml = doneBuckets.map((b, bi) => {
       const openBucket = searching || (bi === 0 && b.kind === "day");
-      return `<details class="mem-done-bucket" ${openBucket ? "open" : ""} data-mem-key="${esc(b.key)}" data-done-bucket="${esc(b.kind)}"><summary><span class="mem-done-bname">${esc(b.label)}</span><span class="mem-done-bcnt">${b.items.length} 件</span></summary><div class="mem-done-blist">${b.items.map(({ f, hit }) => cardFn(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>`;
+      return `<details class="mem-done-bucket" ${openBucket ? "open" : ""} data-mem-key="${esc(b.key)}" data-done-bucket="${esc(b.kind)}"><summary><span class="mem-done-bname">${esc(b.label)}</span><span class="mem-done-bcnt">${esc(tx("mem.doneCount", "{n} 件", { n: b.items.length }))}</span></summary><div class="mem-done-blist">${b.items.map(({ f, hit }) => cardFn(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true }, hit)).join("")}</div></details>`;
     }).join("");
     const moreHtml = !searching && hasMore && doneTotal > doneItems.length
-      ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="mem-done-more">加载更早归档（已显示 ${doneItems.length} / ${doneTotal} 件）</button></div>`
+      ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="mem-done-more">${esc(tx("mem.doneLoadMore", "加载更早归档（已显示 {shown} / {total} 件）", { shown: doneItems.length, total: doneTotal }))}</button></div>`
       : "";
     return bucketsHtml + moreHtml;
   }
@@ -13728,9 +13779,9 @@
     memDoneState.loading = true;
     const container = detailsEl?.querySelector?.(".mem-done-buckets");
     const moreBtn = container?.querySelector?.('[data-act="mem-done-more"]');
-    if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = "加载中…"; }
+    if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = tx("common.loading", "加载中…"); }
     else if (reset && container && !memDoneState.files.length) {
-      container.innerHTML = `<div class="mem-lazy-hint muted">加载归档列表…</div>`;
+      container.innerHTML = `<div class="mem-lazy-hint muted">${esc(tx("mem.doneLoadingList", "加载归档列表…"))}</div>`;
     }
     const offset = reset ? 0 : memDoneState.files.length;
     try {
@@ -13768,16 +13819,16 @@
       }
     } catch (err) {
       if (container && reset && !memDoneState.files.length) {
-        container.innerHTML = `<div class="mem-lazy-hint muted">${esc(err.message || "加载失败")}</div>`;
+        container.innerHTML = `<div class="mem-lazy-hint muted">${esc(err.message || tx("common.loadFailed", "加载失败"))}</div>`;
       } else {
-        toast(err.message || "加载归档失败", "attn");
+        toast(err.message || tx("mem.doneLoadFailed", "加载归档失败"), "attn");
       }
     } finally {
       memDoneState.loading = false;
       const btn = detailsEl?.querySelector?.('[data-act="mem-done-more"]');
       if (btn) {
         btn.disabled = false;
-        btn.textContent = `加载更早归档（已显示 ${memDoneState.files.length} / ${memDoneState.total} 件）`;
+        btn.textContent = tx("mem.doneLoadMore", "加载更早归档（已显示 {shown} / {total} 件）", { shown: memDoneState.files.length, total: memDoneState.total });
       }
     }
   }
@@ -13806,7 +13857,7 @@
     const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(fUse.text || "", terms) : "";
     const subHtml = snipHtml ? snipHtml : esc(subText);
     const labelHtml = searching ? highlightEscapedText(label, terms) : esc(label);
-    const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
+    const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${esc(tx("mem.hitSpots", "{n} 处", { n: hit.hits }))}</span>` : "";
     const isOpen = ctx.forceOpen !== undefined ? !!ctx.forceOpen : (searching ? true : !!o.open);
     if (isOpen) {
       const bodyHtml = o.customBody ? o.customBody(fUse) : md(fUse.text || "");
@@ -13828,8 +13879,11 @@
     const terms = memQueryTerms(query);
     const searching = terms.length > 0;
     const by = (f) => files.filter(f);
-    const dream = r.dreaming ? `<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。`
-      : `上次做梦：${r.last_dream ? dayTime(r.last_dream) : "还没有"}　·　下次：${r.next_dream ? dayTime(r.next_dream) + "（当天有新对话才会做）" : "已关闭"}`;
+    const dream = r.dreaming ? tx("mem.dreamingBanner", "<b>Collie 正在做梦</b>：回顾最近的对话，整理记忆。整理完会自己醒来，期间的消息会先攒着。")
+      : esc(tx("mem.dreamLast", "上次做梦：{last}　·　下次：{next}", {
+          last: r.last_dream ? dayTime(r.last_dream) : tx("mem.dreamNever", "还没有"),
+          next: r.next_dream ? tx("mem.dreamNextNote", "{time}（当天有新对话才会做）", { time: dayTime(r.next_dream) }) : tx("mem.dreamOff", "已关闭"),
+        }));
     let matchedFiles = 0;
     let totalHits = 0;
     let searchOpenRemaining = MEM_SEARCH_OPEN_CAP;
@@ -13869,9 +13923,9 @@
       const items = filterFiles(list, labelOf);
       if (searching && !items.length) return "";
       if (!items.length && !o.always) return "";
-      const noteText = searching ? `命中 ${items.length} 项` : note;
+      const noteText = searching ? tx("mem.hitFiles", "命中 {n} 项", { n: items.length }) : note;
       return `<h4 class="mem-h">${title}<span class="muted">${noteText}</span></h4>
-      <div class="card">${items.length ? items.map(({ f, hit }, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {}, hit)).join("") : `<div class="empty-row">${o.empty || "空"}</div>`}</div>`;
+      <div class="card">${items.length ? items.map(({ f, hit }, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {}, hit)).join("") : `<div class="empty-row">${esc(o.empty || tx("common.empty", "空"))}</div>`}</div>`;
     };
     const ins = by((f) => f.name === "instructions.md");
     const tasks = by((f) => /^tasks\/[^/]+\.md$/.test(f.name));
@@ -13896,22 +13950,22 @@
       const latestSum = latestDream ? extractDreamSummary(latestDream) : null;
       const dreamSumHtml = latestSum ? `<div class="mem-dream-sum" data-dream-name="${esc(latestDream.name)}">
           <button type="button" class="mem-dream-row" data-act="dream-sum-toggle" aria-expanded="${memDreamExpanded ? "true" : "false"}" aria-controls="mem-dream-full">
-            <span class="mem-dream-sum-title">最近做梦摘要<span class="mem-dream-sum-stamp">${esc(latestSum.stamp)}</span></span>
+            <span class="mem-dream-sum-title">${esc(tx("mem.dreamSummaryTitle", "最近做梦摘要"))}<span class="mem-dream-sum-stamp">${esc(latestSum.stamp)}</span></span>
             <span class="mem-dream-one" title="${esc(latestSum.oneLine)}">${esc(latestSum.oneLine)}</span>
-            <span class="mem-dream-chev"><span>${memDreamExpanded ? "收起" : "展开详情"}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></span>
+            <span class="mem-dream-chev"><span>${esc(memDreamExpanded ? tx("common.collapse", "收起") : tx("common.expandDetails", "展开详情"))}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></span>
           </button>
           ${memDreamExpanded ? `<div id="mem-dream-full" class="mem-dream-full msg assistant">${md(latestDream.text)}</div>` : ""}
         </div>` : "";
       statusCard = `<div class="card mem-status-card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
-          <button type="button" class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
+          <button type="button" class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${esc(r.dreaming ? tx("mem.dreamingBtn", "做梦中…") : tx("mem.dreamNowBtn", "现在整理"))}</button></div>
           ${dreamSumHtml}
           <div class="mem-load">
             <div class="mem-load-row">
-              <span class="mem-load-main" id="mem-front-label">前置记忆 <b class="${over ? "warn" : ""}">${kbNum(upFront)}</b> / ${kbCap(budget)}${over ? `<span class="mem-warn-note">超出预算，做梦时会精简</span>` : ""}</span>
-              <span class="mem-load-msg">近期消息 <b>${kb(msgBytes)}</b><span class="muted"> · 自动记录</span></span>
-            </div>
-            <progress class="mem-meter${over ? " warn" : ""}" max="${budget}" value="${Math.min(upFront, budget)}" aria-labelledby="mem-front-label"></progress>
-            <div class="mem-load-sub muted">仅你的约定、笔记索引与进行中的事计入 ${kbCap(budget)} 预算；<code>messages.md</code> 由 hub 自动维护，不占预算</div>
+              <span class="mem-load-main" id="mem-front-label">${esc(tx("mem.frontLabel", "前置记忆"))} <b class="${over ? "warn" : ""}">${kbNum(upFront)}</b> / ${kbCap(budget)}${over ? `<span class="mem-warn-note">${esc(tx("mem.overBudget", "超出预算，做梦时会精简"))}</span>` : ""}</span>
+        <span class="mem-load-msg">${esc(tx("mem.recentMsg", "近期消息"))} <b>${kb(msgBytes)}</b><span class="muted">${esc(tx("mem.autoRecorded", " · 自动记录"))}</span></span>
+      </div>
+      <progress class="mem-meter${over ? " warn" : ""}" max="${budget}" value="${Math.min(upFront, budget)}" aria-labelledby="mem-front-label"></progress>
+      <div class="mem-load-sub muted">${tx("mem.budgetNoteHtml", "仅你的约定、笔记索引与进行中的事计入 {cap} 预算；<code>messages.md</code> 由 hub 自动维护，不占预算", { cap: esc(kbCap(budget)) })}</div>
           </div></div>`;
     }
 
@@ -13928,12 +13982,12 @@
           return { d: dUse, title, hit };
         }).filter(Boolean)
       : dreams.map((d) => ({ d, title: formatDreamStamp(d.name), hit: null }));
-    const dreamSection = dreamItems.length ? `<h4 class="mem-h">做梦日志<span class="muted">${searching ? `命中 ${dreamItems.length} 篇` : `${dreams.length} 篇 · 夜间回顾与跨会话整理`}</span></h4>
+    const dreamSection = dreamItems.length ? `<h4 class="mem-h">${esc(tx("mem.dreamLogs", "做梦日志"))}<span class="muted">${esc(searching ? tx("mem.hitDreams", "命中 {n} 篇", { n: dreamItems.length }) : tx("mem.dreamLogsNote", "{n} 篇 · 夜间回顾与跨会话整理", { n: dreams.length }))}</span></h4>
       <div class="card">${dreamItems.map(({ d, title, hit }) => {
         const snipHtml = searching && hit?.bodyHit ? buildMemorySnippet(d.text || "", terms) : "";
         const subHtml = snipHtml || esc(d.preview != null && d.preview !== "" ? d.preview : memFirstLine(d.text || "", d.name));
         const nameHtml = searching ? highlightEscapedText(title, terms) : esc(title);
-        const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${hit.hits} 处</span>` : "";
+        const hitBadge = searching && hit ? `<span class="mem-hit-cnt">${esc(tx("mem.hitSpots", "{n} 处", { n: hit.hits }))}</span>` : "";
         const openDream = searching && searchOpenRemaining > 0;
         if (openDream) {
           searchOpenRemaining--;
@@ -13946,18 +14000,18 @@
     const doneItems = filterFiles(done, (f) => f.name.replace(/^tasks\/done\//, ""));
     let doneSection = "";
     if (!searching && doneTotal > 0 && doneItems.length === 0) {
-      doneSection = `<details class="mem-done" data-path="tasks/done/" data-mem-key="group:done" data-done-lazy="1"><summary class="mem-h">已结束<span class="muted">${doneTotal} 件 · 做完或放弃的事，不再先读</span></summary>
-        <div class="mem-done-buckets"><div class="mem-lazy-hint muted">展开后按时间分组加载归档…</div></div></details>`;
+      doneSection = `<details class="mem-done" data-path="tasks/done/" data-mem-key="group:done" data-done-lazy="1"><summary class="mem-h">${esc(tx("mem.doneTitle", "已结束"))}<span class="muted">${esc(tx("mem.doneNote", "{n} 件 · 做完或放弃的事，不再先读", { n: doneTotal }))}</span></summary>
+        <div class="mem-done-buckets"><div class="mem-lazy-hint muted">${esc(tx("mem.doneLazyHint", "展开后按时间分组加载归档…"))}</div></div></details>`;
     } else if (doneItems.length) {
       const hasMoreDone = usingLazyDone ? memDoneState.hasMore : (doneTotal > doneItems.length);
-      doneSection = `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">已结束<span class="muted">${searching ? `命中 ${doneItems.length} / ${doneTotal} 件` : `${doneTotal} 件 · 做完或放弃的事，不再先读`}</span></summary>
+      doneSection = `<details class="mem-done" ${searching ? "open" : ""} data-path="tasks/done/" data-mem-key="group:done"><summary class="mem-h">${esc(tx("mem.doneTitle", "已结束"))}<span class="muted">${esc(searching ? tx("mem.hitDone", "命中 {shown} / {total} 件", { shown: doneItems.length, total: doneTotal }) : tx("mem.doneNote", "{n} 件 · 做完或放弃的事，不再先读", { n: doneTotal }))}</span></summary>
         <div class="mem-done-buckets">${renderDoneBucketsInnerHTML(doneItems, doneTotal, hasMoreDone, searching, terms, card)}</div></details>`;
     }
 
     const bodySections = [
-      legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : "",
-      group("进行中的事", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: !searching, empty: "没有进行中的事" }),
-      group("你的约定", "每次都读 · 长期要求和偏好", ins, {
+      legacy.length ? group(tx("mem.legacyTitle", "旧版记忆"), tx("mem.legacyNote", "等下次做梦或换会话时拆进 memory/"), legacy, { card: { open: true } }) : "",
+      group(tx("mem.tasksTitle", "进行中的事"), tx("mem.tasksNote", "一件事一个文件，每次都读"), tasks, { card: { label: undefined, crew: true }, always: !searching, empty: tx("mem.tasksEmpty", "没有进行中的事") }),
+      group(tx("mem.insTitle", "你的约定"), tx("mem.insNote", "每次都读 · 长期要求和偏好"), ins, {
         card: {
           open: true,
           label: "instructions.md",
@@ -13965,19 +14019,19 @@
           customBody: (f) => instructionsPreviewHTML(f, terms),
         },
         always: !searching,
-        empty: "还没有",
+        empty: tx("mem.insEmpty", "还没有"),
       }),
-      group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) }),
-      group("最近说过的话", "hub 自动记录最近 10 条，每次都读，避免重复", msgs, { card: { edit: false, label: "messages.md" } }),
+      group(tx("mem.notesTitle", "笔记"), tx("mem.notesNote", "只先读索引，其余需要时读"), notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) }),
+      group(tx("mem.msgsTitle", "最近说过的话"), tx("mem.msgsNote", "hub 自动记录最近 10 条，每次都读，避免重复"), msgs, { card: { edit: false, label: "messages.md" } }),
       dreamSection,
       doneSection,
     ].filter(Boolean).join("");
 
     const emptySearch = searching && matchedFiles === 0 ? `<div class="card mem-empty">
         <svg class="mem-empty-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <div class="mem-empty-title">未找到包含「${esc(query.trim())}」的记忆</div>
-        <div class="mem-empty-sub">试试换个关键词，可按标题、文件路径或正文检索约定、任务、笔记、已结束事项和做梦日志。</div>
-        <button type="button" class="btn small" data-act="mem-search-clear">清空搜索</button>
+        <div class="mem-empty-title">${esc(tx("mem.searchEmptyTitle", "未找到包含「{q}」的记忆", { q: query.trim() }))}</div>
+      <div class="mem-empty-sub">${esc(tx("mem.searchEmptySub", "试试换个关键词，可按标题、文件路径或正文检索约定、任务、笔记、已结束事项和做梦日志。"))}</div>
+      <button type="button" class="btn small" data-act="mem-search-clear">${esc(tx("mem.searchClear", "清空搜索"))}</button>
       </div>` : "";
 
     return {
@@ -14013,11 +14067,11 @@
     let content = body.querySelector?.("#mem-content");
     if (!wrap || !content) {
       body.innerHTML = `<div class="mem-search-wrap" role="search">
-          <label for="mem-search-input" class="visually-hidden">搜索记忆</label>
-          <svg class="mem-search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-          <input id="mem-search-input" class="mem-search-input" type="search" placeholder="搜索约定、任务、笔记、做梦日志…" autocomplete="off" spellcheck="false" value="${esc(memQuery)}">
-          <span id="mem-search-meta" class="mem-search-meta" aria-live="polite" hidden></span>
-          <button type="button" id="mem-search-clear" class="mem-search-clear" data-act="mem-search-clear" aria-label="清空搜索" title="清空搜索"${memQuery ? "" : " hidden"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          <label for="mem-search-input" class="visually-hidden" data-i18n="mem.searchAria">${esc(tx("mem.searchAria", "搜索记忆"))}</label>
+        <svg class="mem-search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="mem-search-input" class="mem-search-input" type="search" data-i18n-placeholder="mem.searchPlaceholder" placeholder="${esc(tx("mem.searchPlaceholder", "搜索约定、任务、笔记、做梦日志…"))}" autocomplete="off" spellcheck="false" value="${esc(memQuery)}">
+        <span id="mem-search-meta" class="mem-search-meta" aria-live="polite" hidden></span>
+        <button type="button" id="mem-search-clear" class="mem-search-clear" data-act="mem-search-clear" data-i18n-aria="mem.searchClear" data-i18n-title="mem.searchClear" aria-label="${esc(tx("mem.searchClear", "清空搜索"))}" title="${esc(tx("mem.searchClear", "清空搜索"))}"${memQuery ? "" : " hidden"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
         </div>
         <div id="mem-content"></div>`;
       wrap = body.querySelector?.(".mem-search-wrap");
@@ -14056,10 +14110,10 @@
     if (meta) {
       if (res.searching) {
         if (opts.remotePending) {
-          meta.textContent = res.matchedFiles ? `${res.matchedFiles} 项 · 全量检索中…` : "全量检索中…";
+          meta.textContent = res.matchedFiles ? tx("mem.searchingCount", "{n} 项 · 全量检索中…", { n: res.matchedFiles }) : tx("mem.searchingFull", "全量检索中…");
         } else {
-          const capNote = res.truncated ? "（显示前 60 项）" : "";
-          meta.textContent = res.matchedFiles ? `${res.matchedFiles} 项 · ${res.totalHits} 处${capNote}` : "0 项";
+          const capNote = res.truncated ? tx("mem.searchCap", "（显示前 60 项）") : "";
+      meta.textContent = res.matchedFiles ? tx("mem.searchMeta", "{files} 项 · {hits} 处{cap}", { files: res.matchedFiles, hits: res.totalHits, cap: capNote }) : tx("mem.searchZero", "0 项");
         }
         meta.hidden = false;
       } else {
@@ -14160,10 +14214,10 @@
     const expanded = inboxExpanded.has(id);
     const textId = inboxTextId(id);
     return `<li class="row inbox-row${expanded ? " is-expanded is-expandable" : ""}" data-inbox-id="${esc(id)}">
-        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
+        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: tx("inbox.stQueued", "排队"), delivered: tx("inbox.stDelivered", "已投递"), ignored: tx("inbox.stIgnored", "已忽略") }[t.status] || t.status)}</span>
         <div class="inbox-main"><div class="meta"><b>#${esc(id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
         <div class="text inbox-text" id="${esc(textId)}">${esc(t.text)}</div>
-        <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${expanded ? "收起" : "展开"} #${esc(id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${expanded ? "收起" : "展开"}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
+        <button type="button" class="inbox-toggle" data-inbox-toggle="${esc(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="${esc(textId)}" aria-label="${esc((expanded ? tx("common.collapse", "收起") : tx("common.expand", "展开")) + " #" + id)}"${expanded ? "" : " hidden"}><span class="inbox-toggle-lbl">${esc(expanded ? tx("common.collapse", "收起") : tx("common.expand", "展开"))}</span><svg class="inbox-toggle-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>
         <span class="right">${when(t.at)}</span></li>`;
   }
 
@@ -14180,30 +14234,30 @@
       const selTh = inboxThread ? ths.find((th) => th.id === inboxThread) : null;
       const subsChips = (th) => {
         if (!th) return "";
-        if (th.id === "chat:main") return `<div class="inbox-subs"><span class="muted">→ Collie（主会话）</span></div>`;
+        if (th.id === "chat:main") return `<div class="inbox-subs"><span class="muted">${esc(tx("inbox.mainThread", "→ Collie（主会话）"))}</span></div>`;
         const subs = th.subscribers || [];
         const pills = subs.length
-          ? subs.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")
+          ? subs.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="${esc(tx("inbox.unsubTitle", "取消订阅"))}" aria-label="${esc(tx("inbox.unsubAria", "取消 {worker} 订阅", { worker: w }))}">×</button></span>`).join("")
           : `<span class="muted">→ Collie</span>`;
         const addOpts = activeWorkers.filter((w) => !subs.includes(w));
         const adder = addOpts.length
-          ? `<select id="inbox-sub-add" data-thread="${esc(th.id)}" data-pick="compact" data-title="添加订阅 agent"><option value="">+ 订阅 agent</option>${addOpts.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select>`
+          ? `<select id="inbox-sub-add" data-thread="${esc(th.id)}" data-pick="compact" data-title="${esc(tx("inbox.addSubTitle", "添加订阅 agent"))}"><option value="">${esc(tx("inbox.addSubOpt", "+ 订阅 agent"))}</option>${addOpts.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select>`
           : "";
-        return `<div class="inbox-subs"><span>订阅：</span>${pills}${adder}</div>`;
+        return `<div class="inbox-subs"><span>${esc(tx("inbox.subsLabel", "订阅："))}</span>${pills}${adder}</div>`;
       };
       const routesToggle = !selTh
-        ? `<button type="button" class="inbox-routes-btn${inboxRoutesOpen ? " is-open" : ""}" data-act="inbox-routes-toggle" aria-expanded="${inboxRoutesOpen ? "true" : "false"}" aria-controls="inbox-routes-panel"><span>订阅路由</span><svg class="inbox-routes-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button>`
+        ? `<button type="button" class="inbox-routes-btn${inboxRoutesOpen ? " is-open" : ""}" data-act="inbox-routes-toggle" aria-expanded="${inboxRoutesOpen ? "true" : "false"}" aria-controls="inbox-routes-panel"><span>${esc(tx("inbox.routesBtn", "订阅路由"))}</span><svg class="inbox-routes-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button>`
         : "";
       const routesPanel = !selTh
         ? `<div class="inbox-routes-panel" id="inbox-routes-panel"${inboxRoutesOpen ? "" : " hidden"}><div class="card inbox-routes-card"><ul class="rows">${ths.map((th) => `<li class="row inbox-route-row">
           <span class="badge">${th.triggers?.length || 0}</span>
-          <div class="inbox-route-main"><div class="meta"><button type="button" class="inbox-route-id" data-inbox-pick-thread="${esc(th.id)}" title="筛选该来源">${esc(th.id)}</button>${th.id === "chat:main" ? `<span class="muted">→ Collie（主会话）</span>` : th.subscribers?.length ? `<span class="inbox-subs">${th.subscribers.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="取消订阅" aria-label="取消 ${esc(w)} 订阅">×</button></span>`).join("")}</span>` : `<span class="muted">→ Collie</span>`}</div></div>
+          <div class="inbox-route-main"><div class="meta"><button type="button" class="inbox-route-id" data-inbox-pick-thread="${esc(th.id)}" title="${esc(tx("inbox.filterSourceTitle", "筛选该来源"))}">${esc(th.id)}</button>${th.id === "chat:main" ? `<span class="muted">${esc(tx("inbox.mainThread", "→ Collie（主会话）"))}</span>` : th.subscribers?.length ? `<span class="inbox-subs">${th.subscribers.map((w) => `<span class="sub-pill">${esc(w)}<button type="button" data-unsub-worker="${esc(w)}" data-unsub-thread="${esc(th.id)}" title="${esc(tx("inbox.unsubTitle", "取消订阅"))}" aria-label="${esc(tx("inbox.unsubAria", "取消 {worker} 订阅", { worker: w }))}">×</button></span>`).join("")}</span>` : `<span class="muted">→ Collie</span>`}</div></div>
           <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div></div>`
         : "";
       threadBar = `<div class="inbox-bar">
-        <label class="inbox-filter"><span class="inbox-filter-lbl">事件来源</span><select id="inbox-thread-filter" data-pick="compact" data-title="按事件来源筛选">
-          <option value="" ${!inboxThread ? "selected" : ""}>全部来源（${ths.length}）</option>
-          ${ths.map((th) => `<option value="${esc(th.id)}" data-sub="${esc((th.subscribers?.length ? "订阅：" + th.subscribers.join(", ") : th.id === "chat:main" ? "→ Collie（主会话）" : "→ Collie") + " · " + (th.triggers?.length || 0) + " 条")}" ${inboxThread === th.id ? "selected" : ""}>${esc(th.id)}</option>`).join("")}
+        <label class="inbox-filter"><span class="inbox-filter-lbl">${esc(tx("inbox.filterLabel", "事件来源"))}</span><select id="inbox-thread-filter" data-pick="compact" data-title="${esc(tx("inbox.filterSelectTitle", "按事件来源筛选"))}">
+          <option value="" ${!inboxThread ? "selected" : ""}>${esc(tx("inbox.filterAll", "全部来源（{n}）", { n: ths.length }))}</option>
+          ${ths.map((th) => `<option value="${esc(th.id)}" data-sub="${esc(tx("inbox.filterSub", "{route} · {n} 条", { route: th.subscribers?.length ? tx("inbox.subsLabel", "订阅：") + th.subscribers.join(", ") : th.id === "chat:main" ? tx("inbox.mainThread", "→ Collie（主会话）") : "→ Collie", n: th.triggers?.length || 0 }))}" ${inboxThread === th.id ? "selected" : ""}>${esc(th.id)}</option>`).join("")}
         </select></label>
         ${selTh ? subsChips(selTh) : routesToggle}
       </div>${routesPanel}`;
@@ -14212,58 +14266,63 @@
     const moreCount = Math.max(0, shown.length - visible.length);
     const feedFoot = shown.length > 0
       ? (moreCount > 0
-        ? `<div class="inbox-feed-foot" id="inbox-feed-foot" data-inbox-sentinel="more" role="status" aria-live="polite"><span class="inbox-feed-status">正在加载更多…</span></div>`
-        : `<div class="inbox-feed-foot is-done" id="inbox-feed-foot"><span class="inbox-feed-status">已显示全部 ${shown.length} 条</span></div>`)
+        ? `<div class="inbox-feed-foot" id="inbox-feed-foot" data-inbox-sentinel="more" role="status" aria-live="polite"><span class="inbox-feed-status">${esc(tx("inbox.loadingMore", "正在加载更多…"))}</span></div>`
+        : `<div class="inbox-feed-foot is-done" id="inbox-feed-foot"><span class="inbox-feed-status">${esc(tx("inbox.allShown", "已显示全部 {n} 条", { n: shown.length }))}</span></div>`)
       : "";
     return `${threadBar}
-      <div class="card"><ul class="rows" id="inbox-list">${visible.length ? visible.map(inboxRowHTML).join("") : `<li class="empty-row">${inboxThread ? "该来源里还没有事件" : "收件箱是空的"}</li>`}</ul></div>${feedFoot}`;
+      <div class="card"><ul class="rows" id="inbox-list">${visible.length ? visible.map(inboxRowHTML).join("") : `<li class="empty-row">${esc(inboxThread ? tx("inbox.emptyThread", "该来源里还没有事件") : tx("inbox.emptyAll", "收件箱是空的"))}</li>`}</ul></div>${feedFoot}`;
   }
 
   // ───────────────────────────── timers: picked, not typed
-  const WEEK = [["mon", "一"], ["tue", "二"], ["wed", "三"], ["thu", "四"], ["fri", "五"], ["sat", "六"], ["sun", "日"]];
-  const UNIT = { m: "分钟", h: "小时" };
-  // describeSpec turns "weekly mon,thu 09:00" into "每周一、四 09:00".
+  const WEEK_META = [["mon", "timer.dayMon", "一"], ["tue", "timer.dayTue", "二"], ["wed", "timer.dayWed", "三"], ["thu", "timer.dayThu", "四"], ["fri", "timer.dayFri", "五"], ["sat", "timer.daySat", "六"], ["sun", "timer.daySun", "日"]];
   function describeSpec(spec) {
-    const f = String(spec || "").trim().split(/\s+/);
-    const dur = (d) => {
-      const m = /^(\d+(?:\.\d+)?)([mhs])$/.exec(d || "");
-      if (!m) return d;
+    const f = (spec || "").trim().split(/\s+/);
+    const dur = (s) => {
+      const m = /^(\d+(?:\.\d+)?)([mhs])$/.exec(s || "");
+      if (!m) return s || "";
       const n = +m[1];
-      if (m[2] === "h" && n >= 24 && n % 24 === 0) return `${n / 24} 天`;
-      if (m[2] === "m" && n >= 60 && n % 60 === 0) return `${n / 60} 小时`;
-      return `${n} ${UNIT[m[2]] || "秒"}`;
+      if (m[2] === "h" && n >= 24 && n % 24 === 0) return tx("timer.durDays", "{n} 天", { n: n / 24 });
+      if (m[2] === "m" && n >= 60 && n % 60 === 0) return tx("timer.durHours", "{n} 小时", { n: n / 60 });
+      const unit = m[2] === "m" ? tx("timer.unitMin", "分钟") : m[2] === "h" ? tx("timer.unitHour", "小时") : tx("timer.unitSec", "秒");
+      return tx("timer.durUnit", "{n} {unit}", { n, unit });
     };
     switch (f[0]) {
-      case "daily": return `每天 ${f[1]}`;
-      case "weekdays": return `工作日 ${f[1]}`;
-      case "weekly": return `每周${(f[1] || "").split(",").map((d) => (WEEK.find((w) => w[0] === d) || [, d])[1]).join("、")} ${f[2] || ""}`;
-      case "every": return `每隔 ${dur(f[1])}`;
-      case "in": return `${dur(f[1])}后（一次）`;
-      case "at": return `${f[1]} ${f[2] || ""}（一次）`;
+      case "daily": return tx("timer.specDaily", "每天 {clock}", { clock: f[1] || "" });
+      case "weekdays": return tx("timer.specWeekdays", "工作日 {clock}", { clock: f[1] || "" });
+      case "weekly": {
+        const days = (f[1] || "").split(",").map((d) => {
+          const hit = WEEK_META.find((w) => w[0] === d);
+          return hit ? tx(hit[1], hit[2]) : d;
+        }).join(tx("timer.specWeeklySep", "、"));
+        return tx("timer.specWeekly", "每周{days} {clock}", { days, clock: f[2] || "" });
+      }
+      case "every": return tx("timer.specEvery", "每隔 {dur}", { dur: dur(f[1]) });
+      case "in": return tx("timer.specIn", "{dur}后（一次）", { dur: dur(f[1]) });
+      case "at": return tx("timer.specAt", "{date} {time}（一次）", { date: f[1] || "", time: f[2] || "" });
+      default: return spec;
     }
-    return spec;
   }
   const pad2 = (n) => String(n).padStart(2, "0");
   const localStamp = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
   // The spec the timer form describes, or an error to show.
   function timerSpec(f) {
     const mode = f.dataset.mode, clock = f.clock.value;
-    if (["daily", "weekdays", "weekly"].includes(mode) && !/^\d\d:\d\d$/.test(clock)) return { err: "选一个时间" };
+    if (["daily", "weekdays", "weekly"].includes(mode) && !/^\d\d:\d\d$/.test(clock)) return { err: tx("timer.errClock", "选一个时间") };
     if (mode === "daily") return { spec: `daily ${clock}` };
     if (mode === "weekdays") return { spec: `weekdays ${clock}` };
     if (mode === "weekly") {
       const days = [...f.querySelectorAll(".tm-days button.on")].map((b) => b.dataset.day);
-      return days.length ? { spec: `weekly ${days.join(",")} ${clock}` } : { err: "选至少一天" };
+      return days.length ? { spec: `weekly ${days.join(",")} ${clock}` } : { err: tx("timer.errDays", "选至少一天") };
     }
     if (mode === "every") {
       const n = Math.floor(+f.every_n.value);
-      if (!(n >= 1)) return { err: "间隔至少 1" };
+      if (!(n >= 1)) return { err: tx("timer.errEvery", "间隔至少 1") };
       const u = f.every_u.value;
       return { spec: u === "d" ? `every ${n * 24}h` : `every ${n}${u}` };
     }
     const at = f.at.value;
-    if (!at) return { err: "选一个日期和时间" };
-    if (new Date(at) <= new Date()) return { err: "这个时间已经过去了" };
+    if (!at) return { err: tx("timer.errAt", "选一个日期和时间") };
+      if (new Date(at) <= new Date()) return { err: tx("timer.errPast", "这个时间已经过去了") };
     return { spec: `at ${at.replace("T", " ")}` };
   }
   function syncTimerForm(f) {
@@ -14272,7 +14331,7 @@
     f.querySelectorAll("[data-show]").forEach((el) => { el.hidden = !el.dataset.show.split(" ").includes(mode); });
     const r = timerSpec(f), target = f.target.selectedOptions[0]?.textContent || "Collie";
     const sum = f.querySelector(".tm-sum");
-    sum.textContent = r.err ? r.err : `${describeSpec(r.spec)} · 交给 ${target.replace(/（.*）/, "")}`;
+    sum.textContent = r.err ? r.err : tx("timer.sumTo", "{spec} · 交给 {target}", { spec: describeSpec(r.spec), target: target.replace(/（.*）/, "") });
     sum.classList.toggle("err", !!r.err);
   }
 
@@ -14307,7 +14366,7 @@
     timerForm.text.value = "";
     timerForm.querySelectorAll(".tm-days button").forEach((b, i) => b.classList.toggle("on", i === 0));
     const liveWorkers = (sup.workers || []).filter((w) => !w.ended);
-    timerForm.target.innerHTML = `<option value="" data-sub="由它决定怎么处理">Collie</option>`
+    timerForm.target.innerHTML = `<option value="" data-sub="${esc(tx("timer.targetCollieSub", "由它决定怎么处理"))}">Collie</option>`
       + liveWorkers.map((w) => {
         const lbl = workerLabelOf(w);
         const text = lbl && lbl !== w.name ? `${lbl} (${w.name})` : w.name;
@@ -14374,7 +14433,7 @@
       if (btn) btn.disabled = true;
       try {
         await api("/api/super/timers", { body: { spec: r.spec, text, target: timerForm.target.value, owner: "you" } });
-        toast(`已添加：${describeSpec(r.spec)}`);
+        toast(tx("timer.addedToast", "已添加：{spec}", { spec: describeSpec(r.spec) }));
         await closeTimerModal("ok");
         loadAuto();
       } catch (err) {
@@ -14389,15 +14448,15 @@
   let timersEndedLoading = false;
   function renderTimerRowHTML(t) {
     const meta = [
-      t.enabled ? `下次 ${when(t.next_run)}` : t.last_run ? `上次 ${when(t.last_run)}` : "已结束",
-      t.owner ? (t.owner === "you" ? "你设的" : `${t.owner} 设的`) : "",
+      t.enabled ? tx("timer.nextRun", "下次 {time}", { time: when(t.next_run) }) : t.last_run ? tx("timer.lastRun", "上次 {time}", { time: when(t.last_run) }) : tx("st.ended", "已结束"),
+      t.owner ? (t.owner === "you" ? tx("timer.ownerYou", "你设的") : tx("timer.ownerOther", "{owner} 设的", { owner: t.owner })) : "",
     ].filter(Boolean);
     return `<li class="tm-row${t.enabled ? "" : " is-ended"}">
       <div class="tm-row-head">
         <span class="sdot ${t.enabled ? "connected" : "disabled"}" aria-hidden="true"></span>
         <b class="tm-spec" title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b>
         <span class="tm-target-tag">→ ${esc(t.target || "Collie")}</span>
-        <button type="button" class="icon-btn tm-del" data-del-timer="${esc(t.id)}" title="删除定时" aria-label="删除定时">
+        <button type="button" class="icon-btn tm-del" data-del-timer="${esc(t.id)}" title="${esc(tx("timer.deleteTitle", "删除定时"))}" aria-label="${esc(tx("timer.deleteTitle", "删除定时"))}">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>
         </button>
       </div>
@@ -14424,23 +14483,23 @@
     const endedLazy = endedTotal > 0 && endedList.length === 0;
     const endedHasMore = opts.endedHasMore || endedTotal > endedList.length;
     return `<div class="tm-bar">
-        <span class="tm-bar-stat">${active.length ? `启用中 · ${active.length}` : "定时任务"}</span>
+        <span class="tm-bar-stat">${esc(active.length ? tx("timer.activeStat", "启用中 · {n}", { n: active.length }) : tx("timer.barTitle", "定时任务"))}</span>
         <button type="button" class="btn primary small tm-new-btn" id="tm-open-btn" data-act="timer-open">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          <span>新建定时</span>
+          <span>${esc(tx("timer.modalTitle", "新建定时"))}</span>
         </button>
       </div>
-      <div class="card"><ul class="rows">${active.length ? active.map(renderTimerRowHTML).join("") : `<li class="empty-row">${endedTotal ? "没有启用中的定时" : "还没有定时，点右上角新建"}</li>`}</ul></div>
-      ${endedTotal ? `<details class="mem-done" data-ended-timers${endedLazy ? ' data-ended-lazy="1"' : ""}><summary class="mem-h">已结束<span class="muted">${endedTotal} 个</span></summary>
-        <div class="card"><ul class="rows tm-ended-list">${endedLazy ? `<li class="empty-row mem-lazy-hint">展开后加载已结束定时…</li>` : endedList.map(renderTimerRowHTML).join("")}</ul></div>${!endedLazy && endedHasMore ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="timers-ended-more">加载更多（已显示 ${endedList.length} / ${endedTotal} 个）</button></div>` : ""}</details>` : ""}`;
+      <div class="card"><ul class="rows">${active.length ? active.map(renderTimerRowHTML).join("") : `<li class="empty-row">${esc(endedTotal ? tx("timer.emptyActiveOnly", "没有启用中的定时") : tx("timer.emptyAll", "还没有定时，点右上角新建"))}</li>`}</ul></div>
+      ${endedTotal ? `<details class="mem-done" data-ended-timers${endedLazy ? ' data-ended-lazy="1"' : ""}><summary class="mem-h">${esc(tx("mem.doneTitle", "已结束"))}<span class="muted">${esc(tx("timer.endedCount", "{n} 个", { n: endedTotal }))}</span></summary>
+      <div class="card"><ul class="rows tm-ended-list">${endedLazy ? `<li class="empty-row mem-lazy-hint">${esc(tx("timer.endedLazyHint", "展开后加载已结束定时…"))}</li>` : endedList.map(renderTimerRowHTML).join("")}</ul></div>${!endedLazy && endedHasMore ? `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="timers-ended-more">${esc(tx("timer.endedLoadMore", "加载更多（已显示 {shown} / {total} 个）", { shown: endedList.length, total: endedTotal }))}</button></div>` : ""}</details>` : ""}`;
   }
   async function loadMoreEndedTimers(detailsEl, { reset = false } = {}) {
     if (timersEndedLoading || !autoCache.timers) return;
     timersEndedLoading = true;
     const ul = detailsEl?.querySelector?.(".tm-ended-list");
     const moreBtn = detailsEl?.querySelector?.('[data-act="timers-ended-more"]');
-    if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = "加载中…"; }
-    else if (reset && ul) { ul.innerHTML = `<li class="empty-row mem-lazy-hint">加载中…</li>`; }
+    if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = tx("common.loading", "加载中…"); }
+    else if (reset && ul) { ul.innerHTML = `<li class="empty-row mem-lazy-hint">${esc(tx("common.loading", "加载中…"))}</li>`; }
     const c = autoCache.timers;
     const offset = reset ? 0 : (c.endedList || []).length;
     try {
@@ -14460,26 +14519,26 @@
       c.endedLoaded = true;
       if (detailsEl?.isConnected && ul && view === "auto" && autoTab === "timers") {
         detailsEl.removeAttribute("data-ended-lazy");
-        ul.innerHTML = c.endedList.map(renderTimerRowHTML).join("") || `<li class="empty-row">空</li>`;
+        ul.innerHTML = c.endedList.map(renderTimerRowHTML).join("") || `<li class="empty-row">${esc(tx("common.empty", "空"))}</li>`;
         const oldMore = detailsEl.querySelector(".mem-more-row");
         if (oldMore) oldMore.remove();
         if (c.endedHasMore && c.endedCount > c.endedList.length) {
-          detailsEl.insertAdjacentHTML("beforeend", `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="timers-ended-more">加载更多（已显示 ${c.endedList.length} / ${c.endedCount} 个）</button></div>`);
+          detailsEl.insertAdjacentHTML("beforeend", `<div class="mem-more-row"><button type="button" class="btn small mem-more-btn" data-act="timers-ended-more">${esc(tx("timer.endedLoadMore", "加载更多（已显示 {shown} / {total} 个）", { shown: c.endedList.length, total: c.endedCount }))}</button></div>`);
         }
         $("#auto-body")._timersSig = computeTimersSig(c);
       }
     } catch (err) {
       if (ul && reset && !(c.endedList || []).length) {
-        ul.innerHTML = `<li class="empty-row mem-lazy-hint">${esc(err.message || "加载失败")}</li>`;
+        ul.innerHTML = `<li class="empty-row mem-lazy-hint">${esc(err.message || tx("common.loadFailed", "加载失败"))}</li>`;
       } else {
-        toast(err.message || "加载定时失败", "attn");
+        toast(err.message || tx("timer.loadFailed", "加载定时失败"), "attn");
       }
     } finally {
       timersEndedLoading = false;
       const btn = detailsEl?.querySelector?.('[data-act="timers-ended-more"]');
       if (btn && autoCache.timers) {
         btn.disabled = false;
-        btn.textContent = `加载更多（已显示 ${(autoCache.timers.endedList || []).length} / ${autoCache.timers.endedCount || 0} 个）`;
+        btn.textContent = tx("timer.endedLoadMore", "加载更多（已显示 {shown} / {total} 个）", { shown: (autoCache.timers.endedList || []).length, total: autoCache.timers.endedCount || 0 });
       }
     }
   }
@@ -14500,7 +14559,7 @@
       modelSel.dataset.pendingValue = want || "";
       // Keep the current model label visible while fetching to prevent a "读取中…" flash.
       if (!modelSel.options?.length) {
-        modelSel.innerHTML = `<option value="${esc(want || "")}" selected>${esc(want || "默认")}</option>`;
+        modelSel.innerHTML = `<option value="${esc(want || "")}" selected>${esc(want || tx("common.default", "默认"))}</option>`;
         syncPick(modelSel);
       }
       info = await modelsFor(kindSel.value, machine);
@@ -14512,9 +14571,9 @@
     if (want && !list.some((m) => m.id === want)) list.unshift({ id: want });
     const sub = (m) => [m.label && m.label !== m.id ? m.id : "", m.note && m.note !== m.id && !(m.label && m.note.startsWith(m.label)) ? m.note : ""].filter(Boolean).join(" · ");
     const defName = defaultModelName(info);
-    modelSel.innerHTML = `<option value="" data-sub="${esc(defName ? "现在是 " + defName : "用 agent 自己的设置")}">默认</option>`
+    modelSel.innerHTML = `<option value="" data-sub="${esc(defName ? tx("collie.nowModel", "现在是 {name}", { name: defName }) : tx("collie.agentOwnSetting", "用 agent 自己的设置"))}">${esc(tx("common.default", "默认"))}</option>`
       + list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(sub(m))}" ${m.id === want ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("")
-      + `<option value="__custom" data-sub="输入列表里没有的模型名">其他…</option>`;
+      + `<option value="__custom" data-sub="${esc(tx("set.otherModelSub", "输入列表里没有的模型名"))}">${esc(tx("set.otherModel", "其他…"))}</option>`;
     modelSel.value = want || "";
     delete modelSel.dataset.value;
     syncPick(modelSel);
@@ -14523,7 +14582,7 @@
       const rawCur = effSel.dataset.value ?? effSel.value;
       const cur = effs.includes(rawCur) ? rawCur : "";
       const defE = effs.includes(info.default_effort) ? info.default_effort : "";
-      effSel.innerHTML = `<option value="" data-sub="${esc(defE ? "现在是 " + (EFFORT_LABEL[defE] || defE) : "用 agent 自己的设置")}">默认</option>`
+      effSel.innerHTML = `<option value="" data-sub="${esc(defE ? tx("collie.nowModel", "现在是 {name}", { name: EFFORT_LABEL[defE] || defE }) : tx("collie.agentOwnSetting", "用 agent 自己的设置"))}">${esc(tx("common.default", "默认"))}</option>`
         + effs.map((e) => `<option value="${esc(e)}" data-sub="${esc(e)}" ${e === cur ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
       effSel.value = cur;
       delete effSel.dataset.value;
@@ -14537,7 +14596,7 @@
     fillEffort();
     modelSel.onchange = () => {
       if (modelSel.value === "__custom") {
-        const v = (prompt("模型名（照 agent 的 --model 参数写）") || "").trim();
+        const v = (prompt(tx("set.customModelPrompt", "模型名（照 agent 的 --model 参数写）")) || "").trim();
         if (v) modelSel.add(new Option(v, v, true, true), 1);
         else modelSel.value = "";
         syncPick(modelSel);
@@ -14633,13 +14692,13 @@
       if (sig === lastSent) return;
       if (saving) { queued = true; return; }
       saving = true;
-      setStatus("saving", "保存中…");
+      setStatus("saving", tx("common.saving", "保存中…"));
       try {
         const res = await api("/api/super/settings", { body: { settings: payload } });
         if (res?.settings) base = { ...base, ...res.settings };
         lastSent = sig;
         renderTarget(true);
-        setStatus("saved", "✓ 已保存");
+        setStatus("saved", tx("common.savedCheck", "✓ 已保存"));
         // Refresh router.pending immediately so the amber restart bar reflects changes right away.
         api("/api/super").then((d) => {
           sup = normSup(d);
@@ -14648,7 +14707,7 @@
           if (view === "collie") renderSuper();
         }).catch(() => {});
       } catch (err) {
-        setStatus("error", "保存失败：" + err.message);
+        setStatus("error", tx("set.saveErr", "保存失败：{msg}", { msg: err.message }));
         toast(err.message, "attn");
       } finally {
         saving = false;
@@ -14751,8 +14810,8 @@
   }
 
   const ROUTINE_DAYS = [
-    ["mon", "周一"], ["tue", "周二"], ["wed", "周三"],
-    ["thu", "周四"], ["fri", "周五"], ["sat", "周六"], ["sun", "周日"],
+    ["mon", "timer.weekdayMon", "周一"], ["tue", "timer.weekdayTue", "周二"], ["wed", "timer.weekdayWed", "周三"],
+    ["thu", "timer.weekdayThu", "周四"], ["fri", "timer.weekdayFri", "周五"], ["sat", "timer.weekdaySat", "周六"], ["sun", "timer.weekdaySun", "周日"],
   ];
   function routinesSettingsHTML(s) {
     const mb = s.morning_brief || {};
@@ -14761,37 +14820,37 @@
     const mbOn = !!mb.enabled, mbAt = mb.at || "09:00";
     const wrOn = !!wr.enabled, wrDay = wr.day || "mon", wrAt = wr.at || "09:00";
     const sfOn = !!sf.enabled, sfAt = sf.at || "17:30";
-    const dayOpts = ROUTINE_DAYS.map(([k, l]) => `<option value="${k}"${wrDay === k ? " selected" : ""}>${l}</option>`).join("");
-    return `<div class="set-routines" aria-label="官方定时">
+    const dayOpts = ROUTINE_DAYS.map(([k, dk, l]) => `<option value="${k}"${wrDay === k ? " selected" : ""}>${esc(tx(dk, l))}</option>`).join("");
+    return `<div class="set-routines" aria-label="${esc(tx("set.routinesAria", "官方定时"))}">
           <div class="set-routine-row${mbOn ? " is-on" : ""}">
             <div class="set-routine-copy">
-              <label class="set-routine-title" for="routine-morning-enabled">每日晨报</label>
-              <small id="routine-morning-desc">仅在近 24h 有任务、待办或环境异常时推送，无事零打扰</small>
+              <label class="set-routine-title" for="routine-morning-enabled">${esc(tx("set.morningTitle", "每日晨报"))}</label>
+              <small id="routine-morning-desc">${esc(tx("set.morningDesc", "仅在近 24h 有任务、待办或环境异常时推送，无事零打扰"))}</small>
             </div>
             <div class="set-routine-ctls">
-              <input type="time" class="set-routine-time" name="morning_brief_at" value="${esc(mbAt)}" aria-label="每日晨报时间" aria-describedby="routine-morning-desc">
+              <input type="time" class="set-routine-time" name="morning_brief_at" value="${esc(mbAt)}" aria-label="${esc(tx("set.morningTimeAria", "每日晨报时间"))}" aria-describedby="routine-morning-desc">
               <input type="checkbox" switch class="set-switch" id="routine-morning-enabled" name="morning_brief_enabled" aria-describedby="routine-morning-desc"${mbOn ? " checked" : ""}>
             </div>
           </div>
           <div class="set-routine-row${wrOn ? " is-on" : ""}">
             <div class="set-routine-copy">
-              <label class="set-routine-title" for="routine-weekly-enabled">每周复盘</label>
-              <small id="routine-weekly-desc">仅在近 7 天有完工归档或任务挂起超 3 天时汇总</small>
+              <label class="set-routine-title" for="routine-weekly-enabled">${esc(tx("set.weeklyTitle", "每周复盘"))}</label>
+              <small id="routine-weekly-desc">${esc(tx("set.weeklyDesc", "仅在近 7 天有完工归档或任务挂起超 3 天时汇总"))}</small>
             </div>
             <div class="set-routine-ctls">
-              <select class="set-routine-day" name="weekly_review_day" data-pick="compact" data-title="每周复盘日期" aria-label="每周复盘星期">${dayOpts}</select>
-              <input type="time" class="set-routine-time" name="weekly_review_at" value="${esc(wrAt)}" aria-label="每周复盘时间" aria-describedby="routine-weekly-desc">
+              <select class="set-routine-day" name="weekly_review_day" data-pick="compact" data-title="${esc(tx("set.weeklyDayTitle", "每周复盘日期"))}" aria-label="${esc(tx("set.weeklyDayAria", "每周复盘星期"))}">${dayOpts}</select>
+              <input type="time" class="set-routine-time" name="weekly_review_at" value="${esc(wrAt)}" aria-label="${esc(tx("set.weeklyTimeAria", "每周复盘时间"))}" aria-describedby="routine-weekly-desc">
               <input type="checkbox" switch class="set-switch" id="routine-weekly-enabled" name="weekly_review_enabled" aria-describedby="routine-weekly-desc"${wrOn ? " checked" : ""}>
             </div>
           </div>
           <div class="set-routine-row${sfOn ? " is-on" : ""}">
             <div class="set-routine-copy">
-              <label class="set-routine-title" for="routine-stale-enabled">滞留事项轻提醒</label>
-              <small id="routine-stale-desc">工作日检查超 24h 待拍板或超 48h 未推进任务，无滞留静默跳过</small>
+              <label class="set-routine-title" for="routine-stale-enabled">${esc(tx("set.staleTitle", "滞留事项轻提醒"))}</label>
+              <small id="routine-stale-desc">${esc(tx("set.staleDesc", "工作日检查超 24h 待拍板或超 48h 未推进任务，无滞留静默跳过"))}</small>
             </div>
             <div class="set-routine-ctls">
-              <span class="set-routine-cadence" aria-hidden="true">工作日</span>
-              <input type="time" class="set-routine-time" name="stale_follow_at" value="${esc(sfAt)}" aria-label="滞留事项轻提醒时间" aria-describedby="routine-stale-desc">
+              <span class="set-routine-cadence" aria-hidden="true">${esc(tx("timer.modeWeekdays", "工作日"))}</span>
+              <input type="time" class="set-routine-time" name="stale_follow_at" value="${esc(sfAt)}" aria-label="${esc(tx("set.staleTimeAria", "滞留事项轻提醒时间"))}" aria-describedby="routine-stale-desc">
               <input type="checkbox" switch class="set-switch" id="routine-stale-enabled" name="stale_follow_enabled" aria-describedby="routine-stale-desc"${sfOn ? " checked" : ""}>
             </div>
           </div>
@@ -14810,8 +14869,8 @@
       const hideEff = kind === "cursor" || ((kind === "antigravity" || kind === "agy") && agyRejectsEffort(model)) || ((kind === "pi" || kind === "omp" || kind === "oh-my-pi") && PI_THINKING_SUFFIX_RE.test((model || "").trim()));
       const eff = hideEff ? "" : (effort || "");
       return `
-          <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
-          <label${hideEff ? " hidden" : ""}>思考强度<select name="${who}_effort" data-pick="compact" data-title="思考强度" data-value="${esc(eff)}"${hideEff ? " hidden disabled" : ""}><option value="${esc(eff)}" selected>${esc(EFFORT_LABEL[eff] || eff || "默认")}</option></select></label>`;
+          <label>${esc(tx("set.model", "模型"))}<select name="${who}_model" data-title="${esc(tx("set.model", "模型"))}" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || tx("common.default", "默认"))}</option></select></label>
+          <label${hideEff ? " hidden" : ""}>${esc(tx("effort.title", "思考强度"))}<select name="${who}_effort" data-pick="compact" data-title="${esc(tx("effort.title", "思考强度"))}" data-value="${esc(eff)}"${hideEff ? " hidden disabled" : ""}><option value="${esc(eff)}" selected>${esc(EFFORT_LABEL[eff] || eff || tx("common.default", "默认"))}</option></select></label>`;
     };
     const localMs = (state.machines || []).filter((m) => !m.hub);
     const many = localMs.length > 1;
@@ -14824,70 +14883,71 @@
       <section class="card set-sec">
         <header>
           <div class="set-head-row">
-            <h4>Collie 自己</h4>
-            <button type="button" class="btn small set-restart-btn" data-act="router-restart" title="手动重启 Collie（保留记忆与排队消息）">重启 Collie</button>
+            <h4>${esc(tx("set.routerTitle", "Collie 自己"))}</h4>
+            <button type="button" class="btn small set-restart-btn" data-act="router-restart" title="${esc(tx("set.routerRestartTitle", "手动重启 Collie（保留记忆与排队消息）"))}">${esc(tx("collie.menuRestart", "重启 Collie"))}</button>
           </div>
-          <p>负责理解、分派与回复，选轻量快速的模型即可。</p>
+          <p>${esc(tx("set.routerDesc", "负责理解、分派与回复，选轻量快速的模型即可。"))}</p>
         </header>
         <div class="set-grid three">
-          <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${routerKindOpts(s.router_kind)}</select></label>
+          <label>Agent<select name="router_kind" data-title="${esc(tx("set.routerKindTitle", "Collie 自己用的 agent"))}">${routerKindOpts(s.router_kind)}</select></label>
           ${modelPick("router", s.router_kind, s.router_model, s.router_effort)}
         </div>
-        <details class="set-adv" ${(s.router_args || []).length ? "open" : ""}><summary>更多启动参数</summary>
-          <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="例如 --permission-mode plan" autocorrect="off" autocapitalize="off" spellcheck="false"><small>原样加在启动命令后面；工作目录 <code>${esc(tilde(r.router_dir))}</code></small></label>
+        <details class="set-adv" ${(s.router_args || []).length ? "open" : ""}><summary>${esc(tx("set.moreArgs", "更多启动参数"))}</summary>
+          <label><input name="router_args" class="mono" value="${esc((s.router_args || []).join(" "))}" placeholder="${esc(tx("set.argsPh", "例如 --permission-mode plan"))}" autocorrect="off" autocapitalize="off" spellcheck="false"><small>${tx("set.argsHelpHtml", "原样加在启动命令后面；工作目录 <code>{dir}</code>", { dir: esc(tilde(r.router_dir)) })}</small></label>
         </details>
       </section>
 
       <section class="card set-sec">
-        <header><h4>派活默认</h4><p>默认兜底配置；想按任务分模型（如写文档用某模型），对话里告诉 Collie 一次即会长期记住。</p></header>
+        <header><h4>${esc(tx("set.workerTitle", "派活默认"))}</h4><p>${esc(tx("set.workerDesc", "默认兜底配置；想按任务分模型（如写文档用某模型），对话里告诉 Collie 一次即会长期记住。"))}</p></header>
         <div class="set-grid three">
-          <label>Agent<select name="worker_kind" data-title="派活默认用">${workerKindOpts(s.worker_kind)}</select></label>
+          <label>Agent<select name="worker_kind" data-title="${esc(tx("set.workerKindTitle", "派活默认用"))}">${workerKindOpts(s.worker_kind)}</select></label>
           ${modelPick("worker", s.worker_kind, s.worker_model, s.worker_effort)}
         </div>
         <div class="set-grid three">
-          ${many ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${localMs.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
-          <label class="${many ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(cwdDisp)}" placeholder="~ 或输入任意目录路径" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label>
+          ${many ? `<label>${esc(tx("set.machine", "电脑"))}<select name="worker_machine" data-title="${esc(tx("set.machineTitle", "派活默认在哪台电脑"))}">${localMs.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? esc(tx("common.hubSuffix", "（hub）")) : m.online ? "" : esc(tx("common.offlineSuffix", "（离线）"))}</option>`).join("")}</select></label>` : ""}
+          <label class="${many ? "span2" : "span3"}">${esc(tx("set.cwd", "目录"))}<input name="worker_cwd" class="mono" value="${esc(cwdDisp)}" placeholder="${esc(tx("set.cwdPh", "~ 或输入任意目录路径"))}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label>
         </div>
       </section>
 
       <section class="card set-sec">
-        <header><h4>记忆与会话</h4><p>对话超限时自动交接新会话，夜间自动整理记忆，按需开启官方定时。</p></header>
+        <header><h4>${esc(tx("set.memSecTitle", "记忆与会话"))}</h4><p>${esc(tx("set.memSecDesc", "对话超限时自动交接新会话，夜间自动整理记忆，按需开启官方定时。"))}</p></header>
         <div class="set-grid">
-          <label>上下文用到多少时换新会话<select name="rotate_pct" data-pick="compact" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
-          <label>每晚做梦<select name="dream_at" data-pick="compact" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
+          <label>${esc(tx("set.rotateLabel", "上下文用到多少时换新会话"))}<select name="rotate_pct" data-pick="compact" data-title="${esc(tx("set.rotateLabel", "上下文用到多少时换新会话"))}">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? esc(tx("common.never", "从不")) : p + "%"}</option>`).join("")}</select><small>${esc(tx("set.rotateHelp", "窗口大小按 agent 自己的设置算"))}</small></label>
+          <label>${esc(tx("set.dreamLabel", "每晚做梦"))}<select name="dream_at" data-pick="compact" data-title="${esc(tx("set.dreamLabel", "每晚做梦"))}">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? esc(tx("common.off", "不做")) : t}</option>`).join("")}</select><small>${esc(tx("set.dreamHelp", "当天没有新对话就跳过"))}</small></label>
         </div>
         ${routinesSettingsHTML(s)}
         <div class="set-mem-io">
           <div class="set-mem-io-copy">
-            <span class="set-mem-io-title">记忆备份与迁移</span>
-            <small>打包下载全部 <code>.md</code> 记忆，或从 <code>.zip</code> 备份恢复；导入前会自动备份当前记忆。</small>
+            <span class="set-mem-io-title">${esc(tx("set.memBackupTitle", "记忆备份与迁移"))}</span>
+            <small>${tx("set.memBackupDescHtml", "打包下载全部 <code>.md</code> 记忆，或从 <code>.zip</code> 备份恢复；导入前会自动备份当前记忆。")}</small>
           </div>
           <div class="set-mem-io-acts">
-            <button type="button" class="btn small" data-act="mem-export">导出记忆</button>
-            <button type="button" class="btn small" data-act="mem-import">导入记忆</button>
+            <button type="button" class="btn small" data-act="mem-export">${esc(tx("set.memExport", "导出记忆"))}</button>
+            <button type="button" class="btn small" data-act="mem-import">${esc(tx("set.memImport", "导入记忆"))}</button>
           </div>
         </div>
       </section>
 
       <section class="card set-sec">
-        <header><h4>通知</h4></header>
-        <p class="int-set-note">想在飞书里双向对话、直接点交互卡片按钮拍板？前往 <button type="button" data-go-tab="integrations">接入 → 飞书机器人</button> 一键配置。</p>
+        <header><h4>${esc(tx("set.notifyTitle", "通知"))}</h4></header>
+        <p class="int-set-note">${tx("set.notifyFeishuNoteHtml", '想在飞书里双向对话、直接点交互卡片按钮拍板？前往 <button type="button" data-go-tab="integrations">接入 → 飞书机器人</button> 一键配置。')}</p>
         <div class="set-grid">
-          <label class="check span3"><input type="checkbox" name="notify_lark" ${s.notify_lark ? "checked" : ""}> 用 hub 上的 lark-cli 发飞书消息给你<small id="lark-who" class="muted">· 正在看 hub 上的 lark-cli…</small></label>
-          <label>Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" autocorrect="off" autocapitalize="off" spellcheck="false"><small>飞书 / Lark 机器人或 Slack</small></label>
-          <label>什么时候推送<select name="notify_level" data-pick="compact" data-title="什么时候推送"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="卡住、要你确认、出错">只在需要你时</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="外加 Collie 的回复，比如做完事的汇报">也推送 Collie 的回复</option></select><small>你正开着 Collie 的网页时不推</small></label>
+          <label class="check span3"><input type="checkbox" name="notify_lark" ${s.notify_lark ? "checked" : ""}> ${esc(tx("set.notifyLarkLabel", "用 hub 上的 lark-cli 发飞书消息给你"))}<small id="lark-who" class="muted">${esc(tx("set.notifyLarkChecking", "· 正在看 hub 上的 lark-cli…"))}</small></label>
+          <label>Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" autocorrect="off" autocapitalize="off" spellcheck="false"><small>${esc(tx("set.notifyWebhookHelp", "飞书 / Lark 机器人或 Slack"))}</small></label>
+          <label>${esc(tx("set.notifyWhenLabel", "什么时候推送"))}<select name="notify_level" data-pick="compact" data-title="${esc(tx("set.notifyWhenLabel", "什么时候推送"))}"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="${esc(tx("set.notifyQuietSub", "卡住、要你确认、出错"))}">${esc(tx("set.notifyQuiet", "只在需要你时"))}</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="${esc(tx("set.notifyNormalSub", "外加 Collie 的回复，比如做完事的汇报"))}">${esc(tx("set.notifyNormal", "也推送 Collie 的回复"))}</option></select><small>${esc(tx("set.notifyWhenHelp", "你正开着 Collie 的网页时不推"))}</small></label>
         </div>
       </section>
 
       <section class="card set-sec">
-        <header><h4>其他</h4></header>
+        <header><h4>${esc(tx("set.otherTitle", "其他"))}</h4></header>
         <div class="set-grid">
-          <label>聊天回复长度<input name="reply_chars" type="number" min="40" step="20" value="${s.reply_chars || 200}"><small>平时每条回复的大致字数，要求详述时会自动写长</small></label>
-          <label>多久没进展算卡住<input name="stall_minutes" type="number" min="0" value="${s.stall_minutes}"><small>分钟；0 表示不检查</small></label>
+          <label>${esc(tx("set.replyChars", "聊天回复长度"))}<input name="reply_chars" type="number" min="40" step="20" value="${s.reply_chars || 200}"><small>${esc(tx("set.replyCharsHelp", "平时每条回复的大致字数，要求详述时会自动写长"))}</small></label>
+          <label>${esc(tx("set.stallMins", "多久没进展算卡住"))}<input name="stall_minutes" type="number" min="0" value="${s.stall_minutes}"><small>${esc(tx("set.stallMinsHelp", "分钟；0 表示不检查"))}</small></label>
         </div>
-        <label class="check"><input type="checkbox" name="bypass" ${s.ask_permissions ? "" : "checked"}> 跳过权限确认：自动执行命令与改文件（重启 Collie、新派 agent 生效）</label>
-        <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> 暂停投递：事件照收，先不交给 agent</label>
+        <label class="check"><input type="checkbox" name="bypass" ${s.ask_permissions ? "" : "checked"}> ${esc(tx("set.bypassLabel", "跳过权限确认：自动执行命令与改文件（重启 Collie、新派 agent 生效）"))}</label>
+        <label class="check"><input type="checkbox" name="paused" ${s.paused ? "checked" : ""}> ${esc(tx("set.pausedLabel", "暂停投递：事件照收，先不交给 agent"))}</label>
       </section>
+      <p class="panel-intro">${tx("set.localPrefsHintHtml", '本机界面语言、主题与外观在 <a href="#/prefs">偏好设置</a>。')}</p>
     </form>`;
   }
 
@@ -14922,7 +14982,7 @@
         memFileCache.set(path, { text, size: new Blob([text]).size, mod: new Date().toISOString(), preview: memFirstLine(text, "") });
         memEditing = false;
         $("#auto-body")._memSig = "";
-        toast("已保存");
+        toast(tx("common.saved", "已保存"));
         loadAuto();
       } else if (f.id === "settings-form") {
         f._autoSave?.flush();
@@ -14940,7 +15000,7 @@
       if (!worker || !thread) return;
       try {
         await api("/api/super/subscribe", { body: { worker, thread, off: false } });
-        toast(`已订阅 ${worker} → ${thread}`);
+        toast(tx("inbox.subbedToast", "已订阅 {worker} → {thread}", { worker, thread }));
         $("#auto-body")._inboxRendered = false;
         loadAuto();
       } catch (err) { toast(err.message, "attn"); }
@@ -14973,7 +15033,7 @@
       return;
     }
     if (t.hasAttribute("data-int-cli-hint")) {
-      toast("将声明式插件 JSON 放入 ~/.collie/providers/ 并重启 Hub 即可自动出现在这里");
+      toast(tx("int.cliHintToast", "将声明式插件 JSON 放入 ~/.collie/providers/ 并重启 Hub 即可自动出现在这里"));
       return;
     }
     if (t.dataset.peerOpen) {
@@ -14986,7 +15046,7 @@
       t.disabled = true;
       try {
         await api("/api/super/peers/settings", { body: { enabled: next } });
-        toast(next ? "已开启好友边牧受控收件箱" : "已暂停接收全部好友边牧来信");
+        toast(next ? tx("peer.globalEnabledToast", "已开启狗友收件箱") : tx("peer.globalPausedToast", "已暂停接收全部狗友来信"));
         await loadAuto();
       } catch (err) { toast(err.message, "attn"); t.disabled = false; }
       return;
@@ -15002,13 +15062,13 @@
       if (!item) return;
       if (!item.enabled && !item.configured) {
         openIntModal(kind);
-        toast("请先完成必要配置再开启");
+        toast(tx("int.needConfigFirst", "请先完成必要配置再开启"));
         return;
       }
       t.disabled = true;
       try {
         await api(`/api/super/integrations/${encodeURIComponent(kind)}`, { body: { enabled: !item.enabled } });
-        toast(!item.enabled ? `已开启 ${item.name}` : `已暂停 ${item.name}`);
+        toast(!item.enabled ? tx("int.enabledToast", "已开启 {name}", { name: locInt(item.name) }) : tx("int.pausedToast", "已暂停 {name}", { name: locInt(item.name) }));
         await loadAuto();
       } catch (err) { toast(err.message, "attn"); t.disabled = false; }
       return;
@@ -15018,18 +15078,18 @@
       try {
         const cur = await api("/api/super/settings");
         await api("/api/super/settings", { body: { settings: { ...cur.settings, notify_webhook: url } } });
-        toast(url ? "已保存通用单向推送地址" : "已清空通用单向推送地址");
+        toast(url ? tx("int.advWebhookSaved", "已保存通用单向推送地址") : tx("int.advWebhookCleared", "已清空通用单向推送地址"));
         loadAuto();
       } catch (err) { toast(err.message, "attn"); }
       return;
     }
     if (t.hasAttribute("data-int-adv-test")) {
       const url = ($("#int-adv-webhook")?.value || "").trim();
-      if (!url) { toast("请先填写推送地址再测试", "attn"); $("#int-adv-webhook")?.focus(); return; }
+      if (!url) { toast(tx("int.advWebhookEmptyErr", "请先填写推送地址再测试"), "attn"); $("#int-adv-webhook")?.focus(); return; }
       t.disabled = true;
       try {
         const res = await api("/api/super/notify/test", { body: { url } });
-        toast(res.message || "测试提醒已发送");
+        toast(res.message || tx("int.advWebhookTestSent", "测试提醒已发送"));
       } catch (err) { toast(err.message, "attn"); }
       finally { t.disabled = false; }
       return;
@@ -15040,7 +15100,7 @@
       try {
         const cur = await api("/api/super/settings");
         await api("/api/super/settings", { body: { settings: { ...cur.settings, notify_lark: next } } });
-        toast(next ? "已开启本机 lark-cli 兜底提醒" : "已关闭本机 lark-cli 兜底提醒");
+        toast(next ? tx("int.advLarkOn", "已开启本机 lark-cli 兜底提醒") : tx("int.advLarkOff", "已关闭本机 lark-cli 兜底提醒"));
         await loadAuto();
       } catch (err) { toast(err.message, "attn"); t.disabled = false; }
       return;
@@ -15048,7 +15108,7 @@
     if (t.dataset.unsubWorker && t.dataset.unsubThread) {
       try {
         await api("/api/super/subscribe", { body: { worker: t.dataset.unsubWorker, thread: t.dataset.unsubThread, off: true } });
-        toast(`已取消 ${t.dataset.unsubWorker} 订阅`);
+        toast(tx("inbox.unsubbedToast", "已取消 {worker} 订阅", { worker: t.dataset.unsubWorker }));
         loadAuto();
       } catch (err) { toast(err.message, "attn"); }
       return;
@@ -15123,7 +15183,7 @@
       const nextText = removeInstructionLines(prevText, sLine, eLine);
       if (nextText === prevText) return;
       const rowText = (t.closest(".mem-ins-item")?.querySelector(".mem-ins-text")?.textContent || "").trim();
-      const label = rowText.length > 26 ? rowText.slice(0, 26) + "…" : (rowText || "该条推断");
+      const label = rowText.length > 26 ? rowText.slice(0, 26) + "…" : (rowText || tx("mem.insInferredFallback", "该条推断"));
       t.disabled = true;
       try {
         await api("/api/super/memory", { body: { path, text: nextText } });
@@ -15140,7 +15200,7 @@
         };
         file.text = nextText;
         $("#auto-body")._memSig = "";
-        toast("已删掉并保存");
+        toast(tx("common.deletedAndSaved", "已删掉并保存"));
         await loadAuto();
       } catch (err) {
         t.disabled = false;
@@ -15156,7 +15216,7 @@
         await api("/api/super/memory", { body: { path: "instructions.md", text: prevText } });
         clearMemInsUndo();
         $("#auto-body")._memSig = "";
-        toast("已恢复");
+        toast(tx("common.restored", "已恢复"));
         await loadAuto();
       } catch (err) {
         t.disabled = false;
@@ -15199,8 +15259,8 @@
       return;
     }
     if (t.dataset.act === "dream-now") {
-      t.disabled = true; t.textContent = "开始中…";
-      try { await api("/api/super/dream", { body: {} }); toast("Collie 去做梦了"); }
+      t.disabled = true; t.textContent = tx("mem.dreamStarting", "开始中…");
+      try { await api("/api/super/dream", { body: {} }); toast(tx("mem.dreamStartedToast", "Collie 去做梦了")); }
       catch (err) { toast(err.message, "attn"); }
       loadAuto();
       return;
@@ -15220,7 +15280,7 @@
       await api(`/api/super/timers/${t.dataset.delTimer}/delete`, { method: "POST", body: {} }).catch((err) => toast(err.message));
       loadAuto();
     } else if (t.dataset.copy) {
-      await copy(t.dataset.copy); toast("已复制");
+      await copy(t.dataset.copy); toast(tx("common.copied", "已复制"));
     }
   });
 
@@ -15247,7 +15307,7 @@
     if (!btn || btn.disabled) return;
     const orig = btn.textContent;
     btn.disabled = true;
-    btn.textContent = "导出中…";
+    btn.textContent = tx("mem.exporting", "导出中…");
     try {
       const res = await authFetch("/api/memory/export", { credentials: "same-origin", cache: "no-store" });
       if (res.status === 401) {
@@ -15257,7 +15317,7 @@
       if (!res.ok) {
         let msg = "";
         try { msg = (await res.json())?.error || ""; } catch {}
-        throw new Error(msg || `导出失败（HTTP ${res.status}）`);
+        throw new Error(msg || tx("mem.exportFailedHttp", "导出失败（HTTP {status}）", { status: res.status }));
       }
       const cd = res.headers?.get?.("Content-Disposition") || "";
       const m = /filename="([^"]+)"/i.exec(cd);
@@ -15266,9 +15326,9 @@
       const cnt = cntHdr !== null && cntHdr !== "" ? Number(cntHdr) : NaN;
       const blob = await res.blob();
       triggerBlobDownload(blob, fileName);
-      toast(Number.isFinite(cnt) ? `已导出 ${cnt} 个记忆文件` : "已导出记忆");
+      toast(Number.isFinite(cnt) ? tx("mem.exportedCount", "已导出 {n} 个记忆文件", { n: cnt }) : tx("mem.exported", "已导出记忆"));
     } catch (err) {
-      toast(err.message || "导出失败", "attn");
+      toast(err.message || tx("mem.exportFailed", "导出失败"), "attn");
     } finally {
       btn.disabled = false;
       btn.textContent = orig;
@@ -15279,7 +15339,7 @@
     const mode = memImportForm.querySelector('input[name="mode"]:checked')?.value || "merge";
     const sub = $("#mem-io-submit");
     if (sub && !memImportBusy) {
-      sub.textContent = mode === "replace" ? "覆盖并导入" : "开始导入";
+      sub.textContent = mode === "replace" ? tx("mem.importReplaceStart", "覆盖并导入") : tx("mem.importStart", "开始导入");
       sub.classList.toggle("is-danger", mode === "replace");
     }
   }
@@ -15323,11 +15383,11 @@
       memImportFile.value = "";
       if (!file) return;
       if (file.size > MEM_IMPORT_MAX) {
-        toast("压缩包太大了（最多 20 MiB）", "attn");
+        toast(tx("mem.importTooLarge", "压缩包太大了（最多 20 MiB）"), "attn");
         return;
       }
       if (!/\.zip$/i.test(file.name)) {
-        toast("请选择 .zip 格式的记忆备份文件", "attn");
+        toast(tx("mem.importBadType", "请选择 .zip 格式的记忆备份文件"), "attn");
         return;
       }
       openMemImportModal(file);
@@ -15379,7 +15439,7 @@
       const sub = $("#mem-io-submit"), cancel = $("#mem-io-cancel"), closeBtn = $("#mem-io-close"), repick = $("#mem-io-repick");
       memImportBusy = true;
       setMemImportError("");
-      if (sub) { sub.disabled = true; sub.textContent = "导入中…"; }
+      if (sub) { sub.disabled = true; sub.textContent = tx("mem.importing", "导入中…"); }
       if (cancel) cancel.disabled = true;
       if (closeBtn) closeBtn.disabled = true;
       if (repick) repick.disabled = true;
@@ -15405,20 +15465,20 @@
           if (raw) data = JSON.parse(raw);
         } catch {}
         if (!res.ok) {
-          const msg = data.error || (raw && !/^\s*</.test(raw) ? raw.trim().slice(0, 200) : "") || `导入失败（HTTP ${res.status}）`;
+          const msg = data.error || (raw && !/^\s*</.test(raw) ? raw.trim().slice(0, 200) : "") || tx("mem.importFailedHttp", "导入失败（HTTP {status}）", { status: res.status });
           setMemImportError(msg);
           return;
         }
         memImportBusy = false;
         await closeMemImportModal("ok");
         $("#auto-body")._memSig = "";
-        const modeLbl = (data.mode || mode) === "replace" ? "覆盖导入" : "合并导入";
-        const n = Number(data.imported || 0);
-        const bak = data.backup ? `（原记忆已备份为 ${data.backup}）` : "";
-        toast(`已${modeLbl} ${n} 个记忆文件${bak}`);
+        const modeLbl = (data.mode || mode) === "replace" ? tx("mem.importModeReplace", "覆盖导入") : tx("mem.importModeMerge", "合并导入");
+      const n = Number(data.imported || 0);
+      const bak = data.backup ? tx("mem.importBackupSuffix", "（原记忆已备份为 {backup}）", { backup: data.backup }) : "";
+      toast(tx("mem.importSuccess", "已{mode} {n} 个记忆文件{backup}", { mode: modeLbl, n, backup: bak }));
         if (view === "auto" && autoTab === "memory") loadAuto();
       } catch (err) {
-        setMemImportError(err.message || "网络异常，请稍后重试");
+        setMemImportError(err.message || tx("mem.importNetErr", "网络异常，请稍后重试"));
       } finally {
         memImportBusy = false;
         if (sub) sub.disabled = false;
@@ -15552,7 +15612,7 @@
   }
   const ago = (t) => {
     const s = (Date.now() - new Date(t)) / 1000;
-    return s < 90 ? "刚刚" : s < 3600 ? Math.round(s / 60) + " 分钟前" : s < 86400 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前";
+    return s < 90 ? tx("common.justNow", "刚刚") : s < 3600 ? tx("common.minsAgo", "{n} 分钟前", { n: Math.round(s / 60) }) : s < 86400 ? tx("common.hoursAgo", "{n} 小时前", { n: Math.round(s / 3600) }) : tx("common.daysAgo", "{n} 天前", { n: Math.round(s / 86400) });
   };
   const histName = (h) => h.title || (h.name && !autoName(h.name) ? h.name : base(tilde(h.cwd)));
   const histOnline = (h) => !h.machine || (state.machines || []).some((m) => m.id === h.machine && m.online);
@@ -15560,17 +15620,17 @@
   function renderHistHead(hid) {
     const h = hist.find((x) => x.id === hid);
     const on = h && histOnline(h);
-    $("#x-name").textContent = h ? histName(h) : "已结束的会话";
+    $("#x-name").textContent = h ? histName(h) : tx("ext.endedTitle", "已结束的会话");
     $("#x-kind").textContent = h ? KIND_LABEL[h.kind] || h.kind : "";
-    $("#x-tag").textContent = "已结束";
+    $("#x-tag").textContent = tx("st.ended", "已结束");
     $("#x-status").className = "status ended";
-    $("#x-status").textContent = h ? "结束于 " + ago(h.ended) : "";
+    $("#x-status").textContent = h ? tx("ext.endedAt", "结束于 {ago}", { ago: ago(h.ended) }) : "";
     $("#x-cwd").textContent = h ? (h.machine ? machineName(h.machine) + " · " : "") + tilde(h.cwd) : "";
-    $("#x-note").textContent = !h ? "这条记录已经不在了。"
-      : on ? `继续会${h.machine ? "在 " + machineName(h.machine) + " 上" : ""}用同一个会话重新打开 ${KIND_LABEL[h.kind] || h.kind}，之前的上下文都还在。`
-      : `${machineName(h.machine)} 现在不在线，连上后才能继续。`;
+    $("#x-note").textContent = !h ? tx("ext.goneRecord", "这条记录已经不在了。")
+      : on ? tx("ext.continueOnline", "继续会{onMachine}用同一个会话重新打开 {kind}，之前的上下文都还在。", { onMachine: h.machine ? tx("ext.continueOnMachine", "在 {machine} 上", { machine: machineName(h.machine) }) : "", kind: KIND_LABEL[h.kind] || h.kind })
+      : tx("ext.continueOffline", "{machine} 现在不在线，连上后才能继续。", { machine: machineName(h.machine) });
     const b = $("#x-takeover");
-    b.textContent = "继续这个会话";
+    b.textContent = tx("ext.continueSession", "继续这个会话");
     b.hidden = false;
     b.disabled = !on;
     $("#x-forget").hidden = !h;
@@ -15592,7 +15652,7 @@
         resetEarlier(el, (c) => `/api/transcript?${q}&before=${c}`);
         el._msgs = r.messages || []; el._liveEarlier = r.earlier || 0;
         keepThread("h:" + hid, el._msgs);
-        el._redraw = () => { if (view === "ext" && extCur === "h:" + hid) drawThread(threadMsgs(el), el, "这个会话没有消息。"); };
+        el._redraw = () => { if (view === "ext" && extCur === "h:" + hid) drawThread(threadMsgs(el), el, tx("ext.noMsgs", "这个会话没有消息。")); };
         el._redraw();
       }
     } catch (err) {
@@ -15605,7 +15665,7 @@
     const h = hist.find((x) => x.id === hid);
     if (!h || !RESUME[h.kind]) return;
     const b = $("#x-takeover");
-    b.disabled = true; b.textContent = "正在打开…";
+    b.disabled = true; b.textContent = tx("ext.opening", "正在打开…");
     try {
       const r = await api("/api/agents", { body: {
         kind: h.kind, cwd: h.cwd, machine: h.machine || "", name: "", label: histName(h).slice(0, 40), args: RESUME[h.kind](h.session),
@@ -15642,7 +15702,8 @@
   liveGroup.open = store.get("liveGroupOpen", true);
   liveGroup.addEventListener("toggle", () => store.set("liveGroupOpen", liveGroup.open));
   let extAll = store.get("extAll", false);
-  const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
+  const EXT_STATE_ZH = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
+  const EXT_STATE = new Proxy(EXT_STATE_ZH, { get(t, p) { return typeof p === "string" && Object.prototype.hasOwnProperty.call(t, p) ? tx("ext.st." + p, t[p]) : t[p]; } });
   const LIVE_BUSY_STATUS = new Set(["working", "waiting", "starting"]);
   const LIVE_KEY_COLLATOR = typeof Intl !== "undefined" && Intl.Collator
     ? new Intl.Collator("en", { numeric: true })
@@ -15687,7 +15748,7 @@
       const open = e.live && e.status === "idle";
       const name = extName(e);
       const where = [e.app || KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
-      const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "正在运行")}"></span>` : "";
+      const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || tx("ext.st.running", "正在运行"))}"></span>` : "";
       return `<li><a class="item ${e.live ? "" : "ended"}" href="#/x/${encodeURIComponent(e.id)}" title="${esc(name)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(name)}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
@@ -15713,9 +15774,9 @@
       !live.length
         ? ""
         : busy === live.length
-          ? `${live.length} 个在跑`
-          : busy > 0
-            ? `${busy}/${live.length} 在跑`
+          ? tx("side.liveAllRunning", "{n} 个在跑", { n: live.length })
+        : busy > 0
+          ? tx("side.liveBusyRatio", "{busy}/{total} 在跑", { busy, total: live.length })
             : `${live.length}`,
     );
 
@@ -15748,11 +15809,11 @@
       : (() => { const h = extRow(s); return { key: "x:" + s.id, sig: h, html: h }; })());
     const liveRest = Math.max(0, live.length - liveShown.length);
     if (live.length > LIVE_N) {
-      const moreHtml = `<li><button type="button" class="more-row" data-act="live-more" aria-expanded="${liveAll}">${liveAll ? "收起" : `展开其余 ${liveRest} 个`}</button></li>`;
+      const moreHtml = `<li><button type="button" class="more-row" data-act="live-more" aria-expanded="${liveAll}">${esc(liveAll ? tx("common.collapse", "收起") : tx("side.liveMore", "展开其余 {n} 个", { n: liveRest }))}</button></li>`;
       liveItems.push({ key: "__live_more__", sig: moreHtml, html: moreHtml });
     }
     if (!liveItems.length) {
-      const emptyHtml = `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`;
+      const emptyHtml = `<li class="empty-hint">${esc(tx("side.liveEmpty", "没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。"))}</li>`;
       liveItems.push({ key: "__live_empty__", sig: emptyHtml, html: emptyHtml });
     }
     patchKeyedList($("#live-list"), liveItems);
@@ -15782,7 +15843,7 @@
         }
         const lbl = extName(s);
         const st = s.status || "unknown";
-        const tip = `${lbl} · ${EXT_STATE[st] || "正在运行"}`;
+        const tip = `${lbl} · ${EXT_STATE[st] || tx("ext.st.running", "正在运行")}`;
         const html = `<a class="sr-agent" role="listitem" href="#/x/${encodeURIComponent(s.id)}" title="${esc(tip)}" aria-label="${esc(tip)}"><span class="sr-mono" aria-hidden="true">${esc(monoOf(lbl))}</span><span class="sr-dot ${esc(st)}" aria-hidden="true"></span></a>`;
         return { key: "rx:" + s.id, sig: html, html };
       });
@@ -15804,7 +15865,7 @@
     $("#recent-group").hidden = !recent.length;
     const recentSpecs = shown.map((x) => ({ key: "rc:" + x.id, sig: x.html, html: x.html }));
     if (recent.length > RECENT_N) {
-      const moreHtml = `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `还有 ${recent.length - RECENT_N} 个`}</button></li>`;
+      const moreHtml = `<li><button type="button" class="more-row" data-act="ext-more">${esc(extAll ? tx("common.collapse", "收起") : tx("side.recentMore", "还有 {n} 个", { n: recent.length - RECENT_N }))}</button></li>`;
       recentSpecs.push({ key: "__recent_more__", sig: moreHtml, html: moreHtml });
     }
     patchKeyedList($("#recent-list"), recentSpecs);
@@ -15821,7 +15882,7 @@
     const box = $("#x-working");
     const e = !gone && !extCur?.startsWith("h:") && ext.find((x) => x.id === extCur);
     const st = e && e.live ? e.status : "";
-    const text = { working: `${e && e.app || "那边"}里还在跑…`, blocked: "在等你在电脑上确认" }[st] || "";
+    const text = { working: tx("ext.stillRunningThere", "{app}里还在跑…", { app: (e && e.app) || tx("ext.otherTerm", "另一个终端") }), blocked: tx("ext.st.blocked", "等电脑那边确认") }[st] || "";
     const prev = box.hidden ? "" : box.textContent;
     if (!text) { box.hidden = true; return; }
     if (text === prev) return;
@@ -15834,14 +15895,14 @@
   function renderExtHead(gone) {
     extWorking(gone);
     if (extCur?.startsWith("h:")) return renderHistHead(extCur.slice(2));
-    $("#x-tag").textContent = "只读";
+    $("#x-tag").textContent = tx("ext.readonly", "只读");
     $("#x-forget").hidden = true;
-    $("#x-takeover").textContent = "在 herdr 里接管";
+    $("#x-takeover").textContent = tx("ext.takeover", "在 herdr 里接管");
     $("#x-takeover").className = "btn primary small";
     $("#x-composer").hidden = true;
     const e = ext.find((x) => x.id === extCur);
     if (!e) {
-      $("#x-status").textContent = gone ? "已退出" : "正在连接那台电脑…";
+      $("#x-status").textContent = gone ? tx("st.gone", "已退出") : tx("ext.connectingMachine", "正在连接那台电脑…");
       $("#x-status").className = "status " + (gone ? "ended" : "unknown");
       $("#x-takeover").disabled = true;
       if (!gone) extSoon();
@@ -15849,52 +15910,52 @@
     }
     $("#x-name").textContent = extName(e);
     $("#x-kind").textContent = KIND_LABEL[e.kind] || e.kind;
-    $("#x-status").textContent = gone ? "已退出" : `正在运行 · ${e.app || "另一个终端"}`;
+    $("#x-status").textContent = gone ? tx("st.gone", "已退出") : tx("ext.runningApp", "正在运行 · {app}", { app: e.app || tx("ext.otherTerm", "另一个终端") });
     $("#x-status").className = "status " + (gone ? "ended" : "unknown");
     $("#x-cwd").textContent = (e.machine ? machineName(e.machine) + " · " : "") + tilde(e.cwd);
-    const app = e.app || "另一个终端";
+    const app = e.app || tx("ext.otherTerm", "另一个终端");
     if (!e.live && !gone) {
       // A desktop app's conversation that is not running right now.
-      $("#x-tag").textContent = e.can_send ? "可对话" : "只读";
-      $("#x-status").textContent = `上次活动 ${ago(e.updated || e.started)} · ${app}`;
+      $("#x-tag").textContent = e.can_send ? tx("ext.chatable", "可对话") : tx("ext.readonly", "只读");
+      $("#x-status").textContent = tx("ext.lastActive", "上次活动 {ago} · {app}", { ago: ago(e.updated || e.started), app });
       $("#x-status").className = "status ended";
       $("#x-takeover").hidden = !e.can_take_over;
       $("#x-takeover").disabled = false;
-      $("#x-takeover").textContent = "在 herdr 里继续";
+      $("#x-takeover").textContent = tx("ext.continueInHerdr", "在 herdr 里继续");
       $("#x-takeover").className = "btn small";
       $("#x-composer").hidden = !e.can_send;
-      if (e.can_send) $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : "经 Codex App 送达";
+      if (e.can_send) $("#x-hint").textContent = e.kind === "agy" ? tx("ext.viaAgy", "经 Antigravity 送达") : tx("ext.viaCodexApp", "经 Codex App 送达");
       $("#x-note").textContent = e.can_send ? ""
-        : (e.read_only || "") + (e.can_take_over ? "。也可以在 herdr 里用同一个会话继续，之后就能在这里对话。" : "");
+        : (e.read_only || "") + (e.can_take_over ? tx("ext.canContinueHint", "。也可以在 herdr 里用同一个会话继续，之后就能在这里对话。") : "");
       return;
     }
     $("#x-takeover").hidden = !e.can_take_over;
-    $("#x-note").textContent = gone ? "这个进程已经退出了。"
-      : !e.session ? `它跑在 ${app} 里，还没有会话记录，所以没法接管。`
-      : e.can_take_over
-        ? `它跑在 ${app} 里，Collie 只能看，不能往里面打字。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续，之后就能在这里和它对话。`
-        : `它跑在 ${app} 里，Collie 目前只能查看。`;
+    $("#x-note").textContent = gone ? tx("ext.processExited", "这个进程已经退出了。")
+        : !e.session ? tx("ext.noSessionYet", "它跑在 {app} 里，还没有会话记录，所以没法接管。", { app })
+        : e.can_take_over
+          ? tx("ext.readonlyTakeoverNote", "它跑在 {app} 里，Collie 只能看，不能往里面打字。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续，之后就能在这里和它对话。", { app })
+          : tx("ext.readonlyOnlyNote", "它跑在 {app} 里，Collie 目前只能查看。", { app });
     $("#x-takeover").disabled = !!gone || !e.session;
     if (e.status && !gone) {
-      $("#x-status").textContent = `${{ working: "正在跑", waiting: "在等后台任务", idle: "空闲，等你发话", blocked: "等电脑那边确认" }[e.status] || "正在运行"} · ${app}`;
+      $("#x-status").textContent = `${{ working: tx("ext.st.runningShort", "正在跑"), waiting: tx("ext.st.waiting", "在等后台任务"), idle: tx("ext.st.idlePrompt", "空闲，等你发话"), blocked: tx("ext.st.blocked", "等电脑那边确认") }[e.status] || tx("ext.st.running", "正在运行")} · ${app}`;
       $("#x-status").className = "status " + e.status;
     }
     if (e.can_send && !gone) {
       // It takes messages where it runs: no need to take it over.
-      $("#x-tag").textContent = "可对话";
+      $("#x-tag").textContent = tx("ext.chatable", "可对话");
       $("#x-composer").hidden = false;
       $("#x-takeover").className = "btn small";
-      $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : e.app === "Codex 桌面版" ? "经 Codex App 送达" : e.kind === "codex" ? "经 Codex 后台送达" : "经会话收件箱送达";
+      $("#x-hint").textContent = e.kind === "agy" ? tx("ext.viaAgy", "经 Antigravity 送达") : e.app === "Codex 桌面版" ? tx("ext.viaCodexApp", "经 Codex App 送达") : e.kind === "codex" ? tx("ext.viaCodexBg", "经 Codex 后台送达") : tx("ext.viaInbox", "经会话收件箱送达");
       $("#x-note").textContent = "";
     } else if (!gone && e.read_only) {
       $("#x-note").textContent = e.read_only + (e.session && e.can_take_over
-        ? "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。"
+        ? tx("ext.takeoverSuffix", "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。")
         : "");
     }
   }
   bindComposer($("#x-composer"), $("#x-input"), async (text) => {
     const e = ext.find((x) => x.id === extCur);
-    if (!e) throw new Error("这个会话已经结束了");
+    if (!e) throw new Error(tx("ext.sessionEndedErr", "这个会话已经结束了"));
     const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text } });
     if (r.note) toast(r.note, "attn");
   }, () => { // files go to the computer it runs on (through its hub, if another)
@@ -15962,19 +16023,19 @@
       const here = () => mine() && extStream === es;
       const show = (msgs) => {
         keepThread("x:" + id, msgs);
-        drawThread(msgs, el, "这个会话还没有消息。");
+        drawThread(msgs, el, tx("ext.noMsgsYet", "这个会话还没有消息。"));
         extWorking();
       };
       // Some remote connections open the event stream but delay its first
       // complete event. A finite read can populate the view in the meantime.
       const fallback = setTimeout(async () => {
         if (received || !here()) return;
-        if (el.querySelector(".thread-skel")) el.innerHTML = `<div class="thread-empty">正在读取远端会话记录…</div>`;
+        if (el.querySelector(".thread-skel")) el.innerHTML = `<div class="thread-empty">${esc(tx("ext.readingRemote", "正在读取远端会话记录…"))}</div>`;
         try {
           const p = await api(`/api/external/${encodeURIComponent(id)}/snapshot`, { timeout: 12000 });
           if (!received && here() && Array.isArray(p.msgs)) show(applyPatch(el, p));
         } catch {
-          if (!received && here() && !el._msgs) el.innerHTML = `<div class="thread-empty">暂时读不到会话记录，正在等待实时连接…</div>`;
+          if (!received && here() && !el._msgs) el.innerHTML = `<div class="thread-empty">${esc(tx("ext.waitingStream", "暂时读不到会话记录，正在等待实时连接…"))}</div>`;
         }
       }, 4000);
       es.addEventListener("meta", (ev) => {
@@ -15984,7 +16045,7 @@
         if (!JSON.parse(ev.data).structured) {
           received = true;
           clearTimeout(fallback);
-          el.innerHTML = `<div class="thread-empty">还没有找到这个会话的记录。</div>`;
+          el.innerHTML = `<div class="thread-empty">${esc(tx("ext.notFoundRec", "还没有找到这个会话的记录。"))}</div>`;
         }
       });
       el._redraw = () => { if (here()) show(threadMsgs(el)); };
@@ -16004,14 +16065,14 @@
       es.addEventListener("gone", () => {
         if (!here()) return;
         clearTimeout(fallback);
-        if (el.querySelector(".thread-skel")) el.innerHTML = `<div class="thread-empty">这个会话已经结束了。</div>`;
+        if (el.querySelector(".thread-skel")) el.innerHTML = `<div class="thread-empty">${esc(tx("ext.endedEmpty", "这个会话已经结束了。"))}</div>`;
         closeExt();
         renderExtHead(true);
       });
       es.onerror = () => {
         if (!here() || es.readyState !== EventSource.CLOSED) return;
         if (++tries > 20) { renderExtHead(true); return; }
-        if (!el._msgs && !el.querySelector(".msg")) el.innerHTML = `<div class="thread-empty">连不上那台电脑，正在重试…</div>`;
+        if (!el._msgs && !el.querySelector(".msg")) el.innerHTML = `<div class="thread-empty">${esc(tx("ext.retryingConn", "连不上那台电脑，正在重试…"))}</div>`;
         setTimeout(() => { if (here()) connect(); }, Math.min(1000 * tries, 5000));
       };
     };
@@ -16021,14 +16082,14 @@
     if (extCur?.startsWith("h:")) return continueHist(extCur.slice(2));
     const e = ext.find((x) => x.id === extCur);
     if (!e) return;
-    const app = e.app || "另一个终端";
-    if (e.live && !confirm(`接管「${extName(e)}」？\n\n会先结束 ${app} 里的这个 ${KIND_LABEL[e.kind] || e.kind} 进程（相当于按 Ctrl-C），然后在 herdr 里用同一个会话继续。${app} 那边会回到命令行。`)) return;
+    const app = e.app || tx("ext.otherTerm", "另一个终端");
+    if (e.live && !confirm(tx("ext.takeoverConfirm", "接管「{name}」？\n\n会先结束 {app} 里的这个 {kind} 进程（相当于按 Ctrl-C），然后在 herdr 里用同一个会话继续。{app} 那边会回到命令行。", { name: extName(e), app, kind: KIND_LABEL[e.kind] || e.kind }))) return;
     const b = $("#x-takeover");
     const prevLabel = b.textContent;
-    b.disabled = true; b.textContent = e.live ? "接管中…" : "启动中…";
+    b.disabled = true; b.textContent = e.live ? tx("ext.takingOver", "接管中…") : tx("common.starting", "启动中…");
     try {
       const r = await api(`/api/external/${encodeURIComponent(e.id)}/takeover`, { body: {} });
-      toast(e.live ? "已在 herdr 里接管" : "已在 herdr 里继续");
+      toast(e.live ? tx("ext.takenOverToast", "已在 herdr 里接管") : tx("ext.continuedToast", "已在 herdr 里继续"));
       ext = ext.filter((x) => x.id !== e.id);
       renderExt();
       replaceHash("#/p/" + encodeURIComponent(r.pane_id));
@@ -16048,6 +16109,7 @@
   ];
   const VALID_ACCENTS = new Set(ACCENTS.map(([v]) => v));
   const prefs = {
+    lang: () => (window.CollieI18n ? window.CollieI18n.getPref() : store.get("lang", "auto")),
     theme: () => store.get("theme", "system"),
     accent: () => {
       const v = store.get("accent", "amber");
@@ -16122,8 +16184,9 @@
     const env = notifyEnvState();
     const mac = /Mac|iPhone|iPad/.test(navigator.platform);
     const devOn = prefs.devMode();
+    const langPref = prefs.lang();
     const sig = [
-      prefs.theme(), prefs.accent(), prefs.text(), mode, prefs.sendKey(), prefs.fold(), devOn ? 1 : 0,
+      curLang(), langPref, prefs.theme(), prefs.accent(), prefs.text(), mode, prefs.sendKey(), prefs.fold(), devOn ? 1 : 0,
       env.active ? 1 : 0, env.supported ? 1 : 0, env.warn ? 1 : 0, env.text, mac ? 1 : 0,
     ].join("|");
     if (body._prefsSig === sig && body._prefsRendered) {
@@ -16134,34 +16197,41 @@
     body._prefsRendered = true;
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
-    const accentPick = (cur) => `<div class="accent-pick" role="radiogroup" aria-label="点睛色" data-pref="accent">${ACCENTS.map(([v, label]) =>
-      `<button type="button" class="accent-opt${v === cur ? " on" : ""}" role="radio" aria-checked="${v === cur}" tabindex="${v === cur ? "0" : "-1"}" data-v="${v}"><span class="accent-dot ${v}" aria-hidden="true"></span><span>${label}</span></button>`).join("")}</div>`;
+    const langSeg = (cur) => `<div class="seg" role="radiogroup" aria-label="${esc(tx("prefs.lang", "语言"))}" data-pref="lang">${[
+      ["auto", esc(tx("prefs.langAuto", "自动"))],
+      ["zh", '<span lang="zh-CN">简体中文</span>'],
+      ["en", '<span lang="en">English</span>'],
+    ].map(([v, label]) =>
+      `<button type="button" role="radio" aria-checked="${v === cur}" tabindex="${v === cur ? "0" : "-1"}" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
+    const accentPick = (cur) => `<div class="accent-pick" role="radiogroup" aria-label="${esc(tx("prefs.accent", "点睛色"))}" data-pref="accent">${ACCENTS.map(([v, label]) =>
+      `<button type="button" class="accent-opt${v === cur ? " on" : ""}" role="radio" aria-checked="${v === cur}" tabindex="${v === cur ? "0" : "-1"}" data-v="${v}"><span class="accent-dot ${v}" aria-hidden="true"></span><span>${esc(tx("prefs.accent." + v, label))}</span></button>`).join("")}</div>`;
     const sw = (key, on, disabled = false) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"${disabled ? " disabled" : ""}></button>`;
     const row = (title, sub, ctl, warn = false) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small${warn ? ' class="pref-hint-warn"' : ""}>${sub}</small>` : ""}</div>${ctl}</div>`;
     const notifyCtl = env.active
-      ? `<div class="pref-ctls"><button type="button" class="btn small ghost pref-test-btn" data-act="test-notify">测试</button>${sw("notify", true)}</div>`
+      ? `<div class="pref-ctls"><button type="button" class="btn small ghost pref-test-btn" data-act="test-notify">${esc(tx("prefs.testBtn", "测试"))}</button>${sw("notify", true)}</div>`
       : sw("notify", false, !env.supported);
     body.innerHTML = `<div class="prefs">
-      <div class="card"><div class="card-h">外观</div>
-        ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
-        ${row("点睛色", "仅用于未读、待处理圆点与告警等少数提醒", accentPick(prefs.accent()))}
-        ${row("对话文字", "", seg("text", prefs.text(), [["small", "小"], ["normal", "标准"], ["large", "大"]]))}
+      <div class="card"><div class="card-h">${esc(tx("prefs.appearance", "外观"))}</div>
+        ${row(esc(tx("prefs.lang", "语言")), esc(tx("prefs.langSub", "自动时跟随系统语言，切换后立即生效")), langSeg(langPref))}
+        ${row(esc(tx("prefs.theme", "主题")), esc(tx("prefs.themeSub", "跟随系统时，设备切到深色模式这里也跟着变")), seg("theme", prefs.theme(), [["system", `<span class="theme-swatch system"></span>${esc(tx("prefs.themeSystem", "跟随系统"))}`], ["light", `<span class="theme-swatch light"></span>${esc(tx("prefs.themeLight", "浅色"))}`], ["dark", `<span class="theme-swatch dark"></span>${esc(tx("prefs.themeDark", "深色"))}`]]))}
+        ${row(esc(tx("prefs.accent", "点睛色")), esc(tx("prefs.accentSub", "仅用于未读、待处理圆点与告警等少数提醒")), accentPick(prefs.accent()))}
+        ${row(esc(tx("prefs.text", "对话文字")), "", seg("text", prefs.text(), [["small", esc(tx("prefs.textSmall", "小"))], ["normal", esc(tx("prefs.textNormal", "标准"))], ["large", esc(tx("prefs.textLarge", "大"))]]))}
       </div>
-      <div class="card"><div class="card-h">对话</div>
-        ${row("发送消息", "另一种按法用来换行；Shift+Enter 总是换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
-        ${row("折叠连续的工具步骤", "超过 3 步时收成一行，只露出最后一步", sw("fold", prefs.fold()))}
+      <div class="card"><div class="card-h">${esc(tx("prefs.chat", "对话"))}</div>
+        ${row(esc(tx("prefs.sendKey", "发送消息")), esc(tx("prefs.sendKeySub", "另一种按法用来换行；Shift+Enter 总是换行")), seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
+        ${row(esc(tx("prefs.fold", "折叠连续的工具步骤")), esc(tx("prefs.foldSub", "超过 3 步时收成一行，只露出最后一步")), sw("fold", prefs.fold()))}
       </div>
-      <div class="card"><div class="card-h">通知</div>
-        ${row("浏览器通知", esc(env.text), notifyCtl, env.warn)}
+      <div class="card"><div class="card-h">${esc(tx("prefs.notify", "通知"))}</div>
+        ${row(esc(tx("prefs.browserNotify", "浏览器通知")), esc(env.text), notifyCtl, env.warn)}
       </div>
-      <div class="card"><div class="card-h">开发者</div>
-        ${row("开发者模式", "在工作会话中显示底层终端屏幕与原始日志视图", sw("devMode", devOn))}
-        ${devOn ? row("打开 agent 时默认视图", "对话：从会话记录整理的消息；屏幕：终端原样；日志：自动换行的滚动输出", seg("mode2", mode, [["chat", "对话"], ["screen", "屏幕"], ["log", "日志"]])) : ""}
+      <div class="card"><div class="card-h">${esc(tx("prefs.dev", "开发者"))}</div>
+        ${row(esc(tx("prefs.devMode", "开发者模式")), esc(tx("prefs.devModeSub", "在工作会话中显示底层终端屏幕与原始日志视图")), sw("devMode", devOn))}
+        ${devOn ? row(esc(tx("prefs.defaultView", "打开 agent 时默认视图")), esc(tx("prefs.defaultViewSub", "对话：从会话记录整理的消息；屏幕：终端原样；日志：自动换行的滚动输出")), seg("mode2", mode, [["chat", esc(tx("worker.modeChat", "对话"))], ["screen", esc(tx("worker.modeScreen", "屏幕"))], ["log", esc(tx("worker.modeLog", "日志"))]])) : ""}
       </div>
-      <div class="card"><div class="card-h">登录状态</div>
-        ${row("退出登录", "清除当前浏览器的登录凭证，下次需要重新配对或输入访问令牌", `<button type="button" class="btn small danger-ghost" data-act="logout">退出登录</button>`)}
+      <div class="card"><div class="card-h">${esc(tx("prefs.auth", "登录状态"))}</div>
+        ${row(esc(tx("prefs.logout", "退出登录")), esc(tx("prefs.logoutSub", "清除当前浏览器的登录凭证，下次需要重新配对或输入访问令牌")), `<button type="button" class="btn small danger-ghost" data-act="logout">${esc(tx("prefs.logout", "退出登录"))}</button>`)}
       </div>
-      <p class="panel-intro">Collie 本身的设置（它自己用哪个 agent、派活默认在哪台电脑、通知机器人）在 <a href="#/auto" data-auto-tab="settings">自动化 → 设置</a>；电脑和手机的连接在 <a href="#/devices">设备</a>。</p>
+      <p class="panel-intro">${tx("prefs.footerHtml", 'Collie 本身的设置（它自己用哪个 agent、派活默认在哪台电脑、通知机器人）在 <a href="#/auto" data-auto-tab="settings">自动化 → 设置</a>；电脑和手机的连接在 <a href="#/devices">设备</a>。')}</p>
     </div>`;
     if (restore) restoreSimpleScroll(body, restore);
   }
@@ -16176,7 +16246,7 @@
         const env = notifyEnvState();
         if (!env.supported) { toast(env.text, "attn"); renderPrefs(); return; }
         if (env.permission === "denied") {
-          toast("已被浏览器拦截，请在地址栏左侧站点设置中重新开启", "attn");
+          toast(tx("notify.denied", "已被浏览器拦截，请在地址栏左侧站点设置中重新开启"), "attn");
           renderPrefs();
           return;
         }
@@ -16184,7 +16254,7 @@
           let p = "denied";
           try { p = await Notification.requestPermission(); } catch { p = "denied"; }
           if (p !== "granted") {
-            toast(p === "denied" ? "已被浏览器拦截，请在地址栏左侧站点设置中重新开启" : "浏览器没有允许通知", "attn");
+            toast(p === "denied" ? tx("notify.denied", "已被浏览器拦截，请在地址栏左侧站点设置中重新开启") : tx("notify.notAllowed", "浏览器没有允许通知"), "attn");
             renderPrefs();
             return;
           }
@@ -16194,14 +16264,21 @@
       if (key === "devMode") syncDevModeUI();
     } else {
       const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
-      if (key === "mode2") setMode(v); else store.set(key, v);
+      if (key === "lang") {
+        if (window.CollieI18n) window.CollieI18n.setLang(v);
+        else store.set("lang", v);
+      } else if (key === "mode2") {
+        setMode(v);
+      } else {
+        store.set(key, v);
+      }
       if (key === "theme" || key === "accent" || key === "text") applyLook();
       if (key === "sendKey") syncThreadComposerHint();
     }
     renderPrefs();
   });
   $("#prefs-body").addEventListener("keydown", (e) => {
-    const group = e.target.closest('.accent-pick[role="radiogroup"]');
+    const group = e.target.closest('.accent-pick[role="radiogroup"], .seg[data-pref="lang"][role="radiogroup"]');
     if (!group) return;
     const opts = [...group.querySelectorAll('button[role="radio"]')];
     const idx = opts.indexOf(e.target.closest('button[role="radio"]'));
@@ -16213,11 +16290,19 @@
     else if (e.key === "End") next = opts.length - 1;
     if (next < 0) return;
     e.preventDefault();
+    const prefKey = group.dataset.pref;
     const v = opts[next].dataset.v;
-    store.set("accent", v);
-    applyLook();
-    renderPrefs();
-    $(`.accent-pick[data-pref="accent"] button[data-v="${CSS.escape(v)}"]`, $("#prefs-body"))?.focus();
+    if (prefKey === "lang") {
+      if (window.CollieI18n) window.CollieI18n.setLang(v);
+      else store.set("lang", v);
+      renderPrefs();
+      $(`.seg[data-pref="lang"] button[data-v="${CSS.escape(v)}"]`, $("#prefs-body"))?.focus();
+    } else {
+      store.set("accent", v);
+      applyLook();
+      renderPrefs();
+      $(`.accent-pick[data-pref="accent"] button[data-v="${CSS.escape(v)}"]`, $("#prefs-body"))?.focus();
+    }
   });
 
   // ───────────────────────────── devices
@@ -16264,13 +16349,14 @@
     return false;
   };
   const UPDATE_REQUEST_TIMEOUT_MS = 185_000;
-  const UPDATE_REQ_OPTS = {
+  const getUpdateReqOpts = () => ({
     body: {},
     timeout: UPDATE_REQUEST_TIMEOUT_MS,
-    timeoutMessage: "更新请求超时（可能下载较慢或网络卡顿），请检查网络后重试或刷新查看版本",
-    networkMessage: "连接中断，请检查网络或稍候刷新查看是否已更新",
-  };
-  const cleanUpdateError = (err) => String(err?.message || "更新失败").replace(/^更新失败[：:]\s*/, "").trim() || "更新失败";
+    timeoutMessage: tx("upd.timeout", "更新请求超时（可能下载较慢或网络卡顿），请检查网络后重试或刷新查看版本"),
+    networkMessage: tx("upd.network", "连接中断，请检查网络或稍候刷新查看是否已更新"),
+  });
+  const UPDATE_REQ_OPTS = new Proxy({}, { get(_t, p) { return getUpdateReqOpts()[p]; } });
+  const cleanUpdateError = (err) => String(err?.message || tx("upd.failed", "更新失败")).replace(/^(?:更新失败[：:]|Update failed:)\s*/i, "").trim() || tx("upd.failed", "更新失败");
   let versionInfo = { version: "", latest: "", outdated: [], machines: [] };
   let versionRetryT = null, versionRetries = 0;
   const updateFlow = {
@@ -16288,25 +16374,25 @@
   function updateNoteState(id) {
     if (updateFlow.busy && updateFlow.currentId === id) {
       if (updateFlow.phase === "restarting") {
-        return { cls: "busy", text: "新版本已就绪，正在重启并等待页面自动刷新…", alert: false };
+        return { cls: "busy", text: tx("upd.restartingNote", "新版本已就绪，正在重启并等待页面自动刷新…"), alert: false };
       }
       if (updateFlow.phase === "reconnecting") {
-        return { cls: "busy", text: "节点已更新，正在等待重新上线…", alert: false };
+        return { cls: "busy", text: tx("upd.reconnectingNote", "节点已更新，正在等待重新上线…"), alert: false };
       }
-      const ver = updateFlow.targetVersion || versionInfo.latest || "新版本";
-      return { cls: "busy", text: `正在下载并校验 ${ver}，完成后自动重启（运行中的 agent 不受影响）…`, alert: false };
+      const ver = updateFlow.targetVersion || versionInfo.latest || tx("upd.newVersion", "新版本");
+      return { cls: "busy", text: tx("upd.downloadingNote", "正在下载并校验 {ver}，完成后自动重启（运行中的 agent 不受影响）…", { ver }), alert: false };
     }
     const err = updateFlow.errors.get(id);
-    if (err) return { cls: "error", text: `更新失败：${err}`, alert: true };
+    if (err) return { cls: "error", text: tx("upd.failedWith", "更新失败：{err}", { err }), alert: true };
     return null;
   }
   function updateBtnHtml(id, latest) {
     if (updateFlow.busy && updateFlow.currentId === id) {
-      const label = updateFlow.phase === "restarting" ? "重启中…" : updateFlow.phase === "reconnecting" ? "重连中…" : "更新中…";
+      const label = updateFlow.phase === "restarting" ? tx("upd.restarting", "重启中…") : updateFlow.phase === "reconnecting" ? tx("upd.reconnecting", "重连中…") : tx("upd.updating", "更新中…");
       return `<span class="up-spin" aria-hidden="true"></span><span>${esc(label)}</span>`;
     }
-    if (updateFlow.errors.has(id)) return esc(latest ? `重试更新到 ${latest}` : "重试更新");
-    return esc(latest ? `更新到 ${latest}` : "更新");
+    if (updateFlow.errors.has(id)) return esc(latest ? tx("upd.retryTo", "重试更新到 {ver}", { ver: latest }) : tx("upd.retry", "重试更新"));
+    return esc(latest ? tx("upd.toVer", "更新到 {ver}", { ver: latest }) : tx("upd.btn", "更新"));
   }
   function outdatedOnlineMachines() {
     const latest = versionInfo.latest;
@@ -16372,8 +16458,8 @@
         updateDot.classList.remove("is-failed");
       }
       if (moreBtn) {
-        moreBtn.title = "更多";
-        moreBtn.setAttribute("aria-label", "更多");
+        moreBtn.title = tx("common.more", "更多");
+        moreBtn.setAttribute("aria-label", tx("common.more", "更多"));
       }
       syncDeviceUpdateButtons();
       return;
@@ -16382,32 +16468,32 @@
     const busy = updateFlow.busy;
     if (updateFlow.phase === "updating") {
       const step = updateFlow.total > 1 ? ` ${updateFlow.index}/${updateFlow.total}` : "";
-      const label = `更新中${step}…`;
+      const label = tx("upd.updatingStep", "更新中{step}…", { step });
       html = `<span class="up-spin" aria-hidden="true"></span><span>${esc(label)}</span>`;
-      tip = `正在更新 ${updateFlow.currentName}${step ? `（${updateFlow.index}/${updateFlow.total}）` : ""}…`;
-      aria = `${label}，正在更新 ${updateFlow.currentName}`;
+      tip = tx("upd.updatingTip", "正在更新 {name}{step}…", { name: updateFlow.currentName, step: step ? ` (${updateFlow.index}/${updateFlow.total})` : "" });
+      aria = tx("upd.updatingAria", "{label}，正在更新 {name}", { label, name: updateFlow.currentName });
       cls = "busy";
     } else if (updateFlow.phase === "restarting") {
-      html = `<span class="up-spin" aria-hidden="true"></span><span>重启中…</span>`;
-      tip = `正在重启 ${updateFlow.currentName || "hub"}，恢复后自动刷新`;
-      aria = `重启中…，恢复后自动刷新`;
+      html = `<span class="up-spin" aria-hidden="true"></span><span>${esc(tx("upd.restarting", "重启中…"))}</span>`;
+      tip = tx("upd.restartingTip", "正在重启 {name}，恢复后自动刷新", { name: updateFlow.currentName || "hub" });
+      aria = tx("upd.restartingAria", "重启中…，恢复后自动刷新");
       cls = "busy";
     } else if (updateFlow.phase === "reconnecting") {
-      html = `<span class="up-spin" aria-hidden="true"></span><span>重连中…</span>`;
-      tip = "节点已更新，正在等待重连…";
-      aria = "重连中…，等待节点上线";
+      html = `<span class="up-spin" aria-hidden="true"></span><span>${esc(tx("upd.reconnecting", "重连中…"))}</span>`;
+      tip = tx("upd.reconnectingTip", "节点已更新，正在等待重连…");
+      aria = tx("upd.reconnectingAria", "重连中…，等待节点上线");
       cls = "busy";
     } else if (updateFlow.phase === "failed") {
-      html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span>重试更新</span>`;
-      tip = `更新 ${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}（点此重试）`;
-      aria = `重试更新（${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}）`;
+      html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span>${esc(tx("upd.retry", "重试更新"))}</span>`;
+      tip = tx("upd.failedTip", "更新 {name} 失败：{err}（点此重试）", { name: updateFlow.failedMachine || tx("common.device", "设备"), err: updateFlow.error });
+      aria = tx("upd.failedAria", "重试更新（{name} 失败：{err}）", { name: updateFlow.failedMachine || tx("common.device", "设备"), err: updateFlow.error });
       cls = "failed";
     } else {
-      const names = list.map((m) => m.name).join("、");
+      const names = list.map((m) => m.name).join(curLang() === "en" ? ", " : "、");
       const arrow = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>`;
-      html = `${arrow}<span>更新到 ${esc(latest)}</span>`;
-      tip = `一键更新到 ${latest}（待更新：${names}）`;
-      aria = `一键更新到 ${latest}（待更新：${names}）`;
+      html = `${arrow}<span>${esc(tx("upd.toVer", "更新到 {ver}", { ver: latest }))}</span>`;
+      tip = tx("upd.allTip", "一键更新到 {ver}（待更新：{names}）", { ver: latest, names });
+      aria = tip;
     }
     for (const b of btns) {
       b.hidden = false;
@@ -16424,7 +16510,7 @@
       updateDot.classList.toggle("is-failed", cls === "failed");
     }
     if (moreBtn) {
-      const moreLbl = cls === "failed" ? "更多（更新失败，可重试）" : latest ? `更多（有新版本 ${latest}）` : "更多（正在更新）";
+      const moreLbl = cls === "failed" ? tx("upd.moreFailed", "更多（更新失败，可重试）") : latest ? tx("upd.moreNew", "更多（有新版本 {ver}）", { ver: latest }) : tx("upd.moreBusy", "更多（正在更新）");
       moreBtn.title = moreLbl;
       moreBtn.setAttribute("aria-label", moreLbl);
     }
@@ -16488,9 +16574,9 @@
     updateFlow.phase = "failed";
     updateFlow.failedId = "";
     updateFlow.failedMachine = updateFlow.currentName || "hub";
-    updateFlow.error = "等待重启恢复超时，请刷新页面或重试";
+    updateFlow.error = tx("upd.waitRestartTimeout", "等待重启恢复超时，请刷新页面或重试");
     updateFlow.errors.set("", updateFlow.error);
-    toast("等待 hub 重启恢复超时，请手动刷新页面", "attn");
+    toast(tx("upd.waitRestartToast", "等待 hub 重启恢复超时，请手动刷新页面"), "attn");
     renderUpdateEntry();
     return false;
   }
@@ -16504,14 +16590,14 @@
         resetUpdateFlow();
         renderUpdateEntry();
         if (view === "devices") loadDevices();
-        toast(`已全部更新到 ${targetVersion}`);
+        toast(tx("upd.allDoneToast", "已全部更新到 {ver}", { ver: targetVersion }));
         return;
       }
     }
     resetUpdateFlow();
     renderUpdateEntry();
     if (view === "devices") loadDevices();
-    toast("已触发更新，等待节点重连");
+    toast(tx("upd.triggeredToast", "已触发更新，等待节点重连"));
   }
   async function runUpdateAll() {
     if (updateFlow.busy) return;
@@ -16563,7 +16649,7 @@
         updateFlow.failedMachine = m.name;
         updateFlow.error = msg;
         updateFlow.errors.set(m.id, msg);
-        toast(`更新 ${m.name} 失败：${msg}`, "attn");
+        toast(tx("upd.machineFailed", "更新 {name} 失败：{msg}", { name: m.name, msg }), "attn");
         renderUpdateEntry();
         checkUpdates();
         return;
@@ -16576,7 +16662,7 @@
         resetUpdateFlow();
         await checkUpdates();
         if (view === "devices") loadDevices();
-        toast("全端已是最新版本");
+        toast(tx("upd.alreadyLatest", "全端已是最新版本"));
       }
     }
   }
@@ -16604,10 +16690,10 @@
   setInterval(checkUpdates, 30 * 60 * 1000);
   // Which agents a computer has: nothing when not known (an older node).
   const agentsTag = (list) => !Array.isArray(list) ? ""
-    : list.length ? `<span title="这台电脑上装了的 agent">${list.map((k) => esc(AGENT_LABEL[k] || k)).join(" · ")}</span>`
-    : `<span class="tag attn" title="找不到 claude、codex、agy、doubao、cursor-agent、pi、omp 命令：装一个，再重连这台电脑">没装 agent</span>`;
+    : list.length ? `<span title="${esc(tx("dev.agentsInstalledTitle", "这台电脑上装了的 agent"))}">${list.map((k) => esc(AGENT_LABEL[k] || k)).join(" · ")}</span>`
+      : `<span class="tag attn" title="${esc(tx("dev.noAgentsTitle", "找不到 claude、codex、agy、doubao、cursor-agent、pi、omp 命令：装一个，再重连这台电脑"))}">${esc(tx("dev.noAgentsTag", "没装 agent"))}</span>`;
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
-    ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
+    ? `<span class="tag attn" title="${esc(tx("dev.updateCmdTitle", "更新：{cmd}", { cmd }))}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
   const updateRow = (have, latest, cmd, note, id, name) => {
     if (!isOld(have, latest)) return "";
     const busy = updateFlow.busy;
@@ -16616,7 +16702,7 @@
     const noteHtml = st
       ? `<div class="update-note ${st.cls}" data-update-note="${esc(id)}"${st.alert ? ' role="alert"' : ""}>${esc(st.text)}</div>`
       : `<div class="update-note" data-update-note="${esc(id)}" hidden></div>`;
-    return `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}" aria-busy="${isMe ? "true" : "false"}"${busy ? " disabled" : ""}>${updateBtnHtml(id, latest)}</button></p>${noteHtml}<p class="pair-hint muted">如果自动更新失败或需要手动安装，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>`;
+    return `<div class="update-cmd"><p class="pair-hint">${esc(tx("upd.newVerRow", "有新版本 {ver}。", { ver: latest }))}<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}" aria-busy="${isMe ? "true" : "false"}"${busy ? " disabled" : ""}>${updateBtnHtml(id, latest)}</button></p>${noteHtml}<p class="pair-hint muted">${esc(tx("upd.manualFallback", "如果自动更新失败或需要手动安装，在这台电脑上运行{note}：", { note: note ? ` (${note})` : "" }))}</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="${esc(tx("common.copy", "复制"))}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>`;
   };
 
   async function loadDevices(restore = null) {
@@ -16641,7 +16727,7 @@
     const installCmd = pm ? `curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub ${devAddr} --code ${pm.code}` : "";
     const machines = r.devices.filter((d) => d.kind === "machine");
     const browsers = r.devices.filter((d) => d.kind !== "machine");
-    const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr" data-pick="compact">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
+    const addrSel = addrs.length > 1 ? `<label class="addr-pick">${esc(tx("dev.addrLabel", "用这个地址"))}<select id="dev-addr" data-pick="compact">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
     const keepOpen = (pickOpen && pickOpen.id === "dev-addr") || document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
     if (keepOpen) return; // don't redraw under an open select or a half-typed form
     const devSig = JSON.stringify({
@@ -16668,61 +16754,61 @@
     body._devRendered = true;
 
     $("#devices-body").innerHTML = `
-      <p class="panel-intro">Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac 等电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。</p>
+      <p class="panel-intro">${tx("dev.introHtml", "Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac 等电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。")}</p>
 
       <div class="pair-grid">
         <div class="card pair-card">
-          <div class="card-h">连接手机或平板</div>
-          <div class="qr-wrap">${pb ? `<img class="qr" alt="配对二维码" src="demo-qr.png?text=${encodeURIComponent(phoneURL)}">` : ""}</div>
-          <p class="pair-hint">用相机扫一下，在浏览器里打开即可，之后可「添加到主屏幕」。<b data-pair-left="browser">${pb ? left(pb) : ""}</b> 内有效，只能用一次。</p>
-          <div class="code"><span>${esc(phoneURL)}</span><button class="icon-btn" data-copy="${esc(phoneURL)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+          <div class="card-h">${esc(tx("dev.pairPhoneTitle", "连接手机或平板"))}</div>
+          <div class="qr-wrap">${pb ? `<img class="qr" alt="${esc(tx("dev.pairQrAlt", "配对二维码"))}" src="demo-qr.png?text=${encodeURIComponent(phoneURL)}">` : ""}</div>
+          <p class="pair-hint">${tx("dev.pairPhoneHintHtml", '用相机扫一下，在浏览器里打开即可，之后可「添加到主屏幕」。<b data-pair-left="browser">{left}</b> 内有效，只能用一次。', { left: pb ? left(pb) : "" })}</p>
+          <div class="code"><span>${esc(phoneURL)}</span><button class="icon-btn" data-copy="${esc(phoneURL)}" title="${esc(tx("common.copy", "复制"))}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
           ${addrSel}
         </div>
 
         <div class="card pair-card">
-          <div class="card-h">连接一台电脑</div>
-          <p class="pair-hint">在那台电脑上装好 herdr、git 和 Go 1.25+，然后运行（从源码编译 Collie，并作为后台服务常驻）：</p>
-          ${pm ? `<div class="code big"><span>${esc(installCmd)}</span><button class="icon-btn" data-copy="${esc(installCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
-               <p class="pair-hint">已经装了 collie 的话：</p>
-               <div class="code"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
-               <p class="pair-hint"><b data-pair-left="machine">${left(pm)}</b> 内有效，只能用一次。之后它会自动重连。</p>`
-             : `<button class="btn primary small" id="new-node-code">生成连接命令</button>`}
-          <p class="pair-hint muted">需要这台电脑能访问上面的地址（同一内网或 VPN）。</p>
+          <div class="card-h">${esc(tx("dev.pairMachineTitle", "连接一台电脑"))}</div>
+          <p class="pair-hint">${esc(tx("dev.pairMachineIntro", "在那台电脑上装好 herdr、git 和 Go 1.25+，然后运行（从源码编译 Collie，并作为后台服务常驻）："))}</p>
+          ${pm ? `<div class="code big"><span>${esc(installCmd)}</span><button class="icon-btn" data-copy="${esc(installCmd)}" title="${esc(tx("common.copy", "复制"))}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+               <p class="pair-hint">${esc(tx("dev.pairMachineInstalled", "已经装了 collie 的话："))}</p>
+               <div class="code"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="${esc(tx("common.copy", "复制"))}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+               <p class="pair-hint">${tx("dev.pairMachineValidHtml", '<b data-pair-left="machine">{left}</b> 内有效，只能用一次。之后它会自动重连。', { left: left(pm) })}</p>`
+             : `<button class="btn primary small" id="new-node-code">${esc(tx("dev.pairMachineGenBtn", "生成连接命令"))}</button>`}
+          <p class="pair-hint muted">${esc(tx("dev.pairMachineNetHint", "需要这台电脑能访问上面的地址（同一内网或 VPN）。"))}</p>
         </div>
       </div>
 
-      <div class="card"><div class="card-h">电脑</div><ul class="rows">
+      <div class="card"><div class="card-h">${esc(tx("dev.computersTitle", "电脑"))}</div><ul class="rows">
         <li class="row dev-row">
           <span class="dot ${r.hub.herdr ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${agentsTag(r.hub.agents)}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}</div>
-          <span class="right">${r.hub.herdr ? "在线" : ""}</span></li>
+          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${agentsTag(r.hub.agents)}${r.hub.herdr ? "" : `<span>${esc(tx("dev.hubNoHerdr", "没检测到 herdr，这台只当 hub 用"))}</span>`}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", tx("dev.hubUpdateNote", "装 hub 时加过 --url 等参数的话照样带上"), "", r.hub.name)}</div>
+          <span class="right">${r.hub.herdr ? esc(tx("common.online", "在线")) : ""}</span></li>
         ${machines.map((d) => `<li class="row dev-row">
           <span class="dot ${d.online ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}${d.online ? agentsTag(d.agents) : ""}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node", "", d.id, d.name)}</div>
-          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")}
+          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}${d.online ? agentsTag(d.agents) : ""}<span>${esc(d.online ? tx("common.online", "在线") : tx("dev.offlineLastSeen", "离线 · 上次 {time}", { time: when(d.last_seen) }))}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node", "", d.id, d.name)}</div>
+          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">${esc(tx("common.remove", "移除"))}</button></li>`).join("")}
       </ul></div>
 
-      <div class="card"><div class="card-h">其他 hub</div>
-        <p class="pair-hint">别的网络里的 Collie hub（云电脑、家里的电脑）。和这台 hub 不通也没关系：只要这个浏览器能打开它，它的会话就会出现在侧栏里。</p>
+      <div class="card"><div class="card-h">${esc(tx("dev.otherHubsTitle", "其他 hub"))}</div>
+        <p class="pair-hint">${esc(tx("dev.otherHubsDesc", "别的网络里的 Collie hub（云电脑、家里的电脑）。和这台 hub 不通也没关系：只要这个浏览器能打开它，它的会话就会出现在侧栏里。"))}</p>
         <ul class="rows">${hubs.map((h) => { const on = remote.get(h.key)?.online; return `<li class="row dev-row">
           <span class="dot ${on ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(h.name)}</b><span>${on ? "在线" : "连不上"}</span></div><div class="text mono">${esc(h.url)}</div></div>
-          <button class="btn ghost small" data-del-hub="${esc(h.key)}" data-name="${esc(h.name)}">移除</button></li>`; }).join("")}
+          <div><div class="meta"><b>${esc(h.name)}</b><span>${esc(on ? tx("common.online", "在线") : tx("dev.unreachable", "连不上"))}</span></div><div class="text mono">${esc(h.url)}</div></div>
+          <button class="btn ghost small" data-del-hub="${esc(h.key)}" data-name="${esc(h.name)}">${esc(tx("common.remove", "移除"))}</button></li>`; }).join("")}
         </ul>
         <form id="add-hub" class="hub-add">
-          <input name="link" required autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="粘贴那个 hub「设备 → 连接手机或平板」里的链接">
-          <input name="name" autocomplete="off" placeholder="叫它什么（可选）">
-          <button class="btn primary small">添加</button>
+          <input name="link" required autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tx("dev.addHubLinkPh", "粘贴那个 hub「设备 → 连接手机或平板」里的链接"))}">
+          <input name="name" autocomplete="off" placeholder="${esc(tx("dev.addHubNamePh", "叫它什么（可选）"))}">
+          <button class="btn primary small">${esc(tx("common.add", "添加"))}</button>
         </form>
-        <p class="pair-hint muted">那个 hub 也要是 v0.2.4 以后的版本。</p>
+        <p class="pair-hint muted">${esc(tx("dev.addHubVerHint", "那个 hub 也要是 v0.2.4 以后的版本。"))}</p>
       </div>
 
-      <div class="card"><div class="card-h">手机和浏览器</div><ul class="rows">
+      <div class="card"><div class="card-h">${esc(tx("dev.browsersTitle", "手机和浏览器"))}</div><ul class="rows">
         ${browsers.length ? browsers.map((d) => `<li class="row dev-row">
           <span class="dot unknown"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b>${d.current ? '<span class="tag">当前</span>' : ""}<span>最近 ${when(d.last_seen)}</span></div></div>
-          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")
-        : `<li class="empty-row">还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。</li>`}
+          <div><div class="meta"><b>${esc(d.name)}</b>${d.current ? `<span class="tag">${esc(tx("dev.currentTag", "当前"))}</span>` : ""}<span>${esc(tx("dev.recentSeen", "最近 {time}", { time: when(d.last_seen) }))}</span></div></div>
+          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">${esc(tx("common.remove", "移除"))}</button></li>`).join("")
+        : `<li class="empty-row">${esc(tx("dev.browsersEmpty", "还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。"))}</li>`}
       </ul></div>`;
     document.querySelectorAll("#add-hub input").forEach((i, n) => { i.value = typed[n] || ""; });
     if (restore) restoreSimpleScroll(body, restore);
@@ -16740,27 +16826,27 @@
     e.preventDefault();
     const f = e.target, btn = f.querySelector("button");
     let u;
-    try { u = new URL(f.link.value.trim()); } catch { toast("链接不对：要以 http:// 或 https:// 开头", "attn"); return; }
+    try { u = new URL(f.link.value.trim()); } catch { toast(tx("dev.errBadUrl", "链接不对：要以 http:// 或 https:// 开头"), "attn"); return; }
     const code = u.searchParams.get("pair");
-    if (!code) { toast("链接里没有配对码（?pair=…），在那个 hub 的「设备」页复制「连接手机或平板」下面的链接", "attn"); return; }
+    if (!code) { toast(tx("dev.errNoPair", "链接里没有配对码（?pair=…），在那个 hub 的「设备」页复制「连接手机或平板」下面的链接"), "attn"); return; }
     const url = (u.origin + u.pathname).replace(/\/+$/, "");
-    if (url === location.origin) { toast("这就是当前这个 hub", "attn"); return; }
-    if (location.protocol === "https:" && u.protocol === "http:") { toast("这个页面是 https，浏览器不让它连 http 的 hub", "attn"); return; }
+    if (url === location.origin) { toast(tx("dev.errSameHub", "这就是当前这个 hub"), "attn"); return; }
+    if (location.protocol === "https:" && u.protocol === "http:") { toast(tx("dev.errMixedProto", "这个页面是 https，浏览器不让它连 http 的 hub"), "attn"); return; }
     btn.disabled = true;
     try {
       let res;
       try {
         res = await fetch(url + "/api/pair", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "omit",
           body: JSON.stringify({ code, kind: "browser", name: "hub " + location.host, want_token: true }) });
-      } catch { throw new Error("这个浏览器连不上 " + url + "（或者它还是旧版本，不允许跨站访问）"); }
+      } catch { throw new Error(tx("dev.errCantReach", "这个浏览器连不上 {url}（或者它还是旧版本，不允许跨站访问）", { url })); }
       const d = await res.json().catch(() => ({}));
-      if (!res.ok || !d.token) throw new Error(d.error || (res.ok ? "那个 hub 是旧版本，先升级到 v0.2.4" : res.statusText));
+      if (!res.ok || !d.token) throw new Error(d.error || (res.ok ? tx("dev.errOldHub", "那个 hub 是旧版本，先升级到 v0.2.4") : res.statusText));
       const key = "h" + Math.random().toString(36).slice(2, 8);
       const name = f.name.value.trim().slice(0, 30) || u.hostname.split(".")[0];
       const next = [...hubs, { key, name, url, token: d.token }];
       hubs = (await api("/api/hubs", { body: { hubs: next } })).hubs;
       f.reset();
-      toast(`已添加 ${name}`);
+      toast(tx("dev.addedHub", "已添加 {name}", { name }));
       await loadHubs();
       setTimeout(loadExternal, 1500);
       loadDevices();
@@ -16771,7 +16857,7 @@
     const b = e.target.closest("button");
     if (!b) return;
     try {
-      if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
+      if (b.dataset.copy) { await copy(b.dataset.copy); toast(tx("common.copied", "已复制")); }
       else if (b.id === "new-node-code") { await newCode("machine"); loadDevices(); }
       else if (b.dataset.update !== undefined) {
         if (updateFlow.busy) return;
@@ -16793,11 +16879,11 @@
           const qs = id ? "?" + new URLSearchParams({ machine: id }) : "";
           const r = await api("/api/update" + qs, UPDATE_REQ_OPTS);
           if (!id && !r.latest) {
-            toast(`已更新到 ${r.version}，正在重启`);
+            toast(tx("upd.updatedRestarting", "已更新到 {ver}，正在重启", { ver: r.version }));
             await waitForHubRestartAndReload(r.version || versionInfo.latest);
             return;
           }
-          toast(r.latest ? "已经是最新版" : `已更新到 ${r.version}，正在重启`);
+          toast(r.latest ? tx("upd.alreadyLatestOne", "已经是最新版") : tx("upd.updatedRestarting", "已更新到 {ver}，正在重启", { ver: r.version }));
           if (id && !r.latest) {
             await waitForNodesReconnect(r.version || versionInfo.latest);
           } else {
@@ -16814,17 +16900,17 @@
           updateFlow.error = msg;
           updateFlow.errors.set(id, msg);
           renderUpdateEntry();
-          toast(`更新 ${name} 失败：${msg}`, "attn");
+          toast(tx("upd.machineFailed", "更新 {name} 失败：{msg}", { name, msg }), "attn");
           checkUpdates();
         }
       }
       else if (b.dataset.delHub) {
-        if (!confirm(`不再显示「${b.dataset.name}」的会话？那个 hub 本身不受影响。`)) return;
+        if (!confirm(tx("dev.rmHubConfirm", "不再显示「{name}」的会话？那个 hub 本身不受影响。", { name: b.dataset.name }))) return;
         hubs = (await api("/api/hubs", { body: { hubs: hubs.filter((h) => h.key !== b.dataset.delHub) } })).hubs;
         await loadHubs(); loadExternal(); loadHistory(); loadDevices();
       }
       else if (b.dataset.delDev) {
-        if (!confirm(`移除「${b.dataset.name}」？它需要重新配对才能再连进来。`)) return;
+        if (!confirm(tx("dev.rmDevConfirm", "移除「{name}」？它需要重新配对才能再连进来。", { name: b.dataset.name }))) return;
         await api(`/api/devices/${encodeURIComponent(b.dataset.delDev)}/delete`, { body: {} });
         loadDevices();
       }
@@ -16833,7 +16919,7 @@
 
   // Clipboard API needs a secure context; plain-http LAN addresses fall back.
   async function copy(text) {
-    if (!await copyText(text)) throw new Error("复制失败");
+    if (!await copyText(text)) throw new Error(tx("common.copyFailed", "复制失败"));
   }
 
   // ───────────────────────────── one agent: header
@@ -16846,18 +16932,18 @@
     markSeen(v);
     const wLabel = agentLabelOf(v);
     const hasAlias = !!(v.is_agent && v.name && v.name !== ROUTER && wLabel && wLabel !== v.name);
-    $("#d-name").textContent = v.name === ROUTER ? "Collie 的终端" : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
+    $("#d-name").textContent = v.name === ROUTER ? tx("detail.collieTerm", "Collie 的终端") : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
     $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER
-      ? (hasAlias ? `${wLabel} (${v.name})` : `名字：${v.name}`)
+      ? (hasAlias ? `${wLabel} (${v.name})` : tx("detail.workerNamePrefix", "名字：{name}", { name: v.name }))
       : "";
     const wid = $("#d-worker-id");
     if (wid) {
       wid.hidden = !hasAlias;
       wid.textContent = hasAlias ? v.name : "";
-      wid.title = hasAlias ? `底层名称：${v.name}` : "";
+      wid.title = hasAlias ? tx("detail.rawNameTitle", "底层名称：{name}", { name: v.name }) : "";
     }
     $("#d-kind").textContent = v.is_agent ? (KIND_LABEL[v.kind] || v.kind) : "";
-    const role = isWorker(v.name) ? "Collie 派出" : "";
+    const role = isWorker(v.name) ? tx("side.byCollie", "Collie 派出") : "";
     $("#d-worker").hidden = !role;
     $("#d-worker").textContent = role;
     const st = $("#d-status");
@@ -16873,7 +16959,7 @@
     // The pane may have shown up before the page knew what it is (a fresh
     // terminal): once it does, switch to the view that fits.
     if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); resetScreen(); openStream(); }
-    $("#input").placeholder = v.name === ROUTER ? "直接在 Collie 的终端里输入…" : v.is_agent ? `给 ${KIND_LABEL[v.kind] || v.kind} 发消息…` : "输入命令…";
+    $("#input").placeholder = v.name === ROUTER ? tx("detail.inputRouterPh", "直接在 Collie 的终端里输入…") : v.is_agent ? tx("detail.inputKindPh", "给 {kind} 发消息…", { kind: KIND_LABEL[v.kind] || v.kind }) : tx("detail.inputShellPh", "输入命令…");
   }
 
   // What model an agent was started with, recorded when Collie (the launcher
@@ -16899,10 +16985,10 @@
     let name = (info.models || []).find((m) => m.id === model)?.label || model.split("/").pop();
     const b = name.match(/^(.*\S)\s*\(([^)]+)\)$/);
     if (b && EFFORT_LABEL[b[2].toLowerCase()]) { name = b[1]; effort ||= b[2].toLowerCase(); }
-    const parts = [model ? name + (own ? "（默认）" : "") : "默认模型"];
-    if (effort) parts.push("思考 " + (EFFORT_LABEL[effort] || effort));
+    const parts = [model ? name + (own ? tx("common.defaultParen", "（默认）") : "") : tx("common.defaultModel", "默认模型")];
+    if (effort) parts.push(tx("effort.prefix", "思考 {v}", { v: EFFORT_LABEL[effort] || effort }));
     el.textContent = parts.join(" · ");
-    el.title = `启动时用的模型：${model || "agent 自己的设置"}${effort ? "，思考强度 " + effort : ""}（之后在 agent 里换过的话这里不会变）`;
+    el.title = tx("detail.launchModelTitle", "启动时用的模型：{model}{effort}（之后在 agent 里换过的话这里不会变）", { model: model || tx("collie.agentOwnSettingShort", "agent 自己的设置"), effort: effort ? tx("collie.effortComma", "，思考强度 {effort}", { effort }) : "" });
     el.hidden = false;
   }
 
@@ -17208,7 +17294,7 @@
       term.scrollToBottom?.();
       hideJump();
     }
-    $("#term-fit").textContent = overview ? "放大" : "全览";
+    $("#term-fit").textContent = overview ? tx("detail.termFitZoom", "放大") : tx("detail.termFitOverview", "全览");
     $("#term-fit").hidden = !narrowScreen.matches || fitW >= 11;
   }
   let fitTermResizeRAF = 0;
@@ -17617,7 +17703,7 @@
   // stream updates it; a thread never opened shows a skeleton of a
   // conversation, so nothing jumps when the messages land.
   const threadCache = new Map();
-  const SKELETON = `<div class="thread-skel" aria-label="读取中">${["user", "a", "a short", "tools", "user short", "a", "a short"].map((c) => `<div class="sk ${c}"></div>`).join("")}</div>`;
+  const SKELETON = `<div class="thread-skel" aria-label="Loading">${["user", "a", "a short", "tools", "user short", "a", "a short"].map((c) => `<div class="sk ${c}"></div>`).join("")}</div>`;
   function primeThread(el, key) {
     el._sig = ""; el._blocks = null; el._fresh = true;
     const got = key && threadCache.get(key);
@@ -17634,7 +17720,7 @@
     const b = ev.target.closest("[data-act=ask-reveal]");
     if (!b || !extCur) return;
     b.disabled = true;
-    try { await api(`/api/external/${encodeURIComponent(extCur)}/reveal`, { body: {} }); toast("已在电脑上的 Claude 桌面版打开这个会话"); }
+    try { await api(`/api/external/${encodeURIComponent(extCur)}/reveal`, { body: {} }); toast(tx("ext.revealedClaude", "已在电脑上的 Claude 桌面版打开这个会话")); }
     catch (err) { toast(err.message, "attn"); }
     finally { b.disabled = false; }
   });
@@ -17648,7 +17734,7 @@
     }
     const form = b.closest("section.view")?.querySelector("form.composer:not([hidden])");
     const input = form?.querySelector("textarea");
-    if (!form || !input) { toast("这里没法发消息，去电脑上回答", "attn"); return; }
+    if (!form || !input) { toast(tx("ext.cantSendHere", "这里没法发消息，去电脑上回答"), "attn"); return; }
     input.value = b.dataset.text;
     form.requestSubmit();
   });
@@ -17807,11 +17893,11 @@
     const isOpen = open.has(String(k));
     if (v.isSubagent) {
       const hasBody = !!(v.prompt || v.output);
-      const stateLabel = v.error ? "出错" : (!v.output ? "运行中" : "");
+      const stateLabel = v.error ? tx("detail.toolError", "出错") : (!v.output ? tx("st.unknown", "运行中") : "");
       const body = hasBody
         ? `<div class="sub-body">`
-          + (v.prompt ? `<div class="tool-sec"><div class="tool-sec-h"><span>任务指令</span></div><pre class="tool-pre sub-prompt">${esc(v.prompt)}</pre></div>` : "")
-          + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>返回结果</span>${v.subId ? `<span class="tool-sec-meta">${esc(v.subId.slice(0, 8))}</span>` : ""}</div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
+          + (v.prompt ? `<div class="tool-sec"><div class="tool-sec-h"><span>${esc(tx("detail.toolPrompt", "任务指令"))}</span></div><pre class="tool-pre sub-prompt">${esc(v.prompt)}</pre></div>` : "")
+      + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>${esc(tx("detail.toolResult", "返回结果"))}</span>${v.subId ? `<span class="tool-sec-meta">${esc(v.subId.slice(0, 8))}</span>` : ""}</div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
           + `</div>`
         : "";
       return `<details class="tool subagent ${cls}${hasBody ? " has-body" : ""}" data-i="${k}"${isOpen ? " open" : ""}>`
@@ -17828,8 +17914,8 @@
     let body = "";
     if (v.detail) {
       body = `<div class="tool-detail">`
-        + `<div class="tool-sec"><div class="tool-sec-h"><span>参数</span></div><pre class="tool-pre">${esc(v.detail)}</pre></div>`
-        + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>输出</span></div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
+        + `<div class="tool-sec"><div class="tool-sec-h"><span>${esc(tx("detail.toolArgs", "参数"))}</span></div><pre class="tool-pre">${esc(v.detail)}</pre></div>`
+      + (v.output ? `<div class="tool-sec"><div class="tool-sec-h"><span>${esc(tx("detail.toolOutput", "输出"))}</span></div><pre class="tool-pre">${esc(v.output)}</pre></div>` : "")
         + `</div>`;
     } else if (v.output) {
       body = `<pre>${esc(v.output)}</pre>`;
@@ -17839,7 +17925,7 @@
       + body + `</details>`;
   }
 
-  function drawThread(msgs, el = $("#thread"), empty = "还没有对话。发一条消息开始吧。") {
+  function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。")) {
     const rest = el._restore;
     // Just opened: start at the latest message, unless restoring a scroll position.
     const was = rest ? !!rest.atBottom : (el._fresh || nearBottom(el) || !el.childElementCount);
@@ -17867,7 +17953,7 @@
         const names = [...new Set(run.map((t) => (t.subagent?.type || t.subagent?.role || t.name)))].slice(0, 4).join("、");
         const errs = run.filter((t) => t.error).length;
         html += `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>
-          <summary><span class="n">${run.length} 个步骤</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${errs} 个出错</b>` : ""}</span></summary>
+          <summary><span class="n">${esc(tx("detail.stepsCount", "{n} 个步骤", { n: run.length }))}</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${esc(tx("detail.stepsErrors", "{n} 个出错", { n: errs }))}</b>` : ""}</span></summary>
           <div class="toolrun-body">${run.slice(0, -1).map((t, k) => row(t, start + k)).join("")}</div>
         </details>${row(run[run.length - 1], i - 1)}</div>`;
         cut();
@@ -17894,8 +17980,8 @@
           + (opts ? `<div class="opts">${opts}</div>` : "")
           + (m.output ? `<div class="answer">${esc(m.output)}</div>`
             : open && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
-              ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
-              : (el.id === "thread" || el.id === "wd-thread") ? "" : `<div class="where">在电脑上的会话里回答</div>`) : "")
+              ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">${esc(tx("ext.answerInClaude", "去 Claude 桌面版回答"))}</button><span>${esc(tx("ext.onlyDesktopDialog", "这个对话框只能在电脑上答"))}</span></div>`
+      : (el.id === "thread" || el.id === "wd-thread") ? "" : `<div class="where">${esc(tx("ext.answerOnComputer", "在电脑上的会话里回答"))}</div>`) : "")
           + `</div>`;
         cut();
         i++;
@@ -17917,7 +18003,7 @@
       cut();
       i++;
     }
-    if (el._loadingEarlier) blocks.unshift(`<div class="earlier-row">加载中…</div>`);
+    if (el._loadingEarlier) blocks.unshift(`<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`);
     const sig = blocks.join("");
     if (sig === el._sig) return;
     el._sig = sig;
@@ -17952,7 +18038,7 @@
     const el = $("#thread");
     const was = nearBottom(el) || !el.childElementCount;
     const v = find(current);
-    const note = v && v.is_agent ? `${esc(KIND_LABEL[v.kind] || v.kind)} 还没有可读取的会话记录，先显示终端输出` : "普通终端，这里显示终端输出";
+    const note = v && v.is_agent ? esc(tx("detail.fallbackAgent", "{kind} 还没有可读取的会话记录，先显示终端输出", { kind: KIND_LABEL[v.kind] || v.kind })) : esc(tx("detail.fallbackShell", "普通终端，这里显示终端输出"));
     el.innerHTML = `<div class="fallback-note">${note}</div><pre class="termcard">${esc(cleanLog(text))}</pre>`;
     stick(el, was);
   }
@@ -18042,7 +18128,7 @@
       return { q, blocks: out };
     }
     const last = blocks.map((b) => !b.code).lastIndexOf(true);
-    if (last < 0) return { q: "要继续吗？", blocks };
+    if (last < 0) return { q: tx("collie.askContinue", "要继续吗？"), blocks };
     return { q: blocks[last].text, blocks: blocks.filter((_, k) => k !== last) };
   }
 
@@ -18053,14 +18139,14 @@
     const choices = a.choices || [];
     const body = blocks.map((b) => b.code ? `<pre class="ctx-code">${esc(b.text)}</pre>` : `<p>${esc(b.text)}</p>`).join("");
     return `<div class="ask">
-      <div class="ask-head"><span class="dot blocked"></span><span class="who">${esc(who)}</span><span>需要你确认</span><span class="spacer"></span>
-        <button data-raw>${showRaw ? "收起终端" : "查看终端"}</button></div>
+      <div class="ask-head"><span class="dot blocked"></span><span class="who">${esc(who)}</span><span>${esc(tx("collie.askNeedsConfirm", "需要你确认"))}</span><span class="spacer"></span>
+      <button data-raw>${esc(showRaw ? tx("collie.askHideTerm", "收起终端") : tx("collie.askViewTerm", "查看终端"))}</button></div>
       <div class="ask-q"><div class="q">${esc(q)}</div>${body ? `<div class="ctx">${body}</div>` : ""}</div>
       ${showRaw ? `<pre class="ask-raw">${esc(a.screen)}</pre>` : ""}
       ${choices.length ? `<div class="choices">${choices.map((c, i) => `<button class="choice ${c.current ? "current" : ""}" data-choice="${i}">
           <span class="n">${esc(c.text || i + 1)}</span><span class="l">${esc(c.label)}${c.desc ? `<span class="d">${esc(c.desc)}</span>` : ""}</span></button>`).join("")}</div>
-        <div class="ask-keys"><button data-k="esc">Esc 取消</button></div>`
-      : `<div class="ask-keys"><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="esc">Esc</button><button class="go" data-k="enter">确认 ↵</button></div>`}
+        <div class="ask-keys"><button data-k="esc">${esc(tx("collie.askEscCancel", "Esc 取消"))}</button></div>`
+      : `<div class="ask-keys"><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="esc">Esc</button><button class="go" data-k="enter">${esc(tx("collie.askConfirm", "确认 ↵"))}</button></div>`}
     </div>`;
   }
 
@@ -18446,9 +18532,9 @@
     return `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=html`;
   };
   const fileLinkAttrs = (rawPath, escapedPath, titleText) => HTML_EXT.test(rawPath)
-    ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" data-path="${escapedPath}" title="${esc("预览 HTML：" + rawPath)}"`
+    ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" data-path="${escapedPath}" title="${esc(tx("file.previewHtmlTip", "预览 HTML：{path}", { path: rawPath }))}"`
     : IMG_EXT.test(rawPath)
-    ? `class="fpath img-link" href="#" data-path="${escapedPath}" title="${esc("查看大图 " + (rawPath.split("/").pop() || rawPath))}"`
+    ? `class="fpath img-link" href="#" data-path="${escapedPath}" title="${esc(tx("file.viewImgTip", "查看大图 {name}", { name: rawPath.split("/").pop() || rawPath }))}"`
     : `class="fpath" href="#" data-path="${escapedPath}" title="${titleText}"`;
   // Strict RFC 4180 parser for CSV / TSV: handles quoted commas/tabs, escaped "" quotes,
   // and embedded CR/LF newlines inside quoted fields, with a row cap for huge files.
@@ -18529,7 +18615,7 @@
     const headers = [];
     for (let c = 0; c < colCount; c++) {
       const h = (rawHead[c] ?? "").trim();
-      headers.push(h || `列 ${c + 1}`);
+      headers.push(h || tx("file.colN", "列 {n}", { n: c + 1 }));
     }
     const rows = allRows.slice(1).map((r) => {
       if (r.length === colCount) return r;
@@ -18546,7 +18632,7 @@
       const res = await authFetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" }, !!r.hub);
       if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
       if (res.status === 404) continue;
-      if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || "打不开这个 HTML 文件"); }
+      if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || tx("file.cantOpenHtml", "打不开这个 HTML 文件")); }
       const htmlText = await res.text();
       return {
         kind: "html",
@@ -18576,7 +18662,7 @@
     const res = await authFetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" }, !!r.hub);
     if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
     if (res.status === 404) return null;
-    if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || "打不开这个文件"); }
+    if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || tx("file.cantOpen", "打不开这个文件")); }
     return { kind: res.headers.get("X-File-Kind"), size: +res.headers.get("X-File-Size") || 0,
       path: decodeURIComponent(res.headers.get("X-File-Path") || path), blob: await res.blob(), machine };
   }
@@ -18616,7 +18702,7 @@
   async function downloadCurFile(cur) {
     if (!cur?.reqPath) return;
     if (cur.size > FILE_DL_MAX) {
-      toast("文件超过 100 MB，无法通过网页直接下载", "attn");
+      toast(tx("file.dlTooBig", "文件超过 100 MB，无法通过网页直接下载"), "attn");
       return;
     }
     const fileName = baseFileName(cur.path || cur.reqPath);
@@ -18636,11 +18722,11 @@
         if (!res.ok) {
           let e = {};
           try { e = await res.json(); } catch {}
-          throw new Error(e.error || "下载失败");
+          throw new Error(e.error || tx("file.dlFailed", "下载失败"));
         }
         triggerBlobDownload(await res.blob(), fileName);
       } catch (err) {
-        toast(err.message || "下载失败", "attn");
+        toast(err.message || tx("file.dlFailed", "下载失败"), "attn");
       }
       return;
     }
@@ -18663,14 +18749,14 @@
     if (!res.ok) {
       let e = {};
       try { e = await res.json(); } catch {}
-      throw new Error(e.error || "拉取完整原文失败");
+      throw new Error(e.error || tx("file.fetchRawFailed", "拉取完整原文失败"));
     }
     const full = await res.text();
     cur.rawText = full;
     cur.truncated = false;
     return full;
   }
-  function syncFileBar(prefix, { langLabel = "", isHtml = false, modeSeg = false, activeMode = "table", copyable = false, copyTitle = "复制全文", downloadable = false, wideHref = "" }) {
+  function syncFileBar(prefix, { langLabel = "", isHtml = false, modeSeg = false, activeMode = "table", copyable = false, copyTitle = tx("file.copyAll", "复制全文"), downloadable = false, wideHref = "" }) {
     const lEl = $("#" + prefix + "-lang"), cWrap = $("#" + prefix + "-copy-wrap"), cBtn = $("#" + prefix + "-copy");
     const dlBtn = $("#" + prefix + "-dl"), wideBtn = prefix === "fv" ? $("#fv-wide") : null;
     const segEl = $("#" + prefix + "-mode-seg");
@@ -18705,7 +18791,7 @@
       wideBtn.hidden = !wideHref;
       if (wideHref) {
         wideBtn.href = wideHref;
-        const lbl = isHtml ? "在新标签打开 HTML" : "新标签宽屏阅读";
+        const lbl = isHtml ? tx("file.openHtmlNewTab", "在新标签打开 HTML") : tx("file.openWide", "新标签宽屏阅读");
         wideBtn.title = lbl;
         wideBtn.setAttribute("aria-label", lbl);
       }
@@ -18730,12 +18816,12 @@
     const slice = parsed.rows.slice(start, end);
     const kindTag = cur.csvDelimiter === "\t" ? "TSV" : "CSV";
     const moreSign = (parsed.capped || cur.truncated) ? "+" : "";
-    const metaInfo = `${kindTag} · ${totalRows}${moreSign} 行 · ${totalCols} 列${totalRows > CSV_PAGE_SIZE ? ` · 显示第 ${start + 1}–${end} 行` : ""}${parsed.capped ? `（已安全限行前 ${CSV_MAX_PARSE_ROWS} 行）` : ""}`;
+    const metaInfo = tx("file.csvMeta", "{kind} · {rows}{more} 行 · {cols} 列{range}{capped}", { kind: kindTag, rows: totalRows, more: moreSign, cols: totalCols, range: totalRows > CSV_PAGE_SIZE ? tx("file.csvRange", " · 显示第 {start}–{end} 行", { start: start + 1, end }) : "", capped: parsed.capped ? tx("file.csvCapped", "（已安全限行前 {max} 行）", { max: CSV_MAX_PARSE_ROWS }) : "" });
     const pagerHtml = totalPages > 1
-      ? `<div class="csv-pager"><button type="button" data-csv-page="${page - 1}"${page <= 0 ? " disabled" : ""}>上一页</button><span>第 ${page + 1} / ${totalPages} 页</span><button type="button" data-csv-page="${page + 1}"${page >= totalPages - 1 ? " disabled" : ""}>下一页</button></div>`
+      ? `<div class="csv-pager"><button type="button" data-csv-page="${page - 1}"${page <= 0 ? " disabled" : ""}>${esc(tx("file.prevPage", "上一页"))}</button><span>${esc(tx("file.pageOf", "第 {page} / {total} 页", { page: page + 1, total: totalPages }))}</span><button type="button" data-csv-page="${page + 1}"${page >= totalPages - 1 ? " disabled" : ""}>${esc(tx("file.nextPage", "下一页"))}</button></div>`
       : "";
     if (!totalCols) {
-      body.innerHTML = `<div class="csv-stage"><div class="csv-meta-bar"><span class="csv-meta-info">${esc(metaInfo)}</span></div><div class="csv-empty">表格为空</div>${cut}</div>`;
+      body.innerHTML = `<div class="csv-stage"><div class="csv-meta-bar"><span class="csv-meta-info">${esc(metaInfo)}</span></div><div class="csv-empty">${esc(tx("file.csvEmpty", "表格为空"))}</div>${cut}</div>`;
       return;
     }
     const thHtml = `<th class="csv-rn" scope="col">#</th>` + parsed.headers.map((h) => `<th scope="col" title="${esc(h)}">${esc(h)}</th>`).join("");
@@ -18750,8 +18836,8 @@
           }).join("");
           return `<tr><th class="csv-rn" scope="row">${rn}</th>${tds}</tr>`;
         }).join("")
-      : `<tr><td colspan="${totalCols + 1}" class="csv-empty">仅有表头，暂无数据行</td></tr>`;
-    body.innerHTML = `<div class="csv-stage"><div class="csv-meta-bar"><span class="csv-meta-info" title="${esc(metaInfo)}">${esc(metaInfo)}</span>${pagerHtml}</div><div class="csv-wrap" tabindex="0" role="region" aria-label="${esc(baseFileName(cur.path || cur.reqPath))} 表格预览"><table class="csv-table"><thead><tr>${thHtml}</tr></thead><tbody>${trHtml}</tbody></table></div>${cut}</div>`;
+      : `<tr><td colspan="${totalCols + 1}" class="csv-empty">${esc(tx("file.csvHeadersOnly", "仅有表头，暂无数据行"))}</td></tr>`;
+    body.innerHTML = `<div class="csv-stage"><div class="csv-meta-bar"><span class="csv-meta-info" title="${esc(metaInfo)}">${esc(metaInfo)}</span>${pagerHtml}</div><div class="csv-wrap" tabindex="0" role="region" aria-label="${esc(tx("file.csvRegionAria", "{name} 表格预览", { name: baseFileName(cur.path || cur.reqPath) }))}"><table class="csv-table"><thead><tr>${thHtml}</tr></thead><tbody>${trHtml}</tbody></table></div>${cut}</div>`;
   }
   function renderCodeBody(body, path, text, cut, srcId, wrapCard = false) {
     const lang = detectCodeLang(path, true);
@@ -18785,7 +18871,7 @@
     syncFileBar("fv", { isHtml, langLabel: isHtml ? "HTML" : "", wideHref: isHtml ? htmlFileURL(path, initMachine) : wideFileHash(path, initMachine) });
     $("#fv-name").textContent = path.split("/").pop();
     $("#fv-path").textContent = path;
-    body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
+    body.innerHTML = `<p class="fv-note muted">${esc(tx("common.reading", "读取中…"))}</p>`;
     showFilePane(opts);
     const tries = fileTries();
     if (isHtml) {
@@ -18794,12 +18880,12 @@
         hf = await fetchHtmlFile(path, tries);
       } catch (e) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
       if (seq !== fileSeq) return;
-      if (!hf) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+      if (!hf) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
       const where = (state.machines || []).length > 1 || hf.machine ? machineName(hf.machine) + " · " : "";
       $("#fv-path").textContent = where + hf.path + " · " + fmtSize(hf.size);
       const canDl = hf.size <= FILE_DL_MAX;
       fvCur = { reqPath: path, path: hf.path, machine: hf.machine || "", kind: "html", size: hf.size, rawText: hf.htmlText, truncated: false };
-      syncFileBar("fv", { langLabel: "HTML", isHtml: true, copyable: true, copyTitle: "复制 HTML 源码", downloadable: canDl, wideHref: htmlFileURL(path, hf.machine || "") });
+      syncFileBar("fv", { langLabel: "HTML", isHtml: true, copyable: true, copyTitle: tx("file.copyHtml", "复制 HTML 源码"), downloadable: canDl, wideHref: htmlFileURL(path, hf.machine || "") });
       body.classList.add("is-html");
       body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(baseFileName(hf.path))}"></iframe>`;
       const frame = body.querySelector("iframe");
@@ -18812,7 +18898,7 @@
       f = await findFile(path, tries);
     } catch (e) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
     if (seq !== fileSeq) return;
-    if (!f) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+    if (!f) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
     const where = (state.machines || []).length > 1 || f.machine ? machineName(f.machine) + " · " : "";
     $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
     if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
@@ -18828,7 +18914,7 @@
     }
     if (f.kind !== "text") {
       syncFileBar("fv", { downloadable: canDl });
-      body.innerHTML = `<p class="fv-note">这个文件不是文本${f.size > 20 << 20 ? "，也太大了" : ""}，没法在这里预览${canDl ? "（可点右上角下载原件）" : ""}。</p>`;
+      body.innerHTML = `<p class="fv-note">${esc(tx("file.notText", "这个文件不是文本{tooBig}，没法在这里预览{canDl}。", { tooBig: f.size > 20 << 20 ? tx("file.tooBigClause", "，也太大了") : "", canDl: canDl ? tx("file.canDlClause", "（可点右上角下载原件）") : "" }))}</p>`;
       return;
     }
     const text = await f.blob.text();
@@ -18836,7 +18922,7 @@
     const truncated = f.size > f.blob.size;
     fvCur.rawText = text;
     fvCur.truncated = truncated;
-    const cut = truncated ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只预览前 1 MB（点右上角下载可获取完整原件）。</p>` : "";
+    const cut = truncated ? `<p class="fv-note muted">${esc(tx("file.truncatedPreview", "文件有 {size}，这里只预览前 1 MB（点右上角下载可获取完整原件）。", { size: fmtSize(f.size) }))}</p>` : "";
     fvCur.cutHtml = cut;
     if (CSV_EXT.test(path)) {
       const isTsv = TSV_EXT.test(path);
@@ -18845,13 +18931,13 @@
       fvCur.viewMode = "table";
       fvCur.csvPage = 0;
       fvCur.csvParsed = null;
-      syncFileBar("fv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: "复制完整原文", downloadable: canDl, wideHref: wHref });
+      syncFileBar("fv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: tx("file.copyFullRaw", "复制完整原文"), downloadable: canDl, wideHref: wHref });
       renderDelimitedStage("fv", fvCur, body, cut);
       if (view === "collie") renderSuper();
       return;
     }
     if (MD_EXT.test(path)) {
-      syncFileBar("fv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl, wideHref: wHref });
+      syncFileBar("fv", { langLabel: "Markdown", copyable: true, copyTitle: tx("file.copyMd", "复制 Markdown 源码"), downloadable: canDl, wideHref: wHref });
       body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
       hydrateRichContent(body);
       body.scrollTop = body.scrollLeft = 0;
@@ -18859,7 +18945,7 @@
       return;
     }
     const lang = renderCodeBody(body, path, text, cut, "fv-code-src", false);
-    syncFileBar("fv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl, wideHref: wHref });
+    syncFileBar("fv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: tx("file.copyAll", "复制全文"), downloadable: canDl, wideHref: wHref });
     body.scrollTop = body.scrollLeft = 0;
     if (view === "collie") renderSuper();
   }
@@ -18872,17 +18958,17 @@
     body.classList.remove("is-code", "is-html", "is-csv");
     syncFileBar("rv", {});
     if (!path) {
-      $("#rv-name").textContent = "文件阅读";
+      $("#rv-name").textContent = tx("file.readerTitle", "文件阅读");
       $("#rv-path").textContent = "";
-      document.title = "文件阅读 · Collie";
-      body.innerHTML = `<p class="fv-note muted">缺少文件路径参数。</p>`;
+      document.title = tx("file.readerDocTitle", "文件阅读 · Collie");
+      body.innerHTML = `<p class="fv-note muted">${esc(tx("file.missingPath", "缺少文件路径参数。"))}</p>`;
       return;
     }
     const name = path.split("/").pop() || path;
     $("#rv-name").textContent = name;
     $("#rv-path").textContent = (machineHint ? machineName(machineHint) + " · " : "") + path;
     document.title = `${name} · Collie`;
-    body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
+    body.innerHTML = `<p class="fv-note muted">${esc(tx("common.reading", "读取中…"))}</p>`;
     const tries = [...new Set([machineHint, ...fileTries()])];
     if (HTML_EXT.test(path)) {
       let hf = null;
@@ -18890,12 +18976,12 @@
         hf = await fetchHtmlFile(path, tries);
       } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
       if (seq !== wideSeq || view !== "file") return;
-      if (!hf) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+      if (!hf) { body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
       const where = (state.machines || []).length > 1 || hf.machine ? machineName(hf.machine) + " · " : "";
       $("#rv-path").textContent = where + hf.path + " · " + fmtSize(hf.size);
       const canDl = hf.size <= FILE_DL_MAX;
       rvCur = { reqPath: path, path: hf.path, machine: hf.machine || "", kind: "html", size: hf.size, rawText: hf.htmlText, truncated: false };
-      syncFileBar("rv", { langLabel: "HTML", isHtml: true, copyable: true, copyTitle: "复制 HTML 源码", downloadable: canDl });
+      syncFileBar("rv", { langLabel: "HTML", isHtml: true, copyable: true, copyTitle: tx("file.copyHtml", "复制 HTML 源码"), downloadable: canDl });
       body.classList.add("is-html");
       body.innerHTML = `<iframe class="fv-html-sandbox" style="min-height:calc(var(--vh) - 120px);border:1px solid var(--line);border-radius:12px;" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(name)}"></iframe>`;
       const frame = body.querySelector("iframe");
@@ -18907,7 +18993,7 @@
       f = await findFile(path, tries);
     } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
     if (seq !== wideSeq || view !== "file") return;
-    if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+    if (!f) { body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
     const where = (state.machines || []).length > 1 || f.machine ? machineName(f.machine) + " · " : "";
     $("#rv-path").textContent = where + f.path + " · " + fmtSize(f.size);
     if (wideFileUrl) URL.revokeObjectURL(wideFileUrl), wideFileUrl = "";
@@ -18923,7 +19009,7 @@
     }
     if (f.kind !== "text") {
       syncFileBar("rv", { downloadable: canDl });
-      body.innerHTML = `<p class="fv-note">这个文件不是文本${f.size > 20 << 20 ? "，也太大了" : ""}，没法在这里预览${canDl ? "（可点右上角下载原件）" : ""}。</p>`;
+      body.innerHTML = `<p class="fv-note">${esc(tx("file.notText", "这个文件不是文本{tooBig}，没法在这里预览{canDl}。", { tooBig: f.size > 20 << 20 ? tx("file.tooBigClause", "，也太大了") : "", canDl: canDl ? tx("file.canDlClause", "（可点右上角下载原件）") : "" }))}</p>`;
       return;
     }
     const text = await f.blob.text();
@@ -18931,7 +19017,7 @@
     const truncated = f.size > f.blob.size;
     rvCur.rawText = text;
     rvCur.truncated = truncated;
-    const cut = truncated ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB（点右上角下载可获取完整原件）。</p>` : "";
+    const cut = truncated ? `<p class="fv-note muted">${esc(tx("file.truncatedView", "文件有 {size}，这里只显示前 1 MB（点右上角下载可获取完整原件）。", { size: fmtSize(f.size) }))}</p>` : "";
     rvCur.cutHtml = cut;
     if (CSV_EXT.test(path)) {
       const isTsv = TSV_EXT.test(path);
@@ -18940,15 +19026,15 @@
       rvCur.viewMode = "table";
       rvCur.csvPage = 0;
       rvCur.csvParsed = null;
-      syncFileBar("rv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: "复制完整原文", downloadable: canDl });
+      syncFileBar("rv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: tx("file.copyFullRaw", "复制完整原文"), downloadable: canDl });
       renderDelimitedStage("rv", rvCur, body, cut);
     } else if (MD_EXT.test(path)) {
-      syncFileBar("rv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl });
+      syncFileBar("rv", { langLabel: "Markdown", copyable: true, copyTitle: tx("file.copyMd", "复制 Markdown 源码"), downloadable: canDl });
       body.innerHTML = `<article class="msg assistant rv-md" id="rv-code-src">${md(text)}</article>${cut}`;
       hydrateRichContent(body);
     } else {
       const lang = renderCodeBody(body, path, text, cut, "rv-code-src", true);
-      syncFileBar("rv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl });
+      syncFileBar("rv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: tx("file.copyAll", "复制全文"), downloadable: canDl });
     }
     if (restore) restoreSimpleScroll(sc, restore);
     else { markProgrammaticScroll(); sc.scrollTop = sc.scrollLeft = 0; }
@@ -18962,7 +19048,7 @@
     try {
       const d = win.document;
       d.open();
-      d.write(`<!doctype html><meta charset="utf-8"><title>${esc(titleText || "HTML 预览")}</title><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;display:block}</style><iframe sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer"></iframe>`);
+      d.write(`<!doctype html><meta charset="utf-8"><title>${esc(titleText || tx("file.htmlPreviewTitle", "HTML 预览"))}</title><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;display:block}</style><iframe sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer"></iframe>`);
       d.close();
       const frame = d.querySelector("iframe");
       if (frame) frame.srcdoc = htmlText;
@@ -18991,7 +19077,7 @@
             closeFilePane({ immediate: true });
             location.hash = wideFileHash(fvCur.reqPath, curMachine);
           } else {
-            toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+            toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
           }
         }
         return;
@@ -19011,7 +19097,7 @@
         closeFilePane({ immediate: true });
         location.hash = wideFileHash(fvCur.reqPath, curMachine);
       } else {
-        toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+        toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
       }
       return;
     }
@@ -19029,7 +19115,7 @@
       closeFilePane({ immediate: true });
       location.hash = href;
     } else {
-      toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+      toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
     }
   });
   function bindDelimitedControls(prefix, getCur, bodySel) {
@@ -19047,7 +19133,7 @@
         modeSeg: true,
         activeMode: mode,
         copyable: true,
-        copyTitle: "复制完整原文",
+        copyTitle: tx("file.copyFullRaw", "复制完整原文"),
         downloadable: cur.size <= FILE_DL_MAX,
         wideHref: prefix === "fv" ? wideFileHash(cur.reqPath, cur.machine || "") : "",
       });
@@ -19162,7 +19248,7 @@
     const cls = clsParts.length ? ` class="${clsParts.join(" ")}"` : "";
     return cls + (src ? ` src="${src}"` : "") + (dim ? ` width="${dim.w}" height="${dim.h}"` : "");
   };
-  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="${esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt="" decoding="async"${thumbImgAttrs(p)}></button>`;
+  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="${esc(tx("file.viewImgTip", "查看大图 {name}", { name: p.split("/").pop() || tx("lb.image", "图片") }))}"><img alt="" decoding="async"${thumbImgAttrs(p)}></button>`;
   const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
   async function loadThumb(img) {
     const p = img?.parentElement?.dataset?.img;
@@ -19202,19 +19288,19 @@
     const cls = `${extraCls ? extraCls + " " : ""}clap-btn${n > 0 ? " on" : ""}`;
     return `<button type="button" class="${cls}" data-clap="${esc(id)}" data-claps="${n}" title="${esc(clapTitle(n))}" aria-label="${esc(clapAriaLabel(n))}"><span class="clap-ico-wrap" aria-hidden="true">${ICON_CLAP}</span><span class="clap-n">${n > 0 ? n : ""}</span></button>`;
   };
-  const pinActBtn = (id, pinned) => `<button type="button" class="pin-btn${pinned ? " on" : ""}" data-pin="${esc(id)}" aria-pressed="${pinned}" title="${pinned ? "取消钉住" : "钉住"}" aria-label="${pinned ? "取消钉住" : "钉住"}">${ICON_PIN}</button>`;
-  const focusActBtn = (id, rootId) => rootId ? `<button type="button" class="focus-btn" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(id)}" aria-expanded="false" title="话题专注" aria-label="话题专注">${ICON_TOPIC}</button>` : "";
+  const pinActBtn = (id, pinned) => `<button type="button" class="pin-btn${pinned ? " on" : ""}" data-pin="${esc(id)}" aria-pressed="${pinned}" title="${esc(pinned ? tx("collie.unpin", "取消钉住") : tx("collie.pin", "钉住"))}" aria-label="${esc(pinned ? tx("collie.unpin", "取消钉住") : tx("collie.pin", "钉住"))}">${ICON_PIN}</button>`;
+  const focusActBtn = (id, rootId) => rootId ? `<button type="button" class="focus-btn" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(id)}" aria-expanded="false" title="${esc(tx("collie.focusThread", "话题专注"))}" aria-label="${esc(tx("collie.focusThread", "话题专注"))}">${ICON_TOPIC}</button>` : "";
   const msgActs = (e, at, pinned = false, focusRoot = "", claps = 0) => e.id ? `<div class="msg-acts">
       ${clapActBtn(e.id, claps)}
-      <button type="button" data-copy="${esc(e.id)}" title="复制" aria-label="复制">${ICON_COPY}</button>
-      <button type="button" class="re-btn" data-re="${esc(e.id)}" title="引用回复" aria-label="引用回复">${ICON_QUOTE}</button>
+      <button type="button" data-copy="${esc(e.id)}" title="${esc(tx("common.copy", "复制"))}" aria-label="${esc(tx("common.copy", "复制"))}">${ICON_COPY}</button>
+      <button type="button" class="re-btn" data-re="${esc(e.id)}" title="${esc(tx("collie.quoteReply", "引用回复"))}" aria-label="${esc(tx("collie.quoteReply", "引用回复"))}">${ICON_QUOTE}</button>
       ${focusActBtn(e.id, focusRoot)}
       ${pinActBtn(e.id, pinned)}
       ${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}</div>` : "";
   // Under your own message, at its right edge: when you said it, focus-thread, copy, and pin.
   const mineActs = (e, at, pinned = false, focusRoot = "") => e.id ? `<div class="msg-acts">${at ? `<span class="t">${esc(sepTime(at))}</span>` : ""}
       ${focusActBtn(e.id, focusRoot)}
-      <button type="button" data-copy="${esc(e.id)}" title="复制" aria-label="复制">${ICON_COPY}</button>
+      <button type="button" data-copy="${esc(e.id)}" title="${esc(tx("common.copy", "复制"))}" aria-label="${esc(tx("common.copy", "复制"))}">${ICON_COPY}</button>
       ${pinActBtn(e.id, pinned)}</div>` : "";
   function copyTextSync(t) {
     // Plain-HTTP LAN addresses and sandboxed-iframe focus transitions need synchronous textarea copy.
@@ -19257,7 +19343,7 @@
     clearTimeout(copyTimers.get(button));
     button.removeAttribute("data-copied");
     button.removeAttribute("data-failed");
-    let msg = ok ? "已复制" : "复制失败";
+    let msg = ok ? tx("common.copied", "已复制") : tx("common.copyFailed", "复制失败");
     if (msg === lastCopyMsg) msg += "\u00A0";
     lastCopyMsg = msg;
     if (tip) tip.textContent = "";
@@ -19278,30 +19364,30 @@
       if (cur.truncated) {
         if (cur.size > FILE_COPY_MAX) {
           reportCopy(button, false);
-          toast("文件超过 20 MB，请点下载按钮获取完整原件", "attn");
+          toast(tx("file.copyTooLarge", "文件超过 20 MB，请点下载按钮获取完整原件"), "attn");
           return;
         }
         try {
           const full = await fetchFullTextForCopy(cur);
           const ok = await copyText(full);
           reportCopy(button, ok);
-          if (ok) toast(cur.kind === "html" ? "已复制 HTML 源码" : "已复制全文");
-          else toast("完整全文已加载，再点一次即可复制");
+          if (ok) toast(cur.kind === "html" ? tx("file.copiedHtml", "已复制 HTML 源码") : tx("file.copiedAll", "已复制全文"));
+        else toast(tx("file.loadedClickAgain", "完整全文已加载，再点一次即可复制"));
         } catch (err) {
           reportCopy(button, false);
-          toast(err.message || "复制失败", "attn");
+          toast(err.message || tx("common.copyFailed", "复制失败"), "attn");
         }
         return;
       }
       if (typeof cur.rawText !== "string" || !cur.rawText.length) {
         reportCopy(button, false);
-        toast("文件内容为空");
+        toast(tx("file.emptyContent", "文件内容为空"));
         return;
       }
       const ok = await copyText(cur.rawText);
       reportCopy(button, ok);
-      if (ok) toast(cur.kind === "html" ? "已复制 HTML 源码" : "已复制全文");
-      else toast("复制失败，请手动选中或下载原件", "attn");
+      if (ok) toast(cur.kind === "html" ? tx("file.copiedHtml", "已复制 HTML 源码") : tx("file.copiedAll", "已复制全文"));
+      else toast(tx("file.copyManualFallback", "复制失败，请手动选中或下载原件"), "attn");
       return;
     }
     const text = target?.textContent || "";
@@ -19410,7 +19496,7 @@
     const b = ev.target.closest("[data-copy]");
     if (!b) return;
     const e = chatEntries().find((x) => x.id === b.dataset.copy);
-    if (e) toast(await copyText(e.text) ? "已复制" : "复制失败", "");
+    if (e) toast(await copyText(e.text) ? tx("common.copied", "已复制") : tx("common.copyFailed", "复制失败"), "");
   });
   // A reply's quote: open the reply-thread drawer when part of a chain (or locate in main chat when already open / standalone).
   document.addEventListener("click", (e) => {
@@ -19619,7 +19705,7 @@
         tail.hidden = true;
       }
     }
-    if (lbl) lbl.textContent = expanded ? "收起代码" : `展开剩余 ${remain} 行`;
+    if (lbl) lbl.textContent = expanded ? tx("md.collapseCode", "收起代码") : tx("md.expandCode", "展开剩余 {n} 行", { n: remain });
     if (pre && savedScrollLeft) pre.scrollLeft = savedScrollLeft;
     if (persist) {
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
@@ -19794,10 +19880,10 @@
       const txt = extractCodeBlockText(block);
       const ok = await copyText(txt);
       if (ok) {
-        flashMiniBtnDone(copyCodeBtn, "已复制 ✓");
-        toast("已复制代码");
+        flashMiniBtnDone(copyCodeBtn, tx("common.copiedCheck", "已复制 ✓"));
+        toast(tx("md.copiedCodeToast", "已复制代码"));
       } else {
-        toast("复制失败", "attn");
+        toast(tx("common.copyFailed", "复制失败"), "attn");
       }
       return;
     }
@@ -19823,10 +19909,10 @@
       }
       const ok = await copyText(payload);
       if (ok) {
-        flashMiniBtnDone(copyTblBtn, mode === "tsv" ? "已复制 TSV ✓" : "已复制 ✓");
-        toast(mode === "tsv" ? "已复制为表格数据（TSV）" : "已复制 Markdown 表格");
+        flashMiniBtnDone(copyTblBtn, mode === "tsv" ? tx("md.copiedTsvBtn", "已复制 TSV ✓") : tx("common.copiedCheck", "已复制 ✓"));
+        toast(mode === "tsv" ? tx("md.copiedTsvToast", "已复制为表格数据（TSV）") : tx("md.copiedMdToast", "已复制 Markdown 表格"));
       } else {
-        toast("复制失败", "attn");
+        toast(tx("common.copyFailed", "复制失败"), "attn");
       }
       return;
     }
@@ -19880,7 +19966,7 @@
       URL.revokeObjectURL(u);
     }
   }
-  const cleanImgName = (raw, fallback = "图片") => {
+  const cleanImgName = (raw, fallback = tx("lb.image", "图片")) => {
     const s = String(raw || "").split(/[?#]/)[0].replace(/\/+$/, "");
     const n = s.split("/").pop() || "";
     try { return decodeURIComponent(n) || fallback; } catch { return n || fallback; }
@@ -19943,7 +20029,7 @@
     if (lbZoomBtn) {
       lbZoomBtn.classList.toggle("zoomed", zoomed);
       lbZoomBtn.setAttribute("aria-pressed", String(zoomed));
-      const label = zoomed ? "缩回适屏 (1x)" : "放大查看细节";
+      const label = zoomed ? tx("lb.zoomOut", "缩回适屏 (1x)") : tx("lb.zoomIn", "放大查看细节");
       lbZoomBtn.title = label;
       lbZoomBtn.setAttribute("aria-label", label);
     }
@@ -20043,7 +20129,7 @@
     lbCount.hidden = !multi;
     if (multi) lbCount.textContent = `${lbIdx + 1} / ${lbItems.length}`;
 
-    const name = item.title || cleanImgName(item.path || item.url, item.alt || "图片");
+    const name = item.title || cleanImgName(item.path || item.url, item.alt || tx("lb.image", "图片"));
     lbName.textContent = item.title || (item.alt && !item.path ? item.alt : name);
     lbCurMeta = null;
     updateLbMeta();
@@ -20119,7 +20205,7 @@
         }
         setLbReady(true, u, name);
       };
-      lbImg.onerror = () => showErr("这张图片加载失败了。");
+      lbImg.onerror = () => showErr(tx("lb.loadErr", "这张图片加载失败了。"));
       lbImg.src = u;
     };
 
@@ -20127,7 +20213,7 @@
     if (!item.path && item.url) {
       lbImg.hidden = true;
       lbStatus.className = "lb-status loading";
-      lbStatus.textContent = "加载图片中…";
+      lbStatus.textContent = tx("lb.loading", "加载图片中…");
       lbStatus.hidden = false;
       showUrl(item.url, {});
       return;
@@ -20146,23 +20232,23 @@
     lbImg.hidden = true;
     lbImg.removeAttribute("src");
     lbStatus.className = "lb-status loading";
-    lbStatus.textContent = "读取原图中…";
+    lbStatus.textContent = tx("lb.readingOrig", "读取原图中…");
     lbStatus.hidden = false;
     const tries = fileTries();
     let f = null;
     try {
       f = await findFile(item.path, tries);
     } catch (err) {
-      showErr(err.message || "打不开这张图片。");
+      showErr(err.message || tx("lb.cantOpen", "打不开这张图片。"));
       return;
     }
     if (seq !== lbSeq) return;
     if (!f) {
-      showErr(`在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这张图片。`);
+      showErr(tries.length > 1 ? tx("lb.notFoundMany", "在各台电脑上都没找到这张图片。") : tx("lb.notFoundOne", "在这台电脑上都没找到这张图片。"));
       return;
     }
     if (f.kind !== "image") {
-      showErr(f.size > 20 << 20 ? `这张图片有 ${fmtSize(f.size)}（超过 20 MB），没法直接预览。` : "这个文件不是受支持的图片格式。");
+      showErr(f.size > 20 << 20 ? tx("lb.tooBig", "这张图片有 {size}（超过 20 MB），没法直接预览。", { size: fmtSize(f.size) }) : tx("lb.unsupportedFmt", "这个文件不是受支持的图片格式。"));
       return;
     }
     const blobUrl = URL.createObjectURL(new Blob([f.blob], { type: imgMime(item.path) }));
@@ -20358,11 +20444,11 @@
         const res = await authFetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" }, !!r.hub);
         if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
         if (res.status === 404) continue;
-        if (!res.ok) { let d = {}; try { d = await res.json(); } catch {} throw new Error(d.error || "打不开这个文件"); }
+        if (!res.ok) { let d = {}; try { d = await res.json(); } catch {} throw new Error(d.error || tx("file.cantOpen", "打不开这个文件")); }
         htmlText = await res.text();
         break;
       }
-      if (htmlText === null) throw new Error("没找到这个 HTML 文件");
+      if (htmlText === null) throw new Error(tx("file.notFoundHtml", "没找到这个 HTML 文件"));
       const sb = "allow-scripts allow-forms allow-popups allow-modals allow-downloads";
       if (win && !win.closed) {
         const doc = win.document;
@@ -20498,7 +20584,7 @@
       return true;
     }
     Promise.resolve(copyText(parsed.href)).then((ok) => {
-      toast(ok ? "浏览器拦截了外部窗口，已复制链接" : "未能打开外部链接，请右键选择在浏览器中打开", "attn");
+      toast(ok ? tx("common.extLinkBlockedCopied", "浏览器拦截了外部窗口，已复制链接") : tx("common.extLinkBlocked", "未能打开外部链接，请右键选择在浏览器中打开"), "attn");
     });
     return true;
   }
@@ -21014,8 +21100,11 @@
 
   function drawerReturnMeta(entry) {
     const kind = entry?.kind === "thread" ? "thread" : "notes";
-    const label = DRAWER_RETURN_LABELS[kind];
-    return { kind, label, ariaLabel: `返回${label}`, title: `返回${label}` };
+    const label = kind === "thread"
+      ? tx("drawer.returnThread", DRAWER_RETURN_LABELS.thread)
+      : tx("drawer.returnNotes", DRAWER_RETURN_LABELS.notes);
+    const ariaLabel = tx("drawer.returnTo", "返回{label}", { label });
+    return { kind, label, ariaLabel, title: ariaLabel };
   }
   function peekDrawerReturn() {
     return drawerReturnStack.length ? drawerReturnStack[drawerReturnStack.length - 1] : null;
@@ -21313,7 +21402,7 @@
     if (!fvWidenBtn) return;
     const on = !!(drawerWide && isDesktopDrawerViewport() && !pane?.hidden);
     fvWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    const lbl = on ? "还原宽度" : "拓宽抽屉";
+    const lbl = on ? tx("drawer.restoreWidth", "还原宽度") : tx("drawer.widen", "拓宽抽屉");
     fvWidenBtn.title = lbl;
     fvWidenBtn.setAttribute("aria-label", lbl);
     syncAppDrawerClasses();
@@ -22014,7 +22103,7 @@
   function formatNotebookDate(isoDate) {
     const d = isoDate ? new Date(isoDate + "T00:00:00") : new Date();
     if (Number.isNaN(d.getTime())) return "";
-    return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+    return tx("common.monthDay", "{m} 月 {d} 日", { m: d.getMonth() + 1, d: d.getDate() });
   }
   function formatNotebookTimerClock(nextRunIso) {
     const d = new Date(nextRunIso);
@@ -22026,19 +22115,19 @@
     }
     const tmr = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
     if (d.getFullYear() === tmr.getFullYear() && d.getMonth() === tmr.getMonth() && d.getDate() === tmr.getDate()) {
-      return `明 ${hm}`;
+      return tx("common.tomorrowShort", "明 {hm}", { hm });
     }
     return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
   }
   function formatNotebookTimerFreq(spec) {
     const f = String(spec || "").trim().split(/\s+/);
     switch (f[0]) {
-      case "daily": return "每天";
-      case "weekdays": return "工作日";
-      case "weekly": return "每周";
-      case "every": return "循环";
+      case "daily": return tx("timer.modeDaily", "每天");
+      case "weekdays": return tx("timer.modeWeekdays", "工作日");
+      case "weekly": return tx("timer.modeWeekly", "每周");
+      case "every": return tx("timer.badgeEvery", "循环");
       case "in":
-      case "at": return "单次";
+      case "at": return tx("timer.badgeOnce", "单次");
       default: return "";
     }
   }
@@ -22087,7 +22176,7 @@
     const allFiles = Array.isArray(data.artifacts) ? data.artifacts : [];
     const allTimers = Array.isArray(data.timers) ? data.timers : [];
     // Stable DOM key: intentionally excludes notesExpanded so CSS 0fr -> 1fr transitions run without rebuilding nodes.
-    const renderKey = `${data.date || ""}|${JSON.stringify(allTasks)}|${JSON.stringify(allFiles)}|${JSON.stringify(allTimers)}`;
+    const renderKey = `${curLang()}|${data.date || ""}|${JSON.stringify(allTasks)}|${JSON.stringify(allFiles)}|${JSON.stringify(allTimers)}`;
     if (renderKey === _lastNotebookRenderKey) {
       syncNotebookExpanded();
       return;
@@ -22104,7 +22193,7 @@
       const rem = extraTasks.length;
       if (rem > 0) {
         npTasksMoreEl.textContent = `+${rem}`;
-        npTasksMoreEl.title = `展开查看全部 ${allTasks.length} 项`;
+        npTasksMoreEl.title = tx("notes.moreTasksTitle", "展开查看全部 {n} 项", { n: allTasks.length });
       }
     }
     const taskRowHTML = (tk) => {
@@ -22121,7 +22210,7 @@
           (extraTasks.length
             ? `<li class="np-fold np-fold-more" style="--stagger: 65ms"><div class="np-fold-inner"><ul class="np-list">${extraTasks.map(taskRowHTML).join("")}</ul></div></li>`
             : "")
-        : `<li class="np-empty">暂无进行中事项</li>`;
+        : `<li class="np-empty">${esc(tx("notes.emptyTasks", "暂无进行中事项"))}</li>`;
     }
 
     // 2. 今日产物
@@ -22133,7 +22222,7 @@
       filesMoreEl.hidden = rem <= 0;
       if (rem > 0) {
         filesMoreEl.textContent = `+${rem}`;
-        filesMoreEl.title = `展开查看全部 ${allFiles.length} 个产物`;
+        filesMoreEl.title = tx("notes.moreFilesTitle", "展开查看全部 {n} 个产物", { n: allFiles.length });
       }
     }
     const fileRowHTML = (f) => {
@@ -22153,7 +22242,7 @@
           (extraFiles.length
             ? `<li class="np-fold np-fold-more" style="--stagger: 85ms"><div class="np-fold-inner"><ul class="np-list">${extraFiles.map(fileRowHTML).join("")}</ul></div></li>`
             : "")
-        : `<li class="np-empty">今日暂无新产物</li>`;
+        : `<li class="np-empty">${esc(tx("notes.emptyFiles", "今日暂无新产物"))}</li>`;
     }
 
     // 3. 下一条定时
@@ -22165,7 +22254,7 @@
       timersMoreEl.hidden = rem <= 0;
       if (rem > 0) {
         timersMoreEl.textContent = `+${rem}`;
-        timersMoreEl.title = `展开查看全部 ${allTimers.length} 条定时`;
+        timersMoreEl.title = tx("notes.moreTimersTitle", "展开查看全部 {n} 条定时", { n: allTimers.length });
       }
     }
     const timerRowHTML = (tm) => {
@@ -22180,7 +22269,7 @@
           (extraTimers.length
             ? `<li class="np-fold np-fold-more" style="--stagger: 105ms"><div class="np-fold-inner"><ul class="np-list">${extraTimers.map(timerRowHTML).join("")}</ul></div></li>`
             : "")
-        : `<li class="np-empty">暂无待跑定时</li>`;
+        : `<li class="np-empty">${esc(tx("notes.emptyTimers", "暂无待跑定时"))}</li>`;
     }
 
     syncNotebookExpanded();
@@ -22271,7 +22360,7 @@
       notesPane.classList.remove("is-handoff-in", "is-return-in");
     }
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
-    notesPane.setAttribute("aria-label", isThreads ? "小本本 · 话题" : "小本本");
+    notesPane.setAttribute("aria-label", isThreads ? tx("notes.titleThreads", "小本本 · 话题") : tx("notes.title", "小本本"));
     if (!wantOpen) {
       const ae = document.activeElement;
       if (ae && notesPane.contains?.(ae) && typeof ae.blur === "function") ae.blur();
@@ -22291,7 +22380,7 @@
     }
     if (npPanelTasksEl) npPanelTasksEl.hidden = isThreads;
     if (npPanelThreadsEl) npPanelThreadsEl.hidden = !isThreads;
-    if (npHeadEl) npHeadEl.title = "点击空白处切换紧凑或展开";
+    if (npHeadEl) npHeadEl.title = tx("notes.headTitle", "点击空白处切换紧凑或展开");
     if (notesBtn) {
       notesBtn.classList.toggle("on", wantOpen);
       notesBtn.classList.toggle("is-card-open", wantOpen);
@@ -22640,7 +22729,7 @@
     const pendList = activePending();
     const pendKey = `${sup.hasPending ? 1 : 0}:${pendList.map((p) => p.id).join(",")}:${dismissedLocal.size ? [...dismissedLocal].join(",") : ""}`;
     const rowsKey = `${entriesFingerprint(entries)}|${workerStateFingerprint()}|${pendKey}`;
-    const fullInputSig = `${rowsKey}|${activeThreadRoot || ""}|${sidePanePref}|${sidePaneOverlay}|${dayBounds()}`;
+    const fullInputSig = `${curLang()}|${rowsKey}|${activeThreadRoot || ""}|${sidePanePref}|${sidePaneOverlay}|${dayBounds()}`;
     if (fullInputSig === _thPopInputSig) return;
     _thPopInputSig = fullInputSig;
 
@@ -22713,20 +22802,20 @@
     thPopSig = sig;
     if (!allRows.length) {
       _npHasExtraThreads = false;
-      thPopList.innerHTML = `<div class="np-empty" role="status">暂无多轮话题线</div>`;
+      thPopList.innerHTML = `<div class="np-empty" role="status">${esc(tx("notes.emptyThreads", "暂无多轮话题线"))}</div>`;
       syncNotebookExpanded();
       return;
     }
     const renderRow = ({ th, pending, activeWorkers, hasBlockedWorker, inProgress }, foldMeta) => {
       const isAct = activeThreadRoot === th.rootId;
       const lastAt = th.latest?.at ? sepTime(+new Date(th.latest.at)) : "";
-      const metaParts = [th.replyCount > 0 ? `${th.replyCount} 条回复` : "1 条消息"];
-      if (th.branchCount > 0) metaParts.push("含分支");
-      if (activeWorkers.length > 0) {
-        metaParts.push(hasBlockedWorker ? "Agent 等确认" : `${activeWorkers.length} 个在跑`);
+      const metaParts = [th.replyCount > 0 ? tx("collie.repliesCount", "{n} 条回复", { n: th.replyCount }) : tx("collie.oneMsg", "1 条消息")];
+        if (th.branchCount > 0) metaParts.push(tx("notes.hasBranch", "含分支"));
+        if (activeWorkers.length > 0) {
+          metaParts.push(hasBlockedWorker ? tx("notes.agentBlocked", "Agent 等确认") : tx("side.liveAllRunning", "{n} 个在跑", { n: activeWorkers.length }));
       }
       const dotCls = pending ? "is-attn" : inProgress ? "" : "is-idle";
-      const dotHtml = `<span class="th-pop-dot${dotCls ? " " + dotCls : ""}" aria-hidden="true"></span>${pending ? `<span class="visually-hidden">待处理，</span>` : ""}`;
+      const dotHtml = `<span class="th-pop-dot${dotCls ? " " + dotCls : ""}" aria-hidden="true"></span>${pending ? `<span class="visually-hidden">${esc(tx("notes.pendingPrefix", "待处理，"))}</span>` : ""}`;
       const previewHtml = th.preview
         ? `<div class="th-pop-preview" title="${esc(th.preview)}">${esc(th.preview)}</div>`
         : "";
@@ -22748,11 +22837,11 @@
       : extraActive.length > 0
         ? `+${extraActive.length}`
         : shownInactive.length > 0
-          ? `+${shownInactive.length} 历史`
+          ? tx("notes.moreHistory", "+{n} 历史", { n: shownInactive.length })
           : "";
     const moreTitle = shownInactive.length > 0
-      ? `展开查看全部 ${allRows.length} 条话题（含 ${inactiveRows.length} 条历史）`
-      : `展开查看全部 ${activeRows.length} 条活跃话题`;
+      ? tx("notes.moreThreadsAllTitle", "展开查看全部 {all} 条话题（含 {hist} 条历史）", { all: allRows.length, hist: inactiveRows.length })
+          : tx("notes.moreThreadsActiveTitle", "展开查看全部 {n} 条活跃话题", { n: activeRows.length });
     _npHasExtraThreads = hiddenTotal > 0;
     if (npThreadsMoreEl && moreLabel) {
       npThreadsMoreEl.textContent = moreLabel;
@@ -22763,9 +22852,9 @@
         (extraActive.length
           ? `<div class="np-fold np-fold-more" style="--stagger: 55ms"><div class="np-fold-inner"><div class="np-th-sublist">${extraActive.map((r) => renderRow(r, true)).join("")}</div></div></div>`
           : "")
-      : `<div class="np-empty" role="status">暂无活跃话题</div>`;
+      : `<div class="np-empty" role="status">${esc(tx("notes.emptyActiveThreads", "暂无活跃话题"))}</div>`;
     const inactiveSecHtml = shownInactive.length
-      ? `<div class="np-fold np-fold-more np-th-inactive-fold" style="--stagger: 65ms"><div class="np-fold-inner"><div class="np-th-sec-inactive${shownActive.length === 0 ? " is-solo" : ""}"><div class="np-th-subhead"><h3 class="np-sec-title" id="np-h-th-inactive">历史话题</h3><span class="np-sub">${inactiveRows.length}</span></div><div class="np-th-sublist">${shownInactive.map((r) => renderRow(r, false)).join("")}</div></div></div></div>`
+      ? `<div class="np-fold np-fold-more np-th-inactive-fold" style="--stagger: 65ms"><div class="np-fold-inner"><div class="np-th-sec-inactive${shownActive.length === 0 ? " is-solo" : ""}"><div class="np-th-subhead">${curLang() === "zh" ? `<h3 class="np-sec-title" id="np-h-th-inactive">历史话题</h3>` : `<h3 class="np-sec-title" id="np-h-th-inactive">${esc(tx("notes.historyThreads", "历史话题"))}</h3>`}<span class="np-sub">${inactiveRows.length}</span></div><div class="np-th-sublist">${shownInactive.map((r) => renderRow(r, false)).join("")}</div></div></div></div>`
       : "";
     thPopList.innerHTML = activeRowsHtml + inactiveSecHtml;
     syncNotebookExpanded();
@@ -22819,7 +22908,7 @@
     syncAppDrawerClasses();
     if (tdWidenBtn) {
       tdWidenBtn.setAttribute("aria-pressed", activeWide ? "true" : "false");
-      const lbl = activeWide ? "还原宽度" : "拓宽抽屉";
+      const lbl = activeWide ? tx("drawer.restoreWidth", "还原宽度") : tx("drawer.widen", "拓宽抽屉");
       tdWidenBtn.title = lbl;
       tdWidenBtn.setAttribute("aria-label", lbl);
     }
@@ -22856,7 +22945,7 @@
   let tdComposerCtrl = null, tdAutoStickUntil = 0, tdDraftRoot = null;
 
   const escRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const THREAD_IGNORED_WORKERS = new Set(["", ROUTER, "you", "你", "Collie", "collie", "定时", "system", "router"]);
+  const THREAD_IGNORED_WORKERS = new Set(["", ROUTER, "you", "You", "你", "Collie", "collie", "定时", "Timer", "system", "router"]);
   function threadWorkerRank(status, ended) {
     if (ended || status === "gone" || status === "failed") return 4;
     if (status === "blocked") return 0;
@@ -23160,7 +23249,7 @@
     tdWorkersEl.hidden = false;
     tdWorkersEl.innerHTML = list.map((w) => {
       const disp = w.label || w.name;
-      const stLabel = STATUS_LABEL[w.status] || (w.ended ? "已停止" : w.status);
+      const stLabel = STATUS_LABEL[w.status] || (w.ended ? tx("st.stopped", "已停止") : w.status);
       const kindLabel = KIND_LABEL[w.kind] || w.kind || "";
       const metaTip = [w.name, kindLabel, stLabel].filter(Boolean).join(" · ");
       const goal = w.task ? extractGoalFromTask(w.task).goal : "";
@@ -23168,7 +23257,7 @@
       const cls = `td-worker${w.ended ? " is-ended" : ""}${w.href ? "" : " is-static"}`;
       const inner = `<span class="dot ${esc(w.status)}" aria-hidden="true"></span><span class="td-worker-name">${esc(disp)}</span>`;
       if (w.href) {
-        const act = w.isHist ? "查看记录" : "打开终端";
+        const act = w.isHist ? tx("drawer.workerViewRecord", "查看记录") : tx("drawer.workerOpenTerm", "打开终端");
         const aria = disp !== w.name ? `${disp}（${w.name}），${stLabel}，${act}` : `${w.name}，${stLabel}，${act}`;
         return `<a class="${cls}" href="${esc(w.href)}" data-td-worker="${esc(w.name)}" data-td-status="${esc(w.status)}" title="${esc(tip)}" aria-label="${esc(aria)}">${inner}</a>`;
       }
@@ -23181,8 +23270,8 @@
     if (!tdHintEl) return;
     const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
     const keyLabel = prefs.sendKey() === "mod" ? (isMac ? "⌘Enter" : "Ctrl+Enter") : "Enter";
-    tdHintEl.textContent = `${keyLabel} 发送 · 同步写入主聊天流`;
-    if (tdSendBtn) tdSendBtn.title = `发送回复 (${keyLabel})`;
+    tdHintEl.textContent = tx("drawer.threadHint", "{key} 发送 · 同步写入主聊天流", { key: keyLabel });
+    if (tdSendBtn) tdSendBtn.title = tx("drawer.threadSendTitle", "发送回复 ({key})", { key: keyLabel });
   }
   function syncThreadSendBtn(sending = tdComposerCtrl?.isSending?.() || false) {
     if (!tdSendBtn || !tdInput) return;
@@ -23211,12 +23300,12 @@
       : null;
     if (explicit) {
       const at = +new Date(explicit.at) || 0;
-      tdTargetText.innerHTML = `分叉回复 <b>${esc(at ? sepTime(at) + " " : "")}${esc(threadWhoLabel(explicit))}</b> · ${esc(threadSnippet(threadCleanText(explicit), 18))}`;
+      tdTargetText.innerHTML = tx("drawer.threadFork", "分叉回复 <b>{at}{who}</b> · {snip}", { at: esc(at ? sepTime(at) + " " : ""), who: esc(threadWhoLabel(explicit)), snip: esc(threadSnippet(threadCleanText(explicit), 18)) });
       tdTargetReset.hidden = false;
     } else {
       drawerReplyTarget = null;
       const at = +new Date(latest.at) || 0;
-      const prefix = th.totalCount <= 1 ? "自动引用此消息" : "自动接续最新";
+      const prefix = th.totalCount <= 1 ? tx("drawer.threadAutoQuote", "自动引用此消息") : tx("drawer.threadAutoFollow", "自动接续最新");
       tdTargetText.innerHTML = `${prefix} · <b>${esc(at ? sepTime(at) + " " : "")}${esc(threadWhoLabel(latest))}</b>`;
       tdTargetReset.hidden = true;
     }
@@ -23487,9 +23576,9 @@
     }
     if (tdMetaEl) {
       const parts = th.missingRoot
-        ? [`已加载 ${th.list.length} 条`, "含更早起点"]
-        : [`共 ${th.totalCount} 条消息`];
-      if (th.branchCount > 0) parts.push(`含 ${th.branchCount} 处分支`);
+        ? [tx("drawer.threadLoadedCount", "已加载 {n} 条", { n: th.list.length }), tx("drawer.threadHasEarlierRoot", "含更早起点")]
+      : [tx("drawer.threadTotalCount", "共 {n} 条消息", { n: th.totalCount })];
+    if (th.branchCount > 0) parts.push(tx("drawer.threadBranches", "含 {n} 处分支", { n: th.branchCount }));
       tdMetaEl.textContent = parts.join(" · ");
     }
     if (tdLocateRootBtn) {
@@ -23527,10 +23616,10 @@
       const items = [];
       if (th.missingRoot) {
         const statusText = tdLoadingRoot
-          ? "正在拉取更早的话题起点…"
-          : canLoadOlder()
-            ? "起点消息在更早的历史记录中"
-            : "起点消息已超出当前历史窗口";
+          ? tx("drawer.threadLoadingOlder", "正在拉取更早的话题起点…")
+        : canLoadOlder()
+          ? tx("drawer.threadOlderInHist", "起点消息在更早的历史记录中")
+          : tx("drawer.threadOlderOutWindow", "起点消息已超出当前历史窗口");
         const canLoad = !tdLoadingRoot && canLoadOlder();
         const mrId = th.missingRoot.id || "";
         const mrWho = th.missingRoot.who || "";
@@ -23540,10 +23629,10 @@
           sig: `${mrId}|${mrWho}|${mrText}|${tdLoadingRoot ? 1 : 0}|${canLoad ? 1 : 0}`,
           render: () => {
             const loadBtn = canLoad
-              ? `<button type="button" class="btn small td-older-btn" data-td-load-older>加载更早起点</button>`
+              ? `<button type="button" class="btn small td-older-btn" data-td-load-older>${esc(tx("drawer.threadLoadOlder", "加载更早起点"))}</button>`
               : "";
             const qPreview = mrText
-              ? `<div class="td-older-quote"><b>${esc(mrWho || "历史消息")}</b>${esc(plainLine(mrText))}</div>`
+              ? `<div class="td-older-quote"><b>${esc(mrWho || tx("collie.historyMsg", "历史消息"))}</b>${esc(plainLine(mrText))}</div>`
               : "";
             return `<div class="td-older"><div class="td-older-top"><span>${esc(statusText)}</span></div>${qPreview}${loadBtn}</div>`;
           },
@@ -23580,8 +23669,8 @@
         ].join("\x1f");
         const renderActs = () => m.id
           ? `<div class="td-node-acts">
-              <button type="button" class="td-act" data-td-reply="${esc(m.id)}" title="回复这条（新建分支）" aria-label="回复这条">${ICON_TD_REPLY}<span>回复</span></button>
-              <button type="button" class="td-act" data-td-locate="${esc(m.id)}" title="在主聊天流中定位" aria-label="在主聊天流中定位">${ICON_TD_LOCATE}<span>定位</span></button>
+              <button type="button" class="td-act" data-td-reply="${esc(m.id)}" title="${esc(tx("drawer.threadReplyTitle", "回复这条（新建分支）"))}" aria-label="${esc(tx("drawer.threadReplyAria", "回复这条"))}">${ICON_TD_REPLY}<span>${esc(tx("drawer.threadReplyBtn", "回复"))}</span></button>
+          <button type="button" class="td-act" data-td-locate="${esc(m.id)}" title="${esc(tx("drawer.threadLocateTitle", "在主聊天流中定位"))}" aria-label="${esc(tx("drawer.threadLocateTitle", "在主聊天流中定位"))}">${ICON_TD_LOCATE}<span>${esc(tx("drawer.threadLocateBtn", "定位"))}</span></button>
             </div>`
           : "";
         items.push({
@@ -23597,13 +23686,13 @@
               ? `<span class="td-av user" aria-hidden="true">${ICON_TD_USER}</span>`
               : `<span class="td-av collie" aria-hidden="true"><img src="icon.svg" alt=""></span>`;
             const tagHtml = isRoot
-              ? `<span class="td-tag">起点</span>`
-              : isBranch
-                ? `<span class="td-tag">分支</span>`
+              ? `<span class="td-tag">${esc(tx("drawer.threadStartTag", "起点"))}</span>`
+        : isBranch
+          ? `<span class="td-tag">${esc(tx("drawer.threadBranchTag", "分支"))}</span>`
                 : "";
             const branchRefHtml = isBranch && parent
-              ? `<button type="button" class="td-branch-ref" data-jump-drawer="${esc(entryKey(parent))}" title="跳到分支来源消息">` +
-                `<span>↳ 回复 ${esc(+new Date(parent.at) ? sepTime(+new Date(parent.at)) + " " : "")}${esc(threadWhoLabel(parent))}「${esc(threadSnippet(threadCleanText(parent), 24))}」</span></button>`
+              ? `<button type="button" class="td-branch-ref" data-jump-drawer="${esc(entryKey(parent))}" title="${esc(tx("drawer.threadBranchJumpTitle", "跳到分支来源消息"))}">` +
+          `<span>${esc(tx("drawer.threadBranchRef", "↳ 回复 {at}{who}「{snip}」", { at: +new Date(parent.at) ? sepTime(+new Date(parent.at)) + " " : "", who: threadWhoLabel(parent), snip: threadSnippet(threadCleanText(parent), 24) }))}</span></button>`
               : "";
             const rootQuoteHtml = hasRootQuote
               ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
@@ -24138,7 +24227,7 @@
     if (!wdWidenBtn) return;
     const on = !!(activeWorkerKey && drawerWide && isDesktopDrawerViewport());
     wdWidenBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    const lbl = on ? "还原宽度" : "拓宽抽屉";
+    const lbl = on ? tx("drawer.restoreWidth", "还原宽度") : tx("drawer.widen", "拓宽抽屉");
     wdWidenBtn.title = lbl;
     wdWidenBtn.setAttribute("aria-label", lbl);
     syncAppDrawerClasses();
@@ -24165,14 +24254,14 @@
     }
     if (wdPeekNoteEl) {
       const liveAgent = isLive ? find(wdPaneId) : null;
-      if (!isLive) wdPeekNoteEl.textContent = "任务已结束 · 只读记录";
-      else if (liveAgent?.status === "blocked") wdPeekNoteEl.textContent = "等待你确认 · 请在上方审批";
-      else wdPeekNoteEl.textContent = "由 Collie 持续盯控";
+      if (!isLive) wdPeekNoteEl.textContent = tx("worker.peekEnded", "任务已结束 · 只读记录");
+    else if (liveAgent?.status === "blocked") wdPeekNoteEl.textContent = tx("worker.peekBlocked", "等待你确认 · 请在上方审批");
+    else wdPeekNoteEl.textContent = tx("worker.peekMonitoring", "由 Collie 持续盯控");
     }
     if (wdHintEl) {
       const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
       const keyLabel = prefs.sendKey() === "mod" ? (isMac ? "⌘Enter" : "Ctrl+Enter") : "Enter";
-      wdHintEl.textContent = `${keyLabel} 发送 · 直达该任务会话`;
+      wdHintEl.textContent = tx("worker.hint", "{key} 发送 · 直达该任务会话", { key: keyLabel });
     }
   }
   function syncWorkerSendBtn(sending = wdComposerCtrl?.isSending?.() || false) {
@@ -24438,12 +24527,12 @@
     clearWdLive(endedPane);
     if (wdGoneEl) wdGoneEl.hidden = true;
     if (!wdWasLive) return false;
-    const doneTitle = String(fallbackTitle || wdLastLiveTitle || wdTitleEl?.textContent || wdWorkerName || "任务").trim();
+    const doneTitle = String(fallbackTitle || wdLastLiveTitle || wdTitleEl?.textContent || wdWorkerName || tx("worker.taskFallback", "任务")).trim();
     wdWasLive = false;
     wdLastLiveTitle = "";
     wdLastLivePaneId = "";
     closeWorkerDrawer();
-    toast(`${doneTitle} 已完成`);
+    toast(tx("worker.doneToast", "{title} 已完成", { title: doneTitle }));
     return true;
   }
   function drawWdLive(l) {
@@ -24476,7 +24565,7 @@
     const meta = wdLiveEl.querySelector?.(".live-working .meta");
     if (meta && meta.textContent !== (l.meta || "")) meta.textContent = l.meta || "";
     wdLiveEl.hidden = !html;
-    if (wdPeekNoteEl && l.status === "blocked") wdPeekNoteEl.textContent = "等待你确认 · 请在上方审批";
+    if (wdPeekNoteEl && l.status === "blocked") wdPeekNoteEl.textContent = tx("worker.peekBlocked", "等待你确认 · 请在上方审批");
     stick(wdThreadEl, was);
   }
   async function renderWdModel(v, supW) {
@@ -24497,8 +24586,8 @@
     let name = (info.models || []).find((m) => m.id === model)?.label || model.split("/").pop();
     const b = name.match(/^(.*\S)\s*\(([^)]+)\)$/);
     if (b && EFFORT_LABEL[b[2].toLowerCase()]) { name = b[1]; effort ||= b[2].toLowerCase(); }
-    const parts = [model ? name + (own ? "（默认）" : "") : "默认模型"];
-    if (effort) parts.push("思考 " + (EFFORT_LABEL[effort] || effort));
+    const parts = [model ? name + (own ? tx("common.defaultParen", "（默认）") : "") : tx("common.defaultModel", "默认模型")];
+    if (effort) parts.push(tx("effort.prefix", "思考 {v}", { v: EFFORT_LABEL[effort] || effort }));
     wdModelEl.textContent = parts.join(" · ");
     wdModelEl.hidden = false;
   }
@@ -24511,7 +24600,7 @@
     const status = liveAgent?.status || (supW?.ended ? (supW.status === "failed" ? "failed" : "gone") : supW?.status) || "gone";
     const isLive = !!liveAgent;
     const workerLbl = (liveAgent ? agentLabelOf(liveAgent) : "") || workerLabelOf(supW);
-    const dispTitle = workerLbl || name || wdTaskTitle || (liveAgent ? title(liveAgent) : "进行中任务");
+    const dispTitle = workerLbl || name || wdTaskTitle || (liveAgent ? title(liveAgent) : tx("worker.defaultTitle", "进行中任务"));
     if (isLive) {
       wdWasLive = true;
       wdLastLiveTitle = dispTitle;
@@ -24543,7 +24632,7 @@
       if (wdStatusEl.className !== wantCls) wdStatusEl.className = wantCls;
       const stLabel = isLive
         ? (STATUS_LABEL[status] || status)
-        : (status === "failed" ? "执行失败" : "已结束");
+        : (status === "failed" ? tx("st.execFailed", "执行失败") : tx("st.ended", "已结束"));
       setHTML(wdStatusEl, `<span class="dot ${esc(status)}"></span>${esc(stLabel)}`);
     }
     if (wdCwdEl) {
@@ -24564,7 +24653,7 @@
       wdPopoutBtn.hidden = !href;
       if (href) {
         wdPopoutBtn.href = href;
-        wdPopoutBtn.title = isLive ? "独立全屏打开会话" : "独立全屏查看记录";
+        wdPopoutBtn.title = isLive ? tx("worker.popoutLive", "独立全屏打开会话") : tx("worker.popoutHist", "独立全屏查看记录");
       }
     }
     const wtMap = computeWorkerThreadMap();
@@ -24600,7 +24689,7 @@
       const rep = supW?.last_report || supW?.task || "";
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
-        : `<div class="thread-empty">该任务已结束，暂无可读取的历史会话记录。</div>`;
+        : `<div class="thread-empty">${esc(tx("worker.endedNoHist", "该任务已结束，暂无可读取的历史会话记录。"))}</div>`;
       if (rep) hydrateRichContent(wdThreadEl);
       return;
     }
@@ -24609,7 +24698,7 @@
     resetWdChatStateOnly();
     clearWdLive(wdPaneId);
     if (cached) {
-      drawThread(cached, wdThreadEl, "这个任务会话没有消息记录。");
+      drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"));
       wdThreadEl._fresh = true;
     } else if (preserve && wdThreadEl.childElementCount > 0) {
       wdSkelTimer = setTimeout(() => {
@@ -24630,7 +24719,7 @@
       wdThreadEl._msgs = r.messages || [];
       wdThreadEl._liveEarlier = r.earlier || 0;
       keepThread(cacheKey, wdThreadEl._msgs);
-      wdThreadEl._redraw = () => { if (seq === wdSeq && activeWorkerKey) drawThread(threadMsgs(wdThreadEl), wdThreadEl, "这个任务会话没有消息记录。"); };
+      wdThreadEl._redraw = () => { if (seq === wdSeq && activeWorkerKey) drawThread(threadMsgs(wdThreadEl), wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。")); };
       wdThreadEl._redraw();
     } catch (err) {
       if (seq !== wdSeq || !activeWorkerKey) return;
@@ -24639,7 +24728,7 @@
       const rep = supW?.last_report || "";
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
-        : `<div class="thread-empty">${esc(err.message || "暂时读不到历史记录")}</div>`;
+        : `<div class="thread-empty">${esc(err.message || tx("worker.histUnavailable", "暂时读不到历史记录"))}</div>`;
       if (rep) hydrateRichContent(wdThreadEl);
     }
   }
@@ -24664,7 +24753,7 @@
       resetEarlier(wdThreadEl, (c) => paneURL(id, "earlier") + "?before=" + c);
       wdThreadEl.classList.remove("asking");
       if (cached) {
-        drawThread(cached, wdThreadEl, "等待任务输出…");
+        drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
         wdThreadEl._fresh = true;
       } else if (preserve && wdThreadEl.childElementCount > 0) {
         wdSkelTimer = setTimeout(() => {
@@ -24680,10 +24769,10 @@
       if (cachedLive) drawWdLive(cachedLive);
       else if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
       const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
-      wdThreadEl._redraw = () => alive() && drawThread(threadMsgs(wdThreadEl), wdThreadEl, "等待任务输出…");
+      wdThreadEl._redraw = () => alive() && drawThread(threadMsgs(wdThreadEl), wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
       wdStream = openES(paneURL(id, "chat"));
       const clearSkel = () => { if (wdSkelTimer) { clearTimeout(wdSkelTimer); wdSkelTimer = 0; } };
-      const showPane = (msgs) => { clearSkel(); keepThread(cacheKey, msgs); drawThread(msgs, wdThreadEl, "等待任务输出…"); };
+      const showPane = (msgs) => { clearSkel(); keepThread(cacheKey, msgs); drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…")); };
       wdStream.addEventListener("reset", () => { if (alive()) resetWdChatStateOnly(); });
       wdStream.addEventListener("patch", (e) => alive() && showPane(applyPatch(wdThreadEl, JSON.parse(e.data))));
       wdStream.addEventListener("messages", (e) => {
@@ -24691,14 +24780,14 @@
         clearSkel();
         const msgs = JSON.parse(e.data);
         keepThread(cacheKey, msgs);
-        drawThread(msgs, wdThreadEl, "等待任务输出…");
+        drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
       });
       wdStream.addEventListener("log", (e) => {
         if (!alive()) return;
         clearSkel();
         const txt = JSON.parse(e.data).text || "";
         const was = nearBottom(wdThreadEl) || !wdThreadEl.childElementCount;
-        wdThreadEl.innerHTML = `<div class="fallback-note">暂无结构化对话记录，显示实时终端输出</div><pre class="termcard">${esc(cleanLog(txt))}</pre>`;
+        wdThreadEl.innerHTML = `<div class="fallback-note">${esc(tx("worker.fallbackTerm", "暂无结构化对话记录，显示实时终端输出"))}</div><pre class="termcard">${esc(cleanLog(txt))}</pre>`;
         stick(wdThreadEl, was);
       });
       wdStream.addEventListener("live", (e) => alive() && drawWdLive(JSON.parse(e.data)));
@@ -24779,18 +24868,19 @@
     if (cur && cur.targetId === targetId) {
       disarmInterrupt(scope);
       sendFn();
-      toast("已发送中断 (Ctrl-C)");
+      toast(tx("worker.interruptSent", "已发送中断 (Ctrl-C)"));
       return true;
     }
     disarmInterrupt(scope);
-    const defaultTitle = btn.title || "发送 Ctrl-C 中断当前执行";
+    const defaultTitle = btn.title || tx("worker.interruptTitle", "发送 Ctrl-C 中断当前执行");
     const defaultAria = btn.getAttribute("aria-label") || "";
     const defaultText = opts.replaceText ? btn.textContent : undefined;
     btn.classList.add("is-armed");
     btn.setAttribute("data-armed", "true");
-    btn.title = "再点一次确认中断";
-    if (defaultAria) btn.setAttribute("aria-label", "再点一次确认中断");
-    if (opts.replaceText) btn.textContent = "再点一次确认中断";
+    const armAgain = tx("worker.interruptArmAgain", "再点一次确认中断");
+    btn.title = armAgain;
+    if (defaultAria) btn.setAttribute("aria-label", armAgain);
+    if (opts.replaceText) btn.textContent = armAgain;
     const timer = setTimeout(() => disarmInterrupt(scope), INTERRUPT_ARM_MS);
     interruptArms.set(scope, {
       btn,
@@ -24800,7 +24890,7 @@
       defaultAria: defaultAria || undefined,
       defaultText,
     });
-    toast("再点一次确认中断（3 秒内有效）", "attn");
+    toast(tx("worker.interruptArmToast", "再点一次确认中断（3 秒内有效）"), "attn");
     return false;
   }
 
@@ -25501,8 +25591,8 @@
         });
         if (displayMode) {
           return inlineWrap
-            ? `<span class="md-math-block" role="region" aria-label="数学公式">${html}</span>`
-            : `<div class="md-math-block" tabindex="0" role="region" aria-label="数学公式">${html}</div>`;
+            ? `<span class="md-math-block" role="region" aria-label="${esc(tx("md.mathAria", "数学公式"))}">${html}</span>`
+            : `<div class="md-math-block" tabindex="0" role="region" aria-label="${esc(tx("md.mathAria", "数学公式"))}">${html}</div>`;
         }
         return `<span class="md-math">${html}</span>`;
       } catch {}
@@ -25510,8 +25600,8 @@
     const escTex = esc(src);
     return displayMode
       ? (inlineWrap
-        ? `<span class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" data-inline-wrap="1" role="region" aria-label="数学公式"><code>${escTex}</code></span>`
-        : `<div class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" tabindex="0" role="region" aria-label="数学公式"><code>${escTex}</code></div>`)
+        ? `<span class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" data-inline-wrap="1" role="region" aria-label="${esc(tx("md.mathAria", "数学公式"))}"><code>${escTex}</code></span>`
+        : `<div class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" tabindex="0" role="region" aria-label="${esc(tx("md.mathAria", "数学公式"))}"><code>${escTex}</code></div>`)
       : `<span class="md-math md-math-pending md-math-fallback" data-tex="${escTex}" data-display="0"><code>${escTex}</code></span>`;
   }
   function extractMathBlocks(text, blocks) {
@@ -25701,17 +25791,17 @@
     const fenceTag = String(info || "").trim().split(/[\s{:]/)[0].toLowerCase().replace(/^language-/, "");
     if (fenceTag === "mermaid" && raw.trim()) {
       const hash = richVisualHash("mermaid:" + raw);
-      return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="Mermaid 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 Mermaid 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="mermaid" title="全屏放大" aria-label="全屏放大查看图表" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="Mermaid 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染图表中…</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
+      return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("rv.mermaidOpsAria", "Mermaid 图表操作"))}"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="${esc(tx("rv.viewSource", "查看源码"))}" aria-label="${esc(tx("rv.mermaidSourceAria", "查看 Mermaid 源码"))}">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="mermaid" title="${esc(tx("rv.expandFull", "全屏放大"))}" aria-label="${esc(tx("rv.mermaidExpandAria", "全屏放大查看图表"))}" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="${esc(tx("rv.mermaidChart", "Mermaid 图表"))}"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>${esc(tx("rv.mermaidLoading", "渲染图表中…"))}</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
     }
     if (fenceTag === "svg" && raw.trim()) {
       const hash = richVisualHash("svg:" + raw);
-      return `<div class="rv-card rv-svg is-pending" data-rv-kind="svg" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="SVG 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 SVG 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="svg" title="全屏放大" aria-label="全屏放大查看 SVG" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-svg-stage" role="img" aria-label="SVG 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染 SVG 中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></div>`;
+      return `<div class="rv-card rv-svg is-pending" data-rv-kind="svg" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("rv.svgOpsAria", "SVG 图表操作"))}"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="${esc(tx("rv.viewSource", "查看源码"))}" aria-label="${esc(tx("rv.svgSourceAria", "查看 SVG 源码"))}">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="svg" title="${esc(tx("rv.expandFull", "全屏放大"))}" aria-label="${esc(tx("rv.svgExpandAria", "全屏放大查看 SVG"))}" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-svg-stage" role="img" aria-label="${esc(tx("rv.svgChart", "SVG 图表"))}"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>${esc(tx("rv.svgLoading", "渲染 SVG 中…"))}</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></div>`;
     }
     const htmlCard = parseHtmlCardInfo(info);
     if (htmlCard && raw.trim()) {
       const hash = richVisualHash("html-code:" + raw);
-      const label = htmlCard.title || "HTML 卡片";
-      return `<section class="rv-card rv-html-card is-pending" data-rv-kind="html-code" data-rv-hash="${hash}" data-rv-mode="preview" data-rv-title="${esc(label)}" aria-label="${esc(label)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(label)} 操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 HTML 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-open-code-win="1" title="在新窗口打开" aria-label="在新窗口打开 ${esc(label)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>渲染卡片中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></section>`;
+      const label = htmlCard.title || tx("rv.htmlCard", "HTML 卡片");
+      return `<section class="rv-card rv-html-card is-pending" data-rv-kind="html-code" data-rv-hash="${hash}" data-rv-mode="preview" data-rv-title="${esc(label)}" aria-label="${esc(label)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: label }))}"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="${esc(tx("rv.viewSource", "查看源码"))}" aria-label="${esc(tx("rv.htmlSourceAria", "查看 HTML 源码"))}">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-open-code-win="1" title="${esc(tx("file.snapOpenNewWin", "在新窗口打开"))}" aria-label="${esc(tx("file.snapOpenNewWinName", "在新窗口打开 {name}", { name: label }))}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>${esc(tx("rv.htmlLoading", "渲染卡片中…"))}</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></section>`;
     }
     return renderCodeBlock(info, raw);
   }
@@ -26379,7 +26469,7 @@
 
     card.dataset.rvMounting = hash;
     let rawHtml = "";
-    let title = card.dataset.rvTitle || "HTML 预览";
+    let title = card.dataset.rvTitle || tx("file.htmlPreviewTitle", "HTML 预览");
     if (kind === "html-file") {
       const path = card.dataset.rvPath || "";
       title = baseFileName(path);
@@ -26389,7 +26479,7 @@
         if (!hf || typeof hf.htmlText !== "string") {
           card.classList.remove("is-pending");
           card.classList.add("is-error");
-          stage.innerHTML = `<div class="rv-html-err">未找到这个 HTML 文件，可点下方「在抽屉打开」重试。</div>`;
+          stage.innerHTML = `<div class="rv-html-err">${esc(tx("rv.htmlNotFound", "未找到这个 HTML 文件，可点下方「在抽屉打开」重试。"))}</div>`;
           stage.style.height = "auto";
           delete card.dataset.rvMounting;
           return;
@@ -26399,7 +26489,7 @@
         if (!card.isConnected) return;
         card.classList.remove("is-pending");
         card.classList.add("is-error");
-        stage.innerHTML = `<div class="rv-html-err">${esc(err?.message || "加载 HTML 预览失败")}</div>`;
+        stage.innerHTML = `<div class="rv-html-err">${esc(err?.message || tx("rv.htmlLoadErr", "加载 HTML 预览失败"))}</div>`;
         stage.style.height = "auto";
         delete card.dataset.rvMounting;
         return;
@@ -26560,9 +26650,9 @@
       if (btn.classList?.contains("rv-ico")) {
         btn.innerHTML = showSource ? ICON_RV_VISUAL : ICON_RV_CODE;
       } else {
-        btn.textContent = showSource ? (isDiagram ? "图表" : "预览") : "源码";
+        btn.textContent = showSource ? (isDiagram ? tx("rv.btnDiagram", "图表") : tx("rv.btnPreview", "预览")) : tx("rv.btnSource", "源码");
       }
-      const lbl = showSource ? (isDiagram ? "切回图表" : "切回预览") : "查看源码";
+      const lbl = showSource ? (isDiagram ? tx("rv.backDiagram", "切回图表") : tx("rv.backPreview", "切回预览")) : tx("rv.viewSource", "查看源码");
       btn.title = lbl;
       btn.setAttribute("aria-label", lbl);
     }
@@ -26694,8 +26784,8 @@
           svgNode: svgEl.cloneNode(true),
           svgHtml: svgEl.outerHTML,
           lightCanvas: isSvgCard && card.dataset.rvLightCanvas === "1",
-          title: isSvgCard ? "SVG 图表" : "Mermaid 图表",
-          alt: isSvgCard ? "SVG 图表" : "Mermaid 图表",
+          title: isSvgCard ? tx("rv.svgChart", "SVG 图表") : tx("rv.mermaidChart", "Mermaid 图表"),
+          alt: isSvgCard ? tx("rv.svgChart", "SVG 图表") : tx("rv.mermaidChart", "Mermaid 图表"),
           dlName: isSvgCard ? "diagram.svg" : "mermaid-diagram.svg",
         }], 0);
       }
@@ -26715,7 +26805,7 @@
       const isDemoNoStatic = !!(window.__collieDemo && !window.__collieDemoHtmlUrl?.(path));
       if ((isStandaloneMode() || isRemoteHub || isDemoNoStatic) && typeof cached?.htmlText === "string") {
         if (!openSandboxedHtmlWindow(baseFileName(cached.path || path), cached.htmlText)) {
-          toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+          toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
         }
         return;
       }
@@ -26727,7 +26817,7 @@
       }
       const win = window.open(htmlFileURL(path, curMachine), "_blank");
       if (win) { try { win.opener = null; } catch {} return; }
-      toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+      toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
       return;
     }
     const openCodeWinBtn = ev.target?.closest?.("[data-rv-open-code-win]");
@@ -26736,12 +26826,12 @@
       const card = openCodeWinBtn.closest(".rv-html-card");
       const rawHtml = card?.querySelector?.(".rv-source code")?.textContent || "";
       if (!rawHtml.trim()) return;
-      const title = card?.dataset?.rvTitle || "HTML 卡片";
+      const title = card?.dataset?.rvTitle || tx("rv.htmlCard", "HTML 卡片");
       const docHtml = buildSandboxedCardSrcdoc(rawHtml, {
         frameId: "win", token: "", isFragment: true, isDark: currentVisualTheme() === "dark",
       });
       if (!openSandboxedHtmlWindow(title, docHtml)) {
-        toast("浏览器拦截了新标签页，请允许弹出窗口", "attn");
+        toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
       }
     }
   });
@@ -26752,10 +26842,10 @@
   const ICON_MD_CHEV = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
   const ICON_TASK_CHECK = `<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.6"/></svg>`;
   const CALLOUT_META = {
-    NOTE: { cls: "is-note", label: "说明", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>` },
-    TIP: { cls: "is-tip", label: "提示", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>` },
-    WARNING: { cls: "is-warn", label: "注意", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>` },
-    CAUTION: { cls: "is-caution", label: "风险", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2Z"/><path d="M12 8v5M12 16.5h.01"/></svg>` },
+    NOTE: { cls: "is-note", get label() { return tx("md.callout.NOTE", "说明"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>` },
+    TIP: { cls: "is-tip", get label() { return tx("md.callout.TIP", "提示"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>` },
+    WARNING: { cls: "is-warn", get label() { return tx("md.callout.WARNING", "注意"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>` },
+    CAUTION: { cls: "is-caution", get label() { return tx("md.callout.CAUTION", "风险"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2Z"/><path d="M12 8v5M12 16.5h.01"/></svg>` },
   };
   const TABLE_NUM_RE = /^(?:[<>≤≥~≈±+\-−$€£¥]?\s*)?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|ms|us|µs|ns|s|min|h|B|KB|MB|GB|TB|KiB|MiB|GiB|px|fps|FPS|x|×|\/s|次|行|列|条|个|张|天|小时|分钟|秒))?(?:\s*[–\-~→]\s*[+-]?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|ms|s|KB|MB|GB|px|x|×))?)?$/;
   function isNumericTableCell(raw) {
@@ -26830,15 +26920,15 @@
       }
     }
     const diffStatHtml = isDiff && (addCount > 0 || delCount > 0)
-      ? `<span class="md-diff-stat" aria-label="新增 ${addCount} 行，删除 ${delCount} 行">${addCount > 0 ? `<span class="add">+${addCount}</span>` : ""}${delCount > 0 ? `<span class="del">−${delCount}</span>` : ""}</span>`
+      ? `<span class="md-diff-stat" aria-label="${esc(tx("md.diffAria", "新增 {add} 行，删除 {del} 行", { add: addCount, del: delCount }))}">${addCount > 0 ? `<span class="add">+${addCount}</span>` : ""}${delCount > 0 ? `<span class="del">−${delCount}</span>` : ""}</span>`
       : "";
     const cornerTagInner = isDiff
       ? (diffStatHtml || `<span class="md-code-lang">Diff</span>`)
       : (langLabel ? `<span class="md-code-lang">${esc(langLabel)}</span>` : "");
     const cornerTagHtml = cornerTagInner ? `<div class="md-code-tag" aria-hidden="true">${cornerTagInner}</div>` : "";
-    const floatActsHtml = `<div class="md-float-acts md-code-acts"><button type="button" class="mini-btn md-copy-btn" data-copy-code aria-label="复制代码">${ICON_MD_COPY}<span class="md-copy-lbl">复制</span></button></div>`;
+    const floatActsHtml = `<div class="md-float-acts md-code-acts"><button type="button" class="mini-btn md-copy-btn" data-copy-code aria-label="${esc(tx("md.copyCodeAria", "复制代码"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("common.copy", "复制"))}</span></button></div>`;
     const foldBtnHtml = collapsible
-      ? `<button type="button" class="md-code-fold-btn" data-code-fold aria-expanded="false">${ICON_MD_CHEV}<span data-fold-label>展开剩余 ${remain} 行</span></button>`
+      ? `<button type="button" class="md-code-fold-btn" data-code-fold aria-expanded="false">${ICON_MD_CHEV}<span data-fold-label>${esc(tx("md.expandCode", "展开剩余 {n} 行", { n: remain }))}</span></button>`
       : "";
     return `<div class="md-code${isDiff ? " is-diff" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
       `${cornerTagHtml}${floatActsHtml}` +
@@ -26865,14 +26955,14 @@
       const capHtml = capText ? `<span class="gal-cap">${esc(capText)}</span>` : "";
       if (it.path) {
         const ep = esc(it.path), ea = esc(capText);
-        const aria = esc(capText ? "查看大图：" + capText : "查看大图 " + (it.path.split("/").pop() || "图片"));
+        const aria = esc(capText ? tx("file.viewImgColon", "查看大图：{cap}", { cap: capText }) : tx("file.viewImgTip", "查看大图 {name}", { name: it.path.split("/").pop() || tx("lb.image", "图片") }));
         const dim = n === 1 ? thumbDims.get(it.path) : null;
         const arStyle = dim && dim.w > 0 && dim.h > 0 ? ` style="aspect-ratio:${dim.w}/${dim.h}"` : "";
         return `<button type="button" class="gal-tile thumb md-thumb" data-img="${ep}" data-img-alt="${ea}" aria-label="${aria}"${arStyle}><img alt="${ea}" decoding="async"${thumbImgAttrs(it.path, "md-img")}>${capHtml}${moreHtml}</button>`;
       }
       const eu = esc(it.url), ea = esc(capText);
       const loadCls = decodedThumbs.has(it.url) ? "" : " is-img-loading";
-      const aria = esc(capText ? "查看大图：" + capText : "查看大图");
+      const aria = esc(capText ? tx("file.viewImgColon", "查看大图：{cap}", { cap: capText }) : tx("file.viewImg", "查看大图"));
       return `<button type="button" class="gal-tile md-img-btn" data-img-url="${eu}" data-img-alt="${ea}" aria-label="${aria}"><img class="md-img${loadCls}" src="${eu}" alt="${ea}" loading="lazy" decoding="async">${capHtml}${moreHtml}</button>`;
     }).join("");
     const hiddenHtml = overflow > 0
@@ -26881,7 +26971,7 @@
         : `<span class="gal-hidden-item" hidden data-img-url="${esc(it.url)}" data-img-alt="${esc(it.alt || "")}"></span>`
       ).join("")
       : "";
-    return `<div class="md-gallery ${sizeCls}" data-count="${n}" role="group" aria-label="图片画廊（${n} 张）">${tilesHtml}${hiddenHtml}</div>`;
+    return `<div class="md-gallery ${sizeCls}" data-count="${n}" role="group" aria-label="${esc(tx("md.galleryAria", "图片画廊（{n} 张）", { n }))}">${tilesHtml}${hiddenHtml}</div>`;
   }
   const MD_IMG_TOKEN_RE = /!\[([^\]\n]*)\]\((?:(https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)|(?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?)\)/g;
   function parseImageOnlyLine(escapedLine) {
@@ -26949,7 +27039,7 @@
             const cleanP = parseInlineCodePath(raw);
             if (cleanP) {
               const ep = esc(cleanP);
-              scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, "打开这个文件")}><code class="code-link">${c}</code></a>`);
+              scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, tx("file.openThisFile", "打开这个文件"))}><code class="code-link">${c}</code></a>`);
             } else if (isPureHttpUrl(raw)) {
               const eu = esc(raw);
               scanned += keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
@@ -26960,7 +27050,7 @@
               const wk = resolveInlineWorker(raw);
               if (wk) {
                 const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
-                const tip = wk.label && wk.label !== wk.name ? `查看任务：${wk.label} (${wk.name})` : `查看任务：${wk.name}`;
+                const tip = tx("worker.viewTaskTip", "查看任务：{name}", { name: wk.label && wk.label !== wk.name ? `${wk.label} (${wk.name})` : wk.name });
                 scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
               } else {
                 scanned += keep(`<code>${c}</code>`);
@@ -27045,7 +27135,7 @@
         .replace(/!\[([^\]\n]*)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, alt, u) => {
           const rawU = unesc(u), eu = esc(rawU);
           const loadCls = decodedThumbs.has(rawU) ? "" : " is-img-loading";
-          return keep(`<button type="button" class="md-img-btn" data-img-url="${eu}" data-img-alt="${alt}" aria-label="${alt || "查看大图"}"><img class="md-img${loadCls}" src="${eu}" alt="${alt}" loading="lazy" decoding="async"></button>`);
+          return keep(`<button type="button" class="md-img-btn" data-img-url="${eu}" data-img-alt="${alt}" aria-label="${alt || esc(tx("file.viewImg", "查看大图"))}"><img class="md-img${loadCls}" src="${eu}" alt="${alt}" loading="lazy" decoding="async"></button>`);
         })
         .replace(/!\[([^\]\n]*)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, alt, p) => {
           p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
@@ -27053,7 +27143,7 @@
           const ep = esc(p);
           if (!IMG_EXT.test(p)) return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${alt || ep}</a>`);
           mdImgPaths.add(p);
-          return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt="${alt}" decoding="async"${thumbImgAttrs(p, "md-img")}></button>`);
+          return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc(tx("file.viewImgTip", "查看大图 {name}", { name: p.split("/").pop() || tx("lb.image", "图片") }))}"><img alt="${alt}" decoding="async"${thumbImgAttrs(p, "md-img")}></button>`);
         })
         .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${applyInlineStyle(l)}</a>`))
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
@@ -27069,7 +27159,7 @@
         })
         .replace(FILE_RE, (_, pre, p) => {
           const rawP = unesc(p);
-          return `${pre}${keep(`<a ${fileLinkAttrs(rawP, p, "打开这个文件")}>${p}</a>`)}`;
+          return `${pre}${keep(`<a ${fileLinkAttrs(rawP, p, tx("file.openThisFile", "打开这个文件"))}>${p}</a>`)}`;
         });
       r = applyInlineStyle(r);
       while (r.includes("\u0001")) r = r.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
@@ -27114,7 +27204,7 @@
       const flushList = () => {
         if (!list) return;
         if (list.kind === "task") {
-          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"><span class="md-task-box" role="img" aria-label="${it.done ? "已完成" : "未完成"}">${it.done ? ICON_TASK_CHECK : ""}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
+          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"><span class="md-task-box" role="img" aria-label="${esc(it.done ? tx("md.taskDone", "已完成") : tx("md.taskTodo", "未完成"))}">${it.done ? ICON_TASK_CHECK : ""}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
         } else {
           out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`);
         }
@@ -27128,7 +27218,7 @@
           flushPara(); flushList(); flushGallery();
           const isOpen = !!m[1];
           const rawSum = (m[2] || "").trim().replace(/^#{1,6}\s+/, "");
-          const sumHtml = rawSum ? inline(rawSum) : "展开详情";
+          const sumHtml = rawSum ? inline(rawSum) : esc(tx("common.expandDetails", "展开详情"));
           const innerBody = (m[3] || "").trim();
           const bodyHtml = innerBody ? parseBlockLines([innerBody], depth + 1) : "";
           out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
@@ -27147,7 +27237,7 @@
           if (closeIdx > li) {
             flushPara(); flushList(); flushGallery();
             const innerLines = lines.slice(li + 1, closeIdx);
-            let sumHtml = "展开详情";
+            let sumHtml = esc(tx("common.expandDetails", "展开详情"));
             let bodyStart = 0;
             while (bodyStart < innerLines.length && !innerLines[bodyStart].trim()) bodyStart++;
             if (bodyStart < innerLines.length) {
@@ -27219,7 +27309,7 @@
             return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
           }).join("")}</tr>`).join("");
           const rowCount = bodyRows.length, colCount = head.length;
-          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="复制表格（TSV）">${ICON_MD_COPY}<span class="md-copy-lbl">复制表格</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="复制 Markdown 表格"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="数据表格（${rowCount} 行 × ${colCount} 列）"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
           continue;
         }
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
@@ -27319,7 +27409,7 @@
       if (v.is_agent) await api(`/api/agents/${encodeURIComponent(paneId)}/prompt`, { body: { text } });
       else await api(paneURL(paneId, "text"), { body: { text, enter: true } });
     } catch (err) {
-      throw new Error(err.message.includes("blocked") ? "agent 正在等你确认，先处理上面的确认卡片" : err.message);
+      throw new Error(err.message.includes("blocked") ? tx("detail.blockedSendErr", "agent 正在等你确认，先处理上面的确认卡片") : err.message);
     }
   }
   const sendKeys = (keys) => sendToPane("keys", { keys });
@@ -27370,7 +27460,7 @@
   const isUnpreviewableImage = (mime) => /^image\/(heic|heif|tiff|x-adobe-dng|vnd\.adobe\.photoshop)$/i.test(mime || "");
   const isHashCacheName = (name) => /^(?:[0-9a-f]{24,64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|wx_camera_\d+)(?:_[a-z0-9]+)?\.[a-z0-9]{1,8}$/i.test(String(name || "").trim());
   const shortFileName = (name, max = 24) => {
-    const s = String(name || "文件");
+    const s = String(name || tx("up.file", "文件"));
     if (s.length <= max) return s;
     const dot = s.lastIndexOf(".");
     const ext = dot > 0 && s.length - dot <= 8 ? s.slice(dot) : "";
@@ -27382,8 +27472,8 @@
   const swapExtForMime = (name, mime) => {
     const ext = MIME_EXT[(mime || "").toLowerCase()];
     const base = String(name || "").trim();
-    if (!ext) return base || "粘贴的图片.png";
-    if (!base || /^image\.[a-z0-9]+$/i.test(base) || isHashCacheName(base)) return "粘贴的图片" + ext;
+    if (!ext) return base || tx("up.pastedImgPng", "粘贴的图片.png");
+    if (!base || /^image\.[a-z0-9]+$/i.test(base) || isHashCacheName(base)) return tx("up.pastedImg", "粘贴的图片") + ext;
     if (/\.[a-z0-9]{1,8}$/i.test(base)) return base.replace(/\.[a-z0-9]{1,8}$/i, ext);
     return base + ext;
   };
@@ -27459,7 +27549,7 @@
       const sniffed = sniffImageMime(bytes.buffer) || (mime === "image/svg+xml" ? mime : "");
       const finalMime = sniffed || mime;
       const ext = MIME_EXT[finalMime] || ".png";
-      const name = "粘贴的图片" + ext;
+      const name = tx("up.pastedImg", "粘贴的图片") + ext;
       const blob = typeof Blob === "function" ? new Blob([bytes], { type: finalMime }) : { name, size: bytes.byteLength, type: finalMime, _bytes: bytes };
       return { blob, name, type: finalMime, size: bytes.byteLength, sniffed };
     } catch {
@@ -27581,7 +27671,7 @@
       return Promise.resolve({
         ok: true,
         blob: file,
-        name: file?.name || (img ? "粘贴的图片.png" : "文件"),
+        name: file?.name || (img ? tx("up.pastedImgPng", "粘贴的图片.png") : tx("up.file", "文件")),
         type: mime,
         size: file?.size || 0,
         sniffed: img ? mime : "",
@@ -27599,7 +27689,7 @@
       let finalMime = sniffed || mime || "application/octet-stream";
       let blob = typeof Blob === "function" ? new Blob([buf], { type: finalMime }) : file;
       let finalSize = byteLen;
-      let finalName = file?.name || (finalMime.startsWith("image/") ? "粘贴的图片" + (MIME_EXT[finalMime] || ".png") : "文件");
+      let finalName = file?.name || (finalMime.startsWith("image/") ? tx("up.pastedImg", "粘贴的图片") + (MIME_EXT[finalMime] || ".png") : tx("up.file", "文件"));
       if (/^image\/(tiff|bmp)$/i.test(finalMime)) {
         const pngBlob = await maybeTranscodeToPng(blob, finalMime);
         if (pngBlob) {
@@ -27656,7 +27746,7 @@
             return {
               ok: true,
               blob,
-              name: swapExtForMime(baseName || "粘贴的图片.png", finalMime),
+              name: swapExtForMime(baseName || tx("up.pastedImgPng", "粘贴的图片.png"), finalMime),
               type: finalMime,
               size: finalSize,
               sniffed: sniffed || finalMime,
@@ -27683,54 +27773,54 @@
     if (source === "paste") {
       if (isImg && typeof window !== "undefined" && window.isSecureContext === false) {
         return {
-          msg: "剪贴板里的图片已失效（当前为非加密 HTTP，浏览器禁止读取剪贴板位图；请改用本机地址/HTTPS，或直接拖入/选择文件）",
-          tag: "已失效",
+          msg: tx("up.staleHttpImg", "剪贴板里的图片已失效（当前为非加密 HTTP，浏览器禁止读取剪贴板位图；请改用本机地址/HTTPS，或直接拖入/选择文件）"),
+        tag: tx("up.staleTag", "已失效"),
         };
       }
       return {
         msg: isImg
-          ? "剪贴板里的图片已失效，请重新复制或直接拖入/选择文件"
-          : "剪贴板里的文件已失效，请重新复制或直接拖入/选择文件",
-        tag: "已失效",
+          ? tx("up.staleImg", "剪贴板里的图片已失效，请重新复制或直接拖入/选择文件")
+          : tx("up.staleFile", "剪贴板里的文件已失效，请重新复制或直接拖入/选择文件"),
+        tag: tx("up.staleTag", "已失效"),
       };
     }
     return {
       msg: isImg
-        ? "无法读取这张图片，可能已被移动或权限受限，请重新选择"
-        : "无法读取这个文件，可能已被移动或权限受限，请重新选择",
-      tag: "读取失败",
+          ? tx("up.unreadableImg", "无法读取这张图片，可能已被移动或权限受限，请重新选择")
+          : tx("up.unreadableFile", "无法读取这个文件，可能已被移动或权限受限，请重新选择"),
+        tag: tx("up.readFailTag", "读取失败"),
     };
   }
   function friendlyUploadError(err, status, serverErr, hub) {
     const raw = String(serverErr || err?.message || "").trim();
     const hasCJK = /[\u4e00-\u9fff]/.test(raw);
-    if (status === 413) return { msg: "文件太大了（最多 25 MB）", tag: "过大", retryable: false };
+    if (status === 413) return { msg: tx("up.tooBig", "文件太大了（最多 25 MB）"), tag: tx("up.tooBigTag", "过大"), retryable: false };
     if (status === 401 || status === 403) {
       return {
-        msg: hub ? `${hub.name} 登录已失效，请在「设备」里重新连接` : "登录已失效，请刷新页面后重试",
-        tag: "失败",
+        msg: hub ? tx("up.hubAuthLost", "{hub} 登录已失效，请在「设备」里重新连接", { hub: hub.name }) : tx("up.authLost", "登录已失效，请刷新页面后重试"),
+        tag: tx("up.failTag", "失败"),
         retryable: false,
       };
     }
-    if (hasCJK) return { msg: raw, tag: "失败", retryable: true };
-    if (status === 408 || status === 504) return { msg: "上传超时，请点重试", tag: "超时", retryable: true };
-    if (status === 502 || status === 503) return { msg: "服务正在重启或暂时不可用，请稍后重试", tag: "失败", retryable: true };
-    if (status >= 500) return { msg: "服务暂时出错了，请稍后重试", tag: "失败", retryable: true };
-    if (status >= 400) return { msg: "上传请求被拒绝，请重试", tag: "失败", retryable: true };
+    if (hasCJK) return { msg: raw, tag: tx("up.failTag", "失败"), retryable: true };
+    if (status === 408 || status === 504) return { msg: tx("up.timeout", "上传超时，请点重试"), tag: tx("up.timeoutTag", "超时"), retryable: true };
+    if (status === 502 || status === 503) return { msg: tx("up.unavailable", "服务正在重启或暂时不可用，请稍后重试"), tag: tx("up.failTag", "失败"), retryable: true };
+    if (status >= 500) return { msg: tx("up.serverErr", "服务暂时出错了，请稍后重试"), tag: tx("up.failTag", "失败"), retryable: true };
+    if (status >= 400) return { msg: tx("up.rejected", "上传请求被拒绝，请重试"), tag: tx("up.failTag", "失败"), retryable: true };
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      return { msg: "网络已断开，连上网络后点重试", tag: "断网", retryable: true };
+      return { msg: tx("up.offline", "网络已断开，连上网络后点重试"), tag: tx("up.offlineTag", "断网"), retryable: true };
     }
     if (err?.name === "AbortError" || /timeout|timed out/i.test(raw)) {
-      return { msg: "上传超时，请点重试", tag: "超时", retryable: true };
+      return { msg: tx("up.timeout", "上传超时，请点重试"), tag: tx("up.timeoutTag", "超时"), retryable: true };
     }
     if (/failed to fetch|load failed|networkerror|network request failed|fetch failed|err_|net::/i.test(raw)) {
-      return { msg: "网络中断或服务正在重启，请点重试", tag: "失败", retryable: true };
+      return { msg: tx("up.netInterrupted", "网络中断或服务正在重启，请点重试"), tag: tx("up.failTag", "失败"), retryable: true };
     }
-    return { msg: "上传失败，请稍后重试", tag: "失败", retryable: true };
+    return { msg: tx("up.failed", "上传失败，请稍后重试"), tag: tx("up.failTag", "失败"), retryable: true };
   }
   const fileErrHint = (files) => files.some((f) => f.err && f.retryable && f.blob)
-    ? "有附件没传上去，点重试或移除后再发"
-    : "有附件没传上去，移除后再发";
+    ? tx("up.pendingRetry", "有附件没传上去，点重试或移除后再发")
+    : tx("up.pendingRemove", "有附件没传上去，移除后再发");
 
   const hasDragFiles = (dt) => {
     const t = dt?.types;
@@ -27765,15 +27855,15 @@
       box.hidden = !form._files.length;
       box.innerHTML = form._files.map((f, i) => {
         const cls = f.err ? "err" : f.path ? "" : "busy";
-        const tip = f.err || f.path || "上传中…";
-        const status = f.err ? (f.errTag || "失败") : f.path ? fmtSize(f.size) : "上传中";
+        const tip = f.err || f.path || tx("up.uploadingEllipsis", "上传中…");
+        const status = f.err ? (f.errTag || tx("up.failTag", "失败")) : f.path ? fmtSize(f.size) : tx("up.uploading", "上传中");
         const media = (f.thumb && !f.thumbFailed)
           ? `<img class="fi-thumb" src="${f.thumb}" alt="" data-fi="${i}">`
           : iconFor(f);
         const retryBtn = (f.err && f.retryable && f.blob)
-          ? `<button type="button" class="retry" data-retry="${i}" title="重新上传" aria-label="重新上传 ${esc(f.name)}">重试</button>`
+          ? `<button type="button" class="retry" data-retry="${i}" title="${esc(tx("up.retryTitle", "重新上传"))}" aria-label="${esc(tx("up.retryAria", "重新上传 {name}", { name: f.name }))}">${esc(tx("common.retry", "重试"))}</button>`
           : "";
-        return `<span class="file ${cls}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="移除" aria-label="移除 ${esc(f.name)}">×</button></span>`;
+        return `<span class="file ${cls}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="${esc(tx("common.remove", "移除"))}" aria-label="${esc(tx("up.removeAria", "移除 {name}", { name: f.name }))}">×</button></span>`;
       }).join("");
       opts.onChange?.(form._files);
     };
@@ -27845,7 +27935,7 @@
           || cands[0].prebuilt;
         const primaryMime = guessMime(primary) || String(primary?._itemType || "").toLowerCase();
         const f = {
-          name: primary?.name || (isImageFile(primary) || primaryMime.startsWith("image/") ? "粘贴的图片.png" : "文件"),
+          name: primary?.name || (isImageFile(primary) || primaryMime.startsWith("image/") ? tx("up.pastedImgPng", "粘贴的图片.png") : tx("up.file", "文件")),
           size: primary?.size || 0,
           isImage: isImageFile(primary) || primaryMime.startsWith("image/"),
           thumb: "",
@@ -27883,7 +27973,7 @@
           }
           if (!winner) {
             const info = tooBig
-              ? { msg: "文件太大了（最多 25 MB）", tag: "过大" }
+              ? { msg: tx("up.tooBig", "文件太大了（最多 25 MB）"), tag: tx("up.tooBigTag", "过大") }
               : readFailInfo(source, f.isImage);
             f.err = info.msg;
             f.errTag = info.tag;
@@ -27975,9 +28065,9 @@
       }
       if (!plain.trim() && /<img\b[^>]*\bsrc\s*=/i.test(html)) {
         e.preventDefault();
-        readClipboardBitmapFallback("粘贴的图片.png").then((rec) => {
+        readClipboardBitmapFallback(tx("up.pastedImgPng", "粘贴的图片.png")).then((rec) => {
           if (rec?.ok) addEntries([{ candidates: [{ prebuilt: rec }] }], "paste");
-          else toast("剪贴板里的图片已失效或受限，请重新复制或直接拖入/选择文件", "attn");
+          else toast(tx("up.pasteStaleToast", "剪贴板里的图片已失效或受限，请重新复制或直接拖入/选择文件"), "attn");
         });
       }
     });
@@ -28046,7 +28136,7 @@
         const hit = linkifyUrlMatch(m);
         return hit ? keep(hit.anchor) + hit.suffix : m;
       })
-      .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`)}`);
+      .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a ${fileLinkAttrs(unesc(p), p, tx("file.openThisFile", "打开这个文件"))}>${p}</a>`)}`);
     while (out.includes("\u0001")) out = out.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
     return out;
   };
@@ -28262,7 +28352,7 @@
       if (v.is_agent) await api(`/api/agents/${encodeURIComponent(current)}/prompt`, { body: { text } });
       else await api(paneURL(current, "text"), { body: { text, enter: true } });
     } catch (err) {
-      throw new Error(err.message.includes("blocked") ? "agent 正在等你确认，先处理上面的确认卡片" : err.message);
+      throw new Error(err.message.includes("blocked") ? tx("detail.blockedSendErr", "agent 正在等你确认，先处理上面的确认卡片") : err.message);
     }
   }, () => (current || "").includes("@") ? current.slice(current.lastIndexOf("@") + 1) : "", { allowEmpty: true });
 
@@ -28320,13 +28410,13 @@
           if (m) m.hidden = false;
         }
       }
-      if (act === "copy" && v) { await copy(v.pane_id); toast("已复制 " + v.pane_id); }
+      if (act === "copy" && v) { await copy(v.pane_id); toast(tx("common.copiedText", "已复制 {text}", { text: v.pane_id })); }
       if (act === "shell-here" && v) {
         const r = await api("/api/agents", { body: { kind: "shell", cwd: v.cwd, machine: v.machine || "" } });
         location.hash = "#/p/" + encodeURIComponent(r.pane_id);
       }
       if (act === "close" && v) {
-        if (!confirm(`关闭工作区「${v.workspace_label || v.workspace_id}」？里面的进程会被结束。`)) return;
+        if (!confirm(tx("detail.closeWsConfirm", "关闭工作区「{name}」？里面的进程会被结束。", { name: v.workspace_label || v.workspace_id }))) return;
         await api(`/api/workspaces/${encodeURIComponent(v.workspace_id)}/close`, { method: "POST", body: {} });
         state = { ...state, agents: state.agents.filter((a) => a.workspace_id !== v.workspace_id), shells: state.shells.filter((a) => a.workspace_id !== v.workspace_id) };
         if (store.get("last") === location.hash) store.set("last", "#/collie");
@@ -28334,19 +28424,19 @@
       }
       if (act === "router-open") {
         const p = paneOf(ROUTER);
-        if (p) location.hash = "#/p/" + encodeURIComponent(p); else toast("Collie 还在休眠；发一条消息就会唤醒它");
+        if (p) location.hash = "#/p/" + encodeURIComponent(p); else toast(tx("collie.asleepHint", "Collie 还在休眠；发一条消息就会唤醒它"));
       }
       if (act === "router-restart") {
-        if (!confirm("重启 Collie？它会读自己的记忆恢复上下文，排队的消息不会丢。")) return;
+        if (!confirm(tx("collie.restartConfirm", "重启 Collie？它会读自己的记忆恢复上下文，排队的消息不会丢。"))) return;
         await api("/api/super/router/restart", { method: "POST", body: {} });
-        toast("Collie 正在重启");
+        toast(tx("collie.restarting", "Collie 正在重启"));
       }
       if (act === "router-restart-apply") {
-        if (isRouterBusy() && !confirm("Collie 当前正在处理任务，现在重启会中断当前一轮，但记忆和排队中的消息不会丢。确定立即重启生效吗？")) return;
+        if (isRouterBusy() && !confirm(tx("collie.restartBusyConfirm", "Collie 当前正在处理任务，现在重启会中断当前一轮，但记忆和排队中的消息不会丢。确定立即重启生效吗？"))) return;
         btn.disabled = true;
         try {
           await api("/api/super/router/restart", { method: "POST", body: {} });
-          toast("Collie 正在重启应用新设置");
+          toast(tx("collie.restartingApply", "Collie 正在重启应用新设置"));
           api("/api/super").then((d) => {
             sup = normSup(d);
             renderSide();
@@ -28366,7 +28456,7 @@
       if (act === "pause") {
         const cur = (await api("/api/super/settings")).settings;
         await api("/api/super/settings", { body: { settings: { ...cur, paused: !cur.paused } } });
-        toast(cur.paused ? "已恢复投递" : "已暂停投递");
+        toast(cur.paused ? tx("collie.resumedToast", "已恢复投递") : tx("collie.pausedToast", "已暂停投递"));
       }
       if (act === "auto") location.hash = "#/auto";
       if (act === "quota") window.__collieQuota?.open?.();
@@ -28384,7 +28474,7 @@
     // A terminal needs only a computer and a folder.
     const shell = $("input[name=kind]:checked")?.value === "shell";
     $$("#launch .agent-only").forEach((f) => f.hidden = shell);
-    $("#launch-go").textContent = shell ? "打开" : "启动";
+    $("#launch-go").textContent = shell ? tx("common.open", "打开") : tx("common.start", "启动");
     if (!shell) fillLaunchModels();
   }
   // Model and effort for a new agent: "" leaves it to the agent's own settings
@@ -28400,7 +28490,7 @@
     mSel._key = kind + "@" + pickMachine;
     const list = info.models || [];
     const def = defaultModelName(info);
-    mSel.innerHTML = `<option value="" data-short="${esc(def ? "默认 · " + def : "默认模型")}" data-sub="${esc(def ? "现在是 " + def : "agent 自己的设置")}">默认${def ? "（" + esc(def) + "）" : ""}</option>` +
+    mSel.innerHTML = `<option value="" data-short="${esc(def ? tx("collie.defaultModelShort", "默认 · {name}", { name: def }) : tx("common.defaultModel", "默认模型"))}" data-sub="${esc(def ? tx("collie.nowModel", "现在是 {name}", { name: def }) : tx("collie.agentOwnSettingShort", "agent 自己的设置"))}">${esc(def ? tx("collie.defaultWithVal", "默认（{val}）", { val: def }) : tx("common.default", "默认"))}</option>` +
       list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(m.label && m.label !== m.id ? m.id : "")}">${esc(m.label || m.id)}</option>`).join("");
     mSel.value = same && list.some((m) => m.id === keep.model) ? keep.model : "";
     fillLaunchEfforts(info, same ? keep.effort : "");
@@ -28412,8 +28502,8 @@
     const eSel = $("#l-effort");
     const effs = effortsFor(info, kind, model);
     const defE = effs.includes(info.default_effort) ? info.default_effort : "";
-    eSel.innerHTML = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>` +
-      effs.map((e) => `<option value="${esc(e)}" data-short="思考 · ${esc(EFFORT_LABEL[e] || e)}">${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
+    eSel.innerHTML = `<option value="" data-short="${esc(tx("effort.chipPrefix", "思考 · {v}", { v: EFFORT_LABEL[defE] || defE || tx("common.default", "默认") }))}">${esc(tx("collie.defaultWithVal", "默认（{val}）", { val: EFFORT_LABEL[defE] || defE || tx("effort.agentOwn", "agent 自己定") }))}</option>` +
+        effs.map((e) => `<option value="${esc(e)}" data-short="${esc(tx("effort.chipPrefix", "思考 · {v}", { v: EFFORT_LABEL[e] || e }))}">${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
     eSel.value = effs.includes(want) ? want : "";
     const hide = effs.length === 0;
     eSel.hidden = hide;
@@ -28445,8 +28535,8 @@
       const missing = Array.isArray(have) && k in AGENT_LABEL && !have.includes(k);
       r.disabled = missing;
       card.classList.toggle("missing", missing);
-      card.title = missing ? "这台电脑上没装 " + AGENT_LABEL[k] : "";
-      small.textContent = missing ? "没装" : small.dataset.cmd;
+      card.title = missing ? tx("launch.missingTitle", "这台电脑上没装 {agent}", { agent: AGENT_LABEL[k] }) : "";
+      small.textContent = missing ? tx("launch.missingTag", "没装") : small.dataset.cmd;
     }
     if ($("input[name=kind]:checked")?.disabled) {
       const first = $$("input[name=kind]").find((r) => !r.disabled);
@@ -28497,7 +28587,7 @@
       : { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine,
           model: $("#l-model").value, effort: $("#l-effort").disabled ? "" : $("#l-effort").value };
     const go = $("#launch-go");
-    go.disabled = true; go.textContent = shell ? "打开中…" : "启动中…";
+    go.disabled = true; go.textContent = shell ? tx("common.opening", "打开中…") : tx("common.starting", "启动中…");
     $("#launch-error").textContent = "";
     try {
       const r = await api("/api/agents", { body });
@@ -28507,7 +28597,7 @@
       if (r.warning) toast(r.warning, "attn");
       location.hash = "#/p/" + encodeURIComponent(r.pane_id);
     } catch (err) { $("#launch-error").textContent = err.message; }
-    finally { go.disabled = false; go.textContent = shell ? "打开" : "启动"; }
+    finally { go.disabled = false; go.textContent = shell ? tx("common.open", "打开") : tx("common.start", "启动"); }
   });
 
   // ───────────────────────────── viewport (mobile keyboard)
@@ -29068,5 +29158,84 @@
     };
     $("#local-app-x").onclick = () => { store.set("local-app-off", true); $("#local-app").hidden = true; };
   }
+  function refreshAllForLang() {
+    rebuildTimeFormatters();
+    // Invalidate cached DOM signatures so every live region repaints immediately in the new language.
+    superBodyKey = "";
+    pendingBarSig = "";
+    pendingListSig = "";
+    tdLastSig = "";
+    _lastJumpUiKey = "";
+    _thPopInputSig = "";
+    _lastNotebookRenderKey = "";
+    const clearCache = (sel) => {
+      const el = $(sel);
+      if (!el) return;
+      el._html = "";
+      el._sig = "";
+      el._prefsSig = "";
+      el._memSig = "";
+      el._timersSig = "";
+      el._inboxSig = "";
+      el._intSig = "";
+      el._settingsSig = "";
+      el._devSig = "";
+    };
+    for (const sel of ["#super-thread", "#crew", "#attention", "#live-list", "#recent-list", "#shells", "#pending-bar", "#pending-list", "#collie-pending-bar", "#peer-req-bar", "#router-status", "#router-model", "#prefs-body", "#auto-body", "#devices-body", "#thread", "#wd-thread", "#x-thread", "#td-list", "#np-tasks-list", "#np-files-list", "#np-timers-list", "#collie-threads-list"]) {
+      clearCache(sel);
+    }
+    $$("select").forEach((s) => { s._html = ""; });
+    try { renderSide(); } catch {}
+    try { renderUpdateEntry(); } catch {}
+    try { renderRouterPendingBars(); } catch {}
+    try { renderSuper({ force: true }); } catch {}
+    try { renderTarget(true); } catch {}
+    try { renderExt(); } catch {}
+    try { syncThreadComposerHint(); } catch {}
+    try { renderNotebook(); } catch {}
+    try { syncDrawerBackButtons(); } catch {}
+    try { window.__collieQuota?.onLangChange?.(); } catch {}
+    try { $$("select").forEach((s) => syncPick(s)); } catch {}
+    if (view === "prefs") {
+      try { renderPrefs(); } catch {}
+    } else if (view === "auto") {
+      try {
+        const body = $("#auto-body");
+        if (body) body._tabRendered = false;
+        if (!renderAutoTabFromCache(body, autoTab)) loadAuto();
+      } catch {}
+    } else if (view === "devices") {
+      try { loadDevices(); } catch {}
+    } else if (view === "pane" && current) {
+      try { $("#d-model")._key = ""; renderHead(); } catch {}
+    } else if (view === "ext" && extCur) {
+      try { renderExtHead(false); } catch {}
+    }
+    if (intModal?.open && intModalKind) {
+      try {
+        if (intModalKind === "peers") renderPeerModal();
+        else if (intModalDraft) {
+          const item = (intPayload?.integrations || []).find((x) => x.kind === intModalKind) || { kind: intModalKind };
+          renderIntModal(item);
+        }
+      } catch {}
+    }
+    if (activeThreadRoot) {
+      try { syncThreadDrawer(); } catch {}
+    }
+    if (activeWorkerKey) {
+      try { syncWorkerDrawerMeta(); } catch {}
+    }
+    if (sheet?.open) {
+      try { suggestName(); } catch {}
+    }
+    if (timerModal?.open) {
+      try { const tf = $("#tm-form"); if (tf) syncTimerForm(tf); } catch {}
+    }
+    if (!$("#super-search")?.hidden) {
+      try { renderSearch(); } catch {}
+    }
+  }
+  window.CollieI18n?.onChange?.(() => refreshAllForLang());
   boot();
 })();

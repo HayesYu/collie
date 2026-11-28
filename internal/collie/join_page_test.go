@@ -176,7 +176,7 @@ assert.deepEqual(stV2.payload.addrs, [
   "https://collie.example.com",
 ]);
 assert.equal(runV2.J.buildPwaLaunchUrl(stV2), "web+collie://join/2." + v2B64);
-assert.equal(runV2.getEl("card-title").textContent, "Alex的边牧 邀请你成为好友边牧");
+assert.equal(runV2.getEl("card-title").textContent, "Alex的边牧 邀请你成为 Collie 的好狗友");
 assert.equal(runV2.getEl("meta-hub-id").textContent, "hub_demo002");
 assert.equal(runV2.getEl("open-section").hidden, false);
 assert.equal(runV2.getEl("mode-node").checked, true, "default preset should be local Node proxy 127.0.0.1:17788");
@@ -270,7 +270,7 @@ assert.deepEqual(runV2.J.extractInviteFromInput("collie-peer://v1/" + v1B64), { 
   assert.equal(runMob.ctx.location.href, origHref, "mobile copy primary CTA must NOT navigate to web+collie://");
   assert.equal(runMob.getClipboard(), "collie-peer://v2/" + v2B64);
   assert.equal(runMob.getEl("join-toast").hidden, false, "mobile copy shows toast guidance");
-  assert.ok(runMob.getEl("join-toast-msg").textContent.includes("好友边牧"), "toast guides back to Collie peer modal");
+  assert.ok(runMob.getEl("join-toast-msg").textContent.includes("狗友"), "toast guides back to Collie peer modal");
   assert.equal(runMob.getEl("mobile-copy-guide").hidden, false, "inline copy guide remains visible");
 
   // Rejects web+collie:// and 127.0.0.1 in mobile custom URL input

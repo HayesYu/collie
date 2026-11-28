@@ -347,6 +347,7 @@ assert.ok(startIdx > 0 && endIdx > startIdx, "renderToolItem block must be prese
 const snippet = appSrc.slice(startIdx, endIdx);
 const sandbox = {
   esc: (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+  tx: (_k, fb) => fb,
 };
 vm.runInNewContext(snippet + "\nthis.__exports = { normalizeToolView, renderToolItem };", sandbox);
 const { renderToolItem } = sandbox.__exports;

@@ -4428,6 +4428,9 @@ dialog.lightbox[open][data-closing] { display: flex; flex-direction: column; }
 .lb-btn:hover:not(:disabled):not([aria-disabled="true"]) { background: rgba(255, 255, 255, .14); color: #fff; }
 .lb-btn:active:not(:disabled):not([aria-disabled="true"]) { transform: scale(.95); }
 .lb-btn:focus-visible, .lb-nav:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(255, 255, 255, .55); }
+@media (forced-colors: active) {
+  .lb-btn:focus-visible, .lb-nav:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
+}
 .lb-btn:disabled, .lb-btn[aria-disabled="true"] { opacity: .36; pointer-events: none; }
 .lb-zoom-btn .ic-zoom-out { display: none; }
 .lb-zoom-btn.zoomed { background: rgba(255, 255, 255, .16); color: #fff; }
@@ -4512,13 +4515,14 @@ dialog.lightbox.is-dragging .lb-svg { cursor: grabbing !important; }
   border: 1px solid rgba(255, 255, 255, .14); background: rgba(18, 18, 22, .56);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   color: rgba(255, 255, 255, .9); box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
-  transition: background .14s, border-color .14s, transform .1s, color .14s;
+  transition: background .14s, border-color .14s, opacity .14s, transform .1s, color .14s;
 }
 .lb-nav.prev { left: max(12px, env(safe-area-inset-left)); }
 .lb-nav.next { right: max(12px, env(safe-area-inset-right)); }
 .lb-nav svg { width: 20px; height: 20px; stroke-width: 1.85; }
-.lb-nav:hover { background: rgba(34, 34, 40, .82); border-color: rgba(255, 255, 255, .28); color: #fff; }
-.lb-nav:active { transform: translateY(-50%) scale(.94); }
+.lb-nav:hover:not(:disabled) { background: rgba(34, 34, 40, .82); border-color: rgba(255, 255, 255, .28); color: #fff; }
+.lb-nav:active:not(:disabled) { transform: translateY(-50%) scale(.94); }
+.lb-nav:disabled { opacity: .28; cursor: default; }
 @media (max-width: 760px) {
   .lb-bar { gap: 8px; padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
   .lb-actions { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(18, 18, 22, .78); }

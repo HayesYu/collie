@@ -49,30 +49,30 @@ assert.ok(!mobileNotesCss.includes("var(--vh) * 0.80"), "legacy 0.80vh cap must 
 assert.ok(mobileNotesCss.includes("border-radius: 20px 20px 0 0;"), "mobile .notepane border-radius must be 20px 20px 0 0");
 assert.ok(!mobileNotesCss.includes("18px 18px 0 0"), "legacy 18px radius must be removed");
 assert.ok(
-  mobileNotesCss.includes("box-shadow: 0 -8px 32px rgba(0, 0, 0, .14), 0 -1px 4px rgba(0, 0, 0, .06);"),
-  "mobile light .notepane shadow must match unified bottom sheets"
+  mobileNotesCss.includes("box-shadow: 0 -2px 12px rgba(0, 0, 0, .08);"),
+  "mobile light .notepane shadow must match lightweight unified bottom sheets"
 );
 assert.ok(
   mobileNotesCss.includes(":root[data-theme=\"dark\"] .notepane,\n  :root[data-theme=\"dark\"] .notepane.is-expanded") &&
     mobileNotesCss.includes("background: var(--bg);") &&
-    mobileNotesCss.includes("box-shadow: 0 -12px 40px rgba(0, 0, 0, .58);"),
-  "mobile dark .notepane (including .is-expanded) must match unified sheet background and shadow"
+    mobileNotesCss.includes("box-shadow: 0 -2px 14px rgba(0, 0, 0, .36);"),
+  "mobile dark .notepane (including .is-expanded) must match lightweight unified sheet background and shadow"
 );
 assert.ok(
-  mobileNotesCss.includes(".notes-scrim { background: rgba(10, 10, 12, .38); }") &&
+  mobileNotesCss.includes("background: rgba(10, 10, 12, .38);") &&
     mobileNotesCss.includes(':root[data-theme="dark"] .notes-scrim { background: rgba(0, 0, 0, .62); }') &&
     mobileNotesCss.includes(':root:not([data-theme="light"]) .notes-scrim { background: rgba(0, 0, 0, .62); }'),
   "mobile .notes-scrim light/dark opacity must match .drawer-scrim"
 );
 
-// Grabber (24px height, 38x4 pill widening to 44px while dragging, touch-action: none)
+// Grabber (24px height, 38x4 pill widening via pure GPU scaleX while dragging, touch-action: none)
 assert.ok(
   /\.np-handle\s*\{[\s\S]*?height:\s*24px;\s*padding:\s*8px 0 4px;[\s\S]*?touch-action:\s*none;\s*cursor:\s*grab;/.test(mobileNotesCss),
   "mobile .np-handle must be 24px tall with matching padding, touch-action:none and grab cursor"
 );
 assert.ok(
-  mobileNotesCss.includes(".notepane.is-dragging .np-handle-pill { background: var(--fg-3); width: 44px; }"),
-  "mobile .np-handle-pill must widen to 44px with dragging feedback"
+  mobileNotesCss.includes(".notepane.is-dragging .np-handle-pill { background: var(--fg-3); transform: scaleX(1.16); }"),
+  "mobile .np-handle-pill must widen via pure GPU transform: scaleX(1.16) without layout thrashing"
 );
 assert.ok(
   mobileNotesCss.includes(".notepane.is-dragging") && mobileNotesCss.includes("transition: none !important;"),

@@ -587,8 +587,97 @@
       const open = e.newState === "open";
       setExpandedAria(open);
       if (open) startOpenTicker();
-      else stopOpenTicker();
+      else {
+        stopOpenTicker();
+        if (pop.style) {
+          pop.style.transform = "";
+          pop.style.willChange = "";
+        }
+        pop.classList.remove("is-dragging");
+      }
     });
+
+    // Mobile bottom-sheet rAF-batched drag-to-dismiss (zero layout reads during drag).
+    if (pop) {
+      const zones = [pop.querySelector?.(".qp-handle"), pop.querySelector?.(".qp-head")].filter(Boolean);
+      let wcTimer = 0;
+      const clearWC = () => {
+        if (wcTimer) { clearTimeout(wcTimer); wcTimer = 0; }
+        if (pop.style) pop.style.willChange = "";
+      };
+      for (const zone of zones) {
+        let startY = 0, startX = 0, startT = 0, lastY = 0, pid = null;
+        let dragging = false, applied = false, pendingDy = 0, rafId = 0, threshold = 96;
+        const cancelRaf = () => {
+          if (rafId && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
+          rafId = 0;
+        };
+        const flush = () => {
+          rafId = 0;
+          if (!dragging) return;
+          if (!applied) {
+            applied = true;
+            if (wcTimer) { clearTimeout(wcTimer); wcTimer = 0; }
+            pop.style.willChange = "transform";
+            pop.classList.add("is-dragging");
+          }
+          pop.style.transform = `translate3d(0, ${pendingDy}px, 0)`;
+        };
+        zone.addEventListener("pointerdown", (e) => {
+          if (!pop.classList.contains("is-sheet") || !isPopoverOpen(pop)) return;
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          if (e.target?.closest?.("button, a")) return;
+          cancelRaf();
+          pid = e.pointerId;
+          startY = lastY = e.clientY;
+          startX = e.clientX;
+          startT = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+          dragging = false;
+          applied = false;
+          pendingDy = 0;
+          threshold = Math.min(110, (pop.offsetHeight || 360) * 0.24);
+        });
+        zone.addEventListener("pointermove", (e) => {
+          if (pid !== e.pointerId) return;
+          const dy = e.clientY - startY, dx = e.clientX - startX;
+          lastY = e.clientY;
+          if (!dragging) {
+            if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { pid = null; return; }
+            if (dy <= 8) return;
+            dragging = true;
+            try { zone.setPointerCapture?.(e.pointerId); } catch {}
+          }
+          pendingDy = Math.max(0, dy);
+          if (!rafId) {
+            if (typeof requestAnimationFrame === "function") rafId = requestAnimationFrame(flush);
+            else flush();
+          }
+        });
+        const endDrag = (e, cancelled) => {
+          if (pid !== e.pointerId) return;
+          cancelRaf();
+          const wasDragging = dragging;
+          const hadApplied = applied;
+          pid = null;
+          dragging = false;
+          applied = false;
+          const nowT = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+          const dy = Math.max(0, lastY - startY);
+          const vy = dy / Math.max(1, nowT - startT);
+          const shouldClose = wasDragging && !cancelled && (dy > threshold || (dy > 40 && vy > 0.45));
+          pop.classList.remove("is-dragging");
+          pop.style.transform = "";
+          if (hadApplied) {
+            const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+            if (reduced) clearWC();
+            else wcTimer = setTimeout(clearWC, 320);
+          }
+          if (shouldClose) hidePopoverEl(pop);
+        };
+        zone.addEventListener("pointerup", (e) => endDrag(e, false));
+        zone.addEventListener("pointercancel", (e) => endDrag(e, true));
+      }
+    }
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && pop && !hasNativePopover(pop) && isPopoverOpen(pop)) {

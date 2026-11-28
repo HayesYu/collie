@@ -458,7 +458,7 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
 
   // ─── 6. P0-1: Code Block 2.0 (headerless, quiet corner tag, floating copy, >18 fold to 14 + until-found, Diff) ───
   const shortCode = T.mdRender("\x60\x60\x60go main.go\npackage main\nfunc main() {}\n\x60\x60\x60");
-  assert.ok(shortCode.includes('class="md-code"') && !shortCode.includes("md-code-head"), "short code renders headerless card without persistent gray bar");
+  assert.ok(shortCode.includes('class="md-code has-tag"') && !shortCode.includes("md-code-head"), "short code renders headerless card without persistent gray bar");
   assert.ok(shortCode.includes('class="md-code-tag"') && shortCode.includes('<span class="md-code-lang">Go</span>'), "quiet corner language label rendered");
   assert.ok(shortCode.includes('class="md-float-acts md-code-acts"') && shortCode.includes('data-copy-code'), "floating copy button rendered");
   assert.ok(!shortCode.includes("data-code-fold"), "short block <=18 lines is not collapsed");
@@ -469,7 +469,7 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
   for (let i = 2; i <= 21; i++) longLines.push("line " + i);
   longLines.push("end comment */");
   const longCode = T.mdRender("\x60\x60\x60js\n" + longLines.join("\n") + "\n\x60\x60\x60");
-  assert.ok(longCode.includes('class="md-code is-collapsed"'), ">18-line code block collapsed by default");
+  assert.ok(longCode.includes('class="md-code has-tag is-collapsed"'), ">18-line code block collapsed by default");
   assert.ok(longCode.includes('data-total-lines="22"') && longCode.includes('data-head-lines="14"'), "tracks 22 total / 14 head lines");
   assert.ok(longCode.includes('class="code-tail" hidden="until-found"'), "collapsed tail uses hidden=until-found");
   assert.ok(longCode.includes("展开剩余 8 行"), "fold button shows remaining 8 lines");
@@ -520,7 +520,7 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
     "| 首屏传输 | 2,092.5 KB | 369.7 KB | -82.3% |",
     "| 长列表 | 142ms | 13.7s | +5.5% |",
   ].join("\n"));
-  assert.ok(tblHtml.includes('class="md-table-card" data-table-card data-cols="4"') && !tblHtml.includes("md-table-bar") && !tblHtml.includes("md-table-meta"), "table card tags column count and omits persistent top bar and dimension strip");
+  assert.ok(tblHtml.includes('class="md-table-card is-last-num" data-table-card data-cols="4"') && !tblHtml.includes("md-table-bar") && !tblHtml.includes("md-table-meta"), "table card tags column count and omits persistent top bar and dimension strip");
   const tbl3Html = T.mdRender("| 任务 | 负责 Agent | 当前阶段 |\n| --- | --- | --- |\n| 核心索引 | \x60worker-a\x60 | 收尾中 |");
   assert.ok(tbl3Html.includes('class="md-table-card" data-table-card data-cols="3"'), "3-col table emits data-cols=3 for mobile wrap layout");
   assert.ok(tblHtml.includes('class="md-float-acts md-table-acts"') && tblHtml.includes('data-copy-table="tsv"') && tblHtml.includes('data-copy-table="md"'), "table card renders floating TSV and MD copy buttons");
@@ -563,7 +563,7 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
   ].join("\n"));
   assert.ok(safeDet.includes('<details class="md-fold"><summary>查看详细日志</summary>'), "whitelisted details renders with stripped heading prefix in summary");
   assert.ok(!/<summary>[^<]*<h[1-6]/i.test(safeDet), "summary never contains heading elements");
-  assert.ok(safeDet.includes('class="md-task-list"') && safeDet.includes('class="md-code"'), "inner Markdown renders inside details body");
+  assert.ok(safeDet.includes('class="md-task-list"') && safeDet.includes('class="md-code has-tag"'), "inner Markdown renders inside details body");
 
   // XSS payloads in <details>/<summary> and body MUST be completely neutralized
   const xssPayloads = [

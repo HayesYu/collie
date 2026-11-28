@@ -821,7 +821,7 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await flush(); };
 
   // 6e) HTML & CSS contracts for .td-workers / .td-worker
   assert.ok(indexHtml.includes('<nav class="td-workers" id="td-workers"'), "index.html defines semantic nav.td-workers");
-  assert.ok(appCss.includes(".td-head:has(+ .td-workers:not([hidden]))"), "CSS merges header border when .td-workers visible");
+  assert.ok(appCss.includes(".td-head.has-workers"), "CSS merges header border when .td-workers visible via direct .has-workers class");
   assert.ok(appCss.includes("scrollbar-width: none;") && appCss.includes("@supports not (scrollbar-width: none)"), "CSS hides horizontal scrollbar with modern @supports fallback");
   assert.ok(!/\.td-worker\b[^}]*--mono/.test(appCss), ".td-worker pills strictly use --sans typography, never --mono");
   assert.ok(appCss.includes(".viewer > .gone {"), "pane-closed .gone banner must be scoped to .viewer > .gone");

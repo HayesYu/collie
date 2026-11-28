@@ -144,9 +144,9 @@ assert.ok(h1.includes('data-open-worker="review-beta" data-worker-status="blocke
 assert.ok(h1.includes('data-open-worker="wait-gamma" data-worker-status="waiting"'), "waiting worker carries data-worker-status=waiting");
 assert.ok(h1.includes('data-open-worker="done-delta" data-worker-status="ended"'), "ended worker carries data-worker-status=ended");
 assert.ok(h1.includes("<code>go test ./...</code>"), "plain inline code stays non-clickable");
-assert.ok(h1.includes('class="fpath" href="#" data-path="~/code/app/main.go"') && h1.includes('<code class="code-link">~/code/app/main.go</code>'), "file path code link preserved");
-assert.ok(h1.includes('class="fpath img-link" href="#" data-path="~/code/app/shot.png"'), "image path code link carries img-link");
-assert.ok(h1.includes('class="url" href="https://example.com/run/1"') && h1.includes('<code class="code-link">https://example.com/run/1</code>'), "inline URL code link preserved");
+assert.ok(h1.includes('class="fpath has-code-link" href="#" data-path="~/code/app/main.go"') && h1.includes('<code class="code-link">~/code/app/main.go</code>'), "file path code link preserved");
+assert.ok(h1.includes('class="fpath img-link has-code-link" href="#" data-path="~/code/app/shot.png"'), "image path code link carries img-link");
+assert.ok(h1.includes('class="url has-code-link" href="https://example.com/run/1"') && h1.includes('<code class="code-link">https://example.com/run/1</code>'), "inline URL code link preserved");
 assert.ok(h1.includes('<a href="https://example.com/docs" target="_blank" rel="noopener noreferrer">文档</a>'), "markdown external link preserved");
 
 // Status transition working -> ended invalidates mdCache cleanly

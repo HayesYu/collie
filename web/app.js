@@ -5448,7 +5448,7 @@
   const hasTopRightOverlay = () => !!(superSearchOpen || collieMenuOpen);
   function closeCollieMenus() {
     collieMenuOpen = false;
-    $$(".menu").forEach((m) => { m.hidden = true; });
+    $$(".menu").forEach((m) => { if (!m.hidden) m.hidden = true; });
   }
   function closeAllColliePopovers() {
     closeCollieMenus();
@@ -17733,6 +17733,20 @@
       if (!msg) return;
       const expanded = msg.classList.toggle("is-expanded");
       btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+      clearTimeout(msg._ptAnimTimer);
+      msg._ptAnimTimer = 0;
+      if (expanded) {
+        const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!reduced) {
+          msg.classList.add("is-just-expanded");
+          msg._ptAnimTimer = setTimeout(() => {
+            msg._ptAnimTimer = 0;
+            msg.classList.remove("is-just-expanded");
+          }, 200);
+        }
+      } else {
+        msg.classList.remove("is-just-expanded");
+      }
       const key = msg.dataset?.promptKey;
       if (threadEl && key) {
         if (!threadEl._expandedPromptKeys) threadEl._expandedPromptKeys = new Set();
@@ -18067,94 +18081,184 @@
     }
   }
 
-  function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。")) {
-    const rest = el._restore;
-    // Just opened: start at the latest message, unless restoring a scroll position.
-    const was = rest ? !!rest.atBottom : (el._fresh || nearBottom(el) || !el.childElementCount);
-    if (msgs.length) el._fresh = false;
-    const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
-    if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._blocks = null; return; }
-    const blocks = [];
-    let html = "", i = 0, seenUser = false;
-    const fullTask = el.id === "wd-thread"
-      ? (resolveWorkerContext().supW?.task || "")
-      : (el.id === "thread" && current ? (getWorkerLookup().byPane.get(current)?.task || "") : "");
-    const cut = () => { blocks.push(html); html = ""; };
+  function workerMsgsRawSig(msgs, earlier = 0) {
+    try { return `${earlier}|${JSON.stringify(msgs || [])}`; } catch { return ""; }
+  }
+  function bindLazyToolRuns(el) {
+    if (!el || el._lazyRunBound || typeof el.addEventListener !== "function") return;
+    el._lazyRunBound = true;
+    el.addEventListener("toggle", (ev) => {
+      const det = ev.target;
+      if (!det || !det.open || !det.classList?.contains?.("toolrun")) return;
+      const body = det.querySelector?.(".toolrun-body[data-lazy-run]");
+      const k = body?.dataset?.lazyRun;
+      if (!k) return;
+      const rec = el._lazyRuns?.get?.(k);
+      if (!rec) return;
+      delete body.dataset.lazyRun;
+      const emptyOpen = new Set();
+      body.innerHTML = rec.items.map((t, idx) => renderToolItem(t, rec.start + idx, emptyOpen)).join("");
+    }, true);
+  }
+  function groupThreadMsgs(msgs) {
+    const groups = [];
+    let i = 0, seenUser = false;
     while (i < msgs.length) {
       const m = msgs[i];
       if (m.kind === "tool") {
-        // A run of tool calls reads as one quiet line; long runs fold away,
-        // keeping only the latest step in view.
         const start = i;
         while (i < msgs.length && msgs[i].kind === "tool") i++;
-        const run = msgs.slice(start, i);
-        const row = (t, k) => renderToolItem(t, k, open);
-        if (run.length <= 3 || !prefs.fold()) {
-          html += `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
-          cut();
-          continue;
-        }
-        const key = "run" + start;
-        const names = [...new Set(run.map((t) => (t.subagent?.type || t.subagent?.role || t.name)))].slice(0, 4).join("、");
-        const errs = run.filter((t) => t.error).length;
-        html += `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>
-          <summary><span class="n">${esc(tx("detail.stepsCount", "{n} 个步骤", { n: run.length }))}</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${esc(tx("detail.stepsErrors", "{n} 个出错", { n: errs }))}</b>` : ""}</span></summary>
-          <div class="toolrun-body">${run.slice(0, -1).map((t, k) => row(t, start + k)).join("")}</div>
-        </details>${row(run[run.length - 1], i - 1)}</div>`;
-        cut();
+        groups.push({ kind: "tools", start, end: i });
         continue;
       }
-      if (m.kind === "ask" && m.name === "recap") {
-        html += `<div class="recap-note">${esc(m.input)}</div>`;
-        cut();
-        i++;
-        continue;
-      }
-      if (m.kind === "ask") {
-        // A question to you: AskUserQuestion is answered in the app it runs
-        // in; the Claude app's end-of-turn buttons just send their label.
-        const later = msgs.slice(i + 1).some((x) => x.kind === "user");
-        const box = m.name === "wrap_up";
-        const open = box ? !later : !m.output;
-        const opts = (m.options || []).map((o) => box && open
-          ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
-          : `<span class="opt">${esc(o)}</span>`).join("");
-        html += `<div class="ask-card ${open ? "open" : ""}">`
-          + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
-          + `<div class="q"><span class="dot ${open ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
-          + (opts ? `<div class="opts">${opts}</div>` : "")
-          + (m.output ? `<div class="answer">${esc(m.output)}</div>`
-            : open && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
-              ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">${esc(tx("ext.answerInClaude", "去 Claude 桌面版回答"))}</button><span>${esc(tx("ext.onlyDesktopDialog", "这个对话框只能在电脑上答"))}</span></div>`
-      : (el.id === "thread" || el.id === "wd-thread") ? "" : `<div class="where">${esc(tx("ext.answerOnComputer", "在电脑上的会话里回答"))}</div>`) : "")
-          + `</div>`;
-        cut();
-        i++;
-        continue;
-      }
-      if (m.kind === "user") {
-        const isFirstUser = !seenUser;
-        seenUser = true;
-        const parts = parseUserParts(m.text);
-        const mediaHtml = renderUserMedia(parts.imgs);
-        const bubbleHtml = renderWorkerUserBubble(parts, el, i, isFirstUser, fullTask);
-        if (mediaHtml && !parts.hasBubbleContent) {
-          html += `<div class="msg user is-media-only">${mediaHtml}</div>`;
-        } else if (mediaHtml) {
-          html += `<div class="mine-group">${mediaHtml}${bubbleHtml}</div>`;
-        } else {
-          html += bubbleHtml;
-        }
-      } else {
-        html += `<div class="msg assistant">${md(m.text)}</div>`;
-      }
-      cut();
+      const isFirstUser = m.kind === "user" && !seenUser;
+      if (m.kind === "user") seenUser = true;
+      groups.push({ kind: m.kind, index: i, isFirstUser });
       i++;
     }
+    return groups;
+  }
+  function renderThreadGroup(g, msgs, el, open, fullTask, lazyRuns) {
+    if (g.kind === "tools") {
+      const start = g.start;
+      const run = msgs.slice(start, g.end);
+      const row = (t, k) => renderToolItem(t, k, open);
+      if (run.length <= 3 || !prefs.fold()) {
+        return `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
+      }
+      const key = "run" + start;
+      const isOpen = open.has(key);
+      const prevItems = run.slice(0, -1);
+      const names = [...new Set(run.map((t) => (t.subagent?.type || t.subagent?.role || t.name)))].slice(0, 4).join("、");
+      const errs = run.filter((t) => t.error).length;
+      if (!isOpen) lazyRuns.set(key, { start, items: prevItems });
+      const bodyInner = isOpen ? prevItems.map((t, k) => row(t, start + k)).join("") : "";
+      return `<div class="tools"><details class="toolrun" data-i="${key}"${isOpen ? " open" : ""}>
+          <summary><span class="n">${esc(tx("detail.stepsCount", "{n} 个步骤", { n: run.length }))}</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${esc(tx("detail.stepsErrors", "{n} 个出错", { n: errs }))}</b>` : ""}</span></summary>
+          <div class="toolrun-body"${!isOpen ? ` data-lazy-run="${key}"` : ""}>${bodyInner}</div>
+        </details>${row(run[run.length - 1], g.end - 1)}</div>`;
+    }
+    const i = g.index;
+    const m = msgs[i];
+    if (m.kind === "ask" && m.name === "recap") {
+      return `<div class="recap-note">${esc(m.input)}</div>`;
+    }
+    if (m.kind === "ask") {
+      // A question to you: AskUserQuestion is answered in the app it runs
+      // in; the Claude app's end-of-turn buttons just send their label.
+      const later = msgs.slice(i + 1).some((x) => x.kind === "user");
+      const box = m.name === "wrap_up";
+      const isAskOpen = box ? !later : !m.output;
+      const opts = (m.options || []).map((o) => box && isAskOpen
+        ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
+        : `<span class="opt">${esc(o)}</span>`).join("");
+      return `<div class="ask-card ${isAskOpen ? "open" : ""}">`
+        + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
+        + `<div class="q"><span class="dot ${isAskOpen ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
+        + (opts ? `<div class="opts">${opts}</div>` : "")
+        + (m.output ? `<div class="answer">${esc(m.output)}</div>`
+          : isAskOpen && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
+            ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">${esc(tx("ext.answerInClaude", "去 Claude 桌面版回答"))}</button><span>${esc(tx("ext.onlyDesktopDialog", "这个对话框只能在电脑上答"))}</span></div>`
+    : (el.id === "thread" || el.id === "wd-thread") ? "" : `<div class="where">${esc(tx("ext.answerOnComputer", "在电脑上的会话里回答"))}</div>`) : "")
+        + `</div>`;
+    }
+    if (m.kind === "user") {
+      const parts = parseUserParts(m.text);
+      const mediaHtml = renderUserMedia(parts.imgs);
+      const bubbleHtml = renderWorkerUserBubble(parts, el, i, g.isFirstUser, fullTask);
+      if (mediaHtml && !parts.hasBubbleContent) {
+        return `<div class="msg user is-media-only">${mediaHtml}</div>`;
+      }
+      if (mediaHtml) {
+        return `<div class="mine-group">${mediaHtml}${bubbleHtml}</div>`;
+      }
+      return bubbleHtml;
+    }
+    return `<div class="msg assistant">${md(m.text)}</div>`;
+  }
+
+  function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。"), drawOpts = null) {
+    clearTimeout(el._chunkTimer);
+    el._chunkTimer = 0;
+    const rest = el._restore;
+    // Just opened: start at the latest message, unless restoring a scroll position.
+    const was = rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || nearBottom(el));
+    if (msgs.length) el._fresh = false;
+    const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
+    if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._rawMsgsSig = ""; el._blocks = null; el._lazyRuns = null; return; }
+    const fullTask = el.id === "wd-thread"
+      ? (resolveWorkerContext().supW?.task || "")
+      : (el.id === "thread" && current ? (getWorkerLookup().byPane.get(current)?.task || "") : "");
+    const groups = groupThreadMsgs(msgs);
+    const lazyRuns = new Map();
+    el._lazyRuns = lazyRuns;
+    bindLazyToolRuns(el);
+
+    const useProgressive = !!(drawOpts?.progressive && groups.length > 2 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
+    if (useProgressive) {
+      // True lazy tail-first chunked mount on mobile cold Worker Drawer open:
+      // only run md() on the 2 groups being mounted in each batch so neither frame 0 nor post-slide chunks spike.
+      const blocks = new Array(groups.length);
+      const tailStart = Math.max(0, groups.length - 2);
+      for (let gi = tailStart; gi < groups.length; gi++) {
+        blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
+      }
+      el.innerHTML = blocks.slice(tailStart).join("");
+      syncExpandedPrompts(el);
+      hydrateRichContent(el);
+      stick(el, true);
+      let curStart = tailStart;
+      const finishAll = () => {
+        if (el._loadingEarlier) {
+          const rowHtml = `<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`;
+          blocks.unshift(rowHtml);
+          el.insertAdjacentHTML("afterbegin", rowHtml);
+        }
+        el._sig = blocks.join("");
+        el._blocks = blocks;
+        el._last = el.lastElementChild;
+        if (drawOpts?.cacheKey) el._renderedCacheKey = drawOpts.cacheKey;
+        if (drawOpts?.rawSig) el._rawMsgsSig = drawOpts.rawSig;
+        syncExpandedPrompts(el);
+        hydrateRichContent(el);
+        if (el._earlierURL && !el._loadingEarlier && !el._earlierFailed && earlierCursor(el) > 0) {
+          const s = scroller(el);
+          if (s.scrollHeight <= s.clientHeight + 100) setTimeout(() => loadEarlier(el));
+        }
+      };
+      const prependNext = () => {
+        el._chunkTimer = 0;
+        if (drawOpts?.isAlive && !drawOpts.isAlive()) return;
+        const nextStart = Math.max(0, curStart - 2);
+        for (let gi = nextStart; gi < curStart; gi++) {
+          blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
+        }
+        const chunkHtml = blocks.slice(nextStart, curStart).join("");
+        const scEl = scroller(el);
+        const anchor = el.firstElementChild;
+        const anchorTop = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
+        el.insertAdjacentHTML("afterbegin", chunkHtml);
+        if (anchor && anchorTop !== null && anchor.isConnected && scEl && typeof anchor.getBoundingClientRect === "function") {
+          const delta = anchor.getBoundingClientRect().top - anchorTop;
+          if (Math.abs(delta) > 0.5) scEl.scrollTop += delta;
+        }
+        curStart = nextStart;
+        if (curStart > 0) {
+          el._chunkTimer = setTimeout(prependNext, 32);
+        } else {
+          finishAll();
+        }
+      };
+      el._chunkTimer = setTimeout(prependNext, 32);
+      return;
+    }
+
+    const blocks = groups.map((g) => renderThreadGroup(g, msgs, el, open, fullTask, lazyRuns));
     if (el._loadingEarlier) blocks.unshift(`<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`);
     const sig = blocks.join("");
     if (sig === el._sig) return;
     el._sig = sig;
+    if (drawOpts?.rawSig) el._rawMsgsSig = drawOpts.rawSig;
     const old = el._blocks;
     if (old && el.children.length === old.length && el.lastElementChild === el._last) {
       // Keep what did not change (and its open/closed state); redraw from
@@ -18680,11 +18784,14 @@
     }
     return `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=html`;
   };
-  const fileLinkAttrs = (rawPath, escapedPath, titleText) => HTML_EXT.test(rawPath)
-    ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" data-path="${escapedPath}" title="${esc(tx("file.previewHtmlTip", "预览 HTML：{path}", { path: rawPath }))}"`
-    : IMG_EXT.test(rawPath)
-    ? `class="fpath img-link" href="#" data-path="${escapedPath}" title="${esc(tx("file.viewImgTip", "查看大图 {name}", { name: rawPath.split("/").pop() || rawPath }))}"`
-    : `class="fpath" href="#" data-path="${escapedPath}" title="${titleText}"`;
+  const fileLinkAttrs = (rawPath, escapedPath, titleText, extraCls = "") => {
+    const ext = extraCls ? ` ${extraCls}` : "";
+    return HTML_EXT.test(rawPath)
+      ? `class="fpath html-link${ext}" href="${esc(htmlFileURL(rawPath))}" data-path="${escapedPath}" title="${esc(tx("file.previewHtmlTip", "预览 HTML：{path}", { path: rawPath }))}"`
+      : IMG_EXT.test(rawPath)
+      ? `class="fpath img-link${ext}" href="#" data-path="${escapedPath}" title="${esc(tx("file.viewImgTip", "查看大图 {name}", { name: rawPath.split("/").pop() || rawPath }))}"`
+      : `class="fpath${ext}" href="#" data-path="${escapedPath}" title="${titleText}"`;
+  };
   // Strict RFC 4180 parser for CSV / TSV: handles quoted commas/tabs, escaped "" quotes,
   // and embedded CR/LF newlines inside quoted fields, with a row cap for huge files.
   function parseDelimitedTable(rawText, delimiter = ",", maxRows = CSV_MAX_PARSE_ROWS) {
@@ -19039,7 +19146,7 @@
       body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(baseFileName(hf.path))}"></iframe>`;
       const frame = body.querySelector("iframe");
       if (frame) frame.srcdoc = hf.htmlText;
-      if (view === "collie") renderSuper();
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), hf.path || path);
       return;
     }
     let f = null;
@@ -19082,7 +19189,7 @@
       fvCur.csvParsed = null;
       syncFileBar("fv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: tx("file.copyFullRaw", "复制完整原文"), downloadable: canDl, wideHref: wHref });
       renderDelimitedStage("fv", fvCur, body, cut);
-      if (view === "collie") renderSuper();
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), f.path || path);
       return;
     }
     if (MD_EXT.test(path)) {
@@ -19090,13 +19197,13 @@
       body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
       hydrateRichContent(body);
       body.scrollTop = body.scrollLeft = 0;
-      if (view === "collie") renderSuper();
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), f.path || path);
       return;
     }
     const lang = renderCodeBody(body, path, text, cut, "fv-code-src", false);
     syncFileBar("fv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: tx("file.copyAll", "复制全文"), downloadable: canDl, wideHref: wHref });
     body.scrollTop = body.scrollLeft = 0;
-    if (view === "collie") renderSuper();
+    if (view === "collie") syncActiveFileMarks($("#super-thread"), f.path || path);
   }
   async function openWideFile(rawQuery, restore = null) {
     const q = new URLSearchParams(String(rawQuery || "").replace(/^\?/, ""));
@@ -19843,6 +19950,20 @@
     const remain = Math.max(0, total - head);
     block.classList?.toggle("is-collapsed", !expanded);
     btn?.setAttribute?.("aria-expanded", String(!!expanded));
+    clearTimeout(block._foldAnimTimer);
+    block._foldAnimTimer = 0;
+    if (persist && expanded) {
+      const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduced) {
+        block.classList?.add("is-just-expanded");
+        block._foldAnimTimer = setTimeout(() => {
+          block._foldAnimTimer = 0;
+          block.classList?.remove("is-just-expanded");
+        }, 180);
+      }
+    } else {
+      block.classList?.remove("is-just-expanded");
+    }
     if (tail) {
       if (expanded) {
         tail.removeAttribute?.("hidden");
@@ -19888,10 +20009,13 @@
       btn.textContent = doneLabel;
     }
     btn.classList?.add("is-done");
+    const copyHost = btn.closest?.(".md-code, .md-table-card");
+    copyHost?.classList?.add("is-copy-done");
     btn._doneTimer = setTimeout(() => {
       if (lbl) lbl.textContent = btn._origLabel ?? "";
       else btn.textContent = btn._origLabel ?? "";
       btn.classList?.remove("is-done");
+      copyHost?.classList?.remove("is-copy-done");
     }, 1500);
   }
   function extractTableRows(table) {
@@ -19910,52 +20034,105 @@
     });
     return { rows, aligns };
   }
-  function syncTableCard(card) {
-    if (!card) return;
-    const vp = card.querySelector?.("[data-table-vp]");
-    const sc = card.querySelector?.(".md-table");
-    if (!vp || !sc) return;
-    const maxScroll = (sc.scrollWidth || 0) - (sc.clientWidth || 0);
-    const scrollable = maxScroll > 2;
-    vp.classList?.toggle("is-scrollable", scrollable);
-    if (scrollable) {
-      const firstCell = sc.querySelector?.("thead th:first-child, tbody th:first-child");
-      const colW = firstCell?.offsetWidth || 0;
-      if (colW > 0) vp.style?.setProperty?.("--sticky-col-w", colW + "px");
-    } else {
-      vp.style?.removeProperty?.("--sticky-col-w");
+  function isMobileWrappedTable(card) {
+    if (typeof innerWidth !== "number" || innerWidth > 760) return false;
+    const cols = Number(card?.getAttribute?.("data-cols") || card?.dataset?.cols || 0);
+    return cols >= 1 && cols <= 3;
+  }
+  function isMobileWrappedCode() {
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function syncTablesBatch(cards) {
+    if (!cards || !cards.length) return;
+    // Strict 2-phase read-then-write prevents O(N) forced synchronous layout thrashing.
+    const measured = [];
+    for (const card of cards) {
+      if (!card || card.isConnected === false) continue;
+      const vp = card.querySelector?.("[data-table-vp]");
+      const sc = card.querySelector?.(".md-table");
+      if (!vp || !sc) continue;
+      if (isMobileWrappedTable(card)) {
+        measured.push({ vp, scrollable: false, canL: false, canR: false, colW: 0 });
+        continue;
+      }
+      const sw = sc.scrollWidth || 0;
+      const cw = sc.clientWidth || 0;
+      const sl = sc.scrollLeft || 0;
+      const maxScroll = sw - cw;
+      const scrollable = maxScroll > 2;
+      let colW = 0;
+      if (scrollable) {
+        const firstCell = sc.querySelector?.("thead th:first-child, tbody th:first-child");
+        colW = firstCell?.offsetWidth || 0;
+      }
+      measured.push({ vp, scrollable, canL: scrollable && sl > 4, canR: scrollable && sl < maxScroll - 4, colW });
     }
-    vp.classList?.toggle("can-scroll-l", scrollable && (sc.scrollLeft || 0) > 4);
-    vp.classList?.toggle("can-scroll-r", scrollable && (sc.scrollLeft || 0) < maxScroll - 4);
+    for (const m of measured) {
+      m.vp.classList?.toggle("is-scrollable", m.scrollable);
+      if (m.scrollable && m.colW > 0) {
+        m.vp.style?.setProperty?.("--sticky-col-w", m.colW + "px");
+      } else if (!m.scrollable) {
+        m.vp.style?.removeProperty?.("--sticky-col-w");
+      }
+      m.vp.classList?.toggle("can-scroll-l", m.canL);
+      m.vp.classList?.toggle("can-scroll-r", m.canR);
+    }
+  }
+  function syncTableCard(card) {
+    if (card) syncTablesBatch([card]);
   }
   const boundTableScrolls = new WeakSet();
   let tableRO = null;
+  let _tablePending = new Set();
+  let _tableBatchRAF = 0;
+  function scheduleTableSync(cards) {
+    if (!cards || !cards.length) return;
+    for (const c of cards) if (c) _tablePending.add(c);
+    if (_tableBatchRAF) return;
+    const flush = () => {
+      _tableBatchRAF = 0;
+      const batch = [..._tablePending];
+      _tablePending.clear();
+      syncTablesBatch(batch);
+    };
+    if (typeof requestAnimationFrame === "function") {
+      _tableBatchRAF = requestAnimationFrame(flush);
+    } else {
+      flush();
+    }
+  }
   function observeTableResize(sc) {
     if (!sc || typeof ResizeObserver !== "function") return;
     if (!tableRO) {
       tableRO = new ResizeObserver((entries) => {
+        const cards = [];
         for (const entry of entries) {
           const card = entry.target?.closest?.("[data-table-card]");
-          if (card) syncTableCard(card);
+          if (card) cards.push(card);
         }
+        if (cards.length) scheduleTableSync(cards);
       });
     }
     try { tableRO.observe(sc); } catch {}
   }
   function hydrateTables(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
-    const cards = root.querySelectorAll("[data-table-card]");
+    const cards = [...root.querySelectorAll("[data-table-card]")];
+    if (!cards.length) return;
+    const toSync = [];
     for (const card of cards) {
       const sc = card.querySelector?.(".md-table");
       if (!sc) continue;
       if (!boundTableScrolls.has(sc)) {
         boundTableScrolls.add(sc);
         sc.addEventListener?.("scroll", () => {
+          const vp = card.querySelector?.("[data-table-vp]");
+          vp?.classList?.add("is-scroll-ready");
           syncTableCard(card);
           const k = getRichBlockKey(card, "table", "[data-table-card]");
           if (k) setRichUiState(k, sc.scrollLeft || 0);
         }, { passive: true });
-        observeTableResize(sc);
+        if (!isMobileWrappedTable(card)) observeTableResize(sc);
       }
       if (!card._richHydrated) {
         card._richHydrated = true;
@@ -19963,43 +20140,85 @@
         const saved = k ? richUiState.get(k) : 0;
         if (typeof saved === "number" && saved > 0) sc.scrollLeft = saved;
       }
-      syncTableCard(card);
+      if (!isMobileWrappedTable(card)) toSync.push(card);
+    }
+    if (toSync.length) scheduleTableSync(toSync);
+  }
+  function syncCodeBlocksBatch(blocks) {
+    if (!blocks || !blocks.length) return;
+    const wrapped = isMobileWrappedCode();
+    const measured = [];
+    for (const block of blocks) {
+      if (!block || block.isConnected === false) continue;
+      if (wrapped) {
+        measured.push({ block, scrollable: false, canL: false, canR: false });
+        continue;
+      }
+      const pre = block.querySelector?.(".md-code-body pre");
+      if (!pre) continue;
+      const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
+      const scrollable = maxScroll > 2;
+      const sl = pre.scrollLeft || 0;
+      measured.push({ block, scrollable, canL: scrollable && sl > 4, canR: scrollable && sl < maxScroll - 4 });
+    }
+    for (const m of measured) {
+      m.block.classList?.toggle("is-scrollable", m.scrollable);
+      m.block.classList?.toggle("can-scroll-l", m.canL);
+      m.block.classList?.toggle("can-scroll-r", m.canR);
     }
   }
   function syncCodeBlockScroll(block) {
-    if (!block) return;
-    const pre = block.querySelector?.(".md-code-body pre");
-    if (!pre) return;
-    const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
-    const scrollable = maxScroll > 2;
-    block.classList?.toggle("is-scrollable", scrollable);
-    block.classList?.toggle("can-scroll-l", scrollable && (pre.scrollLeft || 0) > 4);
-    block.classList?.toggle("can-scroll-r", scrollable && (pre.scrollLeft || 0) < maxScroll - 4);
+    if (block) syncCodeBlocksBatch([block]);
   }
   const boundCodeScrolls = new WeakSet();
   let codeRO = null;
+  let _codePending = new Set();
+  let _codeBatchRAF = 0;
+  function scheduleCodeSync(blocks) {
+    if (!blocks || !blocks.length) return;
+    for (const b of blocks) if (b) _codePending.add(b);
+    if (_codeBatchRAF) return;
+    const flush = () => {
+      _codeBatchRAF = 0;
+      const batch = [..._codePending];
+      _codePending.clear();
+      syncCodeBlocksBatch(batch);
+    };
+    if (typeof requestAnimationFrame === "function") {
+      _codeBatchRAF = requestAnimationFrame(flush);
+    } else {
+      flush();
+    }
+  }
   function observeCodeResize(pre) {
     if (!pre || typeof ResizeObserver !== "function") return;
     if (!codeRO) {
       codeRO = new ResizeObserver((entries) => {
+        const blocks = [];
         for (const entry of entries) {
           const block = entry.target?.closest?.("[data-code-block]");
-          if (block) syncCodeBlockScroll(block);
+          if (block) blocks.push(block);
         }
+        if (blocks.length) scheduleCodeSync(blocks);
       });
     }
     try { codeRO.observe(pre); } catch {}
   }
   function hydrateCodeBlocks(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
+    const wrapped = isMobileWrappedCode();
+    const toSync = [];
     for (const block of root.querySelectorAll("[data-code-block]")) {
       const pre = block.querySelector?.(".md-code-body pre");
       if (pre && !boundCodeScrolls.has(pre)) {
         boundCodeScrolls.add(pre);
-        pre.addEventListener?.("scroll", () => syncCodeBlockScroll(block), { passive: true });
-        observeCodeResize(pre);
+        pre.addEventListener?.("scroll", () => {
+          block.classList?.add("is-scroll-ready");
+          syncCodeBlockScroll(block);
+        }, { passive: true });
+        if (!wrapped) observeCodeResize(pre);
       }
-      syncCodeBlockScroll(block);
+      if (!wrapped) toSync.push(block);
       if (!block.hasAttribute?.("data-foldable") || block._richHydrated) continue;
       block._richHydrated = true;
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
@@ -20010,6 +20229,7 @@
         if (tail) { tail.setAttribute?.("hidden", ""); tail.hidden = true; }
       }
     }
+    if (toSync.length) scheduleCodeSync(toSync);
   }
   function hydrateDetails(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
@@ -21330,7 +21550,8 @@
       const btn = $(btnId);
       if (!btn) continue;
       const show = !!(meta && activeKind === kind && meta.kind !== kind);
-      btn.hidden = !show;
+      if (btn.hidden !== !show) btn.hidden = !show;
+      btn.parentElement?.classList?.toggle("has-back", show);
       if (show) {
         btn.dataset.returnKind = meta.kind;
         btn.setAttribute("aria-label", meta.ariaLabel);
@@ -21550,10 +21771,65 @@
     });
   }
 
+  function clearMobileSheetOpen(el) {
+    if (!el) return;
+    clearTimeout(el._sdOpenTimer);
+    el._sdOpenTimer = 0;
+    el._slideSettleAt = 0;
+    if (el._sdOpenOnEnd) {
+      el.removeEventListener?.("animationend", el._sdOpenOnEnd);
+      el.removeEventListener?.("animationcancel", el._sdOpenOnEnd);
+      el._sdOpenOnEnd = null;
+    }
+    el.classList?.remove("is-sheet-opening", "is-scrim-opening");
+  }
+  function playMobileSheetOpen(drawerEl, scrimEl) {
+    if (!drawerEl) return;
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    clearMobileSheetOpen(drawerEl);
+    if (scrimEl) clearMobileSheetOpen(scrimEl);
+    if (reduced) {
+      clearSheetWillChange(drawerEl);
+      if (scrimEl) clearSheetWillChange(scrimEl);
+      const cb = drawerEl._onSlideSettled;
+      drawerEl._onSlideSettled = null;
+      if (cb) cb();
+      return;
+    }
+    drawerEl._slideSettleAt = performance.now() + 265;
+    promoteSheetWillChange(drawerEl, "transform", 340);
+    drawerEl.classList?.add("is-sheet-opening");
+    const doneDrawer = (ev) => {
+      if (ev && ev.target !== drawerEl) return;
+      clearMobileSheetOpen(drawerEl);
+      clearSheetWillChange(drawerEl);
+      const cb = drawerEl._onSlideSettled;
+      drawerEl._onSlideSettled = null;
+      if (cb) cb();
+    };
+    drawerEl._sdOpenOnEnd = doneDrawer;
+    drawerEl.addEventListener?.("animationend", doneDrawer);
+    drawerEl.addEventListener?.("animationcancel", doneDrawer);
+    drawerEl._sdOpenTimer = setTimeout(doneDrawer, 290);
+    if (scrimEl) {
+      promoteSheetWillChange(scrimEl, "opacity", 340);
+      scrimEl.classList?.add("is-scrim-opening");
+      const doneScrim = (ev) => {
+        if (ev && ev.target !== scrimEl) return;
+        clearMobileSheetOpen(scrimEl);
+        clearSheetWillChange(scrimEl);
+      };
+      scrimEl._sdOpenOnEnd = doneScrim;
+      scrimEl.addEventListener?.("animationend", doneScrim);
+      scrimEl.addEventListener?.("animationcancel", doneScrim);
+      scrimEl._sdOpenTimer = setTimeout(doneScrim, 320);
+    }
+  }
   const resetDrawerMotion = (el, opts = {}) => {
     if (!el) return;
     clearTimeout(el._sdAnimTimer);
     el._sdAnimTimer = 0;
+    clearMobileSheetOpen(el);
     clearMobileSheetSwap(el);
     el.classList.remove("is-closing", "is-entering", "is-switching", "is-dragging");
     el.style?.removeProperty?.("--drawer-close-w");
@@ -21624,20 +21900,24 @@
       clearCollieShiftInline();
     }
     const mobileSwap = !desktopMode && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
-    if (pane.hidden) {
-      pane.hidden = false;
-      if (!mobileSwap) pane.offsetWidth;
-    }
+    const wasHidden = !!pane.hidden;
+    if (wasHidden) pane.hidden = false;
+    if ("inert" in pane) pane.inert = false;
     pane.setAttribute("aria-hidden", "false");
     if (fileScrim) {
+      clearMobileSheetOpen(fileScrim);
       fileScrim.classList.remove("is-dragging");
       fileScrim.style.opacity = "";
       if (mobileSwap) holdScrimImmediate(fileScrim);
       fileScrim.hidden = false;
     }
     if (!desktopMode && !hadFile) {
-      promoteSheetWillChange(pane, "transform", 340);
-      if (fileScrim) promoteSheetWillChange(fileScrim, "opacity", 340);
+      if (wasHidden && !mobileSwap && !opts.immediate) {
+        playMobileSheetOpen(pane, fileScrim);
+      } else {
+        promoteSheetWillChange(pane, "transform", 340);
+        if (fileScrim) promoteSheetWillChange(fileScrim, "opacity", 340);
+      }
     }
     appEl?.classList?.add("has-file");
     syncFileWidenUI();
@@ -21693,11 +21973,15 @@
     } else if (overlayCloseAnim) {
       resetDrawerMotion(pane, { keepWillChange: true });
       promoteSheetWillChange(pane, "transform", 320);
-      if (fileScrim) {
-        fileScrim.classList.remove("is-dragging");
-        fileScrim.style.opacity = "";
-        promoteSheetWillChange(fileScrim, "opacity", 320);
-      }
+    } else {
+      resetDrawerMotion(pane);
+    }
+    if (fileScrim) {
+      clearMobileSheetOpen(fileScrim);
+      fileScrim.classList.remove("is-dragging");
+      fileScrim.style.opacity = "";
+      if (overlayCloseAnim) promoteSheetWillChange(fileScrim, "opacity", 320);
+      else clearSheetWillChange(fileScrim);
     }
     appEl?.classList?.remove("has-file");
     if (!switching) syncAppDrawerClasses();
@@ -21716,6 +22000,7 @@
       resetDrawerMotion(pane);
       if (pane) {
         pane.hidden = true;
+        if ("inert" in pane) pane.inert = true;
         if (pane.style) pane.style.width = "";
       }
       if (fileScrim) {
@@ -21817,10 +22102,12 @@
         if (!dragging) return;
         if (!appliedDrag) {
           appliedDrag = true;
+          clearMobileSheetOpen(drawerEl);
           clearMobileSheetSwap(drawerEl);
           promoteSheetWillChange(drawerEl, "transform", 0);
           drawerEl.classList.add("is-dragging");
           if (scrimEl) {
+            clearMobileSheetOpen(scrimEl);
             promoteSheetWillChange(scrimEl, "opacity", 0);
             scrimEl.classList.add("is-dragging");
           }
@@ -22360,6 +22647,8 @@
     setNotesExpanded(next);
   }
   function renderNotebook() {
+    clearTimeout(_notesIdlePreRenderTimer);
+    _notesIdlePreRenderTimer = 0;
     if (!notesPane) return;
     const data = notebookData || { date: "", tasks: [], artifacts: [], timers: [] };
     const allTasks = Array.isArray(data.tasks) ? data.tasks : [];
@@ -22509,6 +22798,10 @@
     const hadNotes = col.classList.contains("has-notes");
     const stateUnchanged = (wasHidden === !wantOpen) && (hadNotes === keepSlot);
     const modeChanged = prevMode !== sidePaneActiveMode;
+    if (stateUnchanged && !modeChanged && !wantOpen && !opts.force) {
+      notesOpen = false;
+      return;
+    }
     if (immediate && !stateUnchanged) {
       col.classList.add("no-notes-anim");
       if (_noNotesAnimRAF && typeof cancelAnimationFrame === "function") {
@@ -22517,9 +22810,13 @@
       }
     }
     const isThreads = sidePaneActiveMode === "threads";
+    const wideNotes = isWideNotesViewport();
     notesOpen = wantOpen;
     if (hadNotes !== keepSlot) col.classList.toggle("has-notes", keepSlot);
-    document.body?.classList?.toggle("collie-has-notes", keepSlot);
+    const wantBodyNotes = keepSlot && wideNotes;
+    if (document.body?.classList?.contains("collie-has-notes") !== wantBodyNotes) {
+      document.body?.classList?.toggle("collie-has-notes", wantBodyNotes);
+    }
     const shiftMode = view === "collie" && !blockedByDrawer && keepSlot ? "notes" : "none";
     if (opts.deferShift) {
       _collieShiftMode = shiftMode;
@@ -22530,23 +22827,32 @@
     if (wasHidden !== !wantOpen) {
       if (innerWidth <= 760) {
         if (immediate) {
+          notesPane._slideSettleAt = 0;
           clearSheetWillChange(notesPane);
           if (notesScrim) clearSheetWillChange(notesScrim);
         } else {
+          notesPane._slideSettleAt = wantOpen ? performance.now() + 280 : 0;
           promoteSheetWillChange(notesPane, "transform", 320);
           if (notesScrim) promoteSheetWillChange(notesScrim, "opacity", 320);
         }
+      } else {
+        notesPane._slideSettleAt = 0;
       }
       notesPane.classList.toggle("is-handoff-in", !!(wantOpen && opts.fromDrawerClose && !immediate));
       notesPane.classList.toggle("is-hidden", !wantOpen);
       if (!wantOpen) {
         clearTimeout(_notesReturnAnimTimer);
         _notesReturnAnimTimer = 0;
+        clearTimeout(_notesDeferredRenderTimer);
+        _notesDeferredRenderTimer = 0;
         notesPane.classList.remove("is-return-in");
       }
     } else if (!wantOpen) {
+      notesPane._slideSettleAt = 0;
       clearTimeout(_notesReturnAnimTimer);
       _notesReturnAnimTimer = 0;
+      clearTimeout(_notesDeferredRenderTimer);
+      _notesDeferredRenderTimer = 0;
       notesPane.classList.remove("is-handoff-in", "is-return-in");
     }
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
@@ -22582,9 +22888,9 @@
       }
     }
     if (wantOpen) {
-      if (!col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
-      renderNotebook();
-      renderCollieThreadsMenu();
+      if (wideNotes && !col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
+      if (!isThreads) renderNotebook();
+      else renderCollieThreadsMenu();
       // Smooth 130ms restrained fade-in ONLY on the first-group panel when switching 进行中 <-> 话题.
       // 下方的「今日产物」与「下一条定时」保持原位纹丝不动。
       if (opts.animateModeSwap && modeChanged && !wasHidden && !immediate) {
@@ -22630,6 +22936,8 @@
     }
     syncNotebookVisibility({ animateModeSwap: true });
   }
+  let _notesDeferredRenderTimer = 0;
+  let _notesIdlePreRenderTimer = 0;
   async function loadNotebook(force = false) {
     if (notebookFetching && !force) return;
     notebookFetching = true;
@@ -22637,7 +22945,25 @@
       const r = await api("/api/super/notebook");
       if (r && typeof r === "object") {
         notebookData = r;
-        if (notesOpen) renderNotebook();
+        if (notesOpen) {
+          const remain = notesPane?._slideSettleAt ? (notesPane._slideSettleAt - performance.now()) : 0;
+          if (!isWideNotesViewport() && remain > 16 && _lastNotebookRenderKey) {
+            clearTimeout(_notesDeferredRenderTimer);
+            _notesDeferredRenderTimer = setTimeout(() => {
+              _notesDeferredRenderTimer = 0;
+              if (notesOpen) renderNotebook();
+            }, Math.min(300, Math.ceil(remain)));
+          } else {
+            renderNotebook();
+          }
+        } else if (notesPane && !isWideNotesViewport()) {
+          // Pre-hydrate hidden mobile notebook sheet during idle so tapping 小本本 opens with zero DOM rebuild or layout.
+          clearTimeout(_notesIdlePreRenderTimer);
+          _notesIdlePreRenderTimer = setTimeout(() => {
+            _notesIdlePreRenderTimer = 0;
+            if (!notesOpen && notebookData && view === "collie") renderNotebook();
+          }, 120);
+        }
       }
     } catch {
       // Quiet read-only failure: never disrupt main chat.
@@ -23424,6 +23750,7 @@
   }
   function renderThreadWorkers(th, info, allEntries, force = false) {
     if (!tdWorkersEl) return;
+    const tdHeadEl = tdDrawer?.querySelector?.(".td-head");
     const list = extractThreadWorkers(th, info, allEntries);
     if (!list.length) {
       if (!tdWorkersEl.hidden || tdWorkersSig !== "") {
@@ -23431,12 +23758,17 @@
         tdWorkersEl.innerHTML = "";
         tdWorkersSig = "";
       }
+      tdHeadEl?.classList?.toggle("has-workers", false);
       return;
     }
     const sig = JSON.stringify(list.map((w) => [w.name, w.label || "", w.status, w.ended ? 1 : 0, w.href, w.kind]));
-    if (!force && sig === tdWorkersSig && !tdWorkersEl.hidden) return;
+    if (!force && sig === tdWorkersSig && !tdWorkersEl.hidden) {
+      tdHeadEl?.classList?.toggle("has-workers", true);
+      return;
+    }
     tdWorkersSig = sig;
     tdWorkersEl.hidden = false;
+    tdHeadEl?.classList?.toggle("has-workers", true);
     tdWorkersEl.innerHTML = list.map((w) => {
       const disp = w.label || w.name;
       const stLabel = STATUS_LABEL[w.status] || (w.ended ? tx("st.stopped", "已停止") : w.status);
@@ -23500,11 +23832,10 @@
       tdTargetReset.hidden = true;
     }
   }
-  function focusNodeInDrawer(msgId) {
+  function focusNodeInDrawer(msgId, opts = {}) {
     if (!tdListEl || !msgId) return;
     const node = tdListEl.querySelector(`.td-node[data-td-id="${CSS.escape(msgId)}"]`);
     if (!node) return;
-    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (tdBodyEl) {
       const br = tdBodyEl.getBoundingClientRect();
       const nr = node.getBoundingClientRect();
@@ -23513,11 +23844,17 @@
         maxTop,
         tdBodyEl.scrollTop + (nr.top - br.top) - Math.max(16, (tdBodyEl.clientHeight - nr.height) / 2),
       ));
-      smartScrollCollie(tdBodyEl, want, { markMs: 220 });
+      if (opts.instant) {
+        markProgrammaticScroll(120);
+        tdBodyEl.scrollTop = want;
+      } else {
+        smartScrollCollie(tdBodyEl, want, { markMs: 220 });
+      }
     }
     clearTimeout(tdFocusTimer);
+    const wasAlreadyFocused = node.classList.contains("is-focused");
     tdListEl.querySelectorAll(".td-node.is-focused").forEach((n) => n.classList.remove("is-focused"));
-    void node.offsetWidth;
+    if (wasAlreadyFocused) void node.offsetWidth;
     node.classList.add("is-focused");
     tdFocusTimer = setTimeout(() => node.classList.remove("is-focused"), 1450);
   }
@@ -23747,8 +24084,8 @@
 
   function renderThreadDrawer(opts = {}) {
     if (!tdDrawer || !tdListEl) return;
-    const allEntries = chatEntries();
-    const info = computeReplyThreads(allEntries);
+    const allEntries = opts.allEntries || chatEntries();
+    const info = opts.info || computeReplyThreads(allEntries);
     const th = resolveThread(info, activeThreadRoot, activeThreadAnchor);
     if (th && th.rootId !== activeThreadRoot) activeThreadRoot = th.rootId;
     if (!th) {
@@ -23756,25 +24093,28 @@
       return;
     }
     const prevCount = tdLastCount;
-    const wasAtBottom = tdBodyEl ? (tdBodyEl.scrollHeight - tdBodyEl.scrollTop - tdBodyEl.clientHeight <= AT_BOTTOM_PX + 20) : true;
-    const scrollBottom = !!opts.scrollBottom || tdForceScroll || (prevCount > 0 && th.list.length > prevCount && wasAtBottom);
+    const sliceStart = Math.max(0, Math.min(th.list.length, Number(opts.sliceStart) || 0));
+    const renderedCount = th.list.length - sliceStart;
+    const scrollBottom = !!opts.scrollBottom || tdForceScroll || (prevCount > 0 && renderedCount > prevCount && !opts.preserveAnchor && (tdBodyEl ? (tdBodyEl.scrollHeight - tdBodyEl.scrollTop - tdBodyEl.clientHeight <= AT_BOTTOM_PX + 20) : true));
     tdForceScroll = false;
 
-    if (tdTitleEl) {
-      tdTitleEl.textContent = th.title;
-      tdTitleEl.title = th.fullTitle || th.title;
+    if (!opts.skipMeta) {
+      if (tdTitleEl) {
+        tdTitleEl.textContent = th.title;
+        tdTitleEl.title = th.fullTitle || th.title;
+      }
+      if (tdMetaEl) {
+        const parts = th.missingRoot
+          ? [tx("drawer.threadLoadedCount", "已加载 {n} 条", { n: th.list.length }), tx("drawer.threadHasEarlierRoot", "含更早起点")]
+        : [tx("drawer.threadTotalCount", "共 {n} 条消息", { n: th.totalCount })];
+      if (th.branchCount > 0) parts.push(tx("drawer.threadBranches", "含 {n} 处分支", { n: th.branchCount }));
+        tdMetaEl.textContent = parts.join(" · ");
+      }
+      if (tdLocateRootBtn) {
+        tdLocateRootBtn.hidden = !th.root?.id && !th.list[0]?.id;
+      }
+      renderThreadWorkers(th, info, allEntries, !!opts.force);
     }
-    if (tdMetaEl) {
-      const parts = th.missingRoot
-        ? [tx("drawer.threadLoadedCount", "已加载 {n} 条", { n: th.list.length }), tx("drawer.threadHasEarlierRoot", "含更早起点")]
-      : [tx("drawer.threadTotalCount", "共 {n} 条消息", { n: th.totalCount })];
-    if (th.branchCount > 0) parts.push(tx("drawer.threadBranches", "含 {n} 处分支", { n: th.branchCount }));
-      tdMetaEl.textContent = parts.join(" · ");
-    }
-    if (tdLocateRootBtn) {
-      tdLocateRootBtn.hidden = !th.root?.id && !th.list[0]?.id;
-    }
-    renderThreadWorkers(th, info, allEntries, !!opts.force);
 
     const pendIds = new Set(activePending().map((p) => p.id));
     const idxByKey = new Map();
@@ -23785,11 +24125,12 @@
     const curDayStamp = dayBounds();
     const sig = JSON.stringify([
       th.rootId,
+      sliceStart,
       curDayStamp,
       th.missingRoot?.id || "",
       tdLoadingRoot ? 1 : 0,
       canLoadOlder() ? 1 : 0,
-      th.list.map((m) => {
+      th.list.slice(sliceStart).map((m) => {
         const k = entryKey(m);
         const idx = idxByKey.get(k) ?? -1;
         const hasOpts = Array.isArray(m.options) && m.options.some((o) => typeof o === "string" && o.trim());
@@ -23802,9 +24143,9 @@
     ]);
     if (sig !== tdLastSig || opts.force) {
       tdLastSig = sig;
-      tdLastCount = th.list.length;
+      tdLastCount = renderedCount;
       const items = [];
-      if (th.missingRoot) {
+      if (sliceStart === 0 && th.missingRoot) {
         const statusText = tdLoadingRoot
           ? tx("drawer.threadLoadingOlder", "正在拉取更早的话题起点…")
         : canLoadOlder()
@@ -23828,7 +24169,7 @@
           },
         });
       }
-      for (let i = 0; i < th.list.length; i++) {
+      for (let i = sliceStart; i < th.list.length; i++) {
         const m = th.list[i];
         const k = entryKey(m);
         const isRoot = !th.missingRoot && i === 0;
@@ -23912,7 +24253,7 @@
         // Preserve reading scroll position if older messages were prepended while scrolled up.
         let prepAnchor = null, prepTop = 0;
         if (!scrollBottom && !opts.focusMsgId && typeof opts.restoreScrollTop !== "number"
-          && tdBodyEl && tdListEl._tdRoot === th.rootId && prevCount > 0 && th.list.length > prevCount) {
+          && tdBodyEl && tdListEl._tdRoot === th.rootId && prevCount > 0 && renderedCount > prevCount) {
           const curFirst = tdListEl.querySelector?.(".td-node[data-td-id]");
           const firstKey = curFirst?.dataset?.tdId || "";
           const nextFirstNodeItem = items.find((it) => it.key !== "__td_older__");
@@ -23939,7 +24280,7 @@
     syncThreadSendBtn();
 
     if (opts.focusMsgId) {
-      requestAnimationFrame(() => focusNodeInDrawer(opts.focusMsgId));
+      requestAnimationFrame(() => focusNodeInDrawer(opts.focusMsgId, { instant: !!opts.instantFocus }));
     } else if (typeof opts.restoreScrollTop === "number" && tdBodyEl) {
       requestAnimationFrame(() => { tdBodyEl.scrollTop = opts.restoreScrollTop; });
     } else if (scrollBottom && tdBodyEl) {
@@ -23954,7 +24295,8 @@
     if (!tdDrawer || !rootId) return;
     if (replyTo && isSuperComposerEmpty()) setReply(null);
     cancelInitialAnchor();
-    const info = computeReplyThreads(chatEntries());
+    const allEntries = chatEntries();
+    const info = computeReplyThreads(allEntries);
     const resolved = resolveThread(info, rootId, anchorId || focusMsgId || rootId);
     if (!resolved) return;
     const realRoot = resolved.rootId;
@@ -23990,19 +24332,29 @@
     applyThreadWidth();
     const nextW = _lastThreadW || _lastDrawerW || 432;
     const mobileSwap = !isDesktopDrawerViewport() && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
-    if (tdDrawer.hidden) {
-      tdDrawer.hidden = false;
-      if (!mobileSwap) tdDrawer.offsetWidth;
+    clearTimeout(tdDrawer._fullRenderTimer);
+    tdDrawer._fullRenderTimer = 0;
+    if (tdDrawer._fullRenderRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(tdDrawer._fullRenderRAF);
     }
+    tdDrawer._fullRenderRAF = 0;
+    const wasHidden = !!tdDrawer.hidden;
+    if (wasHidden) tdDrawer.hidden = false;
+    if ("inert" in tdDrawer) tdDrawer.inert = false;
     if (tdScrim) {
+      clearMobileSheetOpen(tdScrim);
       tdScrim.classList.remove("is-dragging");
       tdScrim.style.opacity = "";
       if (mobileSwap) holdScrimImmediate(tdScrim);
       tdScrim.hidden = false;
     }
     if (!desktopMode && !hadThread && !opts.immediate) {
-      promoteSheetWillChange(tdDrawer, "transform", 340);
-      if (tdScrim) promoteSheetWillChange(tdScrim, "opacity", 340);
+      if (wasHidden && !mobileSwap) {
+        playMobileSheetOpen(tdDrawer, tdScrim);
+      } else {
+        promoteSheetWillChange(tdDrawer, "transform", 340);
+        if (tdScrim) promoteSheetWillChange(tdScrim, "opacity", 340);
+      }
     }
     tdDrawer.setAttribute("aria-hidden", "false");
     $("#v-collie")?.classList?.remove("is-main-focused");
@@ -24032,17 +24384,50 @@
       const ae = document.activeElement;
       if (ae && $("#v-collie")?.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     }
-    syncActiveThreadMarks(info);
+    clearTimeout(tdDrawer._markTimer);
+    tdDrawer._markTimer = 0;
+    if (desktopMode) {
+      syncActiveThreadMarks(info);
+    } else if ($("#super-thread")?.querySelector?.(".in-active-thread")) {
+      // Mobile bottom sheet covers #super-thread completely; only clear stale marks if resized from desktop.
+      for (const n of $$("#super-thread .in-active-thread")) n.classList.remove("in-active-thread");
+    }
     if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
     const hasRestore = typeof opts.restoreScrollTop === "number";
+    const alreadyWarm = tdListEl?._tdRoot === realRoot && (tdListEl?.childElementCount || 0) >= resolved.list.length;
+    const mobileColdSlice = !desktopMode && !hadThread && !opts.immediate && !hasRestore && !alreadyWarm && resolved.list.length > 6;
+    let initialSliceStart = 0;
+    if (mobileColdSlice) {
+      const fIdx = focusMsgId ? resolved.list.findIndex((m) => entryKey(m) === focusMsgId || m.id === focusMsgId) : -1;
+      initialSliceStart = fIdx >= 0
+        ? Math.max(0, Math.min(resolved.list.length - 6, fIdx - 2))
+        : Math.max(0, resolved.list.length - 6);
+    }
     renderThreadDrawer({
+      allEntries,
+      info,
       focusMsgId,
+      instantFocus: !desktopMode && !hadThread && !opts.immediate,
       scrollBottom: !focusMsgId && !hasRestore,
       restoreScrollTop: hasRestore ? opts.restoreScrollTop : undefined,
-      force: true,
+      sliceStart: initialSliceStart,
+      force: !alreadyWarm,
     });
+    if (initialSliceStart > 0) {
+      let remStart = initialSliceStart;
+      const mountNextChunk = () => {
+        tdDrawer._fullRenderTimer = 0;
+        if (activeThreadRoot !== realRoot || tdDrawer.hidden) return;
+        remStart = Math.max(0, remStart - 4);
+        renderThreadDrawer({ sliceStart: remStart, preserveAnchor: true, skipMeta: true });
+        if (remStart > 0) {
+          tdDrawer._fullRenderTimer = setTimeout(mountNextChunk, 40);
+        }
+      };
+      tdDrawer._fullRenderTimer = setTimeout(mountNextChunk, 290);
+    }
     if (resolved.missingRoot && canLoadOlder()) {
       ensureThreadRootLoaded(activeThreadRoot, false);
     }
@@ -24071,6 +24456,14 @@
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadThread && desktopMode && !tdDrawer.hidden;
     const overlayCloseAnim = !opts.immediate && !switching && !reduced && !desktopMode && wasOpen && !tdDrawer.hidden;
+    clearTimeout(tdDrawer._markTimer);
+    tdDrawer._markTimer = 0;
+    clearTimeout(tdDrawer._fullRenderTimer);
+    tdDrawer._fullRenderTimer = 0;
+    if (tdDrawer._fullRenderRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(tdDrawer._fullRenderRAF);
+    }
+    tdDrawer._fullRenderRAF = 0;
     activeThreadRoot = null;
     activeThreadAnchor = "";
     drawerReplyTarget = null;
@@ -24089,6 +24482,7 @@
       resetDrawerMotion(tdDrawer);
     }
     if (tdScrim) {
+      clearMobileSheetOpen(tdScrim);
       tdScrim.classList.remove("is-dragging");
       tdScrim.style.opacity = "";
       if (overlayCloseAnim) promoteSheetWillChange(tdScrim, "opacity", 320);
@@ -24110,6 +24504,7 @@
       resetDrawerMotion(tdDrawer);
       if (tdWorkersEl) { tdWorkersEl.hidden = true; tdWorkersEl.innerHTML = ""; }
       tdDrawer.hidden = true;
+      if ("inert" in tdDrawer) tdDrawer.inert = true;
       if (tdScrim) {
         tdScrim.classList.remove("is-dragging");
         clearSheetWillChange(tdScrim);
@@ -24128,7 +24523,9 @@
       tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
     }
     if (wasOpen && !switching && opts.rerender !== false && view === "collie") {
-      syncActiveThreadMarks();
+      if (desktopMode || $("#super-thread")?.querySelector?.(".in-active-thread")) {
+        syncActiveThreadMarks();
+      }
       if (hadThread && desktopMode) {
         renderSuper();
       }
@@ -24611,6 +25008,7 @@
     if (wdMpDangerGroup) wdMpDangerGroup.hidden = !isLive;
     if (!isLive) disarmInterrupt("worker-more");
     if (wdBarEl) wdBarEl.hidden = !showDevTabs;
+    wdDrawer?.querySelector?.(".wd-top")?.classList?.toggle("has-bar", !!showDevTabs);
   }
   function syncDevModeUI() {
     const viewerEl = $("#viewer");
@@ -24642,7 +25040,10 @@
   }
   function resetWdChatStateOnly() {
     if (!wdThreadEl) return;
-    wdThreadEl._sig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
+    clearTimeout(wdThreadEl._chunkTimer);
+    wdThreadEl._chunkTimer = 0;
+    wdThreadEl._sig = ""; wdThreadEl._rawMsgsSig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._lazyRuns = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
+    wdThreadEl._renderedCacheKey = "";
     wdThreadEl._fresh = true;
     wdLastLive = null; wdShowRaw = false;
   }
@@ -25000,6 +25401,7 @@
         wdSummaryTextEl.title = cleanSummary;
       }
     }
+    wdDrawer?.querySelector?.(".wd-top")?.classList?.toggle("has-summary", !!cleanSummary);
     wdMoreState.kindLabel = kl;
     wdMoreState.workerName = name;
     wdMoreState.dispTitle = dispTitle;
@@ -25012,9 +25414,35 @@
       wdMoreState.modelText = "";
     }
     syncWdMoreMenuInfo();
-    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (wdGoneEl && !wdGoneEl.hidden) wdGoneEl.hidden = true;
     applyWdModeUI();
     syncWorkerComposerUI();
+  }
+  function scheduleAfterWdSlide(fn) {
+    clearTimeout(wdDrawer?._deferredDrawTimer);
+    if (wdDrawer) {
+      wdDrawer._deferredDrawTimer = 0;
+      wdDrawer._onSlideSettled = null;
+    }
+    const remain = !isDesktopDrawerViewport() && wdDrawer?._slideSettleAt
+      ? (wdDrawer._slideSettleAt - performance.now())
+      : 0;
+    if (remain > 16) {
+      let ran = false;
+      const runOnce = () => {
+        if (ran) return;
+        ran = true;
+        clearTimeout(wdDrawer._deferredDrawTimer);
+        wdDrawer._deferredDrawTimer = 0;
+        wdDrawer._onSlideSettled = null;
+        fn();
+      };
+      wdDrawer._onSlideSettled = runOnce;
+      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(300, Math.ceil(remain)));
+      return true;
+    }
+    fn();
+    return false;
   }
   async function loadWdHistory(past, supW, opts = {}) {
     if (!wdThreadEl) return;
@@ -25022,6 +25450,11 @@
     const preserve = !!opts.preserve;
     clearTimeout(wdSkelTimer);
     wdSkelTimer = 0;
+    clearTimeout(wdDrawer?._deferredDrawTimer);
+    if (wdDrawer) {
+      wdDrawer._deferredDrawTimer = 0;
+      wdDrawer._onSlideSettled = null;
+    }
     if (!past) {
       resetWdChatStateOnly();
       clearWdLive(wdPaneId);
@@ -25034,18 +25467,43 @@
     }
     const cacheKey = "h:" + past.id;
     const cached = threadCache.get(cacheKey);
-    resetWdChatStateOnly();
-    clearWdLive(wdPaneId);
-    if (cached) {
-      drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"));
-      wdThreadEl._fresh = true;
-    } else if (preserve && wdThreadEl.childElementCount > 0) {
-      wdSkelTimer = setTimeout(() => {
-        wdSkelTimer = 0;
-        if (seq === wdSeq && activeWorkerKey && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
-      }, 140);
+    const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
+    if (!sameRendered) {
+      resetWdChatStateOnly();
+      clearWdLive(wdPaneId);
+      if (cached) {
+        const cachedRawSig = workerMsgsRawSig(cached, 0);
+        const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 4;
+        const paintCached = () => {
+          if (seq !== wdSeq || !activeWorkerKey) return;
+          drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
+            progressive: mobileProgressive,
+            cacheKey,
+            rawSig: cachedRawSig,
+            isAlive: () => seq === wdSeq && !!activeWorkerKey,
+          });
+          if (!mobileProgressive) {
+            wdThreadEl._renderedCacheKey = cacheKey;
+            wdThreadEl._rawMsgsSig = cachedRawSig;
+          }
+          wdThreadEl._fresh = true;
+        };
+        if (mobileProgressive && wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16) {
+          wdThreadEl.innerHTML = SKELETON;
+          scheduleAfterWdSlide(paintCached);
+        } else {
+          paintCached();
+        }
+      } else if (preserve && wdThreadEl.childElementCount > 0) {
+        wdSkelTimer = setTimeout(() => {
+          wdSkelTimer = 0;
+          if (seq === wdSeq && activeWorkerKey && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
+        }, 140);
+      } else {
+        wdThreadEl.innerHTML = SKELETON;
+      }
     } else {
-      wdThreadEl.innerHTML = SKELETON;
+      clearWdLive(wdPaneId);
     }
     try {
       const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
@@ -25054,16 +25512,50 @@
       if (seq !== wdSeq || !activeWorkerKey) return;
       clearTimeout(wdSkelTimer);
       wdSkelTimer = 0;
+      const nextMsgs = r.messages || [];
+      const nextEarlier = r.earlier || 0;
+      const nextRawSig = workerMsgsRawSig(nextMsgs, nextEarlier);
       resetEarlier(wdThreadEl, (c) => `/api/transcript?${q}&before=${c}`);
-      wdThreadEl._msgs = r.messages || [];
-      wdThreadEl._liveEarlier = r.earlier || 0;
-      keepThread(cacheKey, wdThreadEl._msgs);
-      wdThreadEl._redraw = () => { if (seq === wdSeq && activeWorkerKey) drawThread(threadMsgs(wdThreadEl), wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。")); };
-      wdThreadEl._redraw();
+      wdThreadEl._msgs = nextMsgs;
+      wdThreadEl._liveEarlier = nextEarlier;
+      keepThread(cacheKey, nextMsgs);
+      wdThreadEl._redraw = () => {
+        if (seq === wdSeq && activeWorkerKey) {
+          const allMsgs = threadMsgs(wdThreadEl);
+          const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
+          drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), { rawSig: curRawSig });
+          wdThreadEl._renderedCacheKey = cacheKey;
+          wdThreadEl._rawMsgsSig = curRawSig;
+        }
+      };
+      // Warm reopen fast-path: identical transcript skips re-parsing markdown and forced scrollHeight reads completely.
+      if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === nextRawSig && wdThreadEl._sig) {
+        return;
+      }
+      const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && nextMsgs.length > 4;
+      scheduleAfterWdSlide(() => {
+        if (seq !== wdSeq || !activeWorkerKey) return;
+        const allMsgs = threadMsgs(wdThreadEl);
+        const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
+        if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
+          return;
+        }
+        drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
+          progressive: mobileProgressive,
+          cacheKey,
+          rawSig: curRawSig,
+          isAlive: () => seq === wdSeq && !!activeWorkerKey,
+        });
+        if (!mobileProgressive) {
+          wdThreadEl._renderedCacheKey = cacheKey;
+          wdThreadEl._rawMsgsSig = curRawSig;
+        }
+      });
     } catch (err) {
       if (seq !== wdSeq || !activeWorkerKey) return;
       clearTimeout(wdSkelTimer);
       wdSkelTimer = 0;
+      if (sameRendered) return;
       const rep = supW?.last_report || "";
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
@@ -25083,43 +25575,96 @@
     }
     const id = livePaneId;
     const m = curWdMode();
-    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (wdGoneEl && !wdGoneEl.hidden) wdGoneEl.hidden = true;
     if (m === "chat") {
       const seq = ++wdSeq;
       const cacheKey = "p:" + id;
       const cached = threadCache.get(cacheKey);
-      resetWdChatStateOnly();
+      const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
+      if (!sameRendered) {
+        resetWdChatStateOnly();
+      }
       resetEarlier(wdThreadEl, (c) => paneURL(id, "earlier") + "?before=" + c);
       wdThreadEl.classList.remove("asking");
-      if (cached) {
-        drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
-        wdThreadEl._fresh = true;
-      } else if (preserve && wdThreadEl.childElementCount > 0) {
-        wdSkelTimer = setTimeout(() => {
-          wdSkelTimer = 0;
-          if (seq === wdSeq && activeWorkerKey && wdPaneId === id && !wdThreadEl._msgs) {
+      if (!sameRendered) {
+        if (cached) {
+          const cachedRawSig = workerMsgsRawSig(cached, 0);
+          const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 4;
+          const paintCached = () => {
+            if (seq !== wdSeq || !activeWorkerKey || wdPaneId !== id) return;
+            drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
+              progressive: mobileProgressive,
+              cacheKey,
+              rawSig: cachedRawSig,
+              isAlive: () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id,
+            });
+            if (!mobileProgressive) {
+              wdThreadEl._renderedCacheKey = cacheKey;
+              wdThreadEl._rawMsgsSig = cachedRawSig;
+            }
+            wdThreadEl._fresh = true;
+          };
+          if (mobileProgressive && wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16) {
             wdThreadEl.innerHTML = SKELETON;
+            scheduleAfterWdSlide(paintCached);
+          } else {
+            paintCached();
           }
-        }, 140);
-      } else {
-        wdThreadEl.innerHTML = SKELETON;
+        } else if (preserve && wdThreadEl.childElementCount > 0) {
+          wdSkelTimer = setTimeout(() => {
+            wdSkelTimer = 0;
+            if (seq === wdSeq && activeWorkerKey && wdPaneId === id && !wdThreadEl._msgs) {
+              wdThreadEl.innerHTML = SKELETON;
+            }
+          }, 140);
+        } else {
+          wdThreadEl.innerHTML = SKELETON;
+        }
       }
       const cachedLive = wdLiveCache.get(id);
       if (cachedLive) drawWdLive(cachedLive);
       else if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
       const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
-      wdThreadEl._redraw = () => alive() && drawThread(threadMsgs(wdThreadEl), wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
+      wdThreadEl._redraw = () => {
+        if (!alive()) return;
+        const allMsgs = threadMsgs(wdThreadEl);
+        const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
+        drawThread(allMsgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), { rawSig: curRawSig });
+        wdThreadEl._renderedCacheKey = cacheKey;
+        wdThreadEl._rawMsgsSig = curRawSig;
+      };
       wdStream = openES(paneURL(id, "chat"));
       const clearSkel = () => { if (wdSkelTimer) { clearTimeout(wdSkelTimer); wdSkelTimer = 0; } };
-      const showPane = (msgs) => { clearSkel(); keepThread(cacheKey, msgs); drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…")); };
+      const showPane = (msgs) => {
+        clearSkel();
+        keepThread(cacheKey, msgs);
+        const curRawSig = workerMsgsRawSig(msgs, wdThreadEl._liveEarlier || 0);
+        if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
+          return;
+        }
+        const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && msgs.length > 4;
+        scheduleAfterWdSlide(() => {
+          if (!alive()) return;
+          if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
+            return;
+          }
+          drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
+            progressive: mobileProgressive,
+            cacheKey,
+            rawSig: curRawSig,
+            isAlive: alive,
+          });
+          if (!mobileProgressive) {
+            wdThreadEl._renderedCacheKey = cacheKey;
+            wdThreadEl._rawMsgsSig = curRawSig;
+          }
+        });
+      };
       wdStream.addEventListener("reset", () => { if (alive()) resetWdChatStateOnly(); });
       wdStream.addEventListener("patch", (e) => alive() && showPane(applyPatch(wdThreadEl, JSON.parse(e.data))));
       wdStream.addEventListener("messages", (e) => {
         if (!alive()) return;
-        clearSkel();
-        const msgs = JSON.parse(e.data);
-        keepThread(cacheKey, msgs);
-        drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
+        showPane(JSON.parse(e.data));
       });
       wdStream.addEventListener("log", (e) => {
         if (!alive()) return;
@@ -25317,7 +25862,7 @@
     wdWasLive = !!initCtx.liveAgent;
     wdLastLivePaneId = initCtx.livePaneId || wdPaneId || "";
     wdLastLiveTitle = "";
-    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (wdGoneEl && !wdGoneEl.hidden) wdGoneEl.hidden = true;
     if (wantMode) wdMode = wantMode;
     // Default read-only peek mode: never keep bottom composer permanently open on open/switch (#t12601).
     wdComposerOpen = false;
@@ -25334,18 +25879,22 @@
     const mobileSwap = !desktopMode && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
     const handoffScrim = (wasAnyDrawer || closingNotesOverlay) && !desktopMode;
     if (wdScrim && !handoffScrim) {
+      clearMobileSheetOpen(wdScrim);
       wdScrim.classList.remove("is-dragging");
       wdScrim.style.opacity = "";
       if (mobileSwap) holdScrimImmediate(wdScrim);
       wdScrim.hidden = false;
     }
-    if (wdDrawer.hidden) {
-      wdDrawer.hidden = false;
-      if (!mobileSwap) wdDrawer.offsetWidth;
-    }
+    const wasHidden = !!wdDrawer.hidden;
+    if (wasHidden) wdDrawer.hidden = false;
+    if ("inert" in wdDrawer) wdDrawer.inert = false;
     if (!desktopMode && !hadWorker) {
-      promoteSheetWillChange(wdDrawer, "transform", 340);
-      if (wdScrim) promoteSheetWillChange(wdScrim, "opacity", 340);
+      if (wasHidden && !mobileSwap && !opts.immediate) {
+        playMobileSheetOpen(wdDrawer, handoffScrim ? null : wdScrim);
+      } else {
+        promoteSheetWillChange(wdDrawer, "transform", 340);
+        if (wdScrim) promoteSheetWillChange(wdScrim, "opacity", 340);
+      }
     }
     wdDrawer.setAttribute("aria-hidden", "false");
     appEl.classList.add("has-worker");
@@ -25377,7 +25926,7 @@
     }
     syncWorkerDrawerMeta();
     syncWorkerSendBtn();
-    syncSideActive({ skipBadge: true });
+    if (innerWidth > 760) syncSideActive({ skipBadge: true });
     openWorkerDrawerStream({ preserve: hadWorker && switchedTarget });
   }
   function closeWorkerDrawer(opts = {}) {
@@ -25409,6 +25958,12 @@
     wdPeekMode = "";
     const ae = document.activeElement;
     if (ae && wdDrawer.contains?.(ae) && typeof ae.blur === "function") ae.blur();
+    clearTimeout(wdDrawer._deferredDrawTimer);
+    wdDrawer._deferredDrawTimer = 0;
+    wdDrawer._onSlideSettled = null;
+    wdDrawer._slideSettleAt = 0;
+    clearTimeout(wdThreadEl?._chunkTimer);
+    if (wdThreadEl) wdThreadEl._chunkTimer = 0;
     wdSeq++;
     const prevWdPane = wdPaneId || wdLastLivePaneId;
     wdWasLive = false;
@@ -25436,6 +25991,7 @@
       resetDrawerMotion(wdDrawer);
     }
     if (wdScrim) {
+      clearMobileSheetOpen(wdScrim);
       wdScrim.classList.remove("is-dragging");
       wdScrim.style.opacity = "";
       if (overlayCloseAnim) promoteSheetWillChange(wdScrim, "opacity", 320);
@@ -25456,6 +26012,7 @@
       resetDrawerMotion(wdDrawer);
       if (wdGoneEl) wdGoneEl.hidden = true;
       wdDrawer.hidden = true;
+      if ("inert" in wdDrawer) wdDrawer.inert = true;
       if (wdScrim) {
         wdScrim.classList.remove("is-dragging");
         clearSheetWillChange(wdScrim);
@@ -26553,6 +27110,21 @@
   }
   const boundRvStageScrolls = new WeakSet();
   let rvStageRO = null;
+  let _rvStagePending = new Set();
+  let _rvStageRAF = 0;
+  function scheduleRichStageSync(card) {
+    if (!card) return;
+    _rvStagePending.add(card);
+    if (_rvStageRAF) return;
+    const flush = () => {
+      _rvStageRAF = 0;
+      const batch = [..._rvStagePending];
+      _rvStagePending.clear();
+      for (const c of batch) if (c.isConnected) syncRichStageScroll(c);
+    };
+    if (typeof requestAnimationFrame === "function") _rvStageRAF = requestAnimationFrame(flush);
+    else flush();
+  }
   function bindRichStageScroll(card, stage) {
     if (!card || !stage) return;
     if (!boundRvStageScrolls.has(stage)) {
@@ -26563,17 +27135,14 @@
           rvStageRO = new ResizeObserver((entries) => {
             for (const entry of entries) {
               const c = entry.target?.closest?.(".rv-card");
-              if (c) syncRichStageScroll(c);
+              if (c) scheduleRichStageSync(c);
             }
           });
         }
         try { rvStageRO.observe(stage); } catch {}
       }
     }
-    syncRichStageScroll(card);
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => { if (card.isConnected) syncRichStageScroll(card); });
-    }
+    scheduleRichStageSync(card);
   }
   function applySanitizedSvg(card, entry, hash) {
     const stage = card.querySelector?.(".rv-svg-stage");
@@ -27526,13 +28095,13 @@
         if (/^(?:diff |index |--- |\+\+\+ )/.test(ln)) return `<span class="diff-line is-meta">${esc(ln)}</span>`;
         if (ln.startsWith("+")) {
           addCount++;
-          return `<span class="diff-line is-add"><span class="diff-sig">+</span>${esc(ln.slice(1))}</span>`;
+          return `<span class="diff-line is-add has-sig"><span class="diff-sig">+</span>${esc(ln.slice(1))}</span>`;
         }
         if (ln.startsWith("-")) {
           delCount++;
-          return `<span class="diff-line is-del"><span class="diff-sig">-</span>${esc(ln.slice(1))}</span>`;
+          return `<span class="diff-line is-del has-sig"><span class="diff-sig">-</span>${esc(ln.slice(1))}</span>`;
         }
-        if (ln.startsWith(" ")) return `<span class="diff-line"><span class="diff-sig"> </span>${esc(ln.slice(1))}</span>`;
+        if (ln.startsWith(" ")) return `<span class="diff-line has-sig"><span class="diff-sig"> </span>${esc(ln.slice(1))}</span>`;
         return `<span class="diff-line">${esc(ln)}</span>`;
       });
       bodyCodeHtml = collapsible
@@ -27558,7 +28127,7 @@
     const foldBtnHtml = collapsible
       ? `<button type="button" class="md-code-fold-btn" data-code-fold aria-expanded="false">${ICON_MD_CHEV}<span data-fold-label>${esc(tx("md.expandCode", "展开剩余 {n} 行", { n: remain }))}</span></button>`
       : "";
-    return `<div class="md-code${isDiff ? " is-diff" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
+    return `<div class="md-code${isDiff ? " is-diff" : ""}${cornerTagHtml ? " has-tag" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
       `${cornerTagHtml}${floatActsHtml}` +
       `<div class="md-code-body"><pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${bodyCodeHtml}</code></pre></div>${foldBtnHtml}</div>`;
   }
@@ -27667,10 +28236,10 @@
             const cleanP = parseInlineCodePath(raw);
             if (cleanP) {
               const ep = esc(cleanP);
-              scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, tx("file.openThisFile", "打开这个文件"))}><code class="code-link">${c}</code></a>`);
+              scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, tx("file.openThisFile", "打开这个文件"), "has-code-link")}><code class="code-link">${c}</code></a>`);
             } else if (isPureHttpUrl(raw)) {
               const eu = esc(raw);
-              scanned += keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
+              scanned += keep(`<a class="url has-code-link" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
             } else {
               if (raw && raw !== ROUTER && raw.length >= 2 && raw.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) {
                 _mdCurWorkerCandidates?.add(raw);
@@ -27679,7 +28248,7 @@
               if (wk) {
                 const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
                 const tip = tx("worker.viewTaskTip", "查看任务：{name}", { name: wk.label && wk.label !== wk.name ? `${wk.label} (${wk.name})` : wk.name });
-                scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
+                scanned += keep(`<a class="worker-link has-code-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
               } else {
                 scanned += keep(`<code>${c}</code>`);
               }
@@ -27934,10 +28503,14 @@
             const al = align[k] || (colNumeric[k] ? "right" : "");
             const tag = k === 0 ? "th" : "td";
             const scopeAttr = k === 0 ? ' scope="row"' : "";
-            return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
+            const cellHtml = inline(val);
+            const hasCode = tag === "td" && cellHtml.includes("<code");
+            const cellCls = isNum && hasCode ? ' class="is-num has-code"' : isNum ? ' class="is-num"' : hasCode ? ' class="has-code"' : "";
+            return `<${tag}${scopeAttr}${cellCls}${al ? ` style="text-align:${al}"` : ""}>${cellHtml}</${tag}>`;
           }).join("")}</tr>`).join("");
           const rowCount = bodyRows.length, colCount = head.length;
-          out.push(`<div class="md-table-card" data-table-card data-cols="${colCount}"><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          const lastNumCls = colNumeric[colCount - 1] ? " is-last-num" : "";
+          out.push(`<div class="md-table-card${lastNumCls}" data-table-card data-cols="${colCount}"><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
           continue;
         }
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
@@ -28992,7 +29565,7 @@
     const prevCollieMenuOpen = collieMenuOpen;
     $$(".menu").forEach((m) => {
       if ((!opener || m.id !== opener.dataset.menu) && !(armingMoreInterrupt && m.id === "more-menu")) {
-        m.hidden = true;
+        if (!m.hidden) m.hidden = true;
       }
     });
     if (!clickedMoreInterrupt && $("#more-menu")?.hidden) disarmInterrupt("detail");
@@ -29003,7 +29576,7 @@
       if (opener.dataset.menu === "collie-menu" && willOpen && superSearchOpen) {
         closeSuperSearchFn?.(false);
       }
-      if (m) m.hidden = !willOpen;
+      if (m && m.hidden !== !willOpen) m.hidden = !willOpen;
       if (m?.id === "more-menu" && m.hidden) disarmInterrupt("detail");
       collieMenuOpen = opener.dataset.menu === "collie-menu" ? willOpen : false;
     } else {

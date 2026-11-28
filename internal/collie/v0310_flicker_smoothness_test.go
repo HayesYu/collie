@@ -370,7 +370,7 @@ getEl("#worker-drawer").hidden = true;
 
 // 2f) Main chat worker links (prose backtick, event, need, ask-head) open right #worker-drawer without full-screen route jump (#t13010)
 const renderedMd = T.md("已派 ` + "`fix-alpha`" + ` 处理中，顺便看 ` + "`not-a-worker`" + `。");
-assert.ok(renderedMd.includes('class="worker-link"') && renderedMd.includes('data-open-worker="fix-alpha"'), "md() linkifies known backtick worker names");
+assert.ok(renderedMd.includes('class="worker-link has-code-link"') && renderedMd.includes('data-open-worker="fix-alpha"'), "md() linkifies known backtick worker names");
 assert.ok(!renderedMd.includes('data-open-worker="not-a-worker"'), "md() leaves regular inline code untouched");
 
 ctx.location.hash = "#/collie";

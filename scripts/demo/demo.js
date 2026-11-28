@@ -1360,6 +1360,13 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       if (demoUploads.has(fp)) {
         const up = demoUploads.get(fp);
         const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(up.name);
+        const isVid = /\.(mp4|mov|webm|m4v)$/i.test(up.name);
+        const as = q.get("as") || "";
+        if (!dl && as === "video" && isVid) {
+          const ext = (up.name.split(".").pop() || "").toLowerCase();
+          const ct = ext === "mov" ? "video/quicktime" : ext === "webm" ? "video/webm" : "video/mp4";
+          return new Response(up.blob, { headers: { "Content-Type": ct, "Accept-Ranges": "bytes", "X-File-Kind": "video", "X-File-Size": String(up.size), "X-File-Path": encodeURIComponent(fp) } });
+        }
         return new Response(up.blob, { headers: { "X-File-Kind": dl ? "download" : (isImg ? "image" : "text"), "X-File-Size": String(up.size), "X-File-Path": encodeURIComponent(fp), ...dlHead(up.name) } });
       }
       const demoImgs = [

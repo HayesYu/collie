@@ -1534,6 +1534,11 @@
       "file.snapLoading": "加载预览中…",
       "file.snapHtmlReport": "HTML 交互报告",
       "file.snapCsvData": "{ext} 表格数据",
+      "file.videoAria": "视频 {name}",
+      "file.videoTooBig": "视频超过 100 MB，无法在线预览（可点右上角下载原件）。",
+      "file.videoCantPlay": "这段视频暂时无法在浏览器直接播放（可点右上角下载原件）。",
+      "file.videoOpenTip": "在文件抽屉打开视频 {name}",
+      "file.videoDownloadTip": "下载视频 {name}",
 
       "lb.title": "图片预览",
       "lb.image": "图片",
@@ -3172,6 +3177,11 @@
       "file.snapLoading": "Loading preview…",
       "file.snapHtmlReport": "Interactive HTML",
       "file.snapCsvData": "{ext} table",
+      "file.videoAria": "Video {name}",
+      "file.videoTooBig": "Video exceeds 100 MB and can't be previewed inline (use Download above).",
+      "file.videoCantPlay": "This video can't be played directly in the browser (use Download above).",
+      "file.videoOpenTip": "Open video {name} in file drawer",
+      "file.videoDownloadTip": "Download video {name}",
 
       "lb.title": "Image preview",
       "lb.image": "Image",

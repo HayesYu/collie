@@ -101,6 +101,9 @@ assert.ok(cssSrc.includes(".md-code:has(> .md-code-tag) pre"), "code/diff blocks
 assert.ok(cssSrc.includes(".md-table-vp.can-scroll-l thead th:first-child"), "table sticky divider shadow must appear only when horizontally scrolled");
 assert.ok(cssSrc.includes('.md-table-card:is([data-cols="1"], [data-cols="2"], [data-cols="3"]) table {\n    width: 100%; min-width: 0; table-layout: fixed;'), "mobile <=3-col tables must use 100% fixed auto-wrap layout without horizontal scroll");
 assert.ok(cssSrc.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;") && cssSrc.includes(".md-code.is-diff .diff-line:has(> .diff-sig)"), "mobile code and diff blocks must soft-wrap with hanging +/- indent");
+assert.ok(cssSrc.includes(".md-table-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;"), "Markdown tables must be frameless and blended natively into the canvas");
+assert.ok(cssSrc.includes(".md-code {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 10px;\n  background: var(--code-bg);"), "code/diff blocks must use borderless soft-surface blending");
+assert.ok(cssSrc.includes(".rv-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n  box-shadow: none;"), "Mermaid/SVG containers must remain completely borderless and transparent");
 
 // Minimal DOM harness supporting elements, classes, attributes, dataset, children, querySelector, DOMParser, message & theme events
 let bootFinished = false;

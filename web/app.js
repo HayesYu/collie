@@ -182,6 +182,57 @@
     },
     clear() { try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch {} },
   };
+  // Local instant-paint snapshot cache state (bridged with web/cache.js).
+  let hydratedFromCache = false;
+  let cachePreAuth = false;
+  let liveSuperSynced = false;
+  let liveSuperGen = 0;
+  let loginSeq = 0;
+  let userScrolledSinceCacheHydrate = false;
+  let cachedUnreadFirstId = "";
+  let offlineBootPending = false;
+  let lastHiddenAt = 0;
+  let lastResumeRevalidateAt = 0;
+  let resumeRevalidateInFlight = null;
+  const RESUME_REVALIDATE_MS = 1500;
+  const RESUME_SSE_RECYCLE_MS = 5000;
+  function snapCacheOpts() {
+    return { origin: location.origin, token: authBackup.get() };
+  }
+  function readSnapCache() {
+    try { return window.__collieCache?.read?.(snapCacheOpts()) || null; } catch { return null; }
+  }
+  function scheduleSnapCacheWrite() {
+    if (!liveSuperSynced || window.__collieDemo) return;
+    try { window.__collieCache?.scheduleWrite?.(() => ({ sup, state: localState }), snapCacheOpts()); } catch {}
+  }
+  function flushSnapCacheWrite() {
+    if (!liveSuperSynced || window.__collieDemo) return;
+    try { window.__collieCache?.flush?.(); } catch {}
+  }
+  function clearSnapCache() {
+    try { window.__collieCache?.clear?.(snapCacheOpts()); } catch {}
+  }
+  function resetCachedHydration() {
+    if (!hydratedFromCache && !cachePreAuth) return;
+    hydratedFromCache = false;
+    cachePreAuth = false;
+    userScrolledSinceCacheHydrate = false;
+    cachedUnreadFirstId = "";
+    sup = { router: { status: "asleep" }, entries: [], workers: [], pending: [], pinned: [], queued: 0 };
+    localState = { ok: false, agents: [], shells: [] };
+    state = localState;
+    older = [];
+    olderMore = null;
+    superBodyKey = "";
+    superSig = "";
+    const box = $("#super-thread");
+    if (box) {
+      box._collieNodes = null;
+      while (box.firstChild) box.removeChild(box.firstChild);
+    }
+    try { renderPendingBar({ skipJump: true }); } catch {}
+  }
   let restoreInFlight = null;
   async function restoreSession() {
     if (window.__collieDemo) return false;
@@ -208,9 +259,12 @@
     return restoreInFlight;
   }
   async function authFetch(url, init, isRemoteHub = false) {
-    const res = await fetch(url, init);
+    let res = await fetch(url, init);
     if (!isRemoteHub && res.status === 401 && await restoreSession()) {
-      return fetch(url, init);
+      res = await fetch(url, init);
+    }
+    if (!isRemoteHub && (res.status === 401 || res.status === 403)) {
+      clearSnapCache();
     }
     return res;
   }
@@ -290,7 +344,15 @@
       if (!opts._retried && await restoreSession()) {
         return api(path, { ...opts, _retried: true });
       }
+      clearSnapCache();
       showLogin(); throw new Error("unauthorized");
+    }
+    if (res.status === 403 && !r.hub) {
+      clearSnapCache();
+      if (cachePreAuth || path === "/api/session" || (hydratedFromCache && !liveSuperSynced && (path === "/api/super" || path === "/api/state"))) {
+        showLogin();
+        throw new Error("forbidden");
+      }
     }
     if (!res.ok) {
       const fallback = raw && !/^\s*</.test(raw) ? raw.trim().slice(0, 240) : "";
@@ -1059,6 +1121,10 @@
   }
   function showLogin(opts = {}) {
     if (opts.pairFailed) loginPairFailed = true;
+    loginSeq++;
+    clearSnapCache();
+    resetCachedHydration();
+    liveSuperSynced = false;
     if (liveEv) { liveEv.close(); liveEv = null; }
     $("#app").hidden = true;
     $("#login").hidden = false;
@@ -1067,6 +1133,7 @@
   }
   async function login(token) {
     const tok = String(token || "").trim();
+    const prevTok = authBackup.get();
     const res = await fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1074,6 +1141,7 @@
       body: JSON.stringify({ token: tok }),
     });
     if (!res.ok) throw new Error("bad token");
+    if (prevTok !== tok) clearSnapCache();
     authBackup.set(tok);
   }
   // A name the hub shows in its device list, e.g. "iPhone · Safari".
@@ -1085,6 +1153,7 @@
     return `${dev} · ${br}`;
   }
   async function pair(code) {
+    const prevTok = authBackup.get();
     const res = await fetch("/api/pair", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1093,7 +1162,10 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "配对失败");
-    if (data.token) authBackup.set(data.token);
+    if (data.token) {
+      if (prevTok !== String(data.token).trim()) clearSnapCache();
+      authBackup.set(data.token);
+    }
   }
   $("#login-token")?.addEventListener("input", () => {
     $("#login-token").removeAttribute("aria-invalid");
@@ -1127,6 +1199,7 @@
   });
   async function doLogout() {
     if (!confirm("确定退出当前浏览器的登录状态吗？")) return;
+    clearSnapCache();
     authBackup.clear();
     try { await fetch("/api/logout", { method: "POST", credentials: "same-origin" }); } catch {}
     location.reload();
@@ -1258,6 +1331,7 @@
   }
   function noteCollieUserScroll(sc) {
     if (view !== "collie" || !sc || performance.now() < programmaticScrollUntil) return;
+    if (hydratedFromCache && !liveSuperSynced) userScrolledSinceCacheHydrate = true;
     activeCollieRestore = null;
     cancelInitialAnchor();
     if (isCollieNearBottom(sc)) {
@@ -1379,6 +1453,86 @@
       el.classList.toggle("off", !isOn);
     }
   }
+  function applyLiveSuper(rawSup, opts = {}) {
+    const fromCacheReconcile = !!opts.fromCacheReconcile;
+    const prevHydrated = hydratedFromCache && !liveSuperSynced;
+    const beforeScroll = fromCacheReconcile && view === "collie" ? viewScroller("collie") : null;
+    const wasAtBottom = beforeScroll ? isCollieNearBottom(beforeScroll) : true;
+    sup = normSup(rawSup, { skipSpill: prevHydrated });
+    liveSuperGen++;
+    liveSuperSynced = true;
+    hydratedFromCache = false;
+    syncCollieNotifyWatermark(sup.entries, !!opts.allowNotify);
+    if (opts.liveState) setLocalState(opts.liveState);
+    scheduleSnapCacheWrite();
+    if (opts.skipRender) return;
+    if (fromCacheReconcile) {
+      renderSide();
+      renderRouterPendingBars();
+      if (view === "collie") {
+        const unreadNow = computeUnreadInfo(chatEntries(), readCursorId);
+        const hasFreshUnreads = unreadNow.count > 0
+          && !userScrolledSinceCacheHydrate
+          && wasAtBottom
+          && (!cachedUnreadFirstId || unreadNow.firstUnreadId !== cachedUnreadFirstId);
+        if (hasFreshUnreads) {
+          unreadAnchorApplied = false;
+          sessionUnreadMarkerId = "";
+          renderSuper({ unreadAnchor: true, noEnterAnim: true });
+        } else {
+          renderSuper({ noEnterAnim: true });
+        }
+        const sc = viewScroller("collie");
+        if (!hasFreshUnreads && sc && isCollieNearBottom(sc)) {
+          maybeScheduleReadAtBottom();
+        }
+      }
+      cachedUnreadFirstId = "";
+      userScrolledSinceCacheHydrate = false;
+    } else {
+      scheduleLiveUpdates(LIVE_SIDE | LIVE_PENDING_BARS | (view === "collie" ? LIVE_SUPER : 0));
+    }
+  }
+  async function silentRevalidateOnResume(reason = "visible") {
+    if (document.hidden || !$("#login").hidden) return;
+    if (offlineBootPending) {
+      offlineBootPending = false;
+      boot();
+      return;
+    }
+    if (!booted || cachePreAuth) return;
+    const now = Date.now();
+    if (resumeRevalidateInFlight) return resumeRevalidateInFlight;
+    if (reason === "visible" && now - lastResumeRevalidateAt < 1000) return;
+    lastResumeRevalidateAt = now;
+    resumeRevalidateInFlight = (async () => {
+      try {
+        const reqGen = liveSuperGen;
+        const [supRes, stRes] = await Promise.allSettled([api("/api/super"), api("/api/state")]);
+        if (!$("#login").hidden) return;
+        const nextState = stRes.status === "fulfilled" && stRes.value ? stRes.value : null;
+        if (supRes.status === "fulfilled" && supRes.value) {
+          const incoming = supRes.value;
+          const skipStale = liveSuperGen > reqGen && latestEntryNum(sup.entries) >= latestEntryNum(incoming.entries);
+          if (!skipStale) {
+            const wasCached = hydratedFromCache && !liveSuperSynced;
+            applyLiveSuper(incoming, { fromCacheReconcile: wasCached, allowNotify: false, liveState: nextState });
+            return;
+          }
+        }
+        if (nextState) {
+          setLocalState(nextState);
+          scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
+          scheduleSnapCacheWrite();
+        }
+      } catch {
+        // Silent background catch-up: keep existing DOM visible without flashing errors.
+      } finally {
+        resumeRevalidateInFlight = null;
+      }
+    })();
+    return resumeRevalidateInFlight;
+  }
   function connect() {
     const ev = new EventSource("/api/events");
     let lastSuperRaw = "", lastStateRaw = "";
@@ -1388,10 +1542,9 @@
       const prevSum = JSON.stringify(sup.integrations_summary || null);
       const prevPeerSum = JSON.stringify(sup.peers_summary || null);
       const prevInboxKey = `${sup.queued}:${(sup.entries || []).length}:${sup.entries?.[sup.entries.length - 1]?.id || ""}`;
-      sup = normSup(JSON.parse(e.data));
+      const wasCached = hydratedFromCache && !liveSuperSynced;
+      applyLiveSuper(JSON.parse(e.data), { fromCacheReconcile: wasCached, allowNotify: !wasCached });
       const nextPeerSum = JSON.stringify(sup.peers_summary || null);
-      syncCollieNotifyWatermark(sup.entries, true);
-      scheduleLiveUpdates(LIVE_SIDE | LIVE_PENDING_BARS | (view === "collie" ? LIVE_SUPER : 0));
       if (intModal?.open && intModalKind === "peers" && intModalDraft && nextPeerSum !== prevPeerSum) {
         refreshPeerModalData();
       }
@@ -1415,6 +1568,7 @@
       const next = mergedState();
       notifyTransitions(next);
       state = next;
+      scheduleSnapCacheWrite();
       scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
     });
     ev.addEventListener("quota", (e) => {
@@ -1433,7 +1587,49 @@
   }
   document.addEventListener("visibilitychange", () => {
     syncAnimPowerState();
-    if (!document.hidden && $("#login").hidden && liveEv?.readyState === EventSource.CLOSED) connect();
+    if (document.hidden) {
+      lastHiddenAt = Date.now();
+      flushSnapCacheWrite();
+      return;
+    }
+    if ($("#login").hidden) {
+      const hiddenMs = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
+      lastHiddenAt = 0;
+      if (offlineBootPending) {
+        silentRevalidateOnResume("offline-retry");
+        return;
+      }
+      if (!booted || cachePreAuth) return;
+      const evClosed = !liveEv || liveEv.readyState === EventSource.CLOSED;
+      const evStale = hiddenMs >= RESUME_SSE_RECYCLE_MS || liveEv?.readyState !== EventSource.OPEN;
+      if (evClosed) {
+        connect();
+      } else if (evStale) {
+        try { liveEv.close(); } catch {}
+        connect();
+      }
+      if (evClosed || evStale || hiddenMs >= RESUME_REVALIDATE_MS || (hydratedFromCache && !liveSuperSynced)) {
+        silentRevalidateOnResume("visible");
+      }
+    }
+  });
+  addEventListener("pageshow", (ev) => {
+    if (ev?.persisted && booted && !cachePreAuth && $("#login").hidden) {
+      if (!liveEv || liveEv.readyState !== EventSource.OPEN) {
+        try { liveEv?.close?.(); } catch {}
+        connect();
+      }
+      silentRevalidateOnResume("pageshow");
+    }
+  });
+  addEventListener("online", () => {
+    if ($("#login").hidden) {
+      if (booted && !cachePreAuth && (!liveEv || liveEv.readyState !== EventSource.OPEN)) {
+        try { liveEv?.close?.(); } catch {}
+        connect();
+      }
+      silentRevalidateOnResume("online");
+    }
   });
   syncAnimPowerState();
 
@@ -2063,6 +2259,7 @@
     sendChatReadNow(sendId, keepalive);
   }
   function commitChatRead(entryId, opts = {}) {
+    if (hydratedFromCache && !liveSuperSynced) return;
     const id = String(entryId || "").trim();
     const n = entryIdNum(id);
     if (n <= 0) return;
@@ -2100,14 +2297,14 @@
       sendChatReadNow(sendId, false);
     }, opts.delay ?? CHAT_READ_DEBOUNCE_MS);
   }
-  function normSup(s) {
+  function normSup(s, opts = null) {
     s.hasPending = Array.isArray(s.pending);
     s.entries ||= []; s.workers ||= []; s.pending ||= []; s.pinned ||= []; s.router ||= { status: "asleep" };
     syncReadCursorFromServer(s.last_read_entry_id, s.entries);
     // Preserve entries sliding off the front of the hub's 200-entry window when
     // earlier pages are loaded or the viewer is reading above the bottom, so an
     // anchored historical message never vanishes from the DOM on SSE updates.
-    if (sup.entries?.length && s.entries.length) {
+    if (!opts?.skipSpill && sup.entries?.length && s.entries.length) {
       const firstPrevId = sup.entries[0]?.id || "";
       const maybeSpilled = !firstPrevId || s.entries[0]?.id !== firstPrevId;
       if (maybeSpilled) {
@@ -3286,18 +3483,20 @@
         sessionUnreadMarkerId = "";
         renderSuper({ force: needRebuild, unreadAnchor: true });
       }
-      if (collieBgHydrated && typeof requestAnimationFrame === "function") {
-        if (collieBgRAF) cancelAnimationFrame(collieBgRAF);
-        collieBgRAF = requestAnimationFrame(() => {
-          collieBgRAF = 0;
-          if (view !== "collie") return;
+      if (!cachePreAuth) {
+        if (collieBgHydrated && typeof requestAnimationFrame === "function") {
+          if (collieBgRAF) cancelAnimationFrame(collieBgRAF);
+          collieBgRAF = requestAnimationFrame(() => {
+            collieBgRAF = 0;
+            if (view !== "collie" || cachePreAuth) return;
+            renderTarget(true);
+            loadNotebook(false);
+          });
+        } else {
+          collieBgHydrated = true;
           renderTarget(true);
           loadNotebook(false);
-        });
-      } else {
-        collieBgHydrated = true;
-        renderTarget(true);
-        loadNotebook(false);
+        }
       }
       if (wantWorker) {
         openWorkerDrawer(wantWorker);
@@ -3311,36 +3510,38 @@
       }
       if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot && !activeWorkerKey) $("#super-input").focus({ preventScroll: true });
     }
-    if (next === "auto") openAuto(saved);
-    if (next === "devices") openDevices(saved);
-    if (next === "prefs") renderPrefs(saved);
-    if (next === "file") openWideFile(id, saved);
-    if (next === "ext") openExt(id, saved);
-    if (next === "pane") {
-      $("#gone").hidden = true;
-      const paneChanged = lastRenderedPaneId !== id;
-      lastRenderedPaneId = id;
-      applyMode();
-      renderHead();
-      const m = curMode();
-      if (paneChanged) {
-        $("#log").textContent = "";
-        if (m === "chat") {
-          resetChat();
-          if (!threadCache.has("p:" + id)) $("#thread").innerHTML = SKELETON;
-        } else if (m === "screen") {
-          resetScreen();
+    if (!cachePreAuth) {
+      if (next === "auto") openAuto(saved);
+      if (next === "devices") openDevices(saved);
+      if (next === "prefs") renderPrefs(saved);
+      if (next === "file") openWideFile(id, saved);
+      if (next === "ext") openExt(id, saved);
+      if (next === "pane") {
+        $("#gone").hidden = true;
+        const paneChanged = lastRenderedPaneId !== id;
+        lastRenderedPaneId = id;
+        applyMode();
+        renderHead();
+        const m = curMode();
+        if (paneChanged) {
+          $("#log").textContent = "";
+          if (m === "chat") {
+            resetChat();
+            if (!threadCache.has("p:" + id)) $("#thread").innerHTML = SKELETON;
+          } else if (m === "screen") {
+            resetScreen();
+          }
         }
+        const seq = ++paneOpenSeq;
+        const startPane = () => {
+          if (seq !== paneOpenSeq || view !== "pane" || current !== id) return;
+          if (!paneChanged && m === "screen") resetScreen();
+          openStream(saved);
+        };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(startPane);
+        else startPane();
+        if (!narrow()) $("#input").focus({ preventScroll: true });
       }
-      const seq = ++paneOpenSeq;
-      const startPane = () => {
-        if (seq !== paneOpenSeq || view !== "pane" || current !== id) return;
-        if (!paneChanged && m === "screen") resetScreen();
-        openStream(saved);
-      };
-      if (typeof requestAnimationFrame === "function") requestAnimationFrame(startPane);
-      else startPane();
-      if (!narrow()) $("#input").focus({ preventScroll: true });
     }
   }
   addEventListener("popstate", route);
@@ -3385,7 +3586,10 @@
     if (el._key === key) return;
     el._key = key;
     let model = r.model;
-    if (!model && r.kind) model = (await modelsFor(r.kind === "antigravity" ? "agy" : r.kind, "")).default || "";
+    if (!model && r.kind) {
+      if (cachePreAuth) { el._key = ""; return; }
+      model = (await modelsFor(r.kind === "antigravity" ? "agy" : r.kind, "")).default || "";
+    }
     if (el._key !== key) return;
     const parts = [];
     if (model) parts.push(esc(model.split("/").pop()) + (r.model ? "" : "（默认）"));
@@ -6142,6 +6346,7 @@
     return "";
   }
   function resolveSuperBusy(r, allEntries, opts = {}) {
+    if (hydratedFromCache && !liveSuperSynced) return null;
     const rawBusy = r.replied ? null : {
       working: "Collie 在想…",
       starting: "Collie 正在醒来…",
@@ -6455,7 +6660,7 @@
     $$('[data-act="pause"]').forEach((b) => setText(b, pauseLabel));
 
     const active = sup.workers.filter((w) => !w.ended);
-    if (view === "collie") renderTarget();
+    if (view === "collie" && !cachePreAuth) renderTarget();
     const prevCrewScroll = crew.scrollLeft || 0;
     const crewChanged = patchCrewStrip(crew, active, ensureLiveAnchor);
     if (crewChanged) {
@@ -6470,9 +6675,11 @@
     const pendList = activePending();
     const pinList = activePinned();
     const needs = state.agents.filter((a) => a.status === "blocked");
-    for (const a of needs) {
-      const got = superAsks.get(a.pane_id);
-      if (!got || Date.now() - got.at > 4000) loadSuperAsk(a.pane_id);
+    if (!cachePreAuth) {
+      for (const a of needs) {
+        const got = superAsks.get(a.pane_id);
+        if (!got || Date.now() - got.at > 4000) loadSuperAsk(a.pane_id);
+      }
     }
 
     if (!isEmptyChat) {
@@ -6516,7 +6723,7 @@
     ].join("|");
 
     lastSuperFastSig = computeSuperFastSig(allEntries);
-    if (view === "collie") {
+    if (view === "collie" && !cachePreAuth) {
       const nbSig = [
         sup.entries.length,
         sup.entries[sup.entries.length - 1]?.id || "",
@@ -6827,7 +7034,7 @@
       if (canPatchSuperDom(box)) {
         const collieEl = $("#v-collie");
         const collieVisible = view === "collie" && !document.hidden && !collieEl?.classList?.contains("is-parked");
-        const allowEnterAnim = !force && !wantUnreadAnchor && !restore && !olderBusy && !jumping
+        const allowEnterAnim = !force && !wantUnreadAnchor && !restore && !olderBusy && !jumping && !opts?.noEnterAnim
           && !shouldApplyUnreadAnchor && !drawerFreezeMain && collieVisible && atBottom
           && !(collieInitialAnchor?.mode === "unread")
           && !(collieInitialAnchor?.mode === "unread-auto" && !collieInitialAnchor.atBottom);
@@ -7364,7 +7571,7 @@
         maybeScheduleReadAtBottom();
       }
     });
-    addEventListener("pagehide", () => { flushPendingChatRead(true); flushAllPendingClaps(true); });
+    addEventListener("pagehide", () => { flushSnapCacheWrite(); flushPendingChatRead(true); flushAllPendingClaps(true); });
     $("#super-jump")?.addEventListener("click", async () => {
       if (!sc) return;
       const seq = ++jumpSeq;
@@ -27806,7 +28013,35 @@
     capturePeerInviteFromURL();
     const q = new URLSearchParams(location.search);
     const t = q.get("t"), code = q.get("pair");
-    if (t || code) {
+    const hasAuthParam = !!(t || code);
+
+    // 0ms Instant Paint (Stale-While-Revalidate): synchronously paint the last
+    // verified local snapshot for this origin + auth fingerprint before any network RTT.
+    let paintedFromCache = false;
+    if (!hasAuthParam && !liveSuperSynced && !sup.entries.length) {
+      const snap = readSnapCache();
+      if (snap?.sup) {
+        cachePreAuth = true;
+        hydratedFromCache = true;
+        userScrolledSinceCacheHydrate = false;
+        sup = normSup(snap.sup, { skipSpill: true });
+        cachedUnreadFirstId = computeUnreadInfo(sup.entries, readCursorId).firstUnreadId || "";
+        if (snap.state) setLocalState(snap.state);
+        syncCollieNotifyWatermark(sup.entries, false);
+        $("#login").hidden = true;
+        $("#app").hidden = false;
+        setMode(mode);
+        booted = false;
+        view = undefined;
+        route();
+        booted = true;
+        paintedFromCache = true;
+      }
+    }
+
+    if (hasAuthParam) {
+      const isAccountSwitch = !!(code || (t && t.trim() !== authBackup.get()));
+      if (isAccountSwitch) clearSnapCache();
       try { if (code) await pair(code); else await login(t); }
       catch (err) {
         if (code) {
@@ -27818,23 +28053,96 @@
       const rest = q.toString();
       history.replaceState(history.state, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
     }
-    try { await api("/api/session"); } catch { return; }
+
+    try { await api("/api/session"); } catch {
+      cachePreAuth = false;
+      if (paintedFromCache && $("#login").hidden) {
+        offlineBootPending = true;
+        setConnDotState(false);
+      }
+      return;
+    }
+    cachePreAuth = false;
+    offlineBootPending = false;
     loginPairFailed = false;
     $("#login-error").textContent = "";
     syncLoginTip();
-    try { sup = normSup(await api("/api/super")); syncCollieNotifyWatermark(sup.entries, false); } catch {}
-    try { setLocalState(await api("/api/state")); } catch {}
-    await loadHubs();
-    checkUpdates();
-    $("#login").hidden = true;
-    $("#app").hidden = false;
-    setMode(mode);
-    connect();
-    window.__collieQuota?.init?.({ api, toast });
-    booted = false;
-    view = undefined;
-    route();
-    booted = true;
+
+    const seqBeforeFetch = loginSeq;
+    let stateSettled = false;
+    let liveSt = null;
+    const superP = api("/api/super").catch(() => null);
+    const stateP = api("/api/state").then((v) => {
+      stateSettled = true;
+      liveSt = v || null;
+      return liveSt;
+    }).catch(() => {
+      stateSettled = true;
+      return null;
+    });
+    const liveSup = await superP;
+    if (loginSeq !== seqBeforeFetch) return;
+    if (!stateSettled) {
+      await Promise.race([stateP, new Promise((r) => setTimeout(r, 40))]);
+      if (loginSeq !== seqBeforeFetch) return;
+    }
+
+    if (paintedFromCache) {
+      if (liveSup) {
+        applyLiveSuper(liveSup, { fromCacheReconcile: true, allowNotify: false, liveState: liveSt });
+      } else if (liveSt) {
+        setLocalState(liveSt);
+        renderSide();
+        if (view === "collie") renderSuper({ noEnterAnim: true });
+        scheduleSnapCacheWrite();
+      }
+      if (!stateSettled) {
+        stateP.then((lateSt) => {
+          if (!lateSt || loginSeq !== seqBeforeFetch) return;
+          setLocalState(lateSt);
+          scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
+          scheduleSnapCacheWrite();
+        });
+      }
+      connect();
+      window.__collieQuota?.init?.({ api, toast });
+      loadHubs();
+      checkUpdates();
+      if (view === "collie") {
+        collieBgHydrated = true;
+        renderTarget(true);
+        loadNotebook(false);
+      } else if (view) {
+        view = undefined;
+        route();
+      }
+    } else {
+      if (liveSup) {
+        applyLiveSuper(liveSup, { skipRender: true, allowNotify: false, liveState: liveSt });
+      } else if (liveSt) {
+        setLocalState(liveSt);
+        scheduleSnapCacheWrite();
+      }
+      if (!stateSettled) {
+        stateP.then((lateSt) => {
+          if (!lateSt || loginSeq !== seqBeforeFetch) return;
+          setLocalState(lateSt);
+          scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
+          scheduleSnapCacheWrite();
+        });
+      }
+      await loadHubs();
+      checkUpdates();
+      $("#login").hidden = true;
+      $("#app").hidden = false;
+      setMode(mode);
+      connect();
+      window.__collieQuota?.init?.({ api, toast });
+      booted = false;
+      view = undefined;
+      route();
+      booted = true;
+    }
     scheduleAutoWarmup();
     loadExternal();
     clearInterval(extTimer);

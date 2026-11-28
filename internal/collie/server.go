@@ -1,6 +1,8 @@
 package collie
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -17,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1055,6 +1058,54 @@ func init() {
 	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 }
 
+type staticAsset struct {
+	gz           []byte
+	etag         string
+	gzETag       string
+	contentType  string
+	compressible bool
+}
+
+func isCompressibleStatic(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".html", ".js", ".css", ".svg", ".webmanifest":
+		return true
+	}
+	return false
+}
+
+func acceptsGzip(r *http.Request) bool {
+	ae := r.Header.Get("Accept-Encoding")
+	if ae == "" {
+		return false
+	}
+	for _, part := range strings.Split(ae, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		tok, params, hasParams := strings.Cut(part, ";")
+		tok = strings.ToLower(strings.TrimSpace(tok))
+		if tok != "gzip" {
+			continue
+		}
+		if !hasParams {
+			return true
+		}
+		q := 1.0
+		for _, kv := range strings.Split(params, ";") {
+			k, v, ok := strings.Cut(kv, "=")
+			if ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					q = parsed
+				}
+			}
+		}
+		return q > 0
+	}
+	return false
+}
+
 func (s *Server) static() http.Handler {
 	if s.web == nil {
 		return http.NotFoundHandler()
@@ -1062,31 +1113,75 @@ func (s *Server) static() http.Handler {
 	files := http.FileServerFS(s.web)
 	// Embedded files have no modification time, so browsers would guess how
 	// long to keep them and run an old app.js after an upgrade. Tag each file
-	// by its content and have the browser revalidate every time.
-	var etags sync.Map
-	etag := func(p string) string {
-		if v, ok := etags.Load(p); ok {
-			return v.(string)
+	// by its content, cache its gzipped representation in memory, and negotiate
+	// Content-Encoding with distinct ETags for compressed vs raw responses.
+	var cache sync.Map
+	loadAsset := func(p string) *staticAsset {
+		if v, ok := cache.Load(p); ok {
+			return v.(*staticAsset)
 		}
 		b, err := fs.ReadFile(s.web, p)
 		if err != nil {
-			return ""
+			return nil
 		}
 		sum := sha256.Sum256(b)
-		tag := `"` + hex.EncodeToString(sum[:8]) + `"`
-		etags.Store(p, tag)
-		return tag
+		base := hex.EncodeToString(sum[:8])
+		ct := mime.TypeByExtension(path.Ext(p))
+		if ct == "" {
+			ct = http.DetectContentType(b)
+		}
+		a := &staticAsset{
+			etag:         `"` + base + `"`,
+			gzETag:       `"` + base + `-gz"`,
+			contentType:  ct,
+			compressible: isCompressibleStatic(p),
+		}
+		if a.compressible && len(b) > 0 {
+			var buf bytes.Buffer
+			zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+			if err == nil {
+				if _, werr := zw.Write(b); werr == nil {
+					if cerr := zw.Close(); cerr == nil && buf.Len() > 0 && buf.Len() < len(b) {
+						a.gz = buf.Bytes()
+					}
+				}
+			}
+		}
+		actual, _ := cache.LoadOrStore(p, a)
+		return actual.(*staticAsset)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p == "" {
 			p = "index.html"
 		}
-		if tag := etag(p); tag != "" {
+		if a := loadAsset(p); a != nil {
+			if a.compressible {
+				w.Header().Add("Vary", "Accept-Encoding")
+			}
+			useGzip := a.compressible && len(a.gz) > 0 && r.Header.Get("Range") == "" && acceptsGzip(r)
+			tag := a.etag
+			if useGzip {
+				tag = a.gzETag
+			}
 			w.Header().Set("ETag", tag)
-			w.Header().Set("Cache-Control", "no-cache")
-			if r.Header.Get("If-None-Match") == tag {
+			if strings.HasPrefix(p, "vendor/katex/fonts/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			if etagMatches(r, tag) {
 				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			if useGzip {
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Content-Type", a.contentType)
+				w.Header().Set("Content-Length", strconv.Itoa(len(a.gz)))
+				w.WriteHeader(http.StatusOK)
+				if r.Method != http.MethodHead {
+					_, _ = w.Write(a.gz)
+				}
 				return
 			}
 		}

@@ -6165,7 +6165,7 @@
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${artifactsHtml}${optsHtml}${renderFoot()}</div></div>`;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${renderCollieBody(e.text)}${artifactsHtml}${optsHtml}${renderFoot()}</div></div>`;
               },
             });
             sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
@@ -6245,6 +6245,7 @@
         }
       }
       if (domMutated) {
+        hydrateRichContent(box);
         renderPendingBar();
         syncActiveFileMarks(box, openFilePathNow);
         observeRichVisuals(box);
@@ -12477,7 +12478,7 @@
     if (!detailsEl.isConnected || !file) return;
     viewEl.removeAttribute("data-mem-lazy");
     viewEl.innerHTML = md(file.text || "");
-    observeRichVisuals(viewEl);
+    hydrateRichContent(viewEl);
     if (wantEdit && !detailsEl.querySelector?.(".mem-tools")) {
       viewEl.insertAdjacentHTML?.("afterend", memToolsHTML(file, wantCrew));
     }
@@ -12825,6 +12826,7 @@
     const prevOpen = opts.preserveOpen ? snapshotOpenMemoryKeys(content) : null;
     const res = renderMemoryHTML(r, memQuery);
     content.innerHTML = res.html;
+    hydrateRichContent(content);
     const meta = wrap?.querySelector?.("#mem-search-meta");
     if (meta) {
       if (res.searching) {
@@ -15725,10 +15727,81 @@
     j.hidden = true;
     if (hadFocus) (curMode() === "screen" ? $("#screen") : $("#log"))?.focus({ preventScroll: true });
   }
+  let preXtermScreenFrame = null;
+  let preXtermWdFrame = null;
+  let xtermPromise = null;
+  let katexPromise = null;
+  function ensureLazyStylesheet(href, key) {
+    if (typeof document === "undefined" || !document.head || typeof document.head.appendChild !== "function") return;
+    if (document.querySelector?.(`link[data-lazy-css="${key}"]`)) return;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    if (link.dataset) link.dataset.lazyCss = key;
+    document.head.appendChild(link);
+  }
+  function ensureXterm() {
+    if (typeof window !== "undefined" && typeof window.Terminal === "function") return Promise.resolve(window.Terminal);
+    if (typeof document === "undefined" || !document.head || typeof document.head.appendChild !== "function") return Promise.resolve(null);
+    if (xtermPromise) return xtermPromise;
+    ensureLazyStylesheet("/vendor/xterm.css", "xterm");
+    xtermPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector?.('script[data-lazy-js="xterm"]');
+      if (existing) {
+        if (typeof window.Terminal === "function") { resolve(window.Terminal); return; }
+        existing.addEventListener("load", () => resolve(window.Terminal || null), { once: true });
+        existing.addEventListener("error", (e) => { xtermPromise = null; reject(e); }, { once: true });
+        return;
+      }
+      const s = document.createElement("script");
+      s.src = "/vendor/xterm.js";
+      s.async = true;
+      if (s.dataset) s.dataset.lazyJs = "xterm";
+      s.onload = () => {
+        if (typeof window.Terminal === "function") resolve(window.Terminal);
+        else { xtermPromise = null; reject(new Error("xterm failed to load")); }
+      };
+      s.onerror = (e) => { xtermPromise = null; reject(e); };
+      document.head.appendChild(s);
+    });
+    return xtermPromise;
+  }
+  function ensureKaTeX() {
+    const getK = () => (typeof katex !== "undefined" ? katex : (typeof globalThis !== "undefined" ? globalThis.katex : null));
+    const cur = getK();
+    if (cur && typeof cur.renderToString === "function") return Promise.resolve(cur);
+    if (typeof document === "undefined" || !document.head || typeof document.head.appendChild !== "function") return Promise.resolve(null);
+    if (katexPromise) return katexPromise;
+    ensureLazyStylesheet("/vendor/katex/katex.min.css", "katex");
+    katexPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector?.('script[data-lazy-js="katex"]');
+      if (existing) {
+        const loaded = getK();
+        if (loaded && typeof loaded.renderToString === "function") { resolve(loaded); return; }
+        existing.addEventListener("load", () => resolve(getK()), { once: true });
+        existing.addEventListener("error", (e) => { katexPromise = null; reject(e); }, { once: true });
+        return;
+      }
+      const s = document.createElement("script");
+      s.src = "/vendor/katex/katex.min.js";
+      s.async = true;
+      if (s.dataset) s.dataset.lazyJs = "katex";
+      s.onload = () => {
+        const loaded = getK();
+        if (loaded && typeof loaded.renderToString === "function") resolve(loaded);
+        else { katexPromise = null; reject(new Error("KaTeX failed to load")); }
+      };
+      s.onerror = (e) => { katexPromise = null; reject(e); };
+      document.head.appendChild(s);
+    });
+    return katexPromise;
+  }
+
   function resetScreen() {
     screenSeq++;
     screenWriting = false;
     screenQueuedFrame = null;
+    preXtermScreenFrame = null;
     if (screenScrollRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(screenScrollRAF);
       screenScrollRAF = 0;
@@ -15853,7 +15926,21 @@
     applyMode();
     const m = curMode();
     if (m === "chat") return openChat(id, restore);
-    if (m === "screen") ensureTerm();
+    if (m === "screen") {
+      ensureTerm();
+      if (!term && !window.Terminal) {
+        ensureXterm().then(() => {
+          if (id === current && view === "pane" && curMode() === "screen") {
+            ensureTerm();
+            if (preXtermScreenFrame) {
+              const pf = preXtermScreenFrame;
+              preXtermScreenFrame = null;
+              drawScreen(pf.f, pf.restore);
+            }
+          }
+        }).catch(() => {});
+      }
+    }
     let pendingRestore = restore && !restore.atBottom ? restore : null;
     stream = openES(paneURL(id, "stream") + "?mode=" + m);
     stream.addEventListener("frame", (e) => {
@@ -15974,7 +16061,22 @@
   }
 
   function drawScreen(f, restore = null) {
-    if (!term) return;
+    if (!term) {
+      if (typeof window !== "undefined" && !window.Terminal) {
+        preXtermScreenFrame = { f, restore };
+        ensureXterm().then(() => {
+          if (view === "pane" && curMode() === "screen") {
+            ensureTerm();
+            if (term && preXtermScreenFrame) {
+              const pf = preXtermScreenFrame;
+              preXtermScreenFrame = null;
+              drawScreen(pf.f, pf.restore);
+            }
+          }
+        }).catch(() => {});
+      }
+      return;
+    }
     if (!screenFresh && term.hasSelection?.()) {
       pendingScreen = f;
       return;
@@ -16525,6 +16627,7 @@
       el.innerHTML = sig;
     }
     el._blocks = blocks; el._last = el.lastElementChild;
+    hydrateRichContent(el);
     if (rest && !rest.atBottom) {
       restoreSimpleScroll(scroller(el), rest);
       if (msgs.length && !el.querySelector(".thread-skel")) el._restore = null;
@@ -17444,7 +17547,7 @@
     if (MD_EXT.test(path)) {
       syncFileBar("fv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl, wideHref: wHref });
       body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
-      observeRichVisuals(body);
+      hydrateRichContent(body);
       body.scrollTop = body.scrollLeft = 0;
       if (view === "collie") renderSuper();
       return;
@@ -17536,7 +17639,7 @@
     } else if (MD_EXT.test(path)) {
       syncFileBar("rv", { langLabel: "Markdown", copyable: true, copyTitle: "复制 Markdown 源码", downloadable: canDl });
       body.innerHTML = `<article class="msg assistant rv-md" id="rv-code-src">${md(text)}</article>${cut}`;
-      observeRichVisuals(body);
+      hydrateRichContent(body);
     } else {
       const lang = renderCodeBody(body, path, text, cut, "rv-code-src", true);
       syncFileBar("rv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: "复制全文", downloadable: canDl });
@@ -17696,17 +17799,70 @@
     img.src = src;
     if (!cached) watchImgDecode(img, k);
   }
-  const thumbImgAttrs = (p) => {
+  const thumbLRULimit = () => (typeof matchMedia === "function" && matchMedia("(max-width: 760px)").matches) ? 60 : 120;
+  function touchThumbLRU(p) {
+    if (!p || !thumbs.has(p)) return;
+    const v = thumbs.get(p);
+    thumbs.delete(p);
+    thumbs.set(p, v);
+  }
+  function isThumbNearViewport(p) {
+    if (!p || typeof document === "undefined" || typeof document.querySelectorAll !== "function") return false;
+    const vh = (typeof window !== "undefined" && window.innerHeight) || 900;
+    const margin = 800;
+    for (const btn of document.querySelectorAll(".thumb[data-img]")) {
+      if (btn.dataset?.img !== p || !btn.isConnected) continue;
+      if (typeof btn.getBoundingClientRect !== "function") return true;
+      const r = btn.getBoundingClientRect();
+      if ((r.width > 0 || r.height > 0) && r.bottom >= -margin && r.top <= vh + margin) return true;
+    }
+    return false;
+  }
+  function evictThumbsLRU() {
+    const max = thumbLRULimit();
+    let loadedCount = 0;
+    for (const v of thumbs.values()) if (v) loadedCount++;
+    if (loadedCount <= max) return;
+    const lbOpenSrc = (lightbox?.open && lbImg?.getAttribute?.("src")) || "";
+    for (const [p, url] of [...thumbs.entries()]) {
+      if (loadedCount <= max) break;
+      if (!url) continue;
+      if (lbOpenSrc && lbOpenSrc === url) continue;
+      if (lbTabProtected.has(url)) continue;
+      if (isThumbNearViewport(p)) continue;
+      thumbs.delete(p);
+      decodedThumbs.delete(p);
+      loadedCount--;
+      if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+        for (const el of document.querySelectorAll(".thumb[data-img] img")) {
+          if (el.parentElement?.dataset?.img === p) {
+            el.removeAttribute("src");
+            if (el.dataset) delete el.dataset.asked;
+            el.classList?.remove("is-img-loading");
+            observeThumbImg(el);
+          }
+        }
+      }
+      invalidateMdCacheForImage(p);
+      try { URL.revokeObjectURL(url); } catch {}
+    }
+  }
+  const thumbImgAttrs = (p, extraCls = "") => {
     const src = thumbs.get(p);
     const dim = thumbDims.get(p);
-    const cls = src && !decodedThumbs.has(p) ? ` class="is-img-loading"` : "";
+    const clsParts = [];
+    if (extraCls) clsParts.push(extraCls);
+    if (src && !decodedThumbs.has(p)) clsParts.push("is-img-loading");
+    const cls = clsParts.length ? ` class="${clsParts.join(" ")}"` : "";
     return cls + (src ? ` src="${src}"` : "") + (dim ? ` width="${dim.w}" height="${dim.h}"` : "");
   };
   const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="${esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt="" decoding="async"${thumbImgAttrs(p)}></button>`;
   const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
   async function loadThumb(img) {
-    const p = img.parentElement.dataset.img;
+    const p = img?.parentElement?.dataset?.img;
+    if (!p) return;
     if (thumbs.get(p)) {
+      touchThumbLRU(p);
       applyThumbSrc(img, thumbs.get(p), p);
       const dim = thumbDims.get(p);
       if (dim) { img.width = dim.w; img.height = dim.h; }
@@ -17718,6 +17874,7 @@
       const f = await findFile(p);
       if (!f || f.kind !== "image") throw 0;
       const u = URL.createObjectURL(new Blob([f.blob], { type: imgMime(p) }));
+      thumbs.delete(p);
       thumbs.set(p, u);
       thumbMeta.set(p, { size: f.size, machine: f.machine, path: f.path });
       invalidateMdCacheForImage(p);
@@ -17727,7 +17884,8 @@
           el.parentElement.classList.remove("broken");
         }
       }
-    } catch { thumbs.delete(p); img.classList?.remove("is-img-loading"); img.parentElement.classList.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
+      evictThumbsLRU();
+    } catch { thumbs.delete(p); img.classList?.remove("is-img-loading"); img.parentElement?.classList?.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
   }
   // Under each Collie message, on hover (and persistently when clapped): clap (monochrome fine-line thumbs-up SVG, zero emoji), copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
   const ICON_CLAP = `<svg class="clap-ico" viewBox="0 0 24 24" aria-hidden="true"><path class="clap-body" d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/><path class="clap-seam" d="M7 10v12"/></svg>`;
@@ -17984,51 +18142,414 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, .thumb, img, .rv-card")) return;
+    if (m && e.target.closest("a, button, summary, details, input, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
-  const NO_THUMB_IDS = new Set(["live-list", "recent-list", "attention", "shells", "crew", "rail-live", "collie-threads-list", "np-tasks-list", "np-files-list", "np-timers-list", "router-status", "screen", "log"]);
-  function triggerThumbLoads(root) {
+  // Viewport-aware thumbnail lazy loading via IntersectionObserver (replaces global MutationObserver).
+  // Observe the visible .thumb button (not the inner <img>, which is display:none before src is set).
+  const observedThumbImgs = new WeakSet();
+  const thumbIOByRoot = new WeakMap();
+  let thumbViewportIO = null;
+  function getThumbObserver(scrollRoot) {
+    if (typeof IntersectionObserver !== "function") return null;
+    const onEntries = (entries, io) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const target = entry.target;
+        io.unobserve(target);
+        observedThumbImgs.delete(target);
+        const img = target.tagName === "IMG" ? target : target.querySelector?.("img");
+        if (!img) continue;
+        const p = img.parentElement?.dataset?.img || target.dataset?.img || "";
+        if (!img.getAttribute("src") && !img.dataset?.asked) {
+          if (img.dataset) img.dataset.asked = "1";
+          loadThumb(img);
+        } else if (p) {
+          touchThumbLRU(p);
+        }
+      }
+    };
+    if (!scrollRoot) {
+      if (!thumbViewportIO) thumbViewportIO = new IntersectionObserver(onEntries, { root: null, rootMargin: "400px 0px" });
+      return thumbViewportIO;
+    }
+    let io = thumbIOByRoot.get(scrollRoot);
+    if (!io) {
+      try {
+        io = new IntersectionObserver(onEntries, { root: scrollRoot, rootMargin: "400px 0px" });
+      } catch {
+        return getThumbObserver(null);
+      }
+      thumbIOByRoot.set(scrollRoot, io);
+    }
+    return io;
+  }
+  function observeThumbImg(img) {
+    if (!img || img.tagName !== "IMG") return;
+    const btn = img.parentElement;
+    const p = btn?.dataset?.img || "";
+    if (!p) return;
+    if (img.getAttribute("src")) {
+      touchThumbLRU(p);
+      if (img.classList?.contains("is-img-loading")) watchImgDecode(img, p);
+      return;
+    }
+    if (thumbs.get(p)) {
+      touchThumbLRU(p);
+      applyThumbSrc(img, thumbs.get(p), p);
+      const dim = thumbDims.get(p);
+      if (dim) { img.width = dim.w; img.height = dim.h; }
+      return;
+    }
+    if (img.dataset?.asked) return;
+    if (typeof IntersectionObserver === "function") {
+      const target = btn?.classList?.contains("thumb") ? btn : img;
+      if (observedThumbImgs.has(target)) return;
+      const scrollRoot = target.closest?.(".scroller, #td-body, #fv-body, #rv-scroller, .wd-body") || null;
+      const io = getThumbObserver(scrollRoot);
+      if (io) {
+        observedThumbImgs.add(target);
+        io.observe(target);
+        return;
+      }
+    }
+    if (img.dataset) img.dataset.asked = "1";
+    loadThumb(img);
+  }
+  function observeThumbs(root) {
     if (!root || root.nodeType !== 1) return;
     if (root.tagName === "IMG") {
       if (root.classList?.contains("is-img-loading")) {
         watchImgDecode(root, root.parentElement?.dataset?.img || root.getAttribute("src") || "");
       }
-      if (!root.getAttribute("src") && !root.dataset.asked && root.parentElement?.classList?.contains("thumb")) {
-        root.dataset.asked = 1;
-        loadThumb(root);
-      }
+      if (root.parentElement?.classList?.contains("thumb")) observeThumbImg(root);
       return;
     }
     if (root.childElementCount === 0) return;
-    for (const img of root.querySelectorAll(".thumb img:not([src])")) {
-      if (!img.dataset.asked) { img.dataset.asked = 1; loadThumb(img); }
+    for (const img of root.querySelectorAll?.(".thumb img") || []) {
+      observeThumbImg(img);
     }
-    for (const img of root.querySelectorAll("img.is-img-loading[src]")) {
+    for (const img of root.querySelectorAll?.("img.is-img-loading[src]") || []) {
       watchImgDecode(img, img.parentElement?.dataset?.img || img.getAttribute("src") || "");
     }
   }
   document.addEventListener("load", (e) => {
     const img = e.target;
-    if (img?.tagName !== "IMG" || !img.classList?.contains("is-img-loading")) return;
-    revealDecodedImg(img, img.parentElement?.dataset?.img || img.getAttribute("src") || "");
+    if (img?.tagName !== "IMG") return;
+    const p = img.parentElement?.dataset?.img || "";
+    if (p && img.naturalWidth > 0 && img.naturalHeight > 0 && !thumbDims.has(p)) {
+      thumbDims.set(p, { w: img.naturalWidth, h: img.naturalHeight });
+    }
+    if (img.classList?.contains("is-img-loading")) {
+      revealDecodedImg(img, p || img.getAttribute("src") || "");
+    }
   }, true);
   document.addEventListener("error", (e) => {
     const img = e.target;
     if (img?.tagName !== "IMG" || !img.classList?.contains("is-img-loading")) return;
     img.classList.remove("is-img-loading");
   }, true);
-  new MutationObserver((ms) => {
-    for (const m of ms) {
-      const t = m.target;
-      if (NO_THUMB_IDS.has(t?.id) || isScreenDomTarget(t)) continue;
-      for (const n of m.addedNodes) {
-        triggerThumbLoads(n);
-        observeRichVisuals(n);
+
+  // ───────────────────────────── rich rendering transient UI state & interactions
+  const SUPPORTS_UNTIL_FOUND = typeof HTMLElement === "undefined" || ("onbeforematch" in HTMLElement.prototype);
+  const richUiState = new Map(); // "${entryId}|${kind}|${blockIdx}" -> state (boolean | number)
+  const RICH_UI_STATE_MAX = 1000;
+  function setRichUiState(key, val) {
+    if (!key) return;
+    if (richUiState.has(key)) richUiState.delete(key);
+    else if (richUiState.size >= RICH_UI_STATE_MAX) {
+      const oldest = richUiState.keys().next().value;
+      if (oldest !== undefined) richUiState.delete(oldest);
+    }
+    richUiState.set(key, val);
+  }
+  function getRichHostId(el) {
+    const msg = el?.closest?.(".msg[data-id]");
+    if (msg?.dataset?.id) return msg.dataset.id;
+    const td = el?.closest?.(".td-node[data-entry-id]");
+    if (td?.dataset?.entryId) return td.dataset.entryId;
+    const fv = el?.closest?.("#fv-code-src, #rv-code-src");
+    if (fv?.id) return fv.id;
+    return "";
+  }
+  function getRichBlockKey(el, kind, selector) {
+    if (!el) return "";
+    if (el._richKey) return el._richKey;
+    const host = el.closest?.(".msg[data-id], .td-node[data-entry-id], #fv-code-src, #rv-code-src");
+    if (!host) return "";
+    const id = getRichHostId(el);
+    if (!id) return "";
+    const list = host.querySelectorAll?.(selector) || [];
+    let idx = -1;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] === el) { idx = i; break; }
+    }
+    if (idx < 0) return "";
+    const k = `${id}|${kind}|${idx}`;
+    el._richKey = k;
+    return k;
+  }
+  function setCodeBlockExpanded(block, expanded, persist = true) {
+    if (!block) return;
+    const pre = block.querySelector?.("pre");
+    const savedScrollLeft = pre ? pre.scrollLeft : 0;
+    const tail = block.querySelector?.(".code-tail");
+    const btn = block.querySelector?.("[data-code-fold]");
+    const lbl = btn?.querySelector?.("[data-fold-label]");
+    const total = Number(block.dataset?.totalLines) || 0;
+    const head = Number(block.dataset?.headLines) || 14;
+    const remain = Math.max(0, total - head);
+    block.classList?.toggle("is-collapsed", !expanded);
+    btn?.setAttribute?.("aria-expanded", String(!!expanded));
+    if (tail) {
+      if (expanded) {
+        tail.removeAttribute?.("hidden");
+        tail.hidden = false;
+      } else if (SUPPORTS_UNTIL_FOUND) {
+        tail.setAttribute?.("hidden", "until-found");
+      } else {
+        tail.setAttribute?.("hidden", "");
+        tail.hidden = true;
       }
     }
-  }).observe(document.body, { childList: true, subtree: true });
+    if (lbl) lbl.textContent = expanded ? "收起代码" : `展开剩余 ${remain} 行`;
+    if (pre && savedScrollLeft) pre.scrollLeft = savedScrollLeft;
+    if (persist) {
+      const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
+      if (k) setRichUiState(k, !!expanded);
+    }
+  }
+  function extractCodeBlockText(block) {
+    if (!block) return "";
+    const code = block.querySelector?.("pre code");
+    if (!code) return "";
+    if (block.classList?.contains("is-diff")) {
+      const lines = code.querySelectorAll?.(".diff-line") || [];
+      if (lines.length) return [...lines].map((n) => n.textContent || "").join("\n");
+    }
+    const headPart = code.querySelector?.(".code-head-part");
+    const tailPart = code.querySelector?.(".code-tail");
+    if (headPart && tailPart) {
+      return (headPart.textContent || "") + "\n" + (tailPart.textContent || "");
+    }
+    return code.textContent || "";
+  }
+  function flashMiniBtnDone(btn, doneLabel) {
+    if (!btn) return;
+    clearTimeout(btn._doneTimer);
+    const lbl = btn.querySelector?.(".md-copy-lbl");
+    if (lbl) {
+      if (btn._origLabel === undefined) btn._origLabel = lbl.textContent;
+      lbl.textContent = doneLabel;
+    } else {
+      if (btn._origLabel === undefined) btn._origLabel = btn.textContent;
+      btn.textContent = doneLabel;
+    }
+    btn.classList?.add("is-done");
+    btn._doneTimer = setTimeout(() => {
+      if (lbl) lbl.textContent = btn._origLabel ?? "";
+      else btn.textContent = btn._origLabel ?? "";
+      btn.classList?.remove("is-done");
+    }, 1500);
+  }
+  function extractTableRows(table) {
+    if (!table) return { rows: [], aligns: [] };
+    const trs = [...(table.querySelectorAll?.("tr") || [])];
+    const aligns = [];
+    const rows = trs.map((tr, ri) => {
+      const cells = [...(tr.children || [])];
+      return cells.map((c, ci) => {
+        if (ri === 0) {
+          const al = c.style?.textAlign || "";
+          aligns[ci] = al === "center" ? ":---:" : al === "right" ? "---:" : "---";
+        }
+        return (c.textContent || "").trim().replace(/\s+/g, " ");
+      });
+    });
+    return { rows, aligns };
+  }
+  function syncTableCard(card) {
+    if (!card) return;
+    const vp = card.querySelector?.("[data-table-vp]");
+    const sc = card.querySelector?.(".md-table");
+    if (!vp || !sc) return;
+    const maxScroll = (sc.scrollWidth || 0) - (sc.clientWidth || 0);
+    const scrollable = maxScroll > 2;
+    vp.classList?.toggle("is-scrollable", scrollable);
+    if (scrollable) {
+      const firstCell = sc.querySelector?.("thead th:first-child, tbody th:first-child");
+      const colW = firstCell?.offsetWidth || 0;
+      if (colW > 0) vp.style?.setProperty?.("--sticky-col-w", colW + "px");
+    } else {
+      vp.style?.removeProperty?.("--sticky-col-w");
+    }
+    vp.classList?.toggle("can-scroll-l", scrollable && (sc.scrollLeft || 0) > 4);
+    vp.classList?.toggle("can-scroll-r", scrollable && (sc.scrollLeft || 0) < maxScroll - 4);
+  }
+  const boundTableScrolls = new WeakSet();
+  let tableRO = null;
+  function observeTableResize(sc) {
+    if (!sc || typeof ResizeObserver !== "function") return;
+    if (!tableRO) {
+      tableRO = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const card = entry.target?.closest?.("[data-table-card]");
+          if (card) syncTableCard(card);
+        }
+      });
+    }
+    try { tableRO.observe(sc); } catch {}
+  }
+  function hydrateTables(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    const cards = root.querySelectorAll("[data-table-card]");
+    for (const card of cards) {
+      const sc = card.querySelector?.(".md-table");
+      if (!sc) continue;
+      if (!boundTableScrolls.has(sc)) {
+        boundTableScrolls.add(sc);
+        sc.addEventListener?.("scroll", () => {
+          syncTableCard(card);
+          const k = getRichBlockKey(card, "table", "[data-table-card]");
+          if (k) setRichUiState(k, sc.scrollLeft || 0);
+        }, { passive: true });
+        observeTableResize(sc);
+      }
+      if (!card._richHydrated) {
+        card._richHydrated = true;
+        const k = getRichBlockKey(card, "table", "[data-table-card]");
+        const saved = k ? richUiState.get(k) : 0;
+        if (typeof saved === "number" && saved > 0) sc.scrollLeft = saved;
+      }
+      syncTableCard(card);
+    }
+  }
+  function hydrateCodeBlocks(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    for (const block of root.querySelectorAll(".md-code[data-foldable]")) {
+      if (block._richHydrated) continue;
+      block._richHydrated = true;
+      const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
+      if (k && richUiState.has(k)) {
+        setCodeBlockExpanded(block, !!richUiState.get(k), false);
+      } else if (!SUPPORTS_UNTIL_FOUND && block.classList?.contains("is-collapsed")) {
+        const tail = block.querySelector?.(".code-tail");
+        if (tail) { tail.setAttribute?.("hidden", ""); tail.hidden = true; }
+      }
+    }
+  }
+  function hydrateDetails(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    for (const det of root.querySelectorAll("details.md-fold")) {
+      if (det._richHydrated) continue;
+      det._richHydrated = true;
+      const k = getRichBlockKey(det, "details", "details.md-fold");
+      if (k && richUiState.has(k)) {
+        det.open = !!richUiState.get(k);
+      }
+    }
+  }
+  function hydrateRichContent(root) {
+    if (!root || root.nodeType !== 1) return;
+    observeThumbs(root);
+    hydrateCodeBlocks(root);
+    hydrateDetails(root);
+    hydrateTables(root);
+    hydratePendingMath(root);
+    observeRichVisuals(root);
+  }
+  function closeRichFloatActs(except = null) {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+    for (const el of document.querySelectorAll(".md-table-card.is-acts-open, .md-code.is-acts-open")) {
+      if (el !== except) {
+        el.classList.remove("is-acts-open");
+        const act = document.activeElement;
+        if (act && el.contains?.(act) && typeof act.blur === "function") act.blur();
+      }
+    }
+  }
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeRichFloatActs();
+  });
+  document.addEventListener("click", async (ev) => {
+    const foldBtn = ev.target?.closest?.("[data-code-fold]");
+    if (foldBtn) {
+      ev.preventDefault();
+      const block = foldBtn.closest?.(".md-code[data-foldable]");
+      if (block) setCodeBlockExpanded(block, block.classList.contains("is-collapsed"), true);
+      return;
+    }
+    const copyCodeBtn = ev.target?.closest?.("[data-copy-code]");
+    if (copyCodeBtn) {
+      ev.preventDefault();
+      if (ev.detail > 0) copyCodeBtn.blur?.();
+      const block = copyCodeBtn.closest?.("[data-code-block]");
+      const txt = extractCodeBlockText(block);
+      const ok = await copyText(txt);
+      if (ok) {
+        flashMiniBtnDone(copyCodeBtn, "已复制 ✓");
+        toast("已复制代码");
+      } else {
+        toast("复制失败", "attn");
+      }
+      return;
+    }
+    const copyTblBtn = ev.target?.closest?.("[data-copy-table]");
+    if (copyTblBtn) {
+      ev.preventDefault();
+      if (ev.detail > 0) copyTblBtn.blur?.();
+      const mode = copyTblBtn.dataset?.copyTable || "tsv";
+      const card = copyTblBtn.closest?.("[data-table-card]");
+      const table = card?.querySelector?.("table");
+      const { rows, aligns } = extractTableRows(table);
+      if (!rows.length) return;
+      let payload = "";
+      if (mode === "md") {
+        const [head, ...body] = rows;
+        const escCell = (c) => c.replace(/\|/g, "\\|");
+        const sep = head.map((_, i) => aligns[i] || "---");
+        payload = [head.map(escCell), sep, ...body.map((r) => r.map(escCell))]
+          .map((r) => "| " + r.join(" | ") + " |")
+          .join("\n");
+      } else {
+        payload = rows.map((r) => r.map((c) => c.replace(/\t/g, " ")).join("\t")).join("\n");
+      }
+      const ok = await copyText(payload);
+      if (ok) {
+        flashMiniBtnDone(copyTblBtn, mode === "tsv" ? "已复制 TSV ✓" : "已复制 ✓");
+        toast(mode === "tsv" ? "已复制为表格数据（TSV）" : "已复制 Markdown 表格");
+      } else {
+        toast("复制失败", "attn");
+      }
+      return;
+    }
+    // Touch/mobile tap on headerless table or code block toggles its floating micro-actions pill; tapping outside dismisses.
+    const floatHost = ev.target?.closest?.(".md-table-card, .md-code");
+    const isTouchLike = typeof matchMedia === "function" && (matchMedia("(hover: none)").matches || matchMedia("(pointer: coarse)").matches);
+    if (floatHost && isTouchLike) {
+      const sel = typeof window !== "undefined" && typeof window.getSelection === "function" ? String(window.getSelection() || "") : "";
+      if (!sel && !ev.target?.closest?.("a, button")) {
+        const nextOpen = !floatHost.classList.contains("is-acts-open");
+        closeRichFloatActs(nextOpen ? floatHost : null);
+        floatHost.classList.toggle("is-acts-open", nextOpen);
+      }
+      return;
+    }
+    if (!floatHost) closeRichFloatActs();
+  });
+  document.addEventListener("beforematch", (ev) => {
+    const block = ev.target?.closest?.(".md-code[data-foldable]");
+    if (block && block.classList?.contains("is-collapsed")) {
+      setCodeBlockExpanded(block, true, true);
+    }
+  });
+  document.addEventListener("toggle", (ev) => {
+    const det = ev.target;
+    if (!det || det.tagName !== "DETAILS" || !det.classList?.contains("md-fold")) return;
+    const k = getRichBlockKey(det, "details", "details.md-fold");
+    if (k) setRichUiState(k, !!det.open);
+  }, { capture: true });
 
   // ───────────────────────────── fullscreen image lightbox
   const lightbox = $("#lightbox"), lbStage = $("#lb-stage"), lbImg = $("#lb-img"), lbSvg = $("#lb-svg");
@@ -18171,6 +18692,24 @@
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
+    const gal = triggerEl?.closest?.(".md-gallery");
+    if (gal) {
+      const seen = new Set(), items = [];
+      const add = (it) => {
+        const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        items.push(it);
+      };
+      for (const el of gal.querySelectorAll?.(".gal-tile, .gal-hidden-item") || []) {
+        if (el.dataset?.img) add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
+        else if (el.dataset?.imgUrl) add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
+      }
+      const wantKey = fallbackItem.path ? "p:" + fallbackItem.path : "u:" + (fallbackItem.url || "");
+      let index = items.findIndex((it) => (it.path ? "p:" + it.path : "u:" + (it.url || "")) === wantKey);
+      if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
+      return { items, index };
+    }
     const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".mine") || triggerEl?.closest(".mine-group") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
     const seen = new Set(), items = [];
@@ -18180,10 +18719,10 @@
       seen.add(key);
       items.push(it);
     };
-    for (const el of scope.querySelectorAll(".thumb[data-img], .md-img-btn[data-img-url], a.fpath[data-path], img")) {
-      if (el.classList.contains("thumb") && el.dataset.img) {
+    for (const el of scope.querySelectorAll(".thumb[data-img], .md-img-btn[data-img-url], .gal-hidden-item, a.fpath[data-path], img")) {
+      if ((el.classList.contains("thumb") || el.classList.contains("gal-hidden-item")) && el.dataset.img) {
         add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
-      } else if (el.classList.contains("md-img-btn") && el.dataset.imgUrl) {
+      } else if ((el.classList.contains("md-img-btn") || el.classList.contains("gal-hidden-item")) && el.dataset.imgUrl) {
         add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
       } else if (el.matches("a.fpath[data-path]")) {
         const p = el.dataset.path || "";
@@ -18336,6 +18875,7 @@
     const blobUrl = URL.createObjectURL(new Blob([f.blob], { type: imgMime(item.path) }));
     // If a `.thumb` in the DOM is waiting on this exact path, share it into `thumbs`.
     if (document.querySelector(`.thumb[data-img="${CSS.escape(item.path)}"]`)) {
+      thumbs.delete(item.path);
       thumbs.set(item.path, blobUrl);
       thumbMeta.set(item.path, { size: f.size, machine: f.machine, path: f.path });
       for (const el of document.querySelectorAll(".thumb[data-img] img")) {
@@ -18344,6 +18884,7 @@
           el.parentElement.classList.remove("broken");
         }
       }
+      evictThumbsLRU();
     } else {
       lbTempUrl = blobUrl;
     }
@@ -21306,7 +21847,7 @@
             const artifactsHtml = renderEntryArtifacts(m);
             const bodyHtml = m.role === "user"
               ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
-              : `<div class="td-text msg assistant">${rootQuoteHtml}${md(m.text)}${imagesIn(m.text)}${artifactsHtml}${optsHtml}</div>`;
+              : `<div class="td-text msg assistant">${rootQuoteHtml}${renderCollieBody(m.text)}${artifactsHtml}${optsHtml}</div>`;
             return `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
           <div class="td-rail">${avHtml}</div>
           <div class="td-content">
@@ -21347,6 +21888,7 @@
         tdListEl.innerHTML = items.map((it) => it.render()).join("");
         observeRichVisuals(tdListEl);
       }
+      hydrateRichContent(tdListEl);
     }
     updateThreadTargetBanner(th, info.byId);
     syncThreadComposerHint();
@@ -21908,6 +22450,7 @@
     wdScreenSeq++;
     wdScreenWriting = false;
     wdScreenQueuedFrame = null;
+    preXtermWdFrame = null;
     if (wdScreenScrollRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(wdScreenScrollRAF);
       wdScreenScrollRAF = 0;
@@ -21994,7 +22537,22 @@
     }
   }
   function drawWdScreen(f) {
-    if (!wdTerm) return;
+    if (!wdTerm) {
+      if (typeof window !== "undefined" && !window.Terminal) {
+        preXtermWdFrame = f;
+        ensureXterm().then(() => {
+          if (activeWorkerKey && curWdMode() === "screen") {
+            ensureWdTerm();
+            if (wdTerm && preXtermWdFrame) {
+              const pf = preXtermWdFrame;
+              preXtermWdFrame = null;
+              drawWdScreen(pf);
+            }
+          }
+        }).catch(() => {});
+      }
+      return;
+    }
     if (!wdScreenFresh && wdTerm.hasSelection?.()) { wdPendingScreen = f; return; }
     if (wdScreenWriting) { wdScreenQueuedFrame = f; return; }
     const stick = wdScreenFresh || wdScreenNearBottom();
@@ -22222,6 +22780,7 @@
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
         : `<div class="thread-empty">该任务已结束，暂无可读取的历史会话记录。</div>`;
+      if (rep) hydrateRichContent(wdThreadEl);
       return;
     }
     const cacheKey = "h:" + past.id;
@@ -22260,6 +22819,7 @@
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
         : `<div class="thread-empty">${esc(err.message || "暂时读不到历史记录")}</div>`;
+      if (rep) hydrateRichContent(wdThreadEl);
     }
   }
   function openWorkerDrawerStream(opts = {}) {
@@ -22334,6 +22894,18 @@
     if (m === "screen") {
       ensureWdTerm();
       resetWdScreen();
+      if (!wdTerm && !window.Terminal) {
+        ensureXterm().then(() => {
+          if (activeWorkerKey && wdPaneId === id && curWdMode() === "screen") {
+            ensureWdTerm();
+            if (wdTerm && preXtermWdFrame) {
+              const pf = preXtermWdFrame;
+              preXtermWdFrame = null;
+              drawWdScreen(pf);
+            }
+          }
+        }).catch(() => {});
+      }
     } else if (wdLogEl && !preserve) {
       wdLogEl.textContent = "";
     }
@@ -22765,7 +23337,10 @@
   // Minimal, safe Markdown: escape first, then add a little structure.
   const mdCache = new Map();
   const mdCacheImgKeys = new Set();
-  let mdWorkerSig = "";
+  const mdCacheMathKeys = new Set();
+  const mdCacheWorkerKeys = new Map(); // cacheKey -> Set<candidateInlineCodeToken>
+  let mdWorkerState = new Map();       // workerName -> "${paneId}|${label}|${status}"
+  let _mdCurWorkerCandidates = null;
   function workerLinkStatus(w, a) {
     if (w) {
       if (w.ended) return "ended";
@@ -22786,11 +23361,51 @@
     }
     return "idle";
   }
-  function currentMdWorkerSig() {
-    const names = [];
-    for (const w of sup.workers || []) if (w?.name && w.name !== ROUTER) names.push(`${w.name}:${workerLinkStatus(w, null)}`);
-    for (const a of state.agents || []) if (a?.name && a.name !== ROUTER) names.push(`${a.name}:${workerLinkStatus(null, a)}`);
-    return names.join("\0");
+  function currentMdWorkerState() {
+    const m = new Map();
+    for (const w of sup.workers || []) {
+      if (w?.name && w.name !== ROUTER) {
+        const pId = paneOf(w.name) || (!w.ended ? w.pane_id || "" : "");
+        m.set(w.name, `${pId}|${workerDisplayName(w)}|${workerLinkStatus(w, null)}`);
+      }
+    }
+    for (const a of state.agents || []) {
+      if (a?.name && a.name !== ROUTER && !m.has(a.name)) {
+        m.set(a.name, `${a.pane_id || ""}|${title(a)}|${workerLinkStatus(null, a)}`);
+      }
+    }
+    return m;
+  }
+  function syncMdWorkerCache() {
+    const next = currentMdWorkerState();
+    let changed = null;
+    for (const [k, v] of next) {
+      if (mdWorkerState.get(k) !== v) {
+        if (!changed) changed = new Set();
+        changed.add(k);
+      }
+    }
+    for (const k of mdWorkerState.keys()) {
+      if (!next.has(k)) {
+        if (!changed) changed = new Set();
+        changed.add(k);
+      }
+    }
+    if (!changed) return;
+    mdWorkerState = next;
+    if (!mdCacheWorkerKeys.size) return;
+    for (const [cacheKey, cands] of [...mdCacheWorkerKeys.entries()]) {
+      let hit = false;
+      for (const name of changed) {
+        if (cands.has(name)) { hit = true; break; }
+      }
+      if (hit) {
+        mdCache.delete(cacheKey);
+        mdCacheImgKeys.delete(cacheKey);
+        mdCacheMathKeys.delete(cacheKey);
+        mdCacheWorkerKeys.delete(cacheKey);
+      }
+    }
   }
   function resolveInlineWorker(raw) {
     if (!raw || raw === ROUTER || raw.length < 2 || raw.length > 64) return null;
@@ -22810,29 +23425,97 @@
       if (k.includes(p) || (baseName && k.includes(baseName)) || rendered.includes(p)) {
         mdCache.delete(k);
         mdCacheImgKeys.delete(k);
+        mdCacheMathKeys.delete(k);
+        mdCacheWorkerKeys.delete(k);
       }
     }
   }
-  function md(src) {
-    const wSig = currentMdWorkerSig();
-    if (wSig !== mdWorkerSig) {
-      mdWorkerSig = wSig;
-      mdCache.clear();
-      mdCacheImgKeys.clear();
-    }
-    const key = String(src || "");
+  function md(src, opts = null) {
+    syncMdWorkerCache();
+    const includePathImages = !!(opts && opts.includePathImages);
+    const rawKey = String(src || "");
+    const key = includePathImages ? "\u0002" + rawKey : rawKey;
     let out = mdCache.get(key);
     if (out === undefined) {
-      out = mdRender(key);
+      const prevCands = _mdCurWorkerCandidates;
+      const cands = new Set();
+      _mdCurWorkerCandidates = cands;
+      try {
+        out = mdRender(rawKey, opts);
+      } finally {
+        _mdCurWorkerCandidates = prevCands;
+      }
       if (mdCache.size > 8000) {
         const oldest = mdCache.keys().next().value;
         mdCache.delete(oldest);
         mdCacheImgKeys.delete(oldest);
+        mdCacheMathKeys.delete(oldest);
+        mdCacheWorkerKeys.delete(oldest);
       }
       mdCache.set(key, out);
-      if (out.includes('class="thumb md-thumb"')) mdCacheImgKeys.add(key);
+      if (out.includes("md-thumb")) mdCacheImgKeys.add(key);
+      if (out.includes("md-math-pending")) mdCacheMathKeys.add(key);
+      if (cands.size) mdCacheWorkerKeys.set(key, cands);
     }
     return out;
+  }
+  let mathHydrating = false;
+  function hydratePendingMath(root) {
+    const scope = root || (typeof document !== "undefined" ? document : null);
+    if (!scope || typeof scope.querySelectorAll !== "function") return;
+    const pending = scope.querySelectorAll(".md-math-pending[data-tex]");
+    if (!pending || !pending.length) return;
+    const getK = () => (typeof katex !== "undefined" ? katex : (typeof globalThis !== "undefined" ? globalThis.katex : null));
+    const applyAll = () => {
+      const k = getK();
+      if (!k || typeof k.renderToString !== "function") return;
+      for (const cacheKey of [...mdCacheMathKeys]) {
+        mdCacheMathKeys.delete(cacheKey);
+        if (!mdCache.has(cacheKey)) continue;
+        const includePathImages = cacheKey.startsWith("\u0002");
+        const rawKey = includePathImages ? cacheKey.slice(1) : cacheKey;
+        const prevCands = _mdCurWorkerCandidates;
+        const cands = new Set();
+        _mdCurWorkerCandidates = cands;
+        let freshHtml = "";
+        try {
+          freshHtml = mdRender(rawKey, includePathImages ? { includePathImages: true } : null);
+        } finally {
+          _mdCurWorkerCandidates = prevCands;
+        }
+        mdCache.set(cacheKey, freshHtml);
+        if (freshHtml.includes("md-thumb")) mdCacheImgKeys.add(cacheKey);
+        if (cands.size) mdCacheWorkerKeys.set(cacheKey, cands);
+      }
+      const sc = view === "collie" ? $("#v-collie .scroller") : null;
+      const stickBottom = !!(sc && (sc.scrollHeight - sc.scrollTop - sc.clientHeight <= 40));
+      const docNodes = (typeof document !== "undefined" && typeof document.querySelectorAll === "function")
+        ? document.querySelectorAll(".md-math-pending[data-tex]")
+        : pending;
+      for (const el of [...docNodes]) {
+        if (el.isConnected === false) continue;
+        const tex = el.dataset?.tex || "";
+        if (!tex) continue;
+        const rendered = renderMath(tex, el.dataset?.display === "1", el.dataset?.inlineWrap === "1");
+        const parsed = parseSuperNode(rendered);
+        if (parsed && el.parentNode) {
+          if (typeof el.replaceWith === "function") el.replaceWith(parsed);
+          else el.parentNode.replaceChild(parsed, el);
+        }
+      }
+      if (stickBottom && sc) sc.scrollTop = sc.scrollHeight;
+    };
+    const kNow = getK();
+    if (kNow && typeof kNow.renderToString === "function") {
+      applyAll();
+      return;
+    }
+    if (mathHydrating) return;
+    mathHydrating = true;
+    ensureKaTeX().then((k) => {
+      mathHydrating = false;
+      if (k && typeof k.renderToString === "function") applyAll();
+    }).catch(() => { mathHydrating = false; });
   }
   // A bare link: ASCII URL characters up to whitespace, tags or non-ASCII text
   // and punctuation, shown as its host and path, shortened ([name](url) is
@@ -22938,11 +23621,12 @@
         return `<span class="md-math">${html}</span>`;
       } catch {}
     }
+    const escTex = esc(src);
     return displayMode
       ? (inlineWrap
-        ? `<span class="md-math-block md-math-fallback"><code>${esc(src)}</code></span>`
-        : `<div class="md-math-block md-math-fallback"><code>${esc(src)}</code></div>`)
-      : `<span class="md-math md-math-fallback"><code>${esc(src)}</code></span>`;
+        ? `<span class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" data-inline-wrap="1" role="region" aria-label="数学公式"><code>${escTex}</code></span>`
+        : `<div class="md-math-block md-math-pending md-math-fallback" data-tex="${escTex}" data-display="1" tabindex="0" role="region" aria-label="数学公式"><code>${escTex}</code></div>`)
+      : `<span class="md-math md-math-pending md-math-fallback" data-tex="${escTex}" data-display="0"><code>${escTex}</code></span>`;
   }
   function extractMathBlocks(text, blocks) {
     const rawLines = text.split("\n");
@@ -23143,8 +23827,7 @@
       const label = htmlCard.title || "HTML 卡片";
       return `<section class="rv-card rv-html-card is-pending" data-rv-kind="html-code" data-rv-hash="${hash}" data-rv-mode="preview" data-rv-title="${esc(label)}" aria-label="${esc(label)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(label)} 操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 HTML 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-open-code-win="1" title="在新窗口打开" aria-label="在新窗口打开 ${esc(label)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>渲染卡片中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></section>`;
     }
-    const lang = detectCodeLang(info, false);
-    return `<pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${lang ? highlightCode(raw, lang.id) : esc(raw)}</code></pre>`;
+    return renderCodeBlock(info, raw);
   }
   function extractFencedBlocks(text, blocks) {
     const lines = String(text || "").split("\n");
@@ -24177,11 +24860,183 @@
     }
   });
 
-  function mdRender(src) {
+  const CODE_FOLD_THRESHOLD = 18;
+  const CODE_FOLD_HEAD = 14;
+  const ICON_MD_COPY = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
+  const ICON_MD_CHEV = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
+  const ICON_TASK_CHECK = `<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.6"/></svg>`;
+  const CALLOUT_META = {
+    NOTE: { cls: "is-note", label: "说明", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>` },
+    TIP: { cls: "is-tip", label: "提示", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>` },
+    WARNING: { cls: "is-warn", label: "注意", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>` },
+    CAUTION: { cls: "is-caution", label: "风险", icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2Z"/><path d="M12 8v5M12 16.5h.01"/></svg>` },
+  };
+  const TABLE_NUM_RE = /^(?:[<>≤≥~≈±+\-−$€£¥]?\s*)?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|ms|us|µs|ns|s|min|h|B|KB|MB|GB|TB|KiB|MiB|GiB|px|fps|FPS|x|×|\/s|次|行|列|条|个|张|天|小时|分钟|秒))?(?:\s*[–\-~→]\s*[+-]?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|ms|s|KB|MB|GB|px|x|×))?)?$/;
+  function isNumericTableCell(raw) {
+    const clean = unesc(String(raw || "")).replace(/\*\*|__|~~|`|[*_]/g, "").trim();
+    return !!clean && TABLE_NUM_RE.test(clean);
+  }
+  function splitHighlightedLines(html, keepLines) {
+    let lineCount = 0;
+    const openTags = [];
+    for (let i = 0; i < html.length; ) {
+      const ch = html[i];
+      if (ch === "<") {
+        const end = html.indexOf(">", i);
+        if (end < 0) break;
+        const tag = html.slice(i, end + 1);
+        if (tag.startsWith("</")) openTags.pop();
+        else if (!tag.endsWith("/>")) openTags.push(tag);
+        i = end + 1;
+        continue;
+      }
+      if (ch === "\n") {
+        lineCount++;
+        if (lineCount === keepLines) {
+          const closeAll = openTags.length ? "</span>".repeat(openTags.length) : "";
+          const reopenAll = openTags.join("");
+          return { head: html.slice(0, i) + closeAll, tail: reopenAll + html.slice(i + 1) };
+        }
+      }
+      i++;
+    }
+    return { head: html, tail: "" };
+  }
+  function renderCodeBlock(info, raw) {
+    const infoTrim = String(info || "").trim();
+    const infoParts = infoTrim ? infoTrim.split(/\s+/) : [];
+    const lang = detectCodeLang(infoTrim, false);
+    const rawTag = infoParts[0] ? infoParts[0].replace(/^language-/i, "").slice(0, 24) : "";
+    const langLabel = lang ? lang.label : rawTag;
+    const rawLines = raw.split("\n");
+    const totalLines = rawLines.length;
+    const isDiff = lang?.id === "diff";
+    const collapsible = totalLines > CODE_FOLD_THRESHOLD;
+    const remain = collapsible ? totalLines - CODE_FOLD_HEAD : 0;
+    const hiddenAttr = SUPPORTS_UNTIL_FOUND ? 'hidden="until-found"' : 'hidden=""';
+    let addCount = 0, delCount = 0;
+    let bodyCodeHtml = "";
+    if (isDiff) {
+      const spans = rawLines.map((ln) => {
+        if (/^@@/.test(ln)) return `<span class="diff-line is-hunk">${esc(ln)}</span>`;
+        if (/^(?:diff |index |--- |\+\+\+ )/.test(ln)) return `<span class="diff-line is-meta">${esc(ln)}</span>`;
+        if (ln.startsWith("+")) {
+          addCount++;
+          return `<span class="diff-line is-add"><span class="diff-sig">+</span>${esc(ln.slice(1))}</span>`;
+        }
+        if (ln.startsWith("-")) {
+          delCount++;
+          return `<span class="diff-line is-del"><span class="diff-sig">-</span>${esc(ln.slice(1))}</span>`;
+        }
+        if (ln.startsWith(" ")) return `<span class="diff-line"><span class="diff-sig"> </span>${esc(ln.slice(1))}</span>`;
+        return `<span class="diff-line">${esc(ln)}</span>`;
+      });
+      bodyCodeHtml = collapsible
+        ? `<span class="code-head-part">${spans.slice(0, CODE_FOLD_HEAD).join("")}</span><span class="code-tail" ${hiddenAttr}>${spans.slice(CODE_FOLD_HEAD).join("")}</span>`
+        : spans.join("");
+    } else {
+      const hl = lang ? highlightCode(raw, lang.id) : esc(raw);
+      if (collapsible) {
+        const { head, tail } = splitHighlightedLines(hl, CODE_FOLD_HEAD);
+        bodyCodeHtml = `<span class="code-head-part">${head}</span><span class="code-tail" ${hiddenAttr}>${tail}</span>`;
+      } else {
+        bodyCodeHtml = hl;
+      }
+    }
+    const diffStatHtml = isDiff && (addCount > 0 || delCount > 0)
+      ? `<span class="md-diff-stat" aria-label="新增 ${addCount} 行，删除 ${delCount} 行">${addCount > 0 ? `<span class="add">+${addCount}</span>` : ""}${delCount > 0 ? `<span class="del">−${delCount}</span>` : ""}</span>`
+      : "";
+    const cornerTagInner = isDiff
+      ? (diffStatHtml || `<span class="md-code-lang">Diff</span>`)
+      : (langLabel ? `<span class="md-code-lang">${esc(langLabel)}</span>` : "");
+    const cornerTagHtml = cornerTagInner ? `<div class="md-code-tag" aria-hidden="true">${cornerTagInner}</div>` : "";
+    const floatActsHtml = `<div class="md-float-acts md-code-acts"><button type="button" class="mini-btn md-copy-btn" data-copy-code aria-label="复制代码">${ICON_MD_COPY}<span class="md-copy-lbl">复制</span></button></div>`;
+    const foldBtnHtml = collapsible
+      ? `<button type="button" class="md-code-fold-btn" data-code-fold aria-expanded="false">${ICON_MD_CHEV}<span data-fold-label>展开剩余 ${remain} 行</span></button>`
+      : "";
+    return `<div class="md-code${isDiff ? " is-diff" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
+      `${cornerTagHtml}${floatActsHtml}` +
+      `<div class="md-code-body"><pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${bodyCodeHtml}</code></pre></div>${foldBtnHtml}</div>`;
+  }
+  function renderMdGallery(rawItems) {
+    if (!rawItems?.length) return "";
+    const seen = new Set();
+    const list = [];
+    for (const it of rawItems) {
+      const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      list.push(it);
+    }
+    const n = list.length;
+    if (!n) return "";
+    const sizeCls = n === 1 ? "is-1" : n === 2 ? "is-2" : n === 3 ? "is-3" : n === 4 ? "is-4" : "is-many";
+    const visible = list.slice(0, 6);
+    const overflow = n - visible.length;
+    const tilesHtml = visible.map((it, idx) => {
+      const moreHtml = idx === 5 && overflow > 0 ? `<span class="gal-more" aria-hidden="true">+${overflow}</span>` : "";
+      const capText = String(it.alt || "").trim();
+      const capHtml = capText ? `<span class="gal-cap">${esc(capText)}</span>` : "";
+      if (it.path) {
+        const ep = esc(it.path), ea = esc(capText);
+        const aria = esc(capText ? "查看大图：" + capText : "查看大图 " + (it.path.split("/").pop() || "图片"));
+        const dim = n === 1 ? thumbDims.get(it.path) : null;
+        const arStyle = dim && dim.w > 0 && dim.h > 0 ? ` style="aspect-ratio:${dim.w}/${dim.h}"` : "";
+        return `<button type="button" class="gal-tile thumb md-thumb" data-img="${ep}" data-img-alt="${ea}" aria-label="${aria}"${arStyle}><img alt="${ea}" decoding="async"${thumbImgAttrs(it.path, "md-img")}>${capHtml}${moreHtml}</button>`;
+      }
+      const eu = esc(it.url), ea = esc(capText);
+      const loadCls = decodedThumbs.has(it.url) ? "" : " is-img-loading";
+      const aria = esc(capText ? "查看大图：" + capText : "查看大图");
+      return `<button type="button" class="gal-tile md-img-btn" data-img-url="${eu}" data-img-alt="${ea}" aria-label="${aria}"><img class="md-img${loadCls}" src="${eu}" alt="${ea}" loading="lazy" decoding="async">${capHtml}${moreHtml}</button>`;
+    }).join("");
+    const hiddenHtml = overflow > 0
+      ? list.slice(6).map((it) => it.path
+        ? `<span class="gal-hidden-item" hidden data-img="${esc(it.path)}" data-img-alt="${esc(it.alt || "")}"></span>`
+        : `<span class="gal-hidden-item" hidden data-img-url="${esc(it.url)}" data-img-alt="${esc(it.alt || "")}"></span>`
+      ).join("")
+      : "";
+    return `<div class="md-gallery ${sizeCls}" data-count="${n}" role="group" aria-label="图片画廊（${n} 张）">${tilesHtml}${hiddenHtml}</div>`;
+  }
+  const MD_IMG_TOKEN_RE = /!\[([^\]\n]*)\]\((?:(https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)|(?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?)\)/g;
+  function parseImageOnlyLine(escapedLine) {
+    const trimmed = String(escapedLine || "").trim();
+    if (!trimmed || !trimmed.includes("![")) return null;
+    MD_IMG_TOKEN_RE.lastIndex = 0;
+    const items = [];
+    let pos = 0, m;
+    while ((m = MD_IMG_TOKEN_RE.exec(trimmed)) !== null) {
+      if (trimmed.slice(pos, m.index).trim()) return null;
+      const alt = unesc(m[1] || "");
+      if (m[2]) {
+        items.push({ url: unesc(m[2]), alt });
+      } else if (m[3]) {
+        let p = unesc(m[3]).replace(/:\d+(?:[-:]\d+)?$/, "");
+        try { p = decodeURI(p); } catch {}
+        if (!IMG_EXT.test(p)) return null;
+        items.push({ path: p, alt });
+      }
+      pos = MD_IMG_TOKEN_RE.lastIndex;
+    }
+    if (!items.length || trimmed.slice(pos).trim()) return null;
+    return items;
+  }
+  const DETAILS_OPEN_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*$/i;
+  const DETAILS_CLOSE_RE = /^\s*&lt;\/details&gt;\s*$/i;
+  const SUMMARY_LINE_RE = /^\s*&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;\s*$/i;
+  const DETAILS_INLINE_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*(?:&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;)?\s*([\s\S]*?)&lt;\/details&gt;\s*$/i;
+  function mdRender(src, opts = null) {
     const blocks = [];
-    let text = extractFencedBlocks(String(src || "").replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks);
+    const mdImgPaths = new Set();
+    const rawSrc = String(src || "");
+    let text = extractFencedBlocks(rawSrc.replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks);
     text = extractMathBlocks(text, blocks);
     text = esc(text);
+    const applyInlineStyle = (t) => t
+      .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/~~(?=\S)([^~\n]*?\S)~~/g, "<del>$1</del>")
+      .replace(/(?<!\*)\*(?!\s|\*)([^*\n]+?)(?<!\s)\*(?!\*)/g, "<em>$1</em>")
+      .replace(/(?<![A-Za-z0-9_\/])_(?!\s|_)([^_\n]+?)(?<!\s)_(?![A-Za-z0-9_\/])/g, "<em>$1</em>");
     const inline = (s) => {
       const stash = [];
       const keep = (h) => `\u0001${stash.push(h) - 1}\u0001`;
@@ -24213,6 +25068,9 @@
               const eu = esc(raw);
               scanned += keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
             } else {
+              if (raw && raw !== ROUTER && raw.length >= 2 && raw.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) {
+                _mdCurWorkerCandidates?.add(raw);
+              }
               const wk = resolveInlineWorker(raw);
               if (wk) {
                 const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
@@ -24298,7 +25156,6 @@
         i++;
       }
       let r = scanned
-        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
         .replace(/!\[([^\]\n]*)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, alt, u) => {
           const rawU = unesc(u), eu = esc(rawU);
           const loadCls = decodedThumbs.has(rawU) ? "" : " is-img-loading";
@@ -24309,15 +25166,16 @@
           try { p = decodeURI(p); } catch {}
           const ep = esc(p);
           if (!IMG_EXT.test(p)) return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${alt || ep}</a>`);
-          return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img class="md-img" alt="${alt}"${thumbImgAttrs(p)}></button>`);
+          mdImgPaths.add(p);
+          return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc("查看大图 " + (p.split("/").pop() || "图片"))}"><img alt="${alt}" decoding="async"${thumbImgAttrs(p, "md-img")}></button>`);
         })
-        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${applyInlineStyle(l)}</a>`))
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
         .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
           p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
           try { p = decodeURI(p); } catch {}
           const ep = esc(p);
-          return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${label}</a>`);
+          return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${applyInlineStyle(label)}</a>`);
         })
         .replace(URL_RE, (m) => {
           const hit = linkifyUrlMatch(m);
@@ -24327,54 +25185,201 @@
           const rawP = unesc(p);
           return `${pre}${keep(`<a ${fileLinkAttrs(rawP, p, "打开这个文件")}>${p}</a>`)}`;
         });
+      r = applyInlineStyle(r);
       while (r.includes("\u0001")) r = r.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
       return r;
     };
-    const out = [];
-    let list = null, para = [];
-    const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; } };
-    const flushList = () => { if (list) { out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
-    // A GFM table: a | row, a |---| row, then more | rows.
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
     const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
-    const lines = text.split("\n");
-    for (let li = 0; li < lines.length; li++) {
-      const line = lines[li];
-      let m;
-      if (line.includes("|") && li + 1 < lines.length && isSep(lines[li + 1]) && lines[li + 1].includes("|")) {
-        flushPara(); flushList();
-        const head = cells(line);
-        const align = cells(lines[li + 1]).map((c) => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
-        const td = (tag, c, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ""}>${inline(c)}</${tag}>`;
-        let body = "";
-        li += 2;
-        while (li < lines.length && lines[li].includes("|") && lines[li].trim()) {
-          const r = cells(lines[li]);
-          body += `<tr>${head.map((_, k) => td("td", r[k] || "", k)).join("")}</tr>`;
-          li++;
+    const renderQuoteBlock = (qLines) => {
+      const first = (qLines[0] || "").trim();
+      const cm = first.match(/^\[!(NOTE|TIP|WARNING|CAUTION)\](?:\s+(.*))?$/i);
+      const groupParas = (arr) => {
+        const ps = [];
+        let cur = [];
+        for (const ql of arr) {
+          if (!ql.trim()) { if (cur.length) { ps.push(cur); cur = []; } }
+          else cur.push(ql);
         }
-        li--;
-        out.push(`<div class="md-table" tabindex="0" role="region" aria-label="数据表格"><table><thead><tr>${head.map((c, k) => td("th", c, k)).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
-        continue;
+        if (cur.length) ps.push(cur);
+        return ps.map((p) => `<p>${p.map(inline).join("<br>")}</p>`).join("");
+      };
+      if (cm) {
+        const kind = cm[1].toUpperCase();
+        const meta = CALLOUT_META[kind] || CALLOUT_META.NOTE;
+        const extra = (cm[2] || "").trim();
+        const headHtml = extra ? `${meta.label} · ${inline(extra)}` : meta.label;
+        const bodyHtml = groupParas(qLines.slice(1));
+        return `<div class="md-callout ${meta.cls}" role="note"><div class="md-callout-head">${meta.icon}<span>${headHtml}</span></div>${bodyHtml ? `<div class="md-callout-body">${bodyHtml}</div>` : ""}</div>`;
       }
-      if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
-      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); flushList(); out.push("<hr>"); continue; }
-      if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); const h = Math.min(m[1].length + 1, 4); out.push(`<h${h}>${inline(m[2])}</h${h}>`); continue; }
-      if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
-        const tag = /^\s*\d/.test(line) ? "ol" : "ul";
-        flushPara();
-        // "2." after a few bullets carries on the numbering, as the agent wrote it.
-        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [], start: parseInt(line) || 1 }; }
-        list.items.push(m[1]);
-        continue;
+      const inner = groupParas(qLines);
+      return `<blockquote>${inner}</blockquote>`;
+    };
+    const parseBlockLines = (lines, depth = 0, trailingImgs = null) => {
+      const out = [];
+      let list = null, para = [], galleryBuf = [];
+      const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; } };
+      const flushGallery = () => {
+        if (galleryBuf.length) {
+          out.push(renderMdGallery(galleryBuf));
+          galleryBuf = [];
+        }
+      };
+      const flushList = () => {
+        if (!list) return;
+        if (list.kind === "task") {
+          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"><span class="md-task-box" role="img" aria-label="${it.done ? "已完成" : "未完成"}">${it.done ? ICON_TASK_CHECK : ""}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
+        } else {
+          out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`);
+        }
+        list = null;
+      };
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        let m;
+        // Safe whitelist <details>/<summary> (already HTML-escaped, zero extra attributes)
+        if (depth < 2 && (m = line.match(DETAILS_INLINE_RE))) {
+          flushPara(); flushList(); flushGallery();
+          const isOpen = !!m[1];
+          const rawSum = (m[2] || "").trim().replace(/^#{1,6}\s+/, "");
+          const sumHtml = rawSum ? inline(rawSum) : "展开详情";
+          const innerBody = (m[3] || "").trim();
+          const bodyHtml = innerBody ? parseBlockLines([innerBody], depth + 1) : "";
+          out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
+          continue;
+        }
+        if (depth < 2 && (m = line.match(DETAILS_OPEN_RE))) {
+          const isOpen = !!m[1];
+          let nest = 1, closeIdx = -1;
+          for (let j = li + 1; j < lines.length; j++) {
+            if (DETAILS_OPEN_RE.test(lines[j])) nest++;
+            else if (DETAILS_CLOSE_RE.test(lines[j])) {
+              nest--;
+              if (nest === 0) { closeIdx = j; break; }
+            }
+          }
+          if (closeIdx > li) {
+            flushPara(); flushList(); flushGallery();
+            const innerLines = lines.slice(li + 1, closeIdx);
+            let sumHtml = "展开详情";
+            let bodyStart = 0;
+            while (bodyStart < innerLines.length && !innerLines[bodyStart].trim()) bodyStart++;
+            if (bodyStart < innerLines.length) {
+              const sm = innerLines[bodyStart].match(SUMMARY_LINE_RE);
+              if (sm) {
+                const rawSum = (sm[1] || "").trim().replace(/^#{1,6}\s+/, "");
+                if (rawSum) sumHtml = inline(rawSum);
+                bodyStart++;
+              }
+            }
+            const bodyHtml = parseBlockLines(innerLines.slice(bodyStart), depth + 1);
+            out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
+            li = closeIdx;
+            continue;
+          }
+        }
+        // Standalone Markdown image lines -> unified adaptive .md-gallery
+        const imgItems = parseImageOnlyLine(line);
+        if (imgItems) {
+          flushPara(); flushList();
+          for (const it of imgItems) {
+            if (it.path) mdImgPaths.add(it.path);
+            galleryBuf.push(it);
+          }
+          continue;
+        }
+        if (galleryBuf.length) {
+          if (!line.trim()) {
+            let nextIdx = li + 1;
+            while (nextIdx < lines.length && !lines[nextIdx].trim()) nextIdx++;
+            if (nextIdx < lines.length && parseImageOnlyLine(lines[nextIdx])) continue;
+            if (nextIdx >= lines.length && trailingImgs?.length) continue;
+          }
+          flushGallery();
+        }
+        if (line.includes("|") && li + 1 < lines.length && isSep(lines[li + 1]) && lines[li + 1].includes("|")) {
+          flushPara(); flushList();
+          const head = cells(line);
+          const align = cells(lines[li + 1]).map((c) => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
+          const bodyRows = [];
+          li += 2;
+          while (li < lines.length && lines[li].includes("|") && lines[li].trim()) {
+            bodyRows.push(cells(lines[li]));
+            li++;
+          }
+          li--;
+          const colNumeric = head.map((_, k) => {
+            if (k === 0 || !bodyRows.length) return false;
+            let any = false;
+            for (const r of bodyRows) {
+              const v = (r[k] || "").trim();
+              if (!v) continue;
+              any = true;
+              if (!isNumericTableCell(v)) return false;
+            }
+            return any;
+          });
+          const headHtml = head.map((c, k) => {
+            const isNum = colNumeric[k];
+            const al = align[k] || (isNum ? "right" : "");
+            return `<th scope="col"${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(c)}</th>`;
+          }).join("");
+          const bodyHtml = bodyRows.map((r) => `<tr>${head.map((_, k) => {
+            const val = r[k] || "";
+            const isNum = k > 0 && (colNumeric[k] || isNumericTableCell(val));
+            const al = align[k] || (colNumeric[k] ? "right" : "");
+            const tag = k === 0 ? "th" : "td";
+            const scopeAttr = k === 0 ? ' scope="row"' : "";
+            return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
+          }).join("")}</tr>`).join("");
+          const rowCount = bodyRows.length, colCount = head.length;
+          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="复制表格（TSV）">${ICON_MD_COPY}<span class="md-copy-lbl">复制表格</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="复制 Markdown 表格"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="数据表格（${rowCount} 行 × ${colCount} 列）"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          continue;
+        }
+        if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
+        if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); flushList(); out.push("<hr>"); continue; }
+        if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); const h = Math.min(m[1].length + 1, 4); out.push(`<h${h}>${inline(m[2])}</h${h}>`); continue; }
+        if ((m = line.match(/^\s*[-*•]\s+\[([ xX])\]\s+(.*)$/))) {
+          flushPara();
+          if (!list || list.kind !== "task") { flushList(); list = { kind: "task", tag: "ul", items: [], start: 1 }; }
+          list.items.push({ done: m[1] !== " ", text: m[2] });
+          continue;
+        }
+        if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+          const tag = /^\s*\d/.test(line) ? "ol" : "ul";
+          flushPara();
+          // "2." after a few bullets carries on the numbering, as the agent wrote it.
+          if (!list || list.kind !== tag) { flushList(); list = { kind: tag, tag, items: [], start: parseInt(line) || 1 }; }
+          list.items.push(m[1]);
+          continue;
+        }
+        if ((m = line.match(/^&gt;\s?(.*)$/))) {
+          flushPara(); flushList();
+          const qLines = [m[1]];
+          while (li + 1 < lines.length && (m = lines[li + 1].match(/^&gt;\s?(.*)$/))) {
+            qLines.push(m[1]);
+            li++;
+          }
+          out.push(renderQuoteBlock(qLines));
+          continue;
+        }
+        if (!line.trim()) { flushPara(); flushList(); continue; }
+        flushList();
+        para.push(line);
       }
-      if ((m = line.match(/^&gt;\s?(.*)$/))) { flushPara(); flushList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
-      if (!line.trim()) { flushPara(); flushList(); continue; }
-      flushList();
-      para.push(line);
-    }
-    flushPara(); flushList();
-    return out.join("").replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
+      flushPara(); flushList();
+      if (trailingImgs?.length) {
+        for (const it of trailingImgs) {
+          if (it.path && mdImgPaths.has(it.path)) continue;
+          galleryBuf.push(it);
+        }
+      }
+      flushGallery();
+      return out.join("");
+    };
+    const trailingImgs = opts?.includePathImages ? extractImagePaths(rawSrc).map((p) => ({ path: p, alt: "" })) : null;
+    const rendered = parseBlockLines(text.split("\n"), 0, trailingImgs);
+    return rendered.replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
   }
 
   // ───────────────────────────── input
@@ -25126,15 +26131,21 @@
   // Images a Collie message points at (a screenshot a worker took) show
   // under it, so you need not open each one.
   const IMG_PATH = /(?:^|[\s(（`"'：:，、,;；>])((?:~|\/)[^\s`"'()（）<>，、,;；]*\.(?:png|jpe?g|gif|webp|svg))(?=$|[\s)）`"'，。、,;；!?！？])/gim;
-  function imagesIn(t) {
+  function extractImagePaths(t) {
     const clean = stripFencedBlocks(String(t || ""), " ").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, " ");
-    const ps = [...new Set([...clean.matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
-    return ps.length ? `<span class="thumbs">${ps.map(thumbBtn).join("")}</span>` : "";
+    return [...new Set([...clean.matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 24);
+  }
+  function imagesIn(t) {
+    const ps = extractImagePaths(t);
+    return ps.length ? renderMdGallery(ps.map((p) => ({ path: p, alt: "" }))) : "";
+  }
+  function renderCollieBody(t) {
+    return md(t, { includePathImages: true });
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
-  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").trim()).filter(Boolean).join(" ")
+  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|WARNING|CAUTION)\]\s*/i, "").replace(/^\[[ xX]\]\s+/, "").trim()).filter(Boolean).join(" ")
     .replace(/\\([!"#$%&'()*+,\-.\/:;<=>?@\[\\\]^_`{|}~])/g, "$1")
-    .replace(/\*\*|__|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    .replace(/\*\*|__|~~|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
   const linkUserFiles = (escaped) => {

@@ -390,3 +390,77 @@ func TestRecoverActiveDreamClosesOrphanWorkspaceOnHubRestart(t *testing.T) {
 		t.Fatalf("nightly recovery should advance last_dream past %v, got %v", startedAt, sp.lastDream())
 	}
 }
+
+func TestDreamPromptEnvironmentHygieneContractAndNoInternalTerms(t *testing.T) {
+	t.Parallel()
+
+	rendered := strings.ReplaceAll(dreamPrompt, "{{DATE}}", "2026-11-28-0400")
+	rendered = strings.ReplaceAll(rendered, "{{BIN}}", "collie")
+	rendered = strings.ReplaceAll(rendered, "{{BUDGET}}", "10")
+	rendered = strings.ReplaceAll(rendered, "{{MIGRATE}}", "")
+
+	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
+		t.Fatalf("rendered dreamPrompt still has unreplaced template placeholders:\n%s", rendered)
+	}
+
+	required := []string{
+		"Environment & resource hygiene.",
+		"Safe to clean silently",
+		"100% certain",
+		"collie list",
+		"Temporary git worktrees",
+		"git status --porcelain",
+		"git worktree prune",
+		"/tmp/collie-*",
+		"older than 7 days",
+		"dead orphan socket files",
+		"Inventory only — NEVER auto-delete",
+		"uncommitted changes or unmerged branches",
+		">1 GB",
+		"noticeably high disk usage",
+		"long-running orphan processes",
+		"idle external compute resources",
+		"dreams/2026-11-28-0400.md",
+		"zero interruption",
+		"anomalies that genuinely need a human decision",
+		"Hard redlines — NEVER delete",
+		"user project source code",
+		"databases",
+		"configs",
+		"credentials",
+		"active worker's workspace",
+		"Do not message the human or spawn workers",
+	}
+	for _, want := range required {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("dreamPrompt missing required hygiene contract clause %q", want)
+		}
+	}
+
+	low := strings.ToLower(rendered)
+	// Generic open-source prompt must never assume a personal scheduled morning briefing
+	// or embed internal domains, hostnames, IPs, paths, or proprietary tool names.
+	forbidden := []string{
+		"晨报",
+		"morning briefing",
+		"daily briefing",
+		"09:00",
+		"9:00",
+		strings.Join([]string{"byted", "cli"}, ""),
+		strings.Join([]string{"code.", "byted", ".org"}, ""),
+		strings.Join([]string{"byted", "ance"}, ""),
+		strings.Join([]string{"10.37.", "125.77"}, ""),
+		strings.Join([]string{"n37-", "125-077"}, ""),
+		strings.Join([]string{"dor", "ado"}, ""),
+		strings.Join([]string{"arn", "old"}, ""),
+		strings.Join([]string{"byte", "faas"}, ""),
+		strings.Join([]string{"mee", "go"}, ""),
+		strings.Join([]string{"/data", "00/"}, ""),
+		strings.Join([]string{"li", "huanyu"}, ""),
+	}
+	for _, bad := range forbidden {
+		if strings.Contains(low, strings.ToLower(bad)) {
+			t.Errorf("dreamPrompt must not contain %q", bad)
+		}
+	}
+}

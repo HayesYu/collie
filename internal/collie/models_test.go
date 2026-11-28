@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -152,6 +153,34 @@ func TestModelArgs(t *testing.T) {
 			effort: "high",
 			want:   nil,
 		},
+		{
+			name:   "pi passes model and effort",
+			kind:   "pi",
+			model:  "anthropic/claude-sonnet-4-5",
+			effort: "high",
+			want:   []string{"--model", "anthropic/claude-sonnet-4-5", "--effort", "high"},
+		},
+		{
+			name:   "pi drops effort when model carries :thinking suffix",
+			kind:   "pi",
+			model:  "anthropic/claude-sonnet-4-5:medium",
+			effort: "high",
+			want:   []string{"--model", "anthropic/claude-sonnet-4-5:medium"},
+		},
+		{
+			name:   "omp alias passes model and effort",
+			kind:   "oh-my-pi",
+			model:  "openai/gpt-5.4",
+			effort: "auto",
+			want:   []string{"--model", "openai/gpt-5.4", "--effort", "auto"},
+		},
+		{
+			name:   "omp preserves effort for non-thinking :free tag",
+			kind:   "omp",
+			model:  "openrouter/demo:free",
+			effort: "high",
+			want:   []string{"--model", "openrouter/demo:free", "--effort", "high"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,8 +196,20 @@ func TestModelArgs(t *testing.T) {
 	if got := bypassArgs("cursor"); !reflect.DeepEqual(got, []string{"--force"}) {
 		t.Fatalf("bypassArgs(cursor) = %#v, want [--force]", got)
 	}
+	if got := bypassArgs("pi"); !reflect.DeepEqual(got, []string{"--approve"}) {
+		t.Fatalf("bypassArgs(pi) = %#v, want [--approve]", got)
+	}
+	if got := bypassArgs("omp"); !reflect.DeepEqual(got, []string{"--auto-approve"}) {
+		t.Fatalf("bypassArgs(omp) = %#v, want [--auto-approve]", got)
+	}
+	if got := bypassArgs("oh-my-pi"); !reflect.DeepEqual(got, []string{"--auto-approve"}) {
+		t.Fatalf("bypassArgs(oh-my-pi) = %#v, want [--auto-approve]", got)
+	}
 	if got := effectiveEffort("cursor", "auto", "high"); got != "" {
 		t.Fatalf("effectiveEffort(cursor) = %q, want empty", got)
+	}
+	if got := effectiveEffort("omp", "openai/gpt-5.4:high", "medium"); got != "" {
+		t.Fatalf("effectiveEffort(omp suffixed) = %q, want empty", got)
 	}
 }
 
@@ -497,5 +538,135 @@ func TestParseAndFetchCursorModels(t *testing.T) {
 	_ = json.Unmarshal(b, &wire)
 	if string(wire.Efforts) != "[]" {
 		t.Fatalf("cursor ModelInfo JSON efforts = %s, want []", string(wire.Efforts))
+	}
+}
+
+func TestParseAndFetchPiModels(t *testing.T) {
+	raw := "provider   model              context  max-out  thinking  images\n" +
+		"anthropic  claude-sonnet-4-5  200K     64K      yes       yes\n" +
+		"deepseek   deepseek-chat      128K     8K       no        no\n"
+	models := parsePiModels(raw)
+	if len(models) != 2 {
+		t.Fatalf("got %d models: %+v", len(models), models)
+	}
+	if models[0].ID != "anthropic/claude-sonnet-4-5" || models[0].Label != "claude-sonnet-4-5" || models[0].Note != "anthropic · 200K" {
+		t.Fatalf("models[0] = %+v", models[0])
+	}
+	if !reflect.DeepEqual(models[0].Efforts, piEfforts) {
+		t.Fatalf("models[0].Efforts = %#v, want %#v", models[0].Efforts, piEfforts)
+	}
+	if models[1].ID != "deepseek/deepseek-chat" || models[1].Efforts == nil || len(models[1].Efforts) != 0 {
+		t.Fatalf("non-thinking model should have explicit empty efforts: %+v", models[1])
+	}
+
+	dir := t.TempDir()
+	piDir := filepath.Join(dir, ".pi", "agent")
+	if err := os.MkdirAll(piDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(piDir, "settings.json"), []byte(`{"defaultProvider":"anthropic","defaultModel":"claude-sonnet-4-5","defaultThinkingLevel":"high"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_CODING_AGENT_DIR", piDir)
+
+	fakeBin := filepath.Join(dir, "pi")
+	script := "#!/bin/sh\nif [ \"$1\" != \"--list-models\" ] || [ \"$2\" != \"--offline\" ]; then exit 2; fi\n" +
+		"printf 'provider   model              context  max-out  thinking  images\\n" +
+		"anthropic  claude-sonnet-4-5  200K     64K      yes       yes\\n" +
+		"deepseek   deepseek-chat      128K     8K       no        no\\n'\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev, hadPrev := binCache.Load("pi")
+	binCache.Store("pi", fakeBin)
+	defer func() {
+		if hadPrev {
+			binCache.Store("pi", prev)
+		} else {
+			binCache.Delete("pi")
+		}
+	}()
+
+	s := &Server{home: dir}
+	info := &ModelInfo{Kind: "pi", Efforts: allEfforts}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s.piModels(ctx, info)
+	if info.Default != "anthropic/claude-sonnet-4-5" || info.DefaultEffort != "high" || len(info.Models) != 2 {
+		t.Fatalf("piModels = %+v", info)
+	}
+	b, _ := json.Marshal(info.Models[1])
+	if !strings.Contains(string(b), `"efforts":[]`) {
+		t.Fatalf("non-thinking pi model JSON = %s, want efforts:[]", string(b))
+	}
+}
+
+func TestParseAndFetchOmpModels(t *testing.T) {
+	rawJSON := `{
+		"models": [
+			{"provider":"deepseek","id":"deepseek-flash","selector":"deepseek/deepseek-flash","name":"DeepSeek Flash","reasoning":false,"thinking":null},
+			{"provider":"openai","id":"gpt-5.4","selector":"openai/gpt-5.4","name":"GPT-5.4","reasoning":true,"thinking":["medium","high","xhigh"]}
+		]
+	}`
+	models := parseOmpModels([]byte(rawJSON))
+	if len(models) != 2 {
+		t.Fatalf("got %d models: %+v", len(models), models)
+	}
+	if models[0].ID != "deepseek/deepseek-flash" || models[0].Efforts == nil || len(models[0].Efforts) != 0 {
+		t.Fatalf("non-reasoning omp model = %+v", models[0])
+	}
+	wantEff := []string{"off", "medium", "high", "xhigh", "auto"}
+	if models[1].ID != "openai/gpt-5.4" || models[1].Label != "GPT-5.4" || !reflect.DeepEqual(models[1].Efforts, wantEff) {
+		t.Fatalf("reasoning omp model = %+v, want efforts %#v", models[1], wantEff)
+	}
+
+	defM, defE := parseOmpConfig("theme:\n  dark: titanium\nmodelRoles:\n  default: openai/gpt-5.4:medium\n  smol: deepseek/deepseek-flash\ndefaultThinkingLevel: auto\n")
+	if defM != "openai/gpt-5.4" || defE != "medium" {
+		t.Fatalf("parseOmpConfig = %q / %q, want openai/gpt-5.4 / medium", defM, defE)
+	}
+	defM2, defE2 := parseOmpConfig("modelRoles:\n  default: openai/gpt-5.4\ndefaultThinkingLevel: auto\n")
+	if defM2 != "openai/gpt-5.4" || defE2 != "auto" {
+		t.Fatalf("parseOmpConfig fallback = %q / %q, want openai/gpt-5.4 / auto", defM2, defE2)
+	}
+
+	dir := t.TempDir()
+	ompDir := filepath.Join(dir, ".omp", "agent")
+	if err := os.MkdirAll(ompDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ompDir, "config.yml"), []byte("modelRoles:\n  default: openai/gpt-5.4:high\ndefaultThinkingLevel: auto\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+
+	fakeBin := filepath.Join(dir, "omp")
+	script := "#!/bin/sh\nif [ \"$1\" != \"models\" ] || [ \"$2\" != \"--json\" ]; then exit 2; fi\ncat <<'EOF'\n" + rawJSON + "\nEOF\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev, hadPrev := binCache.Load("omp")
+	binCache.Store("omp", fakeBin)
+	defer func() {
+		if hadPrev {
+			binCache.Store("omp", prev)
+		} else {
+			binCache.Delete("omp")
+		}
+	}()
+
+	s := &Server{home: dir}
+	info := &ModelInfo{Kind: "omp", Efforts: allEfforts}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s.ompModels(ctx, info)
+	if info.Default != "openai/gpt-5.4" || info.DefaultEffort != "high" || len(info.Models) != 2 {
+		t.Fatalf("ompModels = %+v", info)
+	}
+	if !reflect.DeepEqual(info.Efforts, wantEff) {
+		t.Fatalf("info.Efforts = %#v, want %#v", info.Efforts, wantEff)
+	}
+	b, _ := json.Marshal(info.Models[0])
+	if !strings.Contains(string(b), `"efforts":[]`) {
+		t.Fatalf("non-reasoning omp model JSON = %s, want efforts:[]", string(b))
 	}
 }

@@ -237,7 +237,7 @@ func cliSay(args []string) error {
 
 func parseSpawn(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
-	kind := fs.String("kind", "", "claude | codex | antigravity | doubao | cursor (default from settings)")
+	kind := fs.String("kind", "", "claude | codex | antigravity | doubao | cursor | pi | omp (default from settings)")
 	cwd := fs.String("cwd", "", "working directory (default from settings)")
 	thread := fs.String("thread", mainThread, "thread this work belongs to")
 	name := fs.String("name", "", "worker name (default kind-N)")

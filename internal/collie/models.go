@@ -39,7 +39,28 @@ type ModelInfo struct {
 	DefaultEffort string     `json:"default_effort,omitempty"`
 }
 
-var allEfforts = []string{"low", "medium", "high", "xhigh", "max"}
+var (
+	allEfforts = []string{"low", "medium", "high", "xhigh", "max"}
+	piEfforts  = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+	ompEfforts = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}
+)
+
+// splitPiModelThinking splits an explicit `:<thinking>` suffix from a Pi/Omp
+// model selector (e.g. "openai/gpt-5:high" -> "openai/gpt-5", "high", true),
+// leaving non-thinking suffixes such as ":free" or ":latest" untouched.
+func splitPiModelThinking(model string) (base, thinking string, ok bool) {
+	m := strings.TrimSpace(model)
+	idx := strings.LastIndexByte(m, ':')
+	if idx <= 0 || idx == len(m)-1 {
+		return m, "", false
+	}
+	suf := strings.ToLower(strings.TrimSpace(m[idx+1:]))
+	switch suf {
+	case "off", "minimal", "low", "medium", "high", "xhigh", "max", "auto":
+		return m[:idx], suf, true
+	}
+	return m, "", false
+}
 
 const (
 	defaultDoubaoModel   = "Auto"
@@ -79,11 +100,17 @@ func effectiveEffort(kind, model, effort string) string {
 	if effort == "" {
 		return ""
 	}
-	if kinds[kind] == "cursor" {
+	canon := kinds[kind]
+	if canon == "cursor" {
 		return ""
 	}
-	if kinds[kind] == "agy" && agyRejectsEffort(model) {
+	if canon == "agy" && agyRejectsEffort(model) {
 		return ""
+	}
+	if canon == "pi" || canon == "omp" {
+		if _, _, hasThinking := splitPiModelThinking(model); hasThinking {
+			return ""
+		}
 	}
 	return effort
 }
@@ -100,7 +127,7 @@ func modelArgs(kind, model, effort string) []string {
 		if effort != "" {
 			a = append(a, "-c", "model_reasoning_effort="+strconvQuote(effort))
 		}
-	case "claude", "agy":
+	case "claude", "agy", "pi", "omp":
 		if model != "" {
 			a = append(a, "--model", model)
 		}
@@ -137,6 +164,10 @@ func bypassArgs(kind string) []string {
 		return []string{"-y"}
 	case "cursor":
 		return []string{"--force"}
+	case "pi":
+		return []string{"--approve"}
+	case "omp":
+		return []string{"--auto-approve"}
 	}
 	return nil
 }
@@ -195,6 +226,10 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			s.doubaoModels(ctx, info)
 		case "cursor":
 			s.cursorModels(ctx, info)
+		case "pi":
+			s.piModels(ctx, info)
+		case "omp":
+			s.ompModels(ctx, info)
 		}
 		if info.Models == nil {
 			info.Models = []ModelOpt{}
@@ -778,6 +813,336 @@ func (s *Server) cursorModels(ctx context.Context, info *ModelInfo) {
 	}
 	info.Models = models
 	info.Default = defID
+}
+
+// parsePiModels parses `pi --list-models --offline` table output:
+// `provider  model  context  max-out  thinking  images`
+func parsePiModels(raw string) []ModelOpt {
+	cleaned := strings.ReplaceAll(stripANSI(raw), "\r\n", "\n")
+	seen := map[string]bool{}
+	var out []ModelOpt
+	for _, line := range strings.Split(cleaned, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 6 {
+			continue
+		}
+		if strings.EqualFold(fields[0], "provider") && strings.EqualFold(fields[1], "model") {
+			continue
+		}
+		provider := strings.TrimSpace(fields[0])
+		model := strings.TrimSpace(fields[1])
+		ctxCol := strings.TrimSpace(fields[2])
+		thinking := strings.TrimSpace(fields[len(fields)-2])
+		if provider == "" || model == "" {
+			continue
+		}
+		id := provider + "/" + model
+		if base, _, ok := splitPiModelThinking(id); ok {
+			id = base
+		}
+		if !modelNameRe.MatchString(id) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		note := provider
+		if ctxCol != "" && ctxCol != "-" {
+			note += " · " + ctxCol
+		}
+		effs := []string{}
+		if strings.EqualFold(thinking, "yes") || strings.EqualFold(thinking, "true") {
+			effs = append([]string(nil), piEfforts...)
+		}
+		out = append(out, ModelOpt{
+			ID:      id,
+			Label:   model,
+			Note:    note,
+			Efforts: effs,
+		})
+	}
+	return out
+}
+
+func readPiSettings(home string) (defModel, defEffort string) {
+	root := envOr("PI_CODING_AGENT_DIR", filepath.Join(home, ".pi", "agent"))
+	b, err := os.ReadFile(filepath.Join(root, "settings.json"))
+	if err != nil {
+		return "", ""
+	}
+	var cfg struct {
+		DefaultProvider      string `json:"defaultProvider"`
+		DefaultModel         string `json:"defaultModel"`
+		DefaultThinkingLevel string `json:"defaultThinkingLevel"`
+	}
+	if json.Unmarshal(b, &cfg) != nil {
+		return "", ""
+	}
+	m := strings.TrimSpace(cfg.DefaultModel)
+	p := strings.TrimSpace(cfg.DefaultProvider)
+	eff := strings.TrimSpace(cfg.DefaultThinkingLevel)
+	if m != "" {
+		if base, suf, ok := splitPiModelThinking(m); ok {
+			m = base
+			if eff == "" {
+				eff = suf
+			}
+		}
+		if !strings.Contains(m, "/") && p != "" {
+			m = p + "/" + m
+		}
+	}
+	return m, eff
+}
+
+func (s *Server) piModels(ctx context.Context, info *ModelInfo) {
+	info.Efforts = append([]string(nil), piEfforts...)
+	info.Default, info.DefaultEffort = readPiSettings(s.home)
+
+	bin := findBin("pi", s.home)
+	if bin == "" {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(pctx, bin, "--list-models", "--offline")
+	cmd.Env = append(piEnv(os.Environ()), "NO_COLOR=1")
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	models := parsePiModels(string(out))
+	if len(models) == 0 {
+		return
+	}
+	info.Models = models
+	if info.Default != "" {
+		for _, m := range models {
+			if m.ID == info.Default {
+				info.Efforts = append([]string{}, m.Efforts...)
+				break
+			}
+		}
+	}
+}
+
+func normalizeOmpModelEfforts(thinking []string) []string {
+	have := map[string]bool{}
+	var extras []string
+	for _, e := range thinking {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" || have[e] {
+			continue
+		}
+		have[e] = true
+		known := false
+		for _, k := range ompEfforts {
+			if k == e {
+				known = true
+				break
+			}
+		}
+		if !known {
+			extras = append(extras, e)
+		}
+	}
+	if len(have) == 0 {
+		return []string{}
+	}
+	// Reasoning models accept "off", their declared thinking levels, and "auto".
+	have["off"] = true
+	have["auto"] = true
+	out := make([]string, 0, len(have))
+	for _, k := range ompEfforts {
+		if have[k] {
+			out = append(out, k)
+		}
+	}
+	out = append(out, extras...)
+	return out
+}
+
+// parseOmpModels parses `omp models --json` stdout into Collie's ModelOpt list.
+func parseOmpModels(raw []byte) []ModelOpt {
+	var env struct {
+		Models []struct {
+			Provider  string   `json:"provider"`
+			ID        string   `json:"id"`
+			Selector  string   `json:"selector"`
+			Name      string   `json:"name"`
+			Reasoning bool     `json:"reasoning"`
+			Thinking  []string `json:"thinking"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(raw, &env) != nil {
+		// Fall back to the first JSON object if a banner preceded stdout.
+		if idx := strings.IndexByte(string(raw), '{'); idx >= 0 {
+			if json.Unmarshal(raw[idx:], &env) != nil {
+				return nil
+			}
+		} else {
+			return nil
+		}
+	}
+	seen := map[string]bool{}
+	out := make([]ModelOpt, 0, len(env.Models))
+	for _, m := range env.Models {
+		id := strings.TrimSpace(m.Selector)
+		if id == "" {
+			p := strings.TrimSpace(m.Provider)
+			mid := strings.TrimSpace(m.ID)
+			if p != "" && mid != "" && !strings.Contains(mid, "/") {
+				id = p + "/" + mid
+			} else {
+				id = mid
+			}
+		}
+		if base, _, ok := splitPiModelThinking(id); ok {
+			id = base
+		}
+		if id == "" || !modelNameRe.MatchString(id) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		effs := []string{}
+		if m.Reasoning && len(m.Thinking) > 0 {
+			effs = normalizeOmpModelEfforts(m.Thinking)
+		}
+		out = append(out, ModelOpt{
+			ID:      id,
+			Label:   orStr(strings.TrimSpace(m.Name), strings.TrimSpace(m.ID)),
+			Note:    strings.TrimSpace(m.Provider),
+			Efforts: effs,
+		})
+	}
+	return out
+}
+
+// parseOmpConfig extracts `modelRoles.default` (stripping optional `:effort`)
+// and top-level `defaultThinkingLevel` from `~/.omp/agent/config.yml`.
+func parseOmpConfig(raw string) (defModel, defEffort string) {
+	cleanYAMLVal := func(v string) string {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return ""
+		}
+		if (strings.HasPrefix(v, "\"") && strings.HasSuffix(v, "\"")) ||
+			(strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'")) {
+			if len(v) >= 2 {
+				return strings.TrimSpace(v[1 : len(v)-1])
+			}
+		}
+		if idx := strings.Index(v, " #"); idx >= 0 {
+			v = v[:idx]
+		}
+		return strings.TrimSpace(v)
+	}
+	inRoles := false
+	roleEffort := ""
+	topEffort := ""
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indented := strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
+		if !indented {
+			inRoles = false
+			k, v, ok := strings.Cut(trimmed, ":")
+			if !ok {
+				continue
+			}
+			key := strings.TrimSpace(k)
+			val := cleanYAMLVal(v)
+			switch key {
+			case "modelRoles":
+				if val == "" {
+					inRoles = true
+				}
+			case "defaultThinkingLevel":
+				topEffort = val
+			}
+			continue
+		}
+		if inRoles {
+			k, v, ok := strings.Cut(trimmed, ":")
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(k) == "default" {
+				val := cleanYAMLVal(v)
+				if val != "" {
+					if base, suf, has := splitPiModelThinking(val); has {
+						defModel = base
+						roleEffort = suf
+					} else {
+						defModel = val
+					}
+				}
+			}
+		}
+	}
+	defEffort = orStr(roleEffort, topEffort)
+	return defModel, defEffort
+}
+
+func readOmpConfig(home string) (defModel, defEffort string) {
+	var paths []string
+	if dir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); dir != "" {
+		paths = append(paths, filepath.Join(dir, "config.yml"))
+	}
+	paths = append(paths, filepath.Join(home, ".omp", "agent", "config.yml"))
+	for _, p := range paths {
+		if b, err := os.ReadFile(p); err == nil {
+			return parseOmpConfig(string(b))
+		}
+	}
+	return "", ""
+}
+
+func (s *Server) ompModels(ctx context.Context, info *ModelInfo) {
+	info.Efforts = append([]string(nil), ompEfforts...)
+	info.Default, info.DefaultEffort = readOmpConfig(s.home)
+
+	bin := findBin("omp", s.home)
+	if bin == "" {
+		return
+	}
+	octx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(octx, bin, "models", "--json")
+	cmd.Env = append(ompEnv(os.Environ()), "NO_COLOR=1")
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	models := parseOmpModels(out)
+	if len(models) == 0 {
+		return
+	}
+	info.Models = models
+	if info.Default != "" {
+		for _, m := range models {
+			if m.ID == info.Default {
+				info.Efforts = append([]string{}, m.Efforts...)
+				return
+			}
+		}
+	}
+	union := map[string]bool{}
+	for _, m := range models {
+		for _, e := range m.Efforts {
+			union[e] = true
+		}
+	}
+	if len(union) > 0 {
+		info.Efforts = make([]string, 0, len(union))
+		for _, e := range ompEfforts {
+			if union[e] {
+				info.Efforts = append(info.Efforts, e)
+			}
+		}
+	}
 }
 
 // detectInitialSettings probes local agents for a brand-new installation and,

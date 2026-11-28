@@ -91,7 +91,7 @@ func resumeArgs(agent, session string) []string {
 		return []string{"resume", session}
 	case "agy":
 		return []string{"--conversation", session}
-	case "doubao", "cursor":
+	case "doubao", "cursor", "pi", "omp":
 		return []string{"--resume", session}
 	}
 	return nil
@@ -105,6 +105,9 @@ var kinds = map[string]string{
 	"doubao":       "doubao",
 	"cursor":       "cursor",
 	"cursor-agent": "cursor",
+	"pi":           "pi",
+	"omp":          "omp",
+	"oh-my-pi":     "omp",
 }
 
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
@@ -692,7 +695,7 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	effort := effectiveEffort(body.Kind, body.Model, body.Effort)
 	var mArgs []string
-	if !((kind == "doubao" || kind == "cursor") && body.Model == "" && body.Effort == "" && contains(body.Args, "--resume")) {
+	if !(isBridgeKind(kind) && body.Model == "" && body.Effort == "" && contains(body.Args, "--resume")) {
 		mArgs = modelArgs(body.Kind, body.Model, effort)
 	}
 	args := append(mArgs, body.Args...)
@@ -757,7 +760,7 @@ func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, 
 	if err := s.agentMissing(machine, herdrKind); err != nil {
 		return "", "", err
 	}
-	if herdrKind == "doubao" || herdrKind == "cursor" {
+	if isBridgeKind(herdrKind) {
 		return s.startBridgeAgent(ctx, machine, herdrKind, name, cwd, label, args)
 	}
 	s.trustForStart(ctx, machine, herdrKind, cwd, args)

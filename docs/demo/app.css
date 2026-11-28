@@ -3469,8 +3469,8 @@ a.url { color: var(--accent, inherit); text-decoration: underline; text-decorati
 a.url:hover { text-decoration-color: currentColor; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }
 .field small { display: block; margin-top: 6px; font-size: 12px; }
-.kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-@media (max-width: 340px) { .kinds { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kinds { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 520px) { .kinds { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .kind-card {
   position: relative; display: grid; justify-items: center; align-content: center; gap: 4px;
   min-width: 0; min-height: 44px; padding: 14px 6px 11px; text-align: center;

@@ -9,7 +9,7 @@ import (
 )
 
 func TestAgentsHeader(t *testing.T) {
-	if got := parseAgentsHeader(agentsHeader([]string{"claude", "agy", "doubao", "cursor"})); len(got) != 4 || got[0] != "claude" || got[1] != "agy" || got[2] != "doubao" || got[3] != "cursor" {
+	if got := parseAgentsHeader(agentsHeader([]string{"claude", "agy", "doubao", "cursor", "pi", "omp"})); len(got) != 6 || got[0] != "claude" || got[1] != "agy" || got[2] != "doubao" || got[3] != "cursor" || got[4] != "pi" || got[5] != "omp" {
 		t.Fatalf("round trip: %v", got)
 	}
 	if got := parseAgentsHeader(agentsHeader(nil)); got == nil || len(got) != 0 {
@@ -40,6 +40,12 @@ func TestAgentMissingRemote(t *testing.T) {
 	}
 	if err := s.agentMissing("mac", "cursor"); err == nil || !strings.Contains(err.Error(), "找不到 cursor-agent 命令") {
 		t.Fatalf("missing cursor: %v", err)
+	}
+	if err := s.agentMissing("mac", "pi"); err == nil || !strings.Contains(err.Error(), "mac 上没装 Pi（找不到 pi 命令）") {
+		t.Fatalf("missing pi: %v", err)
+	}
+	if err := s.agentMissing("mac", "omp"); err == nil || !strings.Contains(err.Error(), "mac 上没装 Oh My Pi（找不到 omp 命令）") {
+		t.Fatalf("missing omp: %v", err)
 	}
 }
 
@@ -84,6 +90,40 @@ func TestCursorAgentBinMapping(t *testing.T) {
 	binCache.Delete("cursor-agent")
 	if got := detectAgents(home); !slices.Contains(got, "cursor") {
 		t.Fatalf("detectAgents with cursor-agent = %v, want cursor included", got)
+	}
+}
+
+func TestDetectAgentsPiAndOmp(t *testing.T) {
+	if got := binForKind("pi"); got != "pi" {
+		t.Fatalf("binForKind(pi) = %q, want pi", got)
+	}
+	if got := binForKind("omp"); got != "omp" {
+		t.Fatalf("binForKind(omp) = %q, want omp", got)
+	}
+	home := t.TempDir()
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pi", "omp"} {
+		if err := os.WriteFile(filepath.Join(localBin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		prev, hadPrev := binCache.Load(name)
+		binCache.Delete(name)
+		n := name
+		t.Cleanup(func() {
+			if hadPrev {
+				binCache.Store(n, prev)
+			} else {
+				binCache.Delete(n)
+			}
+		})
+	}
+	t.Setenv("PATH", localBin)
+	got := detectAgents(home)
+	if !slices.Contains(got, "pi") || !slices.Contains(got, "omp") {
+		t.Fatalf("detectAgents = %v, want pi and omp included", got)
 	}
 }
 

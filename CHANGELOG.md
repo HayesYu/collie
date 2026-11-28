@@ -4,6 +4,36 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## Unreleased
+
+### Highlights
+
+- **Native `pi` & `omp` (`oh-my-pi`) Worker Support (`internal/collie/{bridge_common.go,acp_bridge.go,omp_bridge.go,pi_rpc_bridge.go,agents.go,models.go,server.go,chat.go,titles.go,super.go,superapi.go,cli.go}`, `web/{index.html,app.css,app.js}`, `scripts/demo/demo.js`, `docs/demo/`)**:
+  - Extracted shared bridge runtime primitives into `bridge_common.go` (CLI flag parsing, PTY raw/bracketed-paste input framing, `.panes` metadata, JSONL transcript helpers, Herdr socket lifecycle reporting, and standard numbered approval menus) with zero regression for `doubao` and `cursor`.
+  - Added `omp_bridge.go` driving native `omp acp` over the shared ACP v1 runtime: places all global flags before `acp`, always passes `--allow-home` to avoid switching `~` to `/tmp`, explicitly maps `AskPermissions` to `--approval-mode always-ask` vs `--approval-mode yolo`, translates `--effort` to `--thinking`, and reads `thinking`/`thought_level` `configOptions` in `acp_bridge.go`.
+  - Added lightweight `pi_rpc_bridge.go` driving native `pi --mode rpc` JSONL with zero third-party `pi-acp` dependency: handles `get_state` handshake, `agent_settled` turn settling (with `agent_end` compatibility fallback), same-cwd `--session` resume + `get_messages` transcript backfill, `extension_ui_request` menus (`select`/`confirm` via Collie's numbered approval UI, auto-cancelling `input`/`editor` to avoid headless hangs), and `clear_queue` + `abort` interruption.
+  - Added fast read-only model/thinking discovery (`pi --list-models --offline` + `settings.json`, `omp models --json` + `config.yml`), kept `pi`/`omp` Worker-only in `router_kind` guards, and updated the Web UI launcher to a clean 4×2 desktop / 2×4 mobile grid with matching SVG glyphs and Demo sync.
+
+### Client / API Changes
+
+- **New Worker Agent Kinds**:
+  - `pi` (display name `Pi`, binary `pi`)
+  - `omp` (display name `Oh My Pi`, input alias `oh-my-pi`, binary `omp`)
+- **Capability & State Endpoints**:
+  - `X-Collie-Agents`, `GET /api/state`, `GET /api/events` (`state` SSE), and `GET /api/devices` now include `"pi"` and `"omp"` in `machines[].agents`.
+- **Agent Creation, Dispatch & Settings**:
+  - `POST /api/agents`, `POST /api/super/spawn`, `POST /api/super/say`, `POST /api/super/settings` (`worker_kind`), and `GET /api/transcript?kind=...&session=<id>` accept `"pi"`, `"omp"`, and alias `"oh-my-pi"`.
+  - **Worker-only guard**: `POST /api/super/settings` rejects `"pi"`, `"omp"`, and `"oh-my-pi"` for `router_kind` (preserving the existing `router_kind` and returning HTTP `200`, matching `doubao` and `cursor`).
+- **Model Discovery (`GET /api/models?kind=pi|omp`)**:
+  - Model `id` uses `<provider>/<model>` format.
+  - `efforts` may include `"off"`, `"minimal"` (`pi`), or `"auto"` (`omp`) in addition to standard levels; non-reasoning models explicitly return `"efforts": []`.
+- **Structured Chat & Herdr Reporting**:
+  - Transcripts are stored at `~/.collie/transcripts/{pi,omp}/<session_id>.jsonl` using the existing `patch` protocol (`user`/`assistant`/`tool`/`ask`).
+  - Bridges report `source: "collie:pi"` / `"collie:omp"`, `agent: "pi"` / `"omp"`, and `resume_argv: ["collie", "_bridge", "pi"|"omp", ...]`.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.11 (2026-11-28)
 
 ### Highlights

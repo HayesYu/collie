@@ -390,6 +390,8 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		body.Kind = "antigravity"
 	} else if body.Kind == "cursor-agent" {
 		body.Kind = "cursor"
+	} else if body.Kind == "oh-my-pi" {
+		body.Kind = "omp"
 	}
 	_, known := kinds[body.Kind]
 	if known && kinds[body.Kind] != kinds[st.WorkerKind] {
@@ -1183,7 +1185,7 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 	if body.Settings != nil {
 		prev := sp.st.Settings
 		ns := *body.Settings
-		if _, ok := kinds[ns.RouterKind]; !ok || kinds[ns.RouterKind] == "doubao" || kinds[ns.RouterKind] == "cursor" {
+		if _, ok := kinds[ns.RouterKind]; !ok || isBridgeKind(kinds[ns.RouterKind]) {
 			ns.RouterKind = sp.st.Settings.RouterKind
 		}
 		if _, ok := kinds[ns.WorkerKind]; !ok {

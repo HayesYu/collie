@@ -11,7 +11,7 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.3.11", agents: ["claude", "codex", "agy", "doubao", "cursor"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, version: "v0.3.11", agents: ["claude", "codex", "agy", "doubao", "cursor", "pi", "omp"] },
     { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.3.11", agents: ["claude", "codex"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
@@ -483,6 +483,26 @@
       ],
       default: "auto",
       efforts: [],
+    },
+    pi: {
+      models: [
+        { id: "anthropic/claude-sonnet-4-5", label: "claude-sonnet-4-5", note: "anthropic · 200K", efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        { id: "openai/gpt-5.4", label: "gpt-5.4", note: "openai · 272K", efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        { id: "deepseek/deepseek-chat", label: "deepseek-chat", note: "deepseek · 128K", efforts: [] },
+      ],
+      default: "anthropic/claude-sonnet-4-5",
+      default_effort: "medium",
+      efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    },
+    omp: {
+      models: [
+        { id: "anthropic/claude-sonnet-4-5", label: "Claude Sonnet 4.5", note: "anthropic", efforts: ["off", "low", "medium", "high", "max", "auto"] },
+        { id: "openai/gpt-5.4", label: "GPT-5.4", note: "openai", efforts: ["off", "medium", "high", "xhigh", "auto"] },
+        { id: "deepseek/deepseek-flash", label: "DeepSeek Flash", note: "deepseek", efforts: [] },
+      ],
+      default: "anthropic/claude-sonnet-4-5",
+      default_effort: "auto",
+      efforts: ["off", "low", "medium", "high", "xhigh", "max", "auto"],
     },
   };
 

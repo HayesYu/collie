@@ -19817,10 +19817,41 @@
       syncTableCard(card);
     }
   }
+  function syncCodeBlockScroll(block) {
+    if (!block) return;
+    const pre = block.querySelector?.(".md-code-body pre");
+    if (!pre) return;
+    const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
+    const scrollable = maxScroll > 2;
+    block.classList?.toggle("is-scrollable", scrollable);
+    block.classList?.toggle("can-scroll-l", scrollable && (pre.scrollLeft || 0) > 4);
+    block.classList?.toggle("can-scroll-r", scrollable && (pre.scrollLeft || 0) < maxScroll - 4);
+  }
+  const boundCodeScrolls = new WeakSet();
+  let codeRO = null;
+  function observeCodeResize(pre) {
+    if (!pre || typeof ResizeObserver !== "function") return;
+    if (!codeRO) {
+      codeRO = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const block = entry.target?.closest?.("[data-code-block]");
+          if (block) syncCodeBlockScroll(block);
+        }
+      });
+    }
+    try { codeRO.observe(pre); } catch {}
+  }
   function hydrateCodeBlocks(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
-    for (const block of root.querySelectorAll(".md-code[data-foldable]")) {
-      if (block._richHydrated) continue;
+    for (const block of root.querySelectorAll("[data-code-block]")) {
+      const pre = block.querySelector?.(".md-code-body pre");
+      if (pre && !boundCodeScrolls.has(pre)) {
+        boundCodeScrolls.add(pre);
+        pre.addEventListener?.("scroll", () => syncCodeBlockScroll(block), { passive: true });
+        observeCodeResize(pre);
+      }
+      syncCodeBlockScroll(block);
+      if (!block.hasAttribute?.("data-foldable") || block._richHydrated) continue;
       block._richHydrated = true;
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
       if (k && richUiState.has(k)) {
@@ -20153,15 +20184,25 @@
       }
       const mountedSvg = lbSvg.querySelector?.("svg");
       if (mountedSvg) {
+        const natW = parseFloat(mountedSvg.dataset?.rvNatW || "0");
+        const minW = parseFloat(mountedSvg.dataset?.rvMinW || "0");
         mountedSvg.removeAttribute("height");
-        mountedSvg.setAttribute("width", "100%");
+        mountedSvg.removeAttribute("width");
         if (mountedSvg.style) {
-          mountedSvg.style.width = "100%";
-          mountedSvg.style.maxWidth = "100%";
+          if (natW > 0) {
+            mountedSvg.style.setProperty?.("--rv-vb-w", Math.ceil(natW) + "px");
+            mountedSvg.style.setProperty?.("--rv-min-w", (minW > 0 ? Math.ceil(minW) : 0) + "px");
+            mountedSvg.style.width = minW > 0 ? `clamp(${Math.ceil(minW)}px, 100%, ${Math.max(Math.ceil(natW), Math.ceil(minW))}px)` : "100%";
+            mountedSvg.style.maxWidth = "none";
+          } else {
+            mountedSvg.style.width = "100%";
+            mountedSvg.style.maxWidth = "100%";
+          }
           mountedSvg.style.height = "auto";
         }
       }
       lbSvg.hidden = false;
+      lbSvg.classList.toggle("is-scrollable", (lbSvg.scrollWidth || 0) - (lbSvg.clientWidth || 0) > 2);
       const svgRaw = item.svgHtml || (item.svgNode ? item.svgNode.outerHTML : "");
       lbCurMeta = { isSvg: true, width: 0, height: 0, size: svgRaw.length };
       updateLbMeta();
@@ -26012,21 +26053,144 @@
     root.removeAttribute("height");
     return { node: root, lightCanvas: svgNeedsLightCanvas(root) };
   }
-  function applyResponsiveSvgSizing(svgEl) {
-    if (!svgEl) return;
-    let vbW = 0;
-    const vb = (svgEl.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
-    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) vbW = vb[2];
+  function extractSvgMinFontSize(svgEl) {
+    if (!svgEl || typeof svgEl.querySelectorAll !== "function") return 0;
+    const textEls = svgEl.querySelectorAll("text, tspan");
+    if (!textEls?.length) return 0;
+    let minFs = Infinity;
+    let hasText = false;
+    for (const el of textEls) {
+      if (!(el.textContent || "").trim()) continue;
+      hasText = true;
+      let cur = el;
+      let found = 0;
+      while (cur && cur.nodeType === 1) {
+        const attrFs = parseFloat(cur.getAttribute?.("font-size") || "");
+        if (Number.isFinite(attrFs) && attrFs > 0) { found = attrFs; break; }
+        const st = String(cur.getAttribute?.("style") || "");
+        const m = st.match(/font-size\s*:\s*([0-9.]+)/i);
+        if (m) {
+          const parsed = parseFloat(m[1]);
+          if (Number.isFinite(parsed) && parsed > 0) { found = parsed; break; }
+        }
+        if (cur === svgEl) break;
+        cur = cur.parentElement || cur.parentNode;
+      }
+      if (found >= 6 && found < minFs) minFs = found;
+    }
+    if (!hasText) return 0;
+    return Number.isFinite(minFs) ? minFs : 14;
+  }
+  function computeResponsiveSvgMetrics(svgEl, kind) {
+    let vbW = 0, vbH = 0;
+    const vb = (svgEl?.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0) {
+      vbW = vb[2];
+      if (Number.isFinite(vb[3]) && vb[3] > 0) vbH = vb[3];
+    }
     if (!vbW) {
-      const aw = parseFloat(svgEl.getAttribute?.("width") || "");
+      const aw = parseFloat(svgEl?.getAttribute?.("width") || "");
       if (Number.isFinite(aw) && aw > 0) vbW = aw;
     }
+    if (!vbW) return { natW: 0, minW: 0, vbH: 0 };
+    const natW = Math.ceil(vbW);
+    let minScale = 0;
+    if (kind === "mermaid") {
+      // Keep Mermaid 13px node text >= ~11px crisp vector glyphs (never downscaled to 4-7px ants).
+      minScale = 0.85;
+    } else {
+      const minFs = extractSvgMinFontSize(svgEl);
+      if (minFs > 0) {
+        // Keep text-bearing inline SVGs at >= 10.5px effective text size without upscaling past 1:1.
+        minScale = Math.min(1, Math.max(0.65, 10.5 / minFs));
+      }
+    }
+    const minW = minScale > 0 ? Math.min(natW, Math.ceil(vbW * minScale)) : 0;
+    return { natW, minW, vbH: Math.ceil(vbH) };
+  }
+  function applyResponsiveSvgSizing(svgEl, kind = "svg") {
+    if (!svgEl) return;
+    const { natW, minW } = computeResponsiveSvgMetrics(svgEl, kind);
     svgEl.removeAttribute?.("height");
-    svgEl.setAttribute?.("width", "100%");
+    svgEl.removeAttribute?.("width");
+    if (svgEl.dataset) {
+      if (natW > 0) svgEl.dataset.rvNatW = String(natW);
+      else delete svgEl.dataset.rvNatW;
+      if (minW > 0) svgEl.dataset.rvMinW = String(minW);
+      else delete svgEl.dataset.rvMinW;
+    }
     if (svgEl.style) {
-      svgEl.style.width = "100%";
-      svgEl.style.maxWidth = vbW > 0 ? `min(100%, ${Math.ceil(vbW)}px)` : "100%";
+      if (natW > 0) {
+        svgEl.style.setProperty?.("--rv-vb-w", natW + "px");
+        svgEl.style.setProperty?.("--rv-min-w", minW + "px");
+        svgEl.style.width = minW > 0 ? `clamp(${minW}px, 100%, ${natW}px)` : `min(100%, ${natW}px)`;
+        svgEl.style.maxWidth = "none";
+      } else {
+        svgEl.style.width = "100%";
+        svgEl.style.maxWidth = "100%";
+      }
       svgEl.style.height = "auto";
+    }
+  }
+  function syncRichStageScroll(card) {
+    if (!card) return;
+    const stage = card.querySelector?.(".rv-mermaid-stage, .rv-svg-stage");
+    if (!stage) return;
+    const clientW = stage.clientWidth || 0;
+    const scrollW = stage.scrollWidth || 0;
+    const scrollL = stage.scrollLeft || 0;
+    const maxScroll = scrollW - clientW;
+    const scrollable = maxScroll > 2;
+    let effectiveRight = scrollW;
+    if (scrollable && clientW > 0) {
+      const svg = stage.querySelector?.("svg");
+      if (svg && typeof svg.getBBox === "function") {
+        try {
+          const vb = (svg.getAttribute?.("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+          const sr = svg.getBoundingClientRect?.();
+          if (vb.length === 4 && vb[2] > 0 && sr && sr.width > 0) {
+            const bb = svg.getBBox();
+            if (bb && bb.width > 0) {
+              const scale = sr.width / vb[2];
+              const paintedRight = Math.ceil((bb.x + bb.width - vb[0]) * scale);
+              if (paintedRight > 0 && paintedRight < effectiveRight) effectiveRight = paintedRight;
+            }
+          }
+        } catch {}
+      }
+    }
+    const canScrollR = scrollable && scrollL < maxScroll - 4 && (scrollL + clientW) < effectiveRight - 4;
+    card.classList?.toggle("is-scrollable", scrollable);
+    card.classList?.toggle("can-scroll-l", scrollable && scrollL > 4);
+    card.classList?.toggle("can-scroll-r", canScrollR);
+    if (scrollable) {
+      stage.setAttribute?.("tabindex", "0");
+    } else {
+      stage.removeAttribute?.("tabindex");
+    }
+  }
+  const boundRvStageScrolls = new WeakSet();
+  let rvStageRO = null;
+  function bindRichStageScroll(card, stage) {
+    if (!card || !stage) return;
+    if (!boundRvStageScrolls.has(stage)) {
+      boundRvStageScrolls.add(stage);
+      stage.addEventListener?.("scroll", () => syncRichStageScroll(card), { passive: true });
+      if (typeof ResizeObserver === "function") {
+        if (!rvStageRO) {
+          rvStageRO = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+              const c = entry.target?.closest?.(".rv-card");
+              if (c) syncRichStageScroll(c);
+            }
+          });
+        }
+        try { rvStageRO.observe(stage); } catch {}
+      }
+    }
+    syncRichStageScroll(card);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => { if (card.isConnected) syncRichStageScroll(card); });
     }
   }
   function applySanitizedSvg(card, entry, hash) {
@@ -26035,7 +26199,7 @@
     const imported = typeof document?.importNode === "function"
       ? document.importNode(entry.node, true)
       : entry.node.cloneNode(true);
-    applyResponsiveSvgSizing(imported);
+    applyResponsiveSvgSizing(imported, "svg");
     if (typeof stage.replaceChildren === "function") stage.replaceChildren(imported);
     else { stage.innerHTML = ""; stage.appendChild(imported); }
     stage.classList.toggle("is-light-canvas", !!entry.lightCanvas);
@@ -26051,6 +26215,7 @@
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
+    bindRichStageScroll(card, stage);
   }
   function fallbackSvgCard(card) {
     card.classList.remove("is-pending", "is-ready", "is-acts-open");
@@ -26123,6 +26288,8 @@
   }
   function mermaidConfig(isDark) {
     const sans = '-apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif';
+    const bgCol = isDark ? "#111113" : "#ffffff";
+    const inkCol = isDark ? "#ececea" : "#18181b";
     const edgeInk = isDark ? "#a1a1aa" : "#64645e";
     const strokeCol = isDark ? "#2d2d34" : "#d8d8d3";
     const linkCol = isDark ? "#71717a" : "#787872";
@@ -26132,6 +26299,8 @@
       suppressErrorRendering: true,
       logLevel: 5,
       fontFamily: sans,
+      // Native SVG <text>/<tspan> instead of <foreignObject> prevents blurry 1x WebKit/Safari Retina rasterization.
+      htmlLabels: false,
       theme: "base",
       themeVariables: isDark ? {
         darkMode: true,
@@ -26228,16 +26397,17 @@
         `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
         `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
         `.actor-line { stroke-width: 1px !important; }`,
-        `.nodeLabel, .label, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; letter-spacing: -0.005em; }`,
-        `.edgeLabel, .edgeLabel p, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
-        `.cluster-label .nodeLabel { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; }`,
+        `.nodeLabel, .label, .node text, .node tspan, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; fill: ${inkCol} !important; letter-spacing: -0.005em; }`,
+        `.edgeLabel, .edgeLabel p, .edgeLabel text, .edgeLabel tspan, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.edgeLabel rect, .labelBkg { fill: ${bgCol} !important; opacity: 1 !important; rx: 4px; ry: 4px; }`,
+        `.cluster-label .nodeLabel, .cluster-label text, .cluster-label tspan { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
       ].join("\n"),
-      flowchart: { htmlLabels: true, curve: "basis", padding: 12, nodeSpacing: 36, rankSpacing: 44, useMaxWidth: true },
-      sequence: { useMaxWidth: true, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 44, messageMargin: 34, mirrorActors: false },
-      gantt: { useMaxWidth: true },
-      er: { useMaxWidth: true },
-      state: { useMaxWidth: true },
-      class: { useMaxWidth: true },
+      flowchart: { htmlLabels: false, curve: "basis", padding: 10, nodeSpacing: 22, rankSpacing: 34, useMaxWidth: false },
+      sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 40, messageMargin: 32, mirrorActors: false },
+      gantt: { useMaxWidth: false },
+      er: { useMaxWidth: false },
+      state: { useMaxWidth: false },
+      class: { useMaxWidth: false },
     };
   }
   function loadMermaid() {
@@ -26268,7 +26438,7 @@
     stage.innerHTML = svg;
     const svgEl = stage.querySelector?.("svg");
     if (svgEl) {
-      applyResponsiveSvgSizing(svgEl);
+      applyResponsiveSvgSizing(svgEl, "mermaid");
       for (const rect of svgEl.querySelectorAll?.(".node rect, rect.actor, .cluster rect") || []) {
         const w = parseFloat(rect.getAttribute?.("width") || "0");
         const h = parseFloat(rect.getAttribute?.("height") || "0");
@@ -26291,6 +26461,7 @@
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
+    bindRichStageScroll(card, stage);
   }
   function fallbackMermaidCard(card) {
     card.classList.remove("is-pending", "is-ready", "is-acts-open");
@@ -26643,6 +26814,7 @@
     const srcEl = card.querySelector?.(".rv-source");
     if (stage) stage.hidden = showSource;
     if (srcEl) srcEl.hidden = !showSource;
+    if (!showSource && isDiagram) syncRichStageScroll(card);
     const btn = card.querySelector?.('[data-rv-toggle="source"]');
     if (btn) {
       btn.setAttribute("aria-pressed", showSource ? "true" : "false");

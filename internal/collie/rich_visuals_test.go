@@ -94,6 +94,11 @@ assert.ok(cssSrc.includes(".rv-float-acts") && cssSrc.includes(".rv-html-foot") 
 assert.ok(cssSrc.includes(".rv-mermaid.is-fallback") && cssSrc.includes(".rv-svg.is-fallback"), "CSS must style silent fallback for invalid Mermaid/SVG blocks");
 assert.ok(cssSrc.includes(".lb-svg") && cssSrc.includes(".rv-svg-stage.is-light-canvas"), "CSS must style lightbox SVG stage and dark-mode light canvas fallback");
 assert.ok(cssSrc.includes("--rv-html-max, 460px") && cssSrc.includes("--rv-html-max: 380px"), "CSS must clamp desktop/mobile HTML card heights");
+assert.ok(cssSrc.includes("#super-thread > .say {\n    grid-template-columns: minmax(0, 1fr);"), "mobile main chat must reclaim avatar rail for full-width rich blocks");
+assert.ok(cssSrc.includes(".rv-mermaid-stage svg,\n.rv-svg-stage svg {\n  display: block;\n  width: clamp(var(--rv-min-w, 0px), 100%, var(--rv-vb-w, 100%));\n  max-width: none;"), "Mermaid/SVG stages must enforce readable clamp() vector sizing without crushing wide diagrams");
+assert.ok(cssSrc.includes(".md-table-card, .md-math-block,\n    .rv-card,"), "entry blur animation must skip .md-table-card and .rv-card to keep crisp edges");
+assert.ok(cssSrc.includes(".md-code:has(> .md-code-tag) pre"), "code/diff blocks with corner tag must reserve top clearance so +N/lang never overlaps code lines");
+assert.ok(cssSrc.includes(".md-table-vp.can-scroll-l thead th:first-child"), "table sticky divider shadow must appear only when horizontally scrolled");
 
 // Minimal DOM harness supporting elements, classes, attributes, dataset, children, querySelector, DOMParser, message & theme events
 let bootFinished = false;
@@ -519,7 +524,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, sanitizeSvgElement, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks };\n})();"
+  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, sanitizeSvgElement, applyResponsiveSvgSizing, computeResponsiveSvgMetrics, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 bootFinished = true;
@@ -597,9 +602,36 @@ async function testMermaidLifecycle() {
   assert.equal(lightCfg.suppressErrorRendering, true);
   assert.equal(darkCfg.suppressErrorRendering, true);
   assert.equal(lightCfg.startOnLoad, false);
+  assert.equal(lightCfg.htmlLabels, false, "Mermaid must use native SVG text (htmlLabels=false) to prevent blurry Retina foreignObject rasterization");
+  assert.equal(darkCfg.htmlLabels, false, "Dark Mermaid must use native SVG text (htmlLabels=false)");
+  assert.equal(lightCfg.flowchart.htmlLabels, false, "Flowchart htmlLabels must stay false");
+  assert.equal(lightCfg.flowchart.useMaxWidth, false, "Flowchart must not force useMaxWidth shrink");
   assert.equal(lightCfg.themeVariables.background, "#ffffff");
   assert.equal(darkCfg.themeVariables.background, "#111113");
   assert.ok(lightCfg.themeCSS.includes("stroke-width: 1px") && lightCfg.themeCSS.includes("rx: 8px"), "Mermaid themeCSS enforces 1px hairline strokes and 8px rounded corners");
+
+  // Responsive vector sizing floor: never crush wide Mermaid or text-bearing SVG into tiny blurry ants
+  {
+    const wideMmd = makeEl("svg");
+    wideMmd.setAttribute("viewBox", "0 0 960 60");
+    const mMetrics = R.computeResponsiveSvgMetrics(wideMmd, "mermaid");
+    assert.equal(mMetrics.natW, 960);
+    assert.ok(mMetrics.minW >= 800 && mMetrics.minW <= 960, "wide Mermaid enforces >=0.85 readable scale floor: " + mMetrics.minW);
+    R.applyResponsiveSvgSizing(wideMmd, "mermaid");
+    assert.equal(wideMmd.dataset.rvNatW, "960");
+    assert.equal(wideMmd.dataset.rvMinW, String(mMetrics.minW));
+    assert.ok(wideMmd.style.width.startsWith("clamp(") && wideMmd.style.maxWidth === "none", "wide Mermaid uses clamp(minW, 100%, natW) without max-width:100% crush");
+
+    const textSvgRes = R.sanitizeSvgElement('<svg viewBox="0 0 420 92"><text x="0" y="16" font-size="11" fill="currentColor">v0.5.0</text></svg>');
+    const sMetrics = R.computeResponsiveSvgMetrics(textSvgRes.node, "svg");
+    assert.equal(sMetrics.natW, 420);
+    assert.ok(sMetrics.minW >= 395 && sMetrics.minW <= 420, "11px text SVG keeps >=10.5px readable width floor: " + sMetrics.minW);
+
+    const iconSvgRes = R.sanitizeSvgElement('<svg viewBox="0 0 500 120"><rect width="500" height="120" fill="currentColor"/></svg>');
+    const iMetrics = R.computeResponsiveSvgMetrics(iconSvgRes.node, "svg");
+    assert.equal(iMetrics.natW, 500);
+    assert.equal(iMetrics.minW, 0, "pure shape SVG without text scales freely down to container width");
+  }
 
   // Mock global mermaid to test valid render, cache reuse, theme re-render, and silent syntax-error fallback
   let renderCalls = 0;

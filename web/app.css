@@ -23,11 +23,9 @@
   inherits: false;
   initial-value: 432px;
 }
-@property --vtop {
-  syntax: "<length>";
-  inherits: false;
-  initial-value: 0px;
-}
+@property --vtop { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --kb-inset { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --kb-top { syntax: "<length>"; inherits: false; initial-value: 0px; }
 :root {
   --bg: #ffffff;
   --bg-2: #f7f7f6;
@@ -489,10 +487,17 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 
 /* ─── layout ─── */
 .app { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); height: var(--vh); background: var(--bg); }
-/* Phones: when the keyboard opens, the browser scrolls the page under the
-   visible area. Pin the app to that area so the input stays in view. */
-@media (pointer: coarse) {
+@media (max-width: 760px) and (pointer: coarse) {
   .app { position: fixed; top: 0; left: 0; right: 0; transform: translate3d(0, var(--vtop, 0px), 0); }
+}
+@media (min-width: 761px) {
+  .app { height: 100%; }
+  .app > .main { height: 100%; }
+  .app > .main, .side-drawer { padding-top: var(--kb-top, 0px); padding-bottom: var(--kb-inset, 0px); }
+}
+@media (min-width: 761px) and (pointer: coarse) { .app { position: fixed; inset: 0; } }
+@media (min-width: 761px) and (max-width: 1359px) {
+  .notepane { padding-top: var(--kb-top, 0px); padding-bottom: var(--kb-inset, 0px); }
 }
 @media (max-width: 760px) {
   /* Keep composer opaque & stacked above chat stream during GPU FLIP keyboard glide,
@@ -533,65 +538,30 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   text-decoration: none; white-space: nowrap;
 }
 .brand-name:hover { color: var(--fg); }
-@media (min-width: 1001px) and (hover: hover) {
+.brand-toggle:active { background: var(--bg-3); }
+.side-scrim {
+  display: none; position: fixed; inset: 0; z-index: 41;
+  background: rgba(10, 10, 12, .20); opacity: 0; pointer-events: none;
+  overflow: hidden; overscroll-behavior: contain; touch-action: none;
+}
+:root[data-theme="dark"] .side-scrim { background: rgba(0, 0, 0, .44); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .side-scrim { background: rgba(0, 0, 0, .44); }
+}
+@media (min-width: 761px) and (hover: hover) {
   .brand-toggle:hover { background: var(--bg-3); color: var(--fg); }
   .brand-toggle:hover .bt-logo { opacity: 0; transform: scale(.86); }
   .brand-toggle:hover .bt-ico { opacity: 1; transform: scale(1); }
 }
-@media (min-width: 1001px) {
+@media (pointer: coarse) {
+  .brand-toggle::after { content: ""; position: absolute; inset: -5px; }
+  .sr-btn::after { content: ""; position: absolute; inset: -2px -5px; }
+}
+@media (min-width: 761px) {
   .brand-toggle:focus-visible { background: var(--bg-3); color: var(--fg); }
   .brand-toggle:focus-visible .bt-logo { opacity: 0; transform: scale(.86); }
   .brand-toggle:focus-visible .bt-ico { opacity: 1; transform: scale(1); }
-  .app > .side { grid-column: 1; grid-row: 1; position: relative; z-index: auto; box-shadow: none; }
-  .app > .main { grid-column: 2; grid-row: 1; }
-  /* Collapsed desktop sidebar keeps a calm 54px icon rail on the same plane (#t12760, #t12772) */
-  .app.side-collapsed { --side-w: 54px; }
-  body.side-collapsed .toasts { --side-w: 54px; }
-  .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-full { display: none; }
-  .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-rail { display: flex; }
-  /* Flat same-plane 240ms GPU glide with counter-translated anchored rail so icons NEVER disappear mid-glide (#t12980, #t12984, #t12988) */
-  .app.is-side-opening { --side-w: 54px; }
-  .app.is-side-opening > .side,
-  .side.is-side-closing {
-    display: flex !important;
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: var(--side-anim-w, 300px);
-    overflow: hidden;
-    z-index: 4;
-    border-right: 1px solid var(--line);
-    box-shadow: none !important;
-    will-change: transform;
-  }
-  .app.is-side-opening > .side .side-full,
-  .side.is-side-closing .side-full {
-    display: flex;
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: var(--side-anim-w, 300px);
-    will-change: transform, opacity;
-  }
-  .app.is-side-opening > .side .side-rail,
-  .side.is-side-closing .side-rail {
-    display: flex;
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 53px;
-    will-change: transform, opacity;
-    pointer-events: none;
-  }
-  .app.is-side-opening > .side .brand-toggle .bt-logo,
-  .side.is-side-closing .brand-toggle .bt-logo { opacity: 1 !important; transform: none !important; }
-  .app.is-side-opening > .side .brand-toggle .bt-ico,
-  .side.is-side-closing .brand-toggle .bt-ico { opacity: 0 !important; }
-  .side.is-side-closing { pointer-events: none; }
-  /* Minimalist 54px Icon Rail (Claude / Linear calm aesthetic) */
+  /* Minimalist 54px Icon Rail */
   .side-rail {
     flex-direction: column; align-items: center; flex: 1; min-height: 0; width: 100%;
     padding: 12px 0 10px 1px;
@@ -677,19 +647,100 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   .sr-dot.done { background: var(--ok); }
   .sr-dot.idle, .sr-dot.unknown { background: transparent; box-shadow: inset 0 0 0 1.4px var(--fg-3), 0 0 0 1.5px var(--bg-2); }
 }
+@media (min-width: 1001px) {
+  .app > .side { grid-column: 1; grid-row: 1; position: relative; z-index: auto; box-shadow: none; }
+  .app > .main { grid-column: 2; grid-row: 1; }
+  /* Collapsed desktop sidebar keeps a calm 54px icon rail on the same plane (#t12760, #t12772) */
+  .app.side-collapsed { --side-w: 54px; }
+  body.side-collapsed .toasts { --side-w: 54px; }
+  .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-full { display: none; }
+  .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-rail { display: flex; }
+  /* Flat same-plane 240ms GPU glide with counter-translated anchored rail so icons NEVER disappear mid-glide (#t12980, #t12984, #t12988) */
+  .app.is-side-opening { --side-w: 54px; }
+  .app.is-side-opening > .side,
+  .side.is-side-closing {
+    display: flex !important;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--side-anim-w, 300px);
+    overflow: hidden;
+    z-index: 4;
+    border-right: 1px solid var(--line);
+    box-shadow: none !important;
+    will-change: transform;
+  }
+  .app.is-side-opening > .side .side-full,
+  .side.is-side-closing .side-full {
+    display: flex;
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--side-anim-w, 300px);
+    will-change: transform, opacity;
+  }
+  .app.is-side-opening > .side .side-rail,
+  .side.is-side-closing .side-rail {
+    display: flex;
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 53px;
+    will-change: transform, opacity;
+    pointer-events: none;
+  }
+  .app.is-side-opening > .side .brand-toggle .bt-logo,
+  .side.is-side-closing .brand-toggle .bt-logo { opacity: 1 !important; transform: none !important; }
+  .app.is-side-opening > .side .brand-toggle .bt-ico,
+  .side.is-side-closing .brand-toggle .bt-ico { opacity: 0 !important; }
+  .side.is-side-closing { pointer-events: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .brand-toggle .bt-logo, .brand-toggle .bt-ico { transition: none; transform: none; }
 }
-@media (max-width: 1000px) {
+@media (max-width: 760px) {
   .side-rail { display: none !important; }
   .side-full { display: flex !important; }
   .brand-toggle .bt-ico { display: none; }
 }
-/* Desktop (> 1000px) with left sidebar expanded: left sidebar already shows「工作中」,
-   so hide the duplicate top #crew capsule strip to give maximum reading height to main chat.
-   Automatically shown on mobile (<= 760px), tablet (<= 1000px), or when sidebar is collapsed (#t12693). */
+/* Desktop (> 1000px) expanded sidebar hides duplicate top #crew strip (#t12693). */
 @media (min-width: 1001px) {
   .app:not(.side-collapsed) #v-collie #crew { display: none; }
+}
+@media (min-width: 761px) and (max-width: 1000px),
+       (min-width: 761px) and (pointer: coarse),
+       (min-width: 761px) and (hover: none) and (any-pointer: coarse) {
+  .app, .app.side-collapsed, .app.is-side-opening {
+    --side-w: 54px;
+    --side-overlay-w: clamp(276px, calc(108px + 16vw), 300px);
+  }
+  body .toasts { --side-w: 54px; }
+  .app > .side { grid-column: 1; grid-row: 1; position: relative; z-index: auto; overflow: visible; box-shadow: none; }
+  .app > .main { grid-column: 2; grid-row: 1; }
+  .app:not(.side-collapsed) #v-collie #crew { display: flex; }
+  .app:not(.side-collapsed) #v-collie #crew:empty { display: none; }
+  .app > .side .side-rail,
+  .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-rail,
+  .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-full { display: flex; }
+  .app > .side .side-full {
+    display: flex; position: fixed; top: 0; left: 0; bottom: 0; z-index: 42;
+    width: var(--side-overlay-w, 292px); max-width: calc(100vw - 48px);
+    background: var(--bg-2); border-right: 1px solid var(--line-2); box-shadow: var(--shadow);
+    padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left);
+    transform: translate3d(-100%, 0, 0); visibility: hidden; pointer-events: none;
+    overscroll-behavior: contain; contain: layout style paint; transition: none;
+  }
+  .app.side-overlay-open > .side .side-full { transform: translate3d(0, 0, 0); visibility: visible; pointer-events: auto; }
+  .side-scrim { display: block; }
+  .app.side-overlay-open > .side-scrim { opacity: 1; pointer-events: auto; }
+  @media (prefers-reduced-motion: no-preference) {
+    .app > .side .side-full { transition: transform 240ms cubic-bezier(.22, 1, .36, 1), visibility 0ms linear 240ms; }
+    .app.side-overlay-open > .side .side-full { transition: transform 240ms cubic-bezier(.22, 1, .36, 1), visibility 0ms; }
+    .side-scrim { transition: opacity 220ms ease; }
+  }
 }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 600; font-size: 16px; letter-spacing: -.01em; }
 .brand img { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); }
@@ -873,7 +924,10 @@ html.is-idle .working-row .wk-t {
 }
 #v-collie {
   position: absolute;
-  inset: 0;
+  top: var(--kb-top, 0px);
+  right: 0;
+  bottom: var(--kb-inset, 0px);
+  left: 0;
   z-index: 1;
   padding-top: 0;
   contain: strict;

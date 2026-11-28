@@ -21450,6 +21450,8 @@
 
   const SIDE_RAIL_W = 54;
   const expandedSideW = () => Math.max(268, Math.min(300, 108 + innerWidth * 0.16));
+  const isOverlaySidebarViewport = () => typeof innerWidth === "number" && innerWidth > 760
+    && (innerWidth <= 1000 || (typeof matchMedia === "function" && (matchMedia("(pointer: coarse)").matches || (matchMedia("(hover: none)").matches && matchMedia("(any-pointer: coarse)").matches))));
   const isDesktopDrawerViewport = () => {
     if (innerWidth <= THREAD_DESKTOP_MIN) return false;
     if (typeof matchMedia === "function" && matchMedia("(min-width: 1px)").matches) {
@@ -21459,6 +21461,7 @@
   };
   const currentSideW = () => {
     if (innerWidth <= 760) return 0;
+    if (isOverlaySidebarViewport()) return SIDE_RAIL_W;
     if (innerWidth > 1000 && $("#app")?.classList?.contains("side-collapsed")) return SIDE_RAIL_W;
     return $(".side")?.offsetWidth || expandedSideW();
   };
@@ -22664,11 +22667,44 @@
   }
   bindDrawerSheetDrag(pane, fileScrim, [$("#fv-handle"), pane?.querySelector(".fv-head")], () => !!pane && !pane.hidden, () => closeFilePane());
 
-  // ───────────────────────────── Desktop left sidebar collapse / expand with 240ms GPU glide (#t12615, #t12693)
+  // ───────────────────────────── Desktop left sidebar collapse / expand + tablet/touch GPU overlay
   let sideCollapsed = !!store.get("sideCollapsed", false);
-  let _sideGlideRAF = 0;
-  let _sideGlideFallbackTimer = 0;
-  let _sideGlideCleanup = null;
+  let sideOverlayOpen = false, _sideGlideRAF = 0, _sideGlideFallbackTimer = 0, _sideGlideCleanup = null;
+  function syncSideToggleAria(collapsed) {
+    for (const tb of [$("#side-toggle-btn"), $("#side-collapse-btn"), $("#side-expand-btn")]) {
+      if (!tb) continue;
+      tb.setAttribute("aria-pressed", collapsed ? "true" : "false");
+      tb.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
+  }
+  function setSideOverlayOpen(next, opts = {}) {
+    const appEl = $("#app"), sf = $("#side-full") || $(".side .side-full");
+    const ov = isOverlaySidebarViewport(), want = ov && !!next;
+    if (!appEl) return;
+    sideOverlayOpen = want;
+    if (sf) {
+      if (ov && !want && opts.restoreFocus && sf.contains?.(document.activeElement)) $("#side-expand-btn")?.focus?.({ preventScroll: true });
+      sf.inert = ov && !want;
+      const setA = (k, v) => (v == null ? sf.removeAttribute?.(k) : sf.setAttribute?.(k, v));
+      setA("aria-hidden", ov && !want ? "true" : null);
+      setA("role", ov && want ? "dialog" : null);
+      setA("aria-modal", ov && want ? "true" : null);
+      if (ov && want) setA("aria-label", tx("side.primaryNav", "主导航"));
+    }
+    appEl.classList.toggle("side-overlay-open", want);
+    if (ov) syncSideToggleAria(!want);
+  }
+  function syncSideOverlayMode() {
+    const appEl = $("#app");
+    if (!appEl) return;
+    if (isOverlaySidebarViewport()) {
+      finishSideGlide(true);
+      setSideOverlayOpen(sideOverlayOpen, { immediate: true });
+    } else {
+      if (sideOverlayOpen || appEl.classList.contains("side-overlay-open") || $("#side-full")?.inert) setSideOverlayOpen(false, { immediate: true });
+      syncSideToggleAria(sideCollapsed);
+    }
+  }
   function finishSideGlide(snap = true) {
     if (_sideGlideRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(_sideGlideRAF);
@@ -22688,18 +22724,22 @@
     const sideEl = $(".side");
     const col = $("#v-collie");
     if (!appEl) return;
+    if (isOverlaySidebarViewport() && !opts.skipPersist) {
+      setSideOverlayOpen(!want, opts);
+      return;
+    }
     const prevCollapsed = appEl.classList.contains("side-collapsed");
     sideCollapsed = want;
     if (!opts.skipPersist) store.set("sideCollapsed", want);
-    for (const tb of [$("#side-toggle-btn"), $("#side-collapse-btn"), $("#side-expand-btn")]) {
-      if (tb) tb.setAttribute("aria-pressed", want ? "true" : "false");
+    if (!isOverlaySidebarViewport()) {
+      syncSideToggleAria(want);
     }
     if (prevCollapsed === want && !opts.force) return;
 
     finishSideGlide(true);
     finishDrawerGlide(true);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const canGlide = !opts.immediate && !reduced && innerWidth > 1000 && typeof requestAnimationFrame === "function" && !!sideEl;
+    const canGlide = !opts.immediate && !reduced && innerWidth > 1000 && !isOverlaySidebarViewport() && typeof requestAnimationFrame === "function" && !!sideEl;
     const sideW = expandedSideW();
     const drawerW = (isAnyRightDrawerOpen() && isDesktopDrawerViewport()) ? (_lastDrawerW || drawerDefaultW()) : 0;
     const hasNotes = view === "collie" && !drawerW && isWideNotesViewport() && !!col?.classList?.contains("has-notes");
@@ -22855,25 +22895,40 @@
       _sideGlideFallbackTimer = setTimeout(() => finishSideGlide(true), dur + 90);
     }
   }
+  $("#side-scrim")?.addEventListener("click", () => { if (sideOverlayOpen) setSideOverlayOpen(false); });
+  ($("#side-full") || $(".side .side-full"))?.addEventListener("click", (e) => {
+    if (sideOverlayOpen && isOverlaySidebarViewport() && e.target?.closest?.("a[href], #new-btn, #nav-peers")) setSideOverlayOpen(false);
+  });
   document.addEventListener("click", (e) => {
-    const btn = e.target?.closest?.("[data-toggle-side]");
-    if (!btn) return;
-    if (innerWidth <= 1000) {
-      e.preventDefault();
+    if (!e.target?.closest?.("[data-toggle-side]")) return;
+    e.preventDefault();
+    if (innerWidth <= 760) {
       if (location.hash !== "#/collie") location.hash = "#/collie";
       else if (view !== "collie") route();
-      return;
-    }
-    e.preventDefault();
-    setSideCollapsed(!sideCollapsed);
+    } else if (isOverlaySidebarViewport()) setSideOverlayOpen(!sideOverlayOpen);
+    else setSideCollapsed(!sideCollapsed);
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "\\" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
-    if (innerWidth <= 1000 || document.querySelector("dialog[open]")) return;
+    if (e.key === "Escape" && sideOverlayOpen && !e.isComposing && e.keyCode !== 229) {
+      const pop = [$("#quota-popover"), $("#wd-more-menu")].some((el) => { try { return el?.matches?.(":popover-open") || el?.classList?.contains?.("is-open"); } catch { return false; } });
+      if (superSearchOpen || document.querySelector("dialog[open]") || pickOpen || dirCtx || pop) return;
+      e.preventDefault(); e.stopImmediatePropagation?.();
+      setSideOverlayOpen(false, { restoreFocus: true });
+      return;
+    }
+    if (e.key !== "\\" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || innerWidth <= 760 || document.querySelector("dialog[open]")) return;
     e.preventDefault();
-    setSideCollapsed(!sideCollapsed);
-  });
+    if (isOverlaySidebarViewport()) setSideOverlayOpen(!sideOverlayOpen);
+    else setSideCollapsed(!sideCollapsed);
+  }, true);
+  if (typeof matchMedia === "function") {
+    for (const q of ["(hover: none)", "(pointer: coarse)"]) {
+      try { matchMedia(q)?.addEventListener?.("change", syncSideOverlayMode); } catch {}
+    }
+  }
+  addEventListener("resize", syncSideOverlayMode);
   if (sideCollapsed) setSideCollapsed(true, { immediate: true, force: true, skipPersist: true });
+  syncSideOverlayMode();
 
   // ───────────────────────────── Unified Minimalist Right Floating Side Card（「小本本」第一组内联斜杠切换：进行中 / 话题）
   const NOTES_WIDE_MIN = 1360;
@@ -30601,6 +30656,7 @@
   const KB_FLIP_MS = 240;
   const KB_FLIP_TRANSITION = `transform ${KB_FLIP_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`;
   let lastVH = "", lastVHNum = 0, lastVWNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
+  let lastNarrow = null, lastFH = 0, lastKI = -1, lastKT = -1;
   let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
   let kbFlipRAF = 0, kbFlipTimer = 0, kbFlipEls = [], kbFlipPrimary = null, kbFlipOnEnd = null;
   let kbFlipDir = 0, kbFlipFocusedEl = null, kbFlipPendingContent = null;
@@ -30750,13 +30806,25 @@
       || document.querySelector("dialog[open]")
     );
   }
+  function hasWideRootVHOverlayOpen() {
+    return !!(superSearchOpen || pickOpen || dirCtx || $("#lightbox")?.open || document.querySelector("dialog[open]"));
+  }
+  function applyWideKeyboardInsets(kbTop, kbInset) {
+    for (const sel of [".main", "#v-collie", "#file-view", "#thread-drawer", "#worker-drawer", "#notes-pane"]) {
+      const st = $(sel)?.style;
+      if (typeof st?.setProperty !== "function") continue;
+      if (st.getPropertyValue?.("--kb-top") !== kbTop) st.setProperty("--kb-top", kbTop);
+      if (st.getPropertyValue?.("--kb-inset") !== kbInset) st.setProperty("--kb-inset", kbInset);
+    }
+  }
+  const setRootVH = (v) => {
+    const r = document.documentElement?.style;
+    if (typeof r?.setProperty === "function" && r.getPropertyValue?.("--vh") !== v) r.setProperty("--vh", v);
+  };
   function syncRootVHNow() {
     if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
     if (!lastVH) return;
-    const root = document.documentElement?.style;
-    if (root && root.getPropertyValue("--vh") !== lastVH) {
-      root.setProperty("--vh", lastVH);
-    }
+    setRootVH((!narrow() && !hasWideRootVHOverlayOpen() && lastFH > 0) ? (lastFH + "px") : lastVH);
   }
   function endViewportTransition() {
     if (vvSettleTimer) { clearTimeout(vvSettleTimer); vvSettleTimer = 0; }
@@ -30790,80 +30858,84 @@
     }, 130);
   }
   function setVH() {
-    const v = window.visualViewport;
+    const v = window.visualViewport, isN = narrow();
     const nextVHNum = Math.round(v ? v.height : innerHeight);
     const nextVWNum = Math.round((v && typeof v.width === "number" && v.width > 0) ? v.width : innerWidth);
     const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
-    const nextVH = nextVHNum + "px";
-    const nextVTop = nextVTopNum + "px";
+    const fh = Math.round((typeof innerHeight === "number" && innerHeight > 0) ? innerHeight : nextVHNum);
+    const zoomed = !!(v && typeof v.scale === "number" && v.scale > 1.02);
+    const kt = (!isN && !zoomed) ? nextVTopNum : 0;
+    const ki = (!isN && !zoomed) ? Math.max(0, fh - nextVHNum - kt) : 0;
+    const nextVH = nextVHNum + "px", nextVTop = nextVTopNum + "px";
     const widthChanged = !!lastVH && lastVWNum > 0 && Math.abs(nextVWNum - lastVWNum) > 2;
-    if (nextVH === lastVH && nextVTop === lastVTop && !widthChanged) return;
-    const root = document.documentElement.style;
-    const appEl = $("#app");
-    const vhChanged = nextVH !== lastVH;
-    const vtopChanged = nextVTop !== lastVTop;
-    const isInitial = !lastVH;
-    const prevVHNum = lastVHNum;
-    const deltaH = isInitial ? 0 : (nextVHNum - prevVHNum);
+    const modeChg = lastNarrow !== null && lastNarrow !== isN;
+    const vhChanged = nextVH !== lastVH, vtopChanged = nextVTop !== lastVTop;
+    const kbChg = ki !== lastKI || kt !== lastKT, fhChg = fh !== lastFH;
+    if (!vhChanged && !vtopChanged && !widthChanged && !modeChg && !kbChg && !fhChg) return;
+    const root = document.documentElement.style, appEl = $("#app");
+    const isInitial = !lastVH, prevVHNum = lastVHNum, deltaH = isInitial ? 0 : (nextVHNum - prevVHNum);
     const vhShrank = !isInitial && deltaH < 0;
     const wantKbFlip = vhChanged && !isInitial && !widthChanged
-      && narrow() && !prefersReducedMotion() && !document.hidden
+      && isN && !prefersReducedMotion() && !document.hidden
       && !vvTransitioning && Math.abs(deltaH) >= KB_FLIP_MIN_DELTA;
 
     // 1) Read phase (strictly before any DOM/style writes).
-    let screenPinned = false;
-    let wdScreenPinned = false;
-    const pinTargets = [];
-    const pinInfo = new Map();
-    let kbFlipPlan = null;
+    let screenPinned = false, wdScreenPinned = false, kbFlipPlan = null;
+    const pinTargets = [], pinInfo = new Map();
     if (vhChanged && !isInitial) {
       screenPinned = view === "pane" && curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
       wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
-      // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
-      // When the viewport grows (keyboard dismissing), native scroll clamping keeps bottom-pinned scrollers
-      // anchored without forcing synchronous layout or extra scrollTop writes.
       if (vhShrank) {
         for (const el of document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")) {
           if (!el.offsetParent) continue;
-          const sh = el.scrollHeight;
-          const ch = el.clientHeight;
-          const st = el.scrollTop;
+          const sh = el.scrollHeight, ch = el.clientHeight, st = el.scrollTop;
           if (sh - st - ch <= AT_BOTTOM_PX) {
             pinTargets.push({ el, sh });
             pinInfo.set(el, { sh, ch, st });
           }
         }
       }
-      if (wantKbFlip) {
-        kbFlipPlan = readKbFlipPlan(deltaH, pinInfo);
-      }
+      if (wantKbFlip) kbFlipPlan = readKbFlipPlan(deltaH, pinInfo);
     }
 
     // 2) Write phase (style mutations only; zero post-write layout reads).
-    if (vhChanged || widthChanged) {
-      clearKbFlip();
-    }
-    lastVWNum = nextVWNum;
-    if (vhChanged) {
-      lastVH = nextVH;
-      lastVHNum = nextVHNum;
-      if (appEl?.style) appEl.style.height = nextVH;
-      if (isInitial || !narrow() || hasViewportOverlayOpen()) {
-        root.setProperty("--vh", nextVH);
-      } else {
-        if (rootVHSyncTimer) clearTimeout(rootVHSyncTimer);
-        rootVHSyncTimer = setTimeout(syncRootVHNow, 140);
+    if (vhChanged || widthChanged || modeChg) clearKbFlip();
+    lastNarrow = isN; lastVWNum = nextVWNum; lastFH = fh; lastKI = ki; lastKT = kt;
+    if (vhChanged) { lastVH = nextVH; lastVHNum = nextVHNum; }
+    if (vtopChanged) lastVTop = nextVTop;
+
+    if (isN) {
+      if (modeChg) applyWideKeyboardInsets("0px", "0px");
+      if (vhChanged || modeChg) {
+        if (appEl?.style) appEl.style.height = nextVH;
+        if (isInitial || hasViewportOverlayOpen()) root.setProperty("--vh", nextVH);
+        else {
+          if (rootVHSyncTimer) clearTimeout(rootVHSyncTimer);
+          rootVHSyncTimer = setTimeout(syncRootVHNow, 140);
+        }
+        if (!isInitial && vhChanged) noteViewportHeightTick();
       }
-      if (!isInitial) noteViewportHeightTick();
+      if (vtopChanged || modeChg) {
+        if (appEl?.style) appEl.style.setProperty("--vtop", nextVTop);
+        else root.setProperty("--vtop", nextVTop);
+      }
+    } else {
+      if (appEl?.style) {
+        if (appEl.style.height) appEl.style.height = "";
+        if (appEl.style.getPropertyValue?.("--vtop")) appEl.style.removeProperty?.("--vtop");
+      }
+      if (kbChg || modeChg || isInitial) applyWideKeyboardInsets(kt + "px", ki + "px");
+      const ov = hasWideRootVHOverlayOpen();
+      if (isInitial || fhChg || modeChg || ov) {
+        if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
+        setRootVH(ov ? nextVH : (fh + "px"));
+      }
+      if (!isInitial && vhChanged) noteViewportHeightTick();
+      if (!isInitial && !vhShrank && !ki && !kt && window.scrollY > 0) {
+        try { window.scrollTo?.(0, 0); } catch {}
+      }
     }
-    if (vtopChanged) {
-      lastVTop = nextVTop;
-      if (appEl?.style) appEl.style.setProperty("--vtop", nextVTop);
-      else root.setProperty("--vtop", nextVTop);
-    }
-    if (kbFlipPlan) {
-      beginKbFlip(kbFlipPlan);
-    }
+    if (kbFlipPlan) beginKbFlip(kbFlipPlan);
 
     // 3) Post-layout pin phase (deferred to next clean frame; zero forced reflow).
     if (pinTargets.length || screenPinned || wdScreenPinned) {

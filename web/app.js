@@ -3066,6 +3066,7 @@
     return applyCollieAnchor(sc, snap);
   }
   let syncCollieResizeBaseline = () => {};
+  let reanchorCollieOnViewportChange = () => {};
   function cancelCollieLayoutLock() {
     const lock = collieLayoutLock;
     if (!lock) return;
@@ -7699,8 +7700,11 @@
     let collieResizeH = sc?.clientHeight || 0;
     let collieResizeAnchor = null;
     let collieResizeGraceUntil = 0;
+    let collieWidthResizeUntil = 0;
     let collieResizeAnchorTimer = 0;
     let collieResizeRestoreRAF = 0;
+    let collieResizeSettleTimer = 0;
+    let lastMidAnchorAt = 0;
     const captureCollieResizeMidAnchor = () => {
       collieResizeAnchorTimer = 0;
       if (view !== "collie" || !sc || sc.clientHeight <= 0) return;
@@ -7712,7 +7716,7 @@
       collieResizeWasBottom = false;
       collieResizeAnchor = captureCollieAnchor(sc);
     };
-    const handleCollieScrollResize = (entries) => {
+    const handleCollieScrollResize = (entries, forceWidth = false) => {
       if (isLayoutGliding()) return;
       if (!sc || view !== "collie") return;
       const cr = Array.isArray(entries) && entries[0]?.contentRect ? entries[0].contentRect : null;
@@ -7723,16 +7727,25 @@
         collieResizeW = w;
         collieResizeH = h;
         collieResizeWasBottom = isCollieNearBottom(sc) && collieStickBottom;
+        if (!collieResizeWasBottom) collieResizeAnchor = captureCollieAnchor(sc);
         return;
       }
-      if (w === collieResizeW && h === collieResizeH) return;
-      const widthChanged = w !== collieResizeW;
-      const heightGrew = !widthChanged && h > collieResizeH;
+      if (!forceWidth && w === collieResizeW && h === collieResizeH) return;
+      const widthChanged = forceWidth || w !== collieResizeW;
+      const now = performance.now();
+      const inWidthSession = widthChanged || now < collieWidthResizeUntil;
+      const heightGrew = !inWidthSession && h > collieResizeH;
       collieResizeW = w;
       collieResizeH = h;
-      if (collieInitialAnchor || collieLayoutLock || (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until)) return;
-      collieResizeGraceUntil = performance.now() + 200;
-      markProgrammaticScroll(200);
+      if (collieInitialAnchor || collieLayoutLock || (activeCollieRestore && !activeCollieRestore.atBottom && now < activeCollieRestore.until)) return;
+      if (widthChanged) {
+        collieWidthResizeUntil = now + 280;
+        collieResizeGraceUntil = Math.max(collieResizeGraceUntil, now + 120);
+        markProgrammaticScroll(120);
+      } else {
+        collieResizeGraceUntil = Math.max(collieResizeGraceUntil, now + 120);
+        markProgrammaticScroll(120);
+      }
       const restoreNow = () => {
         if (view !== "collie" || !sc || sc.clientHeight <= 0 || collieInitialAnchor || collieLayoutLock) return;
         if (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until) return;
@@ -7742,23 +7755,26 @@
           updateSuperJump();
           return;
         }
-        if (collieResizeWasBottom && collieStickBottom) {
+        if (collieResizeWasBottom || collieStickBottom) {
           setCollieBottomStick(true);
+          collieResizeWasBottom = true;
+          collieResizeAnchor = null;
           const sh = sc.scrollHeight;
           const dist = sh - sc.scrollTop - sc.clientHeight;
           if (dist > 1) {
-            markProgrammaticScroll(140);
+            markProgrammaticScroll(48);
+            collieResizeGraceUntil = Math.max(collieResizeGraceUntil, performance.now() + 48);
             sc.scrollTop = sh;
           }
           if (!$("#super-jump")?.hidden || dist > 1) updateSuperJump({ dist: dist > 1 ? 0 : dist });
-        } else if (widthChanged && collieResizeAnchor) {
+        } else if (inWidthSession && collieResizeAnchor) {
           applyCollieAnchor(sc, collieResizeAnchor);
           updateSuperJump();
         } else {
           updateSuperJump();
         }
       };
-      // During vertical height expansion (e.g. mobile keyboard dismissing), native
+      // During vertical height expansion (e.g. keyboard dismissing), native
       // scroll clamping keeps bottom-pinned chats glued to bottom with 0px drift.
       if (heightGrew && (collieResizeWasBottom || collieStickBottom)) {
         const sh = sc.scrollHeight;
@@ -7769,13 +7785,24 @@
         }
       }
       restoreNow();
-      if (typeof requestAnimationFrame === "function" && (widthChanged || !heightGrew)) {
+      if (typeof requestAnimationFrame === "function" && (inWidthSession || !heightGrew)) {
         if (collieResizeRestoreRAF) cancelAnimationFrame(collieResizeRestoreRAF);
         collieResizeRestoreRAF = requestAnimationFrame(() => {
           collieResizeRestoreRAF = 0;
           restoreNow();
         });
       }
+      if (widthChanged) {
+        if (collieResizeSettleTimer) clearTimeout(collieResizeSettleTimer);
+        collieResizeSettleTimer = setTimeout(() => {
+          collieResizeSettleTimer = 0;
+          restoreNow();
+          syncCollieResizeBaseline();
+        }, 180);
+      }
+    };
+    reanchorCollieOnViewportChange = (forceWidth = false) => {
+      handleCollieScrollResize(null, forceWidth);
     };
     syncCollieResizeBaseline = () => {
       if (!sc) return;
@@ -7783,6 +7810,12 @@
         cancelAnimationFrame(collieResizeRestoreRAF);
         collieResizeRestoreRAF = 0;
       }
+      if (collieResizeSettleTimer) {
+        clearTimeout(collieResizeSettleTimer);
+        collieResizeSettleTimer = 0;
+      }
+      collieWidthResizeUntil = 0;
+      collieResizeGraceUntil = Math.min(collieResizeGraceUntil, performance.now() + 48);
       const w = sc.clientWidth || 0;
       const h = sc.clientHeight || 0;
       if (w > 0 && h > 0) {
@@ -7809,6 +7842,9 @@
         collieForceBottomUntil = 0;
         collieStickBottom = false;
         collieResizeWasBottom = false;
+        collieWidthResizeUntil = 0;
+      collieResizeGraceUntil = Math.min(collieResizeGraceUntil, performance.now() + 48);
+        if (collieResizeSettleTimer) { clearTimeout(collieResizeSettleTimer); collieResizeSettleTimer = 0; }
       }
     }, { passive: true });
     let touchStartY = 0;
@@ -7821,6 +7857,16 @@
         collieForceBottomUntil = 0;
         collieStickBottom = false;
         collieResizeWasBottom = false;
+        collieWidthResizeUntil = 0;
+      collieResizeGraceUntil = Math.min(collieResizeGraceUntil, performance.now() + 48);
+        if (collieResizeSettleTimer) { clearTimeout(collieResizeSettleTimer); collieResizeSettleTimer = 0; }
+      }
+    }, { passive: true });
+    sc?.addEventListener("touchend", () => {
+      const now = performance.now();
+      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil && now >= collieWidthResizeUntil) {
+        if (collieResizeAnchorTimer) { clearTimeout(collieResizeAnchorTimer); collieResizeAnchorTimer = 0; }
+        captureCollieResizeMidAnchor();
       }
     }, { passive: true });
     let superJumpScrollRAF = 0;
@@ -7838,7 +7884,7 @@
     sc?.addEventListener("scroll", () => {
       noteCollieUserScroll(sc);
       const now = performance.now();
-      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil
+      if (now >= programmaticScrollUntil && now >= collieResizeGraceUntil && now >= collieWidthResizeUntil
         && sc.clientWidth === collieResizeW && sc.clientHeight === collieResizeH) {
         const nearB = isCollieNearBottom(sc);
         collieStickBottom = nearB;
@@ -7848,8 +7894,12 @@
           if (collieResizeAnchorTimer) { clearTimeout(collieResizeAnchorTimer); collieResizeAnchorTimer = 0; }
         } else {
           collieForceBottomUntil = 0;
+          if (!collieResizeAnchor || now - lastMidAnchorAt >= 48) {
+            lastMidAnchorAt = now;
+            collieResizeAnchor = captureCollieAnchor(sc);
+          }
           if (collieResizeAnchorTimer) clearTimeout(collieResizeAnchorTimer);
-          collieResizeAnchorTimer = setTimeout(captureCollieResizeMidAnchor, 120);
+          collieResizeAnchorTimer = setTimeout(captureCollieResizeMidAnchor, 60);
         }
       }
       if (superJumpScrollRAF) return;
@@ -21761,8 +21811,7 @@
 
   const SIDE_RAIL_W = 54;
   const expandedSideW = () => Math.max(268, Math.min(300, 108 + innerWidth * 0.16));
-  const isOverlaySidebarViewport = () => typeof innerWidth === "number" && innerWidth > 760
-    && (innerWidth <= 1000 || (typeof matchMedia === "function" && (matchMedia("(pointer: coarse)").matches || (matchMedia("(hover: none)").matches && matchMedia("(any-pointer: coarse)").matches))));
+  const isOverlaySidebarViewport = () => typeof innerWidth === "number" && innerWidth > 760 && innerWidth <= 1000;
   const isDesktopDrawerViewport = () => {
     if (innerWidth <= THREAD_DESKTOP_MIN) return false;
     if (typeof matchMedia === "function" && matchMedia("(min-width: 1px)").matches) {
@@ -22978,9 +23027,9 @@
   }
   bindDrawerSheetDrag(pane, fileScrim, [$("#fv-handle"), pane?.querySelector(".fv-head")], () => !!pane && !pane.hidden, () => closeFilePane());
 
-  // ───────────────────────────── Desktop left sidebar collapse / expand + tablet/touch GPU overlay
+  // ───────────────────────────── Desktop & iPad landscape docked sidebar + tablet portrait (761-1000px) GPU overlay
   let sideCollapsed = !!store.get("sideCollapsed", false);
-  let sideOverlayOpen = false, _sideGlideRAF = 0, _sideGlideFallbackTimer = 0, _sideGlideCleanup = null;
+  let sideOverlayOpen = false, lastSideOverlayMode = null, _sideGlideRAF = 0, _sideGlideFallbackTimer = 0, _sideGlideCleanup = null;
   function syncSideToggleAria(collapsed) {
     for (const tb of [$("#side-toggle-btn"), $("#side-collapse-btn"), $("#side-expand-btn")]) {
       if (!tb) continue;
@@ -23000,7 +23049,7 @@
       setA("aria-hidden", ov && !want ? "true" : null);
       setA("role", ov && want ? "dialog" : null);
       setA("aria-modal", ov && want ? "true" : null);
-      if (ov && want) setA("aria-label", tx("side.primaryNav", "主导航"));
+      setA("aria-label", ov && want ? tx("side.primaryNav", "主导航") : null);
     }
     appEl.classList.toggle("side-overlay-open", want);
     if (ov) syncSideToggleAria(!want);
@@ -23008,12 +23057,21 @@
   function syncSideOverlayMode() {
     const appEl = $("#app");
     if (!appEl) return;
-    if (isOverlaySidebarViewport()) {
+    const nextOv = isOverlaySidebarViewport();
+    const modeChanged = lastSideOverlayMode !== null && lastSideOverlayMode !== nextOv;
+    lastSideOverlayMode = nextOv;
+    if (nextOv) {
       finishSideGlide(true);
       setSideOverlayOpen(sideOverlayOpen, { immediate: true });
     } else {
       if (sideOverlayOpen || appEl.classList.contains("side-overlay-open") || $("#side-full")?.inert) setSideOverlayOpen(false, { immediate: true });
       syncSideToggleAria(sideCollapsed);
+    }
+    if (modeChanged && view === "collie") {
+      syncCollieTopHeight();
+      const crewEl = $("#crew");
+      if (crewEl && (nextOv || sideCollapsed)) { syncCrewCompact(crewEl); crewEl._syncScrollFade?.(); }
+      reanchorCollieOnViewportChange(true);
     }
   }
   function finishSideGlide(snap = true) {
@@ -23233,7 +23291,7 @@
     else setSideCollapsed(!sideCollapsed);
   }, true);
   if (typeof matchMedia === "function") {
-    for (const q of ["(hover: none)", "(pointer: coarse)"]) {
+    for (const q of ["(max-width: 1000px)", "(max-width: 760px)"]) {
       try { matchMedia(q)?.addEventListener?.("change", syncSideOverlayMode); } catch {}
     }
   }
@@ -30993,7 +31051,7 @@
   const KB_FLIP_MS = 240;
   const KB_FLIP_TRANSITION = `transform ${KB_FLIP_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`;
   let lastVH = "", lastVHNum = 0, lastVWNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
-  let lastNarrow = null, lastFH = 0, lastKI = -1, lastKT = -1;
+  let lastNarrow = null, lastFH = 0, lastBaseH = 0, lastSideLockH = "", lastKI = -1, lastKT = -1;
   let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvLastShrankAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
   let kbFlipRAF = 0, kbFlipTimer = 0, kbFlipEls = [], kbFlipPrimary = null, kbFlipOnEnd = null;
   let kbFlipDir = 0, kbFlipFocusedEl = null, kbFlipPendingContent = null;
@@ -31146,12 +31204,38 @@
   function hasWideRootVHOverlayOpen() {
     return !!(superSearchOpen || pickOpen || dirCtx || $("#lightbox")?.open || document.querySelector("dialog[open]"));
   }
+  const isCoarsePrimary = () => typeof matchMedia === "function"
+    && (matchMedia("(pointer: coarse)").matches
+      || (matchMedia("(hover: none)").matches && matchMedia("(any-pointer: coarse)").matches));
+  const isIPadTouchDevice = () => {
+    const plat = typeof navigator !== "undefined" ? String(navigator.platform || "") : "";
+    const ua = typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "";
+    const mtp = typeof navigator !== "undefined" ? Number(navigator.maxTouchPoints || 0) : 0;
+    if (/iPad|iPhone|iPod/i.test(plat) || /iPad|iPhone|iPod/i.test(ua)) return true;
+    return /Mac/i.test(plat) && mtp > 1;
+  };
+  const isTabletTouchLockEligible = () => isCoarsePrimary() || isIPadTouchDevice();
+  const isEditableFocused = () => {
+    const ae = document.activeElement;
+    return !!(ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT" || ae.isContentEditable || ae.matches?.("input, textarea, [contenteditable]")));
+  };
   function applyWideKeyboardInsets(kbTop, kbInset) {
     for (const sel of [".main", "#v-collie", "#file-view", "#thread-drawer", "#worker-drawer", "#notes-pane"]) {
       const st = $(sel)?.style;
       if (typeof st?.setProperty !== "function") continue;
       if (st.getPropertyValue?.("--kb-top") !== kbTop) st.setProperty("--kb-top", kbTop);
       if (st.getPropertyValue?.("--kb-inset") !== kbInset) st.setProperty("--kb-inset", kbInset);
+    }
+  }
+  function applyWideBaseHeight(h) {
+    for (const sel of ["#app", ".side", "#side-full", "#file-view", "#thread-drawer", "#worker-drawer", "#notes-pane"]) {
+      const st = $(sel)?.style;
+      if (typeof st?.setProperty !== "function") continue;
+      if (h) {
+        if (st.getPropertyValue?.("--side-full-h") !== h) st.setProperty("--side-full-h", h);
+      } else if (st.getPropertyValue?.("--side-full-h")) {
+        st.removeProperty?.("--side-full-h");
+      }
     }
   }
   const setRootVH = (v) => {
@@ -31161,7 +31245,7 @@
   function syncRootVHNow() {
     if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
     if (!lastVH) return;
-    setRootVH((!narrow() && !hasWideRootVHOverlayOpen() && lastFH > 0) ? (lastFH + "px") : lastVH);
+    setRootVH((!narrow() && !hasWideRootVHOverlayOpen() && lastBaseH > 0) ? (lastBaseH + "px") : lastVH);
   }
   function ensureInlineVisibleAfterViewportSettle() {
     if (!openInlineDecisionId || !vvLastShrankAt || performance.now() - vvLastShrankAt > 1500) return;
@@ -31212,25 +31296,58 @@
     const nextVTopNum = v ? Math.max(0, Math.round(v.offsetTop)) : 0;
     const fh = Math.round((typeof innerHeight === "number" && innerHeight > 0) ? innerHeight : nextVHNum);
     const zoomed = !!(v && typeof v.scale === "number" && v.scale > 1.02);
-    const kt = (!isN && !zoomed) ? nextVTopNum : 0;
-    const ki = (!isN && !zoomed) ? Math.max(0, fh - nextVHNum - kt) : 0;
-    const nextVH = nextVHNum + "px", nextVTop = nextVTopNum + "px";
     const widthChanged = !!lastVH && lastVWNum > 0 && Math.abs(nextVWNum - lastVWNum) > 2;
     const modeChg = lastNarrow !== null && lastNarrow !== isN;
+
+    // On real iPadOS Safari/PWA (>760px), opening the soft keyboard shrinks BOTH
+    // window.innerHeight (layout viewport) and visualViewport.height, often on staggered frames.
+    // Lock wideBaseH at the keyboard-closed full-screen baseline on touch viewports so:
+    //  1) #app / .side / .side-full / .side-rail stay pinned to full screen height (.side-foot & .sr-foot never lift),
+    //  2) --kb-inset = wideBaseH - min(vv.height, innerHeight) - offsetTop stays strictly monotonic across desync,
+    //  3) :root --vh has 0 writes on keyboard open & dismiss (0 full-document recalc / WebKit flash).
+    const coarsePrimary = !isN && isCoarsePrimary();
+    const tabletTouch = !isN && isTabletTouchLockEligible();
+    const editable = !isN && isEditableFocused();
+    let nextBaseH = 0;
+    let nextSideLockH = "";
+    if (!isN) {
+      const maxCurH = Math.max(fh, nextVHNum);
+      if (!lastBaseH || widthChanged || modeChg) {
+        nextBaseH = maxCurH;
+      } else if (maxCurH >= lastBaseH) {
+        nextBaseH = maxCurH;
+      } else {
+        const drop = lastBaseH - fh;
+        const keepLock = (coarsePrimary && (editable || drop >= 100 || lastKI > 0))
+          || (tabletTouch && (editable || drop >= 100 || lastKI > 0));
+        nextBaseH = keepLock ? lastBaseH : maxCurH;
+      }
+      const kbActive = !zoomed && (Math.min(nextVHNum, fh) < nextBaseH || nextVTopNum > 0);
+      const alwaysLockBase = coarsePrimary || (tabletTouch && typeof matchMedia === "function" && matchMedia("(hover: none)").matches);
+      nextSideLockH = (alwaysLockBase || (tabletTouch && kbActive)) ? (nextBaseH + "px") : "";
+    }
+
+    const visH = (!isN && !zoomed) ? Math.min(nextVHNum, fh) : nextVHNum;
+    const kt = (!isN && !zoomed) ? nextVTopNum : 0;
+    const ki = (!isN && !zoomed) ? Math.max(0, nextBaseH - visH - kt) : 0;
+    const nextVH = visH + "px", nextVTop = nextVTopNum + "px";
     const vhChanged = nextVH !== lastVH, vtopChanged = nextVTop !== lastVTop;
-    const kbChg = ki !== lastKI || kt !== lastKT, fhChg = fh !== lastFH;
-    if (!vhChanged && !vtopChanged && !widthChanged && !modeChg && !kbChg && !fhChg) return;
+    const kbChg = ki !== lastKI || kt !== lastKT;
+    const baseChg = nextBaseH !== lastBaseH, lockChg = nextSideLockH !== lastSideLockH;
+    if (!vhChanged && !vtopChanged && !widthChanged && !modeChg && !kbChg && !baseChg && !lockChg) return;
     const root = document.documentElement.style, appEl = $("#app");
-    const isInitial = !lastVH, prevVHNum = lastVHNum, deltaH = isInitial ? 0 : (nextVHNum - prevVHNum);
+    const isInitial = !lastVH, prevVHNum = lastVHNum, deltaH = isInitial ? 0 : (visH - prevVHNum);
     const vhShrank = !isInitial && deltaH < 0;
     const wantKbFlip = vhChanged && !isInitial && !widthChanged
       && isN && !prefersReducedMotion() && !document.hidden
       && !vvTransitioning && Math.abs(deltaH) >= KB_FLIP_MIN_DELTA;
 
-    // 1) Read phase (strictly before any DOM/style writes).
+    // 1) Read phase (strictly before any DOM/style writes — zero forced synchronous reflow).
     let screenPinned = false, wdScreenPinned = false, kbFlipPlan = null, activeInline = null;
     const pinTargets = [], pinInfo = new Map();
-    if (vhChanged && !isInitial) {
+    const curScrollY = (!isN && !isInitial && !vhShrank && !ki && !kt) ? (window.scrollY || 0) : 0;
+    const colSc = view === "collie" ? viewScroller("collie") : null;
+    if ((vhChanged || widthChanged) && !isInitial) {
       if (vhShrank && !widthChanged) {
         activeInline = getActiveInlineFocus();
         if (!activeInline && openInlineDecisionId && lastInlineFocusMeta?.id === openInlineDecisionId) {
@@ -31245,27 +31362,35 @@
       if (vhShrank) {
         for (const el of document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")) {
           if (!el.offsetParent || (activeInline && activeInline.scroller === el)) continue;
+          if (el === colSc && !collieStickBottom) continue;
           const sh = el.scrollHeight, ch = el.clientHeight, st = el.scrollTop;
-          if (sh - st - ch <= AT_BOTTOM_PX) {
+          if (sh - st - ch <= AT_BOTTOM_PX || (widthChanged && el === colSc && collieStickBottom)) {
             pinTargets.push({ el, sh });
             pinInfo.set(el, { sh, ch, st });
           }
         }
+      } else if (widthChanged && colSc && colSc.offsetParent && collieStickBottom && !(activeInline && activeInline.scroller === colSc)) {
+        // Orientation change (e.g. iPad landscape -> portrait where viewport grows taller & narrower):
+        // keep bottom-pinned chat glued to bottom even when vh did not shrink.
+        pinTargets.push({ el: colSc, sh: colSc.scrollHeight });
       }
       if (wantKbFlip) kbFlipPlan = readKbFlipPlan(deltaH, pinInfo);
     }
 
     // 2) Write phase (style mutations only; zero post-write layout reads).
     if (vhChanged || widthChanged || modeChg) clearKbFlip();
-    lastNarrow = isN; lastVWNum = nextVWNum; lastFH = fh; lastKI = ki; lastKT = kt;
+    lastNarrow = isN; lastVWNum = nextVWNum; lastFH = fh; lastBaseH = nextBaseH; lastSideLockH = nextSideLockH; lastKI = ki; lastKT = kt;
     if (vhChanged) {
       if (vhShrank && !widthChanged) vvLastShrankAt = performance.now();
-      lastVH = nextVH; lastVHNum = nextVHNum;
+      lastVH = nextVH; lastVHNum = visH;
     }
     if (vtopChanged) lastVTop = nextVTop;
 
     if (isN) {
-      if (modeChg) applyWideKeyboardInsets("0px", "0px");
+      if (modeChg) {
+        applyWideKeyboardInsets("0px", "0px");
+        applyWideBaseHeight("");
+      }
       if (vhChanged || modeChg) {
         if (appEl?.style) appEl.style.height = nextVH;
         if (isInitial || hasViewportOverlayOpen()) root.setProperty("--vh", nextVH);
@@ -31284,14 +31409,15 @@
         if (appEl.style.height) appEl.style.height = "";
         if (appEl.style.getPropertyValue?.("--vtop")) appEl.style.removeProperty?.("--vtop");
       }
+      if (lockChg || modeChg || isInitial) applyWideBaseHeight(nextSideLockH);
       if (kbChg || modeChg || isInitial) applyWideKeyboardInsets(kt + "px", ki + "px");
       const ov = hasWideRootVHOverlayOpen();
-      if (isInitial || fhChg || modeChg || ov) {
+      if (isInitial || baseChg || modeChg || ov) {
         if (rootVHSyncTimer) { clearTimeout(rootVHSyncTimer); rootVHSyncTimer = 0; }
-        setRootVH(ov ? nextVH : (fh + "px"));
+        setRootVH(ov ? nextVH : (nextBaseH + "px"));
       }
       if (!isInitial && vhChanged) noteViewportHeightTick();
-      if (!isInitial && !vhShrank && !ki && !kt && window.scrollY > 0) {
+      if (curScrollY > 0) {
         try { window.scrollTo?.(0, 0); } catch {}
       }
     }
@@ -31363,6 +31489,11 @@
   window.visualViewport?.addEventListener("resize", scheduleSetVH);
   window.visualViewport?.addEventListener("scroll", scheduleSetVH);
   addEventListener("resize", scheduleSetVH);
+  addEventListener("orientationchange", () => {
+    scheduleSetVH();
+    syncSideOverlayMode();
+    if (view === "collie") reanchorCollieOnViewportChange(true);
+  });
   setVH();
 
   // ───────────────────────────── boot

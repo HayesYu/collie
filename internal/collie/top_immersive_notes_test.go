@@ -71,10 +71,10 @@ assert.match(
   /\.head-text-btn\.notes-head-btn\s*\{[\s\S]*?min-block-size:\s*32px;[\s\S]*?color:\s*var\(--fg-2\);/,
   "desktop and mobile #open-notes-btn align 32px height with sibling header icon buttons",
 );
-assert.match(
-  cssSrc,
-  /\.head-text-btn\.notes-head-btn::before\s*\{[\s\S]*?background-color:\s*currentColor;[\s\S]*?forced-color-adjust:\s*none;/,
-  "#open-notes-btn renders a minimalist CSS-masked notepad icon alongside 小本本",
+assert.ok(
+  !cssSrc.includes(".head-text-btn.notes-head-btn::before")
+    && !cssSrc.includes(".notes-head-btn::before"),
+  "#open-notes-btn must omit any CSS mask icon and stay pure minimalist text on both desktop and mobile",
 );
 assert.ok(
   !/\.head-text-btn\.notes-head-btn\s*>\s*span:first-child\s*\{[^}]*clip-path:\s*inset\(50%\)/.test(cssSrc)
@@ -83,7 +83,7 @@ assert.ok(
 );
 assert.ok(
   cssSrc.includes("@container collie-top (inline-size < 340px)"),
-  "extreme-narrow <340px container fallback drops only the decorative icon so 小本本 never clips",
+  "extreme-narrow <340px container fallback tightens padding so 小本本 never clips",
 );
 
 // Demo bundle parity

@@ -42,7 +42,7 @@ assert.ok(
 assert.match(cssSrc, /\.menu-update-dot\s*\{[\s\S]*?width:\s*5px;\s*height:\s*5px;[\s\S]*?background:\s*var\(--ok\);/, "mobile ⋯ update indicator must be a 5px green dot");
 assert.ok(cssSrc.includes("@media (min-width: 761px) {\n  .mobile-only { display: none !important; }"), "desktop (>760px) hides mobile-only update dot and menu entry");
 
-// 1b) Both desktop and mobile show minimalist notepad icon + visible 小本本 text node (i18n-friendly) & inline unread dot
+// 1b) Both desktop and mobile show minimalist plain-text 小本本 (no icon, i18n-friendly) & inline unread dot
 const notesBtnHtml = collieHeadBlock.match(/<button[^>]*id="open-notes-btn"[\s\S]*?<\/button>/)?.[0] || "";
 assert.ok(
   notesBtnHtml.includes('aria-label="小本本"')
@@ -52,10 +52,9 @@ assert.ok(
   "#open-notes-btn keeps clean translatable text markup without inline SVG",
 );
 assert.ok(
-  cssSrc.includes(".head-text-btn.notes-head-btn::before")
-    && cssSrc.includes("forced-color-adjust: none;")
+  !cssSrc.includes(".head-text-btn.notes-head-btn::before")
     && !/\.head-text-btn\.notes-head-btn\s*>\s*span:first-child\s*\{[^}]*clip-path:\s*inset\(50%\)/.test(cssSrc),
-  "both desktop and mobile keep 小本本 text visible alongside the minimalist CSS-masked notepad icon",
+  "both desktop and mobile render pure minimalist 小本本 text without a leading icon",
 );
 
 // 1c) Mobile hides [kind] pill & #router-model, eliminates empty-span flex gaps and half-letter clipping

@@ -19038,7 +19038,11 @@
       body.classList.add("is-html");
       body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(baseFileName(hf.path))}"></iframe>`;
       const frame = body.querySelector("iframe");
-      if (frame) frame.srcdoc = hf.htmlText;
+      if (frame) {
+        const t = currentVisualTheme();
+        if (frame.style) frame.style.colorScheme = t;
+        frame.srcdoc = buildSandboxedCardSrcdoc(hf.htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+      }
       if (view === "collie") renderSuper();
       return;
     }
@@ -19134,7 +19138,11 @@
       body.classList.add("is-html");
       body.innerHTML = `<iframe class="fv-html-sandbox" style="min-height:calc(var(--vh) - 120px);border:1px solid var(--line);border-radius:12px;" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(name)}"></iframe>`;
       const frame = body.querySelector("iframe");
-      if (frame) frame.srcdoc = hf.htmlText;
+      if (frame) {
+        const t = currentVisualTheme();
+        if (frame.style) frame.style.colorScheme = t;
+        frame.srcdoc = buildSandboxedCardSrcdoc(hf.htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+      }
       return;
     }
     let f = null;
@@ -20121,6 +20129,7 @@
     if (!det || det.tagName !== "DETAILS" || !det.classList?.contains("md-fold")) return;
     const k = getRichBlockKey(det, "details", "details.md-fold");
     if (k) setRichUiState(k, !!det.open);
+    if (det.open) hydrateRichContent(det);
   }, { capture: true });
 
   // ───────────────────────────── fullscreen image lightbox
@@ -20646,7 +20655,10 @@
         doc.write(`<!doctype html><meta charset="utf-8"><title>${esc(path.split("/").pop())}</title><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;display:block}</style><iframe sandbox="${sb}"></iframe>`);
         doc.close();
         const frame = doc.querySelector("iframe");
-        if (frame) frame.srcdoc = htmlText;
+        if (frame) {
+          const t = currentVisualTheme();
+          frame.srcdoc = buildSandboxedCardSrcdoc(htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+        }
         return;
       }
       syncFileBar("fv", { langLabel: "HTML" });
@@ -20655,7 +20667,12 @@
       const body = $("#fv-body");
       body.classList.remove("is-code");
       body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${sb}"></iframe>`;
-      body.querySelector("iframe").srcdoc = htmlText;
+      const fvFrame = body.querySelector("iframe");
+      if (fvFrame) {
+        const t = currentVisualTheme();
+        if (fvFrame.style) fvFrame.style.colorScheme = t;
+        fvFrame.srcdoc = buildSandboxedCardSrcdoc(htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+      }
       showFilePane();
     } catch (err) {
       if (win && !win.closed) try { win.close(); } catch {}
@@ -27006,24 +27023,33 @@
     });
   }
   function collieThemeVarsCss() {
-    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057}:where(html,body){background-color:var(--collie-bg);color:var(--collie-fg)}</style>`;
+    const fontSans = '-apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif';
+    const fontMono = '"JetBrains Mono","SF Mono",ui-monospace,"MesloLGS NF","Symbols Nerd Font Mono",Menlo,Consolas,monospace';
+    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-ink:#111111;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309;--collie-danger:#b42318;--collie-font:${fontSans};--collie-mono:${fontMono}}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-ink:#ededeb;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057;--collie-danger:#e38c85;--collie-font:${fontSans};--collie-mono:${fontMono}}:where(html){background:transparent}:where(body){background:transparent;color:var(--collie-ink);font-family:var(--collie-font);margin:0}</style>`;
   }
-  function buildSandboxedCardSrcdoc(rawHtml, { frameId, token, isFragment, isDark }) {
+  function buildSandboxedCardSrcdoc(rawHtml, { frameId, token, isFragment, isDark, measure = true }) {
     const src = String(rawHtml || "");
     const theme = isDark ? "dark" : "light";
-    const safeId = JSON.stringify(frameId);
-    const safeTok = JSON.stringify(token);
+    const safeId = JSON.stringify(frameId || "");
+    const safeTok = JSON.stringify(token || "");
     const safeTheme = JSON.stringify(theme);
     const varsStyle = collieThemeVarsCss();
-    const bridge = `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});document.addEventListener("click",function(ev){try{if(ev.target&&ev.target.closest&&ev.target.closest("a,button,input,select,textarea,summary,label,[role=button]"))return;parent.postMessage({type:"collie:card-tap",id:ID,token:TOK},"*");}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`;
+    const bridge = measure
+      ? `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});document.addEventListener("click",function(ev){try{if(ev.target&&ev.target.closest&&ev.target.closest("a,button,input,select,textarea,summary,label,[role=button]"))return;parent.postMessage({type:"collie:card-tap",id:ID,token:TOK},"*");}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`
+      : `<script>(function(){try{function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}}}catch(e){}});}catch(e){}})();<` + `/script>`;
     const hasDoc = /<!doctype\s+html|<html[\s>]/i.test(src);
     if (!hasDoc && isFragment) {
-      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:var(--collie-bg);color:var(--collie-fg);font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif;overflow-x:hidden}</style></head><body>${src}${bridge}</body></html>`;
+      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>:where(*){box-sizing:border-box}:where(html,body){margin:0;padding:0;background:transparent;color:var(--collie-ink);font-family:var(--collie-font);font-size:13.5px;line-height:1.55;overflow-x:hidden}</style></head><body>${src}${bridge}</body></html>`;
     }
     let out = src;
     if (/<html\b[^>]*>/i.test(out)) {
       out = out.replace(/<html\b([^>]*)>/i, (m, attrs) => {
-        const nextAttrs = /\bdata-theme\s*=/i.test(attrs) ? attrs : `${attrs} data-theme="${theme}"`;
+        let nextAttrs = attrs;
+        if (/\bdata-theme\s*=/i.test(nextAttrs)) {
+          nextAttrs = nextAttrs.replace(/\bdata-theme\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i, `data-theme="${theme}"`);
+        } else {
+          nextAttrs = `${nextAttrs} data-theme="${theme}"`;
+        }
         return `<html${nextAttrs}>`;
       });
     }
@@ -27133,6 +27159,11 @@
     });
     stage.innerHTML = "";
     stage.appendChild(iframe);
+    iframe.addEventListener?.("load", () => {
+      const liveTheme = currentVisualTheme();
+      if (iframe.style) iframe.style.colorScheme = liveTheme;
+      try { iframe.contentWindow?.postMessage({ type: "collie-theme", theme: liveTheme }, "*"); } catch {}
+    });
     iframe.srcdoc = buildSandboxedCardSrcdoc(rawHtml, {
       frameId, token,
       isFragment: kind === "html-code",
@@ -27365,6 +27396,12 @@
         rec.iframe?.contentWindow?.postMessage({ type: "collie-theme", theme: nextTheme }, "*");
       } catch {}
     }
+    for (const frame of document.querySelectorAll?.("iframe.fv-html-sandbox") || []) {
+      if (frame?.style) frame.style.colorScheme = nextTheme;
+      try {
+        frame.contentWindow?.postMessage({ type: "collie-theme", theme: nextTheme }, "*");
+      } catch {}
+    }
   }
   function onRichVisualViewportChange() {
     const nextLayout = mermaidLayoutKey();
@@ -27432,7 +27469,8 @@
       const isRemoteHub = !!hubOf(curMachine);
       const isDemoNoStatic = !!(window.__collieDemo && !window.__collieDemoHtmlUrl?.(path));
       if ((isStandaloneMode() || isRemoteHub || isDemoNoStatic) && typeof cached?.htmlText === "string") {
-        if (!openSandboxedHtmlWindow(baseFileName(cached.path || path), cached.htmlText)) {
+        const themedHtml = buildSandboxedCardSrcdoc(cached.htmlText, { frameId: "win", token: "", isFragment: false, isDark: currentVisualTheme() === "dark", measure: false });
+        if (!openSandboxedHtmlWindow(baseFileName(cached.path || path), themedHtml)) {
           toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
         }
         return;
@@ -27472,6 +27510,7 @@
   const CALLOUT_META = {
     NOTE: { cls: "is-note", get label() { return tx("md.callout.NOTE", "说明"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>` },
     TIP: { cls: "is-tip", get label() { return tx("md.callout.TIP", "提示"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>` },
+    IMPORTANT: { cls: "is-important", get label() { return tx("md.callout.IMPORTANT", "重要"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7.5v4M12 14.5h.01"/></svg>` },
     WARNING: { cls: "is-warn", get label() { return tx("md.callout.WARNING", "注意"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>` },
     CAUTION: { cls: "is-caution", get label() { return tx("md.callout.CAUTION", "风险"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2Z"/><path d="M12 8v5M12 16.5h.01"/></svg>` },
   };
@@ -27624,10 +27663,11 @@
     if (!items.length || trimmed.slice(pos).trim()) return null;
     return items;
   }
-  const DETAILS_OPEN_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*$/i;
+  const DETAILS_OPEN_ATTR = `(?:\\s+open(?:\\s*=\\s*(?:&quot;(?:open)?&quot;|&#39;(?:open)?&#39;|open)?)?)?`;
+  const DETAILS_OPEN_RE = new RegExp(`^\\s*&lt;details(${DETAILS_OPEN_ATTR})\\s*&gt;(?:\\s*&lt;summary&gt;([\\s\\S]*?)&lt;\\/summary&gt;(?:\\s*(.*))?)?\\s*$`, "i");
   const DETAILS_CLOSE_RE = /^\s*&lt;\/details&gt;\s*$/i;
   const SUMMARY_LINE_RE = /^\s*&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;\s*$/i;
-  const DETAILS_INLINE_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*(?:&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;)?\s*([\s\S]*?)&lt;\/details&gt;\s*$/i;
+  const DETAILS_INLINE_RE = new RegExp(`^\\s*&lt;details(${DETAILS_OPEN_ATTR})\\s*&gt;\\s*(?:&lt;summary&gt;([\\s\\S]*?)&lt;\\/summary&gt;)?\\s*([\\s\\S]*?)&lt;\\/details&gt;\\s*$`, "i");
   function mdRender(src, opts = null) {
     const blocks = [];
     const mdImgPaths = new Set();
@@ -27795,9 +27835,9 @@
     };
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
     const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
-    const renderQuoteBlock = (qLines) => {
+    const renderQuoteBlock = (qLines, depth = 0) => {
       const first = (qLines[0] || "").trim();
-      const cm = first.match(/^\[!(NOTE|TIP|WARNING|CAUTION)\](?:\s+(.*))?$/i);
+      const cm = first.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s+(.*))?$/i);
       const groupParas = (arr) => {
         const ps = [];
         let cur = [];
@@ -27813,10 +27853,13 @@
         const meta = CALLOUT_META[kind] || CALLOUT_META.NOTE;
         const extra = (cm[2] || "").trim();
         const headHtml = extra ? `${meta.label} · ${inline(extra)}` : meta.label;
-        const bodyHtml = groupParas(qLines.slice(1));
-        return `<div class="md-callout ${meta.cls}" role="note"><div class="md-callout-head">${meta.icon}<span>${headHtml}</span></div>${bodyHtml ? `<div class="md-callout-body">${bodyHtml}</div>` : ""}</div>`;
+        const bodyLines = qLines.slice(1);
+        const bodyHtml = bodyLines.length
+          ? (depth < 3 ? parseBlockLines(bodyLines, depth + 1) : groupParas(bodyLines))
+          : "";
+        return `<div class="md-callout ${meta.cls}" data-callout="${kind.toLowerCase()}" role="note"><div class="md-callout-head">${meta.icon}<span>${headHtml}</span></div>${bodyHtml ? `<div class="md-callout-body">${bodyHtml}</div>` : ""}</div>`;
       }
-      const inner = groupParas(qLines);
+      const inner = depth < 3 ? parseBlockLines(qLines, depth + 1) : groupParas(qLines);
       return `<blockquote>${inner}</blockquote>`;
     };
     const parseBlockLines = (lines, depth = 0, trailingImgs = null) => {
@@ -27852,10 +27895,13 @@
           out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
           continue;
         }
-        if (depth < 2 && (m = line.match(DETAILS_OPEN_RE))) {
+        if (depth < 2 && (m = line.match(DETAILS_OPEN_RE)) && !(m[3] || "").includes("&lt;/details&gt;")) {
           const isOpen = !!m[1];
+          const inlineSum = m[2];
+          const inlineLead = (m[3] || "").trim();
           let nest = 1, closeIdx = -1;
           for (let j = li + 1; j < lines.length; j++) {
+            if (DETAILS_INLINE_RE.test(lines[j])) continue;
             if (DETAILS_OPEN_RE.test(lines[j])) nest++;
             else if (DETAILS_CLOSE_RE.test(lines[j])) {
               nest--;
@@ -27866,17 +27912,25 @@
             flushPara(); flushList(); flushGallery();
             const innerLines = lines.slice(li + 1, closeIdx);
             let sumHtml = esc(tx("common.expandDetails", "展开详情"));
-            let bodyStart = 0;
-            while (bodyStart < innerLines.length && !innerLines[bodyStart].trim()) bodyStart++;
-            if (bodyStart < innerLines.length) {
-              const sm = innerLines[bodyStart].match(SUMMARY_LINE_RE);
-              if (sm) {
-                const rawSum = (sm[1] || "").trim().replace(/^#{1,6}\s+/, "");
-                if (rawSum) sumHtml = inline(rawSum);
-                bodyStart++;
+            let bodyLines = innerLines;
+            if (inlineSum !== undefined) {
+              const rawSum = inlineSum.trim().replace(/^#{1,6}\s+/, "");
+              if (rawSum) sumHtml = inline(rawSum);
+              if (inlineLead) bodyLines = [inlineLead, ...innerLines];
+            } else {
+              let bodyStart = 0;
+              while (bodyStart < innerLines.length && !innerLines[bodyStart].trim()) bodyStart++;
+              if (bodyStart < innerLines.length) {
+                const sm = innerLines[bodyStart].match(SUMMARY_LINE_RE);
+                if (sm) {
+                  const rawSum = (sm[1] || "").trim().replace(/^#{1,6}\s+/, "");
+                  if (rawSum) sumHtml = inline(rawSum);
+                  bodyStart++;
+                }
               }
+              bodyLines = innerLines.slice(bodyStart);
             }
-            const bodyHtml = parseBlockLines(innerLines.slice(bodyStart), depth + 1);
+            const bodyHtml = parseBlockLines(bodyLines, depth + 1);
             out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
             li = closeIdx;
             continue;
@@ -27957,14 +28011,14 @@
           list.items.push(m[1]);
           continue;
         }
-        if ((m = line.match(/^&gt;\s?(.*)$/))) {
+        if ((m = line.match(/^ {0,3}&gt;\s?(.*)$/))) {
           flushPara(); flushList();
           const qLines = [m[1]];
-          while (li + 1 < lines.length && (m = lines[li + 1].match(/^&gt;\s?(.*)$/))) {
+          while (li + 1 < lines.length && (m = lines[li + 1].match(/^ {0,3}&gt;\s?(.*)$/))) {
             qLines.push(m[1]);
             li++;
           }
-          out.push(renderQuoteBlock(qLines));
+          out.push(renderQuoteBlock(qLines, depth));
           continue;
         }
         if (!line.trim()) { flushPara(); flushList(); continue; }
@@ -28751,7 +28805,7 @@
     return md(t, { includePathImages: true });
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
-  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|WARNING|CAUTION)\]\s*/i, "").replace(/^\[[ xX]\]\s+/, "").trim()).filter(Boolean).join(" ")
+  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i, "").replace(/<\/?(?:details(?:\s+open(?:\s*=\s*(?:"(?:open)?"|'(?:open)?'|open))?)?|summary)>/gi, " ").replace(/^\[[ xX]\]\s+/, "").trim()).filter(Boolean).join(" ")
     .replace(/\\([!"#$%&'()*+,\-.\/:;<=>?@\[\\\]^_`{|}~])/g, "$1")
     .replace(/\*\*|__|~~|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name

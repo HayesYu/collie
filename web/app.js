@@ -5829,7 +5829,7 @@
       if (busy !== prevBusy) wk.innerHTML = `<span class="avatar"><img src="/icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
     }
     wk.hidden = !busy;
-    setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "");
+    setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条排队中` : "");
     const cx = $("#router-ctx");
     setText(cx, r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "");
     cx.classList.toggle("warn", !!r.handover || (!!r.alive && Number(r.context) >= 75));
@@ -15031,6 +15031,9 @@
   }
   function renderUpdateEntry() {
     const btns = updatePillButtons();
+    const updateDot = $("#collie-update-dot");
+    const updateSep = $("#collie-update-sep");
+    const moreBtn = $("#collie-menu-btn");
     if (!btns.length) return;
     const list = outdatedOnlineMachines();
     for (const k of [...updateFlow.errors.keys()]) {
@@ -15045,34 +15048,39 @@
         b.removeAttribute("aria-disabled");
         b.classList.remove("busy", "failed");
       }
+      if (updateSep) updateSep.hidden = true;
+      if (updateDot) {
+        updateDot.hidden = true;
+        updateDot.classList.remove("is-failed");
+      }
+      if (moreBtn) {
+        moreBtn.title = "更多";
+        moreBtn.setAttribute("aria-label", "更多");
+      }
       syncDeviceUpdateButtons();
       return;
     }
-    let html = "", compactHtml = "", tip = "", aria = "", cls = "";
+    let html = "", tip = "", aria = "", cls = "";
     const busy = updateFlow.busy;
     if (updateFlow.phase === "updating") {
       const step = updateFlow.total > 1 ? ` ${updateFlow.index}/${updateFlow.total}` : "";
       const label = `更新中${step}…`;
       html = `<span class="up-spin" aria-hidden="true"></span><span>${esc(label)}</span>`;
-      compactHtml = html;
       tip = `正在更新 ${updateFlow.currentName}${step ? `（${updateFlow.index}/${updateFlow.total}）` : ""}…`;
       aria = `${label}，正在更新 ${updateFlow.currentName}`;
       cls = "busy";
     } else if (updateFlow.phase === "restarting") {
       html = `<span class="up-spin" aria-hidden="true"></span><span>重启中…</span>`;
-      compactHtml = html;
       tip = `正在重启 ${updateFlow.currentName || "hub"}，恢复后自动刷新`;
       aria = `重启中…，恢复后自动刷新`;
       cls = "busy";
     } else if (updateFlow.phase === "reconnecting") {
       html = `<span class="up-spin" aria-hidden="true"></span><span>重连中…</span>`;
-      compactHtml = html;
       tip = "节点已更新，正在等待重连…";
       aria = "重连中…，等待节点上线";
       cls = "busy";
     } else if (updateFlow.phase === "failed") {
       html = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span>重试更新</span>`;
-      compactHtml = html;
       tip = `更新 ${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}（点此重试）`;
       aria = `重试更新（${updateFlow.failedMachine || "设备"} 失败：${updateFlow.error}）`;
       cls = "failed";
@@ -15080,19 +15088,27 @@
       const names = list.map((m) => m.name).join("、");
       const arrow = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>`;
       html = `${arrow}<span>更新到 ${esc(latest)}</span>`;
-      compactHtml = `${arrow}<span>${esc(latest)}</span>`;
       tip = `一键更新到 ${latest}（待更新：${names}）`;
       aria = `一键更新到 ${latest}（待更新：${names}）`;
     }
     for (const b of btns) {
-      const nextHtml = b.id === "collie-update-btn" ? compactHtml : html;
       b.hidden = false;
       b.classList.toggle("busy", cls === "busy");
       b.classList.toggle("failed", cls === "failed");
       if (busy) b.setAttribute("aria-disabled", "true"); else b.removeAttribute("aria-disabled");
       b.title = tip;
       b.setAttribute("aria-label", aria);
-      if (b.innerHTML !== nextHtml) b.innerHTML = nextHtml;
+      if (b.innerHTML !== html) b.innerHTML = html;
+    }
+    if (updateSep) updateSep.hidden = false;
+    if (updateDot) {
+      updateDot.hidden = false;
+      updateDot.classList.toggle("is-failed", cls === "failed");
+    }
+    if (moreBtn) {
+      const moreLbl = cls === "failed" ? "更多（更新失败，可重试）" : latest ? `更多（有新版本 ${latest}）` : "更多（正在更新）";
+      moreBtn.title = moreLbl;
+      moreBtn.setAttribute("aria-label", moreLbl);
     }
     syncDeviceUpdateButtons();
   }

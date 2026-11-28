@@ -64,6 +64,7 @@ type Super struct {
 	handover           *handover            // set while the router writes its memory before a fresh session
 	dream              *dreamRun            // set while Collie sleeps and a dream session tidies its memory
 	activeDreamPending bool                 // persisted active_dream marker waiting for restart cleanup
+	routineDates       map[string]string    // official routine kind → last evaluated local YYYY-MM-DD
 	hubUpdating        bool                 // set while Hub self-update has reserved an idle restart window
 	lastTrust          map[string]time.Time // pane → when its trust dialog was last answered
 	lastAnswer         map[string]time.Time // pane → when a dialog there was just answered
@@ -823,6 +824,7 @@ func (sp *Super) tick(parent context.Context) {
 	}
 	sp.checkHandover(ctx, live, len(deliveries[routerName]) > 0)
 	sp.checkDream(ctx, live, len(deliveries[routerName]) > 0)
+	sp.checkRoutines(ctx, live, len(deliveries[routerName]) > 0)
 
 	// 5. Watchdog.
 	sp.watchdog(ctx, live, routerAlive)

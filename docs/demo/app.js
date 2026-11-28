@@ -13225,6 +13225,19 @@
       stall_minutes: readNum(form.stall_minutes, base.stall_minutes || 0, 0),
       rotate_pct: Number(form.rotate_pct.value),
       dream_at: form.dream_at.value,
+      morning_brief: {
+        enabled: !!form.morning_brief_enabled?.checked,
+        at: form.morning_brief_at?.value || base.morning_brief?.at || "09:00",
+      },
+      weekly_review: {
+        enabled: !!form.weekly_review_enabled?.checked,
+        day: form.weekly_review_day?.value || base.weekly_review?.day || "mon",
+        at: form.weekly_review_at?.value || base.weekly_review?.at || "09:00",
+      },
+      stale_follow: {
+        enabled: !!form.stale_follow_enabled?.checked,
+        at: form.stale_follow_at?.value || base.stale_follow?.at || "17:30",
+      },
       notify_webhook: form.notify_webhook.value.trim(),
       notify_lark: form.notify_lark.checked,
       notify_level: form.notify_level.value,
@@ -13311,8 +13324,28 @@
     });
 
     // Selects and checkboxes save immediately on change.
-    for (const name of ["rotate_pct", "dream_at", "notify_level", "notify_lark", "bypass", "paused"]) {
+    for (const name of ["rotate_pct", "dream_at", "weekly_review_day", "notify_level", "notify_lark", "bypass", "paused"]) {
       form[name]?.addEventListener("change", () => saver.flush());
+    }
+    const nativeSwitch = typeof HTMLInputElement !== "undefined" && "switch" in HTMLInputElement.prototype;
+    for (const name of ["morning_brief_enabled", "weekly_review_enabled", "stale_follow_enabled"]) {
+      const sw = form[name];
+      if (!sw) continue;
+      if (!nativeSwitch) sw.setAttribute("role", "switch");
+      sw.addEventListener("change", () => {
+        sw.closest(".set-routine-row")?.classList.toggle("is-on", sw.checked);
+        saver.flush();
+      });
+    }
+    for (const [name, fallback] of [["morning_brief_at", "09:00"], ["weekly_review_at", "09:00"], ["stale_follow_at", "17:30"]]) {
+      const el = form[name];
+      if (!el) continue;
+      const saveClock = () => {
+        if (!el.value) el.value = fallback;
+        saver.flush();
+      };
+      el.addEventListener("change", saveClock);
+      el.addEventListener("blur", saveClock);
     }
     // Text & number inputs auto-save after 500ms debounce or immediately on blur / IME-safe Enter.
     for (const name of ["router_args", "worker_cwd", "notify_webhook", "reply_chars", "stall_minutes"]) {
@@ -13335,6 +13368,54 @@
       });
     }
     form.worker_cwd.addEventListener("change", () => saver.flush());
+  }
+
+  const ROUTINE_DAYS = [
+    ["mon", "周一"], ["tue", "周二"], ["wed", "周三"],
+    ["thu", "周四"], ["fri", "周五"], ["sat", "周六"], ["sun", "周日"],
+  ];
+  function routinesSettingsHTML(s) {
+    const mb = s.morning_brief || {};
+    const wr = s.weekly_review || {};
+    const sf = s.stale_follow || {};
+    const mbOn = !!mb.enabled, mbAt = mb.at || "09:00";
+    const wrOn = !!wr.enabled, wrDay = wr.day || "mon", wrAt = wr.at || "09:00";
+    const sfOn = !!sf.enabled, sfAt = sf.at || "17:30";
+    const dayOpts = ROUTINE_DAYS.map(([k, l]) => `<option value="${k}"${wrDay === k ? " selected" : ""}>${l}</option>`).join("");
+    return `<div class="set-routines" aria-label="官方定时">
+          <div class="set-routine-row${mbOn ? " is-on" : ""}">
+            <div class="set-routine-copy">
+              <label class="set-routine-title" for="routine-morning-enabled">每日晨报</label>
+              <small id="routine-morning-desc">仅在近 24h 有任务、待办或环境异常时推送，无事零打扰</small>
+            </div>
+            <div class="set-routine-ctls">
+              <input type="time" class="set-routine-time" name="morning_brief_at" value="${esc(mbAt)}" aria-label="每日晨报时间" aria-describedby="routine-morning-desc">
+              <input type="checkbox" switch class="set-switch" id="routine-morning-enabled" name="morning_brief_enabled" aria-describedby="routine-morning-desc"${mbOn ? " checked" : ""}>
+            </div>
+          </div>
+          <div class="set-routine-row${wrOn ? " is-on" : ""}">
+            <div class="set-routine-copy">
+              <label class="set-routine-title" for="routine-weekly-enabled">每周复盘</label>
+              <small id="routine-weekly-desc">仅在近 7 天有完工归档或任务挂起超 3 天时汇总</small>
+            </div>
+            <div class="set-routine-ctls">
+              <select class="set-routine-day" name="weekly_review_day" data-pick="compact" data-title="每周复盘日期" aria-label="每周复盘星期">${dayOpts}</select>
+              <input type="time" class="set-routine-time" name="weekly_review_at" value="${esc(wrAt)}" aria-label="每周复盘时间" aria-describedby="routine-weekly-desc">
+              <input type="checkbox" switch class="set-switch" id="routine-weekly-enabled" name="weekly_review_enabled" aria-describedby="routine-weekly-desc"${wrOn ? " checked" : ""}>
+            </div>
+          </div>
+          <div class="set-routine-row${sfOn ? " is-on" : ""}">
+            <div class="set-routine-copy">
+              <label class="set-routine-title" for="routine-stale-enabled">滞留事项轻提醒</label>
+              <small id="routine-stale-desc">工作日检查超 24h 待拍板或超 48h 未推进任务，无滞留静默跳过</small>
+            </div>
+            <div class="set-routine-ctls">
+              <span class="set-routine-cadence" aria-hidden="true">工作日</span>
+              <input type="time" class="set-routine-time" name="stale_follow_at" value="${esc(sfAt)}" aria-label="滞留事项轻提醒时间" aria-describedby="routine-stale-desc">
+              <input type="checkbox" switch class="set-switch" id="routine-stale-enabled" name="stale_follow_enabled" aria-describedby="routine-stale-desc"${sfOn ? " checked" : ""}>
+            </div>
+          </div>
+        </div>`;
   }
 
   function settingsHTML(r) {
@@ -13387,11 +13468,12 @@
       </section>
 
       <section class="card set-sec">
-        <header><h4>记忆与会话</h4><p>对话超限时自动交接新会话，夜间自动整理记忆。</p></header>
+        <header><h4>记忆与会话</h4><p>对话超限时自动交接新会话，夜间自动整理记忆，按需开启官方定时。</p></header>
         <div class="set-grid">
           <label>上下文用到多少时换新会话<select name="rotate_pct" data-pick="compact" data-title="上下文用到多少时换新会话">${[50, 60, 70, 80, -1].map((p) => `<option value="${p}" ${(s.rotate_pct || 60) === p ? "selected" : ""}>${p < 0 ? "从不" : p + "%"}</option>`).join("")}</select><small>窗口大小按 agent 自己的设置算</small></label>
           <label>每晚做梦<select name="dream_at" data-pick="compact" data-title="每晚做梦">${["02:00", "04:00", "06:00", "off"].map((t) => `<option value="${t}" ${(s.dream_at || "04:00") === t ? "selected" : ""}>${t === "off" ? "不做" : t}</option>`).join("")}</select><small>当天没有新对话就跳过</small></label>
         </div>
+        ${routinesSettingsHTML(s)}
         <div class="set-mem-io">
           <div class="set-mem-io-copy">
             <span class="set-mem-io-title">记忆备份与迁移</span>

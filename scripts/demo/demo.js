@@ -446,7 +446,12 @@
   const settings = {
     bin: "collie", hook_key: "demo-key", router_dir: "~/.collie/router",
     policies: [{ source: "chat", action: "respond" }, { source: "github", action: "candidate" }, { source: "timer", action: "respond" }],
-    settings: { router_kind: "claude", router_model: "sonnet", worker_model: "", worker_effort: "", worker_kind: "codex", worker_cwd: "~/code", worker_machine: "", notify_level: "normal", stall_minutes: 20, reply_chars: 400, rotate_pct: 70, dream_at: "04:00", ask_permissions: false },
+    settings: {
+      router_kind: "claude", router_model: "sonnet", worker_model: "", worker_effort: "", worker_kind: "codex", worker_cwd: "~/code", worker_machine: "", notify_level: "normal", stall_minutes: 20, reply_chars: 400, rotate_pct: 70, dream_at: "04:00", ask_permissions: false,
+      morning_brief: { enabled: false, at: "09:00" },
+      weekly_review: { enabled: false, day: "mon", at: "09:00" },
+      stale_follow: { enabled: false, at: "17:30" },
+    },
   };
   const models = {
     claude: { models: [{ id: "opus", label: "Opus", efforts: ["low", "medium", "high", "max"] }, { id: "sonnet", label: "Sonnet", efforts: ["low", "medium", "high"] }, { id: "haiku", label: "Haiku" }], default: "sonnet", efforts: ["low", "medium", "high", "max"], default_effort: "" },

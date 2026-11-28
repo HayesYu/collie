@@ -216,8 +216,17 @@ const v2ExpObj = { h: "hub_exp01", n: "Sam", a: ["203.0.113.8:7788"], t: "EXP_TO
 const v2ExpB64 = Buffer.from(JSON.stringify(v2ExpObj)).toString("base64url");
 const runExp = runJoinPage({ hash: "#2." + v2ExpB64 });
 assert.equal(runExp.J.getState().status, "expired");
+assert.equal(runExp.getEl("card-sub").textContent, "该邀请已过期，请让对方分享长期有效的 Collie 名片链接。");
 assert.equal(runExp.getEl("open-section").hidden, true);
 assert.equal(runExp.getEl("manual-box").hidden, false);
+
+const runInvZh = runJoinPage({ hash: "#invalid-card", lang: "zh-CN" });
+assert.equal(runInvZh.J.getState().status, "invalid");
+assert.equal(runInvZh.getEl("card-title").textContent, "无法读取这张 Collie 名片");
+
+const runInvEn = runJoinPage({ hash: "#invalid-card", lang: "en-US" });
+assert.equal(runInvEn.J.getState().status, "invalid");
+assert.equal(runInvEn.getEl("card-title").textContent, "Couldn't read this Collie Card");
 
 // 3) Legacy v1 permanent card (#<v1b64>) stays 100% compatible
 const v1Obj = { v: 1, code: "PERMCARD_V1", hub_id: "hub_v1_001", hub_name: "Alice's Collie", addrs: ["http://198.51.100.20:7788"] };

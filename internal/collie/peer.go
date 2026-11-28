@@ -390,7 +390,7 @@ func defaultHubDisplayName() string {
 	host, _ := os.Hostname()
 	host = strings.TrimSpace(strings.TrimSuffix(host, ".local"))
 	if host == "" || host == "localhost" {
-		return "我的边牧"
+		return "我的 Collie"
 	}
 	if r := []rune(host); len(r) > 20 {
 		host = string(r[:20])
@@ -826,7 +826,7 @@ func decodePeerInvite(raw string, now time.Time) (*PeerInvitePayload, error) {
 		return nil, fmt.Errorf("邀请码缺少必要字段（code / hub_id / addrs）")
 	}
 	if p.Exp > 0 && now.Unix() > p.Exp {
-		return nil, fmt.Errorf("该旧版邀请码已过期，请让对方分享新版长期有效边牧名片")
+		return nil, fmt.Errorf("该旧版邀请码已过期，请让对方分享新版长期有效 Collie 名片")
 	}
 	return &p, nil
 }
@@ -1373,7 +1373,7 @@ func (pm *PeerManager) AcceptPair(ctx context.Context, req peerPairAcceptReq, se
 
 	selfHubID, selfHubName, _ := pm.Identity()
 	if remoteHubID == selfHubID {
-		return nil, http.StatusBadRequest, fmt.Errorf("不能添加自己的边牧")
+		return nil, http.StatusBadRequest, fmt.Errorf("不能添加自己的 Collie")
 	}
 	if pm.IsHubBlocked(remoteHubID) {
 		return nil, http.StatusForbidden, fmt.Errorf("对方已将该 Hub 加入黑名单，拒绝配对")
@@ -1542,7 +1542,7 @@ func (pm *PeerManager) PairWithInvite(ctx context.Context, rawInvite, nameOverri
 
 	selfHubID, selfHubName, _ := pm.Identity()
 	if inv.HubID == selfHubID {
-		return nil, http.StatusBadRequest, fmt.Errorf("不能添加自己的边牧")
+		return nil, http.StatusBadRequest, fmt.Errorf("不能添加自己的 Collie")
 	}
 	if pm.IsHubBlocked(inv.HubID) {
 		return nil, http.StatusForbidden, fmt.Errorf("该边牧在黑名单中，请先解除拉黑再配对")

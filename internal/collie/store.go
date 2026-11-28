@@ -59,6 +59,17 @@ type Worker struct {
 	LastReport string     `json:"last_report,omitempty"`
 	ReportAt   time.Time  `json:"report_at,omitempty"`
 	Ended      bool       `json:"ended,omitempty"`
+	// IdleSince tracks when the worker entered continuous idle/done state for
+	// lossless hibernation GC; persisted so Hub restarts don't reset the clock.
+	IdleSince *time.Time `json:"idle_since,omitempty"`
+	// Hibernating is persisted BEFORE closing the herdr workspace so a crash or
+	// RPC timeout reconciles quietly instead of reporting an unexpected exit.
+	Hibernating bool `json:"hibernating,omitempty"`
+	// StartupFailed marks a managed worker that failed on launch without running
+	// a resumable session, allowing GC to reap its empty shell workspace.
+	StartupFailed bool `json:"startup_failed,omitempty"`
+	// Keep exempts a worker from automatic idle/LRU hibernation GC.
+	Keep bool `json:"keep,omitempty"`
 	// Session is its agent's conversation id, kept after it stops so a later
 	// `spawn --resume` can carry on where it left off.
 	Session string `json:"session,omitempty"`
@@ -199,6 +210,12 @@ type Settings struct {
 	// Collie and its workers run with the agent's permission checks off
 	// (--dangerously-skip-permissions and the like) unless this is set.
 	AskPermissions bool `json:"ask_permissions,omitempty"`
+	// Idle minutes before a managed worker is hibernated (workspace closed,
+	// session archived for lossless resume): 0 means default (120), -1 never.
+	WorkerIdleGCMinutes int `json:"worker_idle_gc_minutes,omitempty"`
+	// Soft cap of live managed workers per machine before LRU hibernation kicks
+	// in for idle workers (>=15m): 0 means default (6), -1 disables cap LRU.
+	WorkerMaxLivePerMachine int `json:"worker_max_live_per_machine,omitempty"`
 }
 
 type State struct {

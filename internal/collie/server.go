@@ -604,6 +604,9 @@ func (s *Server) sendText(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if s.sup != nil {
+		s.sup.touchPaneActivity(id)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -618,9 +621,13 @@ func (s *Server) sendKeys(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "keys required"})
 		return
 	}
-	if err := s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": r.PathValue("id"), "keys": body.Keys}, nil); err != nil {
+	id := r.PathValue("id")
+	if err := s.herdr.Call(r.Context(), "pane.send_keys", map[string]any{"pane_id": id, "keys": body.Keys}, nil); err != nil {
 		fail(w, err)
 		return
+	}
+	if s.sup != nil {
+		s.sup.touchPaneActivity(id)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
@@ -636,9 +643,13 @@ func (s *Server) promptAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "empty prompt"})
 		return
 	}
-	if err := s.herdr.Prompt(r.Context(), r.PathValue("target"), body.Text); err != nil {
+	target := r.PathValue("target")
+	if err := s.herdr.Prompt(r.Context(), target, body.Text); err != nil {
 		fail(w, err)
 		return
+	}
+	if s.sup != nil {
+		s.sup.touchPaneActivity(target)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

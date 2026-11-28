@@ -655,6 +655,9 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Model == "" && body.Effort == "" {
 			body.Model, body.Effort = old.Model, old.Effort
+			if body.Model == "" && body.Effort == "" && old.Run != nil {
+				body.Model, body.Effort = old.Run[0], old.Run[1]
+			}
 		}
 		if body.Thread == "" {
 			body.Thread = old.Thread
@@ -732,6 +735,7 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 		body.Thread = wk.Thread
 	}
 	t := sp.ingestLocked("router", body.Thread, routerName, body.Text, "", body.To, "")
+	sp.touchWorkerActivityLocked(body.To, time.Now(), true)
 	sp.mu.Unlock()
 	writeJSON(w, 202, map[string]any{"trigger": t.ID, "note": "queued; delivered when the worker is free"})
 }
@@ -840,8 +844,19 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 	if wk.WorkspaceID != "" {
 		s.herdr.Call(r.Context(), "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)
 	}
+	now := time.Now()
 	sp.mu.Lock()
-	wk.Ended, wk.Status = true, "gone"
+	wkCopy := *wk
+	subs := sp.workerSubscribersLocked(wk.Name)
+	if wk.PaneID != "" {
+		sp.recordRecentlyClosedPaneLocked(wk.PaneID, now)
+	}
+	sp.mu.Unlock()
+	if wkCopy.Session != "" {
+		sp.archiveWorkerSession(&wkCopy, subs, "stopped", now)
+	}
+	sp.mu.Lock()
+	wk.Ended, wk.Hibernating, wk.Status = true, false, "gone"
 	for _, th := range sp.st.Threads {
 		th.Subscribers = remove(th.Subscribers, wk.Name)
 	}
@@ -1212,6 +1227,12 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 			ns.RotatePct = 0
 		} else if ns.RotatePct < 0 {
 			ns.RotatePct = -1
+		}
+		if ns.WorkerIdleGCMinutes < 0 {
+			ns.WorkerIdleGCMinutes = -1
+		}
+		if ns.WorkerMaxLivePerMachine < 0 {
+			ns.WorkerMaxLivePerMachine = -1
 		}
 		ns.WorkerMachine = s.machineByName(ns.WorkerMachine)
 		if ns.WorkerMachine == "" {

@@ -1663,6 +1663,34 @@ func (sp *Super) workerLabels() (byPane, byName map[string]string) {
 	return byPane, byName
 }
 
+// workerCreatedAt returns the creation timestamps of active workers, keyed by
+// pane_id and ASCII worker name, so GET /api/state can expose durable ordering.
+func (sp *Super) workerCreatedAt() (byPane, byName map[string]time.Time) {
+	if sp == nil {
+		return nil, nil
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	for _, w := range sp.st.Workers {
+		if w == nil || w.Ended || w.CreatedAt.IsZero() {
+			continue
+		}
+		if w.PaneID != "" {
+			if byPane == nil {
+				byPane = map[string]time.Time{}
+			}
+			byPane[w.PaneID] = w.CreatedAt
+		}
+		if w.Name != "" {
+			if byName == nil {
+				byName = map[string]time.Time{}
+			}
+			byName[w.Name] = w.CreatedAt
+		}
+	}
+	return byPane, byName
+}
+
 // ---------------------------------------------------------------- watchdog
 
 // watchdog is the external control loop: it restarts the router when work is

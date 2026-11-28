@@ -99,6 +99,8 @@ assert.ok(cssSrc.includes(".rv-mermaid-stage svg,\n.rv-svg-stage svg {\n  displa
 assert.ok(cssSrc.includes(".md-table-card, .md-math-block,\n    .rv-card,"), "entry blur animation must skip .md-table-card and .rv-card to keep crisp edges");
 assert.ok(cssSrc.includes(".md-code:has(> .md-code-tag) pre"), "code/diff blocks with corner tag must reserve top clearance so +N/lang never overlaps code lines");
 assert.ok(cssSrc.includes(".md-table-vp.can-scroll-l thead th:first-child"), "table sticky divider shadow must appear only when horizontally scrolled");
+assert.ok(cssSrc.includes('.md-table-card:is([data-cols="1"], [data-cols="2"], [data-cols="3"]) table {\n    width: 100%; min-width: 0; table-layout: fixed;'), "mobile <=3-col tables must use 100% fixed auto-wrap layout without horizontal scroll");
+assert.ok(cssSrc.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;") && cssSrc.includes(".md-code.is-diff .diff-line:has(> .diff-sig)"), "mobile code and diff blocks must soft-wrap with hanging +/- indent");
 
 // Minimal DOM harness supporting elements, classes, attributes, dataset, children, querySelector, DOMParser, message & theme events
 let bootFinished = false;
@@ -524,7 +526,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, sanitizeSvgElement, applyResponsiveSvgSizing, computeResponsiveSvgMetrics, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks };\n})();"
+  "  globalThis.__rv = { mdRender, stripFencedBlocks, parseHtmlCardInfo, renderEntryArtifacts, HTML_SANDBOX_ATTR, mermaidConfig, renderMermaidCard, rewriteMermaidLrToTd, extractSvgViewBoxWidth, onRichVisualViewportChange, sanitizeSvgElement, applyResponsiveSvgSizing, computeResponsiveSvgMetrics, renderSvgCard, svgSanitizedCache, mountHtmlCard, handleRichCardMessage, setRichCardMode, buildSandboxedCardSrcdoc, htmlCardFrames, mermaidSvgCache, onRichVisualThemeChange, renderSuper, setSup: (s) => { sup = normSup(s); }, setView: (v) => { view = v; }, syncActiveFileMarks };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 bootFinished = true;
@@ -714,6 +716,56 @@ async function testMermaidLifecycle() {
   assert.equal(badCard.stage.hidden, true, "fallback hides diagram stage");
   assert.equal(badCard.pre.hidden, false, "fallback shows raw code block");
   assert.equal(warnings.length, 0, "syntax error must produce zero console warnings/errors");
+
+  // Mobile wide flowchart LR -> TD auto-adaptation (leaves compact LR & non-LR untouched, keeps source unmodified)
+  assert.equal(R.rewriteMermaidLrToTd("flowchart LR\n  A --> B"), "flowchart TD\n  A --> B");
+  assert.equal(R.rewriteMermaidLrToTd("%% comment\ngraph LR\n  A --> B"), "%% comment\ngraph TD\n  A --> B");
+  assert.equal(R.rewriteMermaidLrToTd("sequenceDiagram\n  A->>B: hi"), null);
+  assert.equal(R.rewriteMermaidLrToTd("flowchart TD\n  A --> B"), null);
+  assert.equal(R.extractSvgViewBoxWidth('<svg viewBox="0 0 880.5 52"></svg>'), 880.5);
+
+  const prevMermaid = ctx.mermaid;
+  const renderedCodes = [];
+  ctx.mermaid = {
+    initialize() {},
+    async parse() { return true; },
+    async render(_id, code) {
+      renderedCodes.push(code);
+      if (code.includes("WIDE_CHAIN") && /flowchart\s+LR/i.test(code)) {
+        return { svg: '<svg viewBox="0 0 900 54" data-dir="LR"><text>wide-lr</text></svg>' };
+      }
+      if (code.includes("WIDE_CHAIN") && /flowchart\s+TD/i.test(code)) {
+        return { svg: '<svg viewBox="0 0 190 320" data-dir="TD"><text>wide-td</text></svg>' };
+      }
+      return { svg: '<svg viewBox="0 0 310 220" data-dir="LR"><text>compact-lr</text></svg>' };
+    },
+  };
+  ctx.innerWidth = 390;
+  const wideCard = makeMermaidCardDom("flowchart LR\n  A[WIDE_CHAIN] --> B --> C", "hash-wide-lr");
+  wideCard.stage.clientWidth = 356;
+  R.renderMermaidCard(wideCard.card);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.ok(wideCard.stage.innerHTML.includes('data-dir="TD"'), "mobile wide flowchart LR adapts to vertical TD: " + wideCard.stage.innerHTML);
+  assert.ok(wideCard.pre.querySelector("code").textContent.startsWith("flowchart LR"), "source code view preserves original LR syntax");
+
+  const compactCard = makeMermaidCardDom("flowchart LR\n  A[COMPACT] --> B", "hash-compact-lr");
+  compactCard.stage.clientWidth = 356;
+  const callsBeforeCompact = renderedCodes.length;
+  R.renderMermaidCard(compactCard.card);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(renderedCodes.length - callsBeforeCompact, 1, "compact LR diagram fitting mobile width must NOT re-render as TD");
+  assert.ok(compactCard.stage.innerHTML.includes('data-dir="LR"'), "compact LR stays LR on mobile");
+
+  // Switching back to desktop re-renders wide LR as horizontal LR cleanly (separate cache key)
+  ctx.innerWidth = 1440;
+  R.onRichVisualViewportChange();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.ok(wideCard.stage.innerHTML.includes('data-dir="LR"'), "desktop viewport keeps wide flowchart LR horizontal");
+  ctx.mermaid = prevMermaid;
 }
 
 // 3. Inline HTML cards: both triggers, zero false positives, strict sandbox, safe postMessage height

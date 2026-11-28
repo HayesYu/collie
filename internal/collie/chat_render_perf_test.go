@@ -520,7 +520,9 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
     "| 首屏传输 | 2,092.5 KB | 369.7 KB | -82.3% |",
     "| 长列表 | 142ms | 13.7s | +5.5% |",
   ].join("\n"));
-  assert.ok(tblHtml.includes('class="md-table-card"') && !tblHtml.includes("md-table-bar") && !tblHtml.includes("md-table-meta"), "table card omits persistent top bar and dimension strip");
+  assert.ok(tblHtml.includes('class="md-table-card" data-table-card data-cols="4"') && !tblHtml.includes("md-table-bar") && !tblHtml.includes("md-table-meta"), "table card tags column count and omits persistent top bar and dimension strip");
+  const tbl3Html = T.mdRender("| 任务 | 负责 Agent | 当前阶段 |\n| --- | --- | --- |\n| 核心索引 | \x60worker-a\x60 | 收尾中 |");
+  assert.ok(tbl3Html.includes('class="md-table-card" data-table-card data-cols="3"'), "3-col table emits data-cols=3 for mobile wrap layout");
   assert.ok(tblHtml.includes('class="md-float-acts md-table-acts"') && tblHtml.includes('data-copy-table="tsv"') && tblHtml.includes('data-copy-table="md"'), "table card renders floating TSV and MD copy buttons");
   assert.ok(tblHtml.includes('class="md-table" tabindex="0" role="region"'), "table keeps accessible .md-table scroll region");
   assert.ok(tblHtml.includes('<th scope="col"') && tblHtml.includes('<th scope="row"'), "table uses semantic col and row headers for sticky first column");

@@ -26159,11 +26159,14 @@
         } catch {}
       }
     }
-    const canScrollR = scrollable && scrollL < maxScroll - 4 && (scrollL + clientW) < effectiveRight - 4;
-    card.classList?.toggle("is-scrollable", scrollable);
-    card.classList?.toggle("can-scroll-l", scrollable && scrollL > 4);
+    const paintedFits = scrollable && scrollL === 0 && clientW > 0 && effectiveRight <= clientW + 2;
+    const effectiveScrollable = scrollable && !paintedFits;
+    const canScrollR = effectiveScrollable && scrollL < maxScroll - 4 && (scrollL + clientW) < effectiveRight - 4;
+    card.classList?.toggle("is-painted-fit", paintedFits);
+    card.classList?.toggle("is-scrollable", effectiveScrollable);
+    card.classList?.toggle("can-scroll-l", effectiveScrollable && scrollL > 4);
     card.classList?.toggle("can-scroll-r", canScrollR);
-    if (scrollable) {
+    if (effectiveScrollable) {
       stage.setAttribute?.("tabindex", "0");
     } else {
       stage.removeAttribute?.("tabindex");
@@ -26432,7 +26435,42 @@
     });
     return mermaidLoadPromise;
   }
-  function applyMermaidSvg(card, svg, themeKey, hash) {
+  function isMobileMermaidViewport() {
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function mermaidLayoutKey() {
+    return isMobileMermaidViewport() ? "m" : "d";
+  }
+  function rewriteMermaidLrToTd(code) {
+    const lines = String(code || "").split("\n");
+    let inFrontmatter = false;
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (i === 0 && trimmed === "---") { inFrontmatter = true; continue; }
+      if (inFrontmatter) { if (trimmed === "---") inFrontmatter = false; continue; }
+      if (!trimmed || trimmed.startsWith("%%")) continue;
+      const m = lines[i].match(/^(\s*(?:flowchart|graph)\s+)LR(\b.*)$/i);
+      if (!m) return null;
+      lines[i] = m[1] + "TD" + m[2];
+      return lines.join("\n");
+    }
+    return null;
+  }
+  function extractSvgViewBoxWidth(svgHtml) {
+    const s = String(svgHtml || "");
+    const m = s.match(/\bviewBox\s*=\s*["']\s*[-+0-9.eE]+[\s,]+[-+0-9.eE]+[\s,]+([-+0-9.eE]+)[\s,]+[-+0-9.eE]+\s*["']/i);
+    if (m) {
+      const w = parseFloat(m[1]);
+      if (Number.isFinite(w) && w > 0) return w;
+    }
+    const wm = s.match(/<svg\b[^>]*\bwidth\s*=\s*["']\s*([0-9.]+)(?:px)?\s*["']/i);
+    if (wm) {
+      const w = parseFloat(wm[1]);
+      if (Number.isFinite(w) && w > 0) return w;
+    }
+    return 0;
+  }
+  function applyMermaidSvg(card, svg, themeKey, hash, layoutKey = mermaidLayoutKey()) {
     const stage = card.querySelector?.(".rv-mermaid-stage");
     if (!stage) return;
     stage.innerHTML = svg;
@@ -26449,8 +26487,9 @@
       }
     }
     stage.style.minHeight = "";
-    card.dataset.rvRendered = `${themeKey}:${hash}`;
+    card.dataset.rvRendered = `${themeKey}:${layoutKey}:${hash}`;
     card.dataset.rvTheme = themeKey;
+    card.dataset.rvLayout = layoutKey;
     card.classList.remove("is-pending", "is-fallback");
     card.classList.add("is-ready");
     const expandBtn = card.querySelector?.('[data-rv-expand="mermaid"]');
@@ -26478,12 +26517,13 @@
     if (!card || card.dataset?.rvKind !== "mermaid") return;
     const hash = card.dataset.rvHash || "";
     const themeKey = currentVisualTheme();
-    const cacheKey = `${themeKey}:${hash}`;
+    const layoutKey = mermaidLayoutKey();
+    const cacheKey = `${themeKey}:${layoutKey}:${hash}`;
     if (!opts.force && card.dataset.rvRendered === cacheKey) return;
     if (!opts.force && card.dataset.rvRendered === "fallback") return;
     const cachedSvg = mermaidSvgCache.get(cacheKey);
     if (cachedSvg) {
-      applyMermaidSvg(card, cachedSvg, themeKey, hash);
+      applyMermaidSvg(card, cachedSvg, themeKey, hash, layoutKey);
       return;
     }
     if (card.dataset.rvRendering === cacheKey) return;
@@ -26498,10 +26538,11 @@
     mermaidQueue = mermaidQueue.then(async () => {
       if (!card.isConnected) return;
       const curTheme = currentVisualTheme();
-      const curKey = `${curTheme}:${hash}`;
+      const curLayout = mermaidLayoutKey();
+      const curKey = `${curTheme}:${curLayout}:${hash}`;
       const hitNow = mermaidSvgCache.get(curKey);
       if (hitNow) {
-        applyMermaidSvg(card, hitNow, curTheme, hash);
+        applyMermaidSvg(card, hitNow, curTheme, hash, curLayout);
         return;
       }
       let m;
@@ -26517,7 +26558,14 @@
         mermaidInitTheme = curTheme;
       }
       const rid = `collie-mmd-${++mermaidRenderSeq}`;
+      let ridTd = "";
       let tempHost = null;
+      const cleanMermaidId = (id) => {
+        if (!id) return;
+        document.getElementById?.("d" + id)?.remove?.();
+        const sEl = document.getElementById?.(id);
+        if (sEl && !sEl.closest?.(".rv-mermaid-stage")) sEl.remove?.();
+      };
       try {
         if (typeof m.parse === "function") {
           const valid = await m.parse(code, { suppressErrors: true });
@@ -26532,29 +26580,46 @@
           document.body.appendChild(tempHost);
         }
         const res = await m.render(rid, code, tempHost || undefined);
-        const svg = typeof res === "string" ? res : (res?.svg || "");
-        if (tempHost) { tempHost.remove(); tempHost = null; }
-        document.getElementById?.("d" + rid)?.remove?.();
-        const stray = document.getElementById?.(rid);
-        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        let svg = typeof res === "string" ? res : (res?.svg || "");
+        cleanMermaidId(rid);
         if (!svg || !svg.includes("<svg")) {
           if (card.isConnected) fallbackMermaidCard(card);
           return;
         }
+        // On narrow mobile viewports, adapt overly wide horizontal flowchart/graph LR into vertical TD so users read cleanly without horizontal panning.
+        if (curLayout === "m") {
+          const tdCode = rewriteMermaidLrToTd(code);
+          if (tdCode) {
+            const lrW = extractSvgViewBoxWidth(svg);
+            const containerW = (stage?.clientWidth > 0 ? stage.clientWidth : 0) || Math.max(280, (typeof innerWidth === "number" ? innerWidth : 390) - 34);
+            if (lrW > containerW * 1.25) {
+              try {
+                ridTd = `collie-mmd-${++mermaidRenderSeq}`;
+                const tdRes = await m.render(ridTd, tdCode, tempHost || undefined);
+                const tdSvg = typeof tdRes === "string" ? tdRes : (tdRes?.svg || "");
+                cleanMermaidId(ridTd);
+                if (tdSvg && tdSvg.includes("<svg")) {
+                  const tdW = extractSvgViewBoxWidth(tdSvg);
+                  if (tdW > 0 && tdW < lrW * 0.9) svg = tdSvg;
+                }
+              } catch {}
+            }
+          }
+        }
+        if (tempHost) { tempHost.remove(); tempHost = null; }
         if (mermaidSvgCache.size >= MERMAID_CACHE_MAX) {
           const oldest = mermaidSvgCache.keys().next().value;
           if (oldest !== undefined) mermaidSvgCache.delete(oldest);
         }
         mermaidSvgCache.set(curKey, svg);
-        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash);
+        if (card.isConnected) applyMermaidSvg(card, svg, curTheme, hash, curLayout);
       } catch {
         if (card.isConnected) fallbackMermaidCard(card);
       } finally {
         if (card.dataset.rvRendering === cacheKey) delete card.dataset.rvRendering;
         if (tempHost) tempHost.remove();
-        document.getElementById?.("d" + rid)?.remove?.();
-        const stray = document.getElementById?.(rid);
-        if (stray && !stray.closest?.(".rv-mermaid-stage")) stray.remove?.();
+        cleanMermaidId(rid);
+        cleanMermaidId(ridTd);
         if (typeof requestAnimationFrame === "function") {
           await new Promise((r) => requestAnimationFrame(r));
         }
@@ -26782,6 +26847,7 @@
       buckets.get(k).push(oc);
     }
     const curTheme = currentVisualTheme();
+    const curLayout = mermaidLayoutKey();
     for (const nc of newCards) {
       const kind = nc.dataset?.rvKind || "";
       const hash = nc.dataset?.rvHash || "";
@@ -26792,8 +26858,8 @@
         setRichCardMode(nc, "source");
       }
       if (kind === "mermaid") {
-        const svg = mermaidSvgCache.get(`${curTheme}:${hash}`);
-        if (svg) applyMermaidSvg(nc, svg, curTheme, hash);
+        const svg = mermaidSvgCache.get(`${curTheme}:${curLayout}:${hash}`);
+        if (svg) applyMermaidSvg(nc, svg, curTheme, hash, curLayout);
       } else if (kind === "svg") {
         const entry = svgSanitizedCache.get(hash);
         if (entry) applySanitizedSvg(nc, entry, hash);
@@ -26875,13 +26941,14 @@
     }
     if (!cards.length) return;
     const curTheme = currentVisualTheme();
+    const curLayout = mermaidLayoutKey();
     for (const card of cards) {
       const kind = card.dataset.rvKind;
       const hash = card.dataset.rvHash || "";
       if (kind === "mermaid") {
-        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${hash}`);
-        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${hash}`) {
-          applyMermaidSvg(card, cachedSvg, curTheme, hash);
+        const cachedSvg = mermaidSvgCache.get(`${curTheme}:${curLayout}:${hash}`);
+        if (cachedSvg && card.dataset.rvRendered !== `${curTheme}:${curLayout}:${hash}`) {
+          applyMermaidSvg(card, cachedSvg, curTheme, hash, curLayout);
           card.dataset.rvWatched = "1";
           continue;
         }
@@ -26920,11 +26987,21 @@
       } catch {}
     }
   }
+  function onRichVisualViewportChange() {
+    const nextLayout = mermaidLayoutKey();
+    for (const card of document.querySelectorAll?.(".rv-mermaid.is-ready") || []) {
+      if (card.dataset?.rvLayout !== nextLayout) renderMermaidCard(card, { force: true });
+    }
+  }
   if (typeof addEventListener === "function") {
     rvLastTheme = currentVisualTheme();
     addEventListener("collie:theme", onRichVisualThemeChange);
   }
   darkMQ?.addEventListener?.("change", onRichVisualThemeChange);
+  try {
+    const rvMobileMQ = typeof matchMedia === "function" ? matchMedia("(max-width: 760px)") : null;
+    rvMobileMQ?.addEventListener?.("change", onRichVisualViewportChange);
+  } catch {}
   document.addEventListener?.("click", (ev) => {
     const toggleBtn = ev.target?.closest?.('[data-rv-toggle="source"]');
     if (toggleBtn) {
@@ -27481,7 +27558,7 @@
             return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
           }).join("")}</tr>`).join("");
           const rowCount = bodyRows.length, colCount = head.length;
-          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          out.push(`<div class="md-table-card" data-table-card data-cols="${colCount}"><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
           continue;
         }
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }

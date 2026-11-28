@@ -21028,51 +21028,175 @@
     if (lbScale > 1.005) zoomLbTo(1);
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
+  const STREAM_GALLERY_ROOT_SEL = "#super-thread, #td-list, #wd-thread, #thread, #x-thread";
+  const GALLERY_MEDIA_SEL = ".thumb[data-img], .md-img-btn[data-img-url], .gal-hidden-item, a.fpath[data-path], img";
+  const galleryItemKey = (it) => (it?.path ? "p:" + it.path : (it?.url ? "u:" + it.url : ""));
+  const isSameOrDescendant = (ancestor, node) => {
+    if (!ancestor || !node) return false;
+    if (ancestor === node) return true;
+    if (typeof ancestor.contains === "function") return ancestor.contains(node);
+    let cur = node.parentElement || node.parentNode;
+    while (cur) {
+      if (cur === ancestor) return true;
+      cur = cur.parentElement || cur.parentNode;
+    }
+    return false;
+  };
+  function extractGalleryMediaEl(el) {
+    if (!el || el.closest?.(".file-gallery[hidden], .md-gallery[hidden]")) return null;
+    if ((el.classList?.contains("thumb") || el.classList?.contains("gal-hidden-item")) && el.dataset?.img) {
+      return { item: { path: el.dataset.img, alt: el.dataset.imgAlt || "" }, key: "p:" + el.dataset.img, isLink: false };
+    }
+    if ((el.classList?.contains("md-img-btn") || el.classList?.contains("gal-hidden-item")) && el.dataset?.imgUrl) {
+      return { item: { url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" }, key: "u:" + el.dataset.imgUrl, isLink: false };
+    }
+    if (el.matches?.("a.fpath[data-path]")) {
+      const p = el.dataset?.path || "";
+      if (IMG_EXT.test(p)) return { item: { path: p, alt: "" }, key: "p:" + p, isLink: true };
+      return null;
+    }
+    if (el.tagName === "IMG" && !el.closest?.(".thumb, .md-img-btn, .avatar, .td-av, .hello, a[href]")) {
+      const u = el.currentSrc || el.getAttribute?.("src") || "";
+      if (u) return { item: { url: u, alt: el.getAttribute?.("alt") || "" }, key: "u:" + u, isLink: false };
+    }
+    return null;
+  }
+  function collectScopeMediaInto(scope, items, triggerEl, state) {
+    if (!scope) return;
+    const nodes = [];
+    if (scope.matches?.(GALLERY_MEDIA_SEL)) nodes.push(scope);
+    for (const n of scope.querySelectorAll?.(GALLERY_MEDIA_SEL) || []) nodes.push(n);
+    if (!nodes.length) return;
+    const raw = [];
+    const visualKeys = new Set();
+    for (const el of nodes) {
+      const parsed = extractGalleryMediaEl(el);
+      if (!parsed || !parsed.key) continue;
+      raw.push({ el, ...parsed });
+      if (!parsed.isLink) visualKeys.add(parsed.key);
+    }
+    if (!raw.length) return;
+    const seen = new Map();
+    let deferredTriggerKey = "";
+    for (const entry of raw) {
+      const { el, item, key, isLink } = entry;
+      const hitTrigger = isSameOrDescendant(el, triggerEl);
+      if (isLink && visualKeys.has(key)) {
+        if (hitTrigger && state.matchedIdx < 0) {
+          if (seen.has(key)) state.matchedIdx = seen.get(key);
+          else deferredTriggerKey = key;
+        }
+        continue;
+      }
+      if (seen.has(key)) {
+        const existingIdx = seen.get(key);
+        if (!items[existingIdx].alt && item.alt) items[existingIdx].alt = item.alt;
+        if (hitTrigger && state.matchedIdx < 0) state.matchedIdx = existingIdx;
+        continue;
+      }
+      const slotIdx = items.length;
+      seen.set(key, slotIdx);
+      items.push(item);
+      if (state.matchedIdx < 0 && (hitTrigger || (deferredTriggerKey && deferredTriggerKey === key))) {
+        state.matchedIdx = slotIdx;
+      }
+    }
+  }
+  function collectNotebookImageGallery(clickedPath, listEl = $("#np-files-list")) {
+    const targetPath = String(clickedPath || "").trim();
+    const seen = new Set();
+    const items = [];
+    const addPath = (rawPath, alt = "") => {
+      const p = String(rawPath || "").trim();
+      if (!p || !IMG_EXT.test(p) || seen.has(p)) return;
+      seen.add(p);
+      items.push(alt ? { path: p, alt } : { path: p });
+    };
+    const domBtns = listEl?.querySelectorAll?.("[data-np-file]") || [];
+    if (domBtns.length) {
+      for (const btn of domBtns) {
+        const p = btn.dataset?.npFile || btn.getAttribute?.("data-np-file") || "";
+        const titleText = btn.querySelector?.(".np-file-title")?.textContent?.trim() || "";
+        addPath(p, titleText);
+      }
+    } else if (Array.isArray(notebookData?.artifacts)) {
+      for (const f of notebookData.artifacts) {
+        if (!f?.path) continue;
+        addPath(f.path, f.title || f.name || "");
+      }
+    }
+    let index = targetPath ? items.findIndex((it) => it.path === targetPath) : -1;
+    if (index < 0 && targetPath && IMG_EXT.test(targetPath)) {
+      items.push({ path: targetPath });
+      index = items.length - 1;
+    }
+    return { items, index: Math.max(0, index) };
+  }
   function collectGallery(triggerEl, fallbackItem) {
+    const npFilesList = triggerEl?.closest?.("#np-files-list");
+    if (npFilesList) {
+      const fp = triggerEl.dataset?.npFile || fallbackItem?.path || "";
+      return collectNotebookImageGallery(fp, npFilesList);
+    }
+    const streamRoot = triggerEl?.closest?.(STREAM_GALLERY_ROOT_SEL);
+    if (streamRoot) {
+      const items = [];
+      const state = { matchedIdx: -1 };
+      for (const unit of streamRoot.children || []) {
+        collectScopeMediaInto(unit, items, triggerEl, state);
+      }
+      let index = state.matchedIdx;
+      if (index < 0 && fallbackItem) {
+        const wantKey = galleryItemKey(fallbackItem);
+        index = wantKey ? items.findIndex((it) => galleryItemKey(it) === wantKey) : -1;
+        if (index < 0) {
+          items.push(fallbackItem);
+          index = items.length - 1;
+        }
+      }
+      return { items, index: Math.max(0, index) };
+    }
     const gal = triggerEl?.closest?.(".file-gallery, .md-gallery");
     if (gal) {
-      const seen = new Set(), items = [];
-      const add = (it) => {
-        const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
-        if (!key || seen.has(key)) return;
-        seen.add(key);
-        items.push(it);
-      };
+      const items = [];
+      const state = { matchedIdx: -1 };
+      const seen = new Map();
       for (const el of gal.querySelectorAll?.(".gal-tile, .gal-hidden-item") || []) {
-        if (el.dataset?.img) add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
-        else if (el.dataset?.imgUrl) add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
+        const item = el.dataset?.img
+          ? { path: el.dataset.img, alt: el.dataset.imgAlt || "" }
+          : (el.dataset?.imgUrl ? { url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" } : null);
+        const key = galleryItemKey(item);
+        if (!key) continue;
+        const hitTrigger = isSameOrDescendant(el, triggerEl);
+        if (seen.has(key)) {
+          if (hitTrigger && state.matchedIdx < 0) state.matchedIdx = seen.get(key);
+          continue;
+        }
+        const slotIdx = items.length;
+        seen.set(key, slotIdx);
+        items.push(item);
+        if (hitTrigger && state.matchedIdx < 0) state.matchedIdx = slotIdx;
       }
-      const wantKey = fallbackItem.path ? "p:" + fallbackItem.path : "u:" + (fallbackItem.url || "");
-      let index = items.findIndex((it) => (it.path ? "p:" + it.path : "u:" + (it.url || "")) === wantKey);
-      if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
-      return { items, index };
+      let index = state.matchedIdx;
+      if (index < 0 && fallbackItem) {
+        const wantKey = galleryItemKey(fallbackItem);
+        index = wantKey ? items.findIndex((it) => galleryItemKey(it) === wantKey) : -1;
+        if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
+      }
+      return { items, index: Math.max(0, index) };
     }
-    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".td-text") || triggerEl?.closest(".mine") || triggerEl?.closest(".mine-group") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    const scope = triggerEl?.closest?.(".rv-md") || triggerEl?.closest?.(".fv-md") || triggerEl?.closest?.(".mem-body") || triggerEl?.closest?.(".td-text") || triggerEl?.closest?.(".mine") || triggerEl?.closest?.(".mine-group") || triggerEl?.closest?.(".msg") || triggerEl?.closest?.(".thumbs");
     if (!scope) return { items: [fallbackItem], index: 0 };
-    const seen = new Set(), items = [];
-    const add = (it) => {
-      const key = it.path ? "p:" + it.path : (it.url ? "u:" + it.url : "");
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      items.push(it);
-    };
-    for (const el of scope.querySelectorAll(".thumb[data-img], .md-img-btn[data-img-url], .gal-hidden-item, a.fpath[data-path], img")) {
-      if ((el.classList.contains("thumb") || el.classList.contains("gal-hidden-item")) && el.dataset.img) {
-        add({ path: el.dataset.img, alt: el.dataset.imgAlt || "" });
-      } else if ((el.classList.contains("md-img-btn") || el.classList.contains("gal-hidden-item")) && el.dataset.imgUrl) {
-        add({ url: el.dataset.imgUrl, alt: el.dataset.imgAlt || "" });
-      } else if (el.matches("a.fpath[data-path]")) {
-        const p = el.dataset.path || "";
-        if (IMG_EXT.test(p)) add({ path: p, alt: "" });
-      } else if (el.tagName === "IMG" && !el.closest(".thumb, .md-img-btn, .avatar")) {
-        const u = el.currentSrc || el.getAttribute("src") || "";
-        if (u) add({ url: u, alt: el.getAttribute("alt") || "" });
-      }
+    const items = [];
+    const state = { matchedIdx: -1 };
+    collectScopeMediaInto(scope, items, triggerEl, state);
+    let index = state.matchedIdx;
+    if (index < 0 && fallbackItem) {
+      const wantKey = galleryItemKey(fallbackItem);
+      index = wantKey ? items.findIndex((it) => galleryItemKey(it) === wantKey) : -1;
+      if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
     }
-    const wantKey = fallbackItem.path ? "p:" + fallbackItem.path : "u:" + (fallbackItem.url || "");
-    let index = items.findIndex((it) => (it.path ? "p:" + it.path : "u:" + (it.url || "")) === wantKey);
-    if (index < 0) { items.push(fallbackItem); index = items.length - 1; }
-    return { items, index };
+    return { items, index: Math.max(0, index) };
   }
   async function showLbSlide(idx) {
     if (!lbItems.length) return;
@@ -23778,8 +23902,13 @@
       const fp = fBtn.dataset.npFile;
       if (fp) {
         const isImg = IMG_EXT.test(fp);
-        const ret = !isImg ? captureNotesReturnTo() : null;
-        if (!isWideNotesViewport() && !isImg) sidePaneOverlay = "";
+        if (isImg) {
+          const { items, index } = collectNotebookImageGallery(fp, fBtn.closest?.("#np-files-list") || $("#np-files-list"));
+          if (items.length) openLightbox(items, index);
+          return;
+        }
+        const ret = captureNotesReturnTo();
+        if (!isWideNotesViewport()) sidePaneOverlay = "";
         openFile(fp, ret ? { returnTo: ret } : undefined);
       }
       return;

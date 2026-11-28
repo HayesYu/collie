@@ -354,6 +354,24 @@ lbStageEl.append(lbStatusEl, lbImgEl, lbSvgEl);
 lbEl.append(lbNameEl, lbCountEl, lbMetaEl, lbZoomEl, lbZoomPctEl, lbOpenEl, lbDlEl, lbStageEl, lbPrevEl, lbNextEl, lbCloseEl);
 bodyEl.appendChild(lbEl);
 
+// Pre-populate notebook & stream containers so Today's Files and cross-message streams work end-to-end
+const notesPaneEl = makeEl("aside"); notesPaneEl.setAttribute("id", "notes-pane");
+const npFilesListEl = makeEl("ul"); npFilesListEl.setAttribute("id", "np-files-list");
+const npTasksListEl = makeEl("ul"); npTasksListEl.setAttribute("id", "np-tasks-list");
+const npTimersListEl = makeEl("ul"); npTimersListEl.setAttribute("id", "np-timers-list");
+notesPaneEl.append(npTasksListEl, npFilesListEl, npTimersListEl);
+bodyEl.appendChild(notesPaneEl);
+
+const superThreadEl = makeEl("div"); superThreadEl.setAttribute("id", "super-thread");
+const tdListEl = makeEl("div"); tdListEl.setAttribute("id", "td-list");
+const wdThreadEl = makeEl("div"); wdThreadEl.setAttribute("id", "wd-thread");
+const fvEl = makeEl("section"); fvEl.setAttribute("id", "file-view"); fvEl.hidden = true;
+const fvNameEl = makeEl("div"); fvNameEl.setAttribute("id", "fv-name");
+const fvPathEl = makeEl("div"); fvPathEl.setAttribute("id", "fv-path");
+const fvBodyEl = makeEl("div"); fvBodyEl.setAttribute("id", "fv-body");
+fvEl.append(fvNameEl, fvPathEl, fvBodyEl);
+bodyEl.append(superThreadEl, tdListEl, wdThreadEl, fvEl);
+
 function getById(id) {
   if (!byId.has(id)) {
     const el = makeEl("div");
@@ -439,7 +457,7 @@ const marker = "  boot();\n})();";
 assert.ok(appSrc.includes(marker), "expected boot() tail in web/app.js");
 const instrumented = appSrc.replace(
   marker,
-  "  globalThis.__ig = { renderEntryArtifacts, renderCollieBody, extractEntryArtifacts, loadThumb, degradeFileGalleryTile, collectGallery, openLightbox, closeLightbox, showLbSlide, thumbs, failedFileGalleryImgs, clearFileGalleryImgFailed, getLbState: () => ({ open: lightbox.open, idx: lbIdx, count: lbItems.length, items: lbItems, countText: lbCount.textContent, prevDisabled: lbPrevBtn.disabled, nextDisabled: lbNextBtn.disabled, seq: lbSeq, imgTransform: lbImg.style.transform, dragging: lightbox.classList.contains('is-dragging') }) };\n})();"
+  "  globalThis.__ig = { renderEntryArtifacts, renderCollieBody, extractEntryArtifacts, loadThumb, degradeFileGalleryTile, collectGallery, collectNotebookImageGallery, renderNotebook, setNotebookData: (d) => { notebookData = d; _lastNotebookRenderKey = ''; }, openLightbox, closeLightbox, showLbSlide, thumbs, failedFileGalleryImgs, clearFileGalleryImgFailed, getLbState: () => ({ open: lightbox.open, idx: lbIdx, count: lbItems.length, items: lbItems, countText: lbCount.textContent, prevDisabled: lbPrevBtn.disabled, nextDisabled: lbNextBtn.disabled, seq: lbSeq, imgTransform: lbImg.style.transform, dragging: lightbox.classList.contains('is-dragging') }) };\n})();"
 );
 vm.runInNewContext(instrumented, ctx, { filename: "web/app.js" });
 bootFinished = true;
@@ -734,6 +752,186 @@ async function main() {
   G.clearFileGalleryImgFailed("~/shots/missing-one.png");
   const healedHtml = G.renderEntryArtifacts({ id: "e-heal", role: "collie", text: "恢复", files: ["~/shots/missing-one.png"] }, "");
   assert.ok(healedHtml.includes('class="file-gallery is-1" data-count="1"'), "self-healing restores inline gallery once file becomes readable");
+
+  // ─── Case 9: Notebook Today's Files image stream (skips non-images, dedups path, preserves #file-view for docs & boundary no-wrap) ───
+  const fetchedUrls = [];
+  fetchHandler = async (url) => {
+    const u = String(url);
+    fetchedUrls.push(u);
+    if (u.includes("as=image")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (k) => k === "X-File-Kind" ? "image" : k === "X-File-Size" ? "2048" : k === "X-File-Path" ? "~/shots/ok.png" : "" },
+        blob: async () => new Blob(["PNGDATA"]),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (k) => k === "X-File-Kind" ? "text" : k === "X-File-Size" ? "32" : k === "X-File-Path" ? "~/docs/notes.md" : "" },
+      blob: async () => new Blob(["# Summary\nAll good."]),
+    };
+  };
+
+  G.setNotebookData({
+    date: "2026-11-28",
+    tasks: [],
+    artifacts: [
+      { path: "~/shots/nb-1.png", name: "nb-1.png", title: "nb-1.png", ext: "png" },
+      { path: "~/docs/notes.md", name: "notes.md", title: "notes.md", ext: "md" },
+      { path: "~/shots/nb-2.jpg", name: "nb-2.jpg", title: "nb-2.jpg", ext: "jpg" },
+      { path: "~/reports/perf.html", name: "perf.html", title: "perf.html", ext: "html" },
+      { path: "~/shots/nb-1.png", name: "nb-1.png", title: "nb-1.png", ext: "png" },
+      { path: "~/shots/nb-3.WEBP", name: "nb-3.WEBP", title: "nb-3.WEBP", ext: "webp" },
+    ],
+    timers: [],
+  });
+  G.renderNotebook();
+  parseHtmlInto(npFilesListEl, npFilesListEl.innerHTML);
+  const npBtns = npFilesListEl.querySelectorAll("[data-np-file]");
+  assert.equal(npBtns.length, 6, "Today's Files renders all 6 artifacts including folded overflow rows");
+
+  // Click 2nd image (nb-2.jpg, 3rd artifact row overall) -> opens Lightbox at 2 / 3
+  fetchedUrls.length = 0;
+  notesPaneEl.dispatchEvent({ type: "click", target: npBtns[2] });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().open, true, "clicking Today's Files image opens Lightbox");
+  assert.equal(G.getLbState().idx, 1, "clicking 2nd image in Today's Files lands at index 1");
+  assert.equal(G.getLbState().countText, "2 / 3", "Today's Files image stream skips .md/.html and deduplicates duplicate path -> 2 / 3");
+  assert.deepEqual(
+    [...G.getLbState().items.map((x) => x.path)],
+    ["~/shots/nb-1.png", "~/shots/nb-2.jpg", "~/shots/nb-3.WEBP"],
+    "Today's Files image stream preserves display order and keeps first occurrence on dedup"
+  );
+  assert.equal(fetchedUrls.length, 1, "opening slide 2/3 lazily fetches only the active image");
+
+  // Boundary no-wrap check in Today's Files stream
+  doc.dispatchEvent({ type: "keydown", key: "ArrowLeft", preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().countText, "1 / 3");
+  assert.equal(G.getLbState().prevDisabled, true, "1/3 disables prev arrow");
+  doc.dispatchEvent({ type: "keydown", key: "ArrowLeft", preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 0, "1/3 ArrowLeft must not wrap to 3/3");
+
+  doc.dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+  doc.dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().countText, "3 / 3");
+  assert.equal(G.getLbState().nextDisabled, true, "3/3 disables next arrow");
+  doc.dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 2, "3/3 ArrowRight must not wrap to 1/3");
+
+  // Clicking duplicate path row maps to its deduplicated first slot (1 / 3)
+  notesPaneEl.dispatchEvent({ type: "click", target: npBtns[4] });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 0, "clicking duplicate artifact path targets its first occurrence");
+  await G.closeLightbox();
+
+  // Clicking non-image .md file opens #file-view and does NOT open Lightbox
+  fvNameEl.textContent = "";
+  notesPaneEl.dispatchEvent({ type: "click", target: npBtns[1] });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().open, false, "clicking .md in Today's Files must not open Lightbox");
+  assert.equal(fvNameEl.textContent, "notes.md", "clicking .md in Today's Files opens #file-view");
+
+  // ─── Case 10: Main chat (#super-thread) cross-message image stream with +N hidden items, md-img-btn, per-message dedup & exact duplicate targeting ───
+  const msg2Files = [1, 2, 3, 4, 5].map((n) => "~/shots/s2-" + n + ".png");
+  const msg2Body = G.renderCollieBody("重点看第 3 张 ~/shots/s2-3.png 的效果", msg2Files);
+  const msg2Art = G.renderEntryArtifacts({ id: "e-s2", role: "collie", text: "五图验收", files: msg2Files }, "");
+  const msg3Body = G.renderCollieBody("远程走势图：\n![chart](https://example.com/chart.png)", ["~/uploads/u1.png"]);
+  const msg3Art = G.renderEntryArtifacts({ id: "e-s3", role: "collie", text: "复核原图", files: ["~/uploads/u1.png"] }, "");
+  const superHtml = [
+    '<div class="mine is-media-only"><div class="msg user is-media-only"><div class="mine-media is-single" data-count="1"><span class="thumbs"><button type="button" class="thumb" data-img="~/uploads/u1.png"><img alt="" src=""></button></span></div></div></div>',
+    '<div class="say"><span class="avatar"><img src="/icon.svg" alt=""></span><div class="msg assistant" data-id="e-s2">' + msg2Body + msg2Art + '</div></div>',
+    '<div class="say"><span class="avatar"><img src="/icon.svg" alt=""></span><div class="msg assistant" data-id="e-s3">' + msg3Body + msg3Art + '</div></div>',
+  ].join("");
+  parseHtmlInto(superThreadEl, superHtml);
+
+  const msg1Thumb = superThreadEl.children[0].querySelector(".thumb[data-img]");
+  const msg2ProseLink = superThreadEl.children[1].querySelector('a.fpath[data-path="~/shots/s2-3.png"]');
+  const msg2Tiles = superThreadEl.children[1].querySelectorAll(".file-gal-tile");
+  const msg3MdBtn = superThreadEl.children[2].querySelector(".md-img-btn[data-img-url]");
+  const msg3DupTile = superThreadEl.children[2].querySelector('.file-gal-tile[data-img="~/uploads/u1.png"]');
+  assert.ok(msg1Thumb && msg2ProseLink && msg2Tiles.length === 4 && msg3MdBtn && msg3DupTile, "all 3 main chat message fixtures parsed cleanly");
+
+  const expectedStream = [
+    "p:~/uploads/u1.png",
+    "p:~/shots/s2-1.png",
+    "p:~/shots/s2-2.png",
+    "p:~/shots/s2-3.png",
+    "p:~/shots/s2-4.png",
+    "p:~/shots/s2-5.png",
+    "u:https://example.com/chart.png",
+    "p:~/uploads/u1.png",
+  ];
+  const itemKeys = (list) => [...list.map((x) => (x.path ? "p:" + x.path : "u:" + x.url))];
+
+  const fromMsg1 = G.collectGallery(msg1Thumb, { path: "~/uploads/u1.png", alt: "" });
+  assert.deepEqual(itemKeys(fromMsg1.items), expectedStream, "#super-thread collects all 8 images across 3 messages in chronological order without avatars or within-message duplicates");
+  assert.equal(fromMsg1.index, 0, "clicking msg1 u1.png opens at 1 / 8 (index 0)");
+
+  const fromMsg3Dup = G.collectGallery(msg3DupTile, { path: "~/uploads/u1.png", alt: "u1.png" });
+  assert.deepEqual(itemKeys(fromMsg3Dup.items), expectedStream);
+  assert.equal(fromMsg3Dup.index, 7, "clicking msg3 duplicate u1.png must target index 7 (8 / 8), NOT msg1's index 0");
+
+  const fromMsg2Link = G.collectGallery(msg2ProseLink, { path: "~/shots/s2-3.png", alt: "" });
+  assert.equal(fromMsg2Link.index, 3, "clicking prose image link deduplicated with msg2 gallery targets exact gallery slot (4 / 8)");
+
+  const fromMsg2PlusOne = G.collectGallery(msg2Tiles[3], { path: "~/shots/s2-4.png", alt: "s2-4.png" });
+  assert.equal(fromMsg2PlusOne.index, 4, "clicking +1 overflow tile targets 5 / 8, followed by hidden 5th image at 6 / 8");
+
+  const fromMsg3Md = G.collectGallery(msg3MdBtn, { url: "https://example.com/chart.png", alt: "chart" });
+  assert.equal(fromMsg3Md.index, 6, "clicking markdown remote image targets 7 / 8");
+
+  // Lazy loading verification + cross-message traversal 1/8 -> 8/8 without wrap
+  G.thumbs.clear();
+  fetchedUrls.length = 0;
+  G.openLightbox(fromMsg1.items, fromMsg1.index);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().countText, "1 / 8");
+  assert.equal(G.getLbState().prevDisabled, true);
+  assert.equal(fetchedUrls.length, 1, "lazy loading fetches only slide 1/8 initially (does not preload all 8)");
+  for (let step = 1; step < 8; step++) {
+    doc.dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(G.getLbState().countText, (step + 1) + " / 8");
+  }
+  assert.equal(G.getLbState().nextDisabled, true, "8/8 disables next arrow");
+  doc.dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(G.getLbState().idx, 7, "8/8 ArrowRight stays at last slide without wrapping");
+  await G.closeLightbox();
+
+  // ─── Case 11: Thread drawer (#td-list) & Worker drawer (#wd-thread) stay strictly isolated from #super-thread ───
+  const tdArt = G.renderEntryArtifacts({ id: "td-2", role: "collie", text: "抽屉双图", files: ["~/td/b1.png", "~/td/b2.png"] }, "");
+  parseHtmlInto(tdListEl, [
+    '<article class="td-node" data-td-id="td-1"><div class="td-rail"><span class="td-av user"></span></div><div class="td-content"><div class="td-text td-user-text"><span class="thumbs"><button type="button" class="thumb" data-img="~/td/a.png"><img alt=""></button></span></div></div></article>',
+    '<article class="td-node" data-td-id="td-2"><div class="td-rail"><span class="td-av collie"><img src="/icon.svg" alt=""></span></div><div class="td-content"><div class="td-text msg assistant">' + tdArt + '</div></div></article>',
+  ].join(""));
+  const tdFirst = tdListEl.querySelector('.thumb[data-img="~/td/a.png"]');
+  const tdLast = tdListEl.querySelector('.file-gal-tile[data-img="~/td/b2.png"]');
+  const tdStream = G.collectGallery(tdFirst, { path: "~/td/a.png", alt: "" });
+  assert.deepEqual(itemKeys(tdStream.items), ["p:~/td/a.png", "p:~/td/b1.png", "p:~/td/b2.png"], "#td-list collects its own 3-image stream, skipping .td-av icon and isolating from #super-thread");
+  assert.equal(tdStream.index, 0);
+  const tdStreamLast = G.collectGallery(tdLast, { path: "~/td/b2.png", alt: "b2.png" });
+  assert.equal(tdStreamLast.index, 2, "clicking last image in #td-list lands on 3 / 3");
+
+  parseHtmlInto(wdThreadEl, [
+    '<div class="mine-group"><div class="mine-media is-single" data-count="1"><span class="thumbs"><button type="button" class="thumb" data-img="~/wd/w1.png"><img alt=""></button></span></div><div class="msg user">看图</div></div>',
+    '<div class="msg assistant"><button type="button" class="md-img-btn" data-img-url="https://example.com/w2.png" data-img-alt="w2"><img class="md-img" src="https://example.com/w2.png" alt="w2"></button><p>另有 <a class="fpath img-link" href="#" data-path="~/wd/w3.png">~/wd/w3.png</a></p></div>',
+  ].join(""));
+  const wdMid = wdThreadEl.querySelector(".md-img-btn[data-img-url]");
+  const wdStream = G.collectGallery(wdMid, { url: "https://example.com/w2.png", alt: "w2" });
+  assert.deepEqual(
+    itemKeys(wdStream.items),
+    ["p:~/wd/w1.png", "u:https://example.com/w2.png", "p:~/wd/w3.png"],
+    "#wd-thread collects its own 3-image stream independently from #super-thread and #td-list"
+  );
+  assert.equal(wdStream.index, 1, "clicking 2nd image in #wd-thread lands on 2 / 3");
 }
 
 main().catch((err) => {

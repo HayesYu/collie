@@ -9640,7 +9640,7 @@
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button type="button" class="btn small" data-peer-open="friends">${esc(tx("peer.managePerms", "管理权限"))}</button>
-            <button type="button" class="btn primary small" data-peer-open="card">${esc(tx("peer.myCard", "我的名片"))}</button>
+            <button type="button" class="btn primary small" data-peer-open="card">${esc(tx("peer.myCard", "Collie 名片"))}</button>
           </div>
         </div>
         <ul class="peer-ov-list">${peerList.slice().sort((a, b) => (a.status === "pending_incoming" ? -1 : 0) - (b.status === "pending_incoming" ? -1 : 0)).map((p) => {
@@ -11369,11 +11369,11 @@
     return "";
   }
 
-  function peerShareText(inv, fallbackName = tx("peer.myCollie", "我的边牧")) {
+  function peerShareText(inv, fallbackName = tx("peer.myCollie", "我的 Collie")) {
     const joinUrl = peerInviteJoinURL(inv);
-    const name = inv?.hub_name || fallbackName || tx("peer.myCollie", "我的边牧");
+    const name = inv?.hub_name || fallbackName || tx("peer.myCollie", "我的 Collie");
     if (!joinUrl) return inv?.invite_code || "";
-    return tx("peer.shareText", "来和我的 Collie「{name}」成为好狗友，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
+    return tx("peer.shareText", "「{name}」邀请你成为好狗友，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
   }
 
   function parsePeerInviteClient(raw, selfHubId = "") {
@@ -11418,7 +11418,7 @@
         }
       }
       if (selfHubId && obj.hub_id === selfHubId) {
-        return { error: tx("peer.parseErrSelf", "不能添加自己的边牧（Hub 标识与本机相同）") };
+        return { error: tx("peer.parseErrSelf", "不能添加自己的 Collie（Hub 标识与本机相同）") };
       }
       if (obj.exp && Number(obj.exp) > 0 && Date.now() / 1000 > Number(obj.exp)) {
         return { error: tx("peer.parseErrExpired", "该旧版限时邀请码已过期，请让对方分享新版长期有效名片") };
@@ -11705,7 +11705,7 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !file) return;
     if (typeof window.BarcodeDetector !== "function") {
-      d.scanNote = tx("peer.imgNoDetector", "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或名片码。");
+      d.scanNote = tx("peer.imgNoDetector", "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或邀请码。");
       patchPeerScanPanel();
       $("#peer-paste-input")?.focus();
       return;
@@ -11720,7 +11720,7 @@
           .map((c) => extractPeerInviteCode(String(c?.rawValue || "").trim()))
           .find((v) => isCanonicalPeerInvite(v));
         if (!hit) {
-          d.scanNote = tx("peer.imgNoQr", "未在图片中识别到有效的 Collie 狗友名片二维码，请确认图片清晰或直接粘贴分享链接。");
+          d.scanNote = tx("peer.imgNoQr", "未在图片中识别到有效的 Collie 名片二维码，请确认图片清晰或直接粘贴分享链接。");
           patchPeerScanPanel();
           return;
         }
@@ -12095,7 +12095,7 @@
   function patchPeerQRCard() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), addrs: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的 Collie"), addrs: [] };
     const inv = d.invite;
     const plate = $("#peer-qr-plate");
     const qrTarget = peerInviteJoinURL(inv) || inv?.invite_code || "";
@@ -12106,7 +12106,7 @@
         plate.classList.toggle("is-pulse", !!d.inviteLoading);
         let imgEl = $("#peer-qr-img", plate);
         if (!imgEl) {
-          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="${esc(tx("peer.qrImgAlt", "狗友名片二维码"))}" src="${qrSrc}">`;
+          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="${esc(tx("peer.qrImgAlt", "Collie 名片二维码"))}" src="${qrSrc}">`;
         } else if (imgEl.getAttribute("src") !== qrSrc) {
           imgEl.setAttribute("src", qrSrc);
         }
@@ -12121,7 +12121,7 @@
       }
     }
 
-    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || tx("peer.myCollie", "我的边牧");
+    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || tx("peer.myCollie", "我的 Collie");
     setText($("#peer-hub-name-text"), displayName);
     if (!d.editingHubName) {
       const inp = $("#peer-hub-name");
@@ -12269,7 +12269,7 @@
   function patchPeerHeaderAndList() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), enabled: true, addrs: [], peers: [], blocklist: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的 Collie"), enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
     const incoming = peers.filter((p) => p.status === "pending_incoming");
     const outgoing = peers.filter((p) => p.status === "pending_outgoing");
@@ -12310,7 +12310,7 @@
           <h3>${esc(tx("peer.emptyTitle", "还没有好狗友"))}</h3>
           <p>${esc(tx("peer.emptyDesc", "把你的名片分享给信任的伙伴，或粘贴对方发来的邀请链接。对方仅能向收件箱发消息，无法触碰你的终端与文件。"))}</p>
           <div class="pm-empty-acts">
-            <button type="button" class="btn primary sm" data-peer-jump-tab="card">${esc(tx("peer.emptyViewCard", "查看我的名片"))}</button>
+            <button type="button" class="btn primary sm" data-peer-jump-tab="card">${esc(tx("peer.emptyViewCard", "查看 Collie 名片"))}</button>
             <button type="button" class="btn sm" data-peer-jump-tab="add">${esc(tx("peer.emptyAdd", "添加狗友"))}</button>
           </div>
         </div>
@@ -12461,7 +12461,7 @@
   function renderPeerModal() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), enabled: true, addrs: [], peers: [], blocklist: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的 Collie"), enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
     const pendingInCnt = peers.filter((x) => x.status === "pending_incoming").length;
 
@@ -12489,7 +12489,7 @@
             <span class="pm-tab-pending-pill" id="peer-tab-pending-badge" title="${esc(tx("peer.tabPendingTitle", "待审批申请"))}" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span>
           </button>
           <button type="button" role="tab" id="peer-tab-card" data-peer-tab="card" aria-selected="${d.tab === "card"}" ${d.tab === "card" ? "focusgroupstart" : ""}>
-            <span>${esc(tx("peer.tabCard", "我的名片"))}</span>
+            <span>${esc(tx("peer.tabCard", "Collie 名片"))}</span>
           </button>
           <button type="button" role="tab" id="peer-tab-add" data-peer-tab="add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""}>
             <span>${esc(tx("peer.tabAdd", "添加狗友"))}</span>
@@ -12502,16 +12502,16 @@
         </div>
         <div class="pm-panel" id="peer-panel-card" role="tabpanel" aria-labelledby="peer-tab-card" ${d.tab === "card" ? "" : "hidden"}>
           <div class="pm-panel-pad">
-            <section class="pm-card-hero" aria-label="${esc(tx("peer.cardHeroAria", "我的边牧名片"))}">
-              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="${esc(tx("peer.qrPlateAria", "狗友名片二维码"))}"></div>
+            <section class="pm-card-hero" aria-label="${esc(tx("peer.cardHeroAria", "Collie 名片"))}">
+              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="${esc(tx("peer.qrPlateAria", "Collie 名片二维码"))}"></div>
               <div class="pm-card-info">
                 <div class="pm-inline-name-row">
                   <button type="button" class="pm-inline-name-btn" id="peer-name-display-btn" title="${esc(tx("peer.editNameTitle", "点击修改名片昵称"))}">
-                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || tx("peer.myCollie", "我的边牧"))}</span>
+                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || tx("peer.myCollie", "我的 Collie"))}</span>
                     <svg class="pm-inline-name-pencil" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
                   </button>
                   <form class="pm-inline-name-editor" id="peer-name-editor-form" hidden>
-                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="${esc(tx("peer.nameInputAria", "名片昵称"))}" placeholder="${esc(tx("peer.nameInputPlaceholder", "输入边牧昵称"))}" value="${esc(d.hubNameInput)}">
+                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="${esc(tx("peer.nameInputAria", "名片昵称"))}" placeholder="${esc(tx("peer.nameInputPlaceholder", "输入 Collie 昵称"))}" value="${esc(d.hubNameInput)}">
                     <button type="submit" class="icon-btn" id="peer-hub-name-save" aria-label="${esc(tx("peer.saveNameAria", "保存昵称"))}" title="${esc(tx("peer.saveNameTitle", "保存 (Enter)"))}">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
                     </button>
@@ -12550,7 +12550,7 @@
                   </div>
                 </div>
                 <div class="pm-adv-row">
-                  <span class="pm-adv-k">${esc(tx("peer.advCode", "名片码"))}</span>
+                  <span class="pm-adv-k">${esc(tx("peer.advCode", "邀请码"))}</span>
                   <div class="pm-adv-v">
                     <span class="pm-adv-code" id="peer-adv-code">-</span>
                     <button type="button" class="btn ghost xs" id="peer-adv-copy-code">${esc(tx("common.copy", "复制"))}</button>
@@ -12584,7 +12584,7 @@
             <div class="pm-add-block">
               <div id="peer-add-input-wrap">
                 <div class="pm-field-head">
-                  <label class="pm-field-label" for="peer-paste-input">${esc(tx("peer.addInputLabel", "邀请链接或名片码"))}</label>
+                  <label class="pm-field-label" for="peer-paste-input">${esc(tx("peer.addInputLabel", "邀请链接或邀请码"))}</label>
                   <div class="pm-scan-inline">
                     <button type="button" class="pm-scan-link" id="peer-scan-toggle">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></svg>
@@ -12601,7 +12601,7 @@
                 <div id="peer-scan-stage-slot" hidden></div>
                 <div class="pm-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
                 <div class="pm-paste-box">
-                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="${esc(tx("peer.addPlaceholder", "粘贴狗友分享的邀请链接、整段文案或名片码"))}">${esc(d.pasteRaw)}</textarea>
+                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="${esc(tx("peer.addPlaceholder", "粘贴狗友分享的邀请链接、整段文案或邀请码"))}">${esc(d.pasteRaw)}</textarea>
                   <button type="button" class="pm-paste-btn" id="peer-paste-btn" title="${esc(tx("peer.pasteTitle", "从剪贴板粘贴邀请码"))}">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>
                     <span>${esc(tx("peer.pasteBtn", "粘贴"))}</span>
@@ -12618,7 +12618,7 @@
                     <label class="pm-setting-label" for="peer-pair-name">${esc(tx("peer.aliasLabel", "备注名"))}</label>
                     <div class="pm-setting-sub">${esc(tx("peer.aliasSub", "可选，留空自动使用对方昵称"))}</div>
                   </div>
-                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="${esc(tx("peer.aliasPlaceholder", "例如：周远的边牧"))}">
+                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="${esc(tx("peer.aliasPlaceholder", "例如：周远的 Collie"))}">
                 </div>
                 <div class="pm-setting-row last">
                   <div class="pm-setting-copy">
@@ -12760,10 +12760,10 @@
     // Primary CTA: copy invite link
     $("#peer-copy-invite")?.addEventListener("click", async () => {
       if (!d.invite?.invite_code) return;
-      const share = peerShareText(d.invite, d.data?.hub_name || tx("peer.myCollie", "我的边牧"));
+      const share = peerShareText(d.invite, d.data?.hub_name || tx("peer.myCollie", "我的 Collie"));
       const ok = await copyText(share);
       if (!ok) {
-        toast(tx("peer.copyInviteFail", "复制失败，请展开下方高级详情手动复制名片码"), "attn");
+        toast(tx("peer.copyInviteFail", "复制失败，请展开下方高级详情手动复制邀请码"), "attn");
         return;
       }
       toast(tx("peer.copyInviteOk", "已复制邀请链接，发给狗友即可申请"));
@@ -12791,7 +12791,7 @@
     $("#peer-adv-copy-code")?.addEventListener("click", async () => {
       if (!d.invite?.invite_code) return;
       const ok = await copyText(d.invite.invite_code);
-      toast(ok ? tx("peer.copiedCode", "已复制名片码") : tx("common.copyFailed", "复制失败"), ok ? undefined : "attn");
+      toast(ok ? tx("peer.copiedCode", "已复制邀请码") : tx("common.copyFailed", "复制失败"), ok ? undefined : "attn");
     });
     $("#peer-reset-ask")?.addEventListener("click", () => {
       d.resetConfirm = true;
@@ -12876,7 +12876,7 @@
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
         const text = String(raw || "").trim();
         if (!text) {
-          focusFallback(tx("peer.pasteEmptyNote", "剪贴板为空，请先复制狗友的邀请链接或名片码"), tx("peer.pasteEmptyToast", "剪贴板为空，请先复制邀请码"));
+          focusFallback(tx("peer.pasteEmptyNote", "剪贴板为空，请先复制狗友的邀请链接或邀请码"), tx("peer.pasteEmptyToast", "剪贴板为空，请先复制邀请码"));
           return;
         }
         const parsed = applyPeerPasteRaw(text);

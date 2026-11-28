@@ -221,8 +221,32 @@ assert.equal(I.D.zh["side.pals"], "狗友");
 assert.equal(I.D.en["side.pals"], "Pals");
 assert.equal(I.D.zh["peer.tabAdd"], "添加狗友");
 assert.equal(I.D.en["peer.tabAdd"], "Add a pal");
-assert.equal(I.D.zh["peer.shareText"], "来和我的 Collie「{name}」成为好狗友，点击链接即可发起申请：\n{url}");
-assert.equal(I.D.en["peer.shareText"], "Become pals with my Collie \"{name}\" — open the link to send a request:\n{url}");
+assert.equal(I.D.zh["peer.myCard"], "Collie 名片");
+assert.equal(I.D.en["peer.myCard"], "Collie Card");
+assert.equal(I.D.zh["peer.tabCard"], "Collie 名片");
+assert.equal(I.D.en["peer.tabCard"], "Collie Card");
+assert.equal(I.D.zh["peer.emptyViewCard"], "查看 Collie 名片");
+assert.equal(I.D.en["peer.emptyViewCard"], "View Collie Card");
+assert.equal(I.D.zh["peer.myCollie"], "我的 Collie");
+assert.equal(I.D.en["peer.myCollie"], "My Collie");
+assert.equal(I.D.zh["peer.cardHeroAria"], "Collie 名片");
+assert.equal(I.D.en["peer.cardHeroAria"], "Collie Card");
+assert.equal(I.D.zh["peer.qrPlateAria"], "Collie 名片二维码");
+assert.equal(I.D.en["peer.qrPlateAria"], "Collie Card QR code");
+assert.equal(I.D.zh["peer.qrImgAlt"], "Collie 名片二维码");
+assert.equal(I.D.en["peer.qrImgAlt"], "Collie Card QR code");
+assert.equal(I.D.zh["peer.nameInputPlaceholder"], "输入 Collie 昵称");
+assert.equal(I.D.en["peer.nameInputPlaceholder"], "Enter Collie name");
+assert.equal(I.D.zh["peer.parseErrSelf"], "不能添加自己的 Collie（Hub 标识与本机相同）");
+assert.equal(I.D.en["peer.parseErrSelf"], "You can't add your own Collie (matching Hub ID)");
+assert.equal(I.D.zh["peer.shareText"], "「{name}」邀请你成为好狗友，点击链接即可发起申请：\n{url}");
+assert.equal(I.D.en["peer.shareText"], "\"{name}\" invites you to become pals — open the link to send a request:\n{url}");
+assert.equal(I.D.zh["peer.imgNoQr"], "未在图片中识别到有效的 Collie 名片二维码，请确认图片清晰或直接粘贴分享链接。");
+assert.equal(I.D.en["peer.imgNoQr"], "No valid Collie Card QR code found in that image — check clarity or paste the share link.");
+assert.equal(I.D.zh["peer.advCode"], "邀请码");
+assert.equal(I.D.en["peer.advCode"], "Invite code");
+assert.equal(I.D.zh["peer.advSecret"], "名片密钥");
+assert.equal(I.D.en["peer.advSecret"], "Card secret");
 
 for (const [name, text] of [
   ["web/index.html", htmlSrc],
@@ -234,13 +258,25 @@ for (const [name, text] of [
 ]) {
   const nonComment = text.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
   assert.ok(!nonComment.includes("好友边牧"), name + " must not contain legacy wording '好友边牧'");
+  assert.ok(!nonComment.includes("名片码"), name + " must unify '名片码' to '邀请码'");
+  assert.ok(!nonComment.includes("我的名片"), name + " must unify '我的名片' to 'Collie 名片'");
+  assert.ok(!nonComment.includes("Collie 狗友名片二维码"), name + " must tighten 'Collie 狗友名片二维码' to 'Collie 名片二维码'");
 }
 for (const k of zhKeys) {
   assert.ok(!I.D.zh[k].includes("好友边牧"), "D.zh[" + k + "] must not contain '好友边牧'");
   assert.ok(!I.D.zh[k].includes("好友"), "D.zh[" + k + "] should converge '好友' to '狗友'");
   assert.ok(!/Peer Collie/i.test(I.D.en[k]), "D.en[" + k + "] must not contain 'Peer Collie'");
+  if (k.startsWith("peer.")) {
+    assert.ok(!I.D.zh[k].includes("边牧"), "D.zh[" + k + "] should unify '边牧' to 'Collie'");
+    assert.ok(!I.D.zh[k].includes("名片码"), "D.zh[" + k + "] should unify '名片码' to '邀请码'");
+    assert.ok(!I.D.zh[k].includes("我的名片"), "D.zh[" + k + "] should unify '我的名片' to 'Collie 名片'");
+    assert.ok(!/card code/i.test(I.D.en[k]), "D.en[" + k + "] should unify 'card code' to 'invite code'");
+    assert.ok(!/\bmy card\b/i.test(I.D.en[k]), "D.en[" + k + "] should unify 'My card' to 'Collie Card'");
+  }
 }
 assert.ok(!/Peer Collie/i.test(joinSrc), "docs/join/index.html must not contain 'Peer Collie'");
+assert.ok(!joinSrc.includes("边牧名片"), "docs/join/index.html must unify '边牧名片' to 'Collie 名片'");
+assert.ok(joinSrc.includes("还没养自己的边牧？"), "docs/join/index.html must preserve external slogan '养一只边牧'");
 
 // Historical backend event localization compatibility
 assert.equal(I.localizeEventText("[好友边牧来信 · Alice] 帮忙查下构建", "zh"), "[狗友来信 · Alice] 帮忙查下构建");

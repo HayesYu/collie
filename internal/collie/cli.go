@@ -758,7 +758,7 @@ func cliPeer(args []string) error {
 			return nil
 		}
 		qrTarget := orStr(r.JoinURL, r.InviteCode)
-		fmt.Printf("\n  我的边牧名片（长期有效 · 需对方申请并经你通过后接通，默认模式：%s）：\n\n", peerModeLabel(r.Mode))
+		fmt.Printf("\n  Collie 名片（长期有效 · 需对方申请并经你通过后接通，默认模式：%s）：\n\n", peerModeLabel(r.Mode))
 		printQR(os.Stdout, qrTarget)
 		if r.JoinURL != "" {
 			fmt.Printf("\n  分享链接：%s\n", r.JoinURL)

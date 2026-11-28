@@ -6667,7 +6667,7 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
 /* ─── Floating White-Paper「小本本」&「话题线」(minimalist white-paper card, unified left-biased --notes-reserve, compositor open/close & isolated 0fr->1fr expand motion) ─── */
 .notes-scrim {
   display: none; position: fixed; inset: 0; z-index: 44;
-  background: rgba(10, 10, 12, .34);
+  background: rgba(10, 10, 12, .32);
   opacity: 0; pointer-events: none;
   transition: opacity .22s ease;
   overflow: hidden; overscroll-behavior: contain; touch-action: none;
@@ -6695,6 +6695,7 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   background: var(--np-bg);
   box-shadow: var(--np-shadow);
   overflow: hidden;
+  overscroll-behavior: contain;
   transform-origin: right top;
   opacity: 1;
   visibility: visible;
@@ -6714,7 +6715,7 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
 .np-body {
   flex: 1; min-height: 0;
   overflow-y: auto; overflow-x: hidden;
-  overscroll-behavior-y: contain;
+  overscroll-behavior: contain;
   padding: 5px 13px 11px;
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -6809,7 +6810,10 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
 }
 .np-inner { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; }
 .np-handle { display: none; }
-.np-handle-pill { width: 38px; height: 4px; border-radius: 999px; background: var(--line-2); }
+.np-handle-pill {
+  width: 38px; height: 4px; border-radius: 999px;
+  background: var(--line-2); transition: background .15s, width .15s;
+}
 
 /* Minimalist sticky-note header: 小本本 + M 月 D 日 + single × */
 .np-head {
@@ -6817,7 +6821,6 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   height: 42px; padding: 4px 9px 0 13px; flex: none; min-width: 0;
   user-select: none;
 }
-.np-back { display: none; margin-left: -4px; }
 .np-title-row { display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0; overflow: hidden; }
 .np-title { margin: 0; font-size: 12.5px; font-weight: 600; letter-spacing: -.01em; color: var(--fg); white-space: nowrap; }
 .np-sub {
@@ -7050,11 +7053,18 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
     width: min(316px, 88vw); max-height: none;
     border-radius: 0; border: 0; border-left: 1px solid var(--line);
     background: var(--bg); box-shadow: var(--shadow-lg);
+    overscroll-behavior: contain;
     cursor: default;
     transform-origin: right center;
     opacity: 1; visibility: visible;
     transform: translate3d(0, 0, 0);
     transition: transform 300ms cubic-bezier(.22, 1, .36, 1), visibility 0ms;
+  }
+  :root[data-theme="dark"] .notepane,
+  :root[data-theme="dark"] .notepane.is-expanded {
+    background: var(--bg);
+    border-color: var(--line);
+    box-shadow: var(--shadow-lg);
   }
   .notepane.is-hidden {
     opacity: 1; visibility: hidden;
@@ -7080,50 +7090,95 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   .notepane .np-more-pill { display: none; }
   .notepane .np-timer-freq { opacity: 1; }
 }
+@media (max-width: 1359px) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .notepane,
+  :root:not([data-theme="light"]) .notepane.is-expanded {
+    background: var(--bg);
+    border-color: var(--line);
+    box-shadow: var(--shadow-lg);
+  }
+}
 
-/* Mobile (<= 760px): independent bottom drawer for 小本本 with smooth physical easing */
+/* Mobile (<= 760px): unified rounded bottom sheet aligned with .filepane / .threadpane / .workerpane */
 @media (max-width: 760px) {
   :root { --head-h: 54px; --strip-h: 36px; }
+  .notes-scrim { background: rgba(10, 10, 12, .38); }
+  :root[data-theme="dark"] .notes-scrim { background: rgba(0, 0, 0, .62); }
   .notepane,
   .notepane:not(.is-hidden),
   .notepane.is-expanded {
     position: fixed; top: auto; left: 0; right: 0; bottom: 0; z-index: 50;
     width: 100%; max-width: 100%; max-height: none;
-    height: min(calc(var(--vh) * 0.80), 640px);
-    border-left: 0; border-top: 1px solid var(--line-2); border-radius: 18px 18px 0 0;
-    box-shadow: 0 -10px 36px rgba(0, 0, 0, .18);
+    height: min(calc(var(--vh) * 0.92), calc(var(--vh) - max(36px, env(safe-area-inset-top) + 10px)));
+    border: 0; border-top: 1px solid var(--line-2); border-radius: 20px 20px 0 0;
+    background: var(--bg);
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, .14), 0 -1px 4px rgba(0, 0, 0, .06);
+    overscroll-behavior: contain;
     cursor: default;
     transform-origin: center bottom;
     opacity: 1; visibility: visible;
     transform: translate3d(0, 0, 0);
-    transition: transform 360ms cubic-bezier(.22, 1, .36, 1), visibility 0ms;
-    transition: transform 380ms linear(0, 0.28 8%, 0.68 19%, 0.91 32%, 0.99 46%, 1.008 62%, 1.002 78%, 1), visibility 0ms;
+    transition: transform .3s cubic-bezier(.32, .72, 0, 1), visibility 0ms;
   }
-  :root[data-theme="dark"] .notepane { box-shadow: 0 -12px 40px rgba(0, 0, 0, .58); }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .notepane { box-shadow: 0 -12px 40px rgba(0, 0, 0, .58); }
+  :root[data-theme="dark"] .notepane,
+  :root[data-theme="dark"] .notepane.is-expanded {
+    background: var(--bg);
+    border-color: var(--line-2);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, .58);
   }
   .notepane.is-hidden {
     opacity: 1; visibility: hidden;
     transform: translate3d(0, 100%, 0);
     pointer-events: none;
-    transition: transform 260ms cubic-bezier(.32, .72, 0, 1), visibility 0ms linear 260ms;
+    transition: transform .3s cubic-bezier(.32, .72, 0, 1), visibility 0ms linear .3s;
   }
+  .notepane.is-dragging,
+  .notepane.is-dragging:not(.is-hidden),
+  .notepane.is-dragging.is-expanded { transition: none !important; }
+  #v-collie:has(.notepane.is-dragging) .notes-scrim { transition: none !important; }
   .np-handle {
     display: flex; align-items: center; justify-content: center; flex: none;
-    width: 100%; height: 22px; padding: 8px 0 2px; border: 0; background: transparent;
+    width: 100%; height: 24px; padding: 8px 0 4px;
+    border: 0; background: transparent; touch-action: none; cursor: grab;
   }
-  .notepane .np-head { height: 46px; padding: 0 10px 0 12px; }
-  .notepane .np-back { display: inline-grid; }
+  .np-handle:focus-visible { outline: none; }
+  .np-handle:focus-visible .np-handle-pill,
+  .np-handle:active .np-handle-pill,
+  .notepane.is-dragging .np-handle-pill { background: var(--fg-3); width: 44px; }
+  .notepane .np-head {
+    gap: 10px;
+    padding: 2px 10px 10px 16px; height: auto; min-height: 46px; padding-top: 2px;
+    touch-action: pan-x;
+  }
+  .notepane .np-title { font-size: 14.5px; }
+  .notepane .np-sub { font-size: 12px; }
+  .notepane .np-head-acts { gap: 2px; }
+  .notepane .np-act-btn { min-inline-size: 30px; min-block-size: 30px; width: 30px; height: 30px; border-radius: 8px; }
+  .notepane .np-act-btn svg { width: 16px; height: 16px; stroke-width: 1.7; }
   .notepane .np-slash-tab { min-block-size: 28px; padding: 4px 2px; margin: -4px -2px; }
   .notepane .np-body,
   .notepane.is-expanded .np-body { padding: 10px 16px max(16px, env(safe-area-inset-bottom)); }
   .notepane .np-item-title, .notepane .np-file-title { font-size: 13px; }
   .notepane .np-item-note { font-size: 12px; }
 }
+@media (max-width: 480px) {
+  .notepane .np-act-btn { min-inline-size: 32px; min-block-size: 32px; width: 32px; height: 32px; }
+}
+@media (max-width: 760px) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .notes-scrim { background: rgba(0, 0, 0, .62); }
+  :root:not([data-theme="light"]) .notepane,
+  :root:not([data-theme="light"]) .notepane.is-expanded {
+    background: var(--bg);
+    border-color: var(--line-2);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, .58);
+  }
+}
+@media (max-width: 760px) and (pointer: coarse) {
+  .notepane .np-act-btn { min-inline-size: 36px; min-block-size: 36px; width: 36px; height: 36px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .notepane, .notepane:not(.is-hidden), .notepane.is-hidden, .notepane .np-body,
-  .np-sec-panel.is-mode-entering, .np-slash-tab,
+  .np-handle-pill, .np-sec-panel.is-mode-entering, .np-slash-tab,
   #v-collie .thread, #v-collie .working-row, #v-collie .composer,
   .np-fold, .np-fold > .np-fold-inner, .np-more-pill, .np-timer-freq, .notes-scrim {
     transition: none !important;

@@ -26,6 +26,7 @@
 @property --vtop { syntax: "<length>"; inherits: false; initial-value: 0px; }
 @property --kb-inset { syntax: "<length>"; inherits: false; initial-value: 0px; }
 @property --kb-top { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --side-full-h { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
 :root {
   --bg: #ffffff;
   --bg-2: #f7f7f6;
@@ -372,6 +373,7 @@ body {
   font: 14px/1.5 var(--sans);
   -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 [hidden]:not(.super-search, .ss-panel, .side-drawer) { display: none !important; }
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -491,11 +493,11 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   .app { position: fixed; top: 0; left: 0; right: 0; transform: translate3d(0, var(--vtop, 0px), 0); }
 }
 @media (min-width: 761px) {
-  .app { height: 100%; }
+  .app { position: relative; height: var(--side-full-h, 100%); overflow: hidden; }
+  .app > .side { height: var(--side-full-h, 100%); align-self: start; }
   .app > .main { height: 100%; }
   .app > .main, .side-drawer { padding-top: var(--kb-top, 0px); padding-bottom: var(--kb-inset, 0px); }
 }
-@media (min-width: 761px) and (pointer: coarse) { .app { position: fixed; inset: 0; } }
 @media (min-width: 761px) and (max-width: 1359px) {
   .notepane { padding-top: var(--kb-top, 0px); padding-bottom: var(--kb-inset, 0px); }
 }
@@ -663,7 +665,8 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
     position: fixed;
     top: 0;
     left: 0;
-    bottom: 0;
+    bottom: auto;
+    height: var(--side-full-h, 100%);
     width: var(--side-anim-w, 300px);
     overflow: hidden;
     z-index: 4;
@@ -710,9 +713,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
 @media (min-width: 1001px) {
   .app:not(.side-collapsed) #v-collie #crew { display: none; }
 }
-@media (min-width: 761px) and (max-width: 1000px),
-       (min-width: 761px) and (pointer: coarse),
-       (min-width: 761px) and (hover: none) and (any-pointer: coarse) {
+@media (min-width: 761px) and (max-width: 1000px) {
   .app, .app.side-collapsed, .app.is-side-opening {
     --side-w: 54px;
     --side-overlay-w: clamp(276px, calc(108px + 16vw), 300px);
@@ -726,7 +727,7 @@ input[type=time]:hover::-webkit-calendar-picker-indicator, input[type=datetime-l
   .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-rail,
   .app.side-collapsed:not(.is-side-opening) > .side:not(.is-side-closing) .side-full { display: flex; }
   .app > .side .side-full {
-    display: flex; position: fixed; top: 0; left: 0; bottom: 0; z-index: 42;
+    display: flex; position: fixed; top: 0; left: 0; bottom: auto; height: var(--side-full-h, 100%); z-index: 42;
     width: var(--side-overlay-w, 292px); max-width: calc(100vw - 48px);
     background: var(--bg-2); border-right: 1px solid var(--line-2); box-shadow: var(--shadow);
     padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left);
@@ -930,12 +931,13 @@ html.is-idle .working-row .wk-t {
   left: 0;
   z-index: 1;
   padding-top: 0;
-  contain: strict;
+  contain: layout style;
 }
 /* Keep #v-collie's layout tree, containment box, and scroll position warm across sidebar
    route switches without inherited visibility/pointer-events style invalidation. */
 #v-collie.is-parked {
   z-index: 0;
+  contain: strict;
   content-visibility: hidden;
 }
 @supports not (content-visibility: hidden) {
@@ -3830,8 +3832,8 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   .filepane,
   .threadpane,
   .workerpane {
-    position: fixed; top: 0; right: 0; bottom: 0; left: auto; z-index: 48;
-    width: min(460px, 92vw); max-width: 92vw; height: auto;
+    position: fixed; top: 0; right: 0; bottom: auto; left: auto; z-index: 48;
+    width: min(460px, 92vw); max-width: 92vw; height: var(--side-full-h, 100%);
     border-left: 1px solid var(--line);
     box-shadow: var(--shadow-lg);
     overscroll-behavior: contain;
@@ -8364,8 +8366,8 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   .notepane,
   .notepane:not(.is-hidden),
   .notepane.is-expanded {
-    position: fixed; top: 0; left: auto; right: 0; bottom: 0; z-index: 48;
-    width: min(316px, 88vw); max-height: none;
+    position: fixed; top: 0; left: auto; right: 0; bottom: auto; z-index: 48;
+    width: min(316px, 88vw); height: var(--side-full-h, 100%); max-height: none;
     border-radius: 0; border: 0; border-left: 1px solid var(--line);
     background: var(--bg); box-shadow: var(--shadow-lg);
     overscroll-behavior: contain;

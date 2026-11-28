@@ -4212,6 +4212,50 @@
     if (!p || !failedFileGalleryImgs.delete(p)) return;
     failedFileGalleryVer++;
   }
+  const failedMediaVideos = new Set();
+  let failedMediaVideosVer = 0;
+  const videoDims = new Map();
+  const videoBlobs = new Map();
+  function markMediaVideoFailed(p) {
+    if (!p || failedMediaVideos.has(p)) return;
+    if (failedMediaVideos.size >= 300) {
+      const oldest = failedMediaVideos.values().next().value;
+      if (oldest !== undefined) failedMediaVideos.delete(oldest);
+    }
+    failedMediaVideos.add(p);
+    failedMediaVideosVer++;
+  }
+  function clearMediaVideoFailed(p) {
+    if (!p || !failedMediaVideos.delete(p)) return;
+    failedMediaVideosVer++;
+  }
+  function cleanAttachName(rawPath) {
+    const base = String(rawPath || "").split(/[?#]/)[0].split("/").pop() || String(rawPath || "");
+    return base.replace(/^[0-9a-f]{6}-(?=.+)/i, "");
+  }
+  const ATT_ICO_DOC = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>`;
+  const ATT_ICO_SHEET = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M9.5 9.5v10"/></svg>`;
+  const ATT_ICO_CODE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="m13.5 5.5-3 13"/></svg>`;
+  const ATT_ICO_ARCHIVE = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="4" rx="1.2"/><path d="M5.5 8.5v9.5a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8.5"/><path d="M10 12.5h4"/></svg>`;
+  const ATT_ICO_AUDIO = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4M9 7v10M13 5v14M17 8v8M21 11v2"/></svg>`;
+  const ATT_ICO_VIDEO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg>`;
+  const ATT_ICO_HTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.8 12h16.4"/><path d="M12 3.5a12.5 12.5 0 0 1 0 17M12 3.5a12.5 12.5 0 0 0 0 17"/></svg>`;
+  const ATT_ICO_IMG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.4"/><path d="M20.5 15.5l-4.5-4.5L7.5 19.5"/></svg>`;
+  const ATT_ICO_FILE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`;
+  function fileCategoryInfo(name, extHint = "") {
+    const clean = cleanAttachName(name);
+    const rawExt = String(extHint || (clean.includes(".") ? clean.split(".").pop() : "")).trim().toLowerCase();
+    const extLabel = (rawExt ? rawExt.slice(0, 6) : "file").toUpperCase();
+    if (rawExt === "html" || rawExt === "htm") return { kind: "html", icon: ATT_ICO_HTML, extLabel };
+    if (IMG_EXT.test(clean) || IMG_EXT.test("." + rawExt)) return { kind: "img", icon: ATT_ICO_IMG, extLabel };
+    if (VIDEO_EXT.test(clean) || VIDEO_EXT.test("." + rawExt)) return { kind: "video", icon: ATT_ICO_VIDEO, extLabel };
+    if (AUDIO_EXT.test(clean) || AUDIO_EXT.test("." + rawExt)) return { kind: "audio", icon: ATT_ICO_AUDIO, extLabel };
+    if (ARCHIVE_EXT.test(clean) || ARCHIVE_EXT.test("." + rawExt)) return { kind: "archive", icon: ATT_ICO_ARCHIVE, extLabel };
+    if (SHEET_EXT.test(clean) || SHEET_EXT.test("." + rawExt)) return { kind: "sheet", icon: ATT_ICO_SHEET, extLabel };
+    if (CODE_EXT.test(clean) || CODE_EXT.test("." + rawExt)) return { kind: "code", icon: ATT_ICO_CODE, extLabel };
+    if (DOC_EXT.test(clean) || DOC_EXT.test("." + rawExt)) return { kind: "doc", icon: ATT_ICO_DOC, extLabel };
+    return { kind: "file", icon: ATT_ICO_FILE, extLabel };
+  }
   function extractEntryArtifacts(e) {
     if (!e || e.role !== "collie") return [];
     const text = e.text || "";
@@ -4239,15 +4283,16 @@
       seen.add(key);
       const name = p.split("/").pop() || p;
       const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
-      if (!ext) return;
+      if (!ext && !explicit) return;
       out.push({
         path: p,
-        name,
+        name: cleanAttachName(name),
         ext,
         explicit: !!explicit,
         isHtml: ext === "html" || ext === "htm",
         isCsv: ext === "csv" || ext === "tsv",
         isImg: IMG_EXT.test(name),
+        isVideo: VIDEO_EXT.test(name),
       });
     };
     if (files) {
@@ -4264,7 +4309,74 @@
   const ARTIFACT_CHEV_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
   function renderArtifactChipHtml(it, activeMatch = "") {
     const act = !!(activeMatch && activeMatch === it.path);
-    return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapPreview", "预览 {name}", { name: it.name }))}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>`;
+    const displayName = cleanAttachName(it.name || it.path);
+    const { kind, icon, extLabel } = fileCategoryInfo(displayName, it.ext);
+    const isHtml = !!(it.isHtml || kind === "html");
+    return `<button type="button" class="snap-chip${isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-kind="${kind}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: displayName }) : tx("file.snapPreview", "预览 {name}", { name: displayName }))}"><span class="snap-chip-ico" aria-hidden="true">${icon}</span><span class="snap-chip-name">${esc(displayName)}</span><span class="snap-chip-ext">${esc(extLabel)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>`;
+  }
+  function renderUserFileChipHtml(path, activeMatch = "") {
+    const name = cleanAttachName(path);
+    const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
+    return renderArtifactChipHtml({ path, name, ext, isHtml: ext === "html" || ext === "htm" }, activeMatch);
+  }
+  function renderVideoCardHtml(path, name = "") {
+    const displayName = cleanAttachName(name || path);
+    const ext = (displayName.includes(".") ? displayName.split(".").pop() : "mp4").toLowerCase();
+    const ep = esc(path);
+    const en = esc(displayName);
+    const dim = videoDims.get(path);
+    const w = dim?.w || 640;
+    const h = dim?.h || 360;
+    const readyCls = dim ? " is-ready" : "";
+    const openTip = tx("file.videoOpenTip", "在文件抽屉打开视频 {name}", { name: displayName });
+    return `<figure class="att-video-card${readyCls}" data-video-card="${ep}" data-file-name="${en}" data-file-ext="${esc(ext)}"><video class="att-video-el" controls playsinline webkit-playsinline preload="metadata" loading="lazy" width="${w}" height="${h}" data-video-path="${ep}" aria-label="${esc(tx("file.videoAria", "视频 {name}", { name: displayName }))}"></video><div class="att-video-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: displayName }))}"><button type="button" class="rv-ico" data-open-file="${ep}" title="${esc(openTip)}" aria-label="${esc(openTip)}">${ICON_RV_DRAWER}</button></div></figure>`;
+  }
+  function renderVideoGroupHtml(videoPaths, extraCls = "", activeMatch = "") {
+    if (!videoPaths?.length) return "";
+    const active = videoPaths.filter((p) => !failedMediaVideos.has(p));
+    const failed = videoPaths.filter((p) => failedMediaVideos.has(p));
+    const listHtml = active.length
+      ? `<div class="att-video-list" data-count="${active.length}">${active.map((p) => renderVideoCardHtml(p)).join("")}</div>`
+      : "";
+    const fallbackHtml = failed.length
+      ? `<div class="msg-files att-video-fallbacks">${failed.map((p) => renderUserFileChipHtml(p, activeMatch)).join("")}</div>`
+      : "";
+    return `<div class="att-video-wrap${extraCls ? " " + extraCls : ""}" data-video-wrap>${listHtml}${fallbackHtml}</div>`;
+  }
+  function degradeVideoCard(card) {
+    if (!card || card.dataset?.degraded === "1") return;
+    if (card.dataset) card.dataset.degraded = "1";
+    const path = card.dataset?.videoCard || card.querySelector?.("video")?.dataset?.videoPath || "";
+    if (!path) return;
+    const name = cleanAttachName(card.dataset?.fileName || path);
+    const ext = card.dataset?.fileExt || (name.includes(".") ? name.split(".").pop().toLowerCase() : "mp4");
+    markMediaVideoFailed(path);
+    const cachedBlob = videoBlobs.get(path);
+    if (cachedBlob) {
+      videoBlobs.delete(path);
+      try { URL.revokeObjectURL(cachedBlob); } catch {}
+    }
+    const list = card.closest?.(".att-video-list") || null;
+    const wrap = card.closest?.("[data-video-wrap]") || null;
+    card.remove?.();
+    if (typeof document !== "undefined" && typeof document.createElement === "function") {
+      let fallbacks = wrap?.querySelector?.(".att-video-fallbacks") || null;
+      if (!fallbacks) {
+        fallbacks = document.createElement("div");
+        fallbacks.className = "msg-files att-video-fallbacks";
+        if (wrap) wrap.appendChild(fallbacks);
+        else if (list?.parentElement) list.parentElement.insertBefore(fallbacks, list.nextSibling);
+      }
+      const existing = [...(fallbacks.querySelectorAll?.(".snap-chip[data-open-file]") || [])];
+      if (!existing.some((el) => el.dataset?.openFile === path)) {
+        fallbacks.appendChild(createArtifactChipEl(path, name, ext));
+      }
+    }
+    if (list) {
+      const rem = list.querySelectorAll?.(".att-video-card")?.length || 0;
+      if (list.dataset) list.dataset.count = String(rem);
+      if (rem === 0) list.hidden = true;
+    }
   }
   function fileGallerySizeClass(n) {
     return n === 1 ? "is-1" : n === 2 ? "is-2" : n === 3 ? "is-3" : n === 4 ? "is-4" : "is-many";
@@ -4297,12 +4409,14 @@
   function createArtifactChipEl(path, name, ext) {
     const el = document.createElement("button");
     el.type = "button";
-    const normExt = String(ext || "").toLowerCase();
-    el.className = "snap-chip" + (normExt === "html" || normExt === "htm" ? " is-html" : "");
+    const displayName = cleanAttachName(name || path);
+    const { kind, icon, extLabel } = fileCategoryInfo(displayName, ext);
+    el.className = "snap-chip" + (kind === "html" ? " is-html" : "");
+    el.dataset.kind = kind;
     el.dataset.openFile = path;
     el.title = path;
-    el.setAttribute("aria-label", tx("file.snapPreview", "预览 {name}", { name }));
-    el.innerHTML = `<span class="snap-chip-ext">${esc((normExt || "FILE").toUpperCase())}</span><span class="snap-chip-name">${esc(name)}</span><span class="snap-chip-chev" aria-hidden="true">${ARTIFACT_CHEV_SVG}</span>`;
+    el.setAttribute("aria-label", tx("file.snapPreview", "预览 {name}", { name: displayName }));
+    el.innerHTML = `<span class="snap-chip-ico" aria-hidden="true">${icon}</span><span class="snap-chip-name">${esc(displayName)}</span><span class="snap-chip-ext">${esc(extLabel)}</span><span class="snap-chip-chev" aria-hidden="true">${ARTIFACT_CHEV_SVG}</span>`;
     return el;
   }
   function createPromotedFileTileEl(path, name, ext) {
@@ -4423,7 +4537,7 @@
     const hasExplicit = Array.isArray(e.files) && e.files.length > 0;
     const lang = curLang();
     const cached = _artifactRenderCache.get(e);
-    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit && cached.failVer === failedFileGalleryVer && cached.lang === lang) {
+    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit && cached.failVer === failedFileGalleryVer && cached.vidFailVer === failedMediaVideosVer && cached.lang === lang) {
       return cached.html;
     }
     const renderChip = (it) => renderArtifactChipHtml(it, activeMatch);
@@ -4437,55 +4551,57 @@
       }).join("");
     };
     const inlineImgItems = items.filter((it) => it.isImg && it.explicit);
+    const inlineVideoItems = items.filter((it) => it.isVideo && it.explicit);
     const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
     let html;
-    if (inlineImgItems.length > 0) {
+    if (inlineImgItems.length > 0 || inlineVideoItems.length > 0 || inlineHtmlItems.length > 0) {
       const inlineSet = new Set([
         ...inlineImgItems.map((it) => it.path),
+        ...inlineVideoItems.map((it) => it.path),
         ...inlineHtmlItems.map((it) => it.path),
       ]);
       const otherItems = items.filter((it) => !inlineSet.has(it.path));
-      const activeImgs = inlineImgItems.filter((it) => !failedFileGalleryImgs.has(it.path));
-      const failedImgs = inlineImgItems.filter((it) => failedFileGalleryImgs.has(it.path));
-      const fallbackHtml = failedImgs.length
-        ? `<div class="msg-files file-gallery-fallbacks">${failedImgs.map(renderChip).join("")}</div>`
+      let galleryHtml = "";
+      if (inlineImgItems.length > 0) {
+        const activeImgs = inlineImgItems.filter((it) => !failedFileGalleryImgs.has(it.path));
+        const failedImgs = inlineImgItems.filter((it) => failedFileGalleryImgs.has(it.path));
+        const fallbackHtml = failedImgs.length
+          ? `<div class="msg-files file-gallery-fallbacks">${failedImgs.map(renderChip).join("")}</div>`
+          : "";
+        galleryHtml = activeImgs.length > 0
+          ? `<div class="file-gallery-wrap" data-file-gallery-wrap>${renderFileImageGallery(activeImgs)}${fallbackHtml}</div>`
+          : fallbackHtml;
+      }
+      const videoHtml = inlineVideoItems.length > 0
+        ? renderVideoGroupHtml(inlineVideoItems.map((it) => it.path), "file-videos", activeMatch)
         : "";
-      const galleryHtml = activeImgs.length > 0
-        ? `<div class="file-gallery-wrap" data-file-gallery-wrap>${renderFileImageGallery(activeImgs)}${fallbackHtml}</div>`
-        : fallbackHtml;
       let restHtml = "";
       if (inlineHtmlItems.length > 0) {
         restHtml = renderHtmlCards(inlineHtmlItems, otherItems);
       } else if (otherItems.length > 0) {
         restHtml = `<div class="msg-files">${otherItems.map(renderChip).join("")}</div>`;
       }
-      html = galleryHtml + restHtml;
-    } else if (inlineHtmlItems.length > 0) {
-      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
-      const rest = items.filter((it) => !inlineSet.has(it.path));
-      html = renderHtmlCards(inlineHtmlItems, rest);
+      html = galleryHtml + videoHtml + restHtml;
     } else {
-      const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
-      if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
-        html = `<div class="msg-files">${renderChip(primary)}</div>`;
-      } else {
-        const primaryAct = activeMatch === primary.path;
-        const metaTag = primary.isHtml ? tx("file.snapHtmlReport", "HTML 交互报告") : primary.isCsv ? tx("file.snapCsvData", "{ext} 表格数据", { ext: primary.ext.toUpperCase() }) : primary.ext.toUpperCase();
-        const rest = items.filter((it) => it.path !== primary.path);
+      const primaryHtml = items.find((x) => x.isHtml);
+      if (primaryHtml) {
+        const primaryAct = activeMatch === primaryHtml.path;
+        const metaTag = tx("file.snapHtmlReport", "HTML 交互报告");
+        const rest = items.filter((it) => it.path !== primaryHtml.path);
         const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primary.name }) : tx("file.snapPreview", "预览 {name}", { name: primary.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>${extraChips}</section>`;
+        html = `<section class="snap-card" aria-label="${esc(primaryHtml.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primaryHtml.path)}" title="${esc(primaryHtml.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primaryHtml.name }) : tx("file.snapPreview", "预览 {name}", { name: primaryHtml.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primaryHtml.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primaryHtml.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>${extraChips}</section>`;
+      } else {
+        html = `<div class="msg-files">${items.map(renderChip).join("")}</div>`;
       }
     }
-    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, failVer: failedFileGalleryVer, lang, html });
+    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, failVer: failedFileGalleryVer, vidFailVer: failedMediaVideosVer, lang, html });
     return html;
   }
   function threadEntryPlainText(e) {
     let t = String(e?.text || "");
     if (e?.role === "user") {
-      const cut = t.indexOf("\n\n[The human picked");
-      if (cut >= 0) t = t.slice(0, cut);
-      const att = t.lastIndexOf("附件：\n");
-      if (att >= 0) t = t.slice(0, att).trim() || tx("collie.attachMsg", "附件消息");
+      const split = splitUserAttachmentBlock(t);
+      t = split.paths.length ? (split.body.trim() || tx("collie.attachMsg", "附件消息")) : split.body;
     }
     return t;
   }
@@ -5332,10 +5448,8 @@
     if (!e) return "";
     let t = String(e.text || "");
     if (e.role === "user") {
-      const cut = t.indexOf("\n\n[The human picked");
-      if (cut >= 0) t = t.slice(0, cut);
-      const att = t.lastIndexOf("附件：\n");
-      if (att >= 0) t = (t.slice(0, att).trim() + " 📎").trim();
+      const split = splitUserAttachmentBlock(t);
+      t = split.paths.length ? (split.body.trim() + " 📎").trim() : split.body;
     }
     return plainLine(t.replace(/```[\s\S]*?```/g, " ").replace(/\[image:[^\]]+\]/g, " ")).slice(0, 120) || plainLine(t).slice(0, 120);
   }
@@ -7342,7 +7456,8 @@
             const qi = analyzeQuote(e, ei);
             const qSig = qi ? qi.sig : "";
             const inPlaceHtml = renderInPlaceReceipts(e, eKey);
-            const msgSig = `u:${curLang()}:${qSig}|${inPlaceHtml}|${e.text || ""}`;
+            const vidVerSig = VIDEO_EXT.test(e.text || "") ? `|vf:${failedMediaVideosVer}` : "";
+            const msgSig = `u:${curLang()}:${qSig}|${inPlaceHtml}${vidVerSig}|${e.text || ""}`;
             const sig = `u|${e.id || ""}|${at}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${msgSig}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -7367,13 +7482,13 @@
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
                 const parts = parseUserParts(e.text);
                 const quoteHtml = renderQuoteHtml(qi, e);
-                const mediaHtml = renderUserMedia(parts.imgs);
+                const mediaHtml = renderUserAttachments(parts);
                 const idTitleAttrs = `data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}`;
                 const quoteCls = quoteHtml ? " has-quote" : "";
                 if (mediaHtml && !parts.hasBubbleContent) {
                   return `<div class="mine is-media-only${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}<div class="msg user is-media-only" ${idTitleAttrs}>${mediaHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
                 }
-                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}${parts.attHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
+                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
               },
             });
             lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
@@ -18652,7 +18767,7 @@
     const env = parseWorkerPromptEnvelope(bodyRaw, { fullTask: isFirstUser ? fullTask : "" });
     const useRich = env.useMarkdown || env.collapsible;
     if (!useRich) {
-      return `<div class="msg user">${parts.textHtml}${parts.attHtml}</div>`;
+      return `<div class="msg user">${parts.textHtml}</div>`;
     }
     const renderedHtml = env.body ? (env.useMarkdown ? md(env.body) : linkUserFiles(esc(env.body))) : parts.textHtml;
     const cls = ["msg", "user"];
@@ -18668,9 +18783,9 @@
         + `</div>`
       : "";
     if (!env.collapsible) {
-      return `<div class="${cls.join(" ")}">${kickerHtml}${renderedHtml}${parts.attHtml}</div>`;
+      return `<div class="${cls.join(" ")}">${kickerHtml}${renderedHtml}</div>`;
     }
-    return `<div class="${cls.join(" ")}" data-prompt-key="${esc(promptKey)}">${kickerHtml}<div class="wd-prompt-body" id="${esc(bodyId)}">${renderedHtml}${parts.attHtml}</div><button type="button" class="wd-prompt-toggle" aria-expanded="false" aria-controls="${esc(bodyId)}"><span class="wd-pt-more">${esc(tx("worker.promptExpand", "展开完整指令"))}</span><span class="wd-pt-less">${esc(tx("worker.promptCollapse", "收起指令"))}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>`;
+    return `<div class="${cls.join(" ")}" data-prompt-key="${esc(promptKey)}">${kickerHtml}<div class="wd-prompt-body" id="${esc(bodyId)}">${renderedHtml}</div><button type="button" class="wd-prompt-toggle" aria-expanded="false" aria-controls="${esc(bodyId)}"><span class="wd-pt-more">${esc(tx("worker.promptExpand", "展开完整指令"))}</span><span class="wd-pt-less">${esc(tx("worker.promptCollapse", "收起指令"))}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 6.25L8 10l3.75-3.75"/></svg></button></div>`;
   }
 
   function syncExpandedPrompts(el) {
@@ -18768,7 +18883,7 @@
     }
     if (m.kind === "user") {
       const parts = parseUserParts(m.text);
-      const mediaHtml = renderUserMedia(parts.imgs);
+      const mediaHtml = renderUserAttachments(parts);
       const bubbleHtml = renderWorkerUserBubble(parts, el, i, g.isFirstUser, fullTask);
       if (mediaHtml && !parts.hasBubbleContent) {
         return `<div class="msg user is-media-only">${mediaHtml}</div>`;
@@ -19459,6 +19574,12 @@
   // ───────────────────────────── file viewer
   // A file an agent mentions opens here, read-only, from the computer it is on.
   const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+  const VIDEO_EXT = /\.(mp4|mov|webm|m4v)$/i;
+  const AUDIO_EXT = /\.(mp3|wav|m4a|ogg|flac|aac|opus)$/i;
+  const ARCHIVE_EXT = /\.(zip|tar|gz|tgz|bz2|xz|7z|rar|zst)$/i;
+  const SHEET_EXT = /\.(csv|tsv|xlsx?|ods|json|ya?ml|toml|xml)$/i;
+  const CODE_EXT = /\.(js|mjs|cjs|ts|tsx|jsx|go|py|rs|java|kt|c|cc|cpp|h|hpp|sh|bash|zsh|sql|css|scss|ini|env|rb|php|swift|dart|vue|svelte|diff|patch|log)$/i;
+  const DOC_EXT = /\.(pdf|docx?|pptx?|rtf|txt|md|markdown|mdx|epub)$/i;
   const MD_EXT = /\.(md|markdown|mdx)$/i;
   const HTML_EXT = /\.html?$/i;
   const CSV_EXT = /\.(csv|tsv)$/i;
@@ -19474,6 +19595,69 @@
     }
     return `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=html`;
   };
+  const videoFileURL = (path, machine = "") => `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=video`;
+  async function probeVideoFile(path, tries = fileTries()) {
+    for (const m of tries) {
+      const q = videoFileURL(path, m);
+      const r = routeReq(q);
+      const res = await authFetch(r.url, {
+        method: "HEAD",
+        headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {},
+        credentials: r.hub ? "omit" : "same-origin",
+      }, !!r.hub);
+      if (res.status === 401 && !r.hub) { showLogin(); throw new Error("unauthorized"); }
+      if (res.status === 404) continue;
+      if (res.status === 413) {
+        return { kind: "video", tooBig: true, size: +res.headers.get("X-File-Size") || (FILE_DL_MAX + 1), path, machine: m };
+      }
+      if (!res.ok) { let e = {}; try { e = await res.json(); } catch {} throw new Error(e.error || tx("file.cantOpen", "打不开这个文件")); }
+      return {
+        kind: "video",
+        tooBig: false,
+        size: +res.headers.get("X-File-Size") || +res.headers.get("Content-Length") || 0,
+        path: decodeURIComponent(res.headers.get("X-File-Path") || path),
+        machine: m,
+      };
+    }
+    return null;
+  }
+  async function bindVideoSource(video, path, machine = "", onFail = null) {
+    if (!video || !path) return;
+    const q = videoFileURL(path, machine);
+    const r = routeReq(q);
+    if (!window.__collieDemo && !r.hub) {
+      video.dataset.videoMachine = machine || "";
+      video.src = q + "#t=0.001";
+      return;
+    }
+    const cached = videoBlobs.get(path);
+    if (cached) {
+      video.src = cached + "#t=0.001";
+      return;
+    }
+    try {
+      const res = await authFetch(r.url, {
+        headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {},
+        credentials: r.hub ? "omit" : "same-origin",
+      }, !!r.hub);
+      if (res.status === 401 && !r.hub) { showLogin(); return; }
+      if (!res.ok) throw new Error("video-fetch-failed");
+      const blob = await res.blob();
+      const u = URL.createObjectURL(blob);
+      if (videoBlobs.size >= 12) {
+        const oldestKey = videoBlobs.keys().next().value;
+        if (oldestKey !== undefined) {
+          const oldUrl = videoBlobs.get(oldestKey);
+          videoBlobs.delete(oldestKey);
+          try { URL.revokeObjectURL(oldUrl); } catch {}
+        }
+      }
+      videoBlobs.set(path, u);
+      video.src = u + "#t=0.001";
+    } catch {
+      onFail?.();
+    }
+  }
   const fileLinkAttrs = (rawPath, escapedPath, titleText, extraCls = "") => {
     const ext = extraCls ? ` ${extraCls}` : "";
     return HTML_EXT.test(rawPath)
@@ -19814,12 +19998,44 @@
     body.classList.remove("is-code", "is-html", "is-csv");
     const initMachine = fileContextMachine() || "";
     const isHtml = HTML_EXT.test(path);
-    syncFileBar("fv", { isHtml, langLabel: isHtml ? "HTML" : "", wideHref: isHtml ? htmlFileURL(path, initMachine) : wideFileHash(path, initMachine) });
-    $("#fv-name").textContent = path.split("/").pop();
+    const isVideo = VIDEO_EXT.test(path);
+    const vExt = isVideo ? (cleanAttachName(path).split(".").pop() || "mp4").toUpperCase() : "";
+    syncFileBar("fv", { isHtml, langLabel: isHtml ? "HTML" : vExt, wideHref: isHtml ? htmlFileURL(path, initMachine) : wideFileHash(path, initMachine) });
+    $("#fv-name").textContent = cleanAttachName(path);
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">${esc(tx("common.reading", "读取中…"))}</p>`;
     showFilePane(opts);
     const tries = fileTries();
+    if (isVideo) {
+      let vf = null;
+      try {
+        vf = await probeVideoFile(path, tries);
+      } catch (e) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+      if (seq !== fileSeq) return;
+      if (!vf) { syncFileBar("fv", {}); body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
+      const where = (state.machines || []).length > 1 || vf.machine ? machineName(vf.machine) + " · " : "";
+      $("#fv-path").textContent = where + vf.path + (vf.size ? " · " + fmtSize(vf.size) : "");
+      const canDl = !vf.size || vf.size <= FILE_DL_MAX;
+      fvCur = { reqPath: path, path: vf.path, machine: vf.machine || "", kind: "video", size: vf.size, rawText: "", truncated: false };
+      syncFileBar("fv", { langLabel: vExt, downloadable: canDl, wideHref: wideFileHash(path, vf.machine || "") });
+      if (vf.tooBig) {
+        body.innerHTML = `<p class="fv-note">${esc(tx("file.videoTooBig", "视频超过 100 MB，无法在线预览（可点右上角下载原件）。"))}</p>`;
+        if (view === "collie") syncActiveFileMarks($("#super-thread"), vf.path || path);
+        return;
+      }
+      body.innerHTML = `<div class="fv-video"><video class="att-video-el" controls playsinline webkit-playsinline preload="metadata" width="640" height="360" aria-label="${esc(tx("file.videoAria", "视频 {name}", { name: cleanAttachName(path) }))}"></video></div>`;
+      const vid = body.querySelector("video");
+      if (vid) {
+        const showErr = () => {
+          if (seq !== fileSeq) return;
+          body.innerHTML = `<p class="fv-note">${esc(tx("file.videoCantPlay", "这段视频暂时无法在浏览器直接播放（可点右上角下载原件）。"))}</p>`;
+        };
+        vid.addEventListener("error", showErr, { once: true });
+        bindVideoSource(vid, path, vf.machine || "", showErr);
+      }
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), vf.path || path);
+      return;
+    }
     if (isHtml) {
       let hf = null;
       try {
@@ -19920,6 +20136,36 @@
     document.title = `${name} · Collie`;
     body.innerHTML = `<p class="fv-note muted">${esc(tx("common.reading", "读取中…"))}</p>`;
     const tries = [...new Set([machineHint, ...fileTries()])];
+    if (VIDEO_EXT.test(path)) {
+      let vf = null;
+      try {
+        vf = await probeVideoFile(path, tries);
+      } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+      if (seq !== wideSeq || view !== "file") return;
+      if (!vf) { body.innerHTML = `<p class="fv-note">${esc(tries.length > 1 ? tx("file.notFoundMany", "在各台电脑上都没找到这个文件。") : tx("file.notFoundOne", "在这台电脑上都没找到这个文件。"))}</p>`; return; }
+      const where = (state.machines || []).length > 1 || vf.machine ? machineName(vf.machine) + " · " : "";
+      $("#rv-path").textContent = where + vf.path + (vf.size ? " · " + fmtSize(vf.size) : "");
+      const canDl = !vf.size || vf.size <= FILE_DL_MAX;
+      const vExt = (cleanAttachName(path).split(".").pop() || "mp4").toUpperCase();
+      rvCur = { reqPath: path, path: vf.path, machine: vf.machine || "", kind: "video", size: vf.size, rawText: "", truncated: false };
+      syncFileBar("rv", { langLabel: vExt, downloadable: canDl });
+      if (vf.tooBig) {
+        body.innerHTML = `<p class="fv-note">${esc(tx("file.videoTooBig", "视频超过 100 MB，无法在线预览（可点右上角下载原件）。"))}</p>`;
+        return;
+      }
+      body.innerHTML = `<div class="rv-video"><video class="att-video-el" controls playsinline webkit-playsinline preload="metadata" width="640" height="360" aria-label="${esc(tx("file.videoAria", "视频 {name}", { name: cleanAttachName(path) }))}"></video></div>`;
+      const vid = body.querySelector("video");
+      if (vid) {
+        const showErr = () => {
+          if (seq !== wideSeq || view !== "file") return;
+          body.innerHTML = `<p class="fv-note">${esc(tx("file.videoCantPlay", "这段视频暂时无法在浏览器直接播放（可点右上角下载原件）。"))}</p>`;
+        };
+        vid.addEventListener("error", showErr, { once: true });
+        bindVideoSource(vid, path, vf.machine || "", showErr);
+      }
+      if (restore) restoreSimpleScroll(sc, restore); else sc.scrollTop = 0;
+      return;
+    }
     if (HTML_EXT.test(path)) {
       let hf = null;
       try {
@@ -20505,7 +20751,7 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, textarea, label, .reply-inline, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
+    if (m && e.target.closest("a, button, summary, details, input, textarea, label, video, .att-video-card, .reply-inline, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
@@ -20630,6 +20876,114 @@
       for (const tile of affected) degradeFileGalleryTile(tile);
       if (collieInitialAnchor) applyInitialAnchor();
     }
+  }, true);
+  // Viewport-aware lazy video hydration (Safari / Firefox fallback for native loading="lazy")
+  // + zero-CLS intrinsic dimension caching + graceful error degradation to unified file cards.
+  const observedVideos = new WeakSet();
+  const videoIOByRoot = new WeakMap();
+  let videoViewportIO = null;
+  function hydrateVideoEl(video) {
+    if (!video || video.tagName !== "VIDEO") return;
+    const p = video.dataset?.videoPath || "";
+    if (!p || video.dataset?.videoBound === "1") return;
+    const card = video.closest?.(".att-video-card") || null;
+    if (failedMediaVideos.has(p)) {
+      if (card) degradeVideoCard(card);
+      return;
+    }
+    if (video.dataset) video.dataset.videoBound = "1";
+    const ctxMachine = fileContextMachine() || "";
+    bindVideoSource(video, p, ctxMachine, () => {
+      if (card) degradeVideoCard(card);
+    });
+  }
+  function getVideoObserver(scrollRoot) {
+    if (typeof IntersectionObserver !== "function") return null;
+    const onEntries = (entries, io) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const target = entry.target;
+        io.unobserve(target);
+        observedVideos.delete(target);
+        const vid = target.tagName === "VIDEO" ? target : target.querySelector?.("video.att-video-el");
+        if (vid) hydrateVideoEl(vid);
+      }
+    };
+    if (!scrollRoot) {
+      if (!videoViewportIO) videoViewportIO = new IntersectionObserver(onEntries, { root: null, rootMargin: "400px 0px" });
+      return videoViewportIO;
+    }
+    let io = videoIOByRoot.get(scrollRoot);
+    if (!io) {
+      try {
+        io = new IntersectionObserver(onEntries, { root: scrollRoot, rootMargin: "400px 0px" });
+      } catch {
+        return getVideoObserver(null);
+      }
+      videoIOByRoot.set(scrollRoot, io);
+    }
+    return io;
+  }
+  function observeVideos(root) {
+    if (!root || root.nodeType !== 1) return;
+    const vids = root.tagName === "VIDEO" && root.classList?.contains("att-video-el")
+      ? [root]
+      : [...(root.querySelectorAll?.("video.att-video-el[data-video-path]") || [])];
+    for (const vid of vids) {
+      if (vid.dataset?.videoBound === "1" || vid.getAttribute?.("src")) continue;
+      const card = vid.closest?.(".att-video-card") || vid;
+      if (typeof IntersectionObserver === "function") {
+        if (observedVideos.has(card)) continue;
+        const scrollRoot = card.closest?.(".scroller, #td-body, #fv-body, #rv-scroller, .wd-body") || null;
+        const io = getVideoObserver(scrollRoot);
+        if (io) {
+          observedVideos.add(card);
+          io.observe(card);
+          continue;
+        }
+      }
+      hydrateVideoEl(vid);
+    }
+  }
+  document.addEventListener("loadedmetadata", (e) => {
+    const vid = e.target;
+    if (vid?.tagName !== "VIDEO" || !vid.classList?.contains("att-video-el")) return;
+    const p = vid.dataset?.videoPath || "";
+    const vw = vid.videoWidth || 0;
+    const vh = vid.videoHeight || 0;
+    if (vw > 0 && vh > 0) {
+      vid.width = vw;
+      vid.height = vh;
+      if (p) {
+        if (videoDims.size >= 200) {
+          const oldest = videoDims.keys().next().value;
+          if (oldest !== undefined) videoDims.delete(oldest);
+        }
+        videoDims.set(p, { w: vw, h: vh });
+      }
+    }
+    vid.closest?.(".att-video-card")?.classList?.add("is-ready");
+  }, true);
+  document.addEventListener("error", (e) => {
+    const vid = e.target;
+    if (vid?.tagName !== "VIDEO" || !vid.classList?.contains("att-video-el")) return;
+    const card = vid.closest?.(".att-video-card");
+    if (!card) return;
+    const p = vid.dataset?.videoPath || card.dataset?.videoCard || "";
+    if (p && vid.dataset?.videoMachine && vid.dataset?.videoRetried !== "1") {
+      vid.dataset.videoRetried = "1";
+      vid.dataset.videoMachine = "";
+      vid.src = videoFileURL(p, "") + "#t=0.001";
+      return;
+    }
+    const affected = new Set([card]);
+    if (p && typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+      for (const el of document.querySelectorAll(".att-video-card[data-video-card]")) {
+        if (el.dataset?.videoCard === p) affected.add(el);
+      }
+    }
+    for (const c of affected) degradeVideoCard(c);
+    if (collieInitialAnchor) applyInitialAnchor();
   }, true);
 
   // ───────────────────────────── rich rendering transient UI state & interactions
@@ -20998,6 +21352,7 @@
   function hydrateRichContent(root) {
     if (!root || root.nodeType !== 1) return;
     observeThumbs(root);
+    observeVideos(root);
     hydrateCodeBlocks(root);
     hydrateDetails(root);
     hydrateTables(root);
@@ -21824,6 +22179,24 @@
       e.preventDefault();
       const { items, index } = collectGallery(mb, { url: mb.dataset.imgUrl, alt: mb.dataset.imgAlt || "" });
       openLightbox(items, index);
+      return;
+    }
+    const openBtn = !e.defaultPrevented ? e.target.closest("[data-open-file]") : null;
+    if (openBtn) {
+      e.preventDefault();
+      const fp = openBtn.dataset.openFile || "";
+      if (fp) {
+        if (view === "file") {
+          location.hash = wideFileHash(fp, rvCur?.machine || "");
+          return;
+        }
+        const origin = openBtn.closest?.("#thread-drawer") && activeThreadRoot
+          ? { returnTo: captureThreadReturnTo() }
+          : (openBtn.closest?.("#file-view") || openBtn.closest?.("#worker-drawer"))
+            ? { preserveReturnStack: true }
+            : undefined;
+        openFile(fp, origin);
+      }
       return;
     }
     const a = e.target.closest("a.fpath");
@@ -24579,10 +24952,7 @@
     const hit = _cleanTextCache.get(ck);
     if (hit !== undefined) return hit;
     if (role === "user") {
-      const cut = t.indexOf("\n\n[The human picked");
-      if (cut >= 0) t = t.slice(0, cut);
-      const att = t.lastIndexOf("附件：\n");
-      if (att >= 0) t = t.slice(0, att);
+      t = splitUserAttachmentBlock(t).body;
     }
     const out = t
       .replace(/```[\s\S]*?```/g, " ")
@@ -30370,6 +30740,7 @@
   const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
   const FILE_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
   const IMG_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-4.5-4.5L7 20"/></svg>';
+  const VIDEO_SVG = '<svg class="fi-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg>';
   const EXT_MIME = {
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
     webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml", avif: "image/avif",
@@ -30879,7 +31250,7 @@
     const box = $(".files", form), picker = $('input[type="file"]', form);
     if (!box || !picker) return;
     form._files = [];
-    const iconFor = (f) => (f.isImage ? IMG_SVG : FILE_SVG);
+    const iconFor = (f) => (f.isImage ? IMG_SVG : VIDEO_EXT.test(f.name || "") || (f.mime || "").startsWith("video/") ? VIDEO_SVG : FILE_SVG);
     const uploadLabelOf = (f) => {
       if (f.err) return f.errTag || tx("up.failTag", "失败");
       if (f.path) return fmtSize(f.size);
@@ -31328,31 +31699,81 @@
     while (out.includes("\u0001")) out = out.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
     return out;
   };
+  function splitUserAttachmentBlock(raw) {
+    let t = String(raw || "");
+    let suffix = "";
+    const pickCut = t.indexOf("\n\n[The human picked");
+    if (pickCut >= 0) {
+      suffix = t.slice(pickCut);
+      t = t.slice(0, pickCut);
+    }
+    const looksLikePath = (line) => /^(?:\/|~\/|\.\.?\/|[A-Za-z]:\\)/.test(line);
+    let body = t;
+    let paths = [];
+    const mlIdx = t.lastIndexOf("附件：\n");
+    const mlAltIdx = t.lastIndexOf("附件:\n");
+    const blockIdx = Math.max(mlIdx, mlAltIdx);
+    if (blockIdx >= 0 && (blockIdx === 0 || t[blockIdx - 1] === "\n")) {
+      const after = t.slice(blockIdx + 4);
+      const cand = after.split("\n").map((p) => p.trim()).filter(Boolean);
+      if (cand.length > 0 && cand.every((line) => !line.startsWith("[The human picked"))) {
+        body = t.slice(0, blockIdx).trimEnd();
+        paths = cand;
+      }
+    } else {
+      const m = t.match(/(?:^|\n)附件[：:][ \t]*((?:\/|~\/)[^\n]*(?:\n(?:\/|~\/)[^\n]*)*)\s*$/);
+      if (m && m[1]) {
+        const cand = m[1].split("\n").map((p) => p.trim()).filter((line) => line && looksLikePath(line));
+        if (cand.length > 0) {
+          body = t.slice(0, m.index).trimEnd();
+          paths = cand;
+        }
+      }
+    }
+    return { body, paths, suffix };
+  }
   function parseUserParts(raw) {
-    const t = String(raw || "");
-    const i = t.lastIndexOf("附件：\n");
-    let bodyRaw = i >= 0 ? t.slice(0, i).trimEnd() : t;
+    const split = splitUserAttachmentBlock(raw);
+    let bodyRaw = split.body;
     const imgs = [];
-    const rest = [];
+    const videos = [];
+    const files = [];
+    const seen = new Set();
+    const pushUnique = (rawPath) => {
+      const p = String(rawPath || "").trim();
+      if (!p) return;
+      const k = p.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      if (IMG_EXT.test(p)) imgs.push(p);
+      else if (VIDEO_EXT.test(p)) videos.push(p);
+      else files.push(p);
+    };
     if (bodyRaw.includes("[image:")) {
       bodyRaw = bodyRaw.replace(IMG_TOKEN, (_, p) => {
-        if (p) imgs.push(p);
+        if (p) pushUnique(p);
         return "";
       }).replace(/^\n+|\n+$/g, "");
     }
-    if (i >= 0) {
-      const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
-      for (const p of paths) {
-        if (IMG_EXT.test(p)) imgs.push(p);
-        else rest.push(p);
-      }
-    }
-    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
+    for (const p of split.paths) pushUnique(p);
     const textHtml = bodyRaw ? linkUserFiles(esc(bodyRaw)) : "";
-    const attHtml = rest.length
-      ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>`
+    const attHtml = files.length
+      ? `<div class="att">${files.map((p) => renderUserFileChipHtml(p)).join("")}</div>`
       : "";
-    return { imgs, bodyRaw, textHtml, attHtml, hasBubbleContent: !!(textHtml || attHtml) };
+    const videoHtml = videos.length
+      ? renderVideoGroupHtml(videos, "mine-videos")
+      : "";
+    return {
+      imgs,
+      videos,
+      files,
+      bodyRaw,
+      textHtml,
+      attHtml,
+      videoHtml,
+      hasBubbleContent: !!textHtml,
+      hasAttachments: !!(imgs.length || videos.length || files.length),
+    };
   }
   function renderUserMedia(imgs) {
     if (!imgs.length) return "";
@@ -31361,15 +31782,14 @@
       : "is-grid-3";
     return `<div class="mine-media ${gridCls}" data-count="${imgs.length}"><span class="thumbs">${imgs.map(thumbBtn).join("")}</span></div>`;
   }
+  function renderUserAttachments(parts) {
+    if (!parts) return "";
+    return renderUserMedia(parts.imgs) + (parts.videoHtml || "") + (parts.attHtml || "");
+  }
   function userText(t) {
-    const i = t.lastIndexOf("附件：\n");
-    if (i < 0) return withImages(linkUserFiles(esc(t)));
-    const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
-    const imgs = paths.filter((p) => IMG_EXT.test(p)), rest = paths.filter((p) => !IMG_EXT.test(p));
-    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
-    return withImages(linkUserFiles(esc(t.slice(0, i).trimEnd())))
-      + (imgs.length ? `<span class="thumbs">${imgs.map(thumbBtn).join("")}</span>` : "")
-      + (rest.length ? `<span class="att">${rest.map((p) => `<a ${fileLinkAttrs(p, esc(p), esc(p))}>📎 ${esc(name(p))}</a>`).join("")}</span>` : "");
+    const parts = parseUserParts(t);
+    const imgsHtml = parts.imgs.length ? `<span class="thumbs">${parts.imgs.map(thumbBtn).join("")}</span>` : "";
+    return (parts.textHtml || "") + imgsHtml + (parts.videoHtml || "") + (parts.attHtml || "");
   }
 
   // Safari on macOS fires compositionend before the confirming Enter keydown

@@ -173,8 +173,7 @@
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
         <div class="d-head-acts">
-          <button type="button" class="update-pill mobile-only" id="collie-update-btn" hidden></button>
-          <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" aria-label="展开或收起小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
+          <button type="button" class="head-text-btn notes-head-btn" id="open-notes-btn" aria-label="小本本" aria-pressed="false" aria-controls="notes-pane" title="小本本">
             <span>小本本</span>
             <span class="th-head-dot" id="open-notes-dot" aria-hidden="true" hidden></span>
           </button>
@@ -182,10 +181,13 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.2"/></svg>
           </button>
           <div class="menu-wrap">
-            <button class="icon-btn" data-menu="collie-menu" title="更多">
-              <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+            <button type="button" class="icon-btn collie-more-btn" id="collie-menu-btn" data-menu="collie-menu" aria-label="更多" title="更多">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+              <span class="menu-update-dot mobile-only" id="collie-update-dot" aria-hidden="true" hidden></span>
             </button>
             <div class="menu" id="collie-menu" hidden>
+              <button type="button" class="menu-update-btn mobile-only" id="collie-update-btn" hidden></button>
+              <hr class="menu-update-sep mobile-only" id="collie-update-sep" hidden>
               <button data-act="router-open">查看 Collie 的终端</button>
               <button data-act="router-restart">重启 Collie</button>
               <button data-act="pause">暂停投递</button>

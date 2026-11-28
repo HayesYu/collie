@@ -17859,7 +17859,7 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, .thumb, img")) return;
+    if (m && e.target.closest("a, button, summary, details, input, .thumb, img, .md-table-card, .md-code")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
@@ -18175,6 +18175,19 @@
     hydrateTables(root);
     hydratePendingMath(root);
   }
+  function closeRichFloatActs(except = null) {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+    for (const el of document.querySelectorAll(".md-table-card.is-acts-open, .md-code.is-acts-open")) {
+      if (el !== except) {
+        el.classList.remove("is-acts-open");
+        const act = document.activeElement;
+        if (act && el.contains?.(act) && typeof act.blur === "function") act.blur();
+      }
+    }
+  }
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeRichFloatActs();
+  });
   document.addEventListener("click", async (ev) => {
     const foldBtn = ev.target?.closest?.("[data-code-fold]");
     if (foldBtn) {
@@ -18186,6 +18199,7 @@
     const copyCodeBtn = ev.target?.closest?.("[data-copy-code]");
     if (copyCodeBtn) {
       ev.preventDefault();
+      if (ev.detail > 0) copyCodeBtn.blur?.();
       const block = copyCodeBtn.closest?.("[data-code-block]");
       const txt = extractCodeBlockText(block);
       const ok = await copyText(txt);
@@ -18200,6 +18214,7 @@
     const copyTblBtn = ev.target?.closest?.("[data-copy-table]");
     if (copyTblBtn) {
       ev.preventDefault();
+      if (ev.detail > 0) copyTblBtn.blur?.();
       const mode = copyTblBtn.dataset?.copyTable || "tsv";
       const card = copyTblBtn.closest?.("[data-table-card]");
       const table = card?.querySelector?.("table");
@@ -18223,7 +18238,21 @@
       } else {
         toast("复制失败", "attn");
       }
+      return;
     }
+    // Touch/mobile tap on headerless table or code block toggles its floating micro-actions pill; tapping outside dismisses.
+    const floatHost = ev.target?.closest?.(".md-table-card, .md-code");
+    const isTouchLike = typeof matchMedia === "function" && (matchMedia("(hover: none)").matches || matchMedia("(pointer: coarse)").matches);
+    if (floatHost && isTouchLike) {
+      const sel = typeof window !== "undefined" && typeof window.getSelection === "function" ? String(window.getSelection() || "") : "";
+      if (!sel && !ev.target?.closest?.("a, button")) {
+        const nextOpen = !floatHost.classList.contains("is-acts-open");
+        closeRichFloatActs(nextOpen ? floatHost : null);
+        floatHost.classList.toggle("is-acts-open", nextOpen);
+      }
+      return;
+    }
+    if (!floatHost) closeRichFloatActs();
   });
   document.addEventListener("beforematch", (ev) => {
     const block = ev.target?.closest?.(".md-code[data-foldable]");
@@ -23372,8 +23401,7 @@
     const infoParts = infoTrim ? infoTrim.split(/\s+/) : [];
     const lang = detectCodeLang(infoTrim, false);
     const rawTag = infoParts[0] ? infoParts[0].replace(/^language-/i, "").slice(0, 24) : "";
-    const langLabel = lang ? lang.label : (rawTag || "代码");
-    const fileHint = infoParts.length > 1 && !infoParts[1].startsWith("{") ? infoParts.slice(1).join(" ").slice(0, 80) : "";
+    const langLabel = lang ? lang.label : rawTag;
     const rawLines = raw.split("\n");
     const totalLines = rawLines.length;
     const isDiff = lang?.id === "diff";
@@ -23412,13 +23440,16 @@
     const diffStatHtml = isDiff && (addCount > 0 || delCount > 0)
       ? `<span class="md-diff-stat" aria-label="新增 ${addCount} 行，删除 ${delCount} 行">${addCount > 0 ? `<span class="add">+${addCount}</span>` : ""}${delCount > 0 ? `<span class="del">−${delCount}</span>` : ""}</span>`
       : "";
-    const fileHtml = fileHint ? `<span class="md-code-file">${esc(fileHint)}</span>` : "";
+    const cornerTagInner = isDiff
+      ? (diffStatHtml || `<span class="md-code-lang">Diff</span>`)
+      : (langLabel ? `<span class="md-code-lang">${esc(langLabel)}</span>` : "");
+    const cornerTagHtml = cornerTagInner ? `<div class="md-code-tag" aria-hidden="true">${cornerTagInner}</div>` : "";
+    const floatActsHtml = `<div class="md-float-acts md-code-acts"><button type="button" class="mini-btn md-copy-btn" data-copy-code aria-label="复制代码">${ICON_MD_COPY}<span class="md-copy-lbl">复制</span></button></div>`;
     const foldBtnHtml = collapsible
       ? `<button type="button" class="md-code-fold-btn" data-code-fold aria-expanded="false">${ICON_MD_CHEV}<span data-fold-label>展开剩余 ${remain} 行</span></button>`
       : "";
     return `<div class="md-code${isDiff ? " is-diff" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
-      `<div class="md-code-head"><div class="md-code-meta"><span class="md-code-lang">${esc(langLabel)}</span>${fileHtml}${diffStatHtml}</div>` +
-      `<button type="button" class="mini-btn md-copy-btn" data-copy-code aria-label="复制代码">${ICON_MD_COPY}<span class="md-copy-lbl">复制</span></button></div>` +
+      `${cornerTagHtml}${floatActsHtml}` +
       `<div class="md-code-body"><pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${bodyCodeHtml}</code></pre></div>${foldBtnHtml}</div>`;
   }
   function renderMdGallery(rawItems) {
@@ -23815,7 +23846,7 @@
             return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
           }).join("")}</tr>`).join("");
           const rowCount = bodyRows.length, colCount = head.length;
-          out.push(`<div class="md-table-card" data-table-card><div class="md-table-bar"><span class="md-table-meta">${rowCount} 行 × ${colCount} 列</span><div class="md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="复制表格（TSV）">${ICON_MD_COPY}<span class="md-copy-lbl">复制表格</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="复制 Markdown 表格"><span class="md-copy-lbl">MD</span></button></div></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="数据表格（${rowCount} 行 × ${colCount} 列）"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          out.push(`<div class="md-table-card" data-table-card><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="复制表格（TSV）">${ICON_MD_COPY}<span class="md-copy-lbl">复制表格</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="复制 Markdown 表格"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="数据表格（${rowCount} 行 × ${colCount} 列）"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
           continue;
         }
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }

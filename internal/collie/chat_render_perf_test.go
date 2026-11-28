@@ -182,6 +182,8 @@ assert.ok(demoHtmlSrc.includes('<script src="demo.js"></script>\n<script src="ap
 assert.ok(demoAppSrc.includes('"vendor/xterm.js"') && demoAppSrc.includes('"vendor/katex/katex.min.js"'), "docs/demo/app.js must rewrite lazy vendor paths to relative paths");
 assert.ok(!/#super-thread\s*>\s*\*\s*\{[^}]*content-visibility:\s*auto/.test(cssSrc), "never apply content-visibility: auto to #super-thread direct rows");
 assert.ok(!/\.code-tail\[hidden="until-found"\][^{]*\{[^}]*(?:display:\s*none|visibility:\s*hidden)/.test(cssSrc), "never apply display:none or visibility:hidden to [hidden=until-found]");
+assert.ok(!cssSrc.includes(".md-code-head") && !cssSrc.includes(".md-table-bar"), "persistent gray top bars must be removed from code blocks and tables");
+assert.ok(cssSrc.includes(".md-float-acts") && !/\.md-float-acts\s*\{[^}]*backdrop-filter:/.test(cssSrc), "floating micro-action pill must exist without backdrop-filter blur");
 
 // ─── 2. Runtime VM Harness ───
 function createHarness({ withKatex = false, mobile = false } = {}) {
@@ -453,12 +455,14 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
   assert.equal(mob.T.thumbs.size, 60, "mobile thumbs LRU caps at 60");
   assert.equal(mob.revokedUrls.length, 15, "mobile LRU revoked 15 oldest offscreen URLs");
 
-  // ─── 6. P0-1: Code Block 2.0 (header, copy, >18 fold to 14 + until-found, Diff) ───
+  // ─── 6. P0-1: Code Block 2.0 (headerless, quiet corner tag, floating copy, >18 fold to 14 + until-found, Diff) ───
   const shortCode = T.mdRender("\x60\x60\x60go main.go\npackage main\nfunc main() {}\n\x60\x60\x60");
-  assert.ok(shortCode.includes('class="md-code"') && shortCode.includes('class="md-code-head"'), "short code renders unified header card");
-  assert.ok(shortCode.includes('<span class="md-code-lang">Go</span>'), "language label rendered");
-  assert.ok(shortCode.includes('data-copy-code'), "copy button rendered");
+  assert.ok(shortCode.includes('class="md-code"') && !shortCode.includes("md-code-head"), "short code renders headerless card without persistent gray bar");
+  assert.ok(shortCode.includes('class="md-code-tag"') && shortCode.includes('<span class="md-code-lang">Go</span>'), "quiet corner language label rendered");
+  assert.ok(shortCode.includes('class="md-float-acts md-code-acts"') && shortCode.includes('data-copy-code'), "floating copy button rendered");
   assert.ok(!shortCode.includes("data-code-fold"), "short block <=18 lines is not collapsed");
+  const plainCode = T.mdRender("\x60\x60\x60\nplain output\n\x60\x60\x60");
+  assert.ok(!plainCode.includes('class="md-code-tag"') && plainCode.includes('data-copy-code'), "unlabeled code omits resting corner tag while keeping hover copy");
 
   const longLines = ["/* multi-line comment"];
   for (let i = 2; i <= 21; i++) longLines.push("line " + i);
@@ -486,8 +490,8 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
     "\x60\x60\x60",
   ].join("\n");
   const diffHtml = T.mdRender(diffMd);
-  assert.ok(diffHtml.includes("md-code is-diff"), "diff block gets is-diff class");
-  assert.ok(diffHtml.includes('<span class="add">+3</span><span class="del">−1</span>'), "diff header displays +3 −1 stats");
+  assert.ok(diffHtml.includes("md-code is-diff") && !diffHtml.includes("md-code-head"), "diff block gets is-diff class without top bar");
+  assert.ok(diffHtml.includes('class="md-code-tag"') && diffHtml.includes('<span class="add">+3</span><span class="del">−1</span>'), "diff quiet corner tag displays +3 −1 stats");
   assert.ok(diffHtml.includes("diff-line is-hunk") && diffHtml.includes("diff-line is-add") && diffHtml.includes("diff-line is-del"), "diff lines get full-row semantics");
 
   // ─── 7. P0-2: Adaptive Multi-Image Gallery (1/2/3/4/5-6/6+ & merge with imagesIn) ───
@@ -508,15 +512,15 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
   assert.equal((merged.match(/class="md-gallery /g) || []).length, 1, "Markdown images and trailing path images merge into single gallery");
   assert.ok(merged.includes('class="md-gallery is-3" data-count="3"'), "merged gallery deduplicates /tmp/b.png -> 3 images");
 
-  // ─── 8. P0-3: Enhanced Markdown Table ───
+  // ─── 8. P0-3: Enhanced Markdown Table (headerless + hover floating TSV/MD pill) ───
   const tblHtml = T.mdRender([
     "| 指标 | 现状 | 优化后 | 降幅 |",
     "| --- | --- | --- | --- |",
     "| 首屏传输 | 2,092.5 KB | 369.7 KB | -82.3% |",
     "| 长列表 | 142ms | 13.7s | +5.5% |",
   ].join("\n"));
-  assert.ok(tblHtml.includes('class="md-table-card"') && tblHtml.includes("2 行 × 4 列"), "table card renders dimension summary");
-  assert.ok(tblHtml.includes('data-copy-table="tsv"') && tblHtml.includes('data-copy-table="md"'), "table card renders TSV and MD copy buttons");
+  assert.ok(tblHtml.includes('class="md-table-card"') && !tblHtml.includes("md-table-bar") && !tblHtml.includes("md-table-meta"), "table card omits persistent top bar and dimension strip");
+  assert.ok(tblHtml.includes('class="md-float-acts md-table-acts"') && tblHtml.includes('data-copy-table="tsv"') && tblHtml.includes('data-copy-table="md"'), "table card renders floating TSV and MD copy buttons");
   assert.ok(tblHtml.includes('class="md-table" tabindex="0" role="region"'), "table keeps accessible .md-table scroll region");
   assert.ok(tblHtml.includes('<th scope="col"') && tblHtml.includes('<th scope="row"'), "table uses semantic col and row headers for sticky first column");
   assert.ok(tblHtml.includes('class="is-num"'), "numeric/percentage/duration cells auto-tagged with is-num");

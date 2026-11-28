@@ -79,6 +79,10 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
   --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
   --shadow-lg: 0 2px 6px rgba(0,0,0,.05), 0 18px 48px rgba(0,0,0,.10);
+  --shimmer-base: #8e8e88;
+  --shimmer-peak: #111111;
+  --ease-out-expo: cubic-bezier(.22, 1, .36, 1);
+  --ease-send: cubic-bezier(.2, .9, .3, 1.02);
   --side-w: clamp(268px, calc(108px + 16vw), 300px);
   --drawer-default-w: clamp(440px, 34vw, 540px);
   --col: clamp(780px, calc(480px + 20.8333vw), 880px); /* continuous conversation column width */
@@ -149,6 +153,8 @@
     --shadow-sm: 0 1px 2px rgba(0,0,0,.28);
     --shadow: 0 2px 4px rgba(0,0,0,.26), 0 12px 30px rgba(0,0,0,.34);
     --shadow-lg: 0 4px 10px rgba(0,0,0,.34), 0 22px 54px rgba(0,0,0,.48);
+    --shimmer-base: #7a7a75;
+    --shimmer-peak: #f2f2ef;
     color-scheme: dark;
   }
   :root:not([data-theme="light"]) .brand img, :root:not([data-theme="light"]) .brand-toggle .bt-logo, :root:not([data-theme="light"]) .blank img, :root:not([data-theme="light"]) .login-mark, :root:not([data-theme="light"]) .nav-ico img, :root:not([data-theme="light"]) .sr-brand img, :root:not([data-theme="light"]) .avatar img, :root:not([data-theme="light"]) .td-av img { filter: invert(1); }
@@ -209,6 +215,8 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,.28);
   --shadow: 0 2px 4px rgba(0,0,0,.26), 0 12px 30px rgba(0,0,0,.34);
   --shadow-lg: 0 4px 10px rgba(0,0,0,.34), 0 22px 54px rgba(0,0,0,.48);
+  --shimmer-base: #7a7a75;
+  --shimmer-peak: #f2f2ef;
   color-scheme: dark;
 }
 :root[data-theme="dark"] .brand img, :root[data-theme="dark"] .brand-toggle .bt-logo, :root[data-theme="dark"] .blank img, :root[data-theme="dark"] .login-mark, :root[data-theme="dark"] .nav-ico img, :root[data-theme="dark"] .sr-brand img, :root[data-theme="dark"] .avatar img, :root[data-theme="dark"] .td-av img { filter: invert(1); }
@@ -1163,13 +1171,20 @@ html.is-idle .working-row .wk-t {
   stroke: var(--bg-2, var(--bg));
 }
 .clap-n {
-  font: 500 11.5px/1 var(--sans);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 15px;
+  overflow: clip;
+  font: 500 11.5px/15px var(--sans);
   font-variant-numeric: tabular-nums;
   letter-spacing: -.01em;
   color: inherit;
   pointer-events: none;
 }
 .clap-n:empty { display: none; }
+.clap-n .num-cur, .super-jump .sj-badge .num-cur { display: inline-block; }
 /* Persistently show clapped count on desktop while keeping sibling actions calm until hover/focus-visible */
 #v-collie .say.has-claps .msg-acts {
   opacity: 1;
@@ -1234,6 +1249,31 @@ html.is-idle .working-row .wk-t {
 }
 /* Opt in to spatial spring/ray/drift motion only when user has no reduced-motion preference */
 @media (prefers-reduced-motion: no-preference) {
+  .clap-n[data-prev]::before,
+  .super-jump .sj-badge[data-prev]::before {
+    content: attr(data-prev);
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+  }
+  .clap-n.roll-a > .num-cur,
+  .super-jump .sj-badge.roll-a > .num-cur {
+    animation: cm-num-in-a 160ms var(--ease-out-expo) both;
+  }
+  .clap-n.roll-b > .num-cur,
+  .super-jump .sj-badge.roll-b > .num-cur {
+    animation: cm-num-in-b 160ms var(--ease-out-expo) both;
+  }
+  .clap-n.roll-a[data-prev]::before,
+  .super-jump .sj-badge.roll-a[data-prev]::before {
+    animation: cm-num-out-a 160ms var(--ease-out-expo) both;
+  }
+  .clap-n.roll-b[data-prev]::before,
+  .super-jump .sj-badge.roll-b[data-prev]::before {
+    animation: cm-num-out-b 160ms var(--ease-out-expo) both;
+  }
   .clap-btn.clap-pop-a .clap-ico {
     animation: clap-pop-a 260ms cubic-bezier(.34, 1.56, .64, 1);
     animation-timing-function: linear(0, .38 14%, 1.18 42%, 1.04 62%, .98 78%, 1);
@@ -1254,10 +1294,28 @@ html.is-idle .working-row .wk-t {
 }
 @media (prefers-reduced-motion: reduce) {
   .clap-burst { display: none; }
+  .clap-n[data-prev]::before,
+  .super-jump .sj-badge[data-prev]::before { content: none; }
   .clap-float.pop-a,
   .clap-float.pop-b {
     animation: clap-float-reduced 650ms ease-out forwards;
   }
+}
+@keyframes cm-num-in-a {
+  from { opacity: 0; transform: translate3d(0, 70%, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes cm-num-in-b {
+  from { opacity: 0; transform: translate3d(0, 70%, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes cm-num-out-a {
+  from { opacity: 1; transform: translate3d(0, 0, 0); }
+  to { opacity: 0; transform: translate3d(0, -70%, 0); }
+}
+@keyframes cm-num-out-b {
+  from { opacity: 1; transform: translate3d(0, 0, 0); }
+  to { opacity: 0; transform: translate3d(0, -70%, 0); }
 }
 @keyframes clap-pop-a {
   0%   { transform: scale(1); }
@@ -1384,36 +1442,55 @@ html.is-idle .working-row .wk-t {
 #v-collie a.re[href]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 #v-collie .msg[tabindex="-1"]:focus:not(:focus-visible), #v-collie .event:focus:not(:focus-visible) { outline: none; }
 #v-collie .msg[tabindex="-1"]:focus-visible, #v-collie .event:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-#v-collie .msg.flash { animation: flash 1.5s ease-out; }
-#v-collie .say .msg.flash { border-radius: 8px; animation: flash-collie 1.5s ease-out; }
-#v-collie .event.flash { animation: flash-event 1.5s ease-out; }
-@keyframes flash {
-  0%, 28% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--attn) 42%, transparent); }
-  100% { box-shadow: 0 0 0 3px transparent; }
+#v-collie .msg, #v-collie .event { position: relative; }
+#v-collie .msg.flash::before,
+#v-collie .event.flash::before {
+  content: "";
+  position: absolute;
+  inset: -6px -10px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--attn) 14%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--attn) 72%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
 }
-@keyframes flash-collie {
-  0%, 28% {
-    background: color-mix(in srgb, var(--attn) 13%, transparent);
-    box-shadow: 0 0 0 7px color-mix(in srgb, var(--attn) 13%, transparent);
-  }
-  100% {
-    background: transparent;
-    box-shadow: 0 0 0 7px transparent;
-  }
+#v-collie .mine .msg.user.flash::before {
+  inset: -4px;
+  border-radius: 23px 23px 9px 23px;
+  border-left: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--attn) 58%, transparent);
 }
-@keyframes flash-event {
-  0%, 28% {
-    background: color-mix(in srgb, var(--attn) 15%, transparent);
-    border-color: color-mix(in srgb, var(--attn) 45%, transparent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--attn) 20%, transparent);
-    color: var(--fg);
-  }
-  100% {
-    box-shadow: 0 0 0 3px transparent;
+#v-collie .mine .msg.user.is-media-only.flash::before {
+  border-radius: 16px;
+}
+#v-collie .event.flash::before {
+  inset: -1px;
+  border-radius: 8px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  #v-collie .msg.flash::before,
+  #v-collie .event.flash::before {
+    animation: cm-flash-breath 1350ms ease-in-out forwards;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  #v-collie .msg.flash, #v-collie .say .msg.flash, #v-collie .event.flash { animation-duration: .8s; }
+  #v-collie .msg.flash::before,
+  #v-collie .event.flash::before {
+    animation: cm-flash-reduced 650ms ease-out forwards;
+  }
+}
+@keyframes cm-flash-breath {
+  0%   { opacity: 0; }
+  16%  { opacity: 1; }
+  42%  { opacity: .55; }
+  58%  { opacity: .9; }
+  100% { opacity: 0; }
+}
+@keyframes cm-flash-reduced {
+  0%, 30% { opacity: .8; }
+  100% { opacity: 0; }
 }
 /* Quick-reply choices under a Collie question: first is the recommended pick. */
 .reply-opts { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 6px; min-width: 0; max-width: 100%; }
@@ -1431,7 +1508,7 @@ html.is-idle .working-row .wk-t {
 }
 .reply-opt:not(:first-child):hover { background: var(--bg-2); border-color: var(--fg-3); color: var(--fg); }
 .reply-opt:first-child:not(:disabled):hover { opacity: .9; }
-.reply-opt:active { transform: scale(.98); }
+.reply-opt:active { transform: scale(.965); }
 .reply-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .reply-opt:disabled { opacity: .45; pointer-events: none; }
 @media (pointer: coarse) {
@@ -1899,11 +1976,74 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   border: 1px solid color-mix(in srgb, var(--line-2) 64%, var(--line)); border-radius: 999px;
   font-size: 12px; line-height: 1; white-space: nowrap; text-decoration: none;
   background: transparent; color: var(--fg-2);
+  opacity: 1; translate: 0 0; scale: 1;
   transition: background .14s, border-color .14s, color .14s;
 }
 .chip:hover {
   background: color-mix(in srgb, var(--bg-2) 76%, transparent);
   border-color: var(--line-2); color: var(--fg);
+}
+.chip.is-blocked {
+  border-color: color-mix(in srgb, var(--attn) 45%, var(--line));
+  background: color-mix(in srgb, var(--attn-soft) 75%, transparent);
+}
+.crew[data-live="1"] .chip {
+  transition:
+    background .14s ease,
+    border-color .14s ease,
+    color .14s ease,
+    opacity 180ms var(--ease-out-expo),
+    translate 200ms var(--ease-out-expo),
+    scale 200ms var(--ease-out-expo);
+}
+@starting-style {
+  .crew[data-live="1"] .chip {
+    opacity: 0;
+    translate: -6px 0;
+    scale: .94;
+  }
+}
+.crew .chip[data-closing] {
+  opacity: 0;
+  translate: 0 -2px;
+  scale: .94;
+  pointer-events: none;
+  transition-duration: 150ms;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .crew .chip.ping-blocked .dot.blocked { position: relative; }
+  .crew .chip.ping-blocked .dot.blocked::before {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 1.5px solid var(--attn);
+    pointer-events: none;
+    animation: cm-chip-ping 480ms var(--ease-out-expo) forwards;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew[data-live="1"] .chip {
+    translate: 0 0;
+    scale: 1;
+    transition: background .14s ease, border-color .14s ease, color .14s ease;
+  }
+  @starting-style {
+    .crew[data-live="1"] .chip {
+      opacity: 1;
+      translate: 0 0;
+      scale: 1;
+    }
+  }
+  .crew .chip[data-closing] {
+    translate: 0 0;
+    scale: 1;
+    transition: none;
+  }
+}
+@keyframes cm-chip-ping {
+  0% { opacity: .85; transform: scale(.85); }
+  100% { opacity: 0; transform: scale(2.1); }
 }
 .chip:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 40%, transparent); outline-offset: -2px; }
 .chip-name {
@@ -1951,7 +2091,9 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   position: absolute;
   left: 50%;
   bottom: calc(100% + 8px);
+  opacity: 1;
   translate: -50% 0;
+  scale: 1;
   z-index: 15;
   width: 34px;
   height: 34px;
@@ -1963,8 +2105,32 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   background: color-mix(in oklab, var(--bg) 96%, transparent);
   color: var(--fg-2);
   box-shadow: 0 2px 10px rgba(0, 0, 0, .07), 0 1px 2px rgba(0, 0, 0, .04);
-  transition: border-color .15s, background .15s, color .15s, box-shadow .15s;
+  transition:
+    display 140ms,
+    opacity 170ms var(--ease-out-expo),
+    translate 180ms var(--ease-out-expo),
+    scale 180ms var(--ease-out-expo),
+    border-color .15s,
+    background .15s,
+    color .15s,
+    box-shadow .15s;
+  transition-behavior: allow-discrete;
 }
+@starting-style {
+  .super-jump {
+    opacity: 0;
+    translate: -50% 7px;
+    scale: .92;
+  }
+}
+.super-jump:where([hidden], [data-closing]) {
+  opacity: 0;
+  translate: -50% 7px;
+  scale: .92;
+  pointer-events: none;
+  transition-duration: 140ms;
+}
+.super-jump[hidden] { display: none; }
 :root[data-theme="dark"] .super-jump {
   border-color: color-mix(in oklab, var(--line-2) 92%, var(--fg-3));
   background: color-mix(in oklab, var(--bg-2) 95%, transparent);
@@ -2008,9 +2174,10 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  overflow: clip;
   background: var(--attn);
   color: var(--on-attn);
-  font: 600 10px/1 var(--sans);
+  font: 600 10px/16px var(--sans);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -2031,10 +2198,35 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
   outline-offset: 2px;
 }
 #super-composer:has(.pending-wrap.open) .super-jump { display: none; }
-@keyframes super-jump-in { from { opacity: 0; transform: translateY(5px) scale(.92); } }
 @media (prefers-reduced-motion: no-preference) {
-  .super-jump { animation: super-jump-in .16s ease-out; transition: border-color .15s, background .15s, color .15s, transform .12s, box-shadow .15s; }
-  .super-jump:active { transform: scale(.93); }
+  .super-jump:active { scale: .93; }
+  .super-jump.nudge-a .sj-badge { animation: cm-badge-pop-a 190ms var(--ease-out-expo); }
+  .super-jump.nudge-b .sj-badge { animation: cm-badge-pop-b 190ms var(--ease-out-expo); }
+  .super-jump.nudge-a svg { animation: cm-arrow-nod-a 240ms var(--ease-out-expo); }
+  .super-jump.nudge-b svg { animation: cm-arrow-nod-b 240ms var(--ease-out-expo); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .super-jump { translate: -50% 0; scale: 1; transition-duration: 90ms; }
+  @starting-style { .super-jump { translate: -50% 0; scale: 1; } }
+  .super-jump:where([hidden], [data-closing]) { translate: -50% 0; scale: 1; }
+}
+@keyframes cm-badge-pop-a {
+  0% { transform: scale(.84); }
+  48% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+@keyframes cm-badge-pop-b {
+  0% { transform: scale(.84); }
+  48% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+@keyframes cm-arrow-nod-a {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  45% { transform: translate3d(0, 2.5px, 0); }
+}
+@keyframes cm-arrow-nod-b {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  45% { transform: translate3d(0, 2.5px, 0); }
 }
 @media (pointer: coarse) {
   .super-jump::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; }
@@ -2313,10 +2505,13 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .msg.user .att span, .msg.user .att a { font-size: 12.5px; padding: 2px 8px; border-radius: 8px; background: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 14%, transparent); text-decoration: none; }
 .msg.user .att a:hover { background: color-mix(in srgb, var(--user-bubble-fg, var(--human-line)) 22%, transparent); }
 .fv-html-sandbox { width: 100%; height: 100%; flex: 1; min-width: 0; max-width: 100%; min-height: 0; border: 0; display: block; background: var(--bg); }
-.send { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; border: 0; background: var(--accent); color: var(--on-accent); transition: transform .1s, opacity .15s; }
+.send { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; border: 0; background: var(--accent); color: var(--on-accent); transition: transform 90ms ease, opacity .15s; }
 .send svg { width: 17px; height: 17px; }
-.send:active { transform: scale(.94); }
+.send:active { transform: scale(.92); }
 .send:disabled { opacity: .35; }
+@media (prefers-reduced-motion: reduce) {
+  .send:active { transform: none; }
+}
 .kbd-toggle { display: none; align-self: center; }
 .detail.chat-mode .kbd-toggle { display: inline-grid; }
 .kbd-toggle.on { background: var(--bg-3); color: var(--fg); }
@@ -4795,10 +4990,45 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
 @keyframes workpulse { 50% { opacity: .55; } }
 /* Collie's own: under its avatar, text lined up with its messages */
 .working-row.say { display: grid; gap: 12px; align-items: center; }
+.working-row.say .wk-t { display: inline-block; justify-self: start; width: fit-content; }
 @media (prefers-reduced-motion: no-preference) {
   .working-row.working { animation: workpulse 1.6s ease-in-out infinite; }
   .working-row.say.working { animation: none; }
-  .working-row.say.working .wk-t { animation: workpulse 1.6s ease-in-out infinite; }
+  .working-row.say[data-entering="1"],
+  .working-row.say.working[data-entering="1"] {
+    animation: cm-wk-in 160ms var(--ease-out-expo) both;
+  }
+  .working-row.say.working .wk-t {
+    color: transparent;
+    background: linear-gradient(
+      105deg,
+      var(--shimmer-base) 0%,
+      var(--shimmer-base) 38%,
+      var(--shimmer-peak) 50%,
+      var(--shimmer-base) 62%,
+      var(--shimmer-base) 100%
+    );
+    background-size: 260% 100%;
+    background-position: 115% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: cm-wk-shimmer 2100ms linear infinite;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-row.say.working .wk-t { opacity: .72; }
+}
+@media (forced-colors: active) {
+  .working-row.say.working .wk-t { color: CanvasText; background: none; }
+}
+@keyframes cm-wk-in {
+  from { opacity: 0; transform: translate3d(0, 4px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes cm-wk-shimmer {
+  0% { background-position: 115% 0; }
+  72% { background-position: -15% 0; }
+  100% { background-position: -15% 0; }
 }
 @media (max-width: 760px) {
   .working-row { padding: 0 16px 18px; }
@@ -7307,6 +7537,116 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
 }
 @media (prefers-reduced-motion: reduce) {
   .notepane, .notes-scrim, .file-scrim, .reply-receipt > summary::before { transition: none !important; }
+}
+
+/* ─── Main Chat Micro-Motion (Scheme B Staggered Mist + User Lift + Decision Convergence) ─── */
+@media (prefers-reduced-motion: no-preference) {
+  /* 1) Outgoing user bubble: 180ms soft lift from composer (final layout height, zero scrollbar jitter) */
+  #v-collie .mine[data-enter="user"] > :is(.re, .mine-media, .msg.user) {
+    transform-origin: bottom right;
+    animation: cm-user-in 180ms var(--ease-send) both;
+  }
+
+  /* 2) Collie reply emerge (Scheme B: paragraph-level staggered 2.5px mist + 5px lift, capped at 5 blocks) */
+  #v-collie .say[data-enter]:not(.cont) .avatar {
+    animation: cm-crisp-in 180ms var(--ease-out-expo) both;
+  }
+  #v-collie .say[data-enter="collie-short"] .msg.assistant > :not(.msg-acts) {
+    animation: cm-mist-in 220ms var(--ease-out-expo) both;
+  }
+  #v-collie .say[data-enter="collie"] .msg.assistant > :not(.msg-acts) {
+    --cm-step: 34ms;
+    animation: cm-mist-in 240ms var(--ease-out-expo) both;
+    animation-delay: calc(var(--sibling-index, 0) * var(--cm-step));
+  }
+  /* Gate sibling-index() in @supports with a literal time unit (never var() in @supports) */
+  @supports (animation-delay: calc(sibling-index() * 0.1s)) {
+    #v-collie .say[data-enter="collie"] .msg.assistant > :not(.msg-acts) {
+      animation-delay: calc((sibling-index() - 1) * var(--cm-step));
+    }
+  }
+  /* Hard cap stagger at block 5 so long replies always settle cleanly without trailing lag */
+  #v-collie .say[data-enter="collie"] .msg.assistant > :not(.msg-acts):nth-child(n + 6) {
+    animation-delay: calc(4 * var(--cm-step));
+  }
+  /* Heavy/sharp/interactive blocks skip filter: blur() to guard 60 FPS and crisp edges */
+  #v-collie .say[data-enter^="collie"] .msg.assistant > :is(
+    pre, table, figure, img, svg,
+    .code-block, .md-code, .md-table, .md-math-block,
+    .thumbs, .md-img-btn, .snap-card, .artifact-chips,
+    .decision-wrap, .reply-opts, .reply-receipt, .msg-foot, .re, .pin-ind
+  ) {
+    animation-name: cm-crisp-in;
+  }
+  #v-collie .say[data-enter="collie"] .msg.assistant > :is(.decision-wrap, .reply-opts) {
+    animation-duration: 220ms;
+  }
+
+  /* 3) Quick-decision convergence (--opt press -> unselected fade-shrink -> receipt emerge + checkmark draw) */
+  .reply-opts.is-settling .reply-opt.is-chosen {
+    opacity: 1;
+    animation: cm-opt-tap 110ms var(--ease-out-expo) forwards;
+  }
+  .reply-opts.is-settling .reply-opt.is-chosen:disabled {
+    opacity: 1;
+  }
+  .reply-opts.is-settling .reply-opt:not(.is-chosen),
+  .reply-opts.is-settling .reply-more-btn {
+    opacity: 0;
+    transform: scale(.96);
+    transition: opacity 110ms ease-out, transform 110ms ease-out;
+  }
+  .reply-inline:not([hidden]) {
+    animation: cm-inline-open 160ms var(--ease-out-expo) both;
+  }
+  .reply-receipt[data-just-settled="1"] > summary {
+    animation: cm-receipt-in 180ms var(--ease-out-expo) both;
+  }
+  .reply-receipt[data-just-settled="1"] .rr-ico path {
+    stroke-dasharray: 26;
+    stroke-dashoffset: 26;
+    animation: cm-chk-draw 220ms ease-out 40ms forwards;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #v-collie .mine[data-enter="user"] > :is(.re, .mine-media, .msg.user) {
+    animation: cm-fade-in 90ms ease-out both;
+  }
+  #v-collie .say[data-enter] .msg.assistant {
+    animation: cm-fade-in 100ms ease-out both;
+  }
+}
+@keyframes cm-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cm-user-in {
+  from { opacity: 0; transform: translate3d(0, 10px, 0) scale(.975); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes cm-mist-in {
+  from { opacity: 0; filter: blur(2.5px); transform: translate3d(0, 5px, 0); }
+  to { opacity: 1; filter: blur(0); transform: translate3d(0, 0, 0); }
+}
+@keyframes cm-crisp-in {
+  from { opacity: 0; transform: translate3d(0, 4px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes cm-opt-tap {
+  0% { transform: scale(1); }
+  45% { transform: scale(.965); }
+  100% { transform: scale(1); opacity: .9; }
+}
+@keyframes cm-inline-open {
+  from { opacity: 0; transform: translate3d(0, -4px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes cm-receipt-in {
+  from { opacity: 0; transform: translate3d(0, 3px, 0) scale(.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes cm-chk-draw {
+  to { stroke-dashoffset: 0; }
 }
 
 /* demo only */

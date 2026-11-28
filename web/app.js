@@ -1646,7 +1646,104 @@
     older = next;
     _chatEntriesCache = null;
   }
-  function applyClapBtnState(btn, count) {
+  // ─── Main chat micro-motion helpers (compositor-only, reduced-motion aware) ───
+  const SUPER_ANIM_MAX_KEYS = 800;
+  const superAnimatedKeys = new Set();
+  const justSettledDecisions = new Set();
+  const justSettledTimers = new Map();
+  let _supportsDisplayTransition;
+  let _supportsSiblingIndex;
+  function prefersReducedMotion() {
+    return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+  function supportsSiblingIndex() {
+    if (_supportsSiblingIndex === undefined) {
+      _supportsSiblingIndex = typeof CSS !== "undefined"
+        && typeof CSS.supports === "function"
+        && CSS.supports("animation-delay: calc(sibling-index() * 0.1s)");
+    }
+    return _supportsSiblingIndex;
+  }
+  function canTransitionDisplay() {
+    if (_supportsDisplayTransition !== undefined) return _supportsDisplayTransition;
+    if (typeof CSS === "undefined" || !CSS.supports?.("transition-behavior", "allow-discrete") || !document?.body) {
+      return false;
+    }
+    if (typeof getComputedStyle !== "function") return false;
+    const probe = document.createElement("div");
+    if (!probe?.style || typeof document.body.appendChild !== "function") return false;
+    probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
+    document.body.appendChild(probe);
+    getComputedStyle(probe).display;
+    probe.style.display = "none";
+    _supportsDisplayTransition = getComputedStyle(probe).display === "block";
+    probe.remove?.();
+    return _supportsDisplayTransition;
+  }
+  function markSuperAnimatedKey(k) {
+    if (!k) return;
+    if (superAnimatedKeys.size >= SUPER_ANIM_MAX_KEYS) {
+      let drop = 200;
+      for (const old of superAnimatedKeys) {
+        superAnimatedKeys.delete(old);
+        if (--drop <= 0) break;
+      }
+    }
+    superAnimatedKeys.add(k);
+  }
+  function markDecisionJustSettled(id) {
+    if (!id) return;
+    justSettledDecisions.add(id);
+    const prevTimer = justSettledTimers.get(id);
+    if (prevTimer) clearTimeout(prevTimer);
+    const tid = setTimeout(() => {
+      justSettledTimers.delete(id);
+      justSettledDecisions.delete(id);
+      if (typeof document?.querySelectorAll === "function") {
+        const sel = `.reply-receipt[data-entry="${CSS.escape(id)}"]`;
+        for (const el of document.querySelectorAll(sel)) {
+          el.removeAttribute?.("data-just-settled");
+        }
+      }
+    }, 440);
+    justSettledTimers.set(id, tid);
+  }
+  function rollCounterSlot(el, nextText, animate = false) {
+    if (!el) return;
+    const prevText = el.textContent || "";
+    if (!nextText) {
+      if (el._rollTimer) { clearTimeout(el._rollTimer); el._rollTimer = 0; }
+      el.removeAttribute?.("data-prev");
+      el.classList?.remove("roll-a", "roll-b");
+      if (el.textContent !== "") el.textContent = "";
+      return;
+    }
+    const changed = !!(prevText && prevText !== nextText);
+    if (!animate || !changed || prefersReducedMotion() || document.hidden
+      || typeof el.replaceChildren !== "function" || typeof document?.createElement !== "function") {
+      if (el._rollTimer) { clearTimeout(el._rollTimer); el._rollTimer = 0; }
+      el.removeAttribute?.("data-prev");
+      el.classList?.remove("roll-a", "roll-b");
+      if (el.textContent !== nextText) el.textContent = nextText;
+      return;
+    }
+    el.setAttribute?.("data-prev", prevText);
+    const cur = document.createElement("span");
+    cur.className = "num-cur";
+    cur.textContent = nextText;
+    el.replaceChildren(cur);
+    el._rollAlt = !el._rollAlt;
+    el.classList?.remove("roll-a", "roll-b");
+    el.classList?.add(el._rollAlt ? "roll-a" : "roll-b");
+    if (el._rollTimer) clearTimeout(el._rollTimer);
+    el._rollTimer = setTimeout(() => {
+      el._rollTimer = 0;
+      el.removeAttribute?.("data-prev");
+      el.classList?.remove("roll-a", "roll-b");
+      if (el.textContent === nextText) el.textContent = nextText;
+    }, 185);
+  }
+  function applyClapBtnState(btn, count, opts = null) {
     if (!btn) return;
     const c = clampClaps(count);
     btn.classList?.toggle?.("on", c > 0);
@@ -1654,17 +1751,17 @@
     btn.setAttribute?.("title", clapTitle(c));
     btn.setAttribute?.("aria-label", clapAriaLabel(c));
     const numEl = btn.querySelector?.(".clap-n");
-    if (numEl) numEl.textContent = c > 0 ? String(c) : "";
+    if (numEl) rollCounterSlot(numEl, c > 0 ? String(c) : "", !!opts?.animate);
     const sayEl = btn.closest?.(".say");
     if (sayEl) sayEl.classList?.toggle?.("has-claps", c > 0);
     const tdEl = btn.closest?.(".td-node");
     if (tdEl) tdEl.classList?.toggle?.("has-claps", c > 0);
   }
-  function applyClapDomInPlace(id, count) {
+  function applyClapDomInPlace(id, count, opts = null) {
     if (!id || typeof document?.querySelectorAll !== "function") return;
     const sel = `.clap-btn[data-clap="${CSS.escape(id)}"]`;
     for (const btn of document.querySelectorAll(sel)) {
-      applyClapBtnState(btn, count);
+      applyClapBtnState(btn, count, opts);
     }
   }
   function playClapFx(btn, burstCount, capped = false) {
@@ -1811,7 +1908,7 @@
     st.pendingDelta += 1;
     st.reset = false;
     st.ackUntil = 0;
-    applyClapDomInPlace(id, next);
+    applyClapDomInPlace(id, next, { animate: true });
     playClapFx(btn, bSt.count, false);
     clearTimeout(st.timer);
     st.timer = setTimeout(() => flushClap(id, false), CLAP_DEBOUNCE_MS);
@@ -2942,6 +3039,7 @@
     const col = $("#v-collie");
     if (!col) return;
     if (parked) {
+      clearSuperEnterMarks($("#super-thread"));
       if (collieMounted || (!col.hidden && superBodyKey)) {
         collieMounted = true;
         if (!col.hidden && col.classList.contains("is-parked")) return;
@@ -3326,6 +3424,7 @@
       promotedPendingKeys.delete(promotedPendingKeys.keys().next().value);
     }
     promotedPendingKeys.set(realId, localId);
+    if (superAnimatedKeys.has(localId)) markSuperAnimatedKey(realId);
   }
   // Natural reply-chain thread drawer state.
   let activeThreadRoot = null;
@@ -3639,7 +3738,8 @@
           return `<span class="rr-orig-opt${hit ? " is-picked" : ""}">${hit ? "✓ " : ""}${esc(o)}</span>`;
         }).join("");
         const valHtml = val ? `<span class="rr-val">${esc(val)}</span>` : "";
-        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span>${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
+        const justSettled = !isDismissed && justSettledDecisions.has(e.id);
+        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"${justSettled ? ' data-just-settled="1"' : ""}><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span>${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
       }
       return "";
     }
@@ -4341,7 +4441,43 @@
     await scrollToAsync(sc, finalWant, "smooth");
     return "teleport-glide";
   }
-  let _lastJumpUiKey = "";
+  let _lastJumpUiKey = "", _prevJumpUnread = 0, _prevJumpShow = false, _jumpNudgeAlt = false;
+  function setSuperJumpVisible(btn, show, sc) {
+    if (btn._jumpHideTimer) { clearTimeout(btn._jumpHideTimer); btn._jumpHideTimer = 0; }
+    if (show) {
+      btn.removeAttribute?.("data-closing");
+      btn.hidden = false;
+      return;
+    }
+    const hadFocus = document.activeElement === btn;
+    if (btn.hidden && !btn.hasAttribute?.("data-closing")) return;
+    if (prefersReducedMotion() || document.hidden || canTransitionDisplay() || typeof btn.getAnimations !== "function") {
+      btn.removeAttribute?.("data-closing");
+      btn.hidden = true;
+      if (hadFocus) sc?.focus?.({ preventScroll: true });
+      return;
+    }
+    btn.setAttribute("data-closing", "");
+    if (hadFocus) sc?.focus?.({ preventScroll: true });
+    const anims = btn.getAnimations();
+    if (!anims.length) {
+      btn.removeAttribute("data-closing");
+      btn.hidden = true;
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (btn._jumpHideTimer) { clearTimeout(btn._jumpHideTimer); btn._jumpHideTimer = 0; }
+      if (btn.hasAttribute("data-closing")) {
+        btn.removeAttribute("data-closing");
+        btn.hidden = true;
+      }
+    };
+    btn._jumpHideTimer = setTimeout(finish, 220);
+    Promise.allSettled(anims.map((a) => a.finished)).then(finish);
+  }
   function updateSuperJump() {
     const btn = $("#super-jump"), sc = $("#super-thread")?.parentElement;
     if (!btn || !sc) return;
@@ -4350,14 +4486,18 @@
     const unreadCount = view === "collie" ? computeUnreadInfo().count : 0;
     const threshold = unreadCount > 0 ? AT_BOTTOM_PX : SUPER_JUMP_DIST;
     const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > threshold;
+    const visibleNow = !btn.hidden && !btn.hasAttribute?.("data-closing");
     const uiKey = `${show ? 1 : 0}|${unreadCount}`;
-    if (uiKey === _lastJumpUiKey && btn.hidden === !show) return;
+    if (uiKey === _lastJumpUiKey && visibleNow === show) return;
+    const unreadIncreased = show && unreadCount > _prevJumpUnread && (_prevJumpShow || _prevJumpUnread > 0);
     _lastJumpUiKey = uiKey;
+    _prevJumpShow = show;
+    _prevJumpUnread = show ? unreadCount : 0;
     const badgeText = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
     const ariaText = unreadCount > 0 ? `回到底部，${unreadCount} 条未读` : "回到底部";
     const badgeEl = $("#super-jump-badge", btn);
     if (badgeEl) {
-      if (badgeEl.textContent !== badgeText) badgeEl.textContent = badgeText;
+      rollCounterSlot(badgeEl, badgeText, unreadIncreased);
       badgeEl.hidden = !badgeText;
     }
     btn.classList.toggle("has-unread", unreadCount > 0);
@@ -4365,10 +4505,22 @@
       btn.title = ariaText;
       btn.setAttribute("aria-label", ariaText);
     }
-    if (btn.hidden === !show) return;
-    const hadFocus = !show && document.activeElement === btn;
-    btn.hidden = !show;
-    if (hadFocus) sc.focus({ preventScroll: true });
+    if (visibleNow !== show) {
+      setSuperJumpVisible(btn, show, sc);
+    }
+    if (!show) {
+      if (btn._jumpNudgeTimer) { clearTimeout(btn._jumpNudgeTimer); btn._jumpNudgeTimer = 0; }
+      btn.classList.remove("nudge-a", "nudge-b");
+    } else if (unreadIncreased && !prefersReducedMotion() && !document.hidden) {
+      _jumpNudgeAlt = !_jumpNudgeAlt;
+      btn.classList.remove("nudge-a", "nudge-b");
+      btn.classList.add(_jumpNudgeAlt ? "nudge-a" : "nudge-b");
+      if (btn._jumpNudgeTimer) clearTimeout(btn._jumpNudgeTimer);
+      btn._jumpNudgeTimer = setTimeout(() => {
+        btn._jumpNudgeTimer = 0;
+        btn.classList.remove("nudge-a", "nudge-b");
+      }, 280);
+    }
   }
   function maybeScheduleReadAtBottom(opts = {}) {
     if (view !== "collie" || document.hidden || collieLayoutLock) return;
@@ -4818,7 +4970,7 @@
     captureViewScroll("collie", null, navCur);
     updateSuperJump();
     if (seq !== jumpSeq) return;
-    flashEntry = { id, until: Date.now() + 1550 };
+    flashEntry = { id, until: Date.now() + 1400 };
     const hit = document.querySelector(sel);
     if (hit) {
       hit.classList.remove("flash");
@@ -4833,7 +4985,7 @@
       if (flashEntry.id === id && Date.now() >= flashEntry.until) {
         document.querySelector(sel)?.classList.remove("flash");
       }
-    }, 1600);
+    }, 1450);
   }
   // Legacy quotes created before worker events stored quote.entry: locate the
   // worker's nearest preceding timeline event in main chat without leaving it.
@@ -5421,6 +5573,96 @@
     el._collieKey = item.key;
     return { layoutChanged: false };
   }
+  function clearSuperEnterMarks(box) {
+    if (!box || typeof box.querySelectorAll !== "function") return;
+    for (const el of box.querySelectorAll("[data-enter]")) {
+      if (el._enterTimer) { clearTimeout(el._enterTimer); el._enterTimer = 0; }
+      if (el._enterOnEnd && typeof el.removeEventListener === "function") {
+        el.removeEventListener("animationend", el._enterOnEnd);
+        el._enterOnEnd = null;
+      }
+      el.removeAttribute?.("data-enter");
+      const msgEl = el.querySelector?.(".msg.assistant");
+      if (msgEl?.children) {
+        for (const ch of msgEl.children) ch.style?.removeProperty?.("--sibling-index");
+      }
+    }
+  }
+  function armSuperRowEnter(rowEl, role) {
+    if (!rowEl || !rowEl.dataset) return false;
+    let mode = "";
+    let fallbackMs = 260;
+    let lastTarget = null;
+    if (role === "user") {
+      mode = "user";
+      fallbackMs = 260;
+      lastTarget = rowEl.querySelector?.(".msg.user") || rowEl;
+    } else if (role === "collie") {
+      const msgEl = rowEl.querySelector?.(".msg.assistant");
+      const contentChildren = [];
+      if (msgEl?.children) {
+        for (const ch of msgEl.children) {
+          if (ch.classList?.contains("msg-acts")) continue;
+          contentChildren.push(ch);
+        }
+      }
+      const isShort = contentChildren.length <= 1;
+      mode = isShort ? "collie-short" : "collie";
+      fallbackMs = isShort ? 280 : 450;
+      if (!isShort && !supportsSiblingIndex() && msgEl?.children) {
+        let idx = 0;
+        for (const ch of msgEl.children) {
+          if (ch.classList?.contains("msg-acts")) continue;
+          ch.style?.setProperty?.("--sibling-index", String(Math.min(idx, 4)));
+          idx++;
+        }
+      }
+      lastTarget = isShort
+        ? (contentChildren[0] || msgEl || rowEl)
+        : (contentChildren[Math.min(contentChildren.length - 1, 4)] || msgEl || rowEl);
+    } else {
+      return false;
+    }
+    rowEl.dataset.enter = mode;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (rowEl._enterTimer) { clearTimeout(rowEl._enterTimer); rowEl._enterTimer = 0; }
+      if (rowEl._enterOnEnd && typeof rowEl.removeEventListener === "function") {
+        rowEl.removeEventListener("animationend", rowEl._enterOnEnd);
+        rowEl._enterOnEnd = null;
+      }
+      rowEl.removeAttribute?.("data-enter");
+      if (role === "collie") {
+        const msgEl = rowEl.querySelector?.(".msg.assistant");
+        if (msgEl?.children) {
+          for (const ch of msgEl.children) ch.style?.removeProperty?.("--sibling-index");
+        }
+      }
+    };
+    if (typeof rowEl.addEventListener === "function") {
+      const onEnd = (ev) => {
+        if (!ev?.animationName || !String(ev.animationName).startsWith("cm-")) return;
+        const reduced = prefersReducedMotion();
+        if (reduced || !lastTarget || ev.target === lastTarget) {
+          cleanup();
+          return;
+        }
+        if (typeof rowEl.getAnimations === "function") {
+          const running = rowEl.getAnimations({ subtree: true }).some(
+            (a) => a.playState === "running" && String(a.animationName || "").startsWith("cm-")
+          );
+          if (!running) cleanup();
+        }
+      };
+      rowEl._enterOnEnd = onEnd;
+      rowEl.addEventListener("animationend", onEnd);
+    }
+    if (rowEl._enterTimer) clearTimeout(rowEl._enterTimer);
+    rowEl._enterTimer = setTimeout(cleanup, fallbackMs);
+    return true;
+  }
   function patchSuperThread(box, items, opts = {}) {
     const t0 = performance.now();
     const beforeLayout = typeof opts?.onBeforeLayoutMutate === "function" ? opts.onBeforeLayoutMutate : null;
@@ -5432,7 +5674,7 @@
       }
     };
     const stats = box._colliePatchStats || (box._colliePatchStats = {
-      renders: 0, fullRebuilds: 0, lastAdded: 0, lastUpdated: 0, lastRemoved: 0, lastReused: 0, lastMs: 0,
+      renders: 0, fullRebuilds: 0, lastAdded: 0, lastUpdated: 0, lastRemoved: 0, lastReused: 0, lastAnimated: 0, lastMs: 0,
     });
     stats.renders++;
     let nodeMap = box._collieNodes;
@@ -5444,9 +5686,9 @@
       if (!items.length) {
         while (box.firstChild) box.removeChild(box.firstChild);
         stats.fullRebuilds++;
-        stats.lastAdded = stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+        stats.lastAdded = stats.lastUpdated = stats.lastRemoved = stats.lastReused = stats.lastAnimated = 0;
         stats.lastMs = performance.now() - t0;
-        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, fullRebuild: true, layoutChanged: true };
+        return { mutated: true, added: 0, updated: 0, removed: 0, reused: 0, animated: 0, fullRebuild: true, layoutChanged: true };
       }
       const frag = document.createDocumentFragment();
       if (items.length > 16) {
@@ -5459,6 +5701,8 @@
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+            markSuperAnimatedKey(it.key);
+            if (it.entryId) markSuperAnimatedKey(it.entryId);
             nodeMap.set(it.key, el);
             frag.appendChild(el);
           }
@@ -5471,6 +5715,8 @@
             el._collieSig = it.sig;
             if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
             if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+            markSuperAnimatedKey(it.key);
+            if (it.entryId) markSuperAnimatedKey(it.entryId);
             nodeMap.set(it.key, el);
             frag.appendChild(el);
           }
@@ -5483,6 +5729,8 @@
           el._collieSig = it.sig;
           if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
           if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+          markSuperAnimatedKey(it.key);
+          if (it.entryId) markSuperAnimatedKey(it.entryId);
           nodeMap.set(it.key, el);
           frag.appendChild(el);
         }
@@ -5491,12 +5739,12 @@
       box.appendChild(frag);
       stats.fullRebuilds++;
       stats.lastAdded = items.length;
-      stats.lastUpdated = stats.lastRemoved = stats.lastReused = 0;
+      stats.lastUpdated = stats.lastRemoved = stats.lastReused = stats.lastAnimated = 0;
       stats.lastMs = performance.now() - t0;
-      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, fullRebuild: true, layoutChanged: true };
+      return { mutated: true, added: items.length, updated: 0, removed: 0, reused: 0, animated: 0, fullRebuild: true, layoutChanged: true };
     }
 
-    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0, layoutChanged = false;
+    let added = 0, updated = 0, removed = 0, reused = 0, moved = 0, animated = 0, layoutChanged = false;
     const nextKeys = new Set();
     for (let i = 0; i < items.length; i++) {
       const k = items[i].key;
@@ -5531,50 +5779,44 @@
 
     let cursor = box.firstElementChild;
     let pendingNew = null;
+    const tailCandidates = [];
     const flushFrag = () => {
       if (!pendingNew || !pendingNew.length) return;
       noteLayoutMutate();
       layoutChanged = true;
+      const isTailAppend = !cursor || cursor._collieKey === "__needs__";
       const frag = document.createDocumentFragment();
+      const recordNode = (el, it) => {
+        el._collieKey = it.key;
+        el._collieSig = it.sig;
+        if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
+        if (it.entryId !== undefined) el._collieEntryId = it.entryId;
+        nodeMap.set(it.key, el);
+        frag.appendChild(el);
+        added++;
+        if (isTailAppend && (it.role === "user" || it.role === "collie")) {
+          const alreadyAnimated = superAnimatedKeys.has(it.key) || !!(it.entryId && superAnimatedKeys.has(it.entryId));
+          tailCandidates.push({ el, it, alreadyAnimated });
+        }
+        markSuperAnimatedKey(it.key);
+        if (it.entryId) markSuperAnimatedKey(it.entryId);
+      };
       if (pendingNew.length > 8) {
         _superPatchTpl.innerHTML = pendingNew.map((it) => it.render()).join("");
         const parsed = [..._superPatchTpl.content.children];
         if (parsed.length === pendingNew.length) {
-          for (let j = 0; j < pendingNew.length; j++) {
-            const el = parsed[j], it = pendingNew[j];
-            el._collieKey = it.key;
-            el._collieSig = it.sig;
-            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
-            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
-            nodeMap.set(it.key, el);
-            frag.appendChild(el);
-            added++;
-          }
+          for (let j = 0; j < pendingNew.length; j++) recordNode(parsed[j], pendingNew[j]);
         } else {
           _superPatchTpl.innerHTML = "";
           for (let j = 0; j < pendingNew.length; j++) {
             const it = pendingNew[j], el = parseSuperNode(it.render());
-            if (!el) continue;
-            el._collieKey = it.key;
-            el._collieSig = it.sig;
-            if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
-            if (it.entryId !== undefined) el._collieEntryId = it.entryId;
-            nodeMap.set(it.key, el);
-            frag.appendChild(el);
-            added++;
+            if (el) recordNode(el, it);
           }
         }
       } else {
         for (let j = 0; j < pendingNew.length; j++) {
           const it = pendingNew[j], el = parseSuperNode(it.render());
-          if (!el) continue;
-          el._collieKey = it.key;
-          el._collieSig = it.sig;
-          if (it.msgSig !== undefined) el._collieMsgSig = it.msgSig;
-          if (it.entryId !== undefined) el._collieEntryId = it.entryId;
-          nodeMap.set(it.key, el);
-          frag.appendChild(el);
-          added++;
+          if (el) recordNode(el, it);
         }
       }
       if (frag.firstChild) {
@@ -5647,12 +5889,20 @@
       cursor = next;
       removed++;
     }
+    if (opts.allowEnterAnim && tailCandidates.length > 0 && tailCandidates.length <= 2) {
+      for (const cand of tailCandidates) {
+        if (!cand.alreadyAnimated && armSuperRowEnter(cand.el, cand.it.role)) {
+          animated++;
+        }
+      }
+    }
     stats.lastAdded = added;
     stats.lastUpdated = updated;
     stats.lastRemoved = removed;
     stats.lastReused = reused;
+    stats.lastAnimated = animated;
     stats.lastMs = performance.now() - t0;
-    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, fullRebuild: false, layoutChanged };
+    return { mutated: added + updated + removed + moved > 0, added, updated, removed, reused, animated, fullRebuild: false, layoutChanged };
   }
 
   // Anti-flicker state for the in-stream "Collie 在想…" row (#super-working):
@@ -5763,6 +6013,149 @@
     }
   }
 
+  function patchCrewStrip(crew, active, onBeforeMutate) {
+    if (!crew) return false;
+    const items = active.map((w) => {
+      const pane = paneOf(w.name);
+      const disp = workerDisplayName(w);
+      const kindLbl = KIND_LABEL[w.kind] || w.kind;
+      const status = workerStatus(w);
+      const stLbl = STATUS_LABEL[status] || "";
+      const metaTip = [w.name, kindLbl, stLbl].filter(Boolean).join(" · ");
+      const goal = w.task ? extractGoalFromTask(w.task).goal : "";
+      const tip = goal && goal !== disp && goal !== w.name ? `${metaTip} — ${goal}` : metaTip;
+      const href = pane ? `#/p/${encodeURIComponent(pane)}` : "";
+      const sig = `${w.name}|${href}|${disp}|${kindLbl}|${status}|${tip}`;
+      return { name: w.name, href, disp, kindLbl, status, tip, sig };
+    });
+    const crewSig = items.map((x) => x.sig).join("\n");
+    if (!canPatchSuperDom(crew)) {
+      const prevCrew = crew._html ?? crew.innerHTML;
+      const crewHTML = items.map((x) =>
+        `<a class="chip${x.status === "blocked" ? " is-blocked" : ""}" ${x.href ? `href="${x.href}"` : ""} data-worker="${esc(x.name)}" title="${esc(x.tip)}"><span class="dot ${esc(x.status)}" aria-hidden="true"></span><span class="chip-name">${esc(x.disp)}</span><span class="k">${esc(x.kindLbl)}</span></a>`
+      ).join("");
+      const crewWillChange = crewHTML !== prevCrew;
+      if (crewWillChange && onBeforeMutate) onBeforeMutate();
+      return setHTML(crew, crewHTML) || crewWillChange;
+    }
+    if (crew._crewHydrated && crewSig === crew._crewSig) return false;
+    if (onBeforeMutate) onBeforeMutate();
+    let nodeMap = crew._crewNodes;
+    const isInitial = !crew._crewHydrated || !nodeMap;
+    if (isInitial) {
+      crew._crewHydrated = true;
+      nodeMap = new Map();
+      crew._crewNodes = nodeMap;
+      while (crew.firstChild) crew.removeChild(crew.firstChild);
+      const frag = document.createDocumentFragment();
+      for (const x of items) {
+        const el = parseSuperNode(`<a class="chip${x.status === "blocked" ? " is-blocked" : ""}" ${x.href ? `href="${x.href}"` : ""} data-worker="${esc(x.name)}" title="${esc(x.tip)}"><span class="dot ${esc(x.status)}" aria-hidden="true"></span><span class="chip-name">${esc(x.disp)}</span><span class="k">${esc(x.kindLbl)}</span></a>`);
+        if (!el) continue;
+        el._workerStatus = x.status;
+        el._chipSig = x.sig;
+        nodeMap.set(x.name, el);
+        frag.appendChild(el);
+      }
+      crew.appendChild(frag);
+      crew._crewSig = crewSig;
+      if (crew.dataset && !crew.dataset.live) {
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => { if (crew.dataset) crew.dataset.live = "1"; });
+        } else {
+          crew.dataset.live = "1";
+        }
+      }
+      return true;
+    }
+    const nextNames = new Set(items.map((x) => x.name));
+    const canAnimateExit = !!crew.dataset?.live && !document.hidden && !prefersReducedMotion();
+    for (const [name, el] of [...nodeMap.entries()]) {
+      if (nextNames.has(name)) continue;
+      if (el.hasAttribute?.("data-closing")) continue;
+      if (!canAnimateExit || typeof el.getAnimations !== "function") {
+        if (el.parentNode === crew) crew.removeChild(el);
+        nodeMap.delete(name);
+        continue;
+      }
+      el.setAttribute("data-closing", "");
+      el.setAttribute("aria-hidden", "true");
+      el.tabIndex = -1;
+      const anims = el.getAnimations();
+      const finishExit = () => {
+        if (!el.hasAttribute?.("data-closing")) return;
+        if (el.parentNode === crew) crew.removeChild(el);
+        if (crew._crewNodes?.get(name) === el) crew._crewNodes.delete(name);
+        syncCrewCompact(crew);
+        crew._syncScrollFade?.();
+        syncCollieTopHeight();
+      };
+      if (!anims.length) {
+        finishExit();
+      } else {
+        Promise.race([
+          Promise.allSettled(anims.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 240)),
+        ]).then(finishExit);
+      }
+    }
+    const nextNonClosing = (node) => {
+      let cur = node;
+      while (cur && cur.hasAttribute?.("data-closing")) cur = cur.nextElementSibling;
+      return cur;
+    };
+    let cursor = nextNonClosing(crew.firstElementChild);
+    for (const x of items) {
+      let el = nodeMap.get(x.name);
+      if (el) {
+        if (el.hasAttribute?.("data-closing")) {
+          el.removeAttribute("data-closing");
+          el.removeAttribute("aria-hidden");
+          el.removeAttribute("tabindex");
+        }
+        if (el._chipSig !== x.sig) {
+          const prevStatus = el._workerStatus || "";
+          if (x.href) el.setAttribute("href", x.href);
+          else el.removeAttribute("href");
+          if (el.title !== x.tip) el.title = x.tip;
+          const dotEl = el.querySelector?.(".dot");
+          const nextDotCls = `dot ${x.status}`;
+          if (dotEl && dotEl.className !== nextDotCls) dotEl.className = nextDotCls;
+          const nameEl = el.querySelector?.(".chip-name");
+          if (nameEl && nameEl.textContent !== x.disp) nameEl.textContent = x.disp;
+          const kindEl = el.querySelector?.(".k");
+          if (kindEl && kindEl.textContent !== x.kindLbl) kindEl.textContent = x.kindLbl;
+          el.classList?.toggle("is-blocked", x.status === "blocked");
+          if (x.status === "blocked" && prevStatus && prevStatus !== "blocked" && !document.hidden && !prefersReducedMotion()) {
+            el.classList?.remove("ping-blocked");
+            void el.offsetWidth;
+            el.classList?.add("ping-blocked");
+            if (el._pingTimer) clearTimeout(el._pingTimer);
+            el._pingTimer = setTimeout(() => {
+              el._pingTimer = 0;
+              el.classList?.remove("ping-blocked");
+            }, 540);
+          }
+          el._workerStatus = x.status;
+          el._chipSig = x.sig;
+        }
+      } else {
+        el = parseSuperNode(`<a class="chip${x.status === "blocked" ? " is-blocked" : ""}" ${x.href ? `href="${x.href}"` : ""} data-worker="${esc(x.name)}" title="${esc(x.tip)}"><span class="dot ${esc(x.status)}" aria-hidden="true"></span><span class="chip-name">${esc(x.disp)}</span><span class="k">${esc(x.kindLbl)}</span></a>`);
+        if (!el) continue;
+        el._workerStatus = x.status;
+        el._chipSig = x.sig;
+        nodeMap.set(x.name, el);
+      }
+      if (el === cursor) {
+        cursor = nextNonClosing(el.nextElementSibling);
+      } else {
+        if (cursor) crew.insertBefore(el, cursor);
+        else crew.appendChild(el);
+      }
+    }
+    crew._crewSig = crewSig;
+    return true;
+  }
+
   function renderSuper(opts) {
     const force = opts === true || !!opts?.force;
     const forceBottom = !!opts?.scrollBottom;
@@ -5801,7 +6194,7 @@
       return liveAnchor;
     };
     const prevScrollTop = scroller.scrollTop;
-    const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "", prevCrew = crew._html ?? crew.innerHTML;
+    const wasWorking = !wk.hidden, prevBusy = wasWorking ? wk.textContent : "";
     const r = sup.router || {};
     const allEntries = chatEntries();
     reconcileStaleReplyTo(allEntries);
@@ -5827,6 +6220,17 @@
     if (busy) {
       if (wk.className !== busyInfo.cls) wk.className = busyInfo.cls;
       if (busy !== prevBusy) wk.innerHTML = `<span class="avatar"><img src="/icon.svg" alt=""></span><span class="wk-t">${esc(busy)}</span>`;
+      if (!wasWorking && view === "collie" && !document.hidden && !prefersReducedMotion()) {
+        if (wk.dataset) wk.dataset.entering = "1";
+        if (wk._enterTimer) clearTimeout(wk._enterTimer);
+        wk._enterTimer = setTimeout(() => {
+          wk._enterTimer = 0;
+          if (wk.dataset) delete wk.dataset.entering;
+        }, 200);
+      }
+    } else {
+      if (wk._enterTimer) { clearTimeout(wk._enterTimer); wk._enterTimer = 0; }
+      if (wk.dataset) delete wk.dataset.entering;
     }
     wk.hidden = !busy;
     setText($("#router-queue"), sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "");
@@ -5842,20 +6246,8 @@
 
     const active = sup.workers.filter((w) => !w.ended);
     if (view === "collie") renderTarget();
-    const crewHTML = active.map((w) => {
-      const pane = paneOf(w.name);
-      const disp = workerDisplayName(w);
-      const kindLbl = KIND_LABEL[w.kind] || w.kind;
-      const stLbl = STATUS_LABEL[workerStatus(w)] || "";
-      const metaTip = [w.name, kindLbl, stLbl].filter(Boolean).join(" · ");
-      const goal = w.task ? extractGoalFromTask(w.task).goal : "";
-      const tip = goal && goal !== disp && goal !== w.name ? `${metaTip} — ${goal}` : metaTip;
-      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""} data-worker="${esc(w.name)}" title="${esc(tip)}"><span class="dot ${esc(workerStatus(w))}" aria-hidden="true"></span><span class="chip-name">${esc(disp)}</span><span class="k">${esc(kindLbl)}</span></a>`;
-    }).join("");
-    const crewWillChange = crewHTML !== prevCrew;
-    if (crewWillChange) ensureLiveAnchor();
     const prevCrewScroll = crew.scrollLeft || 0;
-    const crewChanged = setHTML(crew, crewHTML) || crewWillChange;
+    const crewChanged = patchCrewStrip(crew, active, ensureLiveAnchor);
     if (crewChanged) {
       if (prevCrewScroll > 0) crew.scrollLeft = prevCrewScroll;
       syncCrewCompact(crew);
@@ -6061,6 +6453,7 @@
             };
             items.push({
               key: eKey,
+              role: "user",
               sig,
               msgSig,
               canPromoteInPlace: true,
@@ -6102,9 +6495,11 @@
             };
             items.push({
               key: eKey,
+              role: "collie",
               sig,
               msgSig,
               canPromoteCollieInPlace: true,
+              entryId: e.id || "",
               cont,
               pinned,
               claps,
@@ -6179,7 +6574,13 @@
       let domMutated = false;
       let domLayoutChanged = false;
       if (canPatchSuperDom(box)) {
-        const res = patchSuperThread(box, items, { onBeforeLayoutMutate: ensureLiveAnchor });
+        const collieEl = $("#v-collie");
+        const collieVisible = view === "collie" && !document.hidden && !collieEl?.classList?.contains("is-parked");
+        const allowEnterAnim = !force && !wantUnreadAnchor && !restore && !olderBusy && !jumping
+          && !shouldApplyUnreadAnchor && !drawerFreezeMain && collieVisible && atBottom
+          && !(collieInitialAnchor?.mode === "unread")
+          && !(collieInitialAnchor?.mode === "unread-auto" && !collieInitialAnchor.atBottom);
+        const res = patchSuperThread(box, items, { onBeforeLayoutMutate: ensureLiveAnchor, allowEnterAnim });
         domMutated = res.mutated;
         domLayoutChanged = res.layoutChanged;
         if (domMutated) superDomGen++;
@@ -7183,10 +7584,10 @@
     if (mine) {
       // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
       mine.id = r?.entry || mine.id || "";
+      if (mine.id) rememberPromotedPending(mine.id, mine._localId);
       if (mine.id && shouldCommitRead) commitChatRead(mine.id, { immediate: true });
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
-        if (mine.id) rememberPromotedPending(mine.id, mine._localId);
         pendingSays.splice(idx, 1);
         renderSide();
         renderSuper();
@@ -7206,6 +7607,7 @@
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
     pickedReplyOpts.set(id, { state: "custom", text, at: new Date().toISOString(), sending: true });
+    markDecisionJustSettled(id);
     try {
       await sendSuper(
         text,
@@ -7215,7 +7617,7 @@
         {
           scrollBottom: !opts.inDrawer,
           commitRead: true,
-          onRollback: () => { pickedReplyOpts.delete(id); },
+          onRollback: () => { pickedReplyOpts.delete(id); justSettledDecisions.delete(id); },
         },
       );
       const picked = pickedReplyOpts.get(id);
@@ -7285,6 +7687,13 @@
     const text = b.dataset.opt;
     if (openInlineDecisionId === id) openInlineDecisionId = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
+    const canPlayOptSettle = !prefersReducedMotion() && !document.hidden
+      && typeof grp.getAnimations === "function" && !!grp.classList && !!b.classList;
+    if (canPlayOptSettle) {
+      b.classList.add("is-chosen");
+      grp.classList.add("is-settling");
+      await new Promise((r) => setTimeout(r, 110));
+    }
     const e = chatEntries().find((x) => x.id === id);
     const sc = viewScroller("collie");
     const nearBot = isCollieNearBottom(sc);
@@ -7299,6 +7708,7 @@
       if (keepSnap) keepSnap.atBottom = false;
     }
     pickedReplyOpts.set(id, { state: "picked", text, at: new Date().toISOString(), sending: true });
+    markDecisionJustSettled(id);
     try {
       await sendSuper(
         text,
@@ -7310,7 +7720,7 @@
           scrollBottom: nearBot && !opts.inDrawer,
           commitRead: shouldCommitRead,
           restore: keepSnap,
-          onRollback: () => { pickedReplyOpts.delete(id); },
+          onRollback: () => { pickedReplyOpts.delete(id); justSettledDecisions.delete(id); },
         },
       );
       const picked = pickedReplyOpts.get(id);
@@ -7320,6 +7730,9 @@
       }
     } catch (err) {
       pickedReplyOpts.delete(id);
+      justSettledDecisions.delete(id);
+      b.classList?.remove("is-chosen");
+      grp.classList?.remove("is-settling");
       delete grp.dataset.busy;
       grp.querySelectorAll("button").forEach((x) => { x.disabled = false; });
       toast(err.message, "attn");
@@ -17750,19 +18163,6 @@
   let lbScale = 1, lbX = 0, lbY = 0, lbSavedScroll = null;
   const lbTabProtected = new Set();
 
-  let supportsDisplayTransition;
-  function canTransitionDisplay() {
-    if (supportsDisplayTransition !== undefined) return supportsDisplayTransition;
-    if (!window.CSS?.supports?.("transition-behavior", "allow-discrete") || !document.body) return false;
-    const probe = document.createElement("div");
-    probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
-    document.body.appendChild(probe);
-    getComputedStyle(probe).display;
-    probe.style.display = "none";
-    supportsDisplayTransition = getComputedStyle(probe).display === "block";
-    probe.remove();
-    return supportsDisplayTransition;
-  }
   const supportsTopLayerExit = () => !!(window.CSS?.supports?.("overlay", "auto") && canTransitionDisplay());
 
   function releaseLbTempUrl() {

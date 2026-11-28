@@ -214,9 +214,11 @@ const expiredObj = { ...payloadObj, exp: Math.floor(Date.now() / 1000) - 60 };
 const expiredCode = "collie-peer://v1/" + Buffer.from(JSON.stringify(expiredObj)).toString("base64url");
 assert.ok(T.parsePeerInviteClient(expiredCode, "hub_bob002")?.error, "expired legacy invite must fail");
 
-// Share text contains clickable /join/#<payload> URL
+// Share text contains clickable /join/#<payload> URL and natural wording
 const share = T.peerShareText({ invite_code: canonicalInvite, join_url: joinUrl, hub_name: "Alice的边牧" });
 assert.ok(share.includes(joinUrl) && !share.includes("collie-peer://v1/"), "share text must use clean clickable /join/# URL");
+assert.ok(share.includes("来和我的 Collie「Alice的边牧」成为好狗友"), "share text must read naturally without redundant pal subject");
+assert.equal(T.extractPeerInviteCode(share), canonicalInvite, "new share text must extract cleanly");
 assert.equal(T.peerInviteJoinURL({ invite_code: canonicalInvite }), joinUrl, "fallback join URL computed cleanly");
 
 // capturePeerInviteFromURL extracts ?peer_invite= (including web+collie://join/2.<b64>) and immediately strips it from address bar

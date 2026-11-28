@@ -10,9 +10,9 @@ rm -rf "$out" && mkdir -p "$out"
 cp -R web/vendor web/avatars web/app.css web/icon.svg web/icon-512.png web/apple-touch-icon.png "$out/"
 cp scripts/demo/demo.js scripts/demo/demo-qr.png scripts/demo/bench-pagination.html "$out/"
 # Absolute paths assume the hub serves the app at /; Pages serves it at /collie/demo/.
-sed -e 's#src="/icon.svg"#src="icon.svg"#g' -e 's#"/avatars/#"avatars/#g' -e 's#"/api/qr?text=#"demo-qr.png?text=#g' -e 's#`/api/qr?text=#`demo-qr.png?text=#g' web/app.js > "$out/app.js"
+sed -e 's#src="/icon.svg"#src="icon.svg"#g' -e 's#"/avatars/#"avatars/#g' -e 's#"/vendor/#"vendor/#g' -e 's#"/api/qr?text=#"demo-qr.png?text=#g' -e 's#`/api/qr?text=#`demo-qr.png?text=#g' web/app.js > "$out/app.js"
 sed -e 's#href="/#href="#g' -e 's#src="/#src="#g' \
-    -e 's#<script src="vendor/xterm.js"></script>#<script src="demo.js"></script>\n<script src="vendor/xterm.js"></script>#' \
+    -e 's#<script src="app.js"></script>#<script src="demo.js"></script>\n<script src="app.js"></script>#' \
     -e 's#<title>Collie</title>#<title>Collie 演示</title>#' \
     -e '/rel="manifest"/d' web/index.html > "$out/index.html"
 cat >> "$out/app.css" <<'CSS'

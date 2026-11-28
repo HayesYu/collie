@@ -90,6 +90,7 @@ const cssSrc = fs.readFileSync(path.join(root, "web/app.css"), "utf8");
 
 // Static CSS contract checks
 assert.ok(cssSrc.includes(".rv-mermaid") && cssSrc.includes(".rv-svg") && cssSrc.includes(".rv-html-card"), "CSS must style Mermaid, SVG, and inline HTML cards");
+assert.ok(cssSrc.includes(".rv-float-acts") && cssSrc.includes(".rv-html-foot") && !cssSrc.includes(".rv-bar {") && !cssSrc.includes(".rv-html-head {"), "CSS must use frameless floating micro-actions instead of persistent top bars");
 assert.ok(cssSrc.includes(".rv-mermaid.is-fallback") && cssSrc.includes(".rv-svg.is-fallback"), "CSS must style silent fallback for invalid Mermaid/SVG blocks");
 assert.ok(cssSrc.includes(".lb-svg") && cssSrc.includes(".rv-svg-stage.is-light-canvas"), "CSS must style lightbox SVG stage and dark-mode light canvas fallback");
 assert.ok(cssSrc.includes("--rv-html-max, 460px") && cssSrc.includes("--rv-html-max: 380px"), "CSS must clamp desktop/mobile HTML card heights");
@@ -584,6 +585,7 @@ async function testMermaidLifecycle() {
   const bt3 = "\x60\x60\x60";
   const mmdHtml = R.mdRender("前文\n\n" + bt3 + "mermaid\ngraph TD\n  A[提交] --> B[验收]\n" + bt3 + "\n\n后文");
   assert.ok(mmdHtml.includes('data-rv-kind="mermaid"'), "mermaid fence emits mermaid card");
+  assert.ok(mmdHtml.includes('class="rv-float-acts"') && !mmdHtml.includes('class="rv-bar"'), "mermaid card uses floating micro-actions without persistent top bar");
   assert.ok(mmdHtml.includes('data-rv-toggle="source"') && mmdHtml.includes('data-rv-expand="mermaid"'), "mermaid card includes source toggle & fullscreen expand");
   assert.ok(mmdHtml.includes("<p>前文</p>") && mmdHtml.includes("<p>后文</p>"), "surrounding prose preserved");
 
@@ -597,6 +599,7 @@ async function testMermaidLifecycle() {
   assert.equal(lightCfg.startOnLoad, false);
   assert.equal(lightCfg.themeVariables.background, "#ffffff");
   assert.equal(darkCfg.themeVariables.background, "#111113");
+  assert.ok(lightCfg.themeCSS.includes("stroke-width: 1px") && lightCfg.themeCSS.includes("rx: 8px"), "Mermaid themeCSS enforces 1px hairline strokes and 8px rounded corners");
 
   // Mock global mermaid to test valid render, cache reuse, theme re-render, and silent syntax-error fallback
   let renderCalls = 0;
@@ -616,17 +619,17 @@ async function testMermaidLifecycle() {
     card.setAttribute("data-rv-kind", "mermaid");
     card.setAttribute("data-rv-hash", hash);
     card.setAttribute("data-rv-mode", "diagram");
-    const bar = makeEl("div"); bar.className = "rv-bar";
-    const toggleBtn = makeEl("button"); toggleBtn.setAttribute("data-rv-toggle", "source"); toggleBtn.textContent = "源码";
-    const expBtn = makeEl("button"); expBtn.setAttribute("data-rv-expand", "mermaid"); expBtn.hidden = true;
-    bar.appendChild(toggleBtn); bar.appendChild(expBtn);
+    const acts = makeEl("div"); acts.className = "rv-float-acts";
+    const toggleBtn = makeEl("button"); toggleBtn.className = "rv-ico"; toggleBtn.setAttribute("data-rv-toggle", "source"); toggleBtn.title = "查看源码";
+    const expBtn = makeEl("button"); expBtn.className = "rv-ico"; expBtn.setAttribute("data-rv-expand", "mermaid"); expBtn.hidden = true;
+    acts.appendChild(toggleBtn); acts.appendChild(expBtn);
     const stage = makeEl("div"); stage.className = "rv-stage rv-mermaid-stage";
     const pre = makeEl("pre"); pre.className = "rv-source"; pre.hidden = true;
     const codeEl = makeEl("code"); codeEl.textContent = code;
     pre.appendChild(codeEl);
-    card.appendChild(bar); card.appendChild(stage); card.appendChild(pre);
+    card.appendChild(acts); card.appendChild(stage); card.appendChild(pre);
     bodyEl.appendChild(card);
-    return { card, bar, stage, pre, toggleBtn, expBtn };
+    return { card, acts, stage, pre, toggleBtn, expBtn };
   }
 
   // Valid diagram
@@ -649,11 +652,11 @@ async function testMermaidLifecycle() {
   assert.equal(okCard.stage.hidden, true);
   assert.equal(okCard.pre.hidden, false);
   assert.equal(okCard.toggleBtn.getAttribute("aria-pressed"), "true");
-  assert.equal(okCard.toggleBtn.textContent, "图表");
+  assert.equal(okCard.toggleBtn.title, "切回图表");
   R.setRichCardMode(okCard.card, "visual");
   assert.equal(okCard.stage.hidden, false);
   assert.equal(okCard.pre.hidden, true);
-  assert.equal(okCard.toggleBtn.textContent, "源码");
+  assert.equal(okCard.toggleBtn.title, "查看源码");
 
   // Dark theme switch auto-rerenders ready cards
   docEl.dataset.theme = "dark";
@@ -675,7 +678,7 @@ async function testMermaidLifecycle() {
   await new Promise((r) => setImmediate(r));
   await new Promise((r) => setImmediate(r));
   assert.ok(badCard.card.classList.contains("is-fallback"), "syntax error degrades to .is-fallback");
-  assert.equal(badCard.bar.hidden, true, "fallback hides card toolbar");
+  assert.equal(badCard.acts.hidden, true, "fallback hides floating action pill");
   assert.equal(badCard.stage.hidden, true, "fallback hides diagram stage");
   assert.equal(badCard.pre.hidden, false, "fallback shows raw code block");
   assert.equal(warnings.length, 0, "syntax error must produce zero console warnings/errors");
@@ -683,12 +686,14 @@ async function testMermaidLifecycle() {
 
 // 3. Inline HTML cards: both triggers, zero false positives, strict sandbox, safe postMessage height
 async function testHtmlCards() {
-  // 3a) Explicit --file report.html attachment triggers inline sandbox card
+  // 3a) Explicit --file report.html attachment triggers frameless inline sandbox card
   const attHtml = R.renderEntryArtifacts({ id: "e-html-1", role: "collie", text: "报告已生成", files: ["~/reports/weekly.html", "~/reports/data.csv"] }, "");
   assert.ok(attHtml.includes('data-rv-kind="html-file"'), "explicit .html attachment renders inline HTML card");
-  assert.ok(attHtml.includes('data-open-file="~/reports/weekly.html"'), "header includes drawer open button");
-  assert.ok(attHtml.includes("在抽屉打开") && attHtml.includes("新窗口打开"), "header shows drawer and new-window buttons");
-  assert.ok(attHtml.includes('data-rv-open-win="~/reports/weekly.html"'), "new-window button carries target path");
+  assert.ok(attHtml.includes('class="rv-float-acts"') && !attHtml.includes('class="rv-html-head"'), "HTML attachment uses floating micro-actions without top header bar");
+  assert.ok(attHtml.includes('class="rv-html-foot"') && attHtml.includes('<button type="button" class="snap-head" data-open-file="~/reports/weekly.html"'), "HTML attachment includes subtle bottom drawer trigger preserving snap-head contract");
+  assert.ok(!attHtml.includes("HTML · ~/reports/weekly.html"), "HTML attachment must not display raw file path noise inline");
+  assert.ok(attHtml.includes("weekly.html") && attHtml.includes("在抽屉打开"), "footer shows clean filename and drawer cue");
+  assert.ok(attHtml.includes('data-rv-open-win="~/reports/weekly.html"'), "floating new-window icon carries target path");
   assert.ok(attHtml.includes("data.csv"), "companion non-HTML files remain chips");
 
   // Prose mention ONLY (not in e.files) must NOT auto-render inline iframe card
@@ -698,8 +703,9 @@ async function testHtmlCards() {
   // 3b) Explicit html-card and html preview vs normal html
   const bt3 = "\x60\x60\x60";
   const cardFence1 = R.mdRender(bt3 + "html-card 指标卡\n<div>KPI 99.9%</div>\n" + bt3);
-  assert.ok(cardFence1.includes('data-rv-kind="html-code"') && cardFence1.includes("指标卡"), "html-card fence emits inline HTML card with title");
-  assert.ok(cardFence1.includes('data-rv-toggle="source"') && cardFence1.includes('data-rv-open-code-win="1"'), "html-card includes source toggle & new window");
+  assert.ok(cardFence1.includes('data-rv-kind="html-code"') && cardFence1.includes('data-rv-title="指标卡"'), "html-card fence emits inline HTML card with accessible title");
+  assert.ok(cardFence1.includes('class="rv-float-acts"') && !cardFence1.includes('class="rv-bar"'), "html-card uses floating micro-actions without persistent top bar");
+  assert.ok(cardFence1.includes('data-rv-toggle="source"') && cardFence1.includes('data-rv-open-code-win="1"'), "html-card includes floating source toggle & new window icon");
 
   const cardFence2 = R.mdRender(bt3 + "html preview\n<p>Preview</p>\n" + bt3);
   assert.ok(cardFence2.includes('data-rv-kind="html-code"'), "html preview fence emits inline HTML card");
@@ -762,9 +768,18 @@ async function testHtmlCards() {
   assert.ok(injectedDark.includes("body{background:#fafafa}"), "page original styles remain intact");
   assert.ok(injectedDark.indexOf('id="collie-theme-vars"') < injectedDark.indexOf("body{background:#fafafa}"), "injected theme vars precede author styles so author styles are not overridden");
 
-  // Bare fragment html-card also carries theme & semantic vars
+  // Bare fragment html-card carries theme, seamless --collie-bg (no gray shell), & zero extra padding
   assert.ok(iframe.srcdoc.includes('data-theme="light"') && iframe.srcdoc.includes("--collie-bg:#ffffff"), "html-card fragment carries current light theme & Collie vars");
+  assert.ok(iframe.srcdoc.includes("padding:0;background:var(--collie-bg)"), "html-card fragment blends seamlessly with --collie-bg without gray shell or padding");
   assert.equal(iframe._getSrcdocWrites(), 1, "iframe srcdoc written exactly once on mount");
+
+  // Mobile tap inside sandbox iframe toggles .is-acts-open via validated collie:card-tap message
+  ctx.innerWidth = 390;
+  R.handleRichCardMessage({ source: iframe.contentWindow, origin: "null", data: { type: "collie:card-tap", id: frameId, token: rec.token } });
+  assert.equal(card.classList.contains("is-acts-open"), true, "mobile card-tap reveals floating micro-actions");
+  R.handleRichCardMessage({ source: iframe.contentWindow, origin: "null", data: { type: "collie:card-tap", id: frameId, token: rec.token } });
+  assert.equal(card.classList.contains("is-acts-open"), false, "second mobile card-tap hides floating micro-actions");
+  ctx.innerWidth = 1440;
 
   // Switching Collie theme pushes postMessage({ type: "collie-theme", theme }) without rebuilding iframe or rewriting srcdoc!
   docEl.dataset.theme = "dark";
@@ -838,17 +853,17 @@ async function testSvgSafeDirectRender() {
     card.setAttribute("data-rv-kind", "svg");
     card.setAttribute("data-rv-hash", hash);
     card.setAttribute("data-rv-mode", "diagram");
-    const bar = makeEl("div"); bar.className = "rv-bar";
-    const toggleBtn = makeEl("button"); toggleBtn.setAttribute("data-rv-toggle", "source"); toggleBtn.textContent = "源码";
-    const expBtn = makeEl("button"); expBtn.setAttribute("data-rv-expand", "svg"); expBtn.hidden = true;
-    bar.appendChild(toggleBtn); bar.appendChild(expBtn);
+    const acts = makeEl("div"); acts.className = "rv-float-acts";
+    const toggleBtn = makeEl("button"); toggleBtn.className = "rv-ico"; toggleBtn.setAttribute("data-rv-toggle", "source"); toggleBtn.title = "查看源码";
+    const expBtn = makeEl("button"); expBtn.className = "rv-ico"; expBtn.setAttribute("data-rv-expand", "svg"); expBtn.hidden = true;
+    acts.appendChild(toggleBtn); acts.appendChild(expBtn);
     const stage = makeEl("div"); stage.className = "rv-stage rv-svg-stage";
     const pre = makeEl("pre"); pre.className = "rv-source"; pre.hidden = true;
     const codeEl = makeEl("code"); codeEl.textContent = code;
     pre.appendChild(codeEl);
-    card.appendChild(bar); card.appendChild(stage); card.appendChild(pre);
+    card.appendChild(acts); card.appendChild(stage); card.appendChild(pre);
     bodyEl.appendChild(card);
-    return { card, bar, stage, pre, toggleBtn, expBtn };
+    return { card, acts, stage, pre, toggleBtn, expBtn };
   }
 
   const okSvgCard = makeSvgCardDom('<svg viewBox="0 0 80 30"><rect width="80" height="30" fill="currentColor"/></svg>', "svg-ok-1");
@@ -859,7 +874,7 @@ async function testSvgSafeDirectRender() {
   R.setRichCardMode(okSvgCard.card, "source");
   assert.equal(okSvgCard.stage.hidden, true);
   assert.equal(okSvgCard.pre.hidden, false);
-  assert.equal(okSvgCard.toggleBtn.textContent, "图表");
+  assert.equal(okSvgCard.toggleBtn.title, "切回图表");
   R.setRichCardMode(okSvgCard.card, "visual");
   assert.equal(okSvgCard.stage.hidden, false);
   assert.equal(okSvgCard.pre.hidden, true);
@@ -867,7 +882,7 @@ async function testSvgSafeDirectRender() {
   const badSvgCard = makeSvgCardDom("<div>not an svg</div>", "svg-bad-1");
   R.renderSvgCard(badSvgCard.card);
   assert.ok(badSvgCard.card.classList.contains("is-fallback"), "invalid svg silently degrades to .is-fallback");
-  assert.equal(badSvgCard.bar.hidden, true);
+  assert.equal(badSvgCard.acts.hidden, true);
   assert.equal(badSvgCard.stage.hidden, true);
   assert.equal(badSvgCard.pre.hidden, false);
 }

@@ -3724,7 +3724,7 @@
         const act = activeMatch === it.path;
         const hash = richVisualHash("html-file:" + it.path);
         const chipsHere = idx === inlineHtmlItems.length - 1 ? extraChips : "";
-        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-html-head"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "预览 ") + it.name)}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(it.name)}</span><span class="snap-meta">HTML · ${esc(it.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button><div class="rv-acts rv-html-acts"><button type="button" class="rv-btn" data-open-file="${esc(it.path)}" title="在右侧抽屉完整查看" aria-label="在抽屉打开 ${esc(it.name)}">在抽屉打开</button><button type="button" class="rv-btn" data-rv-open-win="${esc(it.path)}" title="在新窗口打开" aria-label="在新窗口打开 ${esc(it.name)}">新窗口打开</button></div></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>加载预览中…</span></div></div>${chipsHere}</section>`;
+        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(it.name)} 操作"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="在抽屉打开" aria-label="在抽屉打开 ${esc(it.name)}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="在新窗口打开" aria-label="在新窗口打开 ${esc(it.name)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>加载预览中…</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc((act ? "正在预览 " : "在抽屉打开 ") + it.name)}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">在抽屉打开</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button></div>${chipsHere}</section>`;
       }).join("");
     } else {
       const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
@@ -22778,7 +22778,11 @@
   };
   // ───────────────────────────── rich visuals (lazy offline Mermaid + sandboxed HTML cards)
   const RV_MERMAID_SCRIPT = "vendor/mermaid/mermaid.min.js";
+  const ICON_RV_CODE = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+  const ICON_RV_VISUAL = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>';
   const ICON_RV_EXPAND = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6"/></svg>';
+  const ICON_RV_DRAWER = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>';
+  const ICON_RV_NEWWIN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M17 13v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h4"/></svg>';
   function richVisualHash(str) {
     const s = String(str || "");
     let h1 = 0x811c9dc5 >>> 0;
@@ -22845,18 +22849,17 @@
     const fenceTag = String(info || "").trim().split(/[\s{:]/)[0].toLowerCase().replace(/^language-/, "");
     if (fenceTag === "mermaid" && raw.trim()) {
       const hash = richVisualHash("mermaid:" + raw);
-      return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-bar"><span class="rv-tag">Mermaid</span><div class="rv-acts"><button type="button" class="rv-btn" data-rv-toggle="source" aria-pressed="false" title="查看 Mermaid 源码" aria-label="查看 Mermaid 源码">源码</button><button type="button" class="rv-btn rv-ico-btn" data-rv-expand="mermaid" title="全屏放大查看" aria-label="全屏放大查看图表" hidden>${ICON_RV_EXPAND}</button></div></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="Mermaid 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染图表中…</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
+      return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="Mermaid 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 Mermaid 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="mermaid" title="全屏放大" aria-label="全屏放大查看图表" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="Mermaid 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染图表中…</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
     }
     if (fenceTag === "svg" && raw.trim()) {
       const hash = richVisualHash("svg:" + raw);
-      return `<div class="rv-card rv-svg is-pending" data-rv-kind="svg" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-bar"><span class="rv-tag">SVG</span><div class="rv-acts"><button type="button" class="rv-btn" data-rv-toggle="source" aria-pressed="false" title="查看 SVG 源码" aria-label="查看 SVG 源码">源码</button><button type="button" class="rv-btn rv-ico-btn" data-rv-expand="svg" title="全屏放大查看" aria-label="全屏放大查看 SVG" hidden>${ICON_RV_EXPAND}</button></div></div><div class="rv-stage rv-svg-stage" role="img" aria-label="SVG 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染 SVG 中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></div>`;
+      return `<div class="rv-card rv-svg is-pending" data-rv-kind="svg" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="SVG 图表操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 SVG 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="svg" title="全屏放大" aria-label="全屏放大查看 SVG" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-svg-stage" role="img" aria-label="SVG 图表"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>渲染 SVG 中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></div>`;
     }
     const htmlCard = parseHtmlCardInfo(info);
     if (htmlCard && raw.trim()) {
       const hash = richVisualHash("html-code:" + raw);
       const label = htmlCard.title || "HTML 卡片";
-      const titleHtml = htmlCard.title ? `<span class="rv-title">${esc(htmlCard.title)}</span>` : "";
-      return `<section class="rv-card rv-html-card is-pending" data-rv-kind="html-code" data-rv-hash="${hash}" data-rv-mode="preview" data-rv-title="${esc(label)}" aria-label="${esc(label)}"><div class="rv-bar"><span class="rv-tag-group"><span class="rv-tag">HTML</span>${titleHtml}</span><div class="rv-acts"><button type="button" class="rv-btn" data-rv-toggle="source" aria-pressed="false" title="查看 HTML 源码" aria-label="查看 HTML 源码">源码</button><button type="button" class="rv-btn" data-rv-open-code-win="1" title="在新窗口打开" aria-label="在新窗口打开 ${esc(label)}">新窗口打开</button></div></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>渲染卡片中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></section>`;
+      return `<section class="rv-card rv-html-card is-pending" data-rv-kind="html-code" data-rv-hash="${hash}" data-rv-mode="preview" data-rv-title="${esc(label)}" aria-label="${esc(label)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(label)} 操作"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="查看源码" aria-label="查看 HTML 源码">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-open-code-win="1" title="在新窗口打开" aria-label="在新窗口打开 ${esc(label)}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>渲染卡片中…</span></div></div><pre class="rv-source" hidden><code data-lang="html">${highlightCode(raw, "html")}</code></pre></section>`;
     }
     const lang = detectCodeLang(info, false);
     return `<pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${lang ? highlightCode(raw, lang.id) : esc(raw)}</code></pre>`;
@@ -23101,19 +23104,19 @@
     card.classList.add("is-ready");
     const expandBtn = card.querySelector?.('[data-rv-expand="svg"]');
     if (expandBtn) expandBtn.hidden = false;
-    const bar = card.querySelector?.(".rv-bar");
-    if (bar) bar.hidden = false;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = false;
     const showSource = card.dataset.rvMode === "source";
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
   }
   function fallbackSvgCard(card) {
-    card.classList.remove("is-pending", "is-ready");
+    card.classList.remove("is-pending", "is-ready", "is-acts-open");
     card.classList.add("is-fallback");
     card.dataset.rvRendered = "fallback";
-    const bar = card.querySelector?.(".rv-bar");
-    if (bar) bar.hidden = true;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = true;
     const stage = card.querySelector?.(".rv-svg-stage");
     if (stage) stage.hidden = true;
     const srcEl = card.querySelector?.(".rv-source");
@@ -23179,6 +23182,9 @@
   }
   function mermaidConfig(isDark) {
     const sans = '-apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif';
+    const edgeInk = isDark ? "#a1a1aa" : "#64645e";
+    const strokeCol = isDark ? "#2d2d34" : "#d8d8d3";
+    const linkCol = isDark ? "#71717a" : "#787872";
     return {
       startOnLoad: false,
       securityLevel: "strict",
@@ -23191,92 +23197,102 @@
         background: "#111113",
         fontFamily: sans,
         fontSize: "13px",
-        primaryColor: "#1b1b1f",
-        primaryTextColor: "#ededeb",
-        primaryBorderColor: "#3d3d45",
-        secondaryColor: "#232329",
-        secondaryTextColor: "#ededeb",
-        secondaryBorderColor: "#3d3d45",
-        tertiaryColor: "#151518",
-        tertiaryTextColor: "#ededeb",
-        tertiaryBorderColor: "#2e2e35",
-        lineColor: "#8f8f96",
-        textColor: "#ededeb",
-        mainBkg: "#1b1b1f",
-        nodeBorder: "#3d3d45",
-        clusterBkg: "#151518",
-        clusterBorder: "#2e2e35",
-        defaultLinkColor: "#8f8f96",
-        titleColor: "#ededeb",
-        edgeLabelBackground: "#151518",
-        actorBkg: "#1b1b1f",
-        actorBorder: "#3d3d45",
-        actorTextColor: "#ededeb",
-        actorLineColor: "#3d3d45",
-        signalColor: "#b8b8be",
-        signalTextColor: "#ededeb",
-        labelBoxBkgColor: "#151518",
-        labelBoxBorderColor: "#34343b",
-        labelTextColor: "#ededeb",
-        loopTextColor: "#a8a8a3",
-        noteBkgColor: "#222227",
-        noteBorderColor: "#3d3d45",
-        noteTextColor: "#ededeb",
-        activationBkgColor: "#2a2a31",
-        activationBorderColor: "#63636c",
+        primaryColor: "#17171a",
+        primaryTextColor: "#ececea",
+        primaryBorderColor: "#2d2d34",
+        secondaryColor: "#1d1d22",
+        secondaryTextColor: "#ececea",
+        secondaryBorderColor: "#34343c",
+        tertiaryColor: "#141417",
+        tertiaryTextColor: "#ececea",
+        tertiaryBorderColor: "#26262c",
+        lineColor: "#71717a",
+        textColor: "#ececea",
+        mainBkg: "#17171a",
+        nodeBorder: "#2d2d34",
+        clusterBkg: "#141417",
+        clusterBorder: "#26262c",
+        defaultLinkColor: "#71717a",
+        titleColor: "#ececea",
+        edgeLabelBackground: "#111113",
+        actorBkg: "#17171a",
+        actorBorder: "#2d2d34",
+        actorTextColor: "#ececea",
+        actorLineColor: "#27272e",
+        signalColor: "#a1a1aa",
+        signalTextColor: "#ececea",
+        labelBoxBkgColor: "#141417",
+        labelBoxBorderColor: "#2d2d34",
+        labelTextColor: "#ececea",
+        loopTextColor: "#a1a1aa",
+        noteBkgColor: "#1c1c21",
+        noteBorderColor: "#2d2d34",
+        noteTextColor: "#ececea",
+        activationBkgColor: "#232329",
+        activationBorderColor: "#52525b",
         sequenceNumberColor: "#111113",
         pie1: "#dcdcd9", pie2: "#a8a8a3", pie3: "#76767a", pie4: "#4d4d55", pie5: "#34343b", pie6: "#232329",
-        pieStrokeColor: "#151518", pieStrokeWidth: "1.5px", pieOpacity: "0.95",
-        pieSectionTextColor: "#111113", pieTitleTextColor: "#ededeb", pieLegendTextColor: "#c8c8c3",
-        cScale0: "#1b1b1f", cScale1: "#232329", cScale2: "#2c2c33", cScale3: "#36363f",
-        cScaleLabel0: "#ededeb", cScaleLabel1: "#ededeb", cScaleLabel2: "#ededeb", cScaleLabel3: "#ededeb",
+        pieStrokeColor: "#111113", pieStrokeWidth: "1px", pieOpacity: "0.95",
+        pieSectionTextColor: "#111113", pieTitleTextColor: "#ececea", pieLegendTextColor: "#c8c8c3",
+        cScale0: "#17171a", cScale1: "#1d1d22", cScale2: "#24242b", cScale3: "#2d2d34",
+        cScaleLabel0: "#ececea", cScaleLabel1: "#ececea", cScaleLabel2: "#ececea", cScaleLabel3: "#ececea",
       } : {
         darkMode: false,
         background: "#ffffff",
         fontFamily: sans,
         fontSize: "13px",
-        primaryColor: "#f7f7f6",
-        primaryTextColor: "#111111",
-        primaryBorderColor: "#c8c8c3",
-        secondaryColor: "#efefed",
-        secondaryTextColor: "#111111",
-        secondaryBorderColor: "#c8c8c3",
-        tertiaryColor: "#fafaf9",
-        tertiaryTextColor: "#111111",
-        tertiaryBorderColor: "#dcdcd8",
-        lineColor: "#55554f",
-        textColor: "#111111",
-        mainBkg: "#f7f7f6",
-        nodeBorder: "#c8c8c3",
+        primaryColor: "#fafaf9",
+        primaryTextColor: "#18181b",
+        primaryBorderColor: "#d8d8d3",
+        secondaryColor: "#f4f4f2",
+        secondaryTextColor: "#18181b",
+        secondaryBorderColor: "#d8d8d3",
+        tertiaryColor: "#ffffff",
+        tertiaryTextColor: "#18181b",
+        tertiaryBorderColor: "#e6e6e2",
+        lineColor: "#787872",
+        textColor: "#18181b",
+        mainBkg: "#fafaf9",
+        nodeBorder: "#d8d8d3",
         clusterBkg: "#fafaf9",
-        clusterBorder: "#dcdcd8",
-        defaultLinkColor: "#55554f",
-        titleColor: "#111111",
+        clusterBorder: "#e4e4e0",
+        defaultLinkColor: "#787872",
+        titleColor: "#18181b",
         edgeLabelBackground: "#ffffff",
-        actorBkg: "#f7f7f6",
-        actorBorder: "#c8c8c3",
-        actorTextColor: "#111111",
-        actorLineColor: "#c8c8c3",
-        signalColor: "#333330",
-        signalTextColor: "#111111",
+        actorBkg: "#fafaf9",
+        actorBorder: "#d8d8d3",
+        actorTextColor: "#18181b",
+        actorLineColor: "#e2e2dd",
+        signalColor: "#52524c",
+        signalTextColor: "#18181b",
         labelBoxBkgColor: "#ffffff",
-        labelBoxBorderColor: "#dcdcd8",
-        labelTextColor: "#111111",
-        loopTextColor: "#55554f",
-        noteBkgColor: "#efefed",
-        noteBorderColor: "#dcdcd8",
-        noteTextColor: "#111111",
-        activationBkgColor: "#efefed",
-        activationBorderColor: "#8e8e88",
+        labelBoxBorderColor: "#e4e4e0",
+        labelTextColor: "#18181b",
+        loopTextColor: "#64645e",
+        noteBkgColor: "#f7f7f5",
+        noteBorderColor: "#e2e2dd",
+        noteTextColor: "#18181b",
+        activationBkgColor: "#f2f2ef",
+        activationBorderColor: "#a8a8a1",
         sequenceNumberColor: "#ffffff",
-        pie1: "#222222", pie2: "#55554f", pie3: "#8e8e88", pie4: "#bdbdb7", pie5: "#dcdcd8", pie6: "#efefed",
-        pieStrokeColor: "#ffffff", pieStrokeWidth: "1.5px", pieOpacity: "0.95",
-        pieSectionTextColor: "#ffffff", pieTitleTextColor: "#111111", pieLegendTextColor: "#333330",
-        cScale0: "#f7f7f6", cScale1: "#efefed", cScale2: "#e4e4e0", cScale3: "#d4d4ce",
-        cScaleLabel0: "#111111", cScaleLabel1: "#111111", cScaleLabel2: "#111111", cScaleLabel3: "#111111",
+        pie1: "#27272a", pie2: "#52525b", pie3: "#8e8e88", pie4: "#bdbdb7", pie5: "#dcdcd8", pie6: "#efefed",
+        pieStrokeColor: "#ffffff", pieStrokeWidth: "1px", pieOpacity: "0.95",
+        pieSectionTextColor: "#ffffff", pieTitleTextColor: "#18181b", pieLegendTextColor: "#3f3f46",
+        cScale0: "#fafaf9", cScale1: "#f4f4f2", cScale2: "#eaeae6", cScale3: "#dcdcd7",
+        cScaleLabel0: "#18181b", cScaleLabel1: "#18181b", cScaleLabel2: "#18181b", cScaleLabel3: "#18181b",
       },
-      flowchart: { htmlLabels: true, curve: "basis", padding: 14, useMaxWidth: true },
-      sequence: { useMaxWidth: true, diagramMarginX: 14, diagramMarginY: 12, boxMargin: 8, messageMargin: 32, mirrorActors: false },
+      themeCSS: [
+        `svg { background: transparent !important; }`,
+        `.node rect, .node circle, .node ellipse, .node polygon, .node path, rect.actor, .cluster rect, .note { stroke: ${strokeCol} !important; stroke-width: 1px !important; }`,
+        `.node rect, rect.actor, .cluster rect, .note { rx: 8px; ry: 8px; }`,
+        `.flowchart-link, .edgePath path, .messageLine0, .messageLine1 { stroke: ${linkCol} !important; stroke-width: 1.2px !important; }`,
+        `.actor-line { stroke-width: 1px !important; }`,
+        `.nodeLabel, .label, text.actor > tspan { font-weight: 450 !important; font-size: 13px !important; letter-spacing: -0.005em; }`,
+        `.edgeLabel, .edgeLabel p, .messageText { font-weight: 400 !important; font-size: 12px !important; color: ${edgeInk} !important; fill: ${edgeInk} !important; }`,
+        `.cluster-label .nodeLabel { font-weight: 500 !important; font-size: 11.5px !important; color: ${edgeInk} !important; }`,
+      ].join("\n"),
+      flowchart: { htmlLabels: true, curve: "basis", padding: 12, nodeSpacing: 36, rankSpacing: 44, useMaxWidth: true },
+      sequence: { useMaxWidth: true, diagramMarginX: 12, diagramMarginY: 10, boxMargin: 10, actorMargin: 44, messageMargin: 34, mirrorActors: false },
       gantt: { useMaxWidth: true },
       er: { useMaxWidth: true },
       state: { useMaxWidth: true },
@@ -23310,7 +23326,17 @@
     if (!stage) return;
     stage.innerHTML = svg;
     const svgEl = stage.querySelector?.("svg");
-    if (svgEl) applyResponsiveSvgSizing(svgEl);
+    if (svgEl) {
+      applyResponsiveSvgSizing(svgEl);
+      for (const rect of svgEl.querySelectorAll?.(".node rect, rect.actor, .cluster rect") || []) {
+        const w = parseFloat(rect.getAttribute?.("width") || "0");
+        const h = parseFloat(rect.getAttribute?.("height") || "0");
+        if ((!w || w >= 18) && (!h || h >= 18)) {
+          rect.setAttribute?.("rx", "8");
+          rect.setAttribute?.("ry", "8");
+        }
+      }
+    }
     stage.style.minHeight = "";
     card.dataset.rvRendered = `${themeKey}:${hash}`;
     card.dataset.rvTheme = themeKey;
@@ -23318,19 +23344,19 @@
     card.classList.add("is-ready");
     const expandBtn = card.querySelector?.('[data-rv-expand="mermaid"]');
     if (expandBtn) expandBtn.hidden = false;
-    const bar = card.querySelector?.(".rv-bar");
-    if (bar) bar.hidden = false;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = false;
     const showSource = card.dataset.rvMode === "source";
     stage.hidden = showSource;
     const srcEl = card.querySelector?.(".rv-source");
     if (srcEl) srcEl.hidden = !showSource;
   }
   function fallbackMermaidCard(card) {
-    card.classList.remove("is-pending", "is-ready");
+    card.classList.remove("is-pending", "is-ready", "is-acts-open");
     card.classList.add("is-fallback");
     card.dataset.rvRendered = "fallback";
-    const bar = card.querySelector?.(".rv-bar");
-    if (bar) bar.hidden = true;
+    const acts = card.querySelector?.(".rv-float-acts, .rv-bar");
+    if (acts) acts.hidden = true;
     const stage = card.querySelector?.(".rv-mermaid-stage");
     if (stage) { stage.hidden = true; stage.style.minHeight = ""; }
     const srcEl = card.querySelector?.(".rv-source");
@@ -23424,7 +23450,7 @@
     });
   }
   function collieThemeVarsCss() {
-    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057}</style>`;
+    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057}:where(html,body){background-color:var(--collie-bg);color:var(--collie-fg)}</style>`;
   }
   function buildSandboxedCardSrcdoc(rawHtml, { frameId, token, isFragment, isDark }) {
     const src = String(rawHtml || "");
@@ -23433,10 +23459,10 @@
     const safeTok = JSON.stringify(token);
     const safeTheme = JSON.stringify(theme);
     const varsStyle = collieThemeVarsCss();
-    const bridge = `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`;
+    const bridge = `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});document.addEventListener("click",function(ev){try{if(ev.target&&ev.target.closest&&ev.target.closest("a,button,input,select,textarea,summary,label,[role=button]"))return;parent.postMessage({type:"collie:card-tap",id:ID,token:TOK},"*");}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`;
     const hasDoc = /<!doctype\s+html|<html[\s>]/i.test(src);
     if (!hasDoc && isFragment) {
-      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>*{box-sizing:border-box}html,body{margin:0;padding:14px 16px;background:var(--collie-surface);color:var(--collie-fg);font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif}</style></head><body>${src}${bridge}</body></html>`;
+      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:var(--collie-bg);color:var(--collie-fg);font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif;overflow-x:hidden}</style></head><body>${src}${bridge}</body></html>`;
     }
     let out = src;
     if (/<html\b[^>]*>/i.test(out)) {
@@ -23512,7 +23538,7 @@
         if (!hf || typeof hf.htmlText !== "string") {
           card.classList.remove("is-pending");
           card.classList.add("is-error");
-          stage.innerHTML = `<div class="rv-html-err">未找到这个 HTML 文件，可点上方「在抽屉打开」重试。</div>`;
+          stage.innerHTML = `<div class="rv-html-err">未找到这个 HTML 文件，可点下方「在抽屉打开」重试。</div>`;
           stage.style.height = "auto";
           delete card.dataset.rvMounting;
           return;
@@ -23561,14 +23587,26 @@
     card.classList.remove("is-pending", "is-error");
     card.classList.add("is-ready");
   }
+  function isCoarseRvPointer() {
+    try {
+      if (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) return true;
+    } catch {}
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function closeOtherRvFloatActs(exceptCard) {
+    for (const open of document.querySelectorAll?.(".rv-card.is-acts-open") || []) {
+      if (open !== exceptCard) open.classList.remove("is-acts-open");
+    }
+  }
   function handleRichCardMessage(ev) {
     const data = ev?.data;
     if (!data || typeof data !== "object") return;
     const isBridge = data.type === "collie:card-height";
+    const isCardTap = data.type === "collie:card-tap";
     const isUserResize = data.type === "collie:resize";
-    if (!isBridge && !isUserResize) return;
+    if (!isBridge && !isCardTap && !isUserResize) return;
     let rec = null;
-    if (isBridge && typeof data.id === "string") {
+    if ((isBridge || isCardTap) && typeof data.id === "string") {
       rec = htmlCardFrames.get(data.id) || null;
       if (!rec || data.token !== rec.token) return;
     } else if (isUserResize) {
@@ -23591,11 +23629,19 @@
         // Synthetic MessageEvent in tests lacks browser-internal origin; event.source already matched rec.iframe.contentWindow.
       }
     }
+    if (isCardTap) {
+      if (isCoarseRvPointer() && rec.card) {
+        const next = !rec.card.classList.contains("is-acts-open");
+        closeOtherRvFloatActs(next ? rec.card : null);
+        rec.card.classList.toggle("is-acts-open", next);
+      }
+      return;
+    }
     const rawH = Number(data.height);
     if (!Number.isFinite(rawH) || rawH <= 0) return;
     if (rec.updates >= 24) return;
     const maxH = rvHeightMax(rec.card);
-    const clamped = Math.round(Math.max(120, Math.min(maxH, rawH + 2)));
+    const clamped = Math.round(Math.max(64, Math.min(maxH, rawH + 2)));
     if (Math.abs(clamped - (rec.lastH || 0)) < 4) return;
     rec.updates++;
     rec.lastH = clamped;
@@ -23660,7 +23706,11 @@
     if (btn) {
       btn.setAttribute("aria-pressed", showSource ? "true" : "false");
       btn.classList.toggle("on", showSource);
-      btn.textContent = showSource ? (isDiagram ? "图表" : "预览") : "源码";
+      if (btn.classList?.contains("rv-ico")) {
+        btn.innerHTML = showSource ? ICON_RV_VISUAL : ICON_RV_CODE;
+      } else {
+        btn.textContent = showSource ? (isDiagram ? "图表" : "预览") : "源码";
+      }
       const lbl = showSource ? (isDiagram ? "切回图表" : "切回预览") : "查看源码";
       btn.title = lbl;
       btn.setAttribute("aria-label", lbl);
@@ -23778,10 +23828,17 @@
     const stageClick = !expandBtn ? ev.target?.closest?.(".rv-mermaid.is-ready .rv-mermaid-stage, .rv-svg.is-ready .rv-svg-stage") : null;
     if (expandBtn || stageClick) {
       const card = (expandBtn || stageClick).closest(".rv-mermaid, .rv-svg");
+      if (stageClick && card && isCoarseRvPointer() && !card.classList.contains("is-acts-open")) {
+        ev.preventDefault();
+        closeOtherRvFloatActs(card);
+        card.classList.add("is-acts-open");
+        return;
+      }
       const isSvgCard = card?.dataset?.rvKind === "svg";
       const svgEl = card?.querySelector?.(isSvgCard ? ".rv-svg-stage svg" : ".rv-mermaid-stage svg");
       if (svgEl) {
         ev.preventDefault();
+        closeOtherRvFloatActs(null);
         openLightbox([{
           svgNode: svgEl.cloneNode(true),
           svgHtml: svgEl.outerHTML,
@@ -23792,6 +23849,9 @@
         }], 0);
       }
       return;
+    }
+    if (!ev.target?.closest?.(".rv-card")) {
+      closeOtherRvFloatActs(null);
     }
     const openWinBtn = ev.target?.closest?.("[data-rv-open-win]");
     if (openWinBtn) {

@@ -3439,7 +3439,11 @@ dialog.lightbox.is-dragging .lb-stage, dialog.lightbox.is-dragging .lb-img { cur
 }
 .lb-svg[hidden] { display: none; }
 .lb-svg.is-light-canvas { background: #f4f4f2; color: #111111; }
-.lb-svg svg { display: block; width: 100%; max-width: 100%; height: auto; margin: 0 auto; }
+.lb-svg svg {
+  display: block; width: 100%; max-width: 100%; height: auto; margin: 0 auto;
+  fill: initial; stroke: initial; stroke-width: initial;
+  stroke-linecap: initial; stroke-linejoin: initial;
+}
 dialog.lightbox.is-zoomed .lb-img, dialog.lightbox.is-zoomed .lb-svg { cursor: grab; border-radius: 4px; }
 dialog.lightbox.is-dragging .lb-img, dialog.lightbox.no-anim .lb-img,
 dialog.lightbox.is-dragging .lb-svg, dialog.lightbox.no-anim .lb-svg { transition: none; }
@@ -7332,126 +7336,158 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   .notepane, .notes-scrim, .file-scrim, .reply-receipt > summary::before { transition: none !important; }
 }
 
-/* ─── Rich visuals: offline lazy Mermaid diagrams & inline sandboxed HTML cards ─── */
+/* ─── Rich visuals: frameless native Mermaid / SVG diagrams & seamless sandboxed HTML cards ─── */
 .rv-card {
-  margin: .45em 0 1em;
-  border: 1px solid var(--line);
+  position: relative;
+  margin: 12px 0 16px;
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--bg);
-  overflow: hidden;
+  background: transparent;
+  overflow: visible;
   max-width: 100%;
-  transition: border-color .15s ease;
+  transition: border-color .16s ease;
 }
-.rv-card:hover { border-color: var(--line-2); }
-.rv-card.snap-card { margin: 8px 0 6px; border-radius: 12px; }
-.rv-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  min-height: 34px; padding: 5px 8px 5px 12px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg-2) 65%, var(--bg));
-  min-width: 0;
+.rv-card.snap-card,
+.rv-card.snap-card:hover,
+.rv-card.snap-card:has(.snap-head.is-active) {
+  margin: 10px 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
-.rv-tag-group { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
-.rv-tag {
-  font: 550 11px/1 var(--mono); letter-spacing: .02em;
-  color: var(--fg-2); flex: none;
+.rv-card.rv-mermaid:hover,
+.rv-card.rv-svg:hover,
+.rv-card.rv-mermaid:focus-within,
+.rv-card.rv-svg:focus-within,
+.rv-card.rv-mermaid.is-acts-open,
+.rv-card.rv-svg.is-acts-open {
+  border-color: color-mix(in srgb, var(--line) 75%, transparent);
 }
-.rv-title {
-  font-size: 12.5px; font-weight: 500; color: var(--fg);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.rv-acts {
-  display: inline-flex; align-items: center; gap: 4px; flex: none;
-}
-.rv-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  height: 24px; padding: 0 8px;
-  border: 1px solid transparent; border-radius: 6px;
-  background: transparent; color: var(--fg-2);
-  font: 500 11.5px/1 var(--sans); cursor: pointer; white-space: nowrap;
-  transition: background .12s ease, border-color .12s ease, color .12s ease;
-}
-.rv-btn:hover { background: var(--bg-3); color: var(--fg); border-color: var(--line); }
-.rv-btn.on { background: var(--bg-3); color: var(--fg); border-color: var(--line-2); }
-.rv-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 28%, transparent); outline-offset: 1px; }
-.rv-ico-btn { width: 24px; padding: 0; }
-.rv-ico-btn svg { width: 13.5px; height: 13.5px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-/* Mermaid & SVG diagram stages & silent fallback */
+/* On-demand translucent floating micro-icon pill (0 visual clutter at rest) */
+.rv-float-acts {
+  position: absolute; top: 6px; right: 6px; z-index: 4;
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  backdrop-filter: blur(10px) saturate(1.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .06);
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.rv-float-acts[hidden] { display: none; }
+:root[data-theme="dark"] .rv-float-acts {
+  background: color-mix(in srgb, var(--bg-2) 86%, transparent);
+  border-color: color-mix(in srgb, var(--line-2) 85%, transparent);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .36);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rv-float-acts {
+    background: color-mix(in srgb, var(--bg-2) 86%, transparent);
+    border-color: color-mix(in srgb, var(--line-2) 85%, transparent);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, .36);
+  }
+}
+.rv-card:hover > .rv-float-acts,
+.rv-card:focus-within > .rv-float-acts,
+.rv-card.is-acts-open > .rv-float-acts,
+.rv-card[data-rv-mode="source"] > .rv-float-acts {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+@media (hover: none) and (pointer: coarse) {
+  .rv-card:hover:not(.is-acts-open):not(:focus-within):not([data-rv-mode="source"]) > .rv-float-acts {
+    opacity: 0;
+    transform: translateY(-2px);
+    pointer-events: none;
+  }
+  .rv-card.rv-mermaid:hover:not(.is-acts-open):not(:focus-within),
+  .rv-card.rv-svg:hover:not(.is-acts-open):not(:focus-within) {
+    border-color: transparent;
+  }
+}
+.rv-ico {
+  display: inline-grid; place-items: center;
+  width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-2);
+  cursor: pointer; flex: none;
+  transition: background .12s ease, color .12s ease;
+}
+.rv-ico[hidden] { display: none; }
+.rv-ico:hover { background: var(--bg-3); color: var(--fg); }
+.rv-ico.on { background: var(--bg-3); color: var(--fg); }
+.rv-ico:focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 28%, transparent); outline-offset: 1px; }
+.rv-ico svg {
+  width: 14px; height: 14px;
+  fill: none; stroke: currentColor; stroke-width: 1.75;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* Mermaid & SVG diagram stages: seamless editorial integration & silent fallback */
 .rv-mermaid-stage, .rv-svg-stage {
   display: block;
   text-align: center;
-  padding: 16px 14px;
-  min-height: 88px;
+  padding: 10px 4px;
+  min-height: 56px;
   overflow-x: auto; overflow-y: hidden;
   -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
-  background: var(--bg);
+  background: transparent;
+  border-radius: 10px;
 }
 .rv-mermaid.is-ready .rv-mermaid-stage,
 .rv-svg.is-ready .rv-svg-stage { cursor: zoom-in; }
 .rv-mermaid-stage svg,
 .rv-svg-stage svg {
   display: block; width: 100%; max-width: 100%; height: auto; margin: 0 auto;
+  fill: initial; stroke: initial; stroke-width: initial;
+  stroke-linecap: initial; stroke-linejoin: initial;
 }
 :root[data-theme="dark"] .rv-svg-stage.is-light-canvas {
-  background: #f4f4f2; color: #111111;
+  background: #f4f4f2; color: #111111; padding: 14px 16px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .rv-svg-stage.is-light-canvas {
-    background: #f4f4f2; color: #111111;
+    background: #f4f4f2; color: #111111; padding: 14px 16px;
   }
 }
 .rv-mermaid-skeleton, .rv-html-skeleton {
   display: flex; align-items: center; justify-content: center;
-  width: 100%; min-height: 76px;
+  width: 100%; min-height: 56px;
   color: var(--fg-3); font-size: 12px;
 }
 .rv-card .rv-source {
-  margin: 0; border: 0; border-radius: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
   max-height: 380px;
 }
 .rv-mermaid.is-fallback,
 .rv-svg.is-fallback {
-  border: 0; border-radius: 0; background: transparent;
+  border: 0; border-radius: 0; background: transparent; margin: .45em 0 1em;
 }
 .rv-mermaid.is-fallback .rv-source,
 .rv-svg.is-fallback .rv-source {
   border: 1px solid var(--line); border-radius: 10px; max-height: none;
 }
 
-/* Inline sandboxed HTML card (attachments & ```html-card) */
-.rv-html-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 6px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg-2) 65%, var(--bg));
-  padding-right: 8px;
-  min-width: 0;
-}
-.rv-html-head .snap-head {
-  flex: 1; min-width: 0; background: transparent;
-  padding: 7px 6px 7px 11px;
-}
-.rv-html-head .snap-head:hover { background: transparent; }
-.rv-html-head .snap-head.is-active { background: transparent; }
-.rv-html-head .snap-ico { width: 24px; height: 24px; border-radius: 6px; }
-.rv-html-head .snap-ico svg { width: 13.5px; height: 13.5px; }
-.rv-html-head .snap-title { font-size: 12.5px; }
-.rv-html-head .snap-meta { font-size: 11px; }
-.rv-html-head .snap-chev { display: none; }
-.rv-html-head .snap-head.is-active .snap-chev { display: inline-flex; }
-.rv-html-head .snap-head.is-active .snap-chev svg { display: none; }
-.rv-html-acts { gap: 4px; }
-.rv-html-acts .rv-btn {
-  border-color: var(--line); background: var(--bg);
-}
-.rv-html-acts .rv-btn:hover { background: var(--bg-2); border-color: var(--line-2); }
+/* Seamless inline sandboxed HTML card (attachments & ```html-card) */
 .rv-html-stage {
   position: relative;
   width: 100%;
-  height: var(--rv-html-h, 300px);
-  min-height: 120px;
+  height: var(--rv-html-h, 240px);
+  min-height: 64px;
   max-height: var(--rv-html-max, 460px);
   background: var(--bg);
+  border-radius: 8px;
   overflow: hidden;
 }
 .rv-html-card.is-error .rv-html-stage {
@@ -7462,20 +7498,56 @@ dialog.int-sheet[data-modal-kind="peers"] .pm-compact-input::placeholder { color
   border: 0; background: var(--bg);
 }
 .rv-html-err {
-  padding: 12px 14px; font-size: 12.5px; color: var(--fg-3);
+  padding: 10px 12px; font-size: 12.5px; color: var(--fg-3);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.rv-html-foot {
+  display: flex; align-items: center; justify-content: flex-start;
+  margin-top: 4px;
+}
+.rv-html-foot .snap-head,
+.rv-html-foot .snap-head:hover,
+.rv-html-foot .snap-head.is-active {
+  display: inline-flex; align-items: center; justify-content: flex-start; gap: 4px;
+  width: auto; max-width: 100%; padding: 2px 0;
+  border: 0; border-radius: 4px; background: transparent; box-shadow: none;
+  color: var(--fg-3); font: 450 11px/1.4 var(--sans);
+  cursor: pointer; transition: color .14s ease;
+}
+.rv-html-foot .snap-head:hover,
+.rv-html-foot .snap-head:focus-visible,
+.rv-html-foot .snap-head.is-active {
+  color: var(--fg-2);
+}
+.rv-html-foot .snap-head:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--fg) 24%, transparent);
+  outline-offset: 2px;
+}
+.rv-foot-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rv-foot-sep { opacity: .6; flex: none; }
+.rv-foot-act { flex: none; }
+.rv-html-foot .snap-chev {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: inherit; opacity: .7;
+}
+.rv-html-foot .snap-chev svg { width: 11px; height: 11px; stroke-width: 2; }
+.rv-html-foot .snap-act-dot { width: 5px; height: 5px; }
+.rv-card.snap-card .snap-files {
+  padding: 6px 0 0; border-top: 0; background: transparent;
 }
 .td-text .rv-html-stage,
 #file-view .rv-html-stage {
-  --rv-html-h: 250px;
+  --rv-html-h: 220px;
   --rv-html-max: 380px;
 }
-.td-text .rv-html-head .snap-meta { display: none; }
 @media (max-width: 760px) {
-  .rv-bar { padding: 5px 6px 5px 10px; }
-  .rv-mermaid-stage, .rv-svg-stage { padding: 12px 10px; }
-  .rv-html-head { flex-wrap: wrap; row-gap: 4px; padding: 6px 8px; }
-  .rv-html-head .snap-head { padding: 0; }
-  .rv-html-head .snap-meta { display: none; }
-  .rv-html-acts { width: 100%; justify-content: flex-end; }
-  .rv-html-stage { --rv-html-h: 240px; --rv-html-max: 380px; }
+  .rv-card { margin: 10px 0 14px; }
+  .rv-mermaid-stage, .rv-svg-stage { padding: 8px 2px; }
+  .rv-html-stage { --rv-html-h: 200px; --rv-html-max: 380px; }
+  .rv-ico { width: 30px; height: 30px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rv-card, .rv-float-acts, .rv-ico { transition: none !important; }
 }

@@ -2845,6 +2845,7 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .cbar .icon-btn { width: 32px; height: 32px; }
 .files { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 10px 0; }
 .file {
+  position: relative; overflow: clip;
   display: inline-flex; align-items: center; gap: 6px; max-width: min(260px, 100%); padding: 4px 5px 4px 6px; border-radius: 10px;
   border: 1px solid var(--line); background: var(--bg-2); font-size: 12px; color: var(--fg-2);
 }
@@ -2852,8 +2853,33 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .file > img { background: var(--bg-3); display: block; }
 .file > svg.fi-ico { padding: 4.5px; fill: none; stroke: currentColor; stroke-width: 1.65; background: var(--bg-3); color: var(--fg-2); }
 .file .fn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
-.file .fs { color: var(--fg-3); flex: none; font-size: 11.5px; }
-.file.busy { opacity: .65; }
+.file .fs { color: var(--fg-3); flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.file.busy { border-color: var(--line-2); }
+.file.busy > img, .file.busy > svg.fi-ico, .file.busy .fn { opacity: .72; }
+.file.busy .fs { color: var(--fg-2); font-weight: 500; }
+.file .fi-prog {
+  position: absolute; inset: auto 0 0 0; height: 2px;
+  background: var(--line);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+  pointer-events: none; overflow: hidden;
+}
+.file .fi-prog-fill {
+  display: block; width: 100%; height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  will-change: transform;
+}
+.file .fi-prog-fill:dir(rtl) { transform-origin: right center; }
+@keyframes fi-prog-indet {
+  0% { transform: translateX(-35%) scaleX(.32); }
+  50% { transform: translateX(35%) scaleX(.46); }
+  100% { transform: translateX(100%) scaleX(.32); }
+}
+@keyframes fi-prog-proc {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
 .file.err { max-width: min(300px, 100%); border-color: color-mix(in srgb, var(--attn) 40%, var(--line)); background: color-mix(in srgb, var(--attn) 5%, var(--bg-2)); }
 .file.err > svg.fi-ico { background: color-mix(in srgb, var(--attn) 13%, var(--bg-2)); color: var(--attn); }
 .file.err .fs { color: var(--attn); }
@@ -2865,19 +2891,26 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 }
 .file button.retry:hover { background: color-mix(in srgb, var(--attn) 18%, transparent); border-color: color-mix(in srgb, var(--attn) 58%, var(--line-2)); }
 .file button.retry:active { transform: scale(.96); }
-.file button.retry:focus-visible { outline: 2px solid var(--attn); outline-offset: 1px; }
+.file button.retry:focus-visible { outline: 2px solid var(--attn); outline-offset: -1px; }
 .file button.rm {
   flex: none; display: inline-grid; place-items: center;
   border: 0; background: none; color: var(--fg-3); width: 20px; height: 20px; border-radius: 6px; font-size: 15px; line-height: 1; cursor: pointer;
 }
 .file button.rm:hover { background: var(--bg-3); color: var(--fg); }
-.file button.rm:focus-visible { outline: 2px solid var(--fg-3); outline-offset: 1px; }
+.file button.rm:focus-visible { outline: 2px solid var(--fg-3); outline-offset: -1px; }
 @media (pointer: coarse) {
   .file button.retry { height: 28px; padding: 0 9px; font-size: 12px; }
   .file button.rm { width: 26px; height: 26px; }
 }
+@media (prefers-reduced-motion: no-preference) {
+  .file .fi-prog-fill { transition: transform 110ms linear; }
+  .file .fi-prog.is-indet .fi-prog-fill { transition: none; animation: fi-prog-indet 1.35s var(--ease-out-expo) infinite; }
+  .file .fi-prog.is-proc .fi-prog-fill { animation: fi-prog-proc 1.3s ease-in-out infinite; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .file button.retry { transition: none; }
+  .file button.retry, .file .fi-prog-fill { transition: none; }
+  .file .fi-prog.is-indet .fi-prog-fill { transform: scaleX(.35); opacity: .6; }
+  .file .fi-prog.is-proc .fi-prog-fill { transform: scaleX(1); opacity: .85; }
 }
 .detail.shell .attach { display: none; }
 .msg.user .att { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -2888,6 +2921,7 @@ a.event:hover { background: var(--bg-2); color: var(--fg); }
 .send svg { width: 17px; height: 17px; }
 .send:active { transform: scale(.92); }
 .send:disabled { opacity: .35; }
+.send.is-wait-upload { opacity: .52; }
 @media (prefers-reduced-motion: reduce) {
   .send:active { transform: none; }
 }

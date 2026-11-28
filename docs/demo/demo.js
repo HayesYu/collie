@@ -824,6 +824,88 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
   const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
   const demoUploads = new Map();
   let demoUploadSeq = 0;
+  const saveDemoUpload = (rawName, body) => {
+    const clean = (rawName || "file.png").replace(/^.*[\\/]/, "") || "file.png";
+    const blob = body instanceof Blob ? body : new Blob([body || ""]);
+    const id = String(++demoUploadSeq).padStart(6, "0");
+    const path = `/home/alex/.collie/uploads/demo/${id}-${clean}`;
+    demoUploads.set(path, { blob, name: clean, size: blob.size || 0 });
+    return { path, name: clean, size: blob.size || 0 };
+  };
+  const RealXHR = window.XMLHttpRequest;
+  if (typeof RealXHR === "function") {
+    window.XMLHttpRequest = function DemoXMLHttpRequest() {
+      const inner = new RealXHR();
+      let mockUrl = null;
+      let timers = [];
+      let aborted = false;
+      const upload = { onprogress: null, onload: null };
+      const xhr = {
+        upload,
+        readyState: 0,
+        status: 0,
+        statusText: "",
+        responseText: "",
+        withCredentials: false,
+        onload: null,
+        onerror: null,
+        onabort: null,
+        ontimeout: null,
+        open(method, url, async = true) {
+          const u = new URL(String(url || ""), location.href);
+          const idx = u.pathname.indexOf("/api/");
+          if (String(method || "").toUpperCase() === "POST" && idx >= 0 && u.pathname.slice(idx) === "/api/uploads") {
+            mockUrl = u;
+            xhr.readyState = 1;
+            return;
+          }
+          mockUrl = null;
+          inner.open(method, url, async);
+        },
+        setRequestHeader(k, v) { if (!mockUrl) inner.setRequestHeader(k, v); },
+        abort() {
+          if (!mockUrl) { inner.abort(); return; }
+          aborted = true;
+          timers.forEach((id) => clearTimeout(id));
+          timers = [];
+          xhr.readyState = 0;
+          xhr.status = 0;
+          xhr.onabort?.();
+        },
+        send(body) {
+          if (!mockUrl) {
+            inner.withCredentials = xhr.withCredentials;
+            inner.onload = () => { xhr.readyState = inner.readyState; xhr.status = inner.status; xhr.statusText = inner.statusText; xhr.responseText = inner.responseText; xhr.onload?.(); };
+            inner.onerror = () => xhr.onerror?.();
+            inner.onabort = () => xhr.onabort?.();
+            inner.ontimeout = () => xhr.ontimeout?.();
+            inner.send(body);
+            return;
+          }
+          const total = Math.max(1, body?.size || body?.byteLength || 1024);
+          const steps = [[90, 0.28], [210, 0.66], [330, 1]];
+          for (const [ms, frac] of steps) {
+            timers.push(setTimeout(() => {
+              if (aborted) return;
+              const loaded = Math.round(total * frac);
+              upload.onprogress?.({ lengthComputable: true, loaded, total });
+              if (frac >= 1) upload.onload?.();
+            }, ms));
+          }
+          timers.push(setTimeout(() => {
+            if (aborted) return;
+            const info = saveDemoUpload(mockUrl.searchParams.get("name"), body);
+            xhr.readyState = 4;
+            xhr.status = 200;
+            xhr.statusText = "OK";
+            xhr.responseText = JSON.stringify(info);
+            xhr.onload?.();
+          }, 440));
+        },
+      };
+      return xhr;
+    };
+  }
   const realFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     const u = new URL(typeof input === "string" ? input : input.url, location.href);
@@ -1324,12 +1406,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
       return json({ ok: true, mode: mode === "replace" ? "replace" : "merge", imported: memory.files.length, backup: `pre-import-${stamp}.zip` });
     }
     if (p === "/api/uploads" && method === "POST") {
-      const rawName = (q.get("name") || "file.png").replace(/^.*[\\/]/, "") || "file.png";
-      const blob = init.body instanceof Blob ? init.body : new Blob([init.body || ""]);
-      const id = String(++demoUploadSeq).padStart(6, "0");
-      const path = `/home/alex/.collie/uploads/demo/${id}-${rawName}`;
-      demoUploads.set(path, { blob, name: rawName, size: blob.size || 0 });
-      return json({ path, name: rawName, size: blob.size || 0 });
+      return json(saveDemoUpload(q.get("name"), init.body));
     }
     if (p === "/api/super/say") {
       const inPlace = !!body.in_place && !!body.re && !body.pick;

@@ -30553,30 +30553,208 @@
     }
   }
 
+  let fileChipSeq = 0;
+  function xhrUploadOnce(url, blob, { hub = null, onProgress = null, onUploadLoad = null, setAbort = null } = {}) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let done = false;
+      const finish = (fn, val) => {
+        if (done) return;
+        done = true;
+        setAbort?.(null);
+        fn(val);
+      };
+      setAbort?.({
+        abort() {
+          if (done) return;
+          try { xhr.abort(); } catch {}
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          err.aborted = true;
+          finish(reject, err);
+        },
+      });
+      xhr.open("POST", url, true);
+      xhr.withCredentials = !hub;
+      if (hub) xhr.setRequestHeader("Authorization", "Bearer " + hub.token);
+      if (xhr.upload) {
+        xhr.upload.onprogress = (ev) => {
+          if (done || !onProgress) return;
+          onProgress(ev);
+        };
+        xhr.upload.onload = () => {
+          if (done || !onUploadLoad) return;
+          onUploadLoad();
+        };
+      }
+      xhr.onload = () => {
+        const status = xhr.status || 0;
+        if (status === 0) {
+          finish(reject, new TypeError("NetworkError"));
+          return;
+        }
+        let data = {};
+        if (xhr.responseText) {
+          try { data = JSON.parse(xhr.responseText); } catch {}
+        }
+        finish(resolve, {
+          ok: status >= 200 && status < 300,
+          status,
+          statusText: xhr.statusText || "",
+          data,
+        });
+      };
+      xhr.onerror = () => finish(reject, new TypeError("NetworkError"));
+      xhr.ontimeout = () => {
+        const err = new Error("timeout");
+        err.name = "AbortError";
+        finish(reject, err);
+      };
+      xhr.onabort = () => {
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        err.aborted = true;
+        finish(reject, err);
+      };
+      try {
+        xhr.send(blob);
+      } catch (err) {
+        finish(reject, err);
+      }
+    });
+  }
+  async function authUpload(up, blob, opts = {}) {
+    if (typeof XMLHttpRequest !== "function") {
+      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+      opts.setAbort?.(ctrl);
+      const init = {
+        method: "POST",
+        body: blob,
+        credentials: up.hub ? "omit" : "same-origin",
+        headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
+      };
+      if (ctrl) init.signal = ctrl.signal;
+      try {
+        const res = await authFetch(up.url, init, !!up.hub);
+        const data = await res.json().catch(() => ({}));
+        return { ok: !!res.ok, status: res.status || 0, statusText: res.statusText || "", data };
+      } finally {
+        opts.setAbort?.(null);
+      }
+    }
+    let res = await xhrUploadOnce(up.url, blob, { ...opts, hub: up.hub });
+    if (!up.hub && res.status === 401 && !opts.isAborted?.() && await restoreSession()) {
+      opts.onReset?.();
+      res = await xhrUploadOnce(up.url, blob, { ...opts, hub: up.hub });
+    }
+    if (!up.hub && (res.status === 401 || res.status === 403)) {
+      clearSnapCache();
+    }
+    return res;
+  }
+
   function bindFiles(form, machine, opts = {}) {
     const box = $(".files", form), picker = $('input[type="file"]', form);
     if (!box || !picker) return;
     form._files = [];
     const iconFor = (f) => (f.isImage ? IMG_SVG : FILE_SVG);
+    const uploadLabelOf = (f) => {
+      if (f.err) return f.errTag || tx("up.failTag", "失败");
+      if (f.path) return fmtSize(f.size);
+      if (f.phase === "processing") return tx("up.processing", "处理中…");
+      if (f.determinate) return `${f.pct}%`;
+      return tx("up.uploading", "上传中");
+    };
+    const uploadTipOf = (f) => {
+      if (f.err) return f.err;
+      if (f.path) return f.path;
+      if (f.phase === "processing") return tx("up.processingTip", "已传完，正在等待服务端保存…");
+      if (f.determinate) return tx("up.uploadingPct", "上传中 {pct}%", { pct: f.pct });
+      return tx("up.uploadingEllipsis", "上传中…");
+    };
+    const progressScaleOf = (f) => {
+      if (f.phase === "processing") return 1;
+      if (!f.determinate) return 0;
+      return Math.max(0, Math.min(1, Math.round((f.progress || 0) * 1000) / 1000));
+    };
     const draw = () => {
       box.hidden = !form._files.length;
       box.innerHTML = form._files.map((f, i) => {
-        const cls = f.err ? "err" : f.path ? "" : "busy";
-        const tip = f.err || f.path || tx("up.uploadingEllipsis", "上传中…");
-        const status = f.err ? (f.errTag || tx("up.failTag", "失败")) : f.path ? fmtSize(f.size) : tx("up.uploading", "上传中");
+        const busy = !f.err && !f.path;
+        const isProc = busy && f.phase === "processing";
+        const cls = f.err ? "err" : busy ? (isProc ? "busy is-proc" : "busy") : "";
+        const tip = uploadTipOf(f);
+        const status = uploadLabelOf(f);
         const media = (f.thumb && !f.thumbFailed)
           ? `<img class="fi-thumb" src="${f.thumb}" alt="" data-fi="${i}">`
           : iconFor(f);
         const retryBtn = (f.err && f.retryable && f.blob)
           ? `<button type="button" class="retry" data-retry="${i}" title="${esc(tx("up.retryTitle", "重新上传"))}" aria-label="${esc(tx("up.retryAria", "重新上传 {name}", { name: f.name }))}">${esc(tx("common.retry", "重试"))}</button>`
           : "";
-        return `<span class="file ${cls}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="${esc(tx("common.remove", "移除"))}" aria-label="${esc(tx("up.removeAria", "移除 {name}", { name: f.name }))}">×</button></span>`;
+        const rmTitle = busy ? tx("up.cancelTitle", "取消上传") : tx("common.remove", "移除");
+        const rmAria = busy
+          ? tx("up.cancelAria", "取消上传 {name}", { name: f.name })
+          : tx("up.removeAria", "移除 {name}", { name: f.name });
+        let progHtml = "";
+        if (busy) {
+          const det = !!f.determinate;
+          const scale = progressScaleOf(f);
+          const pCls = isProc ? "fi-prog is-proc" : det ? "fi-prog" : "fi-prog is-indet";
+          const ariaNow = (det || isProc) ? ` aria-valuenow="${isProc ? 100 : f.pct}"` : "";
+          const fillStyle = (det || isProc) ? ` style="transform:scaleX(${scale})"` : "";
+          progHtml = `<span class="${pCls}" role="progressbar" aria-valuemin="0" aria-valuemax="100"${ariaNow} aria-label="${esc(tip)}"><span class="fi-prog-fill"${fillStyle}></span></span>`;
+          f._paintKey = `${f.phase}|${det ? 1 : 0}|${scale}|${status}`;
+        } else {
+          f._paintKey = "";
+        }
+        return `<span class="file${cls ? " " + cls : ""}" data-fid="${esc(f.id)}" title="${esc(tip)}">${media}<span class="fn">${esc(f.name)}</span><span class="fs">${esc(status)}</span>${retryBtn}<button type="button" class="rm" data-rm="${i}" title="${esc(rmTitle)}" aria-label="${esc(rmAria)}">×</button>${progHtml}</span>`;
       }).join("");
       opts.onChange?.(form._files);
+    };
+    const patchProgress = (f) => {
+      if (f.removed || !f.uploading) return;
+      const label = uploadLabelOf(f);
+      const scale = progressScaleOf(f);
+      const phase = f.phase;
+      const det = !!f.determinate;
+      const paintKey = `${phase}|${det ? 1 : 0}|${scale}|${label}`;
+      if (f._paintKey === paintKey) return;
+      f._paintKey = paintKey;
+      const chip = box.querySelector?.(`.file[data-fid="${f.id}"]`);
+      if (chip && chip.dataset?.fid === f.id) {
+        const tip = uploadTipOf(f);
+        chip.title = tip;
+        chip.classList?.toggle?.("is-proc", phase === "processing");
+        const fsEl = chip.querySelector?.(".fs");
+        if (fsEl && fsEl.textContent !== label) fsEl.textContent = label;
+        const progEl = chip.querySelector?.(".fi-prog");
+        if (progEl) {
+          progEl.classList?.toggle?.("is-indet", !det && phase !== "processing");
+          progEl.classList?.toggle?.("is-proc", phase === "processing");
+          progEl.setAttribute?.("aria-label", tip);
+          if (det || phase === "processing") {
+            progEl.setAttribute?.("aria-valuenow", String(phase === "processing" ? 100 : f.pct));
+          } else {
+            progEl.removeAttribute?.("aria-valuenow");
+          }
+        }
+        const fillEl = chip.querySelector?.(".fi-prog-fill");
+        if (fillEl?.style) {
+          if (det || phase === "processing") fillEl.style.transform = `scaleX(${scale})`;
+          else fillEl.style.transform = "";
+        }
+        return;
+      }
+      draw();
     };
     const uploadEntry = async (f) => {
       if (f.removed || !f.blob) return;
       f.uploading = true;
+      f.phase = "uploading";
+      f.progress = 0;
+      f.pct = 0;
+      f.determinate = false;
+      f._paintKey = "";
       f.err = "";
       f.errTag = "";
       f.retryable = false;
@@ -30584,31 +30762,83 @@
       const m = machine();
       f.machine = m || "";
       const up = routeReq(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
-      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
-      f.abort = ctrl;
+      let activeAbort = null;
+      const setAbort = (handle) => {
+        activeAbort = handle;
+        f.abort = handle;
+      };
       try {
-        const init = {
-          method: "POST",
-          body: f.blob,
-          credentials: up.hub ? "omit" : "same-origin",
-          headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
-        };
-        if (ctrl) init.signal = ctrl.signal;
-        const res = await authFetch(up.url, init, !!up.hub);
-        if (res.status === 401 && !up.hub) { showLogin(); return; }
-        const d = await res.json().catch(() => ({}));
+        const res = await authUpload(up, f.blob, {
+          setAbort,
+          isAborted: () => !!f.removed,
+          onReset: () => {
+            if (f.removed) return;
+            f.phase = "uploading";
+            f.progress = 0;
+            f.pct = 0;
+            f.determinate = false;
+            patchProgress(f);
+          },
+          onProgress: (ev) => {
+            if (f.removed) return;
+            const loaded = Number(ev?.loaded) || 0;
+            const total = (ev?.lengthComputable && ev.total > 0)
+              ? Number(ev.total)
+              : (f.size > 0 && loaded <= f.size * 1.1 ? f.size : 0);
+            if (total > 0) {
+              const raw = Math.max(0, Math.min(1, loaded / total));
+              f.determinate = true;
+              if (raw >= 1) {
+                f.progress = 1;
+                f.pct = 99;
+                f.phase = "processing";
+              } else {
+                f.progress = raw;
+                f.pct = Math.min(99, Math.max(0, Math.round(raw * 100)));
+                f.phase = "uploading";
+              }
+            } else {
+              f.determinate = false;
+              f.phase = "uploading";
+            }
+            patchProgress(f);
+          },
+          onUploadLoad: () => {
+            if (f.removed || f.path || f.err) return;
+            f.determinate = true;
+            f.progress = 1;
+            f.pct = 99;
+            f.phase = "processing";
+            patchProgress(f);
+          },
+        });
+        if (f.removed) return;
+        if (res.status === 401 && !up.hub) {
+          const info = friendlyUploadError(null, 401, res.data?.error || res.statusText, up.hub);
+          f.err = info.msg;
+          f.errTag = info.tag;
+          f.retryable = false;
+          f.phase = "error";
+          showLogin();
+          return;
+        }
+        const d = res.data || {};
         if (!res.ok) {
           const info = friendlyUploadError(null, res.status, d.error || res.statusText, up.hub);
           if (!f.removed) {
             f.err = info.msg;
             f.errTag = info.tag;
             f.retryable = info.retryable && !!f.blob;
+            f.phase = "error";
             toast(`${shortFileName(f.name)}：${f.err}`, "attn");
           }
           return;
         }
         if (!f.removed) {
           f.path = d.path;
+          f.progress = 1;
+          f.pct = 100;
+          f.phase = "done";
           if (typeof d.size === "number" && d.size > 0) f.size = d.size;
           if (f.isImage && f.path && f.blob && !thumbs.get(f.path)) {
             try {
@@ -30617,14 +30847,15 @@
           }
         }
       } catch (err) {
-        if (f.removed) return;
+        if (f.removed || err?.aborted) return;
         const info = friendlyUploadError(err, 0, "", up.hub);
         f.err = info.msg;
         f.errTag = info.tag;
         f.retryable = info.retryable && !!f.blob;
+        f.phase = "error";
         toast(`${shortFileName(f.name)}：${f.err}`, "attn");
       } finally {
-        if (f.abort === ctrl) f.abort = null;
+        if (f.abort === activeAbort) f.abort = null;
         f.uploading = false;
         if (!f.removed) draw();
       }
@@ -30642,6 +30873,7 @@
           || cands[0].prebuilt;
         const primaryMime = guessMime(primary) || String(primary?._itemType || "").toLowerCase();
         const f = {
+          id: "fi" + (++fileChipSeq),
           name: primary?.name || (isImageFile(primary) || primaryMime.startsWith("image/") ? tx("up.pastedImgPng", "粘贴的图片.png") : tx("up.file", "文件")),
           size: primary?.size || 0,
           isImage: isImageFile(primary) || primaryMime.startsWith("image/"),
@@ -30655,6 +30887,11 @@
           errTag: "",
           retryable: false,
           uploading: true,
+          phase: "preparing",
+          progress: 0,
+          pct: 0,
+          determinate: false,
+          _paintKey: "",
           removed: false,
           abort: null,
         };
@@ -30813,7 +31050,9 @@
     if (!files?.length) return text;
     await Promise.all(files.map((f) => f.done));
     if (files.some((f) => f.err)) throw new Error(fileErrHint(files));
-    return formatWithFiles(files, text);
+    const ready = files.filter((f) => f.path);
+    if (ready.length !== files.length) throw new Error(tx("up.failed", "上传失败，请稍后重试"));
+    return formatWithFiles(ready, text);
   }
   // Images a Collie message points at (a screenshot a worker took) show
   // under it, so you need not open each one.
@@ -30945,9 +31184,11 @@
     const growFn = opts.grow || grow;
     const btn = opts.sendBtn || $(".send", form);
     let sending = false;
+    const hasUploading = () => !!(form._files || []).some((f) => f.uploading || (!f.path && !f.err));
     const syncBtn = () => {
       if (opts.syncSendBtn) opts.syncSendBtn(sending);
       else if (btn) btn.disabled = sending;
+      if (btn) btn.classList?.toggle?.("is-wait-upload", !sending && !String(input.value || "").trim() && hasUploading());
     };
     if (machine) {
       bindFiles(form, machine, {
@@ -31027,6 +31268,10 @@
         return;
       }
       const draft = input.value;
+      if (!draft.trim() && curFiles.some((f) => f.uploading || (!f.path && !f.err))) {
+        toast(tx("up.waitUploading", "附件还在上传中，请稍候完成再发送"), "attn");
+        return;
+      }
       if (!opts.allowEmpty && !draft.trim() && !curFiles.length) return;
       let ctx;
       if (opts.beforeSend) {

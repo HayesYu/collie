@@ -335,7 +335,7 @@ const demoSrc = fs.readFileSync("scripts/demo/demo.js", "utf8");
 // 1) CSS contracts: monochrome design tokens, reduced-motion guard, no headings in summary
 assert.ok(cssSrc.includes(".tool.subagent") && cssSrc.includes(".tool.subagent > summary.sub-sum"), "subagent card CSS rules must exist");
 assert.ok(cssSrc.includes(".tool-detail") && cssSrc.includes(".tool-sec-h"), "generic tool detail CSS rules must exist");
-assert.ok(cssSrc.includes(".tool.subagent::details-content") && cssSrc.includes("interpolate-size: allow-keywords"), "progressive details-content disclosure rule must exist");
+assert.ok(!cssSrc.includes(".tool.subagent::details-content") && cssSrc.includes(".tool.subagent[open] > .sub-body"), "subagent disclosure must use compositor fold-reveal instead of layout-thrashing ::details-content block-size transition");
 assert.ok(cssSrc.includes("prefers-reduced-motion: no-preference") && cssSrc.includes("transition: rotate .16s ease"), "chevron & disclosure transitions must respect prefers-reduced-motion");
 assert.ok(demoSrc.includes("invoke_subagent") && demoSrc.includes("Migration Auditor"), "demo.js should showcase subagent card");
 

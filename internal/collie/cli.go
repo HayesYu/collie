@@ -758,7 +758,7 @@ func cliPeer(args []string) error {
 			return nil
 		}
 		qrTarget := orStr(r.JoinURL, r.InviteCode)
-		fmt.Printf("\n  我的边牧名片（长期有效 · 需对方申请并经你通过后接通，默认模式：%s）：\n\n", peerModeLabel(r.Mode))
+		fmt.Printf("\n  Collie 名片（长期有效 · 需对方申请并经你通过后接通，默认模式：%s）：\n\n", peerModeLabel(r.Mode))
 		printQR(os.Stdout, qrTarget)
 		if r.JoinURL != "" {
 			fmt.Printf("\n  分享链接：%s\n", r.JoinURL)
@@ -909,12 +909,14 @@ you keep the big picture and hand the work to workers.
 - Messages may end with "附件：" and file paths, uploaded to the machine the human
   picked (or the default worker machine). Hand the paths to the agent doing the work;
   agents read images and files by path.
-- Chat natively renders Markdown tables, Mermaid diagrams (` + "`mermaid`" + `), inline SVG (` + "`svg`" + `),
-  lightweight HTML blocks (` + "`html-card`" + `), KaTeX math, and fenced code blocks (plus ` + "`--file`" + `
-  attachments). Use a compact table, small Mermaid, or light SVG when it makes option
-  comparisons, flows/architectures, or lightweight data clear at a glance; keep routine
-  short replies plain text. Leave heavy visualizations or long HTML to a worker and
-  deliver them via ` + "`--file`" + ` so replies stay fast.
+- Chat natively renders Markdown tables, KPI strips (` + "`metrics`" + `), step timelines (` + "`steps`" + `),
+  callouts (` + "`> [!NOTE]`/`[!TIP]`/`[!IMPORTANT]`/`[!WARNING]`/`[!CAUTION]`" + `),
+  collapsible ` + "`<details>`" + ` blocks, Mermaid diagrams (` + "`mermaid`" + `), inline SVG (` + "`svg`" + `),
+  lightweight HTML blocks (` + "`html-card`" + `, auto-themed with ` + "`--collie-*`" + ` CSS variables),
+  KaTeX math, and fenced code blocks; ` + "`--file`" + ` images render inline as a gallery.
+  Use them only when they make comparisons, metrics, progress, risks, or visuals clear at
+  a glance—keep routine replies plain text, and delegate heavy visualizations or long HTML
+  to a worker via ` + "`--file`" + `.
 
 ## Memory
 Your memory lives in memory/ (this directory). It is all you keep between sessions:

@@ -458,7 +458,7 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
 
   // ─── 6. P0-1: Code Block 2.0 (headerless, quiet corner tag, floating copy, >18 fold to 14 + until-found, Diff) ───
   const shortCode = T.mdRender("\x60\x60\x60go main.go\npackage main\nfunc main() {}\n\x60\x60\x60");
-  assert.ok(shortCode.includes('class="md-code"') && !shortCode.includes("md-code-head"), "short code renders headerless card without persistent gray bar");
+  assert.ok(shortCode.includes('class="md-code has-tag"') && !shortCode.includes("md-code-head"), "short code renders headerless card without persistent gray bar");
   assert.ok(shortCode.includes('class="md-code-tag"') && shortCode.includes('<span class="md-code-lang">Go</span>'), "quiet corner language label rendered");
   assert.ok(shortCode.includes('class="md-float-acts md-code-acts"') && shortCode.includes('data-copy-code'), "floating copy button rendered");
   assert.ok(!shortCode.includes("data-code-fold"), "short block <=18 lines is not collapsed");
@@ -469,7 +469,7 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
   for (let i = 2; i <= 21; i++) longLines.push("line " + i);
   longLines.push("end comment */");
   const longCode = T.mdRender("\x60\x60\x60js\n" + longLines.join("\n") + "\n\x60\x60\x60");
-  assert.ok(longCode.includes('class="md-code is-collapsed"'), ">18-line code block collapsed by default");
+  assert.ok(longCode.includes('class="md-code has-tag is-collapsed"'), ">18-line code block collapsed by default");
   assert.ok(longCode.includes('data-total-lines="22"') && longCode.includes('data-head-lines="14"'), "tracks 22 total / 14 head lines");
   assert.ok(longCode.includes('class="code-tail" hidden="until-found"'), "collapsed tail uses hidden=until-found");
   assert.ok(longCode.includes("展开剩余 8 行"), "fold button shows remaining 8 lines");
@@ -520,7 +520,7 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
     "| 首屏传输 | 2,092.5 KB | 369.7 KB | -82.3% |",
     "| 长列表 | 142ms | 13.7s | +5.5% |",
   ].join("\n"));
-  assert.ok(tblHtml.includes('class="md-table-card" data-table-card data-cols="4"') && !tblHtml.includes("md-table-bar") && !tblHtml.includes("md-table-meta"), "table card tags column count and omits persistent top bar and dimension strip");
+  assert.ok(tblHtml.includes('class="md-table-card is-last-num" data-table-card data-cols="4"') && !tblHtml.includes("md-table-bar") && !tblHtml.includes("md-table-meta"), "table card tags column count and omits persistent top bar and dimension strip");
   const tbl3Html = T.mdRender("| 任务 | 负责 Agent | 当前阶段 |\n| --- | --- | --- |\n| 核心索引 | \x60worker-a\x60 | 收尾中 |");
   assert.ok(tbl3Html.includes('class="md-table-card" data-table-card data-cols="3"'), "3-col table emits data-cols=3 for mobile wrap layout");
   assert.ok(tblHtml.includes('class="md-float-acts md-table-acts"') && tblHtml.includes('data-copy-table="tsv"') && tblHtml.includes('data-copy-table="md"'), "table card renders floating TSV and MD copy buttons");
@@ -538,18 +538,50 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
   assert.equal((mq.match(/<blockquote>/g) || []).length, 1, "adjacent > lines merge into one blockquote");
   assert.ok(mq.includes("<p>第一行引用<br>第二行引用</p><p>第二段引用</p>"), "blockquote groups paragraphs cleanly");
 
-  // 4-tier Callouts
-  for (const [tag, cls, lbl] of [["NOTE","is-note","说明"],["TIP","is-tip","提示"],["WARNING","is-warn","注意"],["CAUTION","is-caution","风险"]]) {
+  // 5-tier Callouts (case-insensitive, optional custom title, full inner Markdown & XSS safety)
+  for (const [tag, cls, lbl] of [
+    ["NOTE", "is-note", "说明"],
+    ["TIP", "is-tip", "提示"],
+    ["IMPORTANT", "is-important", "重要"],
+    ["WARNING", "is-warn", "注意"],
+    ["CAUTION", "is-caution", "风险"],
+  ]) {
     const co = T.mdRender("> [!" + tag + "] 标题\n> 正文内容");
-    assert.ok(co.includes('class="md-callout ' + cls + '"') && co.includes(lbl + " · 标题") && co.includes("正文内容"), "callout " + tag + " renders properly");
+    assert.ok(co.includes('class="md-callout ' + cls + '"') && co.includes('data-callout="' + tag.toLowerCase() + '"') && co.includes(lbl + " · 标题") && co.includes("正文内容"), "callout " + tag + " renders properly");
+    const coLow = T.mdRender("> [!" + tag.toLowerCase() + "]\n> 默认标题正文");
+    assert.ok(coLow.includes('class="md-callout ' + cls + '"') && coLow.includes("<span>" + lbl + "</span>") && coLow.includes("默认标题正文"), "lowercase callout " + tag.toLowerCase() + " uses default label");
   }
+  const richCallout = T.mdRender([
+    "> [!Warning] 风险提醒",
+    "> 上线前请逐项确认：",
+    "> - **备份配置**（\x60config.yaml\x60）",
+    "> - 查看 [发布文档](https://example.com/release)",
+    "> 1. 先灰度 10%",
+    "> 2. 观察错误率",
+    "> - [x] 预演通过",
+  ].join("\n"));
+  assert.ok(richCallout.includes('class="md-callout is-warn"') && richCallout.includes("注意 · 风险提醒"), "mixed-case callout renders custom title");
+  assert.ok(richCallout.includes("<ul><li><strong>备份配置</strong>（<code>config.yaml</code>）</li>"), "callout renders nested unordered list, bold, and inline code");
+  assert.ok(richCallout.includes('<a href="https://example.com/release" target="_blank" rel="noopener noreferrer">发布文档</a>'), "callout renders Markdown links safely");
+  assert.ok(richCallout.includes("<ol><li>先灰度 10%</li><li>观察错误率</li></ol>"), "callout renders ordered list");
+  assert.ok(richCallout.includes('class="md-task-list"') && richCallout.includes("预演通过"), "callout renders task list");
+
+  const xssCallout = T.mdRender("> [!IMPORTANT] <img src=x onerror=alert(1)>关键\n> <script>alert(2)</script> [bad](javascript:alert(3))");
+  assert.ok(
+    xssCallout.includes('class="md-callout is-important"') &&
+    !/<script\b/i.test(xssCallout) &&
+    !/<img\b/i.test(xssCallout) &&
+    !/<[^>]*\bon(?:click|toggle|mouseover|error|load)\s*=/i.test(xssCallout) &&
+    !/<a\b[^>]*href\s*=\s*["']javascript:/i.test(xssCallout),
+    "callout strictly neutralizes XSS in title and body: " + xssCallout
+  );
 
   // Read-only Task List
   const tasks = T.mdRender("- [x] 已完成项\n- [ ] 待处理项");
   assert.ok(tasks.includes('class="md-task-list"') && tasks.includes('class="md-task-item is-done"') && tasks.includes('class="md-task-item"'), "task list renders done and todo items");
   assert.ok(!tasks.includes("<input"), "task list is read-only without fake interactive checkboxes");
 
-  // Safe whitelist <details>/<summary> with inner Markdown & zero headings in summary
+  // Safe whitelist <details>/<summary> with inner Markdown, open attr, same-line <summary>, & zero headings in summary
   const safeDet = T.mdRender([
     "<details>",
     "<summary>### 查看详细日志</summary>",
@@ -563,21 +595,36 @@ function createHarness({ withKatex = false, mobile = false } = {}) {
   ].join("\n"));
   assert.ok(safeDet.includes('<details class="md-fold"><summary>查看详细日志</summary>'), "whitelisted details renders with stripped heading prefix in summary");
   assert.ok(!/<summary>[^<]*<h[1-6]/i.test(safeDet), "summary never contains heading elements");
-  assert.ok(safeDet.includes('class="md-task-list"') && safeDet.includes('class="md-code"'), "inner Markdown renders inside details body");
+  assert.ok(safeDet.includes('class="md-task-list"') && safeDet.includes('class="md-code has-tag"'), "inner Markdown renders inside details body");
+
+  const openSameLineDet = T.mdRender([
+    "<details open><summary>查看 **变更明细**（\x60v0.3.14\x60）</summary>",
+    "- 新增 5 级 Callout",
+    "- 支持 \x60<details open>\x60 默认展开",
+    "</details>",
+  ].join("\n"));
+  assert.ok(openSameLineDet.includes('<details class="md-fold" open><summary>查看 <strong>变更明细</strong>（<code>v0.3.14</code>）</summary>'), "same-line <details open><summary>...</summary> parses cleanly with inline markdown");
+  assert.ok(openSameLineDet.includes("<ul><li>新增 5 级 Callout</li>"), "inner list renders inside same-line details");
 
   // XSS payloads in <details>/<summary> and body MUST be completely neutralized
   const xssPayloads = [
     '<details onclick="alert(1)" ontoggle="alert(2)"><summary onmouseover="alert(3)">x</summary><script>alert(4)</script></details>',
     '<details>\n<summary onclick="alert(1)">Title</summary>\n<img src=x onerror="alert(2)">\n</details>',
     '<details>\n<summary>Safe</summary>\n<script>alert(1)</script><img src=x onerror=alert(2)><svg onload=alert(3)><a href="javascript:alert(4)">bad</a>\n</details>',
+    '<details open onclick="alert(1)"><summary>Evil</summary>\nbody\n</details>',
+    '<details><summary onclick="alert(1)">EvilSameLine</summary>\nbody\n</details>',
+    '<details><summary><img src=x onerror=alert(1)>标题</summary>\n<iframe src="javascript:alert(2)"></iframe>\n</details>',
   ];
   const xssOuts = xssPayloads.map((payload) => T.mdRender(payload));
   assert.ok(!xssOuts[0].includes("<details"), "XSS: details tag with extra attributes must NOT open real <details>: " + xssOuts[0]);
   assert.ok(!xssOuts[1].includes("<summary onclick"), "XSS: summary tag with attributes must stay escaped: " + xssOuts[1]);
   assert.ok(xssOuts[2].includes('<details class="md-fold"><summary>Safe</summary>'), "whitelisted details renders safe shell while escaping inner HTML");
+  assert.ok(!xssOuts[3].includes("<details"), "XSS: <details open onclick=...> must NOT open real <details>: " + xssOuts[3]);
+  assert.ok(!xssOuts[4].includes("<details"), "XSS: <details><summary onclick=...> same-line must NOT open real <details>: " + xssOuts[4]);
   for (const out of xssOuts) {
     assert.ok(!/<script\b/i.test(out), "XSS: no <script> tag allowed: " + out);
     assert.ok(!/<img\b/i.test(out), "XSS: no raw <img> tag allowed: " + out);
+    assert.ok(!/<iframe\b/i.test(out), "XSS: no raw <iframe> tag allowed: " + out);
     assert.ok(!/<svg\b[^>]*onload/i.test(out), "XSS: no <svg onload> allowed: " + out);
     assert.ok(!/<[^>]*\bon(?:click|toggle|mouseover|error|load)\s*=/i.test(out), "XSS: no inline event handler attribute in any HTML tag: " + out);
     assert.ok(!/<a\b[^>]*href\s*=\s*["']javascript:/i.test(out), "XSS: no javascript: href allowed: " + out);

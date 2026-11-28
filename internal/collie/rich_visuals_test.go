@@ -97,13 +97,15 @@ assert.ok(cssSrc.includes("--rv-html-max, 460px") && cssSrc.includes("--rv-html-
 assert.ok(cssSrc.includes("#super-thread > .say {\n    grid-template-columns: minmax(0, 1fr);"), "mobile main chat must reclaim avatar rail for full-width rich blocks");
 assert.ok(cssSrc.includes(".rv-mermaid-stage svg,\n.rv-svg-stage svg {\n  display: block;\n  width: clamp(var(--rv-min-w, 0px), 100%, var(--rv-vb-w, 100%));\n  max-width: none;"), "Mermaid/SVG stages must enforce readable clamp() vector sizing without crushing wide diagrams");
 assert.ok(cssSrc.includes(".md-table-card, .md-math-block,\n    .rv-card,"), "entry blur animation must skip .md-table-card and .rv-card to keep crisp edges");
-assert.ok(cssSrc.includes(".md-code:has(> .md-code-tag) pre"), "code/diff blocks with corner tag must reserve top clearance so +N/lang never overlaps code lines");
+assert.ok(cssSrc.includes(".md-code.has-tag pre"), "code/diff blocks with corner tag must reserve top clearance via static .has-tag class without :has() invalidation");
 assert.ok(cssSrc.includes(".md-table-vp.can-scroll-l thead th:first-child"), "table sticky divider shadow must appear only when horizontally scrolled");
 assert.ok(cssSrc.includes('.md-table-card:is([data-cols="1"], [data-cols="2"], [data-cols="3"]) table {\n    width: 100%; min-width: 0; table-layout: fixed;'), "mobile <=3-col tables must use 100% fixed auto-wrap layout without horizontal scroll");
-assert.ok(cssSrc.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;") && cssSrc.includes(".md-code.is-diff .diff-line:has(> .diff-sig)"), "mobile code and diff blocks must soft-wrap with hanging +/- indent");
+assert.ok(cssSrc.includes("white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;") && cssSrc.includes(".md-code.is-diff .diff-line.has-sig"), "mobile code and diff blocks must soft-wrap with hanging +/- indent via static .has-sig class");
 assert.ok(cssSrc.includes(".md-table-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;"), "Markdown tables must be frameless and blended natively into the canvas");
 assert.ok(cssSrc.includes(".md-code {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 10px;\n  background: var(--code-bg);"), "code/diff blocks must use borderless soft-surface blending");
 assert.ok(cssSrc.includes(".rv-card {\n  position: relative;\n  margin: 12px 0 16px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n  box-shadow: none;"), "Mermaid/SVG containers must remain completely borderless and transparent");
+assert.ok(cssSrc.includes(".md-callout {\n  --co-bar: var(--co-note);\n  --co-fg: var(--co-note);\n  margin: 10px 0 14px;\n  padding: 7px 12px 8px 13px;\n  border: 0;\n  border-left: 2px solid var(--co-bar);") && cssSrc.includes(".md-callout.is-important { --co-bar: var(--co-important); --co-fg: var(--co-important); }"), "Callouts must use frameless 2px left bar and include 5th IMPORTANT semantic tier");
+assert.ok(cssSrc.includes("details.md-fold {\n  margin: 8px 0 12px;\n  border: 0;\n  border-radius: 0;\n  background: transparent;") && cssSrc.includes("details.md-fold[open] > summary::before { transform: rotate(90deg); }") && cssSrc.includes("border-left: 1px solid var(--line);") && !cssSrc.includes("details.md-fold::details-content"), "Native <details> disclosure must be frameless with pure GPU transform: rotate() chevron and hairline left guide (no reflow block-size animation)");
 
 // Minimal DOM harness supporting elements, classes, attributes, dataset, children, querySelector, DOMParser, message & theme events
 let bootFinished = false;
@@ -847,18 +849,35 @@ async function testHtmlCards() {
   assert.equal(stage.style.height, "380px", "mobile height must clamp at 380px");
   ctx.innerWidth = 1440;
   // 3d) HTML theme passthrough (data-theme, color-scheme, --collie-* semantic vars) & live postMessage sync without iframe rebuild
-  const fullDoc = '<!doctype html><html lang="zh-CN"><head><style>body{background:#fafafa}</style></head><body><h1>Report</h1></body></html>';
+  const fullDoc = '<!doctype html><html lang="zh-CN" data-theme="light"><head><style>body{background:#fafafa}</style></head><body><h1>Report</h1></body></html>';
   const injectedDark = R.buildSandboxedCardSrcdoc(fullDoc, { frameId: "f1", token: "t1", isFragment: false, isDark: true });
-  assert.ok(injectedDark.includes('data-theme="dark"'), "full HTML doc receives data-theme=dark");
+  assert.ok(/<html\b[^>]*\bdata-theme="dark"/i.test(injectedDark) && !/<html\b[^>]*\bdata-theme="light"/i.test(injectedDark), "full HTML doc updates/receives data-theme=dark");
   assert.ok(injectedDark.includes('name="color-scheme" content="dark"'), "full HTML doc receives color-scheme meta");
-  assert.ok(injectedDark.includes("--collie-bg:#111113") && injectedDark.includes("--collie-fg:#ededeb") && injectedDark.includes("--collie-surface:#151518") && injectedDark.includes("--collie-line:#26262b") && injectedDark.includes("--collie-muted:#858580"), "srcdoc injects Collie semantic theme variables");
+  assert.ok(
+    injectedDark.includes("--collie-bg:#111113") &&
+    injectedDark.includes("--collie-surface:#151518") &&
+    injectedDark.includes("--collie-ink:#ededeb") &&
+    injectedDark.includes("--collie-fg:#ededeb") &&
+    injectedDark.includes("--collie-muted:#858580") &&
+    injectedDark.includes("--collie-line:#26262b") &&
+    injectedDark.includes("--collie-accent:#dcdcd9") &&
+    injectedDark.includes("--collie-font:") &&
+    injectedDark.includes("--collie-mono:"),
+    "srcdoc injects all standard Collie semantic theme variables (--collie-bg/surface/ink/muted/line/accent/font/mono)"
+  );
+  assert.ok(injectedDark.includes(":where(body){background:transparent;color:var(--collie-ink);font-family:var(--collie-font);margin:0}"), "srcdoc provides zero-specificity body fallback without overriding author card styles");
   assert.ok(injectedDark.includes("body{background:#fafafa}"), "page original styles remain intact");
   assert.ok(injectedDark.indexOf('id="collie-theme-vars"') < injectedDark.indexOf("body{background:#fafafa}"), "injected theme vars precede author styles so author styles are not overridden");
 
-  // Bare fragment html-card carries theme, seamless --collie-bg (no gray shell), & zero extra padding
-  assert.ok(iframe.srcdoc.includes('data-theme="light"') && iframe.srcdoc.includes("--collie-bg:#ffffff"), "html-card fragment carries current light theme & Collie vars");
-  assert.ok(iframe.srcdoc.includes("padding:0;background:var(--collie-bg)"), "html-card fragment blends seamlessly with --collie-bg without gray shell or padding");
+  // Bare fragment html-card carries theme, transparent seamless canvas blend, & zero extra padding
+  assert.ok(iframe.srcdoc.includes('data-theme="light"') && iframe.srcdoc.includes("--collie-bg:#ffffff") && iframe.srcdoc.includes("--collie-ink:#111111") && iframe.srcdoc.includes("--collie-font:") && iframe.srcdoc.includes("--collie-mono:"), "html-card fragment carries current light theme & full Collie vars");
+  assert.ok(iframe.srcdoc.includes("margin:0;padding:0;background:transparent;color:var(--collie-ink);font-family:var(--collie-font)"), "html-card fragment blends seamlessly with transparent canvas and --collie-ink/--collie-font without gray shell or padding");
   assert.equal(iframe._getSrcdocWrites(), 1, "iframe srcdoc written exactly once on mount");
+
+  // Drawer preview (.fv-html-sandbox) also receives live theme postMessage sync
+  const drawerFrame = doc.createElement("iframe");
+  drawerFrame.className = "fv-html-sandbox";
+  bodyEl.appendChild(drawerFrame);
 
   // Mobile tap inside sandbox iframe toggles .is-acts-open via validated collie:card-tap message
   ctx.innerWidth = 390;
@@ -877,6 +896,10 @@ async function testHtmlCards() {
   const lastMsgDark = iframe.contentWindow.posted[iframe.contentWindow.posted.length - 1];
   assert.equal(lastMsgDark?.msg?.type, "collie-theme", "dark switch posts type=collie-theme");
   assert.equal(lastMsgDark?.msg?.theme, "dark", "dark switch posts theme=dark");
+  const drawerDark = drawerFrame.contentWindow.posted[drawerFrame.contentWindow.posted.length - 1];
+  assert.equal(drawerDark?.msg?.type, "collie-theme", "drawer HTML preview also receives type=collie-theme");
+  assert.equal(drawerDark?.msg?.theme, "dark", "drawer HTML preview switches to dark live");
+  assert.equal(drawerFrame.style.colorScheme, "dark", "drawer HTML iframe updates colorScheme on dark switch");
 
   docEl.dataset.theme = "light";
   R.onRichVisualThemeChange();
@@ -884,6 +907,7 @@ async function testHtmlCards() {
   assert.equal(lastMsgLight?.msg?.type, "collie-theme", "light switch posts type=collie-theme");
   assert.equal(lastMsgLight?.msg?.theme, "light", "light switch posts theme=light");
   assert.equal(iframe._getSrcdocWrites(), 1, "switching back to light keeps srcdoc writes at 1");
+  drawerFrame.remove();
 }
 
 // 4. Safe SVG direct rendering (svg fence) + strict XSS sanitization + silent fallback + hash cache reuse
@@ -1041,12 +1065,17 @@ func TestRouterDocIncludesRichReplyGuidance(t *testing.T) {
 	talkingSection := routerStr[start:end]
 	for _, want := range []string{
 		"Markdown tables",
+		"KPI strips (`metrics`)",
+		"step timelines (`steps`)",
+		"callouts (`> [!NOTE]`/`[!TIP]`/`[!IMPORTANT]`/`[!WARNING]`/`[!CAUTION]`)",
+		"collapsible `<details>` blocks",
 		"Mermaid diagrams (`mermaid`)",
 		"inline SVG (`svg`)",
-		"lightweight HTML blocks (`html-card`)",
+		"lightweight HTML blocks (`html-card`",
+		"`--collie-*` CSS variables",
 		"KaTeX math",
 		"fenced code blocks",
-		"`--file`",
+		"`--file` images render inline as a gallery",
 		"plain text",
 		"heavy visualizations or long HTML",
 	} {

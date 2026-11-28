@@ -1492,6 +1492,7 @@
     hydratedFromCache = false;
     syncCollieNotifyWatermark(sup.entries, !!opts.allowNotify);
     if (opts.liveState) setLocalState(opts.liveState);
+    syncQuotaContext();
     scheduleSnapCacheWrite();
     if (opts.skipRender) return;
     if (fromCacheReconcile) {
@@ -3115,6 +3116,7 @@
     }
     return applyCollieAnchor(sc, snap);
   }
+  let syncCollieResizeBaseline = () => {};
   function cancelCollieLayoutLock() {
     const lock = collieLayoutLock;
     if (!lock) return;
@@ -3624,6 +3626,7 @@
         if (!narrow()) $("#input").focus({ preventScroll: true });
       }
     }
+    syncQuotaContext();
   }
   addEventListener("popstate", () => {
     if (handleDrawerPopState()) return;
@@ -3680,6 +3683,7 @@
     if (r.effort) parts.push(esc(tx("effort.prefix", "思考 {v}", { v: EFFORT_LABEL[r.effort] || r.effort })));
     el.innerHTML = parts.join(" · ");
     el.title = tx("collie.modelTitle", "Collie 自己用的模型{model}{effort}（自动化 → 设置 → Collie 自己）", { model: model ? tx("collie.modelColon", "：{model}", { model }) : "", effort: r.effort ? tx("collie.effortComma", "，思考强度 {effort}", { effort: r.effort }) : "" });
+    syncQuotaContext();
   }
   // A worker's comings and goings: its spawn line shows where it stands, and
   // a dialog waiting on the human shows as a card below. Reports and errors stay.
@@ -4110,8 +4114,25 @@
     return "";
   }
   const SNAP_PATH_RE = /(?:^|[\s（(【\[「『"'`,:;：；、])((?:~\/|\/[A-Za-z0-9._-]+\/)[A-Za-z0-9._/@+\-\u4e00-\u9fff]+\.(?:html?|csv|tsv))(?::\d+(?:-\d+)?)?/gi;
+  const MAX_INLINE_HTML_CARDS = 3;
+  const MAX_INLINE_FILE_IMAGES = 4;
   const _artifactExtractCache = new WeakMap();
   const _artifactRenderCache = new WeakMap();
+  const failedFileGalleryImgs = new Set();
+  let failedFileGalleryVer = 0;
+  function markFileGalleryImgFailed(p) {
+    if (!p || failedFileGalleryImgs.has(p)) return;
+    if (failedFileGalleryImgs.size >= 500) {
+      const oldest = failedFileGalleryImgs.values().next().value;
+      if (oldest !== undefined) failedFileGalleryImgs.delete(oldest);
+    }
+    failedFileGalleryImgs.add(p);
+    failedFileGalleryVer++;
+  }
+  function clearFileGalleryImgFailed(p) {
+    if (!p || !failedFileGalleryImgs.delete(p)) return;
+    failedFileGalleryVer++;
+  }
   function extractEntryArtifacts(e) {
     if (!e || e.role !== "collie") return [];
     const text = e.text || "";
@@ -4126,7 +4147,8 @@
     const add = (raw, explicit = false) => {
       const p = String(raw || "").trim();
       if (!p || /^https?:\/\//i.test(p)) return;
-      if (/\/\.collie\/(?:uploads|images|router\/memory|router\/dreams)\//i.test(p)) return;
+      if (/\/\.collie\/router\/(?:memory|dreams)\//i.test(p)) return;
+      if (!explicit && /\/\.collie\/(?:uploads|images)\//i.test(p)) return;
       const key = p.toLowerCase();
       if (seen.has(key)) {
         if (explicit) {
@@ -4146,6 +4168,7 @@
         explicit: !!explicit,
         isHtml: ext === "html" || ext === "htm",
         isCsv: ext === "csv" || ext === "tsv",
+        isImg: IMG_EXT.test(name),
       });
     };
     if (files) {
@@ -4159,7 +4182,158 @@
     _artifactExtractCache.set(e, { text, filesKey, items: out });
     return out;
   }
-  const MAX_INLINE_HTML_CARDS = 3;
+  const ARTIFACT_CHEV_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+  function renderArtifactChipHtml(it, activeMatch = "") {
+    const act = !!(activeMatch && activeMatch === it.path);
+    return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapPreview", "预览 {name}", { name: it.name }))}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>`;
+  }
+  function fileGallerySizeClass(n) {
+    return n === 1 ? "is-1" : n === 2 ? "is-2" : n === 3 ? "is-3" : n === 4 ? "is-4" : "is-many";
+  }
+  function renderFileImageTileHtml(it, idx, total, overflow) {
+    const ep = esc(it.path);
+    const en = esc(it.name);
+    const moreHtml = idx === MAX_INLINE_FILE_IMAGES - 1 && overflow > 0
+      ? `<span class="gal-more" aria-hidden="true">+${overflow}</span>`
+      : "";
+    const aria = moreHtml
+      ? esc(tx("file.galMoreAria", "查看大图 {name}，共 {total} 张（还有 {more} 张）", { name: it.name, total, more: overflow }))
+      : esc(tx("file.viewImgTip", "查看大图 {name}", { name: it.name }));
+    return `<button type="button" class="gal-tile thumb file-gal-tile" data-img="${ep}" data-img-alt="${en}" data-file-gal-item="1" data-file-name="${en}" data-file-ext="${esc(it.ext)}" title="${ep}" aria-label="${aria}"><img alt="${en}" loading="lazy" decoding="async"${thumbImgAttrs(it.path, "file-gal-img")}>${moreHtml}</button>`;
+  }
+  function renderFileImageGallery(imgItems) {
+    if (!imgItems?.length) return "";
+    const n = imgItems.length;
+    const sizeCls = fileGallerySizeClass(n);
+    const visible = imgItems.slice(0, MAX_INLINE_FILE_IMAGES);
+    const overflow = n - visible.length;
+    const tilesHtml = visible.map((it, idx) => renderFileImageTileHtml(it, idx, n, overflow)).join("");
+    const hiddenHtml = overflow > 0
+      ? imgItems.slice(MAX_INLINE_FILE_IMAGES).map((it) =>
+          `<span class="gal-hidden-item" hidden data-img="${esc(it.path)}" data-img-alt="${esc(it.name)}" data-file-name="${esc(it.name)}" data-file-ext="${esc(it.ext)}"></span>`
+        ).join("")
+      : "";
+    return `<div class="file-gallery ${sizeCls}" data-count="${n}" role="group" aria-label="${esc(tx("md.galleryAria", "图片画廊（{n} 张）", { n }))}">${tilesHtml}${hiddenHtml}</div>`;
+  }
+  function createArtifactChipEl(path, name, ext) {
+    const el = document.createElement("button");
+    el.type = "button";
+    const normExt = String(ext || "").toLowerCase();
+    el.className = "snap-chip" + (normExt === "html" || normExt === "htm" ? " is-html" : "");
+    el.dataset.openFile = path;
+    el.title = path;
+    el.setAttribute("aria-label", tx("file.snapPreview", "预览 {name}", { name }));
+    el.innerHTML = `<span class="snap-chip-ext">${esc((normExt || "FILE").toUpperCase())}</span><span class="snap-chip-name">${esc(name)}</span><span class="snap-chip-chev" aria-hidden="true">${ARTIFACT_CHEV_SVG}</span>`;
+    return el;
+  }
+  function createPromotedFileTileEl(path, name, ext) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "gal-tile thumb file-gal-tile";
+    btn.dataset.img = path;
+    btn.dataset.imgAlt = name;
+    btn.dataset.fileGalItem = "1";
+    btn.dataset.fileName = name;
+    btn.dataset.fileExt = ext;
+    btn.title = path;
+    btn.setAttribute("aria-label", tx("file.viewImgTip", "查看大图 {name}", { name }));
+    const img = document.createElement("img");
+    img.className = "file-gal-img";
+    img.alt = name;
+    img.setAttribute("loading", "lazy");
+    img.setAttribute("decoding", "async");
+    const cachedSrc = thumbs.get(path);
+    const dim = thumbDims.get(path);
+    if (cachedSrc) {
+      if (!decodedThumbs.has(path)) img.classList.add("is-img-loading");
+      img.src = cachedSrc;
+    }
+    if (dim) { img.width = dim.w; img.height = dim.h; }
+    btn.appendChild(img);
+    return btn;
+  }
+  function degradeFileGalleryTile(btn) {
+    if (!btn || btn.dataset?.degraded === "1") return;
+    if (btn.dataset) btn.dataset.degraded = "1";
+    const path = btn.dataset?.img || "";
+    if (!path) return;
+    const name = btn.dataset?.fileName || path.split("/").pop() || path;
+    const ext = btn.dataset?.fileExt || (name.includes(".") ? name.split(".").pop().toLowerCase() : "img");
+    markFileGalleryImgFailed(path);
+
+    const gal = btn.closest?.(".file-gallery") || null;
+    const wrap = gal?.closest?.("[data-file-gallery-wrap]") || null;
+    btn.remove?.();
+
+    if (typeof document !== "undefined" && typeof document.createElement === "function") {
+      let fallbacks = wrap?.querySelector?.(".file-gallery-fallbacks") || null;
+      if (!fallbacks) {
+        fallbacks = document.createElement("div");
+        fallbacks.className = "msg-files file-gallery-fallbacks";
+        if (wrap) wrap.appendChild(fallbacks);
+        else if (gal?.parentElement) gal.parentElement.insertBefore(fallbacks, gal.nextSibling);
+      }
+      const existing = [...(fallbacks.querySelectorAll?.(".snap-chip[data-open-file]") || [])];
+      if (!existing.some((el) => el.dataset?.openFile === path)) {
+        fallbacks.appendChild(createArtifactChipEl(path, name, ext));
+      }
+    }
+
+    if (!gal) return;
+    const hiddenNodes = () => [...(gal.querySelectorAll?.(".gal-hidden-item") || [])];
+    const tileNodes = () => [...(gal.querySelectorAll?.(".gal-tile") || [])];
+
+    if (typeof document !== "undefined" && typeof document.createElement === "function") {
+      while (tileNodes().length < MAX_INLINE_FILE_IMAGES) {
+        const nextHidden = hiddenNodes().find((el) => {
+          const hp = el.dataset?.img || "";
+          if (!hp || failedFileGalleryImgs.has(hp)) {
+            el.remove?.();
+            return false;
+          }
+          return true;
+        });
+        if (!nextHidden) break;
+        const hp = nextHidden.dataset?.img || "";
+        const hn = nextHidden.dataset?.fileName || nextHidden.dataset?.imgAlt || hp.split("/").pop() || hp;
+        const he = nextHidden.dataset?.fileExt || (hn.includes(".") ? hn.split(".").pop().toLowerCase() : "img");
+        const promoted = createPromotedFileTileEl(hp, hn, he);
+        gal.insertBefore(promoted, nextHidden);
+        nextHidden.remove?.();
+        const promotedImg = promoted.querySelector?.("img");
+        if (promotedImg) observeThumbImg(promotedImg);
+      }
+    }
+
+    const tiles = tileNodes();
+    const hidden = hiddenNodes();
+    for (const t of tiles) {
+      t.querySelector?.(".gal-more")?.remove?.();
+      const tn = t.dataset?.fileName || t.dataset?.imgAlt || (t.dataset?.img || "").split("/").pop() || "";
+      if (tn) t.setAttribute?.("aria-label", tx("file.viewImgTip", "查看大图 {name}", { name: tn }));
+    }
+    const total = tiles.length + hidden.length;
+    if (tiles.length === 0) {
+      gal.hidden = true;
+      if (gal.dataset) gal.dataset.count = "0";
+    } else {
+      gal.hidden = false;
+      if (gal.dataset) gal.dataset.count = String(total);
+      gal.setAttribute?.("aria-label", tx("md.galleryAria", "图片画廊（{n} 张）", { n: total }));
+      gal.classList?.remove("is-1", "is-2", "is-3", "is-4", "is-many");
+      gal.classList?.add(fileGallerySizeClass(total));
+      if (hidden.length > 0 && typeof document !== "undefined" && typeof document.createElement === "function") {
+        const lastTile = tiles[tiles.length - 1];
+        const more = document.createElement("span");
+        more.className = "gal-more";
+        more.setAttribute("aria-hidden", "true");
+        more.textContent = `+${hidden.length}`;
+        lastTile.appendChild(more);
+        const ln = lastTile.dataset?.fileName || lastTile.dataset?.imgAlt || "";
+        lastTile.setAttribute?.("aria-label", tx("file.galMoreAria", "查看大图 {name}，共 {total} 张（还有 {more} 张）", { name: ln, total, more: hidden.length }));
+      }
+    }
+  }
   function renderEntryArtifacts(e, openPathOverride) {
     const items = extractEntryArtifacts(e);
     if (!items.length) return "";
@@ -4168,27 +4342,49 @@
       : (!$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "");
     const activeMatch = openPath && items.some((it) => it.path === openPath) ? openPath : "";
     const hasExplicit = Array.isArray(e.files) && e.files.length > 0;
+    const lang = curLang();
     const cached = _artifactRenderCache.get(e);
-    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit) {
+    if (cached && cached.items === items && cached.activeMatch === activeMatch && cached.hasExplicit === hasExplicit && cached.failVer === failedFileGalleryVer && cached.lang === lang) {
       return cached.html;
     }
-    const chevSVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
-    const renderChip = (it) => {
-      const act = activeMatch === it.path;
-      return `<button type="button" class="snap-chip${it.isHtml ? " is-html" : ""}${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapPreview", "预览 {name}", { name: it.name }))}"><span class="snap-chip-ext">${esc(it.ext.toUpperCase())}</span><span class="snap-chip-name">${esc(it.name)}</span><span class="snap-chip-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>`;
-    };
-    const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
-    let html;
-    if (inlineHtmlItems.length > 0) {
-      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
-      const rest = items.filter((it) => !inlineSet.has(it.path));
-      const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-      html = inlineHtmlItems.map((it, idx) => {
+    const renderChip = (it) => renderArtifactChipHtml(it, activeMatch);
+    const renderHtmlCards = (htmlItems, companionChips) => {
+      const extraChips = companionChips.length ? `<div class="snap-files">${companionChips.map(renderChip).join("")}</div>` : "";
+      return htmlItems.map((it, idx) => {
         const act = activeMatch === it.path;
         const hash = richVisualHash("html-file:" + it.path);
-        const chipsHere = idx === inlineHtmlItems.length - 1 ? extraChips : "";
-        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: it.name }))}"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}" aria-label="${esc(tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="${esc(tx("file.snapOpenNewWin", "在新窗口打开"))}" aria-label="${esc(tx("file.snapOpenNewWinName", "在新窗口打开 {name}", { name: it.name }))}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>${esc(tx("file.snapLoading", "加载预览中…"))}</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button></div>${chipsHere}</section>`;
+        const chipsHere = idx === htmlItems.length - 1 ? extraChips : "";
+        return `<section class="snap-card rv-card rv-html-card is-pending" data-rv-kind="html-file" data-rv-path="${esc(it.path)}" data-rv-hash="${hash}" aria-label="${esc(it.name)}"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("file.snapOpsAria", "{name} 操作", { name: it.name }))}"><button type="button" class="rv-ico" data-open-file="${esc(it.path)}" title="${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}" aria-label="${esc(tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}">${ICON_RV_DRAWER}</button><button type="button" class="rv-ico" data-rv-open-win="${esc(it.path)}" title="${esc(tx("file.snapOpenNewWin", "在新窗口打开"))}" aria-label="${esc(tx("file.snapOpenNewWinName", "在新窗口打开 {name}", { name: it.name }))}">${ICON_RV_NEWWIN}</button></div><div class="rv-html-stage" data-rv-stage><div class="rv-html-skeleton" aria-hidden="true"><span>${esc(tx("file.snapLoading", "加载预览中…"))}</span></div></div><div class="rv-html-foot"><button type="button" class="snap-head${act ? " is-active" : ""}" data-open-file="${esc(it.path)}" title="${esc(it.path)}" aria-label="${esc(act ? tx("file.snapPreviewing", "正在预览 {name}", { name: it.name }) : tx("file.snapOpenDrawerName", "在抽屉打开 {name}", { name: it.name }))}"><span class="rv-foot-name">${esc(it.name)}</span><span class="rv-foot-sep" aria-hidden="true">·</span><span class="rv-foot-act">${esc(tx("file.snapOpenDrawer", "在抽屉打开"))}</span><span class="snap-chev" aria-hidden="true">${act ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button></div>${chipsHere}</section>`;
       }).join("");
+    };
+    const inlineImgItems = items.filter((it) => it.isImg && it.explicit);
+    const inlineHtmlItems = items.filter((it) => it.isHtml && it.explicit).slice(0, MAX_INLINE_HTML_CARDS);
+    let html;
+    if (inlineImgItems.length > 0) {
+      const inlineSet = new Set([
+        ...inlineImgItems.map((it) => it.path),
+        ...inlineHtmlItems.map((it) => it.path),
+      ]);
+      const otherItems = items.filter((it) => !inlineSet.has(it.path));
+      const activeImgs = inlineImgItems.filter((it) => !failedFileGalleryImgs.has(it.path));
+      const failedImgs = inlineImgItems.filter((it) => failedFileGalleryImgs.has(it.path));
+      const fallbackHtml = failedImgs.length
+        ? `<div class="msg-files file-gallery-fallbacks">${failedImgs.map(renderChip).join("")}</div>`
+        : "";
+      const galleryHtml = activeImgs.length > 0
+        ? `<div class="file-gallery-wrap" data-file-gallery-wrap>${renderFileImageGallery(activeImgs)}${fallbackHtml}</div>`
+        : fallbackHtml;
+      let restHtml = "";
+      if (inlineHtmlItems.length > 0) {
+        restHtml = renderHtmlCards(inlineHtmlItems, otherItems);
+      } else if (otherItems.length > 0) {
+        restHtml = `<div class="msg-files">${otherItems.map(renderChip).join("")}</div>`;
+      }
+      html = galleryHtml + restHtml;
+    } else if (inlineHtmlItems.length > 0) {
+      const inlineSet = new Set(inlineHtmlItems.map((it) => it.path));
+      const rest = items.filter((it) => !inlineSet.has(it.path));
+      html = renderHtmlCards(inlineHtmlItems, rest);
     } else {
       const primary = items.find((x) => x.isHtml) || items.find((x) => x.isCsv) || items[0];
       if (!hasExplicit && items.length === 1 && !primary.isHtml && !primary.isCsv) {
@@ -4198,10 +4394,10 @@
         const metaTag = primary.isHtml ? tx("file.snapHtmlReport", "HTML 交互报告") : primary.isCsv ? tx("file.snapCsvData", "{ext} 表格数据", { ext: primary.ext.toUpperCase() }) : primary.ext.toUpperCase();
         const rest = items.filter((it) => it.path !== primary.path);
         const extraChips = rest.length ? `<div class="snap-files">${rest.map(renderChip).join("")}</div>` : "";
-        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primary.name }) : tx("file.snapPreview", "预览 {name}", { name: primary.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${chevSVG}</span></button>${extraChips}</section>`;
+        html = `<section class="snap-card" aria-label="${esc(primary.name)}"><button type="button" class="snap-head${primaryAct ? " is-active" : ""}" data-open-file="${esc(primary.path)}" title="${esc(primary.path)}" aria-label="${esc(primaryAct ? tx("file.snapPreviewing", "正在预览 {name}", { name: primary.name }) : tx("file.snapPreview", "预览 {name}", { name: primary.name }))}"><span class="snap-head-main"><span class="snap-ico" aria-hidden="true">${ICON_DOC_MINI}</span><span class="snap-titles"><span class="snap-title">${esc(primary.name)}</span><span class="snap-meta">${esc(metaTag)} · ${esc(primary.path)}</span></span></span><span class="snap-chev" aria-hidden="true">${primaryAct ? `<span class="snap-act-dot"></span>` : ""}${ARTIFACT_CHEV_SVG}</span></button>${extraChips}</section>`;
       }
     }
-    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, html });
+    _artifactRenderCache.set(e, { items, activeMatch, hasExplicit, failVer: failedFileGalleryVer, lang, html });
     return html;
   }
   function threadEntryPlainText(e) {
@@ -5499,7 +5695,7 @@
   const hasTopRightOverlay = () => !!(superSearchOpen || collieMenuOpen);
   function closeCollieMenus() {
     collieMenuOpen = false;
-    $$(".menu").forEach((m) => { m.hidden = true; });
+    $$(".menu").forEach((m) => { if (!m.hidden) m.hidden = true; });
   }
   function closeAllColliePopovers() {
     closeCollieMenus();
@@ -7125,7 +7321,7 @@
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>${esc(tx("collie.pinned", "已钉住"))}</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${renderCollieBody(e.text)}${artifactsHtml}${optsHtml}${inPlaceHtml}${renderFoot()}</div></div>`;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${renderCollieBody(e.text, e.files)}${artifactsHtml}${optsHtml}${inPlaceHtml}${renderFoot()}</div></div>`;
               },
             });
             sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
@@ -7521,6 +7717,28 @@
           collieResizeRestoreRAF = 0;
           restoreNow();
         });
+      }
+    };
+    syncCollieResizeBaseline = () => {
+      if (!sc) return;
+      if (collieResizeRestoreRAF && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(collieResizeRestoreRAF);
+        collieResizeRestoreRAF = 0;
+      }
+      const w = sc.clientWidth || 0;
+      const h = sc.clientHeight || 0;
+      if (w > 0 && h > 0) {
+        collieResizeW = w;
+        collieResizeH = h;
+      }
+      if (view === "collie" && h > 0) {
+        if (isCollieNearBottom(sc) && collieStickBottom) {
+          collieResizeWasBottom = true;
+          collieResizeAnchor = null;
+        } else {
+          collieResizeWasBottom = false;
+          collieResizeAnchor = captureCollieAnchor(sc);
+        }
       }
     };
     if (sc && typeof ResizeObserver === "function") {
@@ -8025,6 +8243,119 @@
       toggle.title = fallbackDesc;
       toggle.setAttribute("aria-description", fallbackDesc);
     }
+    syncQuotaContext();
+  }
+  function resolveActiveQuotaContext() {
+    const normKind = (k) => {
+      const s = String(k || "").trim().toLowerCase();
+      if (s === "antigravity") return "agy";
+      if (s === "cursor-agent") return "cursor";
+      if (s === "oh-my-pi") return "omp";
+      return s;
+    };
+    const cachedDefaultModel = (kind, machine = "") => {
+      if (!kind) return "";
+      const info = modelInfoResolved[kind + "@" + (machine || "")] || modelInfoResolved[kind + "@"];
+      return info?.default || "";
+    };
+    const warmDefaultModel = (kind, machine = "") => {
+      if (!kind || cachePreAuth) return;
+      const key = kind + "@" + (machine || "");
+      if (modelInfoResolved[key] || modelInfo[key]) return;
+      modelsFor(kind, machine || "").then(() => syncQuotaContext()).catch(() => {});
+    };
+
+    if (view === "pane" && current) {
+      const v = find(current);
+      if (v && v.is_agent) {
+        if (v.name === ROUTER) {
+          const kind = normKind(sup.router?.kind || v.kind);
+          let model = sup.router?.model || v.run?.[0] || "";
+          if (!model) {
+            model = cachedDefaultModel(kind, v.machine || "");
+            if (!model) warmDefaultModel(kind, v.machine || "");
+          }
+          return { kind, model, source: "router" };
+        }
+        const w = !v.run && isWorker(v.name) ? (sup.workers || []).find((x) => x.name === v.name && !x.ended) : null;
+        const run = v.run || w?.run;
+        const kind = normKind(v.run ? v.kind : (w?.kind || v.kind));
+        const machine = v.run ? (v.machine || "") : (w?.machine || "");
+        let model = run?.[0] || w?.model || "";
+        if (!model && !hubOf(v.pane_id)) {
+          model = cachedDefaultModel(kind, machine);
+          if (!model) warmDefaultModel(kind, machine);
+        }
+        return { kind, model, source: "pane" };
+      }
+    }
+
+    if (view === "ext" && extCur) {
+      if (extCur.startsWith("h:")) {
+        const hid = extCur.slice(2);
+        const h = (hist || []).find((x) => x.id === hid);
+        if (h?.kind) {
+          const kind = normKind(h.kind);
+          let model = h.model || "";
+          if (!model) {
+            model = cachedDefaultModel(kind, h.machine || "");
+            if (!model) warmDefaultModel(kind, h.machine || "");
+          }
+          return { kind, model, source: "history" };
+        }
+      } else {
+        const e = (ext || []).find((x) => x.id === extCur);
+        if (e?.kind) {
+          const kind = normKind(e.kind);
+          let model = e.model || "";
+          if (!model) {
+            model = cachedDefaultModel(kind, e.machine || "");
+            if (!model) warmDefaultModel(kind, e.machine || "");
+          }
+          return { kind, model, source: "external" };
+        }
+      }
+    }
+
+    if (view === "collie") {
+      const ov = targetOverrideFlags();
+      if (targetExpanded || ov.kindChanged || ov.modelChanged || ov.effortChanged) {
+        const kind = normKind(ov.t?.kind);
+        const machine = ov.t?.machine || "";
+        let model = ov.model || "";
+        if (!model) {
+          model = cachedDefaultModel(kind, machine);
+          if (!model) warmDefaultModel(kind, machine);
+        }
+        return { kind, model, source: "dispatch" };
+      }
+      if (activeWorkerKey) {
+        const { supW, liveAgent } = resolveWorkerContext();
+        if (liveAgent && liveAgent.is_agent) {
+          const run = liveAgent.run || supW?.run;
+          const kind = normKind(liveAgent.run ? liveAgent.kind : (supW?.kind || liveAgent.kind));
+          const machine = liveAgent.run ? (liveAgent.machine || "") : (supW?.machine || "");
+          let model = run?.[0] || supW?.model || "";
+          if (!model && !(liveAgent.pane_id && hubOf(liveAgent.pane_id))) {
+            model = cachedDefaultModel(kind, machine);
+            if (!model) warmDefaultModel(kind, machine);
+          }
+          return { kind, model, source: "worker" };
+        }
+      }
+    }
+
+    const r = sup.router || {};
+    const kind = normKind(r.kind);
+    let model = r.model || "";
+    if (!model && kind) {
+      model = cachedDefaultModel(kind, "");
+      if (!model) warmDefaultModel(kind, "");
+    }
+    return { kind, model, source: "router" };
+  }
+  function syncQuotaContext() {
+    try { window.__collieQuota?.onContextChange?.(); } catch {}
   }
   function resetTargetOverride() {
     target = null;
@@ -9691,7 +10022,7 @@
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button type="button" class="btn small" data-peer-open="friends">${esc(tx("peer.managePerms", "管理权限"))}</button>
-            <button type="button" class="btn primary small" data-peer-open="card">${esc(tx("peer.myCard", "我的名片"))}</button>
+            <button type="button" class="btn primary small" data-peer-open="card">${esc(tx("peer.myCard", "Collie 名片"))}</button>
           </div>
         </div>
         <ul class="peer-ov-list">${peerList.slice().sort((a, b) => (a.status === "pending_incoming" ? -1 : 0) - (b.status === "pending_incoming" ? -1 : 0)).map((p) => {
@@ -11420,11 +11751,11 @@
     return "";
   }
 
-  function peerShareText(inv, fallbackName = tx("peer.myCollie", "我的边牧")) {
+  function peerShareText(inv, fallbackName = tx("peer.myCollie", "我的 Collie")) {
     const joinUrl = peerInviteJoinURL(inv);
-    const name = inv?.hub_name || fallbackName || tx("peer.myCollie", "我的边牧");
+    const name = inv?.hub_name || fallbackName || tx("peer.myCollie", "我的 Collie");
     if (!joinUrl) return inv?.invite_code || "";
-    return tx("peer.shareText", "来和我的 Collie「{name}」成为好狗友，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
+    return tx("peer.shareText", "「{name}」邀请你成为好狗友，点击链接即可发起申请：\n{url}", { name, url: joinUrl });
   }
 
   function parsePeerInviteClient(raw, selfHubId = "") {
@@ -11469,7 +11800,7 @@
         }
       }
       if (selfHubId && obj.hub_id === selfHubId) {
-        return { error: tx("peer.parseErrSelf", "不能添加自己的边牧（Hub 标识与本机相同）") };
+        return { error: tx("peer.parseErrSelf", "不能添加自己的 Collie（Hub 标识与本机相同）") };
       }
       if (obj.exp && Number(obj.exp) > 0 && Date.now() / 1000 > Number(obj.exp)) {
         return { error: tx("peer.parseErrExpired", "该旧版限时邀请码已过期，请让对方分享新版长期有效名片") };
@@ -11756,7 +12087,7 @@
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !file) return;
     if (typeof window.BarcodeDetector !== "function") {
-      d.scanNote = tx("peer.imgNoDetector", "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或名片码。");
+      d.scanNote = tx("peer.imgNoDetector", "当前浏览器不支持本地二维码图像识别（BarcodeDetector），请直接复制并粘贴邀请链接或邀请码。");
       patchPeerScanPanel();
       $("#peer-paste-input")?.focus();
       return;
@@ -11771,7 +12102,7 @@
           .map((c) => extractPeerInviteCode(String(c?.rawValue || "").trim()))
           .find((v) => isCanonicalPeerInvite(v));
         if (!hit) {
-          d.scanNote = tx("peer.imgNoQr", "未在图片中识别到有效的 Collie 狗友名片二维码，请确认图片清晰或直接粘贴分享链接。");
+          d.scanNote = tx("peer.imgNoQr", "未在图片中识别到有效的 Collie 名片二维码，请确认图片清晰或直接粘贴分享链接。");
           patchPeerScanPanel();
           return;
         }
@@ -12146,7 +12477,7 @@
   function patchPeerQRCard() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), addrs: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的 Collie"), addrs: [] };
     const inv = d.invite;
     const plate = $("#peer-qr-plate");
     const qrTarget = peerInviteJoinURL(inv) || inv?.invite_code || "";
@@ -12157,7 +12488,7 @@
         plate.classList.toggle("is-pulse", !!d.inviteLoading);
         let imgEl = $("#peer-qr-img", plate);
         if (!imgEl) {
-          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="${esc(tx("peer.qrImgAlt", "狗友名片二维码"))}" src="${qrSrc}">`;
+          plate.innerHTML = `<img id="peer-qr-img" width="126" height="126" alt="${esc(tx("peer.qrImgAlt", "Collie 名片二维码"))}" src="${qrSrc}">`;
         } else if (imgEl.getAttribute("src") !== qrSrc) {
           imgEl.setAttribute("src", qrSrc);
         }
@@ -12172,7 +12503,7 @@
       }
     }
 
-    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || tx("peer.myCollie", "我的边牧");
+    const displayName = inv?.hub_name || data.hub_name || d.hubNameInput || tx("peer.myCollie", "我的 Collie");
     setText($("#peer-hub-name-text"), displayName);
     if (!d.editingHubName) {
       const inp = $("#peer-hub-name");
@@ -12320,7 +12651,7 @@
   function patchPeerHeaderAndList() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), enabled: true, addrs: [], peers: [], blocklist: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的 Collie"), enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
     const incoming = peers.filter((p) => p.status === "pending_incoming");
     const outgoing = peers.filter((p) => p.status === "pending_outgoing");
@@ -12361,7 +12692,7 @@
           <h3>${esc(tx("peer.emptyTitle", "还没有好狗友"))}</h3>
           <p>${esc(tx("peer.emptyDesc", "把你的名片分享给信任的伙伴，或粘贴对方发来的邀请链接。对方仅能向收件箱发消息，无法触碰你的终端与文件。"))}</p>
           <div class="pm-empty-acts">
-            <button type="button" class="btn primary sm" data-peer-jump-tab="card">${esc(tx("peer.emptyViewCard", "查看我的名片"))}</button>
+            <button type="button" class="btn primary sm" data-peer-jump-tab="card">${esc(tx("peer.emptyViewCard", "查看 Collie 名片"))}</button>
             <button type="button" class="btn sm" data-peer-jump-tab="add">${esc(tx("peer.emptyAdd", "添加狗友"))}</button>
           </div>
         </div>
@@ -12512,7 +12843,7 @@
   function renderPeerModal() {
     const d = intModalDraft;
     if (!d || intModalKind !== "peers" || !intModal) return;
-    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的边牧"), enabled: true, addrs: [], peers: [], blocklist: [] };
+    const data = d.data || { hub_id: "", hub_name: tx("peer.myCollie", "我的 Collie"), enabled: true, addrs: [], peers: [], blocklist: [] };
     const peers = Array.isArray(data.peers) ? data.peers : [];
     const pendingInCnt = peers.filter((x) => x.status === "pending_incoming").length;
 
@@ -12540,7 +12871,7 @@
             <span class="pm-tab-pending-pill" id="peer-tab-pending-badge" title="${esc(tx("peer.tabPendingTitle", "待审批申请"))}" ${pendingInCnt ? "" : "hidden"}>${pendingInCnt || ""}</span>
           </button>
           <button type="button" role="tab" id="peer-tab-card" data-peer-tab="card" aria-selected="${d.tab === "card"}" ${d.tab === "card" ? "focusgroupstart" : ""}>
-            <span>${esc(tx("peer.tabCard", "我的名片"))}</span>
+            <span>${esc(tx("peer.tabCard", "Collie 名片"))}</span>
           </button>
           <button type="button" role="tab" id="peer-tab-add" data-peer-tab="add" aria-selected="${d.tab === "add"}" ${d.tab === "add" ? "focusgroupstart" : ""}>
             <span>${esc(tx("peer.tabAdd", "添加狗友"))}</span>
@@ -12553,16 +12884,16 @@
         </div>
         <div class="pm-panel" id="peer-panel-card" role="tabpanel" aria-labelledby="peer-tab-card" ${d.tab === "card" ? "" : "hidden"}>
           <div class="pm-panel-pad">
-            <section class="pm-card-hero" aria-label="${esc(tx("peer.cardHeroAria", "我的边牧名片"))}">
-              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="${esc(tx("peer.qrPlateAria", "狗友名片二维码"))}"></div>
+            <section class="pm-card-hero" aria-label="${esc(tx("peer.cardHeroAria", "Collie 名片"))}">
+              <div class="pm-qr-plate" id="peer-qr-plate" aria-label="${esc(tx("peer.qrPlateAria", "Collie 名片二维码"))}"></div>
               <div class="pm-card-info">
                 <div class="pm-inline-name-row">
                   <button type="button" class="pm-inline-name-btn" id="peer-name-display-btn" title="${esc(tx("peer.editNameTitle", "点击修改名片昵称"))}">
-                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || tx("peer.myCollie", "我的边牧"))}</span>
+                    <span class="pm-inline-name-text" id="peer-hub-name-text">${esc(data.hub_name || tx("peer.myCollie", "我的 Collie"))}</span>
                     <svg class="pm-inline-name-pencil" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
                   </button>
                   <form class="pm-inline-name-editor" id="peer-name-editor-form" hidden>
-                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="${esc(tx("peer.nameInputAria", "名片昵称"))}" placeholder="${esc(tx("peer.nameInputPlaceholder", "输入边牧昵称"))}" value="${esc(d.hubNameInput)}">
+                    <input type="text" class="pm-inline-name-input" id="peer-hub-name" maxlength="40" aria-label="${esc(tx("peer.nameInputAria", "名片昵称"))}" placeholder="${esc(tx("peer.nameInputPlaceholder", "输入 Collie 昵称"))}" value="${esc(d.hubNameInput)}">
                     <button type="submit" class="icon-btn" id="peer-hub-name-save" aria-label="${esc(tx("peer.saveNameAria", "保存昵称"))}" title="${esc(tx("peer.saveNameTitle", "保存 (Enter)"))}">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
                     </button>
@@ -12601,7 +12932,7 @@
                   </div>
                 </div>
                 <div class="pm-adv-row">
-                  <span class="pm-adv-k">${esc(tx("peer.advCode", "名片码"))}</span>
+                  <span class="pm-adv-k">${esc(tx("peer.advCode", "邀请码"))}</span>
                   <div class="pm-adv-v">
                     <span class="pm-adv-code" id="peer-adv-code">-</span>
                     <button type="button" class="btn ghost xs" id="peer-adv-copy-code">${esc(tx("common.copy", "复制"))}</button>
@@ -12635,7 +12966,7 @@
             <div class="pm-add-block">
               <div id="peer-add-input-wrap">
                 <div class="pm-field-head">
-                  <label class="pm-field-label" for="peer-paste-input">${esc(tx("peer.addInputLabel", "邀请链接或名片码"))}</label>
+                  <label class="pm-field-label" for="peer-paste-input">${esc(tx("peer.addInputLabel", "邀请链接或邀请码"))}</label>
                   <div class="pm-scan-inline">
                     <button type="button" class="pm-scan-link" id="peer-scan-toggle">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></svg>
@@ -12652,7 +12983,7 @@
                 <div id="peer-scan-stage-slot" hidden></div>
                 <div class="pm-scan-note" id="peer-scan-note-slot" role="status" hidden></div>
                 <div class="pm-paste-box">
-                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="${esc(tx("peer.addPlaceholder", "粘贴狗友分享的邀请链接、整段文案或名片码"))}">${esc(d.pasteRaw)}</textarea>
+                  <textarea id="peer-paste-input" class="pm-paste-area" rows="2" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="${esc(tx("peer.addPlaceholder", "粘贴狗友分享的邀请链接、整段文案或邀请码"))}">${esc(d.pasteRaw)}</textarea>
                   <button type="button" class="pm-paste-btn" id="peer-paste-btn" title="${esc(tx("peer.pasteTitle", "从剪贴板粘贴邀请码"))}">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>
                     <span>${esc(tx("peer.pasteBtn", "粘贴"))}</span>
@@ -12669,7 +13000,7 @@
                     <label class="pm-setting-label" for="peer-pair-name">${esc(tx("peer.aliasLabel", "备注名"))}</label>
                     <div class="pm-setting-sub">${esc(tx("peer.aliasSub", "可选，留空自动使用对方昵称"))}</div>
                   </div>
-                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="${esc(tx("peer.aliasPlaceholder", "例如：周远的边牧"))}">
+                  <input type="text" id="peer-pair-name" class="pm-compact-input" maxlength="40" value="${esc(d.pairName)}" placeholder="${esc(tx("peer.aliasPlaceholder", "例如：周远的 Collie"))}">
                 </div>
                 <div class="pm-setting-row last">
                   <div class="pm-setting-copy">
@@ -12811,10 +13142,10 @@
     // Primary CTA: copy invite link
     $("#peer-copy-invite")?.addEventListener("click", async () => {
       if (!d.invite?.invite_code) return;
-      const share = peerShareText(d.invite, d.data?.hub_name || tx("peer.myCollie", "我的边牧"));
+      const share = peerShareText(d.invite, d.data?.hub_name || tx("peer.myCollie", "我的 Collie"));
       const ok = await copyText(share);
       if (!ok) {
-        toast(tx("peer.copyInviteFail", "复制失败，请展开下方高级详情手动复制名片码"), "attn");
+        toast(tx("peer.copyInviteFail", "复制失败，请展开下方高级详情手动复制邀请码"), "attn");
         return;
       }
       toast(tx("peer.copyInviteOk", "已复制邀请链接，发给狗友即可申请"));
@@ -12842,7 +13173,7 @@
     $("#peer-adv-copy-code")?.addEventListener("click", async () => {
       if (!d.invite?.invite_code) return;
       const ok = await copyText(d.invite.invite_code);
-      toast(ok ? tx("peer.copiedCode", "已复制名片码") : tx("common.copyFailed", "复制失败"), ok ? undefined : "attn");
+      toast(ok ? tx("peer.copiedCode", "已复制邀请码") : tx("common.copyFailed", "复制失败"), ok ? undefined : "attn");
     });
     $("#peer-reset-ask")?.addEventListener("click", () => {
       d.resetConfirm = true;
@@ -12927,7 +13258,7 @@
         if (!intModal?.open || intModalKind !== "peers" || intModalDraft !== d) return;
         const text = String(raw || "").trim();
         if (!text) {
-          focusFallback(tx("peer.pasteEmptyNote", "剪贴板为空，请先复制狗友的邀请链接或名片码"), tx("peer.pasteEmptyToast", "剪贴板为空，请先复制邀请码"));
+          focusFallback(tx("peer.pasteEmptyNote", "剪贴板为空，请先复制狗友的邀请链接或邀请码"), tx("peer.pasteEmptyToast", "剪贴板为空，请先复制邀请码"));
           return;
         }
         const parsed = applyPeerPasteRaw(text);
@@ -15945,6 +16276,7 @@
   }
   function renderExtHead(gone) {
     extWorking(gone);
+    syncQuotaContext();
     if (extCur?.startsWith("h:")) return renderHistHead(extCur.slice(2));
     $("#x-tag").textContent = tx("ext.readonly", "只读");
     $("#x-forget").hidden = true;
@@ -17013,6 +17345,7 @@
     // terminal): once it does, switch to the view that fits.
     if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); resetScreen(); openStream(); }
     $("#input").placeholder = v.name === ROUTER ? tx("detail.inputRouterPh", "直接在 Collie 的终端里输入…") : v.is_agent ? tx("detail.inputKindPh", "给 {kind} 发消息…", { kind: KIND_LABEL[v.kind] || v.kind }) : tx("detail.inputShellPh", "输入命令…");
+    syncQuotaContext();
   }
 
   // What model an agent was started with, recorded when Collie (the launcher
@@ -17043,6 +17376,7 @@
     el.textContent = parts.join(" · ");
     el.title = tx("detail.launchModelTitle", "启动时用的模型：{model}{effort}（之后在 agent 里换过的话这里不会变）", { model: model || tx("collie.agentOwnSettingShort", "agent 自己的设置"), effort: effort ? tx("collie.effortComma", "，思考强度 {effort}", { effort }) : "" });
     el.hidden = false;
+    syncQuotaContext();
   }
 
   // ───────────────────────────── one agent: streams
@@ -17786,6 +18120,20 @@
       if (!msg) return;
       const expanded = msg.classList.toggle("is-expanded");
       btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+      clearTimeout(msg._ptAnimTimer);
+      msg._ptAnimTimer = 0;
+      if (expanded) {
+        const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!reduced) {
+          msg.classList.add("is-just-expanded");
+          msg._ptAnimTimer = setTimeout(() => {
+            msg._ptAnimTimer = 0;
+            msg.classList.remove("is-just-expanded");
+          }, 200);
+        }
+      } else {
+        msg.classList.remove("is-just-expanded");
+      }
       const key = msg.dataset?.promptKey;
       if (threadEl && key) {
         if (!threadEl._expandedPromptKeys) threadEl._expandedPromptKeys = new Set();
@@ -18120,94 +18468,184 @@
     }
   }
 
-  function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。")) {
-    const rest = el._restore;
-    // Just opened: start at the latest message, unless restoring a scroll position.
-    const was = rest ? !!rest.atBottom : (el._fresh || nearBottom(el) || !el.childElementCount);
-    if (msgs.length) el._fresh = false;
-    const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
-    if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._blocks = null; return; }
-    const blocks = [];
-    let html = "", i = 0, seenUser = false;
-    const fullTask = el.id === "wd-thread"
-      ? (resolveWorkerContext().supW?.task || "")
-      : (el.id === "thread" && current ? (getWorkerLookup().byPane.get(current)?.task || "") : "");
-    const cut = () => { blocks.push(html); html = ""; };
+  function workerMsgsRawSig(msgs, earlier = 0) {
+    try { return `${earlier}|${JSON.stringify(msgs || [])}`; } catch { return ""; }
+  }
+  function bindLazyToolRuns(el) {
+    if (!el || el._lazyRunBound || typeof el.addEventListener !== "function") return;
+    el._lazyRunBound = true;
+    el.addEventListener("toggle", (ev) => {
+      const det = ev.target;
+      if (!det || !det.open || !det.classList?.contains?.("toolrun")) return;
+      const body = det.querySelector?.(".toolrun-body[data-lazy-run]");
+      const k = body?.dataset?.lazyRun;
+      if (!k) return;
+      const rec = el._lazyRuns?.get?.(k);
+      if (!rec) return;
+      delete body.dataset.lazyRun;
+      const emptyOpen = new Set();
+      body.innerHTML = rec.items.map((t, idx) => renderToolItem(t, rec.start + idx, emptyOpen)).join("");
+    }, true);
+  }
+  function groupThreadMsgs(msgs) {
+    const groups = [];
+    let i = 0, seenUser = false;
     while (i < msgs.length) {
       const m = msgs[i];
       if (m.kind === "tool") {
-        // A run of tool calls reads as one quiet line; long runs fold away,
-        // keeping only the latest step in view.
         const start = i;
         while (i < msgs.length && msgs[i].kind === "tool") i++;
-        const run = msgs.slice(start, i);
-        const row = (t, k) => renderToolItem(t, k, open);
-        if (run.length <= 3 || !prefs.fold()) {
-          html += `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
-          cut();
-          continue;
-        }
-        const key = "run" + start;
-        const names = [...new Set(run.map((t) => (t.subagent?.type || t.subagent?.role || t.name)))].slice(0, 4).join("、");
-        const errs = run.filter((t) => t.error).length;
-        html += `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>
-          <summary><span class="n">${esc(tx("detail.stepsCount", "{n} 个步骤", { n: run.length }))}</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${esc(tx("detail.stepsErrors", "{n} 个出错", { n: errs }))}</b>` : ""}</span></summary>
-          <div class="toolrun-body">${run.slice(0, -1).map((t, k) => row(t, start + k)).join("")}</div>
-        </details>${row(run[run.length - 1], i - 1)}</div>`;
-        cut();
+        groups.push({ kind: "tools", start, end: i });
         continue;
       }
-      if (m.kind === "ask" && m.name === "recap") {
-        html += `<div class="recap-note">${esc(m.input)}</div>`;
-        cut();
-        i++;
-        continue;
-      }
-      if (m.kind === "ask") {
-        // A question to you: AskUserQuestion is answered in the app it runs
-        // in; the Claude app's end-of-turn buttons just send their label.
-        const later = msgs.slice(i + 1).some((x) => x.kind === "user");
-        const box = m.name === "wrap_up";
-        const open = box ? !later : !m.output;
-        const opts = (m.options || []).map((o) => box && open
-          ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
-          : `<span class="opt">${esc(o)}</span>`).join("");
-        html += `<div class="ask-card ${open ? "open" : ""}">`
-          + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
-          + `<div class="q"><span class="dot ${open ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
-          + (opts ? `<div class="opts">${opts}</div>` : "")
-          + (m.output ? `<div class="answer">${esc(m.output)}</div>`
-            : open && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
-              ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">${esc(tx("ext.answerInClaude", "去 Claude 桌面版回答"))}</button><span>${esc(tx("ext.onlyDesktopDialog", "这个对话框只能在电脑上答"))}</span></div>`
-      : (el.id === "thread" || el.id === "wd-thread") ? "" : `<div class="where">${esc(tx("ext.answerOnComputer", "在电脑上的会话里回答"))}</div>`) : "")
-          + `</div>`;
-        cut();
-        i++;
-        continue;
-      }
-      if (m.kind === "user") {
-        const isFirstUser = !seenUser;
-        seenUser = true;
-        const parts = parseUserParts(m.text);
-        const mediaHtml = renderUserMedia(parts.imgs);
-        const bubbleHtml = renderWorkerUserBubble(parts, el, i, isFirstUser, fullTask);
-        if (mediaHtml && !parts.hasBubbleContent) {
-          html += `<div class="msg user is-media-only">${mediaHtml}</div>`;
-        } else if (mediaHtml) {
-          html += `<div class="mine-group">${mediaHtml}${bubbleHtml}</div>`;
-        } else {
-          html += bubbleHtml;
-        }
-      } else {
-        html += `<div class="msg assistant">${md(m.text)}</div>`;
-      }
-      cut();
+      const isFirstUser = m.kind === "user" && !seenUser;
+      if (m.kind === "user") seenUser = true;
+      groups.push({ kind: m.kind, index: i, isFirstUser });
       i++;
     }
+    return groups;
+  }
+  function renderThreadGroup(g, msgs, el, open, fullTask, lazyRuns) {
+    if (g.kind === "tools") {
+      const start = g.start;
+      const run = msgs.slice(start, g.end);
+      const row = (t, k) => renderToolItem(t, k, open);
+      if (run.length <= 3 || !prefs.fold()) {
+        return `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
+      }
+      const key = "run" + start;
+      const isOpen = open.has(key);
+      const prevItems = run.slice(0, -1);
+      const names = [...new Set(run.map((t) => (t.subagent?.type || t.subagent?.role || t.name)))].slice(0, 4).join("、");
+      const errs = run.filter((t) => t.error).length;
+      if (!isOpen) lazyRuns.set(key, { start, items: prevItems });
+      const bodyInner = isOpen ? prevItems.map((t, k) => row(t, start + k)).join("") : "";
+      return `<div class="tools"><details class="toolrun" data-i="${key}"${isOpen ? " open" : ""}>
+          <summary><span class="n">${esc(tx("detail.stepsCount", "{n} 个步骤", { n: run.length }))}</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${esc(tx("detail.stepsErrors", "{n} 个出错", { n: errs }))}</b>` : ""}</span></summary>
+          <div class="toolrun-body"${!isOpen ? ` data-lazy-run="${key}"` : ""}>${bodyInner}</div>
+        </details>${row(run[run.length - 1], g.end - 1)}</div>`;
+    }
+    const i = g.index;
+    const m = msgs[i];
+    if (m.kind === "ask" && m.name === "recap") {
+      return `<div class="recap-note">${esc(m.input)}</div>`;
+    }
+    if (m.kind === "ask") {
+      // A question to you: AskUserQuestion is answered in the app it runs
+      // in; the Claude app's end-of-turn buttons just send their label.
+      const later = msgs.slice(i + 1).some((x) => x.kind === "user");
+      const box = m.name === "wrap_up";
+      const isAskOpen = box ? !later : !m.output;
+      const opts = (m.options || []).map((o) => box && isAskOpen
+        ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
+        : `<span class="opt">${esc(o)}</span>`).join("");
+      return `<div class="ask-card ${isAskOpen ? "open" : ""}">`
+        + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
+        + `<div class="q"><span class="dot ${isAskOpen ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
+        + (opts ? `<div class="opts">${opts}</div>` : "")
+        + (m.output ? `<div class="answer">${esc(m.output)}</div>`
+          : isAskOpen && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
+            ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">${esc(tx("ext.answerInClaude", "去 Claude 桌面版回答"))}</button><span>${esc(tx("ext.onlyDesktopDialog", "这个对话框只能在电脑上答"))}</span></div>`
+    : (el.id === "thread" || el.id === "wd-thread") ? "" : `<div class="where">${esc(tx("ext.answerOnComputer", "在电脑上的会话里回答"))}</div>`) : "")
+        + `</div>`;
+    }
+    if (m.kind === "user") {
+      const parts = parseUserParts(m.text);
+      const mediaHtml = renderUserMedia(parts.imgs);
+      const bubbleHtml = renderWorkerUserBubble(parts, el, i, g.isFirstUser, fullTask);
+      if (mediaHtml && !parts.hasBubbleContent) {
+        return `<div class="msg user is-media-only">${mediaHtml}</div>`;
+      }
+      if (mediaHtml) {
+        return `<div class="mine-group">${mediaHtml}${bubbleHtml}</div>`;
+      }
+      return bubbleHtml;
+    }
+    return `<div class="msg assistant">${md(m.text)}</div>`;
+  }
+
+  function drawThread(msgs, el = $("#thread"), empty = tx("detail.emptyThread", "还没有对话。发一条消息开始吧。"), drawOpts = null) {
+    clearTimeout(el._chunkTimer);
+    el._chunkTimer = 0;
+    const rest = el._restore;
+    // Just opened: start at the latest message, unless restoring a scroll position.
+    const was = rest ? !!rest.atBottom : (el._fresh || !el.childElementCount || nearBottom(el));
+    if (msgs.length) el._fresh = false;
+    const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
+    if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._rawMsgsSig = ""; el._blocks = null; el._lazyRuns = null; return; }
+    const fullTask = el.id === "wd-thread"
+      ? (resolveWorkerContext().supW?.task || "")
+      : (el.id === "thread" && current ? (getWorkerLookup().byPane.get(current)?.task || "") : "");
+    const groups = groupThreadMsgs(msgs);
+    const lazyRuns = new Map();
+    el._lazyRuns = lazyRuns;
+    bindLazyToolRuns(el);
+
+    const useProgressive = !!(drawOpts?.progressive && groups.length > 2 && (!rest || rest.atBottom) && typeof el.insertAdjacentHTML === "function");
+    if (useProgressive) {
+      // True lazy tail-first chunked mount on mobile cold Worker Drawer open:
+      // only run md() on the 2 groups being mounted in each batch so neither frame 0 nor post-slide chunks spike.
+      const blocks = new Array(groups.length);
+      const tailStart = Math.max(0, groups.length - 2);
+      for (let gi = tailStart; gi < groups.length; gi++) {
+        blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
+      }
+      el.innerHTML = blocks.slice(tailStart).join("");
+      syncExpandedPrompts(el);
+      hydrateRichContent(el);
+      stick(el, true);
+      let curStart = tailStart;
+      const finishAll = () => {
+        if (el._loadingEarlier) {
+          const rowHtml = `<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`;
+          blocks.unshift(rowHtml);
+          el.insertAdjacentHTML("afterbegin", rowHtml);
+        }
+        el._sig = blocks.join("");
+        el._blocks = blocks;
+        el._last = el.lastElementChild;
+        if (drawOpts?.cacheKey) el._renderedCacheKey = drawOpts.cacheKey;
+        if (drawOpts?.rawSig) el._rawMsgsSig = drawOpts.rawSig;
+        syncExpandedPrompts(el);
+        hydrateRichContent(el);
+        if (el._earlierURL && !el._loadingEarlier && !el._earlierFailed && earlierCursor(el) > 0) {
+          const s = scroller(el);
+          if (s.scrollHeight <= s.clientHeight + 100) setTimeout(() => loadEarlier(el));
+        }
+      };
+      const prependNext = () => {
+        el._chunkTimer = 0;
+        if (drawOpts?.isAlive && !drawOpts.isAlive()) return;
+        const nextStart = Math.max(0, curStart - 2);
+        for (let gi = nextStart; gi < curStart; gi++) {
+          blocks[gi] = renderThreadGroup(groups[gi], msgs, el, open, fullTask, lazyRuns);
+        }
+        const chunkHtml = blocks.slice(nextStart, curStart).join("");
+        const scEl = scroller(el);
+        const anchor = el.firstElementChild;
+        const anchorTop = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
+        el.insertAdjacentHTML("afterbegin", chunkHtml);
+        if (anchor && anchorTop !== null && anchor.isConnected && scEl && typeof anchor.getBoundingClientRect === "function") {
+          const delta = anchor.getBoundingClientRect().top - anchorTop;
+          if (Math.abs(delta) > 0.5) scEl.scrollTop += delta;
+        }
+        curStart = nextStart;
+        if (curStart > 0) {
+          el._chunkTimer = setTimeout(prependNext, 32);
+        } else {
+          finishAll();
+        }
+      };
+      el._chunkTimer = setTimeout(prependNext, 32);
+      return;
+    }
+
+    const blocks = groups.map((g) => renderThreadGroup(g, msgs, el, open, fullTask, lazyRuns));
     if (el._loadingEarlier) blocks.unshift(`<div class="earlier-row">${esc(tx("common.loading", "加载中…"))}</div>`);
     const sig = blocks.join("");
     if (sig === el._sig) return;
     el._sig = sig;
+    if (drawOpts?.rawSig) el._rawMsgsSig = drawOpts.rawSig;
     const old = el._blocks;
     if (old && el.children.length === old.length && el.lastElementChild === el._last) {
       // Keep what did not change (and its open/closed state); redraw from
@@ -18733,11 +19171,14 @@
     }
     return `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}&as=html`;
   };
-  const fileLinkAttrs = (rawPath, escapedPath, titleText) => HTML_EXT.test(rawPath)
-    ? `class="fpath html-link" href="${esc(htmlFileURL(rawPath))}" data-path="${escapedPath}" title="${esc(tx("file.previewHtmlTip", "预览 HTML：{path}", { path: rawPath }))}"`
-    : IMG_EXT.test(rawPath)
-    ? `class="fpath img-link" href="#" data-path="${escapedPath}" title="${esc(tx("file.viewImgTip", "查看大图 {name}", { name: rawPath.split("/").pop() || rawPath }))}"`
-    : `class="fpath" href="#" data-path="${escapedPath}" title="${titleText}"`;
+  const fileLinkAttrs = (rawPath, escapedPath, titleText, extraCls = "") => {
+    const ext = extraCls ? ` ${extraCls}` : "";
+    return HTML_EXT.test(rawPath)
+      ? `class="fpath html-link${ext}" href="${esc(htmlFileURL(rawPath))}" data-path="${escapedPath}" title="${esc(tx("file.previewHtmlTip", "预览 HTML：{path}", { path: rawPath }))}"`
+      : IMG_EXT.test(rawPath)
+      ? `class="fpath img-link${ext}" href="#" data-path="${escapedPath}" title="${esc(tx("file.viewImgTip", "查看大图 {name}", { name: rawPath.split("/").pop() || rawPath }))}"`
+      : `class="fpath${ext}" href="#" data-path="${escapedPath}" title="${titleText}"`;
+  };
   // Strict RFC 4180 parser for CSV / TSV: handles quoted commas/tabs, escaped "" quotes,
   // and embedded CR/LF newlines inside quoted fields, with a row cap for huge files.
   function parseDelimitedTable(rawText, delimiter = ",", maxRows = CSV_MAX_PARSE_ROWS) {
@@ -19091,8 +19532,12 @@
       body.classList.add("is-html");
       body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(baseFileName(hf.path))}"></iframe>`;
       const frame = body.querySelector("iframe");
-      if (frame) frame.srcdoc = hf.htmlText;
-      if (view === "collie") renderSuper();
+      if (frame) {
+        const t = currentVisualTheme();
+        if (frame.style) frame.style.colorScheme = t;
+        frame.srcdoc = buildSandboxedCardSrcdoc(hf.htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+      }
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), hf.path || path);
       return;
     }
     let f = null;
@@ -19135,7 +19580,7 @@
       fvCur.csvParsed = null;
       syncFileBar("fv", { langLabel: isTsv ? "TSV" : "CSV", modeSeg: true, activeMode: "table", copyable: true, copyTitle: tx("file.copyFullRaw", "复制完整原文"), downloadable: canDl, wideHref: wHref });
       renderDelimitedStage("fv", fvCur, body, cut);
-      if (view === "collie") renderSuper();
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), f.path || path);
       return;
     }
     if (MD_EXT.test(path)) {
@@ -19143,13 +19588,13 @@
       body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${md(text)}</div>${cut}`;
       hydrateRichContent(body);
       body.scrollTop = body.scrollLeft = 0;
-      if (view === "collie") renderSuper();
+      if (view === "collie") syncActiveFileMarks($("#super-thread"), f.path || path);
       return;
     }
     const lang = renderCodeBody(body, path, text, cut, "fv-code-src", false);
     syncFileBar("fv", { langLabel: lang ? lang.label : "", copyable: true, copyTitle: tx("file.copyAll", "复制全文"), downloadable: canDl, wideHref: wHref });
     body.scrollTop = body.scrollLeft = 0;
-    if (view === "collie") renderSuper();
+    if (view === "collie") syncActiveFileMarks($("#super-thread"), f.path || path);
   }
   async function openWideFile(rawQuery, restore = null) {
     const q = new URLSearchParams(String(rawQuery || "").replace(/^\?/, ""));
@@ -19187,7 +19632,11 @@
       body.classList.add("is-html");
       body.innerHTML = `<iframe class="fv-html-sandbox" style="min-height:calc(var(--vh) - 120px);border:1px solid var(--line);border-radius:12px;" sandbox="${HTML_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${esc(name)}"></iframe>`;
       const frame = body.querySelector("iframe");
-      if (frame) frame.srcdoc = hf.htmlText;
+      if (frame) {
+        const t = currentVisualTheme();
+        if (frame.style) frame.style.colorScheme = t;
+        frame.srcdoc = buildSandboxedCardSrcdoc(hf.htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+      }
       return;
     }
     let f = null;
@@ -19470,6 +19919,7 @@
       const u = URL.createObjectURL(new Blob([f.blob], { type: imgMime(p) }));
       thumbs.delete(p);
       thumbs.set(p, u);
+      clearFileGalleryImgFailed(p);
       thumbMeta.set(p, { size: f.size, machine: f.machine, path: f.path });
       invalidateMdCacheForImage(p);
       for (const el of document.querySelectorAll(".thumb[data-img] img")) {
@@ -19479,7 +19929,23 @@
         }
       }
       evictThumbsLRU();
-    } catch { thumbs.delete(p); img.classList?.remove("is-img-loading"); img.parentElement?.classList?.add("broken"); if (collieInitialAnchor) applyInitialAnchor(); }
+    } catch {
+      thumbs.delete(p);
+      const affected = new Set();
+      if (img.parentElement) affected.add(img.parentElement);
+      if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+        for (const el of document.querySelectorAll(".thumb[data-img]")) {
+          if (el.dataset?.img === p) affected.add(el);
+        }
+      }
+      for (const btn of affected) {
+        const innerImg = btn.querySelector?.("img");
+        innerImg?.classList?.remove("is-img-loading");
+        if (btn.classList?.contains("file-gal-tile")) degradeFileGalleryTile(btn);
+        else btn.classList?.add("broken");
+      }
+      if (collieInitialAnchor) applyInitialAnchor();
+    }
   }
   // Under each Collie message, on hover (and persistently when clapped): clap (monochrome fine-line thumbs-up SVG, zero emoji), copy, quote, focus-thread (when no inline capsule), pin, and when it was said.
   const ICON_CLAP = `<svg class="clap-ico" viewBox="0 0 24 24" aria-hidden="true"><path class="clap-body" d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/><path class="clap-seam" d="M7 10v12"/></svg>`;
@@ -19841,8 +20307,26 @@
   }, true);
   document.addEventListener("error", (e) => {
     const img = e.target;
-    if (img?.tagName !== "IMG" || !img.classList?.contains("is-img-loading")) return;
-    img.classList.remove("is-img-loading");
+    if (img?.tagName !== "IMG") return;
+    if (img.classList?.contains("is-img-loading")) img.classList.remove("is-img-loading");
+    const btn = img.parentElement;
+    if (btn?.classList?.contains("file-gal-tile")) {
+      const p = btn.dataset?.img || "";
+      const badSrc = img.getAttribute?.("src") || "";
+      if (p && badSrc && thumbs.get(p) === badSrc) {
+        thumbs.delete(p);
+        decodedThumbs.delete(p);
+        try { URL.revokeObjectURL(badSrc); } catch {}
+      }
+      const affected = new Set([btn]);
+      if (p && typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+        for (const el of document.querySelectorAll(".file-gal-tile[data-img]")) {
+          if (el.dataset?.img === p) affected.add(el);
+        }
+      }
+      for (const tile of affected) degradeFileGalleryTile(tile);
+      if (collieInitialAnchor) applyInitialAnchor();
+    }
   }, true);
 
   // ───────────────────────────── rich rendering transient UI state & interactions
@@ -19896,6 +20380,20 @@
     const remain = Math.max(0, total - head);
     block.classList?.toggle("is-collapsed", !expanded);
     btn?.setAttribute?.("aria-expanded", String(!!expanded));
+    clearTimeout(block._foldAnimTimer);
+    block._foldAnimTimer = 0;
+    if (persist && expanded) {
+      const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduced) {
+        block.classList?.add("is-just-expanded");
+        block._foldAnimTimer = setTimeout(() => {
+          block._foldAnimTimer = 0;
+          block.classList?.remove("is-just-expanded");
+        }, 180);
+      }
+    } else {
+      block.classList?.remove("is-just-expanded");
+    }
     if (tail) {
       if (expanded) {
         tail.removeAttribute?.("hidden");
@@ -19941,10 +20439,13 @@
       btn.textContent = doneLabel;
     }
     btn.classList?.add("is-done");
+    const copyHost = btn.closest?.(".md-code, .md-table-card");
+    copyHost?.classList?.add("is-copy-done");
     btn._doneTimer = setTimeout(() => {
       if (lbl) lbl.textContent = btn._origLabel ?? "";
       else btn.textContent = btn._origLabel ?? "";
       btn.classList?.remove("is-done");
+      copyHost?.classList?.remove("is-copy-done");
     }, 1500);
   }
   function extractTableRows(table) {
@@ -19963,52 +20464,112 @@
     });
     return { rows, aligns };
   }
-  function syncTableCard(card) {
-    if (!card) return;
-    const vp = card.querySelector?.("[data-table-vp]");
-    const sc = card.querySelector?.(".md-table");
-    if (!vp || !sc) return;
-    const maxScroll = (sc.scrollWidth || 0) - (sc.clientWidth || 0);
-    const scrollable = maxScroll > 2;
-    vp.classList?.toggle("is-scrollable", scrollable);
-    if (scrollable) {
-      const firstCell = sc.querySelector?.("thead th:first-child, tbody th:first-child");
-      const colW = firstCell?.offsetWidth || 0;
-      if (colW > 0) vp.style?.setProperty?.("--sticky-col-w", colW + "px");
-    } else {
-      vp.style?.removeProperty?.("--sticky-col-w");
+  function isMobileWrappedTable(card) {
+    if (typeof innerWidth !== "number" || innerWidth > 760) return false;
+    const cols = Number(card?.getAttribute?.("data-cols") || card?.dataset?.cols || 0);
+    return cols >= 1 && cols <= 3;
+  }
+  function isMobileWrappedCode() {
+    return typeof innerWidth === "number" && innerWidth <= 760;
+  }
+  function syncTablesBatch(cards) {
+    if (!cards || !cards.length) return;
+    // Strict 2-phase read-then-write prevents O(N) forced synchronous layout thrashing.
+    const measured = [];
+    for (const card of cards) {
+      if (!card || card.isConnected === false) continue;
+      const vp = card.querySelector?.("[data-table-vp]");
+      const sc = card.querySelector?.(".md-table");
+      if (!vp || !sc) continue;
+      if (isMobileWrappedTable(card)) {
+        measured.push({ vp, scrollable: false, canL: false, canR: false, colW: 0 });
+        continue;
+      }
+      const sw = sc.scrollWidth || 0;
+      const cw = sc.clientWidth || 0;
+      const sl = sc.scrollLeft || 0;
+      const maxScroll = sw - cw;
+      const scrollable = maxScroll > 2;
+      let colW = 0;
+      if (scrollable) {
+        const firstCell = sc.querySelector?.("thead th:first-child, tbody th:first-child");
+        colW = firstCell?.offsetWidth || 0;
+      }
+      measured.push({ vp, scrollable, canL: scrollable && sl > 4, canR: scrollable && sl < maxScroll - 4, colW });
     }
-    vp.classList?.toggle("can-scroll-l", scrollable && (sc.scrollLeft || 0) > 4);
-    vp.classList?.toggle("can-scroll-r", scrollable && (sc.scrollLeft || 0) < maxScroll - 4);
+    for (const m of measured) {
+      m.vp.classList?.toggle("is-scrollable", m.scrollable);
+      if (m.scrollable && m.colW > 0) {
+        m.vp.style?.setProperty?.("--sticky-col-w", m.colW + "px");
+      } else if (!m.scrollable) {
+        m.vp.style?.removeProperty?.("--sticky-col-w");
+      }
+      m.vp.classList?.toggle("can-scroll-l", m.canL);
+      m.vp.classList?.toggle("can-scroll-r", m.canR);
+    }
+  }
+  function syncTableCard(card) {
+    if (card) syncTablesBatch([card]);
   }
   const boundTableScrolls = new WeakSet();
   let tableRO = null;
+  let _tablePending = new Set();
+  let _tableBatchRAF = 0;
+  function scheduleTableSync(cards) {
+    if (!cards || !cards.length) return;
+    for (const c of cards) if (c) _tablePending.add(c);
+    if (isLayoutGliding()) return;
+    if (_tableBatchRAF) return;
+    const flush = () => {
+      _tableBatchRAF = 0;
+      if (isLayoutGliding()) return;
+      const batch = [..._tablePending];
+      _tablePending.clear();
+      syncTablesBatch(batch);
+    };
+    if (typeof requestAnimationFrame === "function") {
+      _tableBatchRAF = requestAnimationFrame(flush);
+    } else {
+      flush();
+    }
+  }
   function observeTableResize(sc) {
     if (!sc || typeof ResizeObserver !== "function") return;
     if (!tableRO) {
       tableRO = new ResizeObserver((entries) => {
+        const cards = [];
         for (const entry of entries) {
-          const card = entry.target?.closest?.("[data-table-card]");
-          if (card) syncTableCard(card);
+          const el = entry.target;
+          const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
+          if (w <= 0) { el._roLastW = 0; continue; }
+          if (el._roLastW === w) continue;
+          el._roLastW = w;
+          const card = el.closest?.("[data-table-card]");
+          if (card) cards.push(card);
         }
+        if (cards.length) scheduleTableSync(cards);
       });
     }
     try { tableRO.observe(sc); } catch {}
   }
   function hydrateTables(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
-    const cards = root.querySelectorAll("[data-table-card]");
+    const cards = [...root.querySelectorAll("[data-table-card]")];
+    if (!cards.length) return;
+    const toSync = [];
     for (const card of cards) {
       const sc = card.querySelector?.(".md-table");
       if (!sc) continue;
       if (!boundTableScrolls.has(sc)) {
         boundTableScrolls.add(sc);
         sc.addEventListener?.("scroll", () => {
+          const vp = card.querySelector?.("[data-table-vp]");
+          vp?.classList?.add("is-scroll-ready");
           syncTableCard(card);
           const k = getRichBlockKey(card, "table", "[data-table-card]");
           if (k) setRichUiState(k, sc.scrollLeft || 0);
         }, { passive: true });
-        observeTableResize(sc);
+        if (!isMobileWrappedTable(card)) observeTableResize(sc);
       }
       if (!card._richHydrated) {
         card._richHydrated = true;
@@ -20016,43 +20577,92 @@
         const saved = k ? richUiState.get(k) : 0;
         if (typeof saved === "number" && saved > 0) sc.scrollLeft = saved;
       }
-      syncTableCard(card);
+      if (!isMobileWrappedTable(card)) toSync.push(card);
+    }
+    if (toSync.length) scheduleTableSync(toSync);
+  }
+  function syncCodeBlocksBatch(blocks) {
+    if (!blocks || !blocks.length) return;
+    const wrapped = isMobileWrappedCode();
+    const measured = [];
+    for (const block of blocks) {
+      if (!block || block.isConnected === false) continue;
+      if (wrapped) {
+        measured.push({ block, scrollable: false, canL: false, canR: false });
+        continue;
+      }
+      const pre = block.querySelector?.(".md-code-body pre");
+      if (!pre) continue;
+      const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
+      const scrollable = maxScroll > 2;
+      const sl = pre.scrollLeft || 0;
+      measured.push({ block, scrollable, canL: scrollable && sl > 4, canR: scrollable && sl < maxScroll - 4 });
+    }
+    for (const m of measured) {
+      m.block.classList?.toggle("is-scrollable", m.scrollable);
+      m.block.classList?.toggle("can-scroll-l", m.canL);
+      m.block.classList?.toggle("can-scroll-r", m.canR);
     }
   }
   function syncCodeBlockScroll(block) {
-    if (!block) return;
-    const pre = block.querySelector?.(".md-code-body pre");
-    if (!pre) return;
-    const maxScroll = (pre.scrollWidth || 0) - (pre.clientWidth || 0);
-    const scrollable = maxScroll > 2;
-    block.classList?.toggle("is-scrollable", scrollable);
-    block.classList?.toggle("can-scroll-l", scrollable && (pre.scrollLeft || 0) > 4);
-    block.classList?.toggle("can-scroll-r", scrollable && (pre.scrollLeft || 0) < maxScroll - 4);
+    if (block) syncCodeBlocksBatch([block]);
   }
   const boundCodeScrolls = new WeakSet();
   let codeRO = null;
+  let _codePending = new Set();
+  let _codeBatchRAF = 0;
+  function scheduleCodeSync(blocks) {
+    if (!blocks || !blocks.length) return;
+    for (const b of blocks) if (b) _codePending.add(b);
+    if (isLayoutGliding()) return;
+    if (_codeBatchRAF) return;
+    const flush = () => {
+      _codeBatchRAF = 0;
+      if (isLayoutGliding()) return;
+      const batch = [..._codePending];
+      _codePending.clear();
+      syncCodeBlocksBatch(batch);
+    };
+    if (typeof requestAnimationFrame === "function") {
+      _codeBatchRAF = requestAnimationFrame(flush);
+    } else {
+      flush();
+    }
+  }
   function observeCodeResize(pre) {
     if (!pre || typeof ResizeObserver !== "function") return;
     if (!codeRO) {
       codeRO = new ResizeObserver((entries) => {
+        const blocks = [];
         for (const entry of entries) {
-          const block = entry.target?.closest?.("[data-code-block]");
-          if (block) syncCodeBlockScroll(block);
+          const el = entry.target;
+          const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
+          if (w <= 0) { el._roLastW = 0; continue; }
+          if (el._roLastW === w) continue;
+          el._roLastW = w;
+          const block = el.closest?.("[data-code-block]");
+          if (block) blocks.push(block);
         }
+        if (blocks.length) scheduleCodeSync(blocks);
       });
     }
     try { codeRO.observe(pre); } catch {}
   }
   function hydrateCodeBlocks(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
+    const wrapped = isMobileWrappedCode();
+    const toSync = [];
     for (const block of root.querySelectorAll("[data-code-block]")) {
       const pre = block.querySelector?.(".md-code-body pre");
       if (pre && !boundCodeScrolls.has(pre)) {
         boundCodeScrolls.add(pre);
-        pre.addEventListener?.("scroll", () => syncCodeBlockScroll(block), { passive: true });
-        observeCodeResize(pre);
+        pre.addEventListener?.("scroll", () => {
+          block.classList?.add("is-scroll-ready");
+          syncCodeBlockScroll(block);
+        }, { passive: true });
+        if (!wrapped) observeCodeResize(pre);
       }
-      syncCodeBlockScroll(block);
+      if (!wrapped) toSync.push(block);
       if (!block.hasAttribute?.("data-foldable") || block._richHydrated) continue;
       block._richHydrated = true;
       const k = getRichBlockKey(block, "code", ".md-code[data-foldable]");
@@ -20063,6 +20673,7 @@
         if (tail) { tail.setAttribute?.("hidden", ""); tail.hidden = true; }
       }
     }
+    if (toSync.length) scheduleCodeSync(toSync);
   }
   function hydrateDetails(root) {
     if (!root || typeof root.querySelectorAll !== "function") return;
@@ -20174,6 +20785,7 @@
     if (!det || det.tagName !== "DETAILS" || !det.classList?.contains("md-fold")) return;
     const k = getRichBlockKey(det, "details", "details.md-fold");
     if (k) setRichUiState(k, !!det.open);
+    if (det.open) hydrateRichContent(det);
   }, { capture: true });
 
   // ───────────────────────────── fullscreen image lightbox
@@ -20304,7 +20916,7 @@
     else zoomLbTo(targetLbZoomScale(), clientX, clientY);
   }
   function collectGallery(triggerEl, fallbackItem) {
-    const gal = triggerEl?.closest?.(".md-gallery");
+    const gal = triggerEl?.closest?.(".file-gallery, .md-gallery");
     if (gal) {
       const seen = new Set(), items = [];
       const add = (it) => {
@@ -20495,6 +21107,7 @@
       return;
     }
     const blobUrl = URL.createObjectURL(new Blob([f.blob], { type: imgMime(item.path) }));
+    clearFileGalleryImgFailed(item.path);
     // If a `.thumb` in the DOM is waiting on this exact path, share it into `thumbs`.
     if (document.querySelector(`.thumb[data-img="${CSS.escape(item.path)}"]`)) {
       thumbs.delete(item.path);
@@ -20646,29 +21259,50 @@
       const dx = ev.clientX - gesture.startX, dy = ev.clientY - gesture.startY;
       if (!gesture.moved && Math.hypot(dx, dy) > 5) {
         gesture.moved = true;
-        if (lbScale > 1.005) lightbox.classList.add("is-dragging");
+        if (lbScale > 1.005) {
+          lightbox.classList.add("is-dragging");
+        } else if (lbItems.length > 1 && Math.abs(dx) > Math.abs(dy)) {
+          gesture.swiping = true;
+          lightbox.classList.add("is-dragging");
+          try { lbStage.setPointerCapture(ev.pointerId); } catch {}
+        }
       }
       if (gesture.moved && lbScale > 1.005) {
         lbX = gesture.panX0 + dx;
         lbY = gesture.panY0 + dy;
         applyLbTransform(true);
+      } else if (gesture.swiping && lbScale <= 1.005 && lbHasMedia()) {
+        const media = lbActiveMedia();
+        const damp = Math.max(-120, Math.min(120, dx * 0.45));
+        if (media) media.style.transform = `translate3d(${damp.toFixed(1)}px, 0, 0)`;
       }
     });
     const endPtr = (ev, cancelled = false) => {
       ptrs.delete(ev.pointerId);
       if (ptrs.size === 0) lightbox.classList.remove("is-dragging");
-      if (!gesture || cancelled) { if (!ptrs.size) gesture = null; return; }
+      if (!gesture || cancelled) {
+        if (gesture?.swiping && lbScale <= 1.005 && lbHasMedia()) {
+          const media = lbActiveMedia();
+          if (media) media.style.transform = "";
+        }
+        if (!ptrs.size) gesture = null;
+        return;
+      }
       if (gesture.kind === "single" && gesture.pointerId === ev.pointerId) {
         const g = gesture;
         gesture = null;
         const dx = ev.clientX - g.startX, dy = ev.clientY - g.startY;
+        if (g.swiping && lbScale <= 1.005 && lbHasMedia()) {
+          const media = lbActiveMedia();
+          if (media) media.style.transform = "";
+        }
         if (!g.moved) {
           if (hitLbMedia(g.target) && lbHasMedia()) {
             toggleLbZoom(ev.clientX, ev.clientY);
           } else if (g.target === lbStage && ev.target === lbStage) {
             closeLightbox();
           }
-        } else if (lbScale <= 1.005 && lbItems.length > 1 && Math.abs(dx) > 52 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+        } else if (lbScale <= 1.005 && lbItems.length > 1 && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
           showLbSlide(lbIdx + (dx < 0 ? 1 : -1));
         }
       }
@@ -20699,7 +21333,10 @@
         doc.write(`<!doctype html><meta charset="utf-8"><title>${esc(path.split("/").pop())}</title><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;display:block}</style><iframe sandbox="${sb}"></iframe>`);
         doc.close();
         const frame = doc.querySelector("iframe");
-        if (frame) frame.srcdoc = htmlText;
+        if (frame) {
+          const t = currentVisualTheme();
+          frame.srcdoc = buildSandboxedCardSrcdoc(htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+        }
         return;
       }
       syncFileBar("fv", { langLabel: "HTML" });
@@ -20708,7 +21345,12 @@
       const body = $("#fv-body");
       body.classList.remove("is-code");
       body.innerHTML = `<iframe class="fv-html-sandbox" sandbox="${sb}"></iframe>`;
-      body.querySelector("iframe").srcdoc = htmlText;
+      const fvFrame = body.querySelector("iframe");
+      if (fvFrame) {
+        const t = currentVisualTheme();
+        if (fvFrame.style) fvFrame.style.colorScheme = t;
+        fvFrame.srcdoc = buildSandboxedCardSrcdoc(htmlText, { frameId: "", token: "", isFragment: false, isDark: t === "dark", measure: false });
+      }
       showFilePane();
     } catch (err) {
       if (win && !win.closed) try { win.close(); } catch {}
@@ -20965,6 +21607,31 @@
     const inv = 1 - u;
     return 1 - inv * inv * inv;
   }
+  function flushPostGlideRichSync() {
+    if (_tablePending.size) {
+      if (_tableBatchRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(_tableBatchRAF); _tableBatchRAF = 0; }
+      const batch = [..._tablePending];
+      _tablePending.clear();
+      syncTablesBatch(batch);
+    }
+    if (_codePending.size) {
+      if (_codeBatchRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(_codeBatchRAF); _codeBatchRAF = 0; }
+      const batch = [..._codePending];
+      _codePending.clear();
+      syncCodeBlocksBatch(batch);
+    }
+    if (_rvStagePending.size) {
+      if (_rvStageRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(_rvStageRAF); _rvStageRAF = 0; }
+      const batch = [..._rvStagePending];
+      _rvStagePending.clear();
+      for (const c of batch) if (c.isConnected) syncRichStageScroll(c);
+    }
+    if (_pendingHtmlCardHeights.size) {
+      const entries = [..._pendingHtmlCardHeights.entries()];
+      _pendingHtmlCardHeights.clear();
+      for (const [rec, h] of entries) applyHtmlCardHeight(rec, h, { skipStick: true });
+    }
+  }
   function finishDrawerGlide(snapToEnd = true) {
     if (_drawerGlideRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(_drawerGlideRAF);
@@ -21006,7 +21673,7 @@
   // Separate gutter-aware threadMetrics vs gutter-free composerMetrics + frame-0 column cap on tight viewports
   // guarantee 0.00px Frame-0 / Frame-N jump and 0 overlap frames across tablets and desktops alike.
   function runDesktopDrawerGlide(cfg = {}) {
-    const { kind, drawerEl, fromW = 0, toW = 0, startOffset = 0, targetShift = 0, onDone = null } = cfg;
+    const { kind, drawerEl, fromW = 0, toW = 0, startOffset = 0, targetShift = 0, lockSnap: passedSnap = null, onDone = null } = cfg;
     const appEl = $("#app");
     const colEl = $("#v-collie");
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -21022,12 +21689,27 @@
       cancelAnimationFrame(_collieShiftRAF);
       _collieShiftRAF = 0;
     }
+    // Stage grid-template-columns BEFORE any layout read (scrollerGutterW / captureColliePos) so
+    // adding .has-worker/.has-thread/.has-file never triggers a premature reflow at the narrowed grid track.
+    let preStageCls = "";
+    if (kind === "open") {
+      preStageCls = "is-drawer-opening";
+      appEl.style.setProperty("--drawer-stage-w", "0px");
+      appEl.classList.add(preStageCls);
+    } else if (kind === "widen" && Math.max(0, toW - fromW) >= 1) {
+      preStageCls = "is-drawer-opening";
+      appEl.style.setProperty("--drawer-stage-w", Math.round(fromW) + "px");
+      appEl.classList.add(preStageCls);
+    } else if (kind === "narrow" && Math.max(0, fromW - toW) >= 1) {
+      preStageCls = "is-drawer-narrowing";
+      appEl.classList.add(preStageCls);
+    }
     const sideW = currentSideW();
     const canvas = Math.max(480, innerWidth - sideW);
     const sc = view === "collie" ? viewScroller("collie") : null;
     const gutter = scrollerGutterW(sc);
     const colW = currentColW();
-    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    const lockSnap = sc ? (passedSnap || collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const threadEls = view === "collie"
       ? [$("#super-thread"), $("#super-working")].filter((e) => e?.style)
       : [];
@@ -21250,10 +21932,12 @@
       if (compEl) compEl.style.transform = "";
       _collieShiftCur = kind === "close" ? targetShift : 0;
       if (snap && onDone) onDone();
+      flushPostGlideRichSync();
       if (view === "collie" && sc && lockSnap) {
         applyColliePos(sc, lockSnap);
         updateSuperJump();
       }
+      syncCollieResizeBaseline();
       if (activeWorkerKey && curWdMode() === "screen") fitWdTerm();
     };
 
@@ -21383,7 +22067,8 @@
       const btn = $(btnId);
       if (!btn) continue;
       const show = !!(meta && activeKind === kind && meta.kind !== kind);
-      btn.hidden = !show;
+      if (btn.hidden !== !show) btn.hidden = !show;
+      btn.parentElement?.classList?.toggle("has-back", show);
       if (show) {
         btn.dataset.returnKind = meta.kind;
         btn.setAttribute("aria-label", meta.ariaLabel);
@@ -21603,10 +22288,65 @@
     });
   }
 
+  function clearMobileSheetOpen(el) {
+    if (!el) return;
+    clearTimeout(el._sdOpenTimer);
+    el._sdOpenTimer = 0;
+    el._slideSettleAt = 0;
+    if (el._sdOpenOnEnd) {
+      el.removeEventListener?.("animationend", el._sdOpenOnEnd);
+      el.removeEventListener?.("animationcancel", el._sdOpenOnEnd);
+      el._sdOpenOnEnd = null;
+    }
+    el.classList?.remove("is-sheet-opening", "is-scrim-opening");
+  }
+  function playMobileSheetOpen(drawerEl, scrimEl) {
+    if (!drawerEl) return;
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    clearMobileSheetOpen(drawerEl);
+    if (scrimEl) clearMobileSheetOpen(scrimEl);
+    if (reduced) {
+      clearSheetWillChange(drawerEl);
+      if (scrimEl) clearSheetWillChange(scrimEl);
+      const cb = drawerEl._onSlideSettled;
+      drawerEl._onSlideSettled = null;
+      if (cb) cb();
+      return;
+    }
+    drawerEl._slideSettleAt = performance.now() + 265;
+    promoteSheetWillChange(drawerEl, "transform", 340);
+    drawerEl.classList?.add("is-sheet-opening");
+    const doneDrawer = (ev) => {
+      if (ev && ev.target !== drawerEl) return;
+      clearMobileSheetOpen(drawerEl);
+      clearSheetWillChange(drawerEl);
+      const cb = drawerEl._onSlideSettled;
+      drawerEl._onSlideSettled = null;
+      if (cb) cb();
+    };
+    drawerEl._sdOpenOnEnd = doneDrawer;
+    drawerEl.addEventListener?.("animationend", doneDrawer);
+    drawerEl.addEventListener?.("animationcancel", doneDrawer);
+    drawerEl._sdOpenTimer = setTimeout(doneDrawer, 290);
+    if (scrimEl) {
+      promoteSheetWillChange(scrimEl, "opacity", 340);
+      scrimEl.classList?.add("is-scrim-opening");
+      const doneScrim = (ev) => {
+        if (ev && ev.target !== scrimEl) return;
+        clearMobileSheetOpen(scrimEl);
+        clearSheetWillChange(scrimEl);
+      };
+      scrimEl._sdOpenOnEnd = doneScrim;
+      scrimEl.addEventListener?.("animationend", doneScrim);
+      scrimEl.addEventListener?.("animationcancel", doneScrim);
+      scrimEl._sdOpenTimer = setTimeout(doneScrim, 320);
+    }
+  }
   const resetDrawerMotion = (el, opts = {}) => {
     if (!el) return;
     clearTimeout(el._sdAnimTimer);
     el._sdAnimTimer = 0;
+    clearMobileSheetOpen(el);
     clearMobileSheetSwap(el);
     el.classList.remove("is-closing", "is-entering", "is-switching", "is-dragging");
     el.style?.removeProperty?.("--drawer-close-w");
@@ -21677,20 +22417,24 @@
       clearCollieShiftInline();
     }
     const mobileSwap = !desktopMode && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
-    if (pane.hidden) {
-      pane.hidden = false;
-      if (!mobileSwap) pane.offsetWidth;
-    }
+    const wasHidden = !!pane.hidden;
+    if (wasHidden) pane.hidden = false;
+    if ("inert" in pane) pane.inert = false;
     pane.setAttribute("aria-hidden", "false");
     if (fileScrim) {
+      clearMobileSheetOpen(fileScrim);
       fileScrim.classList.remove("is-dragging");
       fileScrim.style.opacity = "";
       if (mobileSwap) holdScrimImmediate(fileScrim);
       fileScrim.hidden = false;
     }
     if (!desktopMode && !hadFile) {
-      promoteSheetWillChange(pane, "transform", 340);
-      if (fileScrim) promoteSheetWillChange(fileScrim, "opacity", 340);
+      if (wasHidden && !mobileSwap && !opts.immediate) {
+        playMobileSheetOpen(pane, fileScrim);
+      } else {
+        promoteSheetWillChange(pane, "transform", 340);
+        if (fileScrim) promoteSheetWillChange(fileScrim, "opacity", 340);
+      }
     }
     appEl?.classList?.add("has-file");
     syncFileWidenUI();
@@ -21698,15 +22442,16 @@
     if (!closingNotesOverlay) {
       syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadFile && desktopMode });
     }
+    let glided = false;
     if (mobileSwap && !hadFile) {
       playMobileSheetSwap(pane, opts.restoring ? "return" : "drill");
     } else if (!hadFile) {
       if (!wasAnyDrawer) {
-        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift });
+        glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift, lockSnap });
         if (!glided) playDrawerTransition(pane, false);
       } else {
-        if (baseW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevOpenW, toW: baseW });
-        else if (baseW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevOpenW, toW: baseW });
+        if (baseW > prevOpenW + 1) glided = runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevOpenW, toW: baseW, lockSnap });
+        else if (baseW < prevOpenW - 1) glided = runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevOpenW, toW: baseW, lockSnap });
         playDrawerTransition(pane, true);
       }
     }
@@ -21746,11 +22491,15 @@
     } else if (overlayCloseAnim) {
       resetDrawerMotion(pane, { keepWillChange: true });
       promoteSheetWillChange(pane, "transform", 320);
-      if (fileScrim) {
-        fileScrim.classList.remove("is-dragging");
-        fileScrim.style.opacity = "";
-        promoteSheetWillChange(fileScrim, "opacity", 320);
-      }
+    } else {
+      resetDrawerMotion(pane);
+    }
+    if (fileScrim) {
+      clearMobileSheetOpen(fileScrim);
+      fileScrim.classList.remove("is-dragging");
+      fileScrim.style.opacity = "";
+      if (overlayCloseAnim) promoteSheetWillChange(fileScrim, "opacity", 320);
+      else clearSheetWillChange(fileScrim);
     }
     appEl?.classList?.remove("has-file");
     if (!switching) syncAppDrawerClasses();
@@ -21758,9 +22507,6 @@
     if (!switching) syncDrawerBackButtons();
     pane?.setAttribute?.("aria-hidden", "true");
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
-    if (desktopMode && lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
-    }
     let userScrolled = false;
     const onUserScroll = () => { if (!isProgrammaticScroll()) userScrolled = true; };
     if (sc && lockSnap) sc.addEventListener("scroll", onUserScroll, { passive: true });
@@ -21769,6 +22515,7 @@
       resetDrawerMotion(pane);
       if (pane) {
         pane.hidden = true;
+        if ("inert" in pane) pane.inert = true;
         if (pane.style) pane.style.width = "";
       }
       if (fileScrim) {
@@ -21783,15 +22530,19 @@
         renderSuper(useRestore);
       }
     };
+    let glided = false;
     if (opts.immediate || switching || reduced) {
       hideNow();
     } else if (desktopCloseAnim) {
       const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
         ? computeCollieShiftPx(280) : 0;
-      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: pane, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      glided = runDesktopDrawerGlide({ kind: "close", drawerEl: pane, fromW: closingW, toW: 0, startOffset, targetShift, lockSnap, onDone: hideNow });
       if (!glided) paneTimer = setTimeout(hideNow, 170);
     } else {
       paneTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
+    }
+    if (desktopMode && lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
   }
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
@@ -21806,8 +22557,8 @@
     const nextW = unifiedDrawerW();
     setFileW(nextW);
     syncFileWidenUI();
-    if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevW, toW: nextW });
-    else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevW, toW: nextW });
+    if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevW, toW: nextW, lockSnap });
+    else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevW, toW: nextW, lockSnap });
     if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   });
   document.addEventListener("keydown", (e) => {
@@ -21870,10 +22621,12 @@
         if (!dragging) return;
         if (!appliedDrag) {
           appliedDrag = true;
+          clearMobileSheetOpen(drawerEl);
           clearMobileSheetSwap(drawerEl);
           promoteSheetWillChange(drawerEl, "transform", 0);
           drawerEl.classList.add("is-dragging");
           if (scrimEl) {
+            clearMobileSheetOpen(scrimEl);
             promoteSheetWillChange(scrimEl, "opacity", 0);
             scrimEl.classList.add("is-dragging");
           }
@@ -22123,7 +22876,11 @@
           const crewEl = $("#crew");
           if (crewEl) { syncCrewCompact(crewEl); crewEl._syncScrollFade?.(); }
         }
+        flushPostGlideRichSync();
         if (sc && lockSnap) { applyColliePos(sc, lockSnap); updateSuperJump(); }
+        syncCollieResizeBaseline();
+      } else {
+        flushPostGlideRichSync();
       }
       if (pane && !pane.hidden && isDesktopDrawerViewport()) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
       if (activeThreadRoot) applyThreadWidth();
@@ -22413,6 +23170,8 @@
     setNotesExpanded(next);
   }
   function renderNotebook() {
+    clearTimeout(_notesIdlePreRenderTimer);
+    _notesIdlePreRenderTimer = 0;
     if (!notesPane) return;
     const data = notebookData || { date: "", tasks: [], artifacts: [], timers: [] };
     const allTasks = Array.isArray(data.tasks) ? data.tasks : [];
@@ -22562,6 +23321,10 @@
     const hadNotes = col.classList.contains("has-notes");
     const stateUnchanged = (wasHidden === !wantOpen) && (hadNotes === keepSlot);
     const modeChanged = prevMode !== sidePaneActiveMode;
+    if (stateUnchanged && !modeChanged && !wantOpen && !opts.force) {
+      notesOpen = false;
+      return;
+    }
     if (immediate && !stateUnchanged) {
       col.classList.add("no-notes-anim");
       if (_noNotesAnimRAF && typeof cancelAnimationFrame === "function") {
@@ -22570,9 +23333,13 @@
       }
     }
     const isThreads = sidePaneActiveMode === "threads";
+    const wideNotes = isWideNotesViewport();
     notesOpen = wantOpen;
     if (hadNotes !== keepSlot) col.classList.toggle("has-notes", keepSlot);
-    document.body?.classList?.toggle("collie-has-notes", keepSlot);
+    const wantBodyNotes = keepSlot && wideNotes;
+    if (document.body?.classList?.contains("collie-has-notes") !== wantBodyNotes) {
+      document.body?.classList?.toggle("collie-has-notes", wantBodyNotes);
+    }
     const shiftMode = view === "collie" && !blockedByDrawer && keepSlot ? "notes" : "none";
     if (opts.deferShift) {
       _collieShiftMode = shiftMode;
@@ -22583,23 +23350,32 @@
     if (wasHidden !== !wantOpen) {
       if (innerWidth <= 760) {
         if (immediate) {
+          notesPane._slideSettleAt = 0;
           clearSheetWillChange(notesPane);
           if (notesScrim) clearSheetWillChange(notesScrim);
         } else {
+          notesPane._slideSettleAt = wantOpen ? performance.now() + 280 : 0;
           promoteSheetWillChange(notesPane, "transform", 320);
           if (notesScrim) promoteSheetWillChange(notesScrim, "opacity", 320);
         }
+      } else {
+        notesPane._slideSettleAt = 0;
       }
       notesPane.classList.toggle("is-handoff-in", !!(wantOpen && opts.fromDrawerClose && !immediate));
       notesPane.classList.toggle("is-hidden", !wantOpen);
       if (!wantOpen) {
         clearTimeout(_notesReturnAnimTimer);
         _notesReturnAnimTimer = 0;
+        clearTimeout(_notesDeferredRenderTimer);
+        _notesDeferredRenderTimer = 0;
         notesPane.classList.remove("is-return-in");
       }
     } else if (!wantOpen) {
+      notesPane._slideSettleAt = 0;
       clearTimeout(_notesReturnAnimTimer);
       _notesReturnAnimTimer = 0;
+      clearTimeout(_notesDeferredRenderTimer);
+      _notesDeferredRenderTimer = 0;
       notesPane.classList.remove("is-handoff-in", "is-return-in");
     }
     notesPane.setAttribute("data-side-mode", sidePaneActiveMode);
@@ -22635,9 +23411,9 @@
       }
     }
     if (wantOpen) {
-      if (!col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
-      renderNotebook();
-      renderCollieThreadsMenu();
+      if (wideNotes && !col.hidden && !col.classList.contains("is-parked") && _lastCollieTopH <= 0) syncCollieTopHeight();
+      if (!isThreads) renderNotebook();
+      else renderCollieThreadsMenu();
       // Smooth 130ms restrained fade-in ONLY on the first-group panel when switching 进行中 <-> 话题.
       // 下方的「今日产物」与「下一条定时」保持原位纹丝不动。
       if (opts.animateModeSwap && modeChanged && !wasHidden && !immediate) {
@@ -22683,6 +23459,8 @@
     }
     syncNotebookVisibility({ animateModeSwap: true });
   }
+  let _notesDeferredRenderTimer = 0;
+  let _notesIdlePreRenderTimer = 0;
   async function loadNotebook(force = false) {
     if (notebookFetching && !force) return;
     notebookFetching = true;
@@ -22690,7 +23468,25 @@
       const r = await api("/api/super/notebook");
       if (r && typeof r === "object") {
         notebookData = r;
-        if (notesOpen) renderNotebook();
+        if (notesOpen) {
+          const remain = notesPane?._slideSettleAt ? (notesPane._slideSettleAt - performance.now()) : 0;
+          if (!isWideNotesViewport() && remain > 16 && _lastNotebookRenderKey) {
+            clearTimeout(_notesDeferredRenderTimer);
+            _notesDeferredRenderTimer = setTimeout(() => {
+              _notesDeferredRenderTimer = 0;
+              if (notesOpen) renderNotebook();
+            }, Math.min(300, Math.ceil(remain)));
+          } else {
+            renderNotebook();
+          }
+        } else if (notesPane && !isWideNotesViewport()) {
+          // Pre-hydrate hidden mobile notebook sheet during idle so tapping 小本本 opens with zero DOM rebuild or layout.
+          clearTimeout(_notesIdlePreRenderTimer);
+          _notesIdlePreRenderTimer = setTimeout(() => {
+            _notesIdlePreRenderTimer = 0;
+            if (!notesOpen && notebookData && view === "collie") renderNotebook();
+          }, 120);
+        }
       }
     } catch {
       // Quiet read-only failure: never disrupt main chat.
@@ -23179,8 +23975,8 @@
     applyThreadWidth();
     const nextW = _lastThreadW || _lastDrawerW || drawerDefaultW();
     if (!opts.immediate && activeThreadRoot && innerWidth > THREAD_DESKTOP_MIN) {
-      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
-      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
+      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevW, toW: nextW, lockSnap });
+      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevW, toW: nextW, lockSnap });
     }
     if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   }
@@ -23477,6 +24273,7 @@
   }
   function renderThreadWorkers(th, info, allEntries, force = false) {
     if (!tdWorkersEl) return;
+    const tdHeadEl = tdDrawer?.querySelector?.(".td-head");
     const list = extractThreadWorkers(th, info, allEntries);
     if (!list.length) {
       if (!tdWorkersEl.hidden || tdWorkersSig !== "") {
@@ -23484,12 +24281,17 @@
         tdWorkersEl.innerHTML = "";
         tdWorkersSig = "";
       }
+      tdHeadEl?.classList?.toggle("has-workers", false);
       return;
     }
     const sig = JSON.stringify(list.map((w) => [w.name, w.label || "", w.status, w.ended ? 1 : 0, w.href, w.kind]));
-    if (!force && sig === tdWorkersSig && !tdWorkersEl.hidden) return;
+    if (!force && sig === tdWorkersSig && !tdWorkersEl.hidden) {
+      tdHeadEl?.classList?.toggle("has-workers", true);
+      return;
+    }
     tdWorkersSig = sig;
     tdWorkersEl.hidden = false;
+    tdHeadEl?.classList?.toggle("has-workers", true);
     tdWorkersEl.innerHTML = list.map((w) => {
       const disp = w.label || w.name;
       const stLabel = STATUS_LABEL[w.status] || (w.ended ? tx("st.stopped", "已停止") : w.status);
@@ -23553,11 +24355,10 @@
       tdTargetReset.hidden = true;
     }
   }
-  function focusNodeInDrawer(msgId) {
+  function focusNodeInDrawer(msgId, opts = {}) {
     if (!tdListEl || !msgId) return;
     const node = tdListEl.querySelector(`.td-node[data-td-id="${CSS.escape(msgId)}"]`);
     if (!node) return;
-    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (tdBodyEl) {
       const br = tdBodyEl.getBoundingClientRect();
       const nr = node.getBoundingClientRect();
@@ -23566,11 +24367,17 @@
         maxTop,
         tdBodyEl.scrollTop + (nr.top - br.top) - Math.max(16, (tdBodyEl.clientHeight - nr.height) / 2),
       ));
-      smartScrollCollie(tdBodyEl, want, { markMs: 220 });
+      if (opts.instant) {
+        markProgrammaticScroll(120);
+        tdBodyEl.scrollTop = want;
+      } else {
+        smartScrollCollie(tdBodyEl, want, { markMs: 220 });
+      }
     }
     clearTimeout(tdFocusTimer);
+    const wasAlreadyFocused = node.classList.contains("is-focused");
     tdListEl.querySelectorAll(".td-node.is-focused").forEach((n) => n.classList.remove("is-focused"));
-    void node.offsetWidth;
+    if (wasAlreadyFocused) void node.offsetWidth;
     node.classList.add("is-focused");
     tdFocusTimer = setTimeout(() => node.classList.remove("is-focused"), 1450);
   }
@@ -23800,8 +24607,8 @@
 
   function renderThreadDrawer(opts = {}) {
     if (!tdDrawer || !tdListEl) return;
-    const allEntries = chatEntries();
-    const info = computeReplyThreads(allEntries);
+    const allEntries = opts.allEntries || chatEntries();
+    const info = opts.info || computeReplyThreads(allEntries);
     const th = resolveThread(info, activeThreadRoot, activeThreadAnchor);
     if (th && th.rootId !== activeThreadRoot) activeThreadRoot = th.rootId;
     if (!th) {
@@ -23809,25 +24616,28 @@
       return;
     }
     const prevCount = tdLastCount;
-    const wasAtBottom = tdBodyEl ? (tdBodyEl.scrollHeight - tdBodyEl.scrollTop - tdBodyEl.clientHeight <= AT_BOTTOM_PX + 20) : true;
-    const scrollBottom = !!opts.scrollBottom || tdForceScroll || (prevCount > 0 && th.list.length > prevCount && wasAtBottom);
+    const sliceStart = Math.max(0, Math.min(th.list.length, Number(opts.sliceStart) || 0));
+    const renderedCount = th.list.length - sliceStart;
+    const scrollBottom = !!opts.scrollBottom || tdForceScroll || (prevCount > 0 && renderedCount > prevCount && !opts.preserveAnchor && (tdBodyEl ? (tdBodyEl.scrollHeight - tdBodyEl.scrollTop - tdBodyEl.clientHeight <= AT_BOTTOM_PX + 20) : true));
     tdForceScroll = false;
 
-    if (tdTitleEl) {
-      tdTitleEl.textContent = th.title;
-      tdTitleEl.title = th.fullTitle || th.title;
+    if (!opts.skipMeta) {
+      if (tdTitleEl) {
+        tdTitleEl.textContent = th.title;
+        tdTitleEl.title = th.fullTitle || th.title;
+      }
+      if (tdMetaEl) {
+        const parts = th.missingRoot
+          ? [tx("drawer.threadLoadedCount", "已加载 {n} 条", { n: th.list.length }), tx("drawer.threadHasEarlierRoot", "含更早起点")]
+        : [tx("drawer.threadTotalCount", "共 {n} 条消息", { n: th.totalCount })];
+      if (th.branchCount > 0) parts.push(tx("drawer.threadBranches", "含 {n} 处分支", { n: th.branchCount }));
+        tdMetaEl.textContent = parts.join(" · ");
+      }
+      if (tdLocateRootBtn) {
+        tdLocateRootBtn.hidden = !th.root?.id && !th.list[0]?.id;
+      }
+      renderThreadWorkers(th, info, allEntries, !!opts.force);
     }
-    if (tdMetaEl) {
-      const parts = th.missingRoot
-        ? [tx("drawer.threadLoadedCount", "已加载 {n} 条", { n: th.list.length }), tx("drawer.threadHasEarlierRoot", "含更早起点")]
-      : [tx("drawer.threadTotalCount", "共 {n} 条消息", { n: th.totalCount })];
-    if (th.branchCount > 0) parts.push(tx("drawer.threadBranches", "含 {n} 处分支", { n: th.branchCount }));
-      tdMetaEl.textContent = parts.join(" · ");
-    }
-    if (tdLocateRootBtn) {
-      tdLocateRootBtn.hidden = !th.root?.id && !th.list[0]?.id;
-    }
-    renderThreadWorkers(th, info, allEntries, !!opts.force);
 
     const pendIds = new Set(activePending().map((p) => p.id));
     const idxByKey = new Map();
@@ -23838,11 +24648,12 @@
     const curDayStamp = dayBounds();
     const sig = JSON.stringify([
       th.rootId,
+      sliceStart,
       curDayStamp,
       th.missingRoot?.id || "",
       tdLoadingRoot ? 1 : 0,
       canLoadOlder() ? 1 : 0,
-      th.list.map((m) => {
+      th.list.slice(sliceStart).map((m) => {
         const k = entryKey(m);
         const idx = idxByKey.get(k) ?? -1;
         const hasOpts = Array.isArray(m.options) && m.options.some((o) => typeof o === "string" && o.trim());
@@ -23855,9 +24666,9 @@
     ]);
     if (sig !== tdLastSig || opts.force) {
       tdLastSig = sig;
-      tdLastCount = th.list.length;
+      tdLastCount = renderedCount;
       const items = [];
-      if (th.missingRoot) {
+      if (sliceStart === 0 && th.missingRoot) {
         const statusText = tdLoadingRoot
           ? tx("drawer.threadLoadingOlder", "正在拉取更早的话题起点…")
         : canLoadOlder()
@@ -23881,7 +24692,7 @@
           },
         });
       }
-      for (let i = 0; i < th.list.length; i++) {
+      for (let i = sliceStart; i < th.list.length; i++) {
         const m = th.list[i];
         const k = entryKey(m);
         const isRoot = !th.missingRoot && i === 0;
@@ -23944,7 +24755,7 @@
             const artifactsHtml = renderEntryArtifacts(m);
             const bodyHtml = m.role === "user"
               ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
-              : `<div class="td-text msg assistant">${rootQuoteHtml}${renderCollieBody(m.text)}${artifactsHtml}${optsHtml}</div>`;
+              : `<div class="td-text msg assistant">${rootQuoteHtml}${renderCollieBody(m.text, m.files)}${artifactsHtml}${optsHtml}</div>`;
             return `<article class="td-node${isBranch ? " is-branch" : ""}" data-td-id="${esc(k)}" data-entry-id="${esc(m.id || "")}">
           <div class="td-rail">${avHtml}</div>
           <div class="td-content">
@@ -23965,7 +24776,7 @@
         // Preserve reading scroll position if older messages were prepended while scrolled up.
         let prepAnchor = null, prepTop = 0;
         if (!scrollBottom && !opts.focusMsgId && typeof opts.restoreScrollTop !== "number"
-          && tdBodyEl && tdListEl._tdRoot === th.rootId && prevCount > 0 && th.list.length > prevCount) {
+          && tdBodyEl && tdListEl._tdRoot === th.rootId && prevCount > 0 && renderedCount > prevCount) {
           const curFirst = tdListEl.querySelector?.(".td-node[data-td-id]");
           const firstKey = curFirst?.dataset?.tdId || "";
           const nextFirstNodeItem = items.find((it) => it.key !== "__td_older__");
@@ -23992,7 +24803,7 @@
     syncThreadSendBtn();
 
     if (opts.focusMsgId) {
-      requestAnimationFrame(() => focusNodeInDrawer(opts.focusMsgId));
+      requestAnimationFrame(() => focusNodeInDrawer(opts.focusMsgId, { instant: !!opts.instantFocus }));
     } else if (typeof opts.restoreScrollTop === "number" && tdBodyEl) {
       requestAnimationFrame(() => { tdBodyEl.scrollTop = opts.restoreScrollTop; });
     } else if (scrollBottom && tdBodyEl) {
@@ -24007,7 +24818,8 @@
     if (!tdDrawer || !rootId) return;
     if (replyTo && isSuperComposerEmpty()) setReply(null);
     cancelInitialAnchor();
-    const info = computeReplyThreads(chatEntries());
+    const allEntries = chatEntries();
+    const info = computeReplyThreads(allEntries);
     const resolved = resolveThread(info, rootId, anchorId || focusMsgId || rootId);
     if (!resolved) return;
     const realRoot = resolved.rootId;
@@ -24043,19 +24855,29 @@
     applyThreadWidth();
     const nextW = _lastThreadW || _lastDrawerW || 432;
     const mobileSwap = !isDesktopDrawerViewport() && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
-    if (tdDrawer.hidden) {
-      tdDrawer.hidden = false;
-      if (!mobileSwap) tdDrawer.offsetWidth;
+    clearTimeout(tdDrawer._fullRenderTimer);
+    tdDrawer._fullRenderTimer = 0;
+    if (tdDrawer._fullRenderRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(tdDrawer._fullRenderRAF);
     }
+    tdDrawer._fullRenderRAF = 0;
+    const wasHidden = !!tdDrawer.hidden;
+    if (wasHidden) tdDrawer.hidden = false;
+    if ("inert" in tdDrawer) tdDrawer.inert = false;
     if (tdScrim) {
+      clearMobileSheetOpen(tdScrim);
       tdScrim.classList.remove("is-dragging");
       tdScrim.style.opacity = "";
       if (mobileSwap) holdScrimImmediate(tdScrim);
       tdScrim.hidden = false;
     }
     if (!desktopMode && !hadThread && !opts.immediate) {
-      promoteSheetWillChange(tdDrawer, "transform", 340);
-      if (tdScrim) promoteSheetWillChange(tdScrim, "opacity", 340);
+      if (wasHidden && !mobileSwap) {
+        playMobileSheetOpen(tdDrawer, tdScrim);
+      } else {
+        promoteSheetWillChange(tdDrawer, "transform", 340);
+        if (tdScrim) promoteSheetWillChange(tdScrim, "opacity", 340);
+      }
     }
     tdDrawer.setAttribute("aria-hidden", "false");
     $("#v-collie")?.classList?.remove("is-main-focused");
@@ -24065,15 +24887,16 @@
     if (!closingNotesOverlay) {
       syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadThread && !opts.immediate && desktopMode });
     }
+    let glided = false;
     if (mobileSwap && !hadThread && !opts.immediate) {
       playMobileSheetSwap(tdDrawer, opts.restoring ? "return" : "drill");
     } else if (!hadThread && !opts.immediate) {
       if (!wasAnyDrawer) {
-        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: tdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
+        glided = runDesktopDrawerGlide({ kind: "open", drawerEl: tdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift, lockSnap });
         if (!glided) playDrawerTransition(tdDrawer, false);
       } else {
-        if (nextW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW });
-        else if (nextW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW });
+        if (nextW > prevOpenW + 1) glided = runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
+        else if (nextW < prevOpenW - 1) glided = runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
         playDrawerTransition(tdDrawer, true);
       }
     }
@@ -24085,17 +24908,50 @@
       const ae = document.activeElement;
       if (ae && $("#v-collie")?.contains?.(ae) && typeof ae.blur === "function") ae.blur();
     }
-    syncActiveThreadMarks(info);
+    clearTimeout(tdDrawer._markTimer);
+    tdDrawer._markTimer = 0;
+    if (desktopMode) {
+      syncActiveThreadMarks(info);
+    } else if ($("#super-thread")?.querySelector?.(".in-active-thread")) {
+      // Mobile bottom sheet covers #super-thread completely; only clear stale marks if resized from desktop.
+      for (const n of $$("#super-thread .in-active-thread")) n.classList.remove("in-active-thread");
+    }
     if (desktopMode && lockSnap && view === "collie") {
       beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
     const hasRestore = typeof opts.restoreScrollTop === "number";
+    const alreadyWarm = tdListEl?._tdRoot === realRoot && (tdListEl?.childElementCount || 0) >= resolved.list.length;
+    const mobileColdSlice = !desktopMode && !hadThread && !opts.immediate && !hasRestore && !alreadyWarm && resolved.list.length > 6;
+    let initialSliceStart = 0;
+    if (mobileColdSlice) {
+      const fIdx = focusMsgId ? resolved.list.findIndex((m) => entryKey(m) === focusMsgId || m.id === focusMsgId) : -1;
+      initialSliceStart = fIdx >= 0
+        ? Math.max(0, Math.min(resolved.list.length - 6, fIdx - 2))
+        : Math.max(0, resolved.list.length - 6);
+    }
     renderThreadDrawer({
+      allEntries,
+      info,
       focusMsgId,
+      instantFocus: !desktopMode && !hadThread && !opts.immediate,
       scrollBottom: !focusMsgId && !hasRestore,
       restoreScrollTop: hasRestore ? opts.restoreScrollTop : undefined,
-      force: true,
+      sliceStart: initialSliceStart,
+      force: !alreadyWarm,
     });
+    if (initialSliceStart > 0) {
+      let remStart = initialSliceStart;
+      const mountNextChunk = () => {
+        tdDrawer._fullRenderTimer = 0;
+        if (activeThreadRoot !== realRoot || tdDrawer.hidden) return;
+        remStart = Math.max(0, remStart - 4);
+        renderThreadDrawer({ sliceStart: remStart, preserveAnchor: true, skipMeta: true });
+        if (remStart > 0) {
+          tdDrawer._fullRenderTimer = setTimeout(mountNextChunk, 40);
+        }
+      };
+      tdDrawer._fullRenderTimer = setTimeout(mountNextChunk, 290);
+    }
     if (resolved.missingRoot && canLoadOlder()) {
       ensureThreadRootLoaded(activeThreadRoot, false);
     }
@@ -24124,6 +24980,14 @@
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     const desktopCloseAnim = !opts.immediate && !switching && !reduced && hadThread && desktopMode && !tdDrawer.hidden;
     const overlayCloseAnim = !opts.immediate && !switching && !reduced && !desktopMode && wasOpen && !tdDrawer.hidden;
+    clearTimeout(tdDrawer._markTimer);
+    tdDrawer._markTimer = 0;
+    clearTimeout(tdDrawer._fullRenderTimer);
+    tdDrawer._fullRenderTimer = 0;
+    if (tdDrawer._fullRenderRAF && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(tdDrawer._fullRenderRAF);
+    }
+    tdDrawer._fullRenderRAF = 0;
     activeThreadRoot = null;
     activeThreadAnchor = "";
     drawerReplyTarget = null;
@@ -24142,6 +25006,7 @@
       resetDrawerMotion(tdDrawer);
     }
     if (tdScrim) {
+      clearMobileSheetOpen(tdScrim);
       tdScrim.classList.remove("is-dragging");
       tdScrim.style.opacity = "";
       if (overlayCloseAnim) promoteSheetWillChange(tdScrim, "opacity", 320);
@@ -24155,14 +25020,12 @@
     if (!switching) syncDrawerBackButtons();
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     tdDrawer.setAttribute("aria-hidden", "true");
-    if (desktopMode && lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
-    }
     clearTimeout(tdHideTimer);
     const hideNow = () => {
       resetDrawerMotion(tdDrawer);
       if (tdWorkersEl) { tdWorkersEl.hidden = true; tdWorkersEl.innerHTML = ""; }
       tdDrawer.hidden = true;
+      if ("inert" in tdDrawer) tdDrawer.inert = true;
       if (tdScrim) {
         tdScrim.classList.remove("is-dragging");
         clearSheetWillChange(tdScrim);
@@ -24170,18 +25033,24 @@
         tdScrim.hidden = true;
       }
     };
+    let glided = false;
     if (opts.immediate || switching || reduced) {
       hideNow();
     } else if (desktopCloseAnim) {
       const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
         ? computeCollieShiftPx(280) : 0;
-      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: tdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      glided = runDesktopDrawerGlide({ kind: "close", drawerEl: tdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, lockSnap, onDone: hideNow });
       if (!glided) tdHideTimer = setTimeout(hideNow, 170);
     } else {
       tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
     }
+    if (desktopMode && lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
+    }
     if (wasOpen && !switching && opts.rerender !== false && view === "collie") {
-      syncActiveThreadMarks();
+      if (desktopMode || $("#super-thread")?.querySelector?.(".in-active-thread")) {
+        syncActiveThreadMarks();
+      }
       if (hadThread && desktopMode) {
         renderSuper();
       }
@@ -24664,6 +25533,7 @@
     if (wdMpDangerGroup) wdMpDangerGroup.hidden = !isLive;
     if (!isLive) disarmInterrupt("worker-more");
     if (wdBarEl) wdBarEl.hidden = !showDevTabs;
+    wdDrawer?.querySelector?.(".wd-top")?.classList?.toggle("has-bar", !!showDevTabs);
   }
   function syncDevModeUI() {
     const viewerEl = $("#viewer");
@@ -24695,7 +25565,10 @@
   }
   function resetWdChatStateOnly() {
     if (!wdThreadEl) return;
-    wdThreadEl._sig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
+    clearTimeout(wdThreadEl._chunkTimer);
+    wdThreadEl._chunkTimer = 0;
+    wdThreadEl._sig = ""; wdThreadEl._rawMsgsSig = ""; wdThreadEl._msgs = null; wdThreadEl._blocks = null; wdThreadEl._lazyRuns = null; wdThreadEl._older = null; wdThreadEl._restore = null; wdThreadEl._expandedPromptKeys = null;
+    wdThreadEl._renderedCacheKey = "";
     wdThreadEl._fresh = true;
     wdLastLive = null; wdShowRaw = false;
   }
@@ -24955,6 +25828,7 @@
     wdModelEl.hidden = false;
     wdMoreState.modelText = modelStr;
     syncWdMoreMenuInfo();
+    syncQuotaContext();
   }
   function syncWorkerDrawerMeta() {
     if (!activeWorkerKey || !wdDrawer) return;
@@ -25053,6 +25927,7 @@
         wdSummaryTextEl.title = cleanSummary;
       }
     }
+    wdDrawer?.querySelector?.(".wd-top")?.classList?.toggle("has-summary", !!cleanSummary);
     wdMoreState.kindLabel = kl;
     wdMoreState.workerName = name;
     wdMoreState.dispTitle = dispTitle;
@@ -25065,9 +25940,36 @@
       wdMoreState.modelText = "";
     }
     syncWdMoreMenuInfo();
-    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (wdGoneEl && !wdGoneEl.hidden) wdGoneEl.hidden = true;
     applyWdModeUI();
     syncWorkerComposerUI();
+    syncQuotaContext();
+  }
+  function scheduleAfterWdSlide(fn) {
+    clearTimeout(wdDrawer?._deferredDrawTimer);
+    if (wdDrawer) {
+      wdDrawer._deferredDrawTimer = 0;
+      wdDrawer._onSlideSettled = null;
+    }
+    const remain = !isDesktopDrawerViewport() && wdDrawer?._slideSettleAt
+      ? (wdDrawer._slideSettleAt - performance.now())
+      : 0;
+    if (remain > 16) {
+      let ran = false;
+      const runOnce = () => {
+        if (ran) return;
+        ran = true;
+        clearTimeout(wdDrawer._deferredDrawTimer);
+        wdDrawer._deferredDrawTimer = 0;
+        wdDrawer._onSlideSettled = null;
+        fn();
+      };
+      wdDrawer._onSlideSettled = runOnce;
+      wdDrawer._deferredDrawTimer = setTimeout(runOnce, Math.min(300, Math.ceil(remain)));
+      return true;
+    }
+    fn();
+    return false;
   }
   async function loadWdHistory(past, supW, opts = {}) {
     if (!wdThreadEl) return;
@@ -25075,6 +25977,11 @@
     const preserve = !!opts.preserve;
     clearTimeout(wdSkelTimer);
     wdSkelTimer = 0;
+    clearTimeout(wdDrawer?._deferredDrawTimer);
+    if (wdDrawer) {
+      wdDrawer._deferredDrawTimer = 0;
+      wdDrawer._onSlideSettled = null;
+    }
     if (!past) {
       resetWdChatStateOnly();
       clearWdLive(wdPaneId);
@@ -25087,18 +25994,43 @@
     }
     const cacheKey = "h:" + past.id;
     const cached = threadCache.get(cacheKey);
-    resetWdChatStateOnly();
-    clearWdLive(wdPaneId);
-    if (cached) {
-      drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"));
-      wdThreadEl._fresh = true;
-    } else if (preserve && wdThreadEl.childElementCount > 0) {
-      wdSkelTimer = setTimeout(() => {
-        wdSkelTimer = 0;
-        if (seq === wdSeq && activeWorkerKey && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
-      }, 140);
+    const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
+    if (!sameRendered) {
+      resetWdChatStateOnly();
+      clearWdLive(wdPaneId);
+      if (cached) {
+        const cachedRawSig = workerMsgsRawSig(cached, 0);
+        const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 4;
+        const paintCached = () => {
+          if (seq !== wdSeq || !activeWorkerKey) return;
+          drawThread(cached, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
+            progressive: mobileProgressive,
+            cacheKey,
+            rawSig: cachedRawSig,
+            isAlive: () => seq === wdSeq && !!activeWorkerKey,
+          });
+          if (!mobileProgressive) {
+            wdThreadEl._renderedCacheKey = cacheKey;
+            wdThreadEl._rawMsgsSig = cachedRawSig;
+          }
+          wdThreadEl._fresh = true;
+        };
+        if (mobileProgressive && wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16) {
+          wdThreadEl.innerHTML = SKELETON;
+          scheduleAfterWdSlide(paintCached);
+        } else {
+          paintCached();
+        }
+      } else if (preserve && wdThreadEl.childElementCount > 0) {
+        wdSkelTimer = setTimeout(() => {
+          wdSkelTimer = 0;
+          if (seq === wdSeq && activeWorkerKey && !wdThreadEl._msgs) wdThreadEl.innerHTML = SKELETON;
+        }, 140);
+      } else {
+        wdThreadEl.innerHTML = SKELETON;
+      }
     } else {
-      wdThreadEl.innerHTML = SKELETON;
+      clearWdLive(wdPaneId);
     }
     try {
       const q = new URLSearchParams({ kind: past.kind, session: past.session, cwd: past.cwd });
@@ -25107,16 +26039,50 @@
       if (seq !== wdSeq || !activeWorkerKey) return;
       clearTimeout(wdSkelTimer);
       wdSkelTimer = 0;
+      const nextMsgs = r.messages || [];
+      const nextEarlier = r.earlier || 0;
+      const nextRawSig = workerMsgsRawSig(nextMsgs, nextEarlier);
       resetEarlier(wdThreadEl, (c) => `/api/transcript?${q}&before=${c}`);
-      wdThreadEl._msgs = r.messages || [];
-      wdThreadEl._liveEarlier = r.earlier || 0;
-      keepThread(cacheKey, wdThreadEl._msgs);
-      wdThreadEl._redraw = () => { if (seq === wdSeq && activeWorkerKey) drawThread(threadMsgs(wdThreadEl), wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。")); };
-      wdThreadEl._redraw();
+      wdThreadEl._msgs = nextMsgs;
+      wdThreadEl._liveEarlier = nextEarlier;
+      keepThread(cacheKey, nextMsgs);
+      wdThreadEl._redraw = () => {
+        if (seq === wdSeq && activeWorkerKey) {
+          const allMsgs = threadMsgs(wdThreadEl);
+          const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
+          drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), { rawSig: curRawSig });
+          wdThreadEl._renderedCacheKey = cacheKey;
+          wdThreadEl._rawMsgsSig = curRawSig;
+        }
+      };
+      // Warm reopen fast-path: identical transcript skips re-parsing markdown and forced scrollHeight reads completely.
+      if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === nextRawSig && wdThreadEl._sig) {
+        return;
+      }
+      const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && nextMsgs.length > 4;
+      scheduleAfterWdSlide(() => {
+        if (seq !== wdSeq || !activeWorkerKey) return;
+        const allMsgs = threadMsgs(wdThreadEl);
+        const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
+        if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
+          return;
+        }
+        drawThread(allMsgs, wdThreadEl, tx("worker.noMsgs", "这个任务会话没有消息记录。"), {
+          progressive: mobileProgressive,
+          cacheKey,
+          rawSig: curRawSig,
+          isAlive: () => seq === wdSeq && !!activeWorkerKey,
+        });
+        if (!mobileProgressive) {
+          wdThreadEl._renderedCacheKey = cacheKey;
+          wdThreadEl._rawMsgsSig = curRawSig;
+        }
+      });
     } catch (err) {
       if (seq !== wdSeq || !activeWorkerKey) return;
       clearTimeout(wdSkelTimer);
       wdSkelTimer = 0;
+      if (sameRendered) return;
       const rep = supW?.last_report || "";
       wdThreadEl.innerHTML = rep
         ? `<div class="msg assistant">${md(rep)}</div>`
@@ -25136,43 +26102,96 @@
     }
     const id = livePaneId;
     const m = curWdMode();
-    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (wdGoneEl && !wdGoneEl.hidden) wdGoneEl.hidden = true;
     if (m === "chat") {
       const seq = ++wdSeq;
       const cacheKey = "p:" + id;
       const cached = threadCache.get(cacheKey);
-      resetWdChatStateOnly();
+      const sameRendered = wdThreadEl._renderedCacheKey === cacheKey && !!wdThreadEl._sig;
+      if (!sameRendered) {
+        resetWdChatStateOnly();
+      }
       resetEarlier(wdThreadEl, (c) => paneURL(id, "earlier") + "?before=" + c);
       wdThreadEl.classList.remove("asking");
-      if (cached) {
-        drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
-        wdThreadEl._fresh = true;
-      } else if (preserve && wdThreadEl.childElementCount > 0) {
-        wdSkelTimer = setTimeout(() => {
-          wdSkelTimer = 0;
-          if (seq === wdSeq && activeWorkerKey && wdPaneId === id && !wdThreadEl._msgs) {
+      if (!sameRendered) {
+        if (cached) {
+          const cachedRawSig = workerMsgsRawSig(cached, 0);
+          const mobileProgressive = !isDesktopDrawerViewport() && cached.length > 4;
+          const paintCached = () => {
+            if (seq !== wdSeq || !activeWorkerKey || wdPaneId !== id) return;
+            drawThread(cached, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
+              progressive: mobileProgressive,
+              cacheKey,
+              rawSig: cachedRawSig,
+              isAlive: () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id,
+            });
+            if (!mobileProgressive) {
+              wdThreadEl._renderedCacheKey = cacheKey;
+              wdThreadEl._rawMsgsSig = cachedRawSig;
+            }
+            wdThreadEl._fresh = true;
+          };
+          if (mobileProgressive && wdDrawer?._slideSettleAt && wdDrawer._slideSettleAt > performance.now() + 16) {
             wdThreadEl.innerHTML = SKELETON;
+            scheduleAfterWdSlide(paintCached);
+          } else {
+            paintCached();
           }
-        }, 140);
-      } else {
-        wdThreadEl.innerHTML = SKELETON;
+        } else if (preserve && wdThreadEl.childElementCount > 0) {
+          wdSkelTimer = setTimeout(() => {
+            wdSkelTimer = 0;
+            if (seq === wdSeq && activeWorkerKey && wdPaneId === id && !wdThreadEl._msgs) {
+              wdThreadEl.innerHTML = SKELETON;
+            }
+          }, 140);
+        } else {
+          wdThreadEl.innerHTML = SKELETON;
+        }
       }
       const cachedLive = wdLiveCache.get(id);
       if (cachedLive) drawWdLive(cachedLive);
       else if (wdLiveEl) { wdLiveEl.hidden = true; wdLiveEl.innerHTML = ""; wdLiveEl._html = ""; }
       const alive = () => seq === wdSeq && !!activeWorkerKey && wdPaneId === id && curWdMode() === "chat";
-      wdThreadEl._redraw = () => alive() && drawThread(threadMsgs(wdThreadEl), wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
+      wdThreadEl._redraw = () => {
+        if (!alive()) return;
+        const allMsgs = threadMsgs(wdThreadEl);
+        const curRawSig = workerMsgsRawSig(allMsgs, wdThreadEl._liveEarlier || 0);
+        drawThread(allMsgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), { rawSig: curRawSig });
+        wdThreadEl._renderedCacheKey = cacheKey;
+        wdThreadEl._rawMsgsSig = curRawSig;
+      };
       wdStream = openES(paneURL(id, "chat"));
       const clearSkel = () => { if (wdSkelTimer) { clearTimeout(wdSkelTimer); wdSkelTimer = 0; } };
-      const showPane = (msgs) => { clearSkel(); keepThread(cacheKey, msgs); drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…")); };
+      const showPane = (msgs) => {
+        clearSkel();
+        keepThread(cacheKey, msgs);
+        const curRawSig = workerMsgsRawSig(msgs, wdThreadEl._liveEarlier || 0);
+        if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
+          return;
+        }
+        const mobileProgressive = !isDesktopDrawerViewport() && !wdThreadEl._sig && msgs.length > 4;
+        scheduleAfterWdSlide(() => {
+          if (!alive()) return;
+          if (wdThreadEl._renderedCacheKey === cacheKey && wdThreadEl._rawMsgsSig && wdThreadEl._rawMsgsSig === curRawSig && wdThreadEl._sig) {
+            return;
+          }
+          drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"), {
+            progressive: mobileProgressive,
+            cacheKey,
+            rawSig: curRawSig,
+            isAlive: alive,
+          });
+          if (!mobileProgressive) {
+            wdThreadEl._renderedCacheKey = cacheKey;
+            wdThreadEl._rawMsgsSig = curRawSig;
+          }
+        });
+      };
       wdStream.addEventListener("reset", () => { if (alive()) resetWdChatStateOnly(); });
       wdStream.addEventListener("patch", (e) => alive() && showPane(applyPatch(wdThreadEl, JSON.parse(e.data))));
       wdStream.addEventListener("messages", (e) => {
         if (!alive()) return;
-        clearSkel();
-        const msgs = JSON.parse(e.data);
-        keepThread(cacheKey, msgs);
-        drawThread(msgs, wdThreadEl, tx("worker.waitingOutput", "等待任务输出…"));
+        showPane(JSON.parse(e.data));
       });
       wdStream.addEventListener("log", (e) => {
         if (!alive()) return;
@@ -25370,7 +26389,7 @@
     wdWasLive = !!initCtx.liveAgent;
     wdLastLivePaneId = initCtx.livePaneId || wdPaneId || "";
     wdLastLiveTitle = "";
-    if (wdGoneEl) wdGoneEl.hidden = true;
+    if (wdGoneEl && !wdGoneEl.hidden) wdGoneEl.hidden = true;
     if (wantMode) wdMode = wantMode;
     // Default read-only peek mode: never keep bottom composer permanently open on open/switch (#t12601).
     wdComposerOpen = false;
@@ -25387,18 +26406,22 @@
     const mobileSwap = !desktopMode && isDrawerReturnStackEnabled() && (!!opts.returnTo || !!opts.restoring || closingNotesOverlay || wasAnyDrawer);
     const handoffScrim = (wasAnyDrawer || closingNotesOverlay) && !desktopMode;
     if (wdScrim && !handoffScrim) {
+      clearMobileSheetOpen(wdScrim);
       wdScrim.classList.remove("is-dragging");
       wdScrim.style.opacity = "";
       if (mobileSwap) holdScrimImmediate(wdScrim);
       wdScrim.hidden = false;
     }
-    if (wdDrawer.hidden) {
-      wdDrawer.hidden = false;
-      if (!mobileSwap) wdDrawer.offsetWidth;
-    }
+    const wasHidden = !!wdDrawer.hidden;
+    if (wasHidden) wdDrawer.hidden = false;
+    if ("inert" in wdDrawer) wdDrawer.inert = false;
     if (!desktopMode && !hadWorker) {
-      promoteSheetWillChange(wdDrawer, "transform", 340);
-      if (wdScrim) promoteSheetWillChange(wdScrim, "opacity", 340);
+      if (wasHidden && !mobileSwap && !opts.immediate) {
+        playMobileSheetOpen(wdDrawer, handoffScrim ? null : wdScrim);
+      } else {
+        promoteSheetWillChange(wdDrawer, "transform", 340);
+        if (wdScrim) promoteSheetWillChange(wdScrim, "opacity", 340);
+      }
     }
     wdDrawer.setAttribute("aria-hidden", "false");
     appEl.classList.add("has-worker");
@@ -25413,15 +26436,16 @@
     if (!closingNotesOverlay) {
       syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && desktopMode });
     }
+    let glided = false;
     if (mobileSwap && !hadWorker) {
       playMobileSheetSwap(wdDrawer, opts.restoring ? "return" : "drill");
     } else if (!hadWorker) {
       if (!wasAnyDrawer) {
-        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
+        glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift, lockSnap });
         if (!glided) playDrawerTransition(wdDrawer, false);
       } else {
-        if (nextW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW });
-        else if (nextW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW });
+        if (nextW > prevOpenW + 1) glided = runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
+        else if (nextW < prevOpenW - 1) glided = runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
         playDrawerTransition(wdDrawer, true);
       }
       if (desktopMode && lockSnap && view === "collie") {
@@ -25430,7 +26454,7 @@
     }
     syncWorkerDrawerMeta();
     syncWorkerSendBtn();
-    syncSideActive({ skipBadge: true });
+    if (innerWidth > 760) syncSideActive({ skipBadge: true });
     openWorkerDrawerStream({ preserve: hadWorker && switchedTarget });
   }
   function closeWorkerDrawer(opts = {}) {
@@ -25462,6 +26486,12 @@
     wdPeekMode = "";
     const ae = document.activeElement;
     if (ae && wdDrawer.contains?.(ae) && typeof ae.blur === "function") ae.blur();
+    clearTimeout(wdDrawer._deferredDrawTimer);
+    wdDrawer._deferredDrawTimer = 0;
+    wdDrawer._onSlideSettled = null;
+    wdDrawer._slideSettleAt = 0;
+    clearTimeout(wdThreadEl?._chunkTimer);
+    if (wdThreadEl) wdThreadEl._chunkTimer = 0;
     wdSeq++;
     const prevWdPane = wdPaneId || wdLastLivePaneId;
     wdWasLive = false;
@@ -25489,6 +26519,7 @@
       resetDrawerMotion(wdDrawer);
     }
     if (wdScrim) {
+      clearMobileSheetOpen(wdScrim);
       wdScrim.classList.remove("is-dragging");
       wdScrim.style.opacity = "";
       if (overlayCloseAnim) promoteSheetWillChange(wdScrim, "opacity", 320);
@@ -25501,14 +26532,13 @@
     syncSideActive({ skipBadge: true });
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     wdDrawer.setAttribute("aria-hidden", "true");
-    if (desktopMode && lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
-    }
+    syncQuotaContext();
     clearTimeout(wdHideTimer);
     const hideNow = () => {
       resetDrawerMotion(wdDrawer);
       if (wdGoneEl) wdGoneEl.hidden = true;
       wdDrawer.hidden = true;
+      if ("inert" in wdDrawer) wdDrawer.inert = true;
       if (wdScrim) {
         wdScrim.classList.remove("is-dragging");
         clearSheetWillChange(wdScrim);
@@ -25516,15 +26546,19 @@
         wdScrim.hidden = true;
       }
     };
+    let glided = false;
     if (opts.immediate || switching || reduced) {
       hideNow();
     } else if (desktopCloseAnim) {
       const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
         ? computeCollieShiftPx(280) : 0;
-      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: wdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      glided = runDesktopDrawerGlide({ kind: "close", drawerEl: wdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, lockSnap, onDone: hideNow });
       if (!glided) wdHideTimer = setTimeout(hideNow, 170);
     } else {
       wdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
+    }
+    if (desktopMode && lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
   }
 
@@ -25541,8 +26575,8 @@
       setUnifiedDrawerWide(!drawerWide);
       applyWorkerWidth();
       const nextW = _lastWorkerW || _lastDrawerW || drawerDefaultW();
-      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
-      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
+      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevW, toW: nextW, lockSnap });
+      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevW, toW: nextW, lockSnap });
       if (curWdMode() === "screen" && !isLayoutGliding()) requestAnimationFrame(() => fitWdTerm());
       if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     });
@@ -25879,11 +26913,25 @@
       }
     }
   }
+  function parseMdCacheKey(cacheKey) {
+    if (!cacheKey.startsWith("\u0002")) return { rawKey: cacheKey, opts: null };
+    const rest = cacheKey.slice(1);
+    const sep = rest.indexOf("\u0003");
+    if (sep >= 0) {
+      const exStr = rest.slice(0, sep);
+      const excludePathImages = exStr ? new Set(exStr.split("\u001f").filter(Boolean)) : null;
+      return { rawKey: rest.slice(sep + 1), opts: { includePathImages: true, excludePathImages } };
+    }
+    return { rawKey: rest, opts: { includePathImages: true } };
+  }
   function md(src, opts = null) {
     syncMdWorkerCache();
     const includePathImages = !!(opts && opts.includePathImages);
     const rawKey = String(src || "");
-    const key = includePathImages ? "\u0002" + rawKey : rawKey;
+    const exArr = includePathImages && opts?.excludePathImages?.size ? [...opts.excludePathImages].sort() : null;
+    const key = includePathImages
+      ? (exArr ? "\u0002" + exArr.join("\u001f") + "\u0003" + rawKey : "\u0002" + rawKey)
+      : rawKey;
     let out = mdCache.get(key);
     if (out === undefined) {
       const prevCands = _mdCurWorkerCandidates;
@@ -25921,14 +26969,13 @@
       for (const cacheKey of [...mdCacheMathKeys]) {
         mdCacheMathKeys.delete(cacheKey);
         if (!mdCache.has(cacheKey)) continue;
-        const includePathImages = cacheKey.startsWith("\u0002");
-        const rawKey = includePathImages ? cacheKey.slice(1) : cacheKey;
+        const { rawKey, opts } = parseMdCacheKey(cacheKey);
         const prevCands = _mdCurWorkerCandidates;
         const cands = new Set();
         _mdCurWorkerCandidates = cands;
         let freshHtml = "";
         try {
-          freshHtml = mdRender(rawKey, includePathImages ? { includePathImages: true } : null);
+          freshHtml = mdRender(rawKey, opts);
         } finally {
           _mdCurWorkerCandidates = prevCands;
         }
@@ -25975,6 +27022,69 @@
     const s = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return s.length > 42 ? s.slice(0, 40) + "…" : s;
   };
+  const ICON_EP_PR = '<svg class="ep-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="3.75" r="1.75"/><circle cx="4.5" cy="12.25" r="1.75"/><circle cx="11.5" cy="12.25" r="1.75"/><path d="M4.5 5.5v5M11.5 10.5V6.25a2 2 0 0 0-2-2H8"/><path d="M9.5 2.75 8 4.25l1.5 1.5"/></svg>';
+  const ICON_EP_ISSUE = '<svg class="ep-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none"/></svg>';
+  const ICON_EP_RELEASE = '<svg class="ep-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.75 7.6V3.5a.75.75 0 0 1 .75-.75h4.1a.75.75 0 0 1 .53.22l5.15 5.15a1 1 0 0 1 0 1.41l-3.75 3.75a1 1 0 0 1-1.41 0L2.97 8.13a.75.75 0 0 1-.22-.53Z"/><circle cx="5.75" cy="5.75" r=".85" fill="currentColor" stroke="none"/></svg>';
+  function parseGitEntityUrl(rawUrl) {
+    let u;
+    try { u = new URL(rawUrl); } catch { return null; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    const host = (u.hostname || "").toLowerCase();
+    const isGitHub = host === "github.com" || host === "www.github.com";
+    const isGitLab = host === "gitlab.com" || host === "www.gitlab.com" || host.startsWith("gitlab.");
+    if (!isGitHub && !isGitLab) return null;
+    const segs = u.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    const safeDecode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+    if (isGitHub) {
+      if (segs.length < 4) return null;
+      const [owner, repo, kindSeg, idSeg] = segs;
+      if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null;
+      const prefix = `${owner}/${repo}`;
+      if (kindSeg === "pull" && /^\d+$/.test(idSeg) && (segs.length === 4 || (segs.length === 5 && /^(?:files|commits|checks)$/.test(segs[4])))) {
+        return { kind: "pr", prefix, sep: "#", ref: idSeg, icon: ICON_EP_PR, kindAria: tx("md.entityPr", "Pull Request") };
+      }
+      if (kindSeg === "issues" && /^\d+$/.test(idSeg) && segs.length === 4) {
+        return { kind: "issue", prefix, sep: "#", ref: idSeg, icon: ICON_EP_ISSUE, kindAria: tx("md.entityIssue", "Issue") };
+      }
+      if (kindSeg === "releases" && idSeg === "tag" && segs.length === 5 && segs[4]) {
+        const tag = safeDecode(segs[4]);
+        if (!tag || /[<>"'\s]/.test(tag)) return null;
+        return { kind: "release", prefix, sep: "@", ref: tag, icon: ICON_EP_RELEASE, kindAria: tx("md.entityRelease", "Release") };
+      }
+      return null;
+    }
+    const dashIdx = segs.indexOf("-");
+    let repoSegs, rest;
+    if (dashIdx >= 2 && dashIdx + 2 < segs.length) {
+      repoSegs = segs.slice(0, dashIdx);
+      rest = segs.slice(dashIdx + 1);
+    } else {
+      const kIdx = segs.findIndex((s, i) => i >= 2 && (s === "merge_requests" || s === "issues" || s === "releases"));
+      if (kIdx < 2 || kIdx + 1 >= segs.length) return null;
+      repoSegs = segs.slice(0, kIdx);
+      rest = segs.slice(kIdx);
+    }
+    if (repoSegs.length < 2 || repoSegs.some((s) => !/^[\w.-]+$/.test(s))) return null;
+    const prefix = repoSegs.length <= 2 ? repoSegs.join("/") : repoSegs.slice(-2).join("/");
+    const [kindSeg, idSeg] = rest;
+    if (kindSeg === "merge_requests" && /^\d+$/.test(idSeg) && (rest.length === 2 || (rest.length === 3 && /^(?:diffs|commits|pipelines)$/.test(rest[2])))) {
+      return { kind: "mr", prefix, sep: "!", ref: idSeg, icon: ICON_EP_PR, kindAria: tx("md.entityMr", "Merge Request") };
+    }
+    if (kindSeg === "issues" && /^\d+$/.test(idSeg) && rest.length === 2) {
+      return { kind: "issue", prefix, sep: "#", ref: idSeg, icon: ICON_EP_ISSUE, kindAria: tx("md.entityIssue", "Issue") };
+    }
+    if (kindSeg === "releases" && idSeg && rest.length === 2) {
+      const tag = safeDecode(idSeg);
+      if (!tag || /[<>"'\s]/.test(tag)) return null;
+      return { kind: "release", prefix, sep: "@", ref: tag, icon: ICON_EP_RELEASE, kindAria: tx("md.entityRelease", "Release") };
+    }
+    return null;
+  }
+  function renderGitEntityPill(rawUrl, ent) {
+    const eu = esc(rawUrl);
+    const fullLabel = `${ent.prefix}${ent.sep}${ent.ref}`;
+    return `<a class="url entity-pill is-${ent.kind}" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}" aria-label="${esc(`${ent.kindAria} ${fullLabel}`)}">${ent.icon}<span class="ep-text"><span class="ep-repo">${esc(ent.prefix)}</span><span class="ep-ref">${esc(ent.sep + ent.ref)}</span></span></a>`;
+  }
   const linkifyUrlMatch = (m) => {
     const raw = unesc(m);
     const cut = raw.search(/[<>"`]/);
@@ -25991,12 +27101,41 @@
       } else break;
     }
     if (!/^https?:\/\/[^\/.\s]/.test(u)) return null;
+    const ent = parseGitEntityUrl(u);
+    if (ent) {
+      return {
+        anchor: renderGitEntityPill(u, ent),
+        suffix: esc(tail + rest),
+      };
+    }
     const eu = esc(u);
     return {
       anchor: `<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`,
       suffix: esc(tail + rest),
     };
   };
+  const FILE_LINE_RE = /(?<![A-Za-z0-9_/.~:\\-])((?:~\/|\/|\.\/)?(?:[\w.\-+@%~]+\/)+[\w.\-+@%~]+\.[A-Za-z][A-Za-z0-9]{0,9}(?:#L\d+(?:-L?\d+)?|:\d+(?:[-:]\d+)?))(?![A-Za-z0-9_\/])/g;
+  function parseFileLineRef(raw) {
+    if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return null;
+    const lm = raw.match(/(?:#L(\d+(?:-L?\d+)?)|:(\d+(?:[-:]\d+)?))$/i);
+    if (!lm) return null;
+    const lineRaw = lm[1] || lm[2];
+    const lineSuffix = lm[0];
+    const base = raw.slice(0, -lineSuffix.length);
+    if (!base || base.startsWith("http:") || base.startsWith("https:")) return null;
+    if (!/^(?:~\/|\/|\.\/)?(?:[\w.\-+@%~\u4e00-\u9fff]+\/)+[\w.\-+@%~\u4e00-\u9fff]*[A-Za-z0-9_\u4e00-\u9fff][\w.\-+@%~\u4e00-\u9fff]*\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(base)) {
+      return null;
+    }
+    const body = base.replace(/^(?:~\/|\/|\.\/)/, "");
+    const segs = body.split("/");
+    if (segs.some((seg) => !seg || seg === "." || /^\.{2,}$/.test(seg))) return null;
+    return { path: base, line: lineRaw, displayLine: lm[1] ? "#L" + lm[1] : ":" + lm[2] };
+  }
+  function renderFileLinePill(ref) {
+    const ep = esc(ref.path);
+    const tip = tx("md.openFileLine", "打开文件 {path} 第 {line} 行", { path: ref.path, line: ref.line });
+    return `<a ${fileLinkAttrs(ref.path, ep, esc(tip), "has-code-link")} data-line="${esc(ref.line)}"><code class="code-link is-fref"><span class="fref-path">${ep}</span><span class="fref-line">${esc(ref.displayLine)}</span></code></a>`;
+  }
   function parseInlineCodePath(raw) {
     if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return "";
     const base = raw.replace(/(?:#L\d+(?:-L?\d+)?|:\d+(?:[-:]\d+)?)$/i, "");
@@ -26259,9 +27398,106 @@
     if (tm) title = (tm[1] ?? tm[2] ?? tm[3] ?? "").trim();
     return { title };
   }
-  function renderFencedBlock(info, code) {
+  const ICON_STEP_DONE = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.6"/></svg>';
+  const ICON_STEP_ERR = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 3.1v3.4"/><circle cx="6" cy="9" r=".8" fill="currentColor" stroke="none"/></svg>';
+  function parseMetricsBlock(raw) {
+    const items = [];
+    for (const rawLine of String(raw || "").split("\n")) {
+      const line = rawLine.trim().replace(/^[-*•]\s+/, "");
+      if (!line) continue;
+      if (/^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/.test(line)) continue;
+      let label = "", value = "", delta = "";
+      if (line.includes("|")) {
+        const parts = line.replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((s) => s.trim().replace(/\\\|/g, "|"));
+        if (parts.length < 2) continue;
+        label = parts[0];
+        value = parts[1];
+        delta = parts.slice(2).filter(Boolean).join(" · ");
+      } else {
+        const cm = line.match(/^([^:：]+?)\s*[:：]\s*(.+)$/);
+        if (!cm) continue;
+        label = cm[1].trim();
+        value = cm[2].trim();
+      }
+      if (!label || !value) continue;
+      items.push({ label, value, delta });
+    }
+    return items.length ? items : null;
+  }
+  function classifyMetricDelta(delta) {
+    const d = String(delta || "").trim();
+    if (!d) return "";
+    if (/^(?:[+↑▲↗])/.test(d)) return "is-pos";
+    if (/^(?:[-−↓▼↘])/.test(d)) return "is-neg";
+    return "";
+  }
+  function renderMetricsBlock(raw) {
+    const items = parseMetricsBlock(raw);
+    if (!items) return "";
+    const n = items.length;
+    const cols = n <= 4 ? n : (n <= 6 ? 3 : 4);
+    const body = items.map((it) => {
+      const tone = classifyMetricDelta(it.delta);
+      const deltaHtml = it.delta
+        ? `<dd class="md-metric-delta${tone ? " " + tone : ""}">${esc(it.delta)}</dd>`
+        : "";
+      return `<div class="md-metric"><dt class="md-metric-label">${esc(it.label)}</dt><dd class="md-metric-val">${esc(it.value)}</dd>${deltaHtml}</div>`;
+    }).join("");
+    return `<div class="md-metrics" role="region" aria-label="${esc(tx("md.metricsAria", "核心指标"))}" data-cols="${cols}" data-count="${n}"><dl class="md-metrics-grid">${body}</dl></div>`;
+  }
+  function parseStepsBlock(raw) {
+    const items = [];
+    for (const rawLine of String(raw || "").split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const m = line.match(/^(?:(?:[-*•]|\d+[.)])\s+)?\[([xX~*! ])\]\s+(.+)$/);
+      if (!m) continue;
+      const sig = m[1];
+      const status = (sig === "x" || sig === "X") ? "done"
+        : (sig === "~" || sig === "*") ? "active"
+        : sig === "!" ? "error"
+        : "todo";
+      const rest = m[2].trim();
+      const parts = rest.split(/(?<!\\)\|/).map((s) => s.trim().replace(/\\\|/g, "|"));
+      const title = parts[0] || "";
+      const note = parts.slice(1).filter(Boolean).join(" · ");
+      if (!title) continue;
+      items.push({ status, title, note });
+    }
+    return items.length ? items : null;
+  }
+  function renderStepsBlock(raw, inlineFn = null) {
+    const items = parseStepsBlock(raw);
+    if (!items) return "";
+    const fmt = (s) => (typeof inlineFn === "function" ? inlineFn(esc(s)) : esc(s));
+    const statusLabel = {
+      done: tx("md.stepDone", "已完成"),
+      active: tx("md.stepActive", "进行中"),
+      error: tx("md.stepError", "阻塞或失败"),
+      todo: tx("md.stepTodo", "待办"),
+    };
+    const lis = items.map((it) => {
+      const icon = it.status === "done"
+        ? ICON_STEP_DONE
+        : it.status === "error"
+          ? ICON_STEP_ERR
+          : '<span class="md-step-dot" aria-hidden="true"></span>';
+      const noteHtml = it.note ? `<div class="md-step-note">${fmt(it.note)}</div>` : "";
+      return `<li class="md-step is-${it.status}"><span class="md-step-node" role="img" aria-label="${esc(statusLabel[it.status])}">${icon}</span><div class="md-step-body"><div class="md-step-title">${fmt(it.title)}</div>${noteHtml}</div></li>`;
+    }).join("");
+    return `<ol class="md-steps" aria-label="${esc(tx("md.stepsAria", "执行步骤"))}">${lis}</ol>`;
+  }
+  function renderFencedBlock(info, code, inlineFn = null) {
     const raw = String(code || "").replace(/\n$/, "");
     const fenceTag = String(info || "").trim().split(/[\s{:]/)[0].toLowerCase().replace(/^language-/, "");
+    if (fenceTag === "metrics" && raw.trim()) {
+      const mHtml = renderMetricsBlock(raw);
+      if (mHtml) return mHtml;
+    }
+    if (fenceTag === "steps" && raw.trim()) {
+      const sHtml = renderStepsBlock(raw, inlineFn);
+      if (sHtml) return sHtml;
+    }
     if (fenceTag === "mermaid" && raw.trim()) {
       const hash = richVisualHash("mermaid:" + raw);
       return `<div class="rv-card rv-mermaid is-pending" data-rv-kind="mermaid" data-rv-hash="${hash}" data-rv-mode="diagram"><div class="rv-float-acts" role="toolbar" aria-label="${esc(tx("rv.mermaidOpsAria", "Mermaid 图表操作"))}"><button type="button" class="rv-ico" data-rv-toggle="source" aria-pressed="false" title="${esc(tx("rv.viewSource", "查看源码"))}" aria-label="${esc(tx("rv.mermaidSourceAria", "查看 Mermaid 源码"))}">${ICON_RV_CODE}</button><button type="button" class="rv-ico" data-rv-expand="mermaid" title="${esc(tx("rv.expandFull", "全屏放大"))}" aria-label="${esc(tx("rv.mermaidExpandAria", "全屏放大查看图表"))}" hidden>${ICON_RV_EXPAND}</button></div><div class="rv-stage rv-mermaid-stage" role="img" aria-label="${esc(tx("rv.mermaidChart", "Mermaid 图表"))}"><div class="rv-mermaid-skeleton" aria-hidden="true"><span>${esc(tx("rv.mermaidLoading", "渲染图表中…"))}</span></div></div><pre class="rv-source" hidden><code data-lang="mermaid">${esc(raw)}</code></pre></div>`;
@@ -26278,7 +27514,7 @@
     }
     return renderCodeBlock(info, raw);
   }
-  function extractFencedBlocks(text, blocks) {
+  function extractFencedBlocks(text, blocks, inlineFn = null) {
     const lines = String(text || "").split("\n");
     const out = [];
     for (let i = 0; i < lines.length; i++) {
@@ -26305,7 +27541,7 @@
             }
             bodyLines.push(cl);
           }
-          blocks.push(renderFencedBlock(info, bodyLines.join("\n")));
+          blocks.push(renderFencedBlock(info, bodyLines.join("\n"), inlineFn));
           out.push(`\u0000${blocks.length - 1}\u0000`);
           i = j;
           continue;
@@ -26606,6 +27842,23 @@
   }
   const boundRvStageScrolls = new WeakSet();
   let rvStageRO = null;
+  let _rvStagePending = new Set();
+  let _rvStageRAF = 0;
+  function scheduleRichStageSync(card) {
+    if (!card) return;
+    _rvStagePending.add(card);
+    if (isLayoutGliding()) return;
+    if (_rvStageRAF) return;
+    const flush = () => {
+      _rvStageRAF = 0;
+      if (isLayoutGliding()) return;
+      const batch = [..._rvStagePending];
+      _rvStagePending.clear();
+      for (const c of batch) if (c.isConnected) syncRichStageScroll(c);
+    };
+    if (typeof requestAnimationFrame === "function") _rvStageRAF = requestAnimationFrame(flush);
+    else flush();
+  }
   function bindRichStageScroll(card, stage) {
     if (!card || !stage) return;
     if (!boundRvStageScrolls.has(stage)) {
@@ -26615,18 +27868,20 @@
         if (!rvStageRO) {
           rvStageRO = new ResizeObserver((entries) => {
             for (const entry of entries) {
-              const c = entry.target?.closest?.(".rv-card");
-              if (c) syncRichStageScroll(c);
+              const el = entry.target;
+              const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
+              if (w <= 0) { el._roLastW = 0; continue; }
+              if (el._roLastW === w) continue;
+              el._roLastW = w;
+              const c = el.closest?.(".rv-card");
+              if (c) scheduleRichStageSync(c);
             }
           });
         }
         try { rvStageRO.observe(stage); } catch {}
       }
     }
-    syncRichStageScroll(card);
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => { if (card.isConnected) syncRichStageScroll(card); });
-    }
+    scheduleRichStageSync(card);
   }
   function applySanitizedSvg(card, entry, hash) {
     const stage = card.querySelector?.(".rv-svg-stage");
@@ -27059,24 +28314,33 @@
     });
   }
   function collieThemeVarsCss() {
-    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057}:where(html,body){background-color:var(--collie-bg);color:var(--collie-fg)}</style>`;
+    const fontSans = '-apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif';
+    const fontMono = '"JetBrains Mono","SF Mono",ui-monospace,"MesloLGS NF","Symbols Nerd Font Mono",Menlo,Consolas,monospace';
+    return `<style id="collie-theme-vars">:root,:root[data-theme="light"]{color-scheme:light;--collie-bg:#ffffff;--collie-surface:#f7f7f6;--collie-surface-2:#efefed;--collie-ink:#111111;--collie-fg:#111111;--collie-fg-2:#55554f;--collie-muted:#8e8e88;--collie-line:#e9e9e6;--collie-line-2:#dcdcd8;--collie-accent:#111111;--collie-ok:#15803d;--collie-attn:#b45309;--collie-danger:#b42318;--collie-font:${fontSans};--collie-mono:${fontMono}}:root[data-theme="dark"]{color-scheme:dark;--collie-bg:#111113;--collie-surface:#151518;--collie-surface-2:#1b1b1f;--collie-ink:#ededeb;--collie-fg:#ededeb;--collie-fg-2:#a8a8a3;--collie-muted:#858580;--collie-line:#26262b;--collie-line-2:#34343b;--collie-accent:#dcdcd9;--collie-ok:#58c285;--collie-attn:#dfa057;--collie-danger:#e38c85;--collie-font:${fontSans};--collie-mono:${fontMono}}:where(html){background:transparent}:where(body){background:transparent;color:var(--collie-ink);font-family:var(--collie-font);margin:0}</style>`;
   }
-  function buildSandboxedCardSrcdoc(rawHtml, { frameId, token, isFragment, isDark }) {
+  function buildSandboxedCardSrcdoc(rawHtml, { frameId, token, isFragment, isDark, measure = true }) {
     const src = String(rawHtml || "");
     const theme = isDark ? "dark" : "light";
-    const safeId = JSON.stringify(frameId);
-    const safeTok = JSON.stringify(token);
+    const safeId = JSON.stringify(frameId || "");
+    const safeTok = JSON.stringify(token || "");
     const safeTheme = JSON.stringify(theme);
     const varsStyle = collieThemeVarsCss();
-    const bridge = `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});document.addEventListener("click",function(ev){try{if(ev.target&&ev.target.closest&&ev.target.closest("a,button,input,select,textarea,summary,label,[role=button]"))return;parent.postMessage({type:"collie:card-tap",id:ID,token:TOK},"*");}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`;
+    const bridge = measure
+      ? `<script>(function(){try{var ID=${safeId},TOK=${safeTok},last=0,raf=0;function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});function measure(){raf=0;try{var b=document.body;if(!b)return;var h=0;var kids=b.children;if(kids&&kids.length){var maxB=0;for(var i=0;i<kids.length;i++){var tag=(kids[i].tagName||"").toUpperCase();if(tag==="SCRIPT"||tag==="STYLE")continue;var r=kids[i].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}var cs=getComputedStyle(b);var pb=parseFloat(cs.paddingBottom)||0;if(maxB>0)h=Math.ceil(maxB+pb);}var overflowH=b.scrollHeight>window.innerHeight?b.scrollHeight:0;h=Math.ceil(Math.max(h,overflowH));if(h>0&&Math.abs(h-last)>=4){last=h;parent.postMessage({type:"collie:card-height",id:ID,token:TOK,height:h},"*");}}catch(e){}}function sched(){if(!raf)raf=requestAnimationFrame(measure);}window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}sched();}}catch(e){}});document.addEventListener("click",function(ev){try{if(ev.target&&ev.target.closest&&ev.target.closest("a,button,input,select,textarea,summary,label,[role=button]"))return;parent.postMessage({type:"collie:card-tap",id:ID,token:TOK},"*");}catch(e){}});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sched,{once:true});else sched();window.addEventListener("load",sched,{once:true});if(typeof ResizeObserver==="function"&&document.body){new ResizeObserver(sched).observe(document.body);}setTimeout(sched,180);}catch(e){}})();<` + `/script>`
+      : `<script>(function(){try{function applyTheme(t){if(t!=="light"&&t!=="dark")return;var r=document.documentElement;r.dataset.theme=t;r.dataset.collieTheme=t;r.style.colorScheme=t;var m=document.querySelector('meta[name="color-scheme"]');if(m)m.content=t;}applyTheme(${safeTheme});window.addEventListener("message",function(ev){try{var d=ev&&ev.data;if(d&&(d.type==="collie-theme"||d.type==="collie:theme")&&(d.theme==="light"||d.theme==="dark")){applyTheme(d.theme);try{window.dispatchEvent(new CustomEvent("collie-theme",{detail:{theme:d.theme}}));}catch(e){}}}catch(e){}});}catch(e){}})();<` + `/script>`;
     const hasDoc = /<!doctype\s+html|<html[\s>]/i.test(src);
     if (!hasDoc && isFragment) {
-      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:var(--collie-bg);color:var(--collie-fg);font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif;overflow-x:hidden}</style></head><body>${src}${bridge}</body></html>`;
+      return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-collie-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="${theme}">${varsStyle}<style>:where(*){box-sizing:border-box}:where(html,body){margin:0;padding:0;background:transparent;color:var(--collie-ink);font-family:var(--collie-font);font-size:13.5px;line-height:1.55;overflow-x:hidden}</style></head><body>${src}${bridge}</body></html>`;
     }
     let out = src;
     if (/<html\b[^>]*>/i.test(out)) {
       out = out.replace(/<html\b([^>]*)>/i, (m, attrs) => {
-        const nextAttrs = /\bdata-theme\s*=/i.test(attrs) ? attrs : `${attrs} data-theme="${theme}"`;
+        let nextAttrs = attrs;
+        if (/\bdata-theme\s*=/i.test(nextAttrs)) {
+          nextAttrs = nextAttrs.replace(/\bdata-theme\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i, `data-theme="${theme}"`);
+        } else {
+          nextAttrs = `${nextAttrs} data-theme="${theme}"`;
+        }
         return `<html${nextAttrs}>`;
       });
     }
@@ -27186,6 +28450,11 @@
     });
     stage.innerHTML = "";
     stage.appendChild(iframe);
+    iframe.addEventListener?.("load", () => {
+      const liveTheme = currentVisualTheme();
+      if (iframe.style) iframe.style.colorScheme = liveTheme;
+      try { iframe.contentWindow?.postMessage({ type: "collie-theme", theme: liveTheme }, "*"); } catch {}
+    });
     iframe.srcdoc = buildSandboxedCardSrcdoc(rawHtml, {
       frameId, token,
       isFragment: kind === "html-code",
@@ -27206,6 +28475,23 @@
     for (const open of document.querySelectorAll?.(".rv-card.is-acts-open") || []) {
       if (open !== exceptCard) open.classList.remove("is-acts-open");
     }
+  }
+  const _pendingHtmlCardHeights = new Map();
+  function applyHtmlCardHeight(rec, clamped, opts = {}) {
+    if (!rec?.iframe?.isConnected || !rec.stage) return;
+    const sc = !opts.skipStick && view === "collie" && rec.card?.closest?.("#super-thread") ? viewScroller("collie") : null;
+    const keepBottom = !!(sc && collieStickBottom && isCollieNearBottom(sc));
+    rec.lastH = clamped;
+    rec.stage.style.height = clamped + "px";
+    const hk = rvHeightKey(rec.card);
+    if (hk) {
+      if (rvHeightCache.size >= RV_HEIGHT_CACHE_MAX) {
+        const oldest = rvHeightCache.keys().next().value;
+        if (oldest !== undefined) rvHeightCache.delete(oldest);
+      }
+      rvHeightCache.set(hk, clamped);
+    }
+    if (keepBottom) snapCollieStickBottom(sc);
   }
   function handleRichCardMessage(ev) {
     const data = ev?.data;
@@ -27253,16 +28539,11 @@
     const clamped = Math.round(Math.max(64, Math.min(maxH, rawH + 2)));
     if (Math.abs(clamped - (rec.lastH || 0)) < 4) return;
     rec.updates++;
-    rec.lastH = clamped;
-    rec.stage.style.height = clamped + "px";
-    const hk = rvHeightKey(rec.card);
-    if (hk) {
-      if (rvHeightCache.size >= RV_HEIGHT_CACHE_MAX) {
-        const oldest = rvHeightCache.keys().next().value;
-        if (oldest !== undefined) rvHeightCache.delete(oldest);
-      }
-      rvHeightCache.set(hk, clamped);
+    if (isLayoutGliding()) {
+      _pendingHtmlCardHeights.set(rec, clamped);
+      return;
     }
+    applyHtmlCardHeight(rec, clamped);
   }
   if (typeof addEventListener === "function") {
     addEventListener("message", handleRichCardMessage);
@@ -27418,6 +28699,12 @@
         rec.iframe?.contentWindow?.postMessage({ type: "collie-theme", theme: nextTheme }, "*");
       } catch {}
     }
+    for (const frame of document.querySelectorAll?.("iframe.fv-html-sandbox") || []) {
+      if (frame?.style) frame.style.colorScheme = nextTheme;
+      try {
+        frame.contentWindow?.postMessage({ type: "collie-theme", theme: nextTheme }, "*");
+      } catch {}
+    }
   }
   function onRichVisualViewportChange() {
     const nextLayout = mermaidLayoutKey();
@@ -27485,7 +28772,8 @@
       const isRemoteHub = !!hubOf(curMachine);
       const isDemoNoStatic = !!(window.__collieDemo && !window.__collieDemoHtmlUrl?.(path));
       if ((isStandaloneMode() || isRemoteHub || isDemoNoStatic) && typeof cached?.htmlText === "string") {
-        if (!openSandboxedHtmlWindow(baseFileName(cached.path || path), cached.htmlText)) {
+        const themedHtml = buildSandboxedCardSrcdoc(cached.htmlText, { frameId: "win", token: "", isFragment: false, isDark: currentVisualTheme() === "dark", measure: false });
+        if (!openSandboxedHtmlWindow(baseFileName(cached.path || path), themedHtml)) {
           toast(tx("common.popupBlocked", "浏览器拦截了新标签页，请允许弹出窗口"), "attn");
         }
         return;
@@ -27522,9 +28810,12 @@
   const ICON_MD_COPY = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
   const ICON_MD_CHEV = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
   const ICON_TASK_CHECK = `<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.6"/></svg>`;
+  const ICON_TASK_BOX_DONE = `<svg class="md-task-svg" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="4" fill="currentColor"/><path d="M4.6 8.2 6.9 10.5 11.4 5.6" fill="none" stroke="var(--md-task-chk, var(--bg))" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const ICON_TASK_BOX_TODO = `<svg class="md-task-svg" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
   const CALLOUT_META = {
     NOTE: { cls: "is-note", get label() { return tx("md.callout.NOTE", "说明"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>` },
     TIP: { cls: "is-tip", get label() { return tx("md.callout.TIP", "提示"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>` },
+    IMPORTANT: { cls: "is-important", get label() { return tx("md.callout.IMPORTANT", "重要"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7.5v4M12 14.5h.01"/></svg>` },
     WARNING: { cls: "is-warn", get label() { return tx("md.callout.WARNING", "注意"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>` },
     CAUTION: { cls: "is-caution", get label() { return tx("md.callout.CAUTION", "风险"); }, icon: `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2Z"/><path d="M12 8v5M12 16.5h.01"/></svg>` },
   };
@@ -27579,13 +28870,13 @@
         if (/^(?:diff |index |--- |\+\+\+ )/.test(ln)) return `<span class="diff-line is-meta">${esc(ln)}</span>`;
         if (ln.startsWith("+")) {
           addCount++;
-          return `<span class="diff-line is-add"><span class="diff-sig">+</span>${esc(ln.slice(1))}</span>`;
+          return `<span class="diff-line is-add has-sig"><span class="diff-sig">+</span>${esc(ln.slice(1))}</span>`;
         }
         if (ln.startsWith("-")) {
           delCount++;
-          return `<span class="diff-line is-del"><span class="diff-sig">-</span>${esc(ln.slice(1))}</span>`;
+          return `<span class="diff-line is-del has-sig"><span class="diff-sig">-</span>${esc(ln.slice(1))}</span>`;
         }
-        if (ln.startsWith(" ")) return `<span class="diff-line"><span class="diff-sig"> </span>${esc(ln.slice(1))}</span>`;
+        if (ln.startsWith(" ")) return `<span class="diff-line has-sig"><span class="diff-sig"> </span>${esc(ln.slice(1))}</span>`;
         return `<span class="diff-line">${esc(ln)}</span>`;
       });
       bodyCodeHtml = collapsible
@@ -27611,7 +28902,7 @@
     const foldBtnHtml = collapsible
       ? `<button type="button" class="md-code-fold-btn" data-code-fold aria-expanded="false">${ICON_MD_CHEV}<span data-fold-label>${esc(tx("md.expandCode", "展开剩余 {n} 行", { n: remain }))}</span></button>`
       : "";
-    return `<div class="md-code${isDiff ? " is-diff" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
+    return `<div class="md-code${isDiff ? " is-diff" : ""}${cornerTagHtml ? " has-tag" : ""}${collapsible ? " is-collapsed" : ""}" data-code-block${collapsible ? ` data-foldable="1" data-total-lines="${totalLines}" data-head-lines="${CODE_FOLD_HEAD}"` : ""}>` +
       `${cornerTagHtml}${floatActsHtml}` +
       `<div class="md-code-body"><pre><code${lang ? ` data-lang="${lang.id}"` : ""}>${bodyCodeHtml}</code></pre></div>${foldBtnHtml}</div>`;
   }
@@ -27677,18 +28968,19 @@
     if (!items.length || trimmed.slice(pos).trim()) return null;
     return items;
   }
-  const DETAILS_OPEN_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*$/i;
+  const DETAILS_OPEN_ATTR = `(?:\\s+open(?:\\s*=\\s*(?:&quot;(?:open)?&quot;|&#39;(?:open)?&#39;|open)?)?)?`;
+  const DETAILS_OPEN_RE = new RegExp(`^\\s*&lt;details(${DETAILS_OPEN_ATTR})\\s*&gt;(?:\\s*&lt;summary&gt;([\\s\\S]*?)&lt;\\/summary&gt;(?:\\s*(.*))?)?\\s*$`, "i");
   const DETAILS_CLOSE_RE = /^\s*&lt;\/details&gt;\s*$/i;
   const SUMMARY_LINE_RE = /^\s*&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;\s*$/i;
-  const DETAILS_INLINE_RE = /^\s*&lt;details(\s+open(?:\s*=\s*(?:&quot;[^&]*&quot;|&#39;[^&]*&#39;|open)?)?)?\s*&gt;\s*(?:&lt;summary&gt;([\s\S]*?)&lt;\/summary&gt;)?\s*([\s\S]*?)&lt;\/details&gt;\s*$/i;
+  const DETAILS_INLINE_RE = new RegExp(`^\\s*&lt;details(${DETAILS_OPEN_ATTR})\\s*&gt;\\s*(?:&lt;summary&gt;([\\s\\S]*?)&lt;\\/summary&gt;)?\\s*([\\s\\S]*?)&lt;\\/details&gt;\\s*$`, "i");
+  const MD_KBD_RE = /&lt;kbd&gt;((?:(?!&lt;(?:\/?kbd\b|[a-z/!]))[^\n]){1,64})&lt;\/kbd&gt;/gi;
+  const MD_MARK_RE = /(?<![A-Za-z0-9_=])==(?![=\s])([^\n]*?(?<![=\s]))==(?![A-Za-z0-9_=])/g;
   function mdRender(src, opts = null) {
     const blocks = [];
     const mdImgPaths = new Set();
     const rawSrc = String(src || "");
-    let text = extractFencedBlocks(rawSrc.replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks);
-    text = extractMathBlocks(text, blocks);
-    text = esc(text);
     const applyInlineStyle = (t) => t
+      .replace(MD_MARK_RE, '<mark class="md-mark">$1</mark>')
       .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "<strong><em>$1</em></strong>")
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/~~(?=\S)([^~\n]*?\S)~~/g, "<del>$1</del>")
@@ -27717,24 +29009,29 @@
               c = c.slice(1, -1);
             }
             const raw = unesc(c).trim();
-            const cleanP = parseInlineCodePath(raw);
-            if (cleanP) {
-              const ep = esc(cleanP);
-              scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, tx("file.openThisFile", "打开这个文件"))}><code class="code-link">${c}</code></a>`);
-            } else if (isPureHttpUrl(raw)) {
-              const eu = esc(raw);
-              scanned += keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
+            const fref = parseFileLineRef(raw);
+            if (fref) {
+              scanned += keep(renderFileLinePill(fref));
             } else {
-              if (raw && raw !== ROUTER && raw.length >= 2 && raw.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) {
-                _mdCurWorkerCandidates?.add(raw);
-              }
-              const wk = resolveInlineWorker(raw);
-              if (wk) {
-                const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
-                const tip = tx("worker.viewTaskTip", "查看任务：{name}", { name: wk.label && wk.label !== wk.name ? `${wk.label} (${wk.name})` : wk.name });
-                scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
+              const cleanP = parseInlineCodePath(raw);
+              if (cleanP) {
+                const ep = esc(cleanP);
+                scanned += keep(`<a ${fileLinkAttrs(cleanP, ep, tx("file.openThisFile", "打开这个文件"), "has-code-link")}><code class="code-link">${c}</code></a>`);
+              } else if (isPureHttpUrl(raw)) {
+                const eu = esc(raw);
+                scanned += keep(`<a class="url has-code-link" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
               } else {
-                scanned += keep(`<code>${c}</code>`);
+                if (raw && raw !== ROUTER && raw.length >= 2 && raw.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) {
+                  _mdCurWorkerCandidates?.add(raw);
+                }
+                const wk = resolveInlineWorker(raw);
+                if (wk) {
+                  const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
+                  const tip = tx("worker.viewTaskTip", "查看任务：{name}", { name: wk.label && wk.label !== wk.name ? `${wk.label} (${wk.name})` : wk.name });
+                  scanned += keep(`<a class="worker-link has-code-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
+                } else {
+                  scanned += keep(`<code>${c}</code>`);
+                }
               }
             }
             i = close + ticks;
@@ -27813,6 +29110,11 @@
         i++;
       }
       let r = scanned
+        .replace(MD_KBD_RE, (m, inner) => {
+          const t = String(inner || "").trim();
+          if (!t || t.includes("\u0001")) return m;
+          return keep(`<kbd class="md-kbd">${t}</kbd>`);
+        })
         .replace(/!\[([^\]\n]*)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, alt, u) => {
           const rawU = unesc(u), eu = esc(rawU);
           const loadCls = decodedThumbs.has(rawU) ? "" : " is-img-loading";
@@ -27826,7 +29128,14 @@
           mdImgPaths.add(p);
           return keep(`<button type="button" class="thumb md-thumb" data-img="${ep}" data-img-alt="${alt}" aria-label="${alt || esc(tx("file.viewImgTip", "查看大图 {name}", { name: p.split("/").pop() || tx("lb.image", "图片") }))}"><img alt="${alt}" decoding="async"${thumbImgAttrs(p, "md-img")}></button>`);
         })
-        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${applyInlineStyle(l)}</a>`))
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s"]|\([^()\s"]*\))+)\)/g, (_, l, u) => {
+          const rawU = unesc(u);
+          if (unesc(l).trim() === rawU.trim()) {
+            const ent = parseGitEntityUrl(rawU);
+            if (ent) return keep(renderGitEntityPill(rawU, ent));
+          }
+          return keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${applyInlineStyle(l)}</a>`);
+        })
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
         .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
           p = unesc(p).replace(/:\d+(?:[-:]\d+)?$/, "");
@@ -27838,6 +29147,10 @@
           const hit = linkifyUrlMatch(m);
           return hit ? keep(hit.anchor) + hit.suffix : m;
         })
+        .replace(FILE_LINE_RE, (m) => {
+          const fref = parseFileLineRef(unesc(m));
+          return fref ? keep(renderFileLinePill(fref)) : m;
+        })
         .replace(FILE_RE, (_, pre, p) => {
           const rawP = unesc(p);
           return `${pre}${keep(`<a ${fileLinkAttrs(rawP, p, tx("file.openThisFile", "打开这个文件"))}>${p}</a>`)}`;
@@ -27846,11 +29159,14 @@
       while (r.includes("\u0001")) r = r.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
       return r;
     };
+    let text = extractFencedBlocks(rawSrc.replace(/\r\n?/g, "\n").replace(/[\u0000\u0001]/g, ""), blocks, inline);
+    text = extractMathBlocks(text, blocks);
+    text = esc(text);
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
     const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
-    const renderQuoteBlock = (qLines) => {
+    const renderQuoteBlock = (qLines, depth = 0) => {
       const first = (qLines[0] || "").trim();
-      const cm = first.match(/^\[!(NOTE|TIP|WARNING|CAUTION)\](?:\s+(.*))?$/i);
+      const cm = first.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s+(.*))?$/i);
       const groupParas = (arr) => {
         const ps = [];
         let cur = [];
@@ -27866,10 +29182,13 @@
         const meta = CALLOUT_META[kind] || CALLOUT_META.NOTE;
         const extra = (cm[2] || "").trim();
         const headHtml = extra ? `${meta.label} · ${inline(extra)}` : meta.label;
-        const bodyHtml = groupParas(qLines.slice(1));
-        return `<div class="md-callout ${meta.cls}" role="note"><div class="md-callout-head">${meta.icon}<span>${headHtml}</span></div>${bodyHtml ? `<div class="md-callout-body">${bodyHtml}</div>` : ""}</div>`;
+        const bodyLines = qLines.slice(1);
+        const bodyHtml = bodyLines.length
+          ? (depth < 3 ? parseBlockLines(bodyLines, depth + 1) : groupParas(bodyLines))
+          : "";
+        return `<div class="md-callout ${meta.cls}" data-callout="${kind.toLowerCase()}" role="note"><div class="md-callout-head">${meta.icon}<span>${headHtml}</span></div>${bodyHtml ? `<div class="md-callout-body">${bodyHtml}</div>` : ""}</div>`;
       }
-      const inner = groupParas(qLines);
+      const inner = depth < 3 ? parseBlockLines(qLines, depth + 1) : groupParas(qLines);
       return `<blockquote>${inner}</blockquote>`;
     };
     const parseBlockLines = (lines, depth = 0, trailingImgs = null) => {
@@ -27885,7 +29204,7 @@
       const flushList = () => {
         if (!list) return;
         if (list.kind === "task") {
-          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"><span class="md-task-box" role="img" aria-label="${esc(it.done ? tx("md.taskDone", "已完成") : tx("md.taskTodo", "未完成"))}">${it.done ? ICON_TASK_CHECK : ""}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
+          out.push(`<ul class="md-task-list">${list.items.map((it) => `<li class="md-task-item${it.done ? " is-done" : ""}"${it.depth ? ` data-depth="${it.depth}"` : ""}><span class="md-task-box" role="img" aria-label="${esc(it.done ? tx("md.taskDone", "已完成") : tx("md.taskTodo", "未完成"))}">${it.done ? ICON_TASK_BOX_DONE : ICON_TASK_BOX_TODO}</span><span class="md-task-text">${inline(it.text)}</span></li>`).join("")}</ul>`);
         } else {
           out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`);
         }
@@ -27905,10 +29224,13 @@
           out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
           continue;
         }
-        if (depth < 2 && (m = line.match(DETAILS_OPEN_RE))) {
+        if (depth < 2 && (m = line.match(DETAILS_OPEN_RE)) && !(m[3] || "").includes("&lt;/details&gt;")) {
           const isOpen = !!m[1];
+          const inlineSum = m[2];
+          const inlineLead = (m[3] || "").trim();
           let nest = 1, closeIdx = -1;
           for (let j = li + 1; j < lines.length; j++) {
+            if (DETAILS_INLINE_RE.test(lines[j])) continue;
             if (DETAILS_OPEN_RE.test(lines[j])) nest++;
             else if (DETAILS_CLOSE_RE.test(lines[j])) {
               nest--;
@@ -27919,17 +29241,25 @@
             flushPara(); flushList(); flushGallery();
             const innerLines = lines.slice(li + 1, closeIdx);
             let sumHtml = esc(tx("common.expandDetails", "展开详情"));
-            let bodyStart = 0;
-            while (bodyStart < innerLines.length && !innerLines[bodyStart].trim()) bodyStart++;
-            if (bodyStart < innerLines.length) {
-              const sm = innerLines[bodyStart].match(SUMMARY_LINE_RE);
-              if (sm) {
-                const rawSum = (sm[1] || "").trim().replace(/^#{1,6}\s+/, "");
-                if (rawSum) sumHtml = inline(rawSum);
-                bodyStart++;
+            let bodyLines = innerLines;
+            if (inlineSum !== undefined) {
+              const rawSum = inlineSum.trim().replace(/^#{1,6}\s+/, "");
+              if (rawSum) sumHtml = inline(rawSum);
+              if (inlineLead) bodyLines = [inlineLead, ...innerLines];
+            } else {
+              let bodyStart = 0;
+              while (bodyStart < innerLines.length && !innerLines[bodyStart].trim()) bodyStart++;
+              if (bodyStart < innerLines.length) {
+                const sm = innerLines[bodyStart].match(SUMMARY_LINE_RE);
+                if (sm) {
+                  const rawSum = (sm[1] || "").trim().replace(/^#{1,6}\s+/, "");
+                  if (rawSum) sumHtml = inline(rawSum);
+                  bodyStart++;
+                }
               }
+              bodyLines = innerLines.slice(bodyStart);
             }
-            const bodyHtml = parseBlockLines(innerLines.slice(bodyStart), depth + 1);
+            const bodyHtml = parseBlockLines(bodyLines, depth + 1);
             out.push(`<details class="md-fold"${isOpen ? " open" : ""}><summary>${sumHtml}</summary><div class="md-fold-body">${bodyHtml}</div></details>`);
             li = closeIdx;
             continue;
@@ -27987,19 +29317,24 @@
             const al = align[k] || (colNumeric[k] ? "right" : "");
             const tag = k === 0 ? "th" : "td";
             const scopeAttr = k === 0 ? ' scope="row"' : "";
-            return `<${tag}${scopeAttr}${isNum ? ' class="is-num"' : ""}${al ? ` style="text-align:${al}"` : ""}>${inline(val)}</${tag}>`;
+            const cellHtml = inline(val);
+            const hasCode = tag === "td" && cellHtml.includes("<code");
+            const cellCls = isNum && hasCode ? ' class="is-num has-code"' : isNum ? ' class="is-num"' : hasCode ? ' class="has-code"' : "";
+            return `<${tag}${scopeAttr}${cellCls}${al ? ` style="text-align:${al}"` : ""}>${cellHtml}</${tag}>`;
           }).join("")}</tr>`).join("");
           const rowCount = bodyRows.length, colCount = head.length;
-          out.push(`<div class="md-table-card" data-table-card data-cols="${colCount}"><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
+          const lastNumCls = colNumeric[colCount - 1] ? " is-last-num" : "";
+          out.push(`<div class="md-table-card${lastNumCls}" data-table-card data-cols="${colCount}"><div class="md-float-acts md-table-acts"><button type="button" class="mini-btn" data-copy-table="tsv" aria-label="${esc(tx("md.copyTableTsvAria", "复制表格（TSV）"))}">${ICON_MD_COPY}<span class="md-copy-lbl">${esc(tx("md.copyTableBtn", "复制表格"))}</span></button><button type="button" class="mini-btn" data-copy-table="md" aria-label="${esc(tx("md.copyTableMdAria", "复制 Markdown 表格"))}"><span class="md-copy-lbl">MD</span></button></div><div class="md-table-vp" data-table-vp><div class="md-table" tabindex="0" role="region" aria-label="${esc(tx("md.tableAria", "数据表格（{rows} 行 × {cols} 列）", { rows: rowCount, cols: colCount }))}"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div></div>`);
           continue;
         }
         if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }
         if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); flushList(); out.push("<hr>"); continue; }
         if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); const h = Math.min(m[1].length + 1, 4); out.push(`<h${h}>${inline(m[2])}</h${h}>`); continue; }
-        if ((m = line.match(/^\s*[-*•]\s+\[([ xX])\]\s+(.*)$/))) {
+        if ((m = line.match(/^(\s*)[-*+•]\s+\[([ xX])\]\s+(.*)$/))) {
           flushPara();
           if (!list || list.kind !== "task") { flushList(); list = { kind: "task", tag: "ul", items: [], start: 1 }; }
-          list.items.push({ done: m[1] !== " ", text: m[2] });
+          const indentLen = (m[1] || "").replace(/\t/g, "  ").length;
+          list.items.push({ done: m[2] !== " ", text: m[3], depth: Math.min(2, Math.floor(indentLen / 2)) });
           continue;
         }
         if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
@@ -28010,14 +29345,14 @@
           list.items.push(m[1]);
           continue;
         }
-        if ((m = line.match(/^&gt;\s?(.*)$/))) {
+        if ((m = line.match(/^ {0,3}&gt;\s?(.*)$/))) {
           flushPara(); flushList();
           const qLines = [m[1]];
-          while (li + 1 < lines.length && (m = lines[li + 1].match(/^&gt;\s?(.*)$/))) {
+          while (li + 1 < lines.length && (m = lines[li + 1].match(/^ {0,3}&gt;\s?(.*)$/))) {
             qLines.push(m[1]);
             li++;
           }
-          out.push(renderQuoteBlock(qLines));
+          out.push(renderQuoteBlock(qLines, depth));
           continue;
         }
         if (!line.trim()) { flushPara(); flushList(); continue; }
@@ -28034,7 +29369,12 @@
       flushGallery();
       return out.join("");
     };
-    const trailingImgs = opts?.includePathImages ? extractImagePaths(rawSrc).map((p) => ({ path: p, alt: "" })) : null;
+    const excludeImgSet = opts?.excludePathImages;
+    const trailingImgs = opts?.includePathImages
+      ? extractImagePaths(rawSrc)
+          .filter((p) => !(excludeImgSet && excludeImgSet.has(p.toLowerCase())))
+          .map((p) => ({ path: p, alt: "" }))
+      : null;
     const rendered = parseBlockLines(text.split("\n"), 0, trailingImgs);
     return rendered.replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
   }
@@ -28800,12 +30140,28 @@
     const ps = extractImagePaths(t);
     return ps.length ? renderMdGallery(ps.map((p) => ({ path: p, alt: "" }))) : "";
   }
-  function renderCollieBody(t) {
-    return md(t, { includePathImages: true });
+  function explicitImagePathSet(files) {
+    if (!Array.isArray(files) || !files.length) return null;
+    let set = null;
+    for (const raw of files) {
+      const p = String(raw || "").trim();
+      if (!p || /^https?:\/\//i.test(p) || /\/\.collie\/router\/(?:memory|dreams)\//i.test(p)) continue;
+      const name = p.split("/").pop() || p;
+      if (!IMG_EXT.test(name)) continue;
+      if (!set) set = new Set();
+      set.add(p.toLowerCase());
+    }
+    return set;
+  }
+  function renderCollieBody(t, files = null) {
+    const excludePathImages = explicitImagePathSet(files);
+    return md(t, excludePathImages ? { includePathImages: true, excludePathImages } : { includePathImages: true });
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
-  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|WARNING|CAUTION)\]\s*/i, "").replace(/^\[[ xX]\]\s+/, "").trim()).filter(Boolean).join(" ")
+  const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").replace(/^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i, "").replace(/<\/?(?:details(?:\s+open(?:\s*=\s*(?:"(?:open)?"|'(?:open)?'|open))?)?|summary)>/gi, " ").replace(/^\[[ xX~*!]\]\s+/, "").trim()).filter(Boolean).join(" ")
     .replace(/\\([!"#$%&'()*+,\-.\/:;<=>?@\[\\\]^_`{|}~])/g, "$1")
+    .replace(/<kbd>([^<\n]{1,64})<\/kbd>/gi, "$1")
+    .replace(MD_MARK_RE, "$1")
     .replace(/\*\*|__|~~|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
@@ -28816,6 +30172,10 @@
       .replace(URL_RE, (m) => {
         const hit = linkifyUrlMatch(m);
         return hit ? keep(hit.anchor) + hit.suffix : m;
+      })
+      .replace(FILE_LINE_RE, (m) => {
+        const fref = parseFileLineRef(unesc(m));
+        return fref ? keep(renderFileLinePill(fref)) : m;
       })
       .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a ${fileLinkAttrs(unesc(p), p, tx("file.openThisFile", "打开这个文件"))}>${p}</a>`)}`);
     while (out.includes("\u0001")) out = out.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
@@ -29045,7 +30405,7 @@
     const prevCollieMenuOpen = collieMenuOpen;
     $$(".menu").forEach((m) => {
       if ((!opener || m.id !== opener.dataset.menu) && !(armingMoreInterrupt && m.id === "more-menu")) {
-        m.hidden = true;
+        if (!m.hidden) m.hidden = true;
       }
     });
     if (!clickedMoreInterrupt && $("#more-menu")?.hidden) disarmInterrupt("detail");
@@ -29056,7 +30416,7 @@
       if (opener.dataset.menu === "collie-menu" && willOpen && superSearchOpen) {
         closeSuperSearchFn?.(false);
       }
-      if (m) m.hidden = !willOpen;
+      if (m && m.hidden !== !willOpen) m.hidden = !willOpen;
       if (m?.id === "more-menu" && m.hidden) disarmInterrupt("detail");
       collieMenuOpen = opener.dataset.menu === "collie-menu" ? willOpen : false;
     } else {
@@ -29766,7 +31126,7 @@
         });
       }
       connect();
-      window.__collieQuota?.init?.({ api, toast });
+      window.__collieQuota?.init?.({ api, toast, getContext: resolveActiveQuotaContext });
       loadHubs();
       checkUpdates();
       if (view === "collie") {
@@ -29798,7 +31158,7 @@
       $("#app").hidden = false;
       setMode(mode);
       connect();
-      window.__collieQuota?.init?.({ api, toast });
+      window.__collieQuota?.init?.({ api, toast, getContext: resolveActiveQuotaContext });
       booted = false;
       view = undefined;
       route();

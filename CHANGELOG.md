@@ -4,6 +4,41 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.15 (2026-11-28)
+
+### Highlights
+
+- **Inline `--file` Image Galleries & Touch-Hardened Lightbox (`web/{app.css,app.js,i18n.js}`, `internal/collie/inline_image_gallery_test.go`, `docs/demo/`)**:
+  - Rendered explicit `--file` image attachments directly beneath Collie replies as a frameless `.file-gallery` while keeping non-image documents as clean file chips and `.html` files as sandboxed cards (with prose path deduplication and automatic fallback to clean file chips on fetch/decode error).
+  - Styled single images with natural aspect-ratio preservation (capped at `380px` desktop / `320px` mobile without cropping) and 2–4+ images as a compact 2-column grid with `object-position: top center` for screenshots and a lightweight `+N` badge on tile 4 when >4 images are attached (forwarding all images to the fullscreen Lightbox).
+  - Hardened fullscreen Lightbox horizontal touch swipe (`touch-action: none` + live GPU drag feedback) and mobile/tablet safe-area insets.
+- **Frameless 5-Tier Callouts, Safe `<details>` & Live `html-card` Theme Passthrough (`web/{app.css,app.js,i18n.js}`, `internal/collie/{cli.go,chat_render_perf_test.go,rich_visuals_test.go}`, `scripts/demo/bench-pagination.html`, `docs/demo/`)**:
+  - Added full 5-tier GitHub/Obsidian callouts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`, case-insensitive, optional custom title) with full block Markdown parsing inside callout bodies and frameless 2px semantic left accents.
+  - Upgraded native `<details>`/`<summary>` disclosures under a strict attribute whitelist (blocking inline event/tag XSS), GPU-only `transform: rotate(90deg)` chevron + `fold-reveal` animation, hairline expanded guide, and lazy inner hydration.
+  - Injected `<html data-theme="light|dark">`, `color-scheme`, standard `--collie-*` CSS variables, and a zero-specificity transparent body fallback into sandboxed `html-card` and drawer `.fv-html-sandbox` iframes, with live `postMessage({ type: "collie-theme", theme })` syncing on theme toggles without rebuilding iframes.
+- **KPI Metrics Strip, Stepper Timeline, Entity Pills, SVG Task Lists & Inline Micro-Expressions (`web/{app.css,app.js,i18n.js}`, `internal/collie/{cli.go,rich_blocks_test.go}`, `docs/demo/`)**:
+  - Added frameless `metrics` KPI strips (`Label | Value | Delta` and `Label: Value`, equal-width desktop columns and responsive 2-column mobile grid) and `steps` stepper timelines (`[x]` done, `[~]`/`[*]` active with GPU-only breathing halo, `[!]` error, `[ ]` pending).
+  - Added compact monochrome entity pills for GitHub/GitLab PR/MR, Issue, and Release URLs plus clickable `path/to/file.ext:line` references opening directly in Collie's file drawer.
+  - Replaced browser checkboxes in GFM task lists with custom rounded-square SVG checkboxes across nested depths, added safe attribute-free `<kbd>` keycaps and soft `==highlight==` marks (strictly protecting code blocks, inline code, math, URLs, and XSS payloads), and concisely updated default `ROUTER.md` guidance.
+- **60 FPS Mobile Drawer/Expand Motion & Zero-Twitch Docked Drawers (`web/{app.css,app.js}`, `internal/collie/mobile_expand_anim_fps_test.go`, `docs/demo/`)**:
+  - Eliminated mobile Worker drawer warm-reopen jank via `content-visibility: hidden` cache preservation, deferred mid-slide transcript mounts, raw-message fingerprint short-circuiting, lazy collapsed `.toolrun-body` hydration, progressive cold chunking, and pure-GPU keyframe openings with zero forced `offsetWidth` reflows.
+  - Replaced high-cardinality `:has()` selectors with direct static/JS classes, removed layout-reflowing `::details-content` transitions, and eliminated remaining mobile `backdrop-filter` overrides.
+  - Root-fixed desktop/iPad landscape `.md-table-vp.is-scrollable` 60Hz `±19px` oscillation by keeping `.is-scrollable` geometry-invariant, deduplicating rich `ResizeObserver` callbacks by width, deferring rich/HTML-card resizes during drawer glide, and locking scroll anchors cleanly.
+- **Active-Model Bottleneck Subscription Quota (`internal/collie/{quota.go,quota_test.go}`, `web/{app.js,quota.js,quota.css,i18n.js}`, `docs/demo/`)**:
+  - Scoped the footer quota ring and tooltip to the currently active agent & model (dispatch override, open live pane/worker drawer, external/history view, or router default), matching model-scoped pools across exact/base/series/family aliases and taking `min(remaining)` across matching windows (e.g., 5h vs 7d).
+  - Preserved Codex `rateLimitsByLimitId` model-specific buckets in `quota.go` and highlighted the active bottleneck bucket in the quota popover (zh/en synced).
+- **Unified Peer Card & Invite Copy (`web/{app.js,i18n.js}`, `docs/join/index.html`, `internal/collie/{cli.go,peer.go,i18n_test.go,join_page_test.go,v0311_peer_modal_test.go,v033_join_card_test.go}`, `docs/demo/`)**:
+  - Standardized zh/en copy across Peer UI, `/join/` page, backend errors, and CLI (`Collie 名片` / `Collie Card`, `我的 Collie`, `邀请码` / `Invite code`, deduplicated share text, and tightened QR labels).
+
+### Client / API Changes
+
+- **`GET /api/quota`, `POST /api/quota/refresh`, and SSE `quota` event (backward compatible)**:
+  - `QuotaPool` adds optional additive field `models` (`[]string`, `omitempty`) listing model IDs/aliases covered by the pool.
+  - Codex `rateLimitsByLimitId` model-specific quota buckets are now preserved as additional `QuotaPool` entries alongside the primary bucket.
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.14 (2026-11-28)
 
 ### Highlights

@@ -73,6 +73,7 @@ type AgentQuota struct {
 // QuotaPool groups related rolling windows (e.g. Antigravity Gemini vs Claude/GPT).
 type QuotaPool struct {
 	Group       string        `json:"group,omitempty"`
+	Models      []string      `json:"models,omitempty"`
 	CompactFull bool          `json:"compact_full,omitempty"`
 	Windows     []QuotaWindow `json:"windows"`
 }
@@ -597,6 +598,9 @@ func cloneAgentQuota(a AgentQuota) AgentQuota {
 		out.Pools = make([]QuotaPool, len(a.Pools))
 		for i, p := range a.Pools {
 			cp := p
+			if len(p.Models) > 0 {
+				cp.Models = slices.Clone(p.Models)
+			}
 			if len(p.Windows) > 0 {
 				cp.Windows = make([]QuotaWindow, len(p.Windows))
 				for j, w := range p.Windows {
@@ -748,7 +752,8 @@ func parseAgyUsageOutput(stdout []byte, stderr string, exitCode int, updatedAt s
 			Name string `json:"name"`
 			Data *struct {
 				Groups []struct {
-					Name    string `json:"name"`
+					Name    string   `json:"name"`
+					Models  []string `json:"models"`
 					Buckets []struct {
 						ID                string   `json:"id"`
 						Name              string   `json:"name"`
@@ -795,6 +800,7 @@ func parseAgyUsageOutput(stdout []byte, stderr string, exitCode int, updatedAt s
 			sortQuotaWindows(wins)
 			pools = append(pools, QuotaPool{
 				Group:   shortenAgyGroup(g.Name),
+				Models:  cleanQuotaModels(g.Models),
 				Windows: wins,
 			})
 		}
@@ -956,9 +962,15 @@ func (w *codexRateWindowRaw) resetsUnix() int64 {
 }
 
 type codexRateLimitsRaw struct {
-	Primary   *codexRateWindowRaw `json:"primary"`
-	Secondary *codexRateWindowRaw `json:"secondary"`
-	Credits   *struct {
+	LimitID              string              `json:"limitId"`
+	LimitIDSnake         string              `json:"limit_id"`
+	LimitName            string              `json:"limitName"`
+	LimitNameSnake       string              `json:"limit_name"`
+	NormalModelSlug      string              `json:"normalModelSlug"`
+	NormalModelSlugSnake string              `json:"normal_model_slug"`
+	Primary              *codexRateWindowRaw `json:"primary"`
+	Secondary            *codexRateWindowRaw `json:"secondary"`
+	Credits              *struct {
 		HasCredits bool `json:"hasCredits"`
 		Unlimited  bool `json:"unlimited"`
 	} `json:"credits"`
@@ -971,6 +983,27 @@ func (r *codexRateLimitsRaw) plan() string {
 		return ""
 	}
 	return formatPlanName(orStr(r.PlanType, r.PlanTypeSnake))
+}
+
+func (r *codexRateLimitsRaw) limitID() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(orStr(r.LimitID, r.LimitIDSnake))
+}
+
+func (r *codexRateLimitsRaw) limitName() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(orStr(r.LimitName, r.LimitNameSnake))
+}
+
+func (r *codexRateLimitsRaw) modelSlug() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(orStr(r.NormalModelSlug, r.NormalModelSlugSnake))
 }
 
 func (qm *quotaManager) collectCodex(ctx context.Context) AgentQuota {
@@ -1109,32 +1142,62 @@ func parseCodexAppServerRateLimits(resultRaw []byte, updatedAt string) AgentQuot
 		}
 	}
 	rl := env.RateLimits
+	primaryKey := ""
+	if rl != nil {
+		primaryKey = rl.limitID()
+	}
 	if rl == nil || (rl.Primary == nil && rl.Secondary == nil) {
 		for _, k := range sortedMapKeys(env.RateLimitsByLimitID) {
 			cand := env.RateLimitsByLimitID[k]
 			if cand != nil && (cand.Primary != nil || cand.Secondary != nil) {
 				rl = cand
+				primaryKey = orStr(cand.limitID(), k)
 				break
 			}
 		}
 	}
-	return buildCodexAgentQuota(rl, "app-server", updatedAt)
+	ag := buildCodexAgentQuota(rl, "app-server", updatedAt)
+	if ag.Status != "ok" || len(env.RateLimitsByLimitID) == 0 {
+		return ag
+	}
+	seenKeys := map[string]bool{}
+	if primaryKey != "" {
+		seenKeys[strings.ToLower(primaryKey)] = true
+	} else {
+		seenKeys["codex"] = true
+	}
+	for _, k := range sortedMapKeys(env.RateLimitsByLimitID) {
+		cand := env.RateLimitsByLimitID[k]
+		if cand == nil {
+			continue
+		}
+		cid := orStr(cand.limitID(), k)
+		if seenKeys[strings.ToLower(cid)] || seenKeys[strings.ToLower(k)] {
+			continue
+		}
+		wins := codexWindowsFromRaw(cand)
+		if len(wins) == 0 {
+			continue
+		}
+		seenKeys[strings.ToLower(cid)] = true
+		seenKeys[strings.ToLower(k)] = true
+		group := orStr(cand.limitName(), orStr(cand.modelSlug(), cid))
+		if strings.EqualFold(group, "codex") && len(ag.Pools) > 0 && ag.Pools[0].Group == "" {
+			continue
+		}
+		ag.Pools = append(ag.Pools, QuotaPool{
+			Group:   group,
+			Models:  cleanQuotaModels([]string{cand.modelSlug()}),
+			Windows: wins,
+		})
+	}
+	return ag
 }
 
-func buildCodexAgentQuota(rl *codexRateLimitsRaw, source, updatedAt string) AgentQuota {
-	base := AgentQuota{
-		Kind:      "codex",
-		Name:      "Codex",
-		Source:    source,
-		UpdatedAt: updatedAt,
-	}
+func codexWindowsFromRaw(rl *codexRateLimitsRaw) []QuotaWindow {
 	if rl == nil {
-		base.Status = "degraded"
-		base.Plan = "API 模式"
-		base.Note = "当前走 API 计费，无订阅周期窗口"
-		return base
+		return nil
 	}
-	base.Plan = rl.plan()
 	var wins []QuotaWindow
 	addWin := func(rw *codexRateWindowRaw, fallbackID, fallbackLabel string) {
 		used, ok := rw.usedPct()
@@ -1156,6 +1219,25 @@ func buildCodexAgentQuota(rl *codexRateLimitsRaw, source, updatedAt string) Agen
 	}
 	addWin(rl.Primary, "primary", "主窗口")
 	addWin(rl.Secondary, "secondary", "周额度")
+	sortQuotaWindows(wins)
+	return wins
+}
+
+func buildCodexAgentQuota(rl *codexRateLimitsRaw, source, updatedAt string) AgentQuota {
+	base := AgentQuota{
+		Kind:      "codex",
+		Name:      "Codex",
+		Source:    source,
+		UpdatedAt: updatedAt,
+	}
+	if rl == nil {
+		base.Status = "degraded"
+		base.Plan = "API 模式"
+		base.Note = "当前走 API 计费，无订阅周期窗口"
+		return base
+	}
+	base.Plan = rl.plan()
+	wins := codexWindowsFromRaw(rl)
 
 	if len(wins) == 0 {
 		base.Status = "degraded"
@@ -1169,9 +1251,12 @@ func buildCodexAgentQuota(rl *codexRateLimitsRaw, source, updatedAt string) Agen
 		return base
 	}
 
-	sortQuotaWindows(wins)
 	base.Status = "ok"
-	base.Pools = []QuotaPool{{Group: "", Windows: wins}}
+	base.Pools = []QuotaPool{{
+		Group:   "",
+		Models:  cleanQuotaModels([]string{rl.modelSlug()}),
+		Windows: wins,
+	}}
 	return base
 }
 
@@ -1749,4 +1834,28 @@ func sortedMapKeys[V any](m map[string]V) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+func cleanQuotaModels(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, m := range raw {
+		t := strings.TrimSpace(m)
+		if t == "" {
+			continue
+		}
+		low := strings.ToLower(t)
+		if seen[low] {
+			continue
+		}
+		seen[low] = true
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

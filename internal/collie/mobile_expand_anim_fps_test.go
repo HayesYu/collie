@@ -74,7 +74,7 @@ for (const [name, src] of [["web/app.css", cssSrc], ["docs/demo/app.css", demoCs
 
   // 1d) Mobile sheet open animations & warm reopen content-visibility: hidden cache
   assert.ok(src.includes("[hidden]:not(.super-search, .ss-panel, .side-drawer) { display: none !important; }"), name + " global [hidden] rule must exempt .side-drawer for mobile content-visibility cache");
-  assert.ok(src.includes("@keyframes sd-sheet-in-y") && src.includes(".side-drawer.is-sheet-opening") && src.includes(".drawer-scrim.is-scrim-opening"), name + " mobile drawers must animate open via GPU keyframes without offsetWidth reflow");
+  assert.ok(src.includes(".side-drawer.is-sheet-prep") && src.includes(".side-drawer.is-sheet-opening:not(.is-sheet-prep)") && src.includes(".drawer-scrim.is-scrim-prep") && src.includes("@starting-style"), name + " mobile drawers must animate open via two-phase GPU prep + transition with @starting-style fallback and 0 offsetWidth reflow");
   assert.ok(src.includes("@supports (content-visibility: hidden)") && src.includes("content-visibility: hidden;"), name + " hidden mobile drawers must preserve layout/style cache via content-visibility: hidden");
 
   // 1e) Topic drawer focus pulse uses GPU ::after opacity fade, not background repaint

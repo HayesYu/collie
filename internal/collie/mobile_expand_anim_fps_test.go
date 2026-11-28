@@ -90,6 +90,16 @@ for (const [name, src] of [["web/app.css", cssSrc], ["docs/demo/app.css", demoCs
 
   // 1h) Never add content-visibility: auto to #super-thread (scroll anchor stability red line)
   assert.ok(!/#super-thread[^{]*\{[^}]*content-visibility:\s*auto/.test(src), name + " must never apply content-visibility: auto to #super-thread");
+
+  // 1i) Desktop / iPad landscape docked drawer zero-twitch contract (#t15047):
+  // .md-table-vp.is-scrollable MUST NOT alter column geometry (max-width / white-space / width / padding),
+  // otherwise ResizeObserver(tableRO) enters a 60Hz +-19px vertical oscillation loop when main chat narrows.
+  const scrollRules = [...src.matchAll(/\.md-table-vp\.is-scrollable[^{]*\{([^}]*)\}/g)];
+  assert.ok(scrollRules.length >= 1, name + " must define .md-table-vp.is-scrollable sticky rule");
+  for (const m of scrollRules) {
+    assert.ok(!/\b(?:max-width|min-width|width|white-space|padding|font-size)\s*:/.test(m[1]), name + " .md-table-vp.is-scrollable must stay geometry-invariant to prevent 60Hz tableRO oscillation: " + m[0]);
+  }
+  assert.ok(src.includes('.md-table-card:not([data-cols="1"]):not([data-cols="2"]):not([data-cols="3"]) thead th:first-child'), name + " 4+ col tables must apply unconditional first-col max-width");
 }
 
 for (const [name, src] of [["web/app.js", appSrc], ["docs/demo/app.js", demoAppSrc]]) {
@@ -99,6 +109,10 @@ for (const [name, src] of [["web/app.js", appSrc], ["docs/demo/app.js", demoAppS
   assert.ok(src.includes("_renderedCacheKey"), name + " worker drawer warm reopen must reuse rendered transcript DOM via _renderedCacheKey");
   assert.ok(src.includes("scheduleAfterWdSlide") && src.includes("workerMsgsRawSig") && src.includes("bindLazyToolRuns") && src.includes("groupThreadMsgs"), name + " worker drawer open must defer mid-slide DOM dumps, short-circuit identical transcripts, and lazy-hydrate collapsed toolruns");
   assert.ok(src.includes("is-just-expanded"), name + " prompt/code expand must toggle transient .is-just-expanded class");
+  // Desktop / iPad landscape docked drawer zero-twitch JS contracts (#t15047)
+  assert.ok(src.includes("_roLastW") && src.includes("flushPostGlideRichSync") && src.includes("syncCollieResizeBaseline"), name + " rich ROs must be width-only, glide-deferred, and sync resize baseline on glide end");
+  assert.ok(src.includes("lockSnap: passedSnap = null") && src.includes("let preStageCls = \"\";"), name + " runDesktopDrawerGlide must accept pre-mutation lockSnap and stage grid class before layout reads");
+  assert.ok(src.includes("_pendingHtmlCardHeights") && src.includes("function applyHtmlCardHeight("), name + " HTML card height updates must defer during layout glide and preserve bottom stick");
 }
 
 // ─── 2. Runtime VM Verification: Render Classes, 0 Forced Reflow, Mobile Progressive Slice & Warm Reuse ───

@@ -3064,6 +3064,7 @@
     }
     return applyCollieAnchor(sc, snap);
   }
+  let syncCollieResizeBaseline = () => {};
   function cancelCollieLayoutLock() {
     const lock = collieLayoutLock;
     if (!lock) return;
@@ -7470,6 +7471,28 @@
           collieResizeRestoreRAF = 0;
           restoreNow();
         });
+      }
+    };
+    syncCollieResizeBaseline = () => {
+      if (!sc) return;
+      if (collieResizeRestoreRAF && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(collieResizeRestoreRAF);
+        collieResizeRestoreRAF = 0;
+      }
+      const w = sc.clientWidth || 0;
+      const h = sc.clientHeight || 0;
+      if (w > 0 && h > 0) {
+        collieResizeW = w;
+        collieResizeH = h;
+      }
+      if (view === "collie" && h > 0) {
+        if (isCollieNearBottom(sc) && collieStickBottom) {
+          collieResizeWasBottom = true;
+          collieResizeAnchor = null;
+        } else {
+          collieResizeWasBottom = false;
+          collieResizeAnchor = captureCollieAnchor(sc);
+        }
       }
     };
     if (sc && typeof ResizeObserver === "function") {
@@ -20088,9 +20111,11 @@
   function scheduleTableSync(cards) {
     if (!cards || !cards.length) return;
     for (const c of cards) if (c) _tablePending.add(c);
+    if (isLayoutGliding()) return;
     if (_tableBatchRAF) return;
     const flush = () => {
       _tableBatchRAF = 0;
+      if (isLayoutGliding()) return;
       const batch = [..._tablePending];
       _tablePending.clear();
       syncTablesBatch(batch);
@@ -20107,7 +20132,12 @@
       tableRO = new ResizeObserver((entries) => {
         const cards = [];
         for (const entry of entries) {
-          const card = entry.target?.closest?.("[data-table-card]");
+          const el = entry.target;
+          const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
+          if (w <= 0) { el._roLastW = 0; continue; }
+          if (el._roLastW === w) continue;
+          el._roLastW = w;
+          const card = el.closest?.("[data-table-card]");
           if (card) cards.push(card);
         }
         if (cards.length) scheduleTableSync(cards);
@@ -20177,9 +20207,11 @@
   function scheduleCodeSync(blocks) {
     if (!blocks || !blocks.length) return;
     for (const b of blocks) if (b) _codePending.add(b);
+    if (isLayoutGliding()) return;
     if (_codeBatchRAF) return;
     const flush = () => {
       _codeBatchRAF = 0;
+      if (isLayoutGliding()) return;
       const batch = [..._codePending];
       _codePending.clear();
       syncCodeBlocksBatch(batch);
@@ -20196,7 +20228,12 @@
       codeRO = new ResizeObserver((entries) => {
         const blocks = [];
         for (const entry of entries) {
-          const block = entry.target?.closest?.("[data-code-block]");
+          const el = entry.target;
+          const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
+          if (w <= 0) { el._roLastW = 0; continue; }
+          if (el._roLastW === w) continue;
+          el._roLastW = w;
+          const block = el.closest?.("[data-code-block]");
           if (block) blocks.push(block);
         }
         if (blocks.length) scheduleCodeSync(blocks);
@@ -21132,6 +21169,31 @@
     const inv = 1 - u;
     return 1 - inv * inv * inv;
   }
+  function flushPostGlideRichSync() {
+    if (_tablePending.size) {
+      if (_tableBatchRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(_tableBatchRAF); _tableBatchRAF = 0; }
+      const batch = [..._tablePending];
+      _tablePending.clear();
+      syncTablesBatch(batch);
+    }
+    if (_codePending.size) {
+      if (_codeBatchRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(_codeBatchRAF); _codeBatchRAF = 0; }
+      const batch = [..._codePending];
+      _codePending.clear();
+      syncCodeBlocksBatch(batch);
+    }
+    if (_rvStagePending.size) {
+      if (_rvStageRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(_rvStageRAF); _rvStageRAF = 0; }
+      const batch = [..._rvStagePending];
+      _rvStagePending.clear();
+      for (const c of batch) if (c.isConnected) syncRichStageScroll(c);
+    }
+    if (_pendingHtmlCardHeights.size) {
+      const entries = [..._pendingHtmlCardHeights.entries()];
+      _pendingHtmlCardHeights.clear();
+      for (const [rec, h] of entries) applyHtmlCardHeight(rec, h, { skipStick: true });
+    }
+  }
   function finishDrawerGlide(snapToEnd = true) {
     if (_drawerGlideRAF && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(_drawerGlideRAF);
@@ -21173,7 +21235,7 @@
   // Separate gutter-aware threadMetrics vs gutter-free composerMetrics + frame-0 column cap on tight viewports
   // guarantee 0.00px Frame-0 / Frame-N jump and 0 overlap frames across tablets and desktops alike.
   function runDesktopDrawerGlide(cfg = {}) {
-    const { kind, drawerEl, fromW = 0, toW = 0, startOffset = 0, targetShift = 0, onDone = null } = cfg;
+    const { kind, drawerEl, fromW = 0, toW = 0, startOffset = 0, targetShift = 0, lockSnap: passedSnap = null, onDone = null } = cfg;
     const appEl = $("#app");
     const colEl = $("#v-collie");
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -21189,12 +21251,27 @@
       cancelAnimationFrame(_collieShiftRAF);
       _collieShiftRAF = 0;
     }
+    // Stage grid-template-columns BEFORE any layout read (scrollerGutterW / captureColliePos) so
+    // adding .has-worker/.has-thread/.has-file never triggers a premature reflow at the narrowed grid track.
+    let preStageCls = "";
+    if (kind === "open") {
+      preStageCls = "is-drawer-opening";
+      appEl.style.setProperty("--drawer-stage-w", "0px");
+      appEl.classList.add(preStageCls);
+    } else if (kind === "widen" && Math.max(0, toW - fromW) >= 1) {
+      preStageCls = "is-drawer-opening";
+      appEl.style.setProperty("--drawer-stage-w", Math.round(fromW) + "px");
+      appEl.classList.add(preStageCls);
+    } else if (kind === "narrow" && Math.max(0, fromW - toW) >= 1) {
+      preStageCls = "is-drawer-narrowing";
+      appEl.classList.add(preStageCls);
+    }
     const sideW = currentSideW();
     const canvas = Math.max(480, innerWidth - sideW);
     const sc = view === "collie" ? viewScroller("collie") : null;
     const gutter = scrollerGutterW(sc);
     const colW = currentColW();
-    const lockSnap = sc ? (collieLayoutLock?.snap || captureColliePos(sc)) : null;
+    const lockSnap = sc ? (passedSnap || collieLayoutLock?.snap || captureColliePos(sc)) : null;
     const threadEls = view === "collie"
       ? [$("#super-thread"), $("#super-working")].filter((e) => e?.style)
       : [];
@@ -21417,10 +21494,12 @@
       if (compEl) compEl.style.transform = "";
       _collieShiftCur = kind === "close" ? targetShift : 0;
       if (snap && onDone) onDone();
+      flushPostGlideRichSync();
       if (view === "collie" && sc && lockSnap) {
         applyColliePos(sc, lockSnap);
         updateSuperJump();
       }
+      syncCollieResizeBaseline();
       if (activeWorkerKey && curWdMode() === "screen") fitWdTerm();
     };
 
@@ -21925,15 +22004,16 @@
     if (!closingNotesOverlay) {
       syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadFile && desktopMode });
     }
+    let glided = false;
     if (mobileSwap && !hadFile) {
       playMobileSheetSwap(pane, opts.restoring ? "return" : "drill");
     } else if (!hadFile) {
       if (!wasAnyDrawer) {
-        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift });
+        glided = runDesktopDrawerGlide({ kind: "open", drawerEl: pane, fromW: 0, toW: baseW, startOffset: prevVisualShift, lockSnap });
         if (!glided) playDrawerTransition(pane, false);
       } else {
-        if (baseW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevOpenW, toW: baseW });
-        else if (baseW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevOpenW, toW: baseW });
+        if (baseW > prevOpenW + 1) glided = runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevOpenW, toW: baseW, lockSnap });
+        else if (baseW < prevOpenW - 1) glided = runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevOpenW, toW: baseW, lockSnap });
         playDrawerTransition(pane, true);
       }
     }
@@ -21989,9 +22069,6 @@
     if (!switching) syncDrawerBackButtons();
     pane?.setAttribute?.("aria-hidden", "true");
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
-    if (desktopMode && lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
-    }
     let userScrolled = false;
     const onUserScroll = () => { if (!isProgrammaticScroll()) userScrolled = true; };
     if (sc && lockSnap) sc.addEventListener("scroll", onUserScroll, { passive: true });
@@ -22015,15 +22092,19 @@
         renderSuper(useRestore);
       }
     };
+    let glided = false;
     if (opts.immediate || switching || reduced) {
       hideNow();
     } else if (desktopCloseAnim) {
       const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
         ? computeCollieShiftPx(280) : 0;
-      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: pane, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      glided = runDesktopDrawerGlide({ kind: "close", drawerEl: pane, fromW: closingW, toW: 0, startOffset, targetShift, lockSnap, onDone: hideNow });
       if (!glided) paneTimer = setTimeout(hideNow, 170);
     } else {
       paneTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
+    }
+    if (desktopMode && lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
   }
   pane?.addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFilePane(); });
@@ -22038,8 +22119,8 @@
     const nextW = unifiedDrawerW();
     setFileW(nextW);
     syncFileWidenUI();
-    if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevW, toW: nextW });
-    else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevW, toW: nextW });
+    if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: pane, fromW: prevW, toW: nextW, lockSnap });
+    else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: pane, fromW: prevW, toW: nextW, lockSnap });
     if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   });
   document.addEventListener("keydown", (e) => {
@@ -22357,7 +22438,11 @@
           const crewEl = $("#crew");
           if (crewEl) { syncCrewCompact(crewEl); crewEl._syncScrollFade?.(); }
         }
+        flushPostGlideRichSync();
         if (sc && lockSnap) { applyColliePos(sc, lockSnap); updateSuperJump(); }
+        syncCollieResizeBaseline();
+      } else {
+        flushPostGlideRichSync();
       }
       if (pane && !pane.hidden && isDesktopDrawerViewport()) { setFileW(unifiedDrawerW()); syncFileWidenUI(); }
       if (activeThreadRoot) applyThreadWidth();
@@ -23452,8 +23537,8 @@
     applyThreadWidth();
     const nextW = _lastThreadW || _lastDrawerW || drawerDefaultW();
     if (!opts.immediate && activeThreadRoot && innerWidth > THREAD_DESKTOP_MIN) {
-      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
-      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevW, toW: nextW });
+      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevW, toW: nextW, lockSnap });
+      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevW, toW: nextW, lockSnap });
     }
     if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
   }
@@ -24364,15 +24449,16 @@
     if (!closingNotesOverlay) {
       syncNotebookVisibility({ immediate: wasAnyDrawer || !!opts.immediate, deferShift: !hadThread && !opts.immediate && desktopMode });
     }
+    let glided = false;
     if (mobileSwap && !hadThread && !opts.immediate) {
       playMobileSheetSwap(tdDrawer, opts.restoring ? "return" : "drill");
     } else if (!hadThread && !opts.immediate) {
       if (!wasAnyDrawer) {
-        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: tdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
+        glided = runDesktopDrawerGlide({ kind: "open", drawerEl: tdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift, lockSnap });
         if (!glided) playDrawerTransition(tdDrawer, false);
       } else {
-        if (nextW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW });
-        else if (nextW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW });
+        if (nextW > prevOpenW + 1) glided = runDesktopDrawerGlide({ kind: "widen", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
+        else if (nextW < prevOpenW - 1) glided = runDesktopDrawerGlide({ kind: "narrow", drawerEl: tdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
         playDrawerTransition(tdDrawer, true);
       }
     }
@@ -24496,9 +24582,6 @@
     if (!switching) syncDrawerBackButtons();
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     tdDrawer.setAttribute("aria-hidden", "true");
-    if (desktopMode && lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
-    }
     clearTimeout(tdHideTimer);
     const hideNow = () => {
       resetDrawerMotion(tdDrawer);
@@ -24512,15 +24595,19 @@
         tdScrim.hidden = true;
       }
     };
+    let glided = false;
     if (opts.immediate || switching || reduced) {
       hideNow();
     } else if (desktopCloseAnim) {
       const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
         ? computeCollieShiftPx(280) : 0;
-      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: tdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      glided = runDesktopDrawerGlide({ kind: "close", drawerEl: tdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, lockSnap, onDone: hideNow });
       if (!glided) tdHideTimer = setTimeout(hideNow, 170);
     } else {
       tdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
+    }
+    if (desktopMode && lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
     if (wasOpen && !switching && opts.rerender !== false && view === "collie") {
       if (desktopMode || $("#super-thread")?.querySelector?.(".in-active-thread")) {
@@ -25909,15 +25996,16 @@
     if (!closingNotesOverlay) {
       syncNotebookVisibility({ immediate: wasAnyDrawer, deferShift: !hadWorker && desktopMode });
     }
+    let glided = false;
     if (mobileSwap && !hadWorker) {
       playMobileSheetSwap(wdDrawer, opts.restoring ? "return" : "drill");
     } else if (!hadWorker) {
       if (!wasAnyDrawer) {
-        const glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift });
+        glided = runDesktopDrawerGlide({ kind: "open", drawerEl: wdDrawer, fromW: 0, toW: nextW, startOffset: prevVisualShift, lockSnap });
         if (!glided) playDrawerTransition(wdDrawer, false);
       } else {
-        if (nextW > prevOpenW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW });
-        else if (nextW < prevOpenW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW });
+        if (nextW > prevOpenW + 1) glided = runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
+        else if (nextW < prevOpenW - 1) glided = runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevOpenW, toW: nextW, lockSnap });
         playDrawerTransition(wdDrawer, true);
       }
       if (desktopMode && lockSnap && view === "collie") {
@@ -26004,9 +26092,6 @@
     syncSideActive({ skipBadge: true });
     if (!switching) syncNotebookVisibility({ immediate: !!opts.immediate, deferShift: desktopCloseAnim, fromDrawerClose: desktopCloseAnim });
     wdDrawer.setAttribute("aria-hidden", "true");
-    if (desktopMode && lockSnap && view === "collie") {
-      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
-    }
     clearTimeout(wdHideTimer);
     const hideNow = () => {
       resetDrawerMotion(wdDrawer);
@@ -26020,15 +26105,19 @@
         wdScrim.hidden = true;
       }
     };
+    let glided = false;
     if (opts.immediate || switching || reduced) {
       hideNow();
     } else if (desktopCloseAnim) {
       const targetShift = view === "collie" && $("#v-collie")?.classList?.contains("has-notes") && isWideNotesViewport()
         ? computeCollieShiftPx(280) : 0;
-      const glided = runDesktopDrawerGlide({ kind: "close", drawerEl: wdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, onDone: hideNow });
+      glided = runDesktopDrawerGlide({ kind: "close", drawerEl: wdDrawer, fromW: closingW, toW: 0, startOffset, targetShift, lockSnap, onDone: hideNow });
       if (!glided) wdHideTimer = setTimeout(hideNow, 170);
     } else {
       wdHideTimer = setTimeout(hideNow, innerWidth <= 760 ? 280 : 270);
+    }
+    if (desktopMode && lockSnap && view === "collie") {
+      beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     }
   }
 
@@ -26045,8 +26134,8 @@
       setUnifiedDrawerWide(!drawerWide);
       applyWorkerWidth();
       const nextW = _lastWorkerW || _lastDrawerW || drawerDefaultW();
-      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
-      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevW, toW: nextW });
+      if (nextW > prevW + 1) runDesktopDrawerGlide({ kind: "widen", drawerEl: wdDrawer, fromW: prevW, toW: nextW, lockSnap });
+      else if (nextW < prevW - 1) runDesktopDrawerGlide({ kind: "narrow", drawerEl: wdDrawer, fromW: prevW, toW: nextW, lockSnap });
       if (curWdMode() === "screen" && !isLayoutGliding()) requestAnimationFrame(() => fitWdTerm());
       if (lockSnap && view === "collie") beginCollieLayoutLock(lockSnap, { trackTransition: false, duration: 240 });
     });
@@ -27115,9 +27204,11 @@
   function scheduleRichStageSync(card) {
     if (!card) return;
     _rvStagePending.add(card);
+    if (isLayoutGliding()) return;
     if (_rvStageRAF) return;
     const flush = () => {
       _rvStageRAF = 0;
+      if (isLayoutGliding()) return;
       const batch = [..._rvStagePending];
       _rvStagePending.clear();
       for (const c of batch) if (c.isConnected) syncRichStageScroll(c);
@@ -27134,7 +27225,12 @@
         if (!rvStageRO) {
           rvStageRO = new ResizeObserver((entries) => {
             for (const entry of entries) {
-              const c = entry.target?.closest?.(".rv-card");
+              const el = entry.target;
+              const w = Math.round(entry.contentRect?.width ?? el?.clientWidth ?? 0);
+              if (w <= 0) { el._roLastW = 0; continue; }
+              if (el._roLastW === w) continue;
+              el._roLastW = w;
+              const c = el.closest?.(".rv-card");
               if (c) scheduleRichStageSync(c);
             }
           });
@@ -27723,6 +27819,23 @@
       if (open !== exceptCard) open.classList.remove("is-acts-open");
     }
   }
+  const _pendingHtmlCardHeights = new Map();
+  function applyHtmlCardHeight(rec, clamped, opts = {}) {
+    if (!rec?.iframe?.isConnected || !rec.stage) return;
+    const sc = !opts.skipStick && view === "collie" && rec.card?.closest?.("#super-thread") ? viewScroller("collie") : null;
+    const keepBottom = !!(sc && collieStickBottom && isCollieNearBottom(sc));
+    rec.lastH = clamped;
+    rec.stage.style.height = clamped + "px";
+    const hk = rvHeightKey(rec.card);
+    if (hk) {
+      if (rvHeightCache.size >= RV_HEIGHT_CACHE_MAX) {
+        const oldest = rvHeightCache.keys().next().value;
+        if (oldest !== undefined) rvHeightCache.delete(oldest);
+      }
+      rvHeightCache.set(hk, clamped);
+    }
+    if (keepBottom) snapCollieStickBottom(sc);
+  }
   function handleRichCardMessage(ev) {
     const data = ev?.data;
     if (!data || typeof data !== "object") return;
@@ -27769,16 +27882,11 @@
     const clamped = Math.round(Math.max(64, Math.min(maxH, rawH + 2)));
     if (Math.abs(clamped - (rec.lastH || 0)) < 4) return;
     rec.updates++;
-    rec.lastH = clamped;
-    rec.stage.style.height = clamped + "px";
-    const hk = rvHeightKey(rec.card);
-    if (hk) {
-      if (rvHeightCache.size >= RV_HEIGHT_CACHE_MAX) {
-        const oldest = rvHeightCache.keys().next().value;
-        if (oldest !== undefined) rvHeightCache.delete(oldest);
-      }
-      rvHeightCache.set(hk, clamped);
+    if (isLayoutGliding()) {
+      _pendingHtmlCardHeights.set(rec, clamped);
+      return;
     }
+    applyHtmlCardHeight(rec, clamped);
   }
   if (typeof addEventListener === "function") {
     addEventListener("message", handleRichCardMessage);

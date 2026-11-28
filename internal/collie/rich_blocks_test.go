@@ -32,10 +32,14 @@ const demoCssSrc = fs.readFileSync(path.join(root, "docs/demo/app.css"), "utf8")
   assert.ok(sectionStart > 0, "web/app.css must define Native Rich Expression Blocks section");
   const richCss = cssSrc.slice(sectionStart);
 
-  // Frameless KPI metrics strip + desktop cols + mobile/container 2-col grid + tabular-nums
+  // Frameless KPI metrics strip + desktop cols + mobile/container 2-col grid + tabular-nums + Retina 600 weight & contrast
   assert.ok(richCss.includes(".md-metrics {") && richCss.includes("border: 0;") && richCss.includes("background: transparent;") && richCss.includes("box-shadow: none;"), "KPI metrics strip must be frameless and transparent");
   assert.ok(richCss.includes("grid-template-columns: repeat(2, minmax(0, 1fr));") && richCss.includes("@media (max-width: 760px)") && richCss.includes("@container (max-width: 520px)"), "KPI metrics strip must adapt cleanly to 2 columns on mobile and narrow drawers");
   assert.ok(richCss.includes("font-variant-numeric: tabular-nums;"), "KPI metrics must use tabular-nums");
+  const metricValBlock = richCss.slice(richCss.indexOf(".md-metric-val {"), richCss.indexOf("}", richCss.indexOf(".md-metric-val {")) + 1);
+  assert.ok(metricValBlock.includes("font-weight: 600;") && !metricValBlock.includes("font-weight: 650;"), "KPI .md-metric-val must use standard 600 weight instead of synthetic 650 faux-bold");
+  assert.ok(metricValBlock.includes("font-size: 22px;"), "KPI .md-metric-val must use crisp integer base font-size");
+  assert.ok(richCss.includes("--md-metric-sub: color-mix(in oklab, var(--fg-2) 86%, var(--fg-3));") && demoCssSrc.includes("--md-metric-sub: color-mix(in oklab, var(--fg-2) 86%, var(--fg-3));"), "KPI labels/deltas must use AA+ contrast token synced to demo");
 
   // Frameless stepper timeline + GPU-only breathing dot gated on prefers-reduced-motion: no-preference
   assert.ok(richCss.includes("ol.md-steps") && richCss.includes("li.md-step:not(:last-child)::before"), "steps timeline must render vertical hairline connector");

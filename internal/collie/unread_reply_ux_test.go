@@ -208,7 +208,7 @@ const htmlSrc = fs.readFileSync(path.join(root, "web", "index.html"), "utf8");
 // 1) CSS & restrained copy checks (zero prototype jargon; modern field-sizing + fallback).
 assert.ok(cssSrc.includes(".super-jump.stage-unread"), "CSS must style stage 1 compact unread jump pill");
 assert.ok(cssSrc.includes("field-sizing: content") && cssSrc.includes("@supports not (field-sizing: content)"), "CSS must provide field-sizing: content + Grid fallback");
-assert.ok(cssSrc.includes(".reply-inline-send") && cssSrc.includes("max-width: 368px") && cssSrc.includes(".inplace-receipt"), "CSS must style slim subordinate inline bar & minimal 1-line in-place receipt");
+assert.ok(cssSrc.includes(".reply-inline-send") && cssSrc.includes("max-width: min(340px, 100%)") && cssSrc.includes(".reply-inline.is-multiline") && cssSrc.includes(".inplace-receipt"), "CSS must style in-place morphing inline pill & minimal 1-line in-place receipt");
 for (const banned of ["原地收口 · 不刷主底", "留在原地记入话题线", "跳到最新 · 余", "落主底 · 0px"]) {
   assert.ok(!appSrc.includes(banned) && !htmlSrc.includes(banned), "UI copy must remain restrained without prototype jargon: " + banned);
 }
@@ -626,20 +626,23 @@ const mkEntry = (num, role, text, extra = {}) => ({
   });
   T.renderSuper({ force: true, unreadAnchor: true });
 
-  // C1) Desktop Plan A: click 补充一句 opens slim single-line <form class="reply-inline"> with lightweight send button
+  // C1) Desktop Plan A: click 补充一句 morphs pill in-place inside .reply-opts (hides trigger button, starts at 220px 1-line)
   const togBtn = makeEl("tog-e7");
   togBtn.dataset.toggleInline = "e7";
   togBtn.closest = (sel) => (sel === "[data-toggle-inline]" ? togBtn : null);
   await T.handleQuickOptionClick({ target: togBtn, preventDefault() {} });
-  assert.equal(T.getOpenInline(), "e7", "desktop click opens Plan A inline bar");
+  assert.equal(T.getOpenInline(), "e7", "desktop click morphs Plan A pill in-place");
   assert.equal(T.getReplyTo(), null, "desktop Plan A does not hijack bottom composer");
-  assert.ok(threadBox.innerHTML.includes('placeholder="补充一句…"'), "Plan A uses minimal placeholder");
+  assert.ok(threadBox.innerHTML.includes('data-toggle-inline="e7" aria-expanded="true" hidden>'), "morphing pill hides trigger button in-place");
+  assert.ok(threadBox.innerHTML.includes('style="--ri-w:220px">') && threadBox.innerHTML.includes('placeholder="补充一句…"'), "Plan A starts at 220px with minimal placeholder");
   assert.ok(threadBox.innerHTML.includes('rows="1"'), "Plan A starts as compact 1-line input");
   assert.ok(threadBox.innerHTML.includes('class="reply-inline-send"') && !threadBox.innerHTML.includes('class="send reply-inline-send"'), "Plan A uses subordinate lightweight send button distinct from primary composer .send");
 
-  // IME safety + Shift+Enter + Esc draft preservation on Plan A textarea
+  // IME safety + adaptive width + multiline class + Shift+Enter + Esc draft preservation on Plan A pill
   const riForm = makeEl("ri-form-e7");
   riForm.dataset.inlineBox = "e7";
+  const riProps = {};
+  riForm.style.setProperty = (k, v) => { riProps[k] = v; };
   let formSubmitted = 0;
   riForm.requestSubmit = () => { formSubmitted++; };
   const riWrap = makeEl("ri-wrap-e7");
@@ -651,11 +654,18 @@ const mkEntry = (num, role, text, extra = {}) => ({
   riTa.parentElement = riWrap;
   riTa.closest = (sel) => (sel === "[data-inline-input]" ? riTa : sel === "[data-inline-box]" || sel === "form.reply-inline" ? riForm : null);
 
+  riTa.value = "先合主分支，顺手把这条变更说明补进发版日志里。";
+  doc.dispatchDoc("input", { target: riTa });
+  assert.equal(T.getInlineDraft("e7"), "先合主分支，顺手把这条变更说明补进发版日志里。", "typing persists draft");
+  assert.equal(riWrap.dataset.replicatedValue, "先合主分支，顺手把这条变更说明补进发版日志里。", "fallback updates data-replicated-value when field-sizing unsupported");
+  assert.equal(riSend.disabled, false, "non-empty input enables mini send button");
+  assert.equal(riProps["--ri-w"], "340px", "long input caps pill width smoothly at 340px");
+  assert.equal(riForm.classList.contains("is-multiline"), true, "long wrapping text switches pill to multiline corner radius");
+
   riTa.value = "第一行草稿";
   doc.dispatchDoc("input", { target: riTa });
-  assert.equal(T.getInlineDraft("e7"), "第一行草稿", "typing persists draft");
-  assert.equal(riWrap.dataset.replicatedValue, "第一行草稿", "fallback updates data-replicated-value when field-sizing unsupported");
-  assert.equal(riSend.disabled, false, "non-empty input enables circular send button");
+  assert.equal(riProps["--ri-w"], "220px", "short input returns pill width to 220px");
+  assert.equal(riForm.classList.contains("is-multiline"), false, "short single-line input keeps pill corner radius");
 
   // Shift+Enter -> must NOT submit
   const evShift = doc.dispatchDoc("keydown", { target: riTa, key: "Enter", shiftKey: true, isComposing: false, keyCode: 13, timeStamp: 2000 });

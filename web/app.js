@@ -3645,6 +3645,19 @@
     }
     return { state: "dismissed", text: "", at: "", sending: false, inPlace: false };
   }
+  function inlinePillLayout(text) {
+    const raw = String(text || "");
+    const lines = raw.split("\n");
+    let maxUnits = 0;
+    for (const ln of lines) {
+      let u = 0;
+      for (const ch of ln) u += ch.charCodeAt(0) > 0x7f ? 1 : 0.58;
+      if (u > maxUnits) maxUnits = u;
+    }
+    const width = Math.min(340, Math.max(220, Math.ceil(maxUnits * 13 + 84)));
+    const multi = lines.length > 1 || (width >= 340 && maxUnits * 13 > 260);
+    return { width, multi };
+  }
   function replyOptsMarkup(e, idx, allEntries, pendIds = null, opts = null) {
     if (!e || e.role !== "collie" || !e.id) return "";
     const optList = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
@@ -3656,8 +3669,9 @@
         const savedDraft = getInlineDraft(e.id);
         const hasDraft = !inlineOpen && !isMobileTarget && savedDraft.trim().length > 0;
         const taId = (inDrawer ? "ri-td-" : "ri-") + e.id;
+        const pill = inlinePillLayout(savedDraft);
         return `<div class="decision-wrap" data-decision="${esc(e.id)}"><div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
-          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}">${ICON_EDIT_MINI}<span>补充一句</span>${hasDraft ? `<span class="draft-dot" aria-label="有草稿"></span>` : ""}</button></div><form class="reply-inline" data-inline-box="${esc(e.id)}"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">补充一句</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="1" placeholder="补充一句…" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-acts"><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="取消 (Esc)" aria-label="取消">${ICON_CLOSE_MINI}</button><button type="submit" class="reply-inline-send" data-inline-send="${esc(e.id)}" title="发送 (Enter)" aria-label="发送"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div>`;
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}"${inlineOpen ? " hidden" : ""}>${ICON_EDIT_MINI}<span>补充一句</span>${hasDraft ? `<span class="draft-dot" aria-label="有草稿"></span>` : ""}</button><form class="reply-inline${pill.multi ? " is-multiline" : ""}" data-inline-box="${esc(e.id)}" style="--ri-w:${pill.width}px"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">补充一句</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="1" placeholder="补充一句…" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-acts"><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="取消 (Esc)" aria-label="取消">${ICON_CLOSE_MINI}</button><button type="submit" class="reply-inline-send" data-inline-send="${esc(e.id)}" title="发送 (Enter)" aria-label="发送"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div></div>`;
       }
       const res = resolveDecisionInfo(e, idx, allEntries);
       if (res) {
@@ -7696,6 +7710,16 @@
       inp.parentElement.dataset.replicatedValue = inp.value;
     }
     const box = inp.closest("[data-inline-box]");
+    if (box) {
+      const pill = inlinePillLayout(inp.value);
+      box.style?.setProperty?.("--ri-w", pill.width + "px");
+      const isMulti = pill.multi || (pill.width >= 340 && inp.scrollHeight > 30);
+      box.classList?.toggle?.("is-multiline", isMulti);
+      if (isMulti && !box.closest?.("#thread-drawer") && view === "collie") {
+        const sc = viewScroller("collie");
+        if (sc) ensureInlineCardVisible(sc, id);
+      }
+    }
     const btn = box?.querySelector?.("[data-inline-send]");
     if (btn) btn.disabled = !String(inp.value || "").trim();
   });

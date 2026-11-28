@@ -17,11 +17,11 @@
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
     agent({ pane_id: "w1:p1", workspace_id: "w1", name: "collie", kind: "claude", status: "idle", cwd: "/home/alex/.collie/router" }),
-    agent({ pane_id: "w2:p1@macbook", workspace_id: "w2@macbook", name: "claude-1", kind: "claude", status: "working", cwd: "/Users/alex/code/shop-web", topic: "首页加暗色模式", run: ["opus", "high"] }),
-    agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "idle", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", run: ["gpt-6.1-sol", "high"] }),
-    agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", run: ["", ""] }),
-    agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", label: "查分页单测", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
-    agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", label: "写v1.4日志", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
+    agent({ pane_id: "w2:p1@macbook", workspace_id: "w2@macbook", name: "claude-1", kind: "claude", status: "working", cwd: "/Users/alex/code/shop-web", topic: "首页加暗色模式", created_at: ago(38), run: ["opus", "high"] }),
+    agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "idle", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", created_at: ago(26), run: ["gpt-6.1-sol", "high"] }),
+    agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", created_at: ago(20), run: ["", ""] }),
+    agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", label: "查分页单测", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", created_at: ago(14), run: ["gpt-6.1-sol", "medium"] }),
+    agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", label: "写v1.4日志", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", created_at: ago(14), run: ["sonnet", "low"] }),
   ];
   const shells = [
     { pane_id: "w7:p1", workspace_id: "w7", workspace_label: "logs", name: "logs", kind: "", status: "shell", cwd: "/home/alex/code/shop-api", title: "", is_agent: false, machine: "" },
@@ -563,8 +563,9 @@
     const reBack = fromEntry?.re ? { re: { entry: fromEntry.id, who: "你", text: fromEntry.text } } : {};
     entries.push(entry("collie", `收到。这件事我交给 **${name}**（Codex · devbox）去做，它会在 \`~/code/shop-api\` 里动手；有结果或需要你拍板时我再说。`, reBack));
     const pane = "w" + (20 + demoN) + ":p1";
-    agents.push(agent({ pane_id: pane, workspace_id: pane.split(":")[0], name, kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }));
-    workers.push({ name, kind: "codex", cwd: "/home/alex/code/shop-api", task: text, thread: "chat:main", pane_id: pane, workspace_id: pane.split(":")[0], machine: "", created_by: "collie", created_at: new Date().toISOString(), status: "working", run: ["gpt-6.1-sol", "medium"] });
+    const spawnedAt = new Date().toISOString();
+    agents.push(agent({ pane_id: pane, workspace_id: pane.split(":")[0], name, kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", created_at: spawnedAt, run: ["gpt-6.1-sol", "medium"] }));
+    workers.push({ name, kind: "codex", cwd: "/home/alex/code/shop-api", task: text, thread: "chat:main", pane_id: pane, workspace_id: pane.split(":")[0], machine: "", created_by: "collie", created_at: spawnedAt, status: "working", run: ["gpt-6.1-sol", "medium"] });
     chats[pane] = [{ kind: "user", text: "[collie] " + text }, tool("Bash", "rg -n TODO --stats", "37 matches in 12 files")];
     lives[pane] = { status: "working", tail: "Reading the code", meta: "12s" };
     entries.push(entry("event", `派出 ${name}（codex · devbox）`, { tone: "spawn", ref: name }));
@@ -1376,7 +1377,7 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     if (p === "/api/agents" && method === "POST") {
       const n = agents.length + 10, pane = `w${n}:p1${body.machine ? "@" + body.machine : ""}`;
       const kind = body.kind === "antigravity" ? "agy" : body.kind;
-      agents.push(agent({ pane_id: pane, workspace_id: pane.split(":")[0], name: body.name || `${kind}-${n}`, kind, status: body.prompt ? "working" : "idle", cwd: (body.cwd || "~/code").replace(/^~/, body.machine ? "/Users/alex" : "/home/alex"), run: [body.model || "", body.effort || ""] }));
+      agents.push(agent({ pane_id: pane, workspace_id: pane.split(":")[0], name: body.name || `${kind}-${n}`, kind, status: body.prompt ? "working" : "idle", cwd: (body.cwd || "~/code").replace(/^~/, body.machine ? "/Users/alex" : "/home/alex"), created_at: new Date().toISOString(), run: [body.model || "", body.effort || ""] }));
       chats[pane] = [];
       if (body.prompt) promptPane(pane, body.prompt); else pushAll();
       return json({ pane_id: pane, workspace_id: pane.split(":")[0] });

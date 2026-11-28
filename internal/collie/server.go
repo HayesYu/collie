@@ -36,8 +36,9 @@ type Server struct {
 	localAddr  string   // hub only: local host:port for CLI and loopback links
 	publicURLs []string // hub only: addresses given with -url, shown first
 
-	startMu sync.Mutex
-	started map[string]time.Time // pane → when Collie started an agent there
+	startMu   sync.Mutex
+	started   map[string]time.Time // pane → when Collie started an agent there
+	firstSeen map[string]time.Time // pane → first observation time for non-Collie panes
 
 	agyResuming sync.Map // CLI history IDs currently starting in herdr
 }
@@ -52,6 +53,10 @@ func (s *Server) markStarted(pane string) {
 	s.started[local] = now
 	if pane != local {
 		s.started[pane] = now
+	}
+	delete(s.firstSeen, local)
+	if pane != local {
+		delete(s.firstSeen, pane)
 	}
 	s.startMu.Unlock()
 
@@ -76,6 +81,38 @@ func (s *Server) startedAt(pane string) (time.Time, bool) {
 	}
 	t, ok := s.started[local]
 	return t, ok
+}
+
+// agentCreatedAt returns a stable creation timestamp for an agent pane: the
+// exact time Collie started it when known, otherwise its first-observed time.
+func (s *Server) agentCreatedAt(pane string, fallback time.Time) time.Time {
+	local, _ := split(pane)
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	if t, ok := s.started[pane]; ok && !t.IsZero() {
+		return t
+	}
+	if t, ok := s.started[local]; ok && !t.IsZero() {
+		return t
+	}
+	if s.firstSeen == nil {
+		s.firstSeen = map[string]time.Time{}
+	}
+	if t, ok := s.firstSeen[pane]; ok && !t.IsZero() {
+		return t
+	}
+	s.firstSeen[pane] = fallback
+	return fallback
+}
+
+func (s *Server) pruneFirstSeen(alive map[string]bool, listed func(machine string) bool) {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	for p := range s.firstSeen {
+		if _, m := split(p); !alive[p] && listed(m) {
+			delete(s.firstSeen, p)
+		}
+	}
 }
 
 // Agent kinds Collie offers in its launcher, mapped to herdr's --kind values.
@@ -289,6 +326,7 @@ type AgentView struct {
 	Session        string     `json:"session,omitempty"` // id to resume it by
 	IsAgent        bool       `json:"is_agent"`
 	Machine        string     `json:"machine"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
 	Run            *[2]string `json:"run,omitempty"` // model, effort Collie started it with
 }
 
@@ -339,9 +377,12 @@ func (s *Server) state(ctx context.Context) PaneState {
 
 	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, LastReadEntryID: lastRead}
 	var workerLabelByPane, workerLabelByName map[string]string
+	var workerCreatedByPane, workerCreatedByName map[string]time.Time
 	if s.sup != nil {
 		workerLabelByPane, workerLabelByName = s.sup.workerLabels()
+		workerCreatedByPane, workerCreatedByName = s.sup.workerCreatedAt()
 	}
+	pollNow := time.Now()
 	topics := map[string]map[string]paneSession{"": s.titlesFor("", ctx)}
 	for _, m := range machines {
 		if !m.Local && m.Online {
@@ -377,6 +418,18 @@ func (s *Server) state(ctx context.Context) PaneState {
 				v.Label = lbl
 			} else if lbl := workerLabelByName[v.Name]; lbl != "" {
 				v.Label = lbl
+			}
+			var created time.Time
+			if t := workerCreatedByPane[p.ID]; !t.IsZero() {
+				created = t
+			} else if t := workerCreatedByName[v.Name]; !t.IsZero() {
+				created = t
+			} else {
+				created = s.agentCreatedAt(p.ID, pollNow)
+			}
+			if !created.IsZero() {
+				t := created
+				v.CreatedAt = &t
 			}
 		}
 		if v.IsAgent {
@@ -415,8 +468,20 @@ func (s *Server) state(ctx context.Context) PaneState {
 			online[m.ID] = m.Online && s.herdr.MachineHerdrOK(m.ID)
 		}
 	}
-	s.herdr.pruneRuns(alive, func(m string) bool { return online[m] })
-	sort.SliceStable(st.Agents, less(st.Agents))
+	listed := func(m string) bool { return online[m] }
+	s.herdr.pruneRuns(alive, listed)
+	s.pruneFirstSeen(alive, listed)
+	agentLess := less(st.Agents)
+	sort.SliceStable(st.Agents, func(i, j int) bool {
+		ti, tj := st.Agents[i].CreatedAt, st.Agents[j].CreatedAt
+		switch {
+		case ti != nil && tj != nil && !ti.Equal(*tj):
+			return ti.After(*tj)
+		case (ti != nil) != (tj != nil):
+			return ti != nil
+		}
+		return agentLess(i, j)
+	})
 	sort.SliceStable(st.Shells, less(st.Shells))
 	return st
 }

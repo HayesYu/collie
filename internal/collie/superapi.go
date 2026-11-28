@@ -236,7 +236,15 @@ func (s *Server) superState(ctx context.Context) superView {
 			v.Workers = append(v.Workers, &cp)
 		}
 	}
-	sort.Slice(v.Workers, func(i, j int) bool { return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt) })
+	sort.Slice(v.Workers, func(i, j int) bool {
+		if !v.Workers[i].CreatedAt.Equal(v.Workers[j].CreatedAt) {
+			return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt)
+		}
+		if v.Workers[i].Name != v.Workers[j].Name {
+			return v.Workers[i].Name < v.Workers[j].Name
+		}
+		return v.Workers[i].PaneID < v.Workers[j].PaneID
+	})
 	v.Follow = sp.followLocked()
 	for _, t := range sp.st.Timers {
 		if t.Enabled {

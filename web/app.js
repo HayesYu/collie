@@ -2390,7 +2390,7 @@
     sideRenderedOnce = true;
     const allEntries = chatEntries();
     const wtMap = computeWorkerThreadMap(null, allEntries);
-    const blocked = state.agents.filter((a) => a.status === "blocked");
+    const blocked = state.agents.filter((a) => a.status === "blocked").sort(compareLiveSession);
     $("#attention-group").hidden = blocked.length === 0;
     patchKeyedList($("#attention"), blocked.map((a) => itemSpec(a, wtMap, allEntries)));
 
@@ -14178,7 +14178,41 @@
   liveGroup.addEventListener("toggle", () => store.set("liveGroupOpen", liveGroup.open));
   let extAll = store.get("extAll", false);
   const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
-  const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
+  const LIVE_BUSY_STATUS = new Set(["working", "waiting", "starting"]);
+  const LIVE_KEY_COLLATOR = typeof Intl !== "undefined" && Intl.Collator
+    ? new Intl.Collator("en", { numeric: true })
+    : null;
+  function parseCreatedMs(v) {
+    if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+    if (!v) return 0;
+    const ms = Date.parse(v);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  function liveCreatedMs(s) {
+    if (!s) return 0;
+    if (s.pane_id) {
+      const direct = parseCreatedMs(s.created_at);
+      if (direct) return direct;
+      const w = findWorkerForAgent(s);
+      return parseCreatedMs(w && !w.ended ? w.created_at : 0) || parseCreatedMs(s.started);
+    }
+    return parseCreatedMs(s.created_at) || parseCreatedMs(s.started);
+  }
+  function liveStableKey(s) {
+    if (!s) return "";
+    return s.pane_id ? "p:" + s.pane_id : "x:" + (s.id || s.name || "");
+  }
+  function compareLiveSession(a, b) {
+    const ta = liveCreatedMs(a), tb = liveCreatedMs(b);
+    if (tb !== ta) return tb - ta;
+    const ka = liveStableKey(a), kb = liveStableKey(b);
+    if (ka === kb) return 0;
+    if (LIVE_KEY_COLLATOR) {
+      const c = LIVE_KEY_COLLATOR.compare(ka, kb);
+      if (c !== 0) return c;
+    }
+    return ka < kb ? -1 : 1;
+  }
   function renderExt() { renderSessions(); }
   function renderSessions(workerThreadMap = null, allEntries = null) {
     const entries = allEntries || chatEntries();
@@ -14207,9 +14241,8 @@
     // saying it is still open.
     const going = (e) => e.live && e.status !== "idle" && e.status !== "unknown";
     const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked");
-    const rank = (s) => RANK[s.status] ?? 3;
-    const live = [...panes, ...ext.filter(going)].sort((a, b) => rank(a) - rank(b));
-    const busy = live.filter((s) => rank(s) <= 1).length;
+    const live = [...panes, ...ext.filter(going)].sort(compareLiveSession);
+    const busy = live.filter((s) => LIVE_BUSY_STATUS.has(s.status)).length;
     setText(
       $("#live-count"),
       !live.length
@@ -14264,7 +14297,7 @@
     const railSepEl = $("#rail-live-sep");
     if (railLiveEl) {
       const blockedAgents = state.agents.filter((a) => a.name !== ROUTER && a.status === "blocked");
-      const railItems = [...blockedAgents, ...live].slice(0, 10);
+      const railItems = [...blockedAgents, ...live].sort(compareLiveSession).slice(0, 10);
       if (railSepEl) railSepEl.hidden = railItems.length === 0;
       const monoOf = (str) => {
         const s = String(str || "").replace(/^[^A-Za-z0-9\u4e00-\u9fff]+/, "").trim();

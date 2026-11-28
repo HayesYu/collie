@@ -10,10 +10,21 @@
 try {
   var t = localStorage.getItem("collie-theme");
   if (t === "light" || t === "dark") document.querySelector('meta[name="color-scheme"]').content = t;
+  var rawL = localStorage.getItem("collie-lang");
+  var lp = rawL === "zh" || rawL === "en" ? rawL : "";
+  if (!lp) {
+    var cl = localStorage.getItem("collie.lang");
+    if (cl) {
+      try { cl = JSON.parse(cl); } catch (e2) {}
+      if (cl === "zh" || cl === "en") lp = cl;
+    }
+  }
+  var effL = lp || (/^zh(?:[-_]|$)/i.test(navigator.language || "") ? "zh" : "en");
+  document.documentElement.lang = effL === "zh" ? "zh-CN" : "en";
 } catch (e) {}
 </script>
-<title>Collie · Peer Collie Invite</title>
-<meta name="description" content="Open a friend's Collie business card locally in your own Collie Hub—parsed 100% in your browser from the URL hash with zero server relay.">
+<title>Collie · Pal Invite</title>
+<meta name="description" content="Open a pal's Collie card locally in your own Collie Hub—parsed 100% in your browser from the URL hash with zero server relay.">
 <link rel="icon" href="../icon.svg" type="image/svg+xml">
 <style>
 :root {
@@ -1431,7 +1442,7 @@ footer {
 
       <!-- Manual paste fallback (shown only on empty / invalid / expired state) -->
       <div class="manual-box" id="manual-box" hidden>
-        <label for="manual-input" data-i18n="manual_label">Paste a friend's card link or invite code</label>
+        <label for="manual-input" data-i18n="manual_label">Paste a pal's card link or invite code</label>
         <textarea id="manual-input" rows="2" spellcheck="false" data-i18n-placeholder="manual_ph" placeholder="https://lihuanyu0w0.github.io/collie/join/#2.... or collie-peer://v2/..."></textarea>
         <button type="button" class="btn primary" id="manual-parse-btn" data-i18n="manual_btn">Open business card</button>
       </div>
@@ -1502,22 +1513,22 @@ const PRESET_PWA = "web+collie://";
 const COPY = {
   en: {
     _lang: "en",
-    _title: "Collie · Peer Collie Invite",
-    _titleWithName: (n) => `${n} · Collie Invite`,
+    _title: "Collie · Pal Invite",
+    _titleWithName: (n) => `${n} · Collie's Pals Invite`,
     _langAria: "EN / 中文 — Switch to Chinese",
     nav_home: "Homepage",
     theme_to_dark: "Switch to dark theme",
     theme_to_light: "Switch to light theme",
-    title_card: (name) => `${name} invited you to be peer Collies`,
+    title_card: (name) => `${name} invited you to be Collie's Pals`,
     title_expired: (name) => `Invite from ${name} expired`,
-    sub_perm: "Send a friend request from your Collie — direct collaboration begins once approved.",
+    sub_perm: "Send a pal request from your Collie — direct collaboration begins once approved.",
     sub_once: "Open in your Collie to accept this one-time direct connection invite.",
     sub_legacy: "Open in your Collie before this time-limited invite expires.",
     sub_expired: "This invite has expired. Ask them to share their permanent Collie card instead.",
-    title_empty: "Connect a peer Collie",
-    sub_empty: "Open a friend's /join/# link or paste their invite code below to pair directly.",
+    title_empty: "Add a pal",
+    sub_empty: "Open a pal's /join/# link or paste their invite code below to pair directly.",
     title_invalid: "Couldn't read this invite card",
-    sub_invalid: "The # card fragment looks incomplete. Ask your friend to copy it again, or paste below.",
+    sub_invalid: "The # card fragment looks incomplete. Ask your pal to copy it again, or paste below.",
     note_once: "One-time invite",
     note_once_exp: (rem) => `One-time invite · ${rem} left`,
     note_legacy: (rem) => `Time-limited invite · ${rem} left`,
@@ -1529,8 +1540,8 @@ const COPY = {
     copy_code: "Copy invite code",
     copied: "Invite code copied",
     copy_failed: "Clipboard blocked — select and copy the invite code below.",
-    mobile_copy_toast: "Code copied · Open Collie on Home Screen → Peers → Paste",
-    mobile_copy_guide: "Invite code copied! Open Collie from your Home Screen → Peers → Add Friend, then tap Paste.",
+    mobile_copy_toast: "Code copied · Open Collie on Home Screen → Pals → Paste",
+    mobile_copy_guide: "Invite code copied! Open Collie from your Home Screen → Pals → Add a pal, then tap Paste.",
     opens_prefix: "Opens:",
     switch_addr: "Switch",
     mobile_addr_toggle: "Enter my LAN / Tailscale URL to open directly",
@@ -1558,13 +1569,13 @@ const COPY = {
     err_url_self: "Enter your own Collie Hub URL, not this static invite page.",
     toast_region_label: "Notifications",
     toast_close: "Close notification",
-    manual_label: "Paste a friend's card link or invite code",
+    manual_label: "Paste a pal's card link or invite code",
     manual_ph: "https://lihuanyu0w0.github.io/collie/join/#2.... or collie-peer://v2/...",
-    manual_btn: "Open business card",
+    manual_btn: "Open card",
     details_toggle: "Connection details & security",
     meta_hub_id: "Hub ID",
     meta_addrs: "Direct addresses",
-    notice_privacy: "Parsed 100% locally from the URL # hash—never sent to GitHub or any third-party server. Peer tokens stay isolated with 0 terminal, file, or memory access.",
+    notice_privacy: "Parsed 100% locally from the URL # hash—never sent to GitHub or any third-party server. Pal tokens stay isolated with 0 terminal, file, or memory access.",
     promo_kicker: "New to Collie?",
     promo_home: "Explore Collie →",
     promo_demo: "Live demo",
@@ -1572,20 +1583,20 @@ const COPY = {
   },
   zh: {
     _lang: "zh-CN",
-    _title: "Collie · 好友边牧邀请",
-    _titleWithName: (n) => `${n} · Collie 好友邀请`,
+    _title: "Collie · 好狗友邀请",
+    _titleWithName: (n) => `${n} · Collie 好狗友邀请`,
     _langAria: "EN / 中文 — 切换到英文",
     nav_home: "官网首页",
     theme_to_dark: "切换到深色主题",
     theme_to_light: "切换到浅色主题",
-    title_card: (name) => `${name} 邀请你成为好友边牧`,
+    title_card: (name) => `${name} 邀请你成为 Collie 的好狗友`,
     title_expired: (name) => `${name} 的邀请已过期`,
-    sub_perm: "发起好友申请，对方通过后即开启直连协作。",
+    sub_perm: "发起狗友申请，对方通过后即开启直连协作。",
     sub_once: "在你的 Collie 中打开此一次性邀请，确认后即刻建立直连协作。",
     sub_legacy: "这是限时邀请，请在倒计时结束前打开你的 Collie 配对。",
     sub_expired: "该邀请已过期，请让对方分享长期有效的边牧名片链接。",
-    title_empty: "添加好友边牧",
-    sub_empty: "打开好友的 /join/# 名片链接，或在下方粘贴分享文案与邀请码发起直连协作。",
+    title_empty: "添加狗友",
+    sub_empty: "打开狗友的 /join/# 名片链接，或在下方粘贴分享文案与邀请码发起直连协作。",
     title_invalid: "无法读取这张边牧名片",
     sub_invalid: "链接中的 # 名片信息不完整或被截断，请让对方重新复制或在下方粘贴。",
     note_once: "一次性邀请",
@@ -1599,8 +1610,8 @@ const COPY = {
     copy_code: "复制邀请码",
     copied: "已复制邀请码",
     copy_failed: "自动复制受限，请长按全选下方邀请码复制。",
-    mobile_copy_toast: "已复制邀请码 · 回主屏幕打开 Collie → 好友边牧粘贴",
-    mobile_copy_guide: "已复制邀请码！回到主屏幕打开 Collie → 好友边牧 → 添加好友，点「粘贴」即可。",
+    mobile_copy_toast: "已复制邀请码 · 回主屏幕打开 Collie → 狗友粘贴",
+    mobile_copy_guide: "已复制邀请码！回到主屏幕打开 Collie → 狗友 → 添加狗友，点「粘贴」即可。",
     opens_prefix: "将打开：",
     switch_addr: "切换地址",
     mobile_addr_toggle: "填写我的局域网 / Tailscale 地址直达",
@@ -1628,13 +1639,13 @@ const COPY = {
     err_url_self: "请填写你自己运行的 Collie 地址，而不是当前邀请落地页。",
     toast_region_label: "操作提示",
     toast_close: "关闭提示",
-    manual_label: "粘贴好友的名片链接或邀请码",
+    manual_label: "粘贴狗友的名片链接或邀请码",
     manual_ph: "粘贴整段分享文案、https://lihuanyu0w0.github.io/collie/join/#2.... 或 collie-peer://v2/...",
     manual_btn: "打开边牧名片",
     details_toggle: "查看连接详情与安全说明",
     meta_hub_id: "Hub 标识",
     meta_addrs: "直连地址",
-    notice_privacy: "纯前端解析：名片仅保存在 URL 的 # 锚点中，绝不发往 GitHub 或任何第三方服务器；好友令牌物理隔离，0 终端 / 0 文件 / 0 记忆权限。",
+    notice_privacy: "纯前端解析：名片仅保存在 URL 的 # 锚点中，绝不发往 GitHub 或任何第三方服务器；狗友令牌物理隔离，0 终端 / 0 文件 / 0 记忆权限。",
     promo_kicker: "还没养自己的边牧？",
     promo_home: "了解 Collie →",
     promo_demo: "在线体验",
@@ -1701,6 +1712,12 @@ function announce(msg) {
 function detectInitialLang() {
   const saved = readStored(LANG_KEY);
   if (saved === "zh" || saved === "en") return saved;
+  const appLangRaw = readStored("collie.lang");
+  if (appLangRaw) {
+    let parsed = appLangRaw;
+    try { parsed = JSON.parse(appLangRaw); } catch {}
+    if (parsed === "zh" || parsed === "en") return parsed;
+  }
   return /^zh(?:[-_]|$)/i.test(navigator.language || "") ? "zh" : "en";
 }
 

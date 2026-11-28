@@ -3540,7 +3540,7 @@
           immediate: true,
         });
       }
-      if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot && !activeWorkerKey) $("#super-input").focus({ preventScroll: true });
+      if (!narrow() && ($("#super-search")?.hidden ?? true) && !activeThreadRoot && !activeWorkerKey && !openInlineDecisionId) $("#super-input").focus({ preventScroll: true });
     }
     if (!cachePreAuth) {
       if (next === "auto") openAuto(saved);
@@ -3933,7 +3933,95 @@
     return reaches(startId, targetId) || reaches(targetId, startId);
   }
   let openInlineDecisionId = null;
+  let lastInlineFocusMeta = null;
   const inlineDecisionDrafts = new Map();
+  const isInlineInputEl = (el) => !!(el?.dataset?.inlineInput);
+  const inlineScope = (d) => d ? $("#td-list") : $("#super-thread");
+  const inlineScroller = (d) => d ? $("#td-body") : ($("#super-thread")?.parentElement || null);
+  const isVoidInlineFocus = (ae, sc) => !ae || ae === document.body || ae === sc || ae === $("#super-thread") || ae === $("#td-list");
+  function getActiveInlineFocus() {
+    const ae = document.activeElement;
+    const inp = isInlineInputEl(ae) ? ae : ae?.closest?.("[data-inline-input]");
+    if (!isInlineInputEl(inp) || !inp.isConnected || inp.closest?.("[data-inline-box]")?.hidden) return null;
+    const inDrawer = !!inp.closest?.("#thread-drawer");
+    return { inp, entryId: inp.dataset.inlineInput, inDrawer, scroller: inlineScroller(inDrawer) };
+  }
+  function focusInlineDecisionInput(id, opts = {}) {
+    if (!id) return null;
+    const inDrawer = !!opts.inDrawer;
+    const inp = inlineScope(inDrawer)?.querySelector?.(`[data-inline-input="${CSS.escape(id)}"]`);
+    if (!inp || inp.closest?.("[data-inline-box]")?.hidden) return null;
+    trackIME(inp);
+    bindCompositionGuard(inp);
+    inp.focus?.({ preventScroll: true });
+    const max = String(inp.value || "").length;
+    const hr = typeof opts.selectionStart === "number" && typeof opts.selectionEnd === "number";
+    const s = hr ? Math.max(0, Math.min(max, opts.selectionStart)) : max;
+    const e = hr ? Math.max(0, Math.min(max, opts.selectionEnd)) : max;
+    try { hr && opts.selectionDirection ? inp.setSelectionRange?.(s, e, opts.selectionDirection) : inp.setSelectionRange?.(s, e); }
+    catch { try { inp.setSelectionRange?.(s, e); } catch {} }
+    lastInlineFocusMeta = { id, inDrawer, at: performance.now() };
+    return inp;
+  }
+  function captureInlineInputFocus(scope) {
+    const ae = document.activeElement;
+    if (!scope || !isInlineInputEl(ae) || (typeof scope.contains === "function" && !scope.contains(ae))) return null;
+    return {
+      id: ae.dataset.inlineInput, el: ae, value: String(ae.value || ""),
+      selectionStart: typeof ae.selectionStart === "number" ? ae.selectionStart : null,
+      selectionEnd: typeof ae.selectionEnd === "number" ? ae.selectionEnd : null,
+      selectionDirection: ae.selectionDirection || "none",
+      inDrawer: scope.id === "td-list" || !!scope.closest?.("#thread-drawer"),
+    };
+  }
+  function restoreInlineInputFocus(scope, snap) {
+    if (!snap || !scope || openInlineDecisionId !== snap.id) return false;
+    if (snap.el?.isConnected && document.activeElement === snap.el) return true;
+    const inp = scope.querySelector?.(`[data-inline-input="${CSS.escape(snap.id)}"]`);
+    const box = inp?.closest?.("[data-inline-box]");
+    if (!inp || box?.hidden) return false;
+    if (inp.value !== snap.value) {
+      inp.value = snap.value;
+      if (!window.CSS?.supports?.("field-sizing", "content") && inp.parentElement?.dataset) inp.parentElement.dataset.replicatedValue = snap.value;
+      const sb = box?.querySelector?.("[data-inline-send]");
+      if (sb) sb.disabled = !snap.value.trim();
+    }
+    return !!focusInlineDecisionInput(snap.id, snap);
+  }
+  function patchDecisionWrapInPlace(oldOpts, newOpts) {
+    const id = oldOpts?.dataset?.decision || "";
+    if (!id || id !== newOpts?.dataset?.decision) return null;
+    const oBtns = oldOpts.querySelectorAll?.(".reply-opt") || [];
+    const nBtns = newOpts.querySelectorAll?.(".reply-opt") || [];
+    if (oBtns.length !== nBtns.length || [...oBtns].some((b, i) => b.dataset?.opt !== nBtns[i].dataset?.opt || b.textContent !== nBtns[i].textContent)) return null;
+    const oBtn = oldOpts.querySelector?.("[data-toggle-inline]"), nBtn = newOpts.querySelector?.("[data-toggle-inline]");
+    const oBox = oldOpts.querySelector?.("[data-inline-box]"), nBox = newOpts.querySelector?.("[data-inline-box]");
+    const oInp = oBox?.querySelector?.("[data-inline-input]"), nInp = nBox?.querySelector?.("[data-inline-input]");
+    if (!oBtn || !nBtn || !oBox || !nBox || !oInp || !nInp || oBox.dataset?.inlineBox !== nBox.dataset?.inlineBox || nBox.hidden) return null;
+    const wasOpen = !oBox.hidden;
+    if (oBtn.className !== nBtn.className) oBtn.className = nBtn.className;
+    oBtn.hidden = !!nBtn.hidden;
+    nBtn.hidden ? oBtn.setAttribute?.("hidden", "") : oBtn.removeAttribute?.("hidden");
+    oBtn.setAttribute?.("aria-expanded", nBtn.getAttribute?.("aria-expanded") || "true");
+    oBtn.querySelector?.(".draft-dot")?.remove?.();
+    const ph = nInp.getAttribute?.("placeholder");
+    if (ph != null) oInp.setAttribute?.("placeholder", ph);
+    for (const sel of ["[data-inline-cancel]", "[data-inline-send]"]) {
+      const a = oBox.querySelector?.(sel), b = nBox.querySelector?.(sel);
+      if (a && b) { a.title = b.title; const ar = b.getAttribute?.("aria-label"); if (ar != null) a.setAttribute?.("aria-label", ar); }
+    }
+    if (wasOpen) return { layoutChanged: false };
+    const draft = getInlineDraft(id), pill = inlinePillLayout(draft);
+    oBox.style?.setProperty?.("--ri-w", pill.width + "px");
+    oBox.classList?.toggle?.("is-multiline", pill.multi);
+    if (oInp.value !== draft) oInp.value = draft;
+    if (oInp.parentElement?.dataset) oInp.parentElement.dataset.replicatedValue = draft;
+    const sb = oBox.querySelector?.("[data-inline-send]");
+    if (sb) sb.disabled = !draft.trim();
+    oBox.hidden = false;
+    oBox.removeAttribute?.("hidden");
+    return { layoutChanged: true };
+  }
   const getInlineDraft = (id) => (id ? (inlineDecisionDrafts.get(id) || "") : "");
   const setInlineDraft = (id, val) => {
     if (!id) return;
@@ -3943,9 +4031,10 @@
   };
   const inlineDraftDotsFingerprint = () => {
     if (!inlineDecisionDrafts.size) return "";
+    const supp = replyTo?.mode === "supplement" ? (replyTo.entry || "") : "";
     const ids = [];
     for (const [k, v] of inlineDecisionDrafts) {
-      if (v && v.trim()) ids.push(k);
+      if (v && v.trim() && k !== openInlineDecisionId && k !== supp) ids.push(k);
     }
     return ids.sort().join(",");
   };
@@ -6202,15 +6291,21 @@
       if (item.optsHtml) {
         const newOpts = parseSuperNode(item.optsHtml);
         if (newOpts) {
-          if (oldOpts && oldOpts.parentNode === msgEl) msgEl.replaceChild(newOpts, oldOpts);
-          else if (beforeEl && beforeEl.parentNode === msgEl) msgEl.insertBefore(newOpts, beforeEl);
-          else msgEl.appendChild(newOpts);
+          const patched = patchDecisionWrapInPlace(oldOpts, newOpts);
+          if (patched) {
+            if (patched.layoutChanged) layoutChanged = true;
+          } else {
+            if (oldOpts && oldOpts.parentNode === msgEl) msgEl.replaceChild(newOpts, oldOpts);
+            else if (beforeEl && beforeEl.parentNode === msgEl) msgEl.insertBefore(newOpts, beforeEl);
+            else msgEl.appendChild(newOpts);
+            layoutChanged = true;
+          }
         }
       } else if (oldOpts && oldOpts.parentNode === msgEl) {
         msgEl.removeChild(oldOpts);
+        layoutChanged = true;
       }
       el._collieOptsHtml = item.optsHtml;
-      layoutChanged = true;
     }
     const curEntry = oldFoot?.querySelector?.(".thread-entry");
     const curCount = curEntry?.querySelector?.(".te-count");
@@ -6879,7 +6974,11 @@
     const box = $("#super-thread"), wk = $("#super-working"), crew = $("#crew");
     const scroller = box.parentElement;
     const drawerSideBySide = isDesktopThreadSideBySide();
-    const drawerFreezeMain = !forceBottom && drawerSideBySide;
+    const activeInlineMain = (() => {
+      const f = getActiveInlineFocus();
+      return f && !f.inDrawer ? f : null;
+    })();
+    const drawerFreezeMain = !forceBottom && (drawerSideBySide || (!restore && !!activeInlineMain));
     const holdRestore = !forceBottom && (restore || collieLayoutLock?.snap || (activeCollieRestore && performance.now() < activeCollieRestore.until ? activeCollieRestore : null));
     const initialBottomLock = !forceBottom && !holdRestore && !activeThreadRoot
       && (collieInitialAnchor?.mode === "bottom" || (collieInitialAnchor?.mode === "unread-auto" && collieInitialAnchor.atBottom))
@@ -7334,6 +7433,7 @@
       superBodyKey = nextBodyKey;
       let domMutated = false;
       let domLayoutChanged = false;
+      const savedInlineFocus = captureInlineInputFocus(box);
       if (canPatchSuperDom(box)) {
         const collieEl = $("#v-collie");
         const collieVisible = view === "collie" && !document.hidden && !collieEl?.classList?.contains("is-parked");
@@ -7355,6 +7455,9 @@
           domMutated = true;
           domLayoutChanged = true;
         }
+      }
+      if (domMutated && savedInlineFocus) {
+        restoreInlineInputFocus(box, savedInlineFocus);
       }
       if (domMutated) {
         hydrateRichContent(box);
@@ -7633,6 +7736,12 @@
       const restoreNow = () => {
         if (view !== "collie" || !sc || sc.clientHeight <= 0 || collieInitialAnchor || collieLayoutLock) return;
         if (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until) return;
+        const inlineFocus = getActiveInlineFocus();
+        if (inlineFocus && !inlineFocus.inDrawer && inlineFocus.scroller === sc) {
+          ensureInlineCardVisible(sc, inlineFocus.entryId, { instant: true });
+          updateSuperJump();
+          return;
+        }
         if (collieResizeWasBottom && collieStickBottom) {
           setCollieBottomStick(true);
           const sh = sc.scrollHeight;
@@ -8633,24 +8742,33 @@
     if (!sup.router?.alive) toast(tx("collie.waking", "正在唤醒 Collie…"));
   }
 
-  function ensureInlineCardVisible(sc, entryId) {
+  function ensureInlineCardVisible(sc, entryId, opts = {}) {
     if (!sc || !entryId || sc.clientHeight <= 0) return;
-    const card = $("#super-thread")?.querySelector?.(`[data-inline-box="${CSS.escape(entryId)}"]`);
+    const inDrawer = !!opts.inDrawer;
+    const card = inlineScope(inDrawer)?.querySelector?.(`[data-inline-box="${CSS.escape(entryId)}"]`);
     if (!card || card.hidden || typeof card.getBoundingClientRect !== "function" || typeof sc.getBoundingClientRect !== "function") return;
-    const sr = sc.getBoundingClientRect();
-    const cr = card.getBoundingClientRect();
-    let bottomPad = 16;
-    const jump = $("#super-jump");
-    if (jump && !jump.hidden && typeof jump.getBoundingClientRect === "function") {
-      const jr = jump.getBoundingClientRect();
-      if (jr.height > 0 && jr.top < sr.bottom) {
-        bottomPad = Math.max(bottomPad, Math.ceil(sr.bottom - jr.top) + 12);
+    const sr = sc.getBoundingClientRect(), cr = card.getBoundingClientRect();
+    if (sr.height <= 0) return;
+    let bottomPad = 18;
+    if (!inDrawer) {
+      const jump = $("#super-jump");
+      if (jump && !jump.hidden && typeof jump.getBoundingClientRect === "function") {
+        const jr = jump.getBoundingClientRect();
+        if (jr.height > 0 && jr.top < sr.bottom) bottomPad = Math.max(bottomPad, Math.ceil(sr.bottom - jr.top) + 12);
       }
     }
-    const bottomSafe = sr.bottom - bottomPad;
-    if (cr.bottom > bottomSafe) {
-      smartScrollCollie(sc, sc.scrollTop + (cr.bottom - bottomSafe), { markMs: 280 });
-    }
+    const delta = cr.bottom > sr.bottom - bottomPad ? cr.bottom - (sr.bottom - bottomPad) : cr.top < sr.top + 14 ? cr.top - (sr.top + 14) : 0;
+    if (Math.abs(delta) < 2) return;
+    const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const want = Math.max(0, Math.min(maxTop, sc.scrollTop + delta));
+    if (Math.abs(want - sc.scrollTop) < 2) return;
+    if (!inDrawer) {
+      if (superScrollRAF && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(superScrollRAF); superScrollRAF = 0; }
+      if (want < maxTop - AT_BOTTOM_PX) { collieForceBottomUntil = 0; setCollieBottomStick(false); }
+      if (opts.instant) { markProgrammaticScroll(240); sc.scrollTop = want; updateSuperJump(); }
+      else smartScrollCollie(sc, want, { markMs: 280 });
+    } else if (opts.instant || prefersReducedMotion() || typeof sc.scrollTo !== "function") sc.scrollTop = want;
+    else sc.scrollTo({ top: want, behavior: "smooth" });
   }
   function closeInlineDecision(id, opts = {}) {
     if (!id || openInlineDecisionId !== id) return;
@@ -8660,6 +8778,7 @@
       : null;
     if (keepSnap) keepSnap.atBottom = false;
     openInlineDecisionId = null;
+    lastInlineFocusMeta = null;
     renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
     if (activeThreadRoot) syncThreadDrawer();
     if (opts.restoreFocus) {
@@ -8676,6 +8795,7 @@
     const prevDraft = getInlineDraft(id);
     inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
+    if (lastInlineFocusMeta?.id === id) lastInlineFocusMeta = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
     const sc = viewScroller("collie");
@@ -8763,6 +8883,7 @@
         }
         const hadSupplement = replyTo?.mode === "supplement";
         openInlineDecisionId = null;
+        lastInlineFocusMeta = null;
         const target = chatEntries().find((x) => x.id === id);
         if (target) {
           setReply(target, { mode: "supplement", focus: false });
@@ -8791,20 +8912,21 @@
         setReply(null);
       }
       openInlineDecisionId = openInlineDecisionId === id ? null : id;
+      if (!openInlineDecisionId) lastInlineFocusMeta = null;
       renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
       if (activeThreadRoot) syncThreadDrawer();
       if (openInlineDecisionId) {
-        requestAnimationFrame(() => {
-          const scope = opts.inDrawer ? $("#td-list") : $("#super-thread");
-          const inp = scope?.querySelector?.(`[data-inline-input="${CSS.escape(openInlineDecisionId)}"]`);
-          if (inp) {
-            trackIME(inp);
-            inp.focus?.({ preventScroll: true });
-            const end = String(inp.value || "").length;
-            inp.setSelectionRange?.(end, end);
+        const targetId = openInlineDecisionId, inDrawer = !!opts.inDrawer, targetSc = inlineScroller(inDrawer);
+        focusInlineDecisionInput(targetId, { inDrawer });
+        const post = () => {
+          if (openInlineDecisionId !== targetId) return;
+          if (!isInlineInputEl(document.activeElement) && isVoidInlineFocus(document.activeElement, targetSc)) {
+            focusInlineDecisionInput(targetId, { inDrawer });
           }
-          if (!opts.inDrawer && sc) ensureInlineCardVisible(sc, openInlineDecisionId);
-        });
+          if (targetSc) ensureInlineCardVisible(targetSc, targetId, { inDrawer });
+        };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(post);
+        else post();
       }
       return true;
     }
@@ -8834,6 +8956,7 @@
     const text = b.dataset.opt;
     inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
+    if (lastInlineFocusMeta?.id === id) lastInlineFocusMeta = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const canPlayOptSettle = !prefersReducedMotion() && !document.hidden
       && typeof grp.getAnimations === "function" && !!grp.classList && !!b.classList;
@@ -8912,13 +9035,39 @@
       box.style?.setProperty?.("--ri-w", pill.width + "px");
       const isMulti = pill.multi || (pill.width >= 340 && inp.scrollHeight > 30);
       box.classList?.toggle?.("is-multiline", isMulti);
-      if (isMulti && !box.closest?.("#thread-drawer") && view === "collie") {
-        const sc = viewScroller("collie");
-        if (sc) ensureInlineCardVisible(sc, id);
+      if (isMulti) {
+        const inDrawer = !!box.closest?.("#thread-drawer");
+        const sc = inDrawer ? $("#td-body") : (view === "collie" ? viewScroller("collie") : null);
+        if (sc) ensureInlineCardVisible(sc, id, { inDrawer });
       }
     }
     const btn = box?.querySelector?.("[data-inline-send]");
     if (btn) btn.disabled = !String(inp.value || "").trim();
+  });
+  document.addEventListener("focusin", (ev) => {
+    const t = ev.target;
+    if (isInlineInputEl(t)) {
+      trackIME(t);
+      bindCompositionGuard(t);
+      lastInlineFocusMeta = { id: t.dataset.inlineInput, inDrawer: !!t.closest?.("#thread-drawer"), at: performance.now() };
+    } else if (lastInlineFocusMeta && !isVoidInlineFocus(t, viewScroller("collie")) && t !== $("#td-body")) {
+      lastInlineFocusMeta = null;
+    }
+  }, true);
+  document.addEventListener("pointerdown", (ev) => {
+    if (lastInlineFocusMeta && !ev.target?.closest?.("[data-inline-box], [data-toggle-inline]")) lastInlineFocusMeta = null;
+  }, { capture: true, passive: true });
+  document.addEventListener("mousedown", (ev) => {
+    const box = ev.target?.closest?.("form.reply-inline[data-inline-box]");
+    if (!box) {
+      if (lastInlineFocusMeta && !ev.target?.closest?.("[data-toggle-inline]")) lastInlineFocusMeta = null;
+      return;
+    }
+    if (ev.target.closest?.("textarea, button")) return;
+    const inp = box.querySelector?.("[data-inline-input]");
+    if (!inp) return;
+    ev.preventDefault();
+    if (document.activeElement !== inp) focusInlineDecisionInput(inp.dataset.inlineInput, { inDrawer: !!box.closest?.("#thread-drawer") });
   });
   document.addEventListener("keydown", (ev) => {
     const inp = ev.target?.closest?.("[data-inline-input]");
@@ -17579,10 +17728,12 @@
     const nearBot = isCollieNearBottom(sc);
     if (narrowScreen.matches && openInlineDecisionId && !activeThreadRoot) {
       const id = openInlineDecisionId;
+      const wasInlineFocused = isInlineInputEl(document.activeElement) && document.activeElement.dataset.inlineInput === id;
       const target = chatEntries().find((x) => x.id === id);
       const keepSnap = !nearBot ? (captureEntryAnchor(sc, id) || captureColliePos(sc)) : null;
       if (keepSnap) keepSnap.atBottom = false;
       openInlineDecisionId = null;
+      lastInlineFocusMeta = null;
       if (target) {
         setReply(target, { mode: "supplement", focus: false });
         const inp = $("#super-input");
@@ -17592,9 +17743,18 @@
         }
       }
       renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+      if (wasInlineFocused) {
+        const inp = $("#super-input");
+        if (inp) {
+          inp.focus?.({ preventScroll: true });
+          const end = String(inp.value || "").length;
+          inp.setSelectionRange?.(end, end);
+        }
+      }
     } else if (!narrowScreen.matches && replyTo?.mode === "supplement" && replyTo.entry) {
       const id = replyTo.entry;
       const inp = $("#super-input");
+      const wasComposerFocused = !!inp && document.activeElement === inp;
       if (inp) {
         setInlineDraft(id, inp.value);
         inp.value = "";
@@ -17605,6 +17765,9 @@
       setReply(null);
       openInlineDecisionId = id;
       renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+      if (wasComposerFocused) {
+        focusInlineDecisionInput(id, { inDrawer: false });
+      }
     }
   });
   function fitTerm() {
@@ -20149,7 +20312,7 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, textarea, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
+    if (m && e.target.closest("a, button, summary, details, input, textarea, label, .reply-inline, .thumb, img, .rv-card, .md-table-card, .md-code")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });
@@ -24532,6 +24695,21 @@
         } else if (it.canPatchClapInPlace && el._tdMsgSig && el._tdMsgSig === it.msgSig && updateTdClapInPlace(el, it)) {
           updated++;
           reused++;
+        } else if (it.canPatchDecisionInPlace && el._tdMsgSig && el._tdMsgSig === it.msgSig && it.optsHtml && (() => {
+          const oldOpts = el.querySelector?.(".decision-wrap");
+          const newOpts = oldOpts ? parseSuperNode(it.optsHtml) : null;
+          if (!oldOpts || !newOpts || !patchDecisionWrapInPlace(oldOpts, newOpts)) return false;
+          const whenEl = el.querySelector?.(".td-when");
+          if (whenEl && it.at) {
+            const nextWhen = sepTime(it.at);
+            if (whenEl.textContent !== nextWhen) whenEl.textContent = nextWhen;
+          }
+          el._tdSig = it.sig;
+          el._tdKey = it.key;
+          return true;
+        })()) {
+          updated++;
+          reused++;
         } else {
           const fresh = parseSuperNode(it.render());
           if (fresh) {
@@ -24695,13 +24873,16 @@
           <button type="button" class="td-act" data-td-locate="${esc(m.id)}" title="${esc(tx("drawer.threadLocateTitle", "在主聊天流中定位"))}" aria-label="${esc(tx("drawer.threadLocateTitle", "在主聊天流中定位"))}">${ICON_TD_LOCATE}<span>${esc(tx("drawer.threadLocateBtn", "定位"))}</span></button>
             </div>`
           : "";
+        const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
         items.push({
           key: k,
           sig: itemSig,
           msgSig,
           entryId: m.id || "",
           at,
+          optsHtml,
           canPromoteInPlace: m.role === "user",
+          canPatchDecisionInPlace: m.role === "collie" && hasPendingOpts && !pickedSig && !srvPickSig,
           renderActs,
           render: () => {
             const avHtml = m.role === "user"
@@ -24719,7 +24900,6 @@
             const rootQuoteHtml = hasRootQuote
               ? `<div class="re" title="${esc(m.re.text)}"><span class="re-who">${esc(m.re.who || "")}</span>${esc(plainLine(m.re.text))}</div>`
               : "";
-            const optsHtml = entryIdx >= 0 ? replyOptsMarkup(m, entryIdx, allEntries, pendIds, { inDrawer: true }) : "";
             const artifactsHtml = renderEntryArtifacts(m);
             const bodyHtml = m.role === "user"
               ? `<div class="td-text td-user-text">${rootQuoteHtml}${userText(m.text)}</div>`
@@ -24740,6 +24920,7 @@
           },
         });
       }
+      const savedDrawerInlineFocus = captureInlineInputFocus(tdListEl);
       if (canPatchSuperDom(tdListEl)) {
         // Preserve reading scroll position if older messages were prepended while scrolled up.
         let prepAnchor = null, prepTop = 0;
@@ -24763,6 +24944,9 @@
       } else {
         tdListEl.innerHTML = items.map((it) => it.render()).join("");
         observeRichVisuals(tdListEl);
+      }
+      if (savedDrawerInlineFocus) {
+        restoreInlineInputFocus(tdListEl, savedDrawerInlineFocus);
       }
       hydrateRichContent(tdListEl);
     }
@@ -25121,7 +25305,7 @@
         focusNodeInDrawer(jumpBtn.dataset.jumpDrawer);
         return;
       }
-      if (e.target.closest("a, button, .thumb, img, pre, code")) return;
+      if (e.target.closest("a, button, input, textarea, select, label, form, .reply-inline, .decision-wrap, details, summary, .thumb, img, pre, code")) return;
       if (window.getSelection?.()?.toString()) return;
       const node = e.target.closest(".td-node[data-entry-id]");
       const eid = node?.dataset.entryId || "";
@@ -25144,6 +25328,12 @@
           if (tdPrevW === 0 && tdPrevH === 0) { tdPrevW = w; tdPrevH = h; return; }
           if (w === tdPrevW && h === tdPrevH) return;
           tdPrevW = w; tdPrevH = h;
+          const inlineFocus = getActiveInlineFocus();
+          if (inlineFocus && inlineFocus.inDrawer && inlineFocus.scroller === tdBodyEl) {
+            tdGraceUntil = performance.now() + 180;
+            ensureInlineCardVisible(tdBodyEl, inlineFocus.entryId, { inDrawer: true, instant: true });
+            return;
+          }
           if (tdWasAtBottom) {
             tdGraceUntil = performance.now() + 180;
             tdBodyEl.scrollTop = tdBodyEl.scrollHeight;
@@ -30622,7 +30812,7 @@
   const KB_FLIP_MS = 240;
   const KB_FLIP_TRANSITION = `transform ${KB_FLIP_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`;
   let lastVH = "", lastVHNum = 0, lastVWNum = 0, lastVTop = "", setVHRAF = 0, setVHPinRAF = 0;
-  let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
+  let rootVHSyncTimer = 0, vvLastHeightTickAt = 0, vvLastShrankAt = 0, vvSettleTimer = 0, vvCapTimer = 0;
   let kbFlipRAF = 0, kbFlipTimer = 0, kbFlipEls = [], kbFlipPrimary = null, kbFlipOnEnd = null;
   let kbFlipDir = 0, kbFlipFocusedEl = null, kbFlipPendingContent = null;
   function clearKbFlip() {
@@ -30779,6 +30969,13 @@
       root.setProperty("--vh", lastVH);
     }
   }
+  function ensureInlineVisibleAfterViewportSettle() {
+    if (!openInlineDecisionId || !vvLastShrankAt || performance.now() - vvLastShrankAt > 1500) return;
+    const cur = getActiveInlineFocus();
+    if (cur && cur.entryId === openInlineDecisionId && cur.scroller?.isConnected) {
+      ensureInlineCardVisible(cur.scroller, cur.entryId, { inDrawer: cur.inDrawer, instant: true });
+    }
+  }
   function endViewportTransition() {
     if (vvSettleTimer) { clearTimeout(vvSettleTimer); vvSettleTimer = 0; }
     if (vvCapTimer) { clearTimeout(vvCapTimer); vvCapTimer = 0; }
@@ -30789,6 +30986,7 @@
       deferredViewportMask = 0;
       scheduleLiveUpdates(pending);
     }
+    ensureInlineVisibleAfterViewportSettle();
   }
   function noteViewportHeightTick() {
     const now = performance.now();
@@ -30807,7 +31005,10 @@
     vvSettleTimer = setTimeout(() => {
       vvSettleTimer = 0;
       if (vvTransitioning) endViewportTransition();
-      else syncRootVHNow();
+      else {
+        syncRootVHNow();
+        ensureInlineVisibleAfterViewportSettle();
+      }
     }, 130);
   }
   function setVH() {
@@ -30837,7 +31038,17 @@
     const pinTargets = [];
     const pinInfo = new Map();
     let kbFlipPlan = null;
+    let activeInline = null;
     if (vhChanged && !isInitial) {
+      if (vhShrank && !widthChanged) {
+        activeInline = getActiveInlineFocus();
+        if (!activeInline && openInlineDecisionId && lastInlineFocusMeta?.id === openInlineDecisionId) {
+          const d = !!lastInlineFocusMeta.inDrawer, sc = inlineScroller(d);
+          if (isVoidInlineFocus(document.activeElement, sc)) {
+            activeInline = { inp: null, entryId: openInlineDecisionId, inDrawer: d, scroller: sc };
+          }
+        }
+      }
       screenPinned = view === "pane" && curMode() === "screen" && !!term?.buffer?.active && screenNearBottom();
       wdScreenPinned = !!activeWorkerKey && curWdMode() === "screen" && !!wdTerm?.buffer?.active && wdScreenNearBottom();
       // Chats and terminals that were showing their latest lines keep showing them as the keyboard takes space.
@@ -30845,7 +31056,7 @@
       // anchored without forcing synchronous layout or extra scrollTop writes.
       if (vhShrank) {
         for (const el of document.querySelectorAll(".viewer, #log, #td-body, #wd-thread, #wd-log")) {
-          if (!el.offsetParent) continue;
+          if (!el.offsetParent || (activeInline && activeInline.scroller === el)) continue;
           const sh = el.scrollHeight;
           const ch = el.clientHeight;
           const st = el.scrollTop;
@@ -30866,6 +31077,7 @@
     }
     lastVWNum = nextVWNum;
     if (vhChanged) {
+      if (vhShrank && !widthChanged) vvLastShrankAt = performance.now();
       lastVH = nextVH;
       lastVHNum = nextVHNum;
       if (appEl?.style) appEl.style.height = nextVH;
@@ -30887,17 +31099,27 @@
     }
 
     // 3) Post-layout pin phase (deferred to next clean frame; zero forced reflow).
-    if (pinTargets.length || screenPinned || wdScreenPinned) {
+    if (pinTargets.length || screenPinned || wdScreenPinned || (vhShrank && activeInline)) {
       const applyPin = () => {
         setVHPinRAF = 0;
-        markProgrammaticScroll(140);
-        for (const { el } of pinTargets) {
-          if (!el.isConnected) continue;
-          const sh = el.scrollHeight;
-          if (sh - el.scrollTop - el.clientHeight > 1) el.scrollTop = sh;
+        if (pinTargets.length) {
+          markProgrammaticScroll(140);
+          for (const { el } of pinTargets) {
+            if (!el.isConnected) continue;
+            const sh = el.scrollHeight;
+            if (sh - el.scrollTop - el.clientHeight > 1) el.scrollTop = sh;
+          }
         }
         if (screenPinned) { fitTerm(); term?.scrollToBottom?.(); }
         if (wdScreenPinned) { fitWdTerm(); wdTerm?.scrollToBottom?.(); }
+        if (vhShrank && activeInline && openInlineDecisionId === activeInline.entryId) {
+          if (!isInlineInputEl(document.activeElement) && isVoidInlineFocus(document.activeElement, activeInline.scroller)) {
+            focusInlineDecisionInput(activeInline.entryId, { inDrawer: activeInline.inDrawer });
+          }
+          if (activeInline.scroller?.isConnected) {
+            ensureInlineCardVisible(activeInline.scroller, activeInline.entryId, { inDrawer: activeInline.inDrawer, instant: true });
+          }
+        }
         if (kbFlipPendingContent) {
           const { els, shiftPx } = kbFlipPendingContent;
           kbFlipPendingContent = null;

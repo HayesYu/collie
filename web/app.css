@@ -968,7 +968,7 @@ html.is-idle .working-row .wk-t {
 
 /* ─── viewer ─── */
 .viewer { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
-.viewer.chatbg { background: var(--bg); overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; outline: none; contain: layout style; will-change: scroll-position; }
+.viewer.chatbg { background: var(--bg); overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scroll-padding-block: 16px 24px; outline: none; contain: layout style; will-change: scroll-position; }
 .viewer > .screen, .viewer > .log, .viewer > .chat { display: none; }
 .viewer[data-mode="screen"] > .screen, .viewer[data-mode="log"] > .log { display: block; }
 .viewer[data-mode="chat"] > .chat { display: flex; }
@@ -3575,7 +3575,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
 .td-worker.is-static { cursor: default; }
 .td-body {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
-  overscroll-behavior-y: contain; outline: none;
+  overscroll-behavior-y: contain; scroll-padding-block: 16px 24px; outline: none;
   padding: 16px 18px 24px; scrollbar-gutter: stable;
   contain: layout style;
 }

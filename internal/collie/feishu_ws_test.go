@@ -3500,6 +3500,395 @@ func TestFeishuGroupRecentContext(t *testing.T) {
 	})
 }
 
+func TestFeishuCardMentionPushTriggerAndSanitization(t *testing.T) {
+	t.Parallel()
+	const ownerID = "ou_owner_push_123"
+	const wantTag = "<at id=" + ownerID + "></at>"
+
+	t.Run("actionable and error entries include mention only when unresolved", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			entry Entry
+		}{
+			{
+				name:  "decision options",
+				entry: Entry{ID: "e_opt", Text: "选哪个方案？", Options: []string{"方案A", "方案B"}},
+			},
+			{
+				name:  "todo check",
+				entry: Entry{ID: "e_chk", Text: "请确认证书已续签", Check: true},
+			},
+			{
+				name:  "blocked tone",
+				entry: Entry{ID: "e_blk", Text: "等待你批准命令", Tone: "blocked"},
+			},
+			{
+				name:  "error tone",
+				entry: Entry{ID: "e_err", Text: "构建失败，请排查", Tone: "error"},
+			},
+			{
+				name: "quoted actionable reply",
+				entry: Entry{
+					ID:      "e_re",
+					Text:    "定位到了，要怎么修？",
+					Options: []string{"直接修"},
+					Re:      &Quote{Who: "你", Text: "查下失败原因"},
+				},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				raw, err := marshalCardJSON(buildFeishuEntryCardWithMention(&tc.entry, "http://127.0.0.1:7788/#/collie", "", ownerID))
+				if err != nil {
+					t.Fatalf("marshal unresolved card: %v", err)
+				}
+				var doc struct {
+					Schema string `json:"schema"`
+					Config struct {
+						Summary struct {
+							Content string `json:"content"`
+						} `json:"summary"`
+					} `json:"config"`
+					Body struct {
+						Elements []map[string]any `json:"elements"`
+					} `json:"body"`
+				}
+				if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+					t.Fatalf("unmarshal card: %v\n%s", err, raw)
+				}
+				if doc.Schema != "2.0" {
+					t.Fatalf("schema = %q, want 2.0", doc.Schema)
+				}
+				if strings.Contains(doc.Config.Summary.Content, "<at") {
+					t.Fatalf("card summary must stay clean without <at>: %q", doc.Config.Summary.Content)
+				}
+				bodyContent, _ := doc.Body.Elements[0]["content"].(string)
+				if !strings.Contains(bodyContent, wantTag) {
+					t.Fatalf("unresolved %s card missing %q in body:\n%s", tc.name, wantTag, bodyContent)
+				}
+				if tc.entry.Re != nil && strings.Index(bodyContent, "↩") > strings.Index(bodyContent, wantTag) {
+					t.Fatalf("quoted reply should keep quote line before mention:\n%s", bodyContent)
+				}
+
+				// Once resolved, no <at> tag may remain even if mentionOpenID is provided.
+				resolvedRaw, err := marshalCardJSON(buildFeishuEntryCardWithMention(&tc.entry, "http://127.0.0.1:7788/#/collie", "已处理", ownerID))
+				if err != nil {
+					t.Fatalf("marshal resolved card: %v", err)
+				}
+				if strings.Contains(resolvedRaw, "<at") {
+					t.Fatalf("resolved %s card must NOT contain <at>:\n%s", tc.name, resolvedRaw)
+				}
+			})
+		}
+	})
+
+	t.Run("normal progress broadcasts never include mention", func(t *testing.T) {
+		normalEntries := []Entry{
+			{ID: "e_n1", Text: "单测已全部跑绿"},
+			{ID: "e_n2", Text: "进度更新：已完成 50%", Tone: "info"},
+			{ID: "e_n3", Text: "任务已完成", Tone: "done"},
+			{ID: "e_n4", Text: "空白选项不算决策", Options: []string{"  ", ""}},
+		}
+		for _, e := range normalEntries {
+			raw, err := marshalCardJSON(buildFeishuEntryCardWithMention(&e, "http://127.0.0.1:7788/#/collie", "", ownerID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(raw, "<at") {
+				t.Fatalf("normal broadcast %s must NOT contain <at>:\n%s", e.ID, raw)
+			}
+		}
+	})
+
+	t.Run("missing or unsafe open_id degrades safely without injection", func(t *testing.T) {
+		e := Entry{ID: "e_safe", Text: "需要你拍板", Options: []string{"同意"}}
+		badIDs := []string{
+			"",
+			"   ",
+			"all",
+			"oc_chat_not_open_id",
+			"ou_",
+			"ou_bad><script>alert(1)</script>",
+			"ou_bad id=all",
+			"ou_bad\" attr=\"x",
+			"ou_bad\nnewline",
+		}
+		for _, bad := range badIDs {
+			raw, err := marshalCardJSON(buildFeishuEntryCardWithMention(&e, "http://127.0.0.1:7788/#/collie", "", bad))
+			if err != nil {
+				t.Fatalf("marshal(%q): %v", bad, err)
+			}
+			if strings.Contains(raw, "<at") {
+				t.Fatalf("unsafe/missing open_id %q must not emit <at>:\n%s", bad, raw)
+			}
+		}
+	})
+
+	t.Run("batched notice cards mention only when batch has needsAction or error", func(t *testing.T) {
+		normalOnly := buildFeishuNoticesCard([]notice{
+			{text: "已完成第一步"},
+			{tone: "done", text: "全部完成"},
+		}, "http://127.0.0.1:7788/#/collie", ownerID)
+		if strings.Contains(normalOnly, "<at") {
+			t.Fatalf("normal-only notice batch must NOT contain <at>:\n%s", normalOnly)
+		}
+
+		mixedError := buildFeishuNoticesCard([]notice{
+			{text: "前半段正常"},
+			{tone: "error", text: "编译失败"},
+		}, "http://127.0.0.1:7788/#/collie", ownerID)
+		if strings.Count(mixedError, wantTag) != 1 {
+			t.Fatalf("mixed error notice batch must contain %q exactly once:\n%s", wantTag, mixedError)
+		}
+		var doc struct {
+			Config struct {
+				Summary struct {
+					Content string `json:"content"`
+				} `json:"summary"`
+			} `json:"config"`
+			Body struct {
+				Elements []map[string]any `json:"elements"`
+			} `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(mixedError), &doc); err != nil {
+			t.Fatalf("unmarshal mixed error notice card: %v", err)
+		}
+		if strings.Contains(doc.Config.Summary.Content, "<at") {
+			t.Fatalf("notice batch summary must not contain <at>: %q", doc.Config.Summary.Content)
+		}
+		n := len(doc.Body.Elements)
+		if n < 3 || doc.Body.Elements[n-2]["tag"] != "hr" || doc.Body.Elements[n-1]["text_size"] != "notation" {
+			t.Fatalf("notice batch footer corrupted: %+v", doc.Body.Elements)
+		}
+
+		mixedAction := buildFeishuNoticesCard([]notice{
+			{text: "进度汇报"},
+			{tone: "blocked", text: "等待你确认"},
+		}, "http://127.0.0.1:7788/#/collie", ownerID)
+		if strings.Count(mixedAction, wantTag) != 1 {
+			t.Fatalf("mixed blocked notice batch must contain %q once:\n%s", wantTag, mixedAction)
+		}
+
+		missingOpenID := buildFeishuNoticesCard([]notice{
+			{tone: "error", text: "部署失败"},
+		}, "http://127.0.0.1:7788/#/collie", "")
+		if strings.Contains(missingOpenID, "<at") {
+			t.Fatalf("notice batch with missing open_id must degrade safely without <at>:\n%s", missingOpenID)
+		}
+	})
+}
+
+func TestFeishuOutboundMentionPriorityAndLifecycle(t *testing.T) {
+	t.Parallel()
+	_, sp, fa, ff, sink := setupFeishuTestHarness(t)
+	ctx := context.Background()
+
+	// Configure two allowlisted owners so we can verify originating sender open_id
+	// takes priority over AllowOpenIDs[0] fallback.
+	cfgJSON, _ := json.Marshal(FeishuConfig{
+		Region:           "cn",
+		AppID:            "cli_test_app",
+		AllowOpenIDs:     []string{"ou_primary_owner", "ou_secondary_owner"},
+		GroupMentionOnly: true,
+		InstantChatSync:  true,
+	})
+	fa.mu.Lock()
+	fa.activeCfg = parseFeishuConfig(cfgJSON)
+	fa.mu.Unlock()
+	sp.integrations.mu.Lock()
+	rec := sp.integrations.records[feishuKind]
+	rec.Config = cfgJSON
+	sp.integrations.records[feishuKind] = rec
+	sp.integrations.mu.Unlock()
+
+	// 1) Secondary owner @Collie in a group (no prior P2P DM) -> Collie replies with --opt
+	//    quoting them -> outbound group reply mentions originating sender (ou_secondary_owner),
+	//    NOT AllowOpenIDs[0] fallback.
+	inSecondary := &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_mention_sec_1"}},
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId:   &larkim.UserId{OpenId: strPtr("ou_secondary_owner")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   strPtr("om_sec_in_1"),
+				ChatId:      strPtr("oc_grp_mention"),
+				ChatType:    strPtr("group"),
+				MessageType: strPtr("text"),
+				Content:     strPtr(`{"text":"@_user_1 帮我看下上线方案"}`),
+				Mentions: []*larkim.MentionEvent{{
+					Key:           strPtr("@_user_1"),
+					Id:            &larkim.UserId{OpenId: strPtr("ou_bot_collie")},
+					MentionedType: strPtr("bot"),
+					Name:          strPtr("Collie Test Bot"),
+				}},
+			},
+		},
+	}
+	if err := fa.handleMessageReceive(ctx, inSecondary, sink); err != nil {
+		t.Fatalf("handleMessageReceive: %v", err)
+	}
+	sp.mu.Lock()
+	secUserEntry := sp.st.Entries[len(sp.st.Entries)-1]
+	sp.mu.Unlock()
+
+	optEntry, _ := sp.Reply(mainThread, "请拍板发布策略", secUserEntry.ID, []string{"立刻发布", "明早发布"}, false)
+	optCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages/om_sec_in_1/reply" && strings.Contains(extractCardContent(c.Body), optEntry.ID)
+	})
+	optRaw := extractCardContent(optCall.Body)
+	if !strings.Contains(optRaw, "<at id=ou_secondary_owner></at>") {
+		t.Fatalf("decision card should mention originating sender ou_secondary_owner:\n%s", optRaw)
+	}
+	if strings.Contains(optRaw, "ou_primary_owner") {
+		t.Fatalf("decision card should not mention fallback primary owner when origin sender is known:\n%s", optRaw)
+	}
+
+	// Clicking option button updates card with resolvedSummary -> must drop <at>.
+	cbResp, err := fa.handleCardAction(ctx, &larkcallback.CardActionTriggerEvent{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_mention_cb_1"}},
+		Event: &larkcallback.CardActionTriggerRequest{
+			Operator: &larkcallback.Operator{OpenID: "ou_secondary_owner"},
+			Context:  &larkcallback.Context{OpenChatID: "oc_grp_mention", OpenMessageID: "om_card_1"},
+			Action:   &larkcallback.CallBackAction{Value: map[string]any{"action": "pick_opt", "entry_id": optEntry.ID, "opt_idx": "0"}},
+		},
+	}, sink)
+	if err != nil || cbResp.Card == nil {
+		t.Fatalf("handleCardAction pick_opt: resp=%+v err=%v", cbResp, err)
+	}
+	resolvedBytes, _ := json.Marshal(cbResp.Card.Data)
+	if strings.Contains(string(resolvedBytes), "<at") {
+		t.Fatalf("resolved card after button click must NOT keep <at>:\n%s", string(resolvedBytes))
+	}
+
+	// 2) Normal progress broadcast (no options/check, normal tone) -> NO <at>.
+	infoEntry, _ := sp.Reply(mainThread, "正在跑单测，一切顺利", secUserEntry.ID, nil, false)
+	infoCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages/om_sec_in_1/reply" && strings.Contains(extractCardContent(c.Body), "正在跑单测，一切顺利")
+	})
+	if strings.Contains(extractCardContent(infoCall.Body), "<at") {
+		t.Fatalf("normal broadcast card must NOT contain <at>:\n%s", extractCardContent(infoCall.Body))
+	}
+	_ = infoEntry
+
+	// 3) Unquoted error & --check entries (no prior P2P) -> fall back to AllowOpenIDs[0]
+	//    (ou_primary_owner), and both Web Dismiss reverse-sync PATCH and Feishu ack drop <at>.
+	errEntry := &Entry{ID: "e_unquoted_err", Role: "collie", Thread: mainThread, Tone: "error", Text: "后台任务报错退出"}
+	if _, err := fa.SendReply(ctx, errEntry, "http://127.0.0.1:7788"); err != nil {
+		t.Fatalf("SendReply(errEntry): %v", err)
+	}
+	errCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), "后台任务报错退出")
+	})
+	if !strings.Contains(extractCardContent(errCall.Body), "<at id=ou_primary_owner></at>") {
+		t.Fatalf("unquoted error card should fall back to AllowOpenIDs[0]:\n%s", extractCardContent(errCall.Body))
+	}
+
+	checkEntry, _ := sp.Reply(mainThread, "请手动确认配置", "", nil, true)
+	if err := fa.SendNotices(ctx, []notice{{entryID: checkEntry.ID, text: checkEntry.Text, check: true}}, "http://127.0.0.1:7788"); err != nil {
+		t.Fatalf("SendNotices(single check): %v", err)
+	}
+	checkCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), "请手动确认配置")
+	})
+	if !strings.Contains(extractCardContent(checkCall.Body), "<at id=ou_primary_owner></at>") {
+		t.Fatalf("unquoted --check card should fall back to AllowOpenIDs[0]:\n%s", extractCardContent(checkCall.Body))
+	}
+	var checkMsgID string
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if m, _ := getIntegrationMessage(sp.db, checkEntry.ID, feishuKind); m != nil && m.ExternalID != "" {
+			checkMsgID = m.ExternalID
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if checkMsgID == "" {
+		t.Fatal("checkEntry outbound mapping missing")
+	}
+	sp.Dismiss(checkEntry.ID)
+	patchCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPatch && c.Path == "/open-apis/im/v1/messages/"+checkMsgID
+	})
+	if strings.Contains(extractCardContent(patchCall.Body), "<at") {
+		t.Fatalf("reverse-sync PATCH card after dismiss must NOT contain <at>:\n%s", extractCardContent(patchCall.Body))
+	}
+
+	// Clicking "已处理" (ack) on a --check card also returns a resolved card without <at>.
+	ackEntry, _ := sp.Reply(mainThread, "请确认磁盘已清理", "", nil, true)
+	ackResp, err := fa.handleCardAction(ctx, &larkcallback.CardActionTriggerEvent{
+		EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_mention_ack_1"}},
+		Event: &larkcallback.CardActionTriggerRequest{
+			Operator: &larkcallback.Operator{OpenID: "ou_primary_owner"},
+			Context:  &larkcallback.Context{OpenChatID: "oc_p2p_primary", OpenMessageID: "om_card_ack"},
+			Action:   &larkcallback.CallBackAction{Value: map[string]any{"action": "ack", "entry_id": ackEntry.ID}},
+		},
+	}, sink)
+	if err != nil || ackResp.Card == nil {
+		t.Fatalf("handleCardAction ack: resp=%+v err=%v", ackResp, err)
+	}
+	ackBytes, _ := json.Marshal(ackResp.Card.Data)
+	if strings.Contains(string(ackBytes), "<at") {
+		t.Fatalf("resolved card after ack click must NOT contain <at>:\n%s", string(ackBytes))
+	}
+
+	// 4) SendNotices: batched with error/needsAction mentions owner; normal-only batch does not.
+	if err := fa.SendNotices(ctx, []notice{
+		{text: "子任务 A 完成"},
+		{tone: "error", text: "子任务 B 报错"},
+	}, "http://127.0.0.1:7788"); err != nil {
+		t.Fatalf("SendNotices(error batch): %v", err)
+	}
+	batchErrCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), "子任务 B 报错")
+	})
+	if !strings.Contains(extractCardContent(batchErrCall.Body), "<at id=ou_primary_owner></at>") {
+		t.Fatalf("SendNotices error batch should mention fallback owner:\n%s", extractCardContent(batchErrCall.Body))
+	}
+
+	if err := fa.SendNotices(ctx, []notice{
+		{text: "定时巡检正常"},
+		{tone: "done", text: "无异常项"},
+	}, "http://127.0.0.1:7788"); err != nil {
+		t.Fatalf("SendNotices(normal batch): %v", err)
+	}
+	batchNormCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), "定时巡检正常")
+	})
+	if strings.Contains(extractCardContent(batchNormCall.Body), "<at") {
+		t.Fatalf("SendNotices normal batch must NOT contain <at>:\n%s", extractCardContent(batchNormCall.Body))
+	}
+
+	// 5) Missing open_id (empty AllowOpenIDs and route without openID) degrades safely without <at>.
+	fa.mu.Lock()
+	fa.activeCfg.AllowOpenIDs = nil
+	fa.lastInbound = feishuRoute{at: time.Now(), chatID: "oc_p2p_no_openid", chatType: "p2p"}
+	fa.lastP2P = fa.lastInbound
+	fa.mu.Unlock()
+
+	noIDEntry := &Entry{ID: "e_no_openid", Role: "collie", Thread: mainThread, Text: "无 open_id 降级测试", Options: []string{"确认"}}
+	if _, err := fa.SendReply(ctx, noIDEntry, "http://127.0.0.1:7788"); err != nil {
+		t.Fatalf("SendReply(noIDEntry): %v", err)
+	}
+	noIDCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), "无 open_id 降级测试")
+	})
+	if strings.Contains(extractCardContent(noIDCall.Body), "<at") {
+		t.Fatalf("missing open_id card must degrade safely without <at>:\n%s", extractCardContent(noIDCall.Body))
+	}
+	if err := fa.SendNotices(ctx, []notice{{tone: "error", text: "无 open_id 报错汇总"}}, "http://127.0.0.1:7788"); err != nil {
+		t.Fatalf("SendNotices(noID): %v", err)
+	}
+	noIDNoticeCall := ff.waitForCall(t, func(c fakeFeishuCall) bool {
+		return c.Method == http.MethodPost && c.Path == "/open-apis/im/v1/messages" && strings.Contains(extractCardContent(c.Body), "无 open_id 报错汇总")
+	})
+	if strings.Contains(extractCardContent(noIDNoticeCall.Body), "<at") {
+		t.Fatalf("missing open_id notice card must degrade safely without <at>:\n%s", extractCardContent(noIDNoticeCall.Body))
+	}
+}
+
 func TestOpenSourceRepoZeroInternalTerms(t *testing.T) {
 	t.Parallel()
 	// Guard against accidentally introducing internal tool names or internal corporate domains

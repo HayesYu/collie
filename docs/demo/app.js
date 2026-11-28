@@ -27081,7 +27081,7 @@
   function renderFileLinePill(ref) {
     const ep = esc(ref.path);
     const tip = tx("md.openFileLine", "打开文件 {path} 第 {line} 行", { path: ref.path, line: ref.line });
-    return `<a ${fileLinkAttrs(ref.path, ep, esc(tip))} data-line="${esc(ref.line)}"><code class="code-link is-fref"><span class="fref-path">${ep}</span><span class="fref-line">${esc(ref.displayLine)}</span></code></a>`;
+    return `<a ${fileLinkAttrs(ref.path, ep, esc(tip), "has-code-link")} data-line="${esc(ref.line)}"><code class="code-link is-fref"><span class="fref-path">${ep}</span><span class="fref-line">${esc(ref.displayLine)}</span></code></a>`;
   }
   function parseInlineCodePath(raw) {
     if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return "";

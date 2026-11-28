@@ -148,7 +148,7 @@ const bt4 = bt.repeat(4);
 
   // Empty/unparseable metrics fence falls back to plain code block
   const badMetrics = R.mdRender(bt3 + "metrics\njust plain text without delimiters\n" + bt3);
-  assert.ok(!badMetrics.includes('class="md-metrics"') && badMetrics.includes('class="md-code"'), "unparseable metrics falls back to code block");
+  assert.ok(!badMetrics.includes('class="md-metrics"') && /class="md-code(?:\s|")/.test(badMetrics), "unparseable metrics falls back to code block");
 
   // XSS inside metrics is strictly escaped
   const xssMetrics = R.mdRender(bt3 + 'metrics\n<script>alert(1)</script> | <img src=x onerror=alert(2)> | +<svg onload=alert(3)>\n' + bt3);
@@ -177,7 +177,7 @@ const bt4 = bt.repeat(4);
 
   // Non-step content falls back to code block
   const badSteps = R.mdRender(bt3 + "steps\nnot a step list\n" + bt3);
-  assert.ok(!badSteps.includes('class="md-steps"') && badSteps.includes('class="md-code"'), "non-step content falls back to code block");
+  assert.ok(!badSteps.includes('class="md-steps"') && /class="md-code(?:\s|")/.test(badSteps), "non-step content falls back to code block");
 
   // XSS inside steps title & note is neutralized
   const xssSteps = R.mdRender(bt3 + 'steps\n[x] <script>alert(1)</script> | <img src=x onerror=alert(2)> <kbd onclick="alert(3)">x</kbd>\n' + bt3);
@@ -219,7 +219,7 @@ const bt4 = bt.repeat(4);
 
   // Inline file:line pills in bare prose, CJK-adjacent prose, and inline backticks
   const frefs = R.mdRender("定位到web/app.js:27631附近，同时看 " + bt + "internal/collie/cli.go:42-58" + bt + "、~/repo/main.go:88、/tmp/demo.py:10、./src/App.tsx:12:4 和 web/app.js#L123-L145。");
-  assert.ok(frefs.includes('class="fpath" href="#" data-path="web/app.js"') && frefs.includes('data-line="27631"') && frefs.includes('<code class="code-link is-fref"><span class="fref-path">web/app.js</span><span class="fref-line">:27631</span></code>'), "bare CJK-adjacent file:line pill works");
+  assert.ok(frefs.includes('class="fpath has-code-link" href="#" data-path="web/app.js"') && frefs.includes('data-line="27631"') && frefs.includes('<code class="code-link is-fref"><span class="fref-path">web/app.js</span><span class="fref-line">:27631</span></code>'), "bare CJK-adjacent file:line pill works");
   assert.ok(frefs.includes('data-path="internal/collie/cli.go"') && frefs.includes('data-line="42-58"') && frefs.includes(':42-58</span>'), "backtick file:line range pill works");
   assert.ok(frefs.includes('data-path="~/repo/main.go"') && frefs.includes('data-line="88"'), "home path file:line pill works");
   assert.ok(frefs.includes('data-path="/tmp/demo.py"') && frefs.includes('data-line="10"'), "absolute path file:line pill works");

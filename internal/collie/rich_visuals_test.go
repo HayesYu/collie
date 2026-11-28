@@ -1065,6 +1065,8 @@ func TestRouterDocIncludesRichReplyGuidance(t *testing.T) {
 	talkingSection := routerStr[start:end]
 	for _, want := range []string{
 		"Markdown tables",
+		"KPI strips (`metrics`)",
+		"step timelines (`steps`)",
 		"callouts (`> [!NOTE]`/`[!TIP]`/`[!IMPORTANT]`/`[!WARNING]`/`[!CAUTION]`)",
 		"collapsible `<details>` blocks",
 		"Mermaid diagrams (`mermaid`)",
@@ -1073,7 +1075,7 @@ func TestRouterDocIncludesRichReplyGuidance(t *testing.T) {
 		"`--collie-*` CSS variables",
 		"KaTeX math",
 		"fenced code blocks",
-		"`--file`",
+		"`--file` images render inline as a gallery",
 		"plain text",
 		"heavy visualizations or long HTML",
 	} {

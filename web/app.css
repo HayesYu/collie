@@ -1886,9 +1886,9 @@ html.is-idle .working-row .wk-t {
 .thread > .unread-sep + :is(.say, .mine, .event, .msg, .tools, .needs) { margin-top: calc(16px - var(--thread-gap)); }
 .thread > .unread-sep + .time-sep { margin-top: calc(8px - var(--thread-gap)); }
 .thread > .time-sep + .unread-sep { margin-top: calc(8px - var(--thread-gap)); }
-.say { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; align-items: start; }
-.avatar { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; background: var(--bg); margin-top: 2px; }
-.avatar img { width: 20px; height: 20px; }
+.say { display: grid; grid-template-columns: var(--say-av, 26px) minmax(0, 1fr); gap: var(--say-gap, 12px); align-items: start; }
+.avatar { width: var(--say-av, 26px); height: var(--say-av, 26px); border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; background: var(--bg); margin-top: 2px; }
+.avatar img { display: block; width: 20px; height: 20px; }
 
 .thread > .say.cont { margin-top: calc(10px - var(--thread-gap)); }
 .say.cont .avatar { border-color: transparent; background: none; }
@@ -1896,7 +1896,7 @@ html.is-idle .working-row .wk-t {
 /* system events in the super-agent conversation: one quiet row each,
    lined up with the messages (dot under the avatar column) */
 .event {
-  align-self: stretch; display: grid; grid-template-columns: 26px auto minmax(0, 1fr); gap: 12px; align-items: center;
+  align-self: stretch; display: grid; grid-template-columns: var(--say-av, 26px) auto minmax(0, 1fr); gap: var(--say-gap, 12px); align-items: center;
   margin-inline: -8px; padding: 3px 8px; border-radius: 8px; border: 1px solid transparent;
   font-size: 12.5px; color: var(--fg-3); text-decoration: none; min-width: 0;
 }
@@ -5233,16 +5233,19 @@ a.foot-status:focus-visible { outline: none; box-shadow: 0 0 0 2.5px color-mix(i
   .threadpane .td-text h4 { font-size: 1em; line-height: 1.45; }
   .workerpane .wd-thread .msg.assistant { font-size: calc(var(--msg-fs-m, 15.5px) - 1px); line-height: 1.68; }
   .dev-row { grid-template-columns: auto 1fr auto !important; }
-  /* Mobile main chat: reclaim the 38px left avatar rail so prose, tables, diagrams, SVGs, and diffs share full symmetric width */
-  #super-thread > .say {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
+  /* Mobile main chat: keep Collie avatar inline beside first line on a compact 22px + 8px rail,
+     shared across .say, .say.cont, .event, and .working-row.say so every row aligns on one spine
+     without stranding the avatar on its own blank line. */
+  #v-collie {
+    --say-av: 22px;
+    --say-gap: 8px;
   }
-  #super-thread > .say > .avatar {
-    width: 22px; height: 22px; border-radius: 7px; margin-top: 0;
+  #v-collie .say > .avatar {
+    border-radius: 7px;
+    margin-top: 2px;
   }
-  #super-thread > .say > .avatar img { width: 16px; height: 16px; }
-  #super-thread > .say.cont > .avatar { display: none; }
+  #v-collie .say > .avatar img { width: 16px; height: 16px; }
+  #v-collie .working-row.say > .avatar { margin-top: 0; }
   #v-collie .say.in-active-thread::before { left: -9px; }
 }
 .dot.online { background: var(--ok); }
@@ -6162,7 +6165,7 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
 .working-row { display: flex; align-items: center; gap: 8px; margin-top: -12px; padding: 0 max(20px, calc((100% - var(--col)) / 2)) 24px; font-size: 13px; color: var(--fg-3); }
 @keyframes workpulse { 50% { opacity: .55; } }
 /* Collie's own: under its avatar, text lined up with its messages */
-.working-row.say { display: grid; gap: 12px; align-items: center; }
+.working-row.say { display: grid; gap: var(--say-gap, 12px); align-items: center; }
 .working-row.say .wk-t { display: inline-block; justify-self: start; width: fit-content; }
 @media (prefers-reduced-motion: no-preference) {
   .working-row.working { animation: workpulse 1.6s ease-in-out infinite; }
@@ -6263,7 +6266,7 @@ dialog.tm-sheet[open][data-closing] { display: flex; flex-direction: column; }
 .needs .ask { margin-top: 10px; }
 .needs .ask-head a { font-size: 12px; color: var(--fg-3); text-decoration: none; }
 .needs .ask-head a:hover { color: var(--fg); }
-.event:has(> .wstate) { grid-template-columns: 26px auto minmax(0, 1fr) auto; }
+.event:has(> .wstate) { grid-template-columns: var(--say-av, 26px) auto minmax(0, 1fr) auto; }
 .event:has(> .wstate) > span:nth-child(3) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .event > .wstate { font-size: 12px; color: var(--fg-3); white-space: nowrap; }
 

@@ -1100,6 +1100,9 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 	sp.ingestLocked("worker", w.Thread, w.Name,
 		fmt.Sprintf("worker %s finished a turn. Last message:\n%s", w.Name, summary), "", "", w.Name)
 	sp.addEntryLocked("event", w.Thread, w.Name+" 完成了一轮", w.Name, "done")
+	if sp.s != nil {
+		sp.s.onWorkerSettledQuota(w.Kind)
+	}
 }
 
 // workerQuotaRe is an agent CLI saying it can't go on: a usage limit, the

@@ -1400,6 +1400,9 @@
       state = next;
       scheduleLiveUpdates(LIVE_SIDE | LIVE_UPDATE_ENTRY | (view === "pane" ? LIVE_HEAD : 0) | (view === "collie" ? LIVE_SUPER : 0));
     });
+    ev.addEventListener("quota", (e) => {
+      try { window.__collieQuota?.onEvent?.(JSON.parse(e.data)); } catch {}
+    });
     ev.onopen = () => setConnDotState(true);
     ev.onerror = async () => {
       setConnDotState(false);
@@ -24195,6 +24198,7 @@
         toast(cur.paused ? "已恢复投递" : "已暂停投递");
       }
       if (act === "auto") location.hash = "#/auto";
+      if (act === "quota") window.__collieQuota?.open?.();
     } catch (err) { toast(err.message, "attn"); }
   });
 
@@ -24456,6 +24460,7 @@
     $("#app").hidden = false;
     setMode(mode);
     connect();
+    window.__collieQuota?.init?.({ api, toast });
     booted = false;
     view = undefined;
     route();

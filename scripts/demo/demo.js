@@ -491,6 +491,79 @@
     },
   };
 
+  let demoQuotaUpdatedAt = ago(2);
+  let demoQuotaLastManual = 0;
+  const demoQuota = () => ({
+    updated_at: demoQuotaUpdatedAt,
+    stale: false,
+    refreshing: false,
+    refresh_cooldown_sec: demoQuotaLastManual ? Math.max(0, Math.ceil((demoQuotaLastManual + 30000 - Date.now()) / 1000)) : 0,
+    agents: [
+      {
+        kind: "agy",
+        name: "Antigravity",
+        plan: "Pro",
+        status: "ok",
+        source: "cli",
+        updated_at: demoQuotaUpdatedAt,
+        pools: [
+          {
+            group: "Gemini",
+            windows: [
+              { id: "5h", label: "5 小时", remaining_pct: 86, resets_at: later(142) },
+              { id: "weekly", label: "周额度", remaining_pct: 39, resets_at: later(60 * 24 * 5 + 180) },
+            ],
+          },
+          {
+            group: "Claude / GPT",
+            compact_full: true,
+            windows: [
+              { id: "5h", label: "5 小时", remaining_pct: 100 },
+              { id: "weekly", label: "周额度", remaining_pct: 100 },
+            ],
+          },
+        ],
+      },
+      {
+        kind: "codex",
+        name: "Codex",
+        plan: "Plus",
+        status: "ok",
+        source: "app-server",
+        updated_at: demoQuotaUpdatedAt,
+        pools: [
+          {
+            group: "",
+            windows: [
+              { id: "5h", label: "5 小时窗口", remaining_pct: 82, resets_at: later(198) },
+              { id: "weekly", label: "周额度", remaining_pct: 64, resets_at: later(60 * 24 * 4 + 320) },
+            ],
+          },
+        ],
+      },
+      {
+        kind: "claude",
+        name: "Claude Code",
+        plan: "Max",
+        status: "optin",
+        source: "auth-status",
+        updated_at: demoQuotaUpdatedAt,
+        note: "按对话被动同步 · 未开启状态行采集",
+      },
+      {
+        kind: "cursor",
+        name: "Cursor",
+        plan: "CLI 已登录",
+        status: "external",
+        source: "status",
+        updated_at: demoQuotaUpdatedAt,
+        note: "CLI 未开放实时额度接口",
+        link_text: "控制台 ↗",
+        link_url: "https://cursor.com/settings",
+      },
+    ],
+  });
+
   // ───────────────────────────── streams
   const streams = new Set();
   class FakeES {
@@ -1244,6 +1317,16 @@ func List(ctx context.Context, db *sql.DB, userID int64, page, size int) ([]Orde
     });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") { const k = q.get("kind") === "antigravity" ? "agy" : q.get("kind"); return json(models[k] || { models: [], efforts: [] }); }
+    if (p === "/api/quota") return json(demoQuota());
+    if (p === "/api/quota/refresh" && method === "POST") {
+      if (!demoQuotaLastManual || Date.now() - demoQuotaLastManual >= 30000) {
+        demoQuotaUpdatedAt = new Date().toISOString();
+        demoQuotaLastManual = Date.now();
+      }
+      const snap = demoQuota();
+      for (const s of streams) { if (s.path === "/api/events") s.emit("quota", snap); }
+      return json(snap);
+    }
     if (p === "/api/file") {
       const fp = q.get("path") || "", mach = q.get("machine") || "", dl = q.get("download") === "1";
       const dlHead = (name) => dl ? { "Content-Disposition": `attachment; filename="${name}"` } : {};

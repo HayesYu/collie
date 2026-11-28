@@ -22636,19 +22636,39 @@
   const mdCache = new Map();
   const mdCacheImgKeys = new Set();
   let mdWorkerSig = "";
+  function workerLinkStatus(w, a) {
+    if (w) {
+      if (w.ended) return "ended";
+      const st = workerStatus(w) || w.status || "";
+      if (st === "blocked") return "blocked";
+      if (st === "working" || st === "starting" || st === "running") return "working";
+      if (st === "waiting") return "waiting";
+      if (st === "done") return "done";
+      return "idle";
+    }
+    if (a) {
+      const st = a.status || "";
+      if (st === "blocked") return "blocked";
+      if (st === "working" || st === "starting" || st === "running") return "working";
+      if (st === "waiting") return "waiting";
+      if (st === "done") return "done";
+      return "idle";
+    }
+    return "idle";
+  }
   function currentMdWorkerSig() {
     const names = [];
-    for (const w of sup.workers || []) if (w?.name && w.name !== ROUTER) names.push(w.name);
-    for (const a of state.agents || []) if (a?.name && a.name !== ROUTER) names.push(a.name);
+    for (const w of sup.workers || []) if (w?.name && w.name !== ROUTER) names.push(`${w.name}:${workerLinkStatus(w, null)}`);
+    for (const a of state.agents || []) if (a?.name && a.name !== ROUTER) names.push(`${a.name}:${workerLinkStatus(null, a)}`);
     return names.join("\0");
   }
   function resolveInlineWorker(raw) {
     if (!raw || raw === ROUTER || raw.length < 2 || raw.length > 64) return null;
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) return null;
     const w = getWorkerLookup().byName.get(raw) || null;
-    if (w) return { name: raw, label: workerDisplayName(w), paneId: paneOf(raw) || (!w.ended ? w.pane_id || "" : "") };
+    if (w) return { name: raw, label: workerDisplayName(w), paneId: paneOf(raw) || (!w.ended ? w.pane_id || "" : ""), status: workerLinkStatus(w, null) };
     const a = getAgentByName().get(raw) || null;
-    if (a && a.is_agent && a.name !== ROUTER) return { name: raw, label: title(a), paneId: a.pane_id || "" };
+    if (a && a.is_agent && a.name !== ROUTER) return { name: raw, label: title(a), paneId: a.pane_id || "", status: workerLinkStatus(null, a) };
     return null;
   }
   function invalidateMdCacheForImage(p) {
@@ -22692,6 +22712,28 @@
   const urlLabel = (u) => {
     const s = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return s.length > 42 ? s.slice(0, 40) + "…" : s;
+  };
+  const linkifyUrlMatch = (m) => {
+    const raw = unesc(m);
+    const cut = raw.search(/[<>"`]/);
+    let u = cut < 0 ? raw : raw.slice(0, cut);
+    const rest = cut < 0 ? "" : raw.slice(cut);
+    let tail = "";
+    const count = (x, ch) => x.split(ch).length - 1;
+    while (u.length) {
+      if (/[.,;:!?']$/.test(u) ||
+          (u.endsWith(")") && count(u, "(") < count(u, ")")) ||
+          (u.endsWith("]") && count(u, "[") < count(u, "]"))) {
+        tail = u.slice(-1) + tail;
+        u = u.slice(0, -1);
+      } else break;
+    }
+    if (!/^https?:\/\/[^\/.\s]/.test(u)) return null;
+    const eu = esc(u);
+    return {
+      anchor: `<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`,
+      suffix: esc(tail + rest),
+    };
   };
   function parseInlineCodePath(raw) {
     if (!raw || raw.includes("://") || raw.includes("//") || /[\s<>"'`*?;$&|()\\]/.test(raw)) return "";
@@ -22931,7 +22973,7 @@
               if (wk) {
                 const href = wk.paneId ? `#/p/${encodeURIComponent(wk.paneId)}` : `#/w/${encodeURIComponent(wk.name)}`;
                 const tip = wk.label && wk.label !== wk.name ? `查看任务：${wk.label} (${wk.name})` : `查看任务：${wk.name}`;
-                scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
+                scanned += keep(`<a class="worker-link" href="${href}" data-open-worker="${esc(wk.name)}" data-worker-status="${esc(wk.status || "idle")}" title="${esc(tip)}"><code class="code-link">${c}</code></a>`);
               } else {
                 scanned += keep(`<code>${c}</code>`);
               }
@@ -23034,23 +23076,8 @@
           return keep(`<a ${fileLinkAttrs(p, ep, ep)}>${label}</a>`);
         })
         .replace(URL_RE, (m) => {
-          const raw = unesc(m);
-          const cut = raw.search(/[<>"`]/);
-          let u = cut < 0 ? raw : raw.slice(0, cut);
-          const rest = cut < 0 ? "" : raw.slice(cut);
-          let tail = "";
-          const count = (x, ch) => x.split(ch).length - 1;
-          while (u.length) {
-            if (/[.,;:!?']$/.test(u) ||
-                (u.endsWith(")") && count(u, "(") < count(u, ")")) ||
-                (u.endsWith("]") && count(u, "[") < count(u, "]"))) {
-              tail = u.slice(-1) + tail;
-              u = u.slice(0, -1);
-            } else break;
-          }
-          if (!/^https?:\/\/[^\/.\s]/.test(u)) return m;
-          const eu = esc(u);
-          return keep(`<a class="url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}">${esc(urlLabel(u))}</a>`) + esc(tail + rest);
+          const hit = linkifyUrlMatch(m);
+          return hit ? keep(hit.anchor) + hit.suffix : m;
         })
         .replace(FILE_RE, (_, pre, p) => {
           const rawP = unesc(p);
@@ -23866,7 +23893,18 @@
     .replace(/\*\*|__|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // A user message's attachments: images as thumbnails, other files by name
   // (not server paths).
-  const linkUserFiles = (escaped) => escaped.replace(FILE_RE, (_, pre, p) => `${pre}<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`);
+  const linkUserFiles = (escaped) => {
+    const stash = [];
+    const keep = (h) => `\u0001${stash.push(h) - 1}\u0001`;
+    let out = String(escaped || "").replace(/[\u0000\u0001]/g, "")
+      .replace(URL_RE, (m) => {
+        const hit = linkifyUrlMatch(m);
+        return hit ? keep(hit.anchor) + hit.suffix : m;
+      })
+      .replace(FILE_RE, (_, pre, p) => `${pre}${keep(`<a ${fileLinkAttrs(unesc(p), p, "打开这个文件")}>${p}</a>`)}`);
+    while (out.includes("\u0001")) out = out.replace(/\u0001(\d+)\u0001/g, (_, n) => stash[+n]);
+    return out;
+  };
   function parseUserParts(raw) {
     const t = String(raw || "");
     const i = t.lastIndexOf("附件：\n");

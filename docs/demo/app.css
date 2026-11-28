@@ -3521,10 +3521,34 @@ body.dragging { cursor: col-resize; user-select: none; }
   contain: layout style;
 }
 #wd-thread > .msg,
-#wd-thread > .tools {
+#wd-thread > .tools,
+#wd-thread > .mine-group,
+#wd-thread > .ask-card {
   contain: layout style;
 }
-.wd-live { padding: 0 18px 14px; }
+.wd-live { flex: none; padding: 0 18px 14px; contain: layout style; }
+.wd-live.is-working {
+  padding: 0 18px;
+  height: 35px;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.wd-live.is-working .live-working {
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.wd-live.is-working .live-working .dot { margin-top: 0; }
+.wd-live.is-working .live-working pre {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 18px;
+  max-height: 18px;
+}
 .wd-live[hidden] { display: none !important; }
 .wd-screen { padding: 12px 14px; }
 .wd-log { padding: 14px 16px 24px; font-size: 12px; overscroll-behavior: contain; }
@@ -3830,7 +3854,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   .app.has-file .file-scrim,
   .app.has-thread .thread-scrim,
   .app.has-worker .worker-scrim { opacity: 1; pointer-events: auto; }
-  .drawer-scrim.is-scrim-opening { animation: sd-scrim-in 220ms ease both; }
+  .drawer-scrim.is-scrim-opening { transition: none !important; animation: sd-scrim-in 220ms ease both; }
   .side-drawer,
   .filepane,
   .threadpane,
@@ -3844,7 +3868,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
     will-change: auto;
     transition: transform 260ms cubic-bezier(.22, 1, .36, 1);
   }
-  .side-drawer.is-sheet-opening { animation: sd-sheet-in-x 260ms cubic-bezier(.22, 1, .36, 1) both; }
+  .side-drawer.is-sheet-opening { transition: none !important; animation: sd-sheet-in-x 260ms cubic-bezier(.22, 1, .36, 1) both; }
   .wd-head { padding-right: max(12px, env(safe-area-inset-right, 0px)); }
   .wd-peek-foot {
     padding-right: max(14px, env(safe-area-inset-right, 0px));
@@ -3874,7 +3898,7 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
     background: rgba(10, 10, 12, .38);
     transition: opacity 260ms cubic-bezier(.32, .72, 0, 1);
   }
-  .drawer-scrim.is-scrim-opening { animation: sd-scrim-in 260ms cubic-bezier(.32, .72, 0, 1) both; }
+  .drawer-scrim.is-scrim-opening { transition: none !important; animation: sd-scrim-in 260ms cubic-bezier(.32, .72, 0, 1) both; }
   :root[data-theme="dark"] .drawer-scrim,
   :root[data-theme="dark"] .file-scrim,
   :root[data-theme="dark"] .thread-scrim,
@@ -3905,7 +3929,20 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
     will-change: auto;
     transition: transform 260ms cubic-bezier(.32, .72, 0, 1);
   }
-  .side-drawer.is-sheet-opening { animation: sd-sheet-in-y 260ms cubic-bezier(.32, .72, 0, 1) both; }
+  .side-drawer.is-sheet-opening {
+    transition: none !important;
+    backface-visibility: hidden;
+    animation: sd-sheet-in-y 260ms cubic-bezier(.32, .72, 0, 1) both;
+  }
+  :is(.app.has-worker, .app.has-thread, .app.has-file) #v-collie .dot,
+  :is(.app.has-worker, .app.has-thread, .app.has-file) #v-collie .dot::after,
+  :is(.app.has-worker, .app.has-thread, .app.has-file) #v-collie .working-row,
+  :is(.app.has-worker, .app.has-thread, .app.has-file) #v-collie .working-row .wk-t,
+  .side-drawer.is-sheet-opening .thread-skel .sk,
+  .side-drawer.is-sheet-opening .dot,
+  .side-drawer.is-sheet-opening .dot::after {
+    animation-play-state: paused !important;
+  }
   @supports (content-visibility: hidden) {
     .side-drawer[hidden] {
       display: flex;
@@ -3921,10 +3958,11 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
       content-visibility: auto;
       contain-intrinsic-size: auto none auto 5.5rem;
     }
-    #wd-thread > :not(:first-child):nth-last-child(n+4) {
-      content-visibility: auto;
-      contain-intrinsic-size: auto none auto 6rem;
-    }
+    /* Do not apply content-visibility: auto to #wd-thread rows: the worker drawer
+       opens pinned at the bottom and scrolls upward into never-laid-out messages
+       with wide tables/code blocks, where placeholder-vs-actual height mismatches
+       cause violent 300-460px scroll jumps (especially on iOS Safari without
+       overflow-anchor). Per-row contain: layout style already isolates updates. */
   }
   .side-drawer.is-dragging,
   .filepane.is-dragging,
@@ -4008,6 +4046,8 @@ a.td-worker.is-ended:hover { color: var(--fg-2); }
   #td-close { display: inline-grid; }
   .td-body { padding: 14px 14px 20px; scrollbar-gutter: auto; }
   .wd-thread { padding: 14px 14px 20px; --thread-gap: 16px; }
+  .wd-live { padding: 0 14px 12px; }
+  .wd-live.is-working { padding: 0 14px; }
   .wd-thread .msg.user.is-task-brief { max-width: min(92%, 620px); }
   .td-node { padding: 9px 6px 12px; margin: 0 -6px; }
   .td-node-acts { opacity: .75; }

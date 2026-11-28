@@ -320,6 +320,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		Effort      string `json:"effort"`
 		Re          string `json:"re"`            // a message of Collie's this answers
 		Pick        bool   `json:"pick"`          // true when tapping a --opt button: collapse card in-place without a user bubble
+		InPlace     bool   `json:"in_place"`      // true when replying to an earlier message while scrolled up: settle under target & thread without a main-bottom bubble
 		ClientMsgID string `json:"client_msg_id"` // optional client idempotency token
 	}
 	if !decode(w, r, &body) || strings.TrimSpace(body.Text) == "" {
@@ -337,7 +338,14 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	sp.mu.Lock()
 	if prev, ok := sp.lookupSayDedupLocked(cid, now); ok {
 		sp.mu.Unlock()
-		writeJSON(w, 200, map[string]any{"entry": prev.entry, "trigger": prev.trigger, "duplicate": true})
+		dupResp := map[string]any{"entry": prev.entry, "trigger": prev.trigger, "duplicate": true}
+		if prev.picked {
+			dupResp["picked"] = true
+		}
+		if prev.inPlace {
+			dupResp["in_place"] = true
+		}
+		writeJSON(w, 200, dupResp)
 		return
 	}
 	beforePending := sp.pendingLocked(now)
@@ -349,6 +357,7 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	isSilentPick := body.Pick && pickTarget != nil
+	isInPlace := !isSilentPick && body.InPlace && re != nil && re.Entry != ""
 	var entryID string
 	text := body.Text
 	if isSilentPick {
@@ -362,9 +371,12 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		if cid != "" {
 			e.ClientMsgID = cid
 		}
+		if isInPlace {
+			e.InPlace = true
+		}
 		entryID = e.ID
 		if pickTarget != nil && pickTarget.Pick == nil {
-			pickTarget.Pick = &DecisionPick{State: "custom", Text: strings.TrimSpace(body.Text), At: now}
+			pickTarget.Pick = &DecisionPick{State: "custom", Text: strings.TrimSpace(body.Text), At: now, InPlace: isInPlace}
 			sp.changed()
 		}
 		if re != nil { // which message they mean: Collie need not guess
@@ -419,6 +431,13 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	}
 	t := sp.ingestLocked("chat", mainThread, "you", text, "", "", entryID)
 	sp.recordSayDedupLocked(cid, entryID, t.ID, now)
+	if cid != "" {
+		if rec, ok := sp.sayDedup[cid]; ok {
+			rec.picked = isSilentPick
+			rec.inPlace = isInPlace
+			sp.sayDedup[cid] = rec
+		}
+	}
 	afterPending := sp.pendingLocked(now)
 	mgr := sp.integrations
 	sp.mu.Unlock()
@@ -451,6 +470,9 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"entry": entryID, "trigger": t.ID}
 	if isSilentPick {
 		resp["picked"] = true
+	}
+	if isInPlace {
+		resp["in_place"] = true
 	}
 	writeJSON(w, 200, resp)
 }

@@ -89,9 +89,10 @@ func cleanWorkerLabel(s string) string {
 
 // DecisionPick records how the human resolved a Collie --opt decision card.
 type DecisionPick struct {
-	State string    `json:"state"`          // picked | custom | dismissed
-	Text  string    `json:"text,omitempty"` // picked option label or custom reply text
-	At    time.Time `json:"at"`
+	State   string    `json:"state"`          // picked | custom | dismissed
+	Text    string    `json:"text,omitempty"` // picked option label or custom reply text
+	At      time.Time `json:"at"`
+	InPlace bool      `json:"in_place,omitempty"` // true when custom reply settled in-place without a main-bottom bubble
 }
 
 // Entry is one line of the human-facing super-agent conversation.
@@ -110,6 +111,10 @@ type Entry struct {
 	Options []string `json:"options,omitempty"`
 	// Resolved receipt for a Collie --opt decision card (pure click, custom note, or dismissed).
 	Pick *DecisionPick `json:"pick,omitempty"`
+	// InPlace marks a targeted user reply sent while scrolled above the bottom:
+	// settled under its target message and grouped into its reply thread without
+	// adding a stray user bubble to the bottom of the main timeline.
+	InPlace bool `json:"in_place,omitempty"`
 	// Structured deliverable paths attached via `collie reply --file`.
 	Files []string `json:"files,omitempty"`
 	// Marked by Collie (--check) when a reply without options still awaits the human's review or action.

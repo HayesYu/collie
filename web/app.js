@@ -3276,6 +3276,7 @@
   const workerChatter = (e) => e.ref && e.ref !== ROUTER && (e.tone === "done" || e.tone === "info" || e.tone === "blocked") && CHATTER.test(e.text);
   const isHiddenSuperEntry = (e) => {
     if (!e) return true;
+    if (e.role === "user" && e.in_place) return true;
     if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") return true;
     if (e.role === "event" && workerChatter(e)) return true;
     return false;
@@ -3568,8 +3569,25 @@
     return reaches(startId, targetId) || reaches(targetId, startId);
   }
   let openInlineDecisionId = null;
+  const inlineDecisionDrafts = new Map();
+  const getInlineDraft = (id) => (id ? (inlineDecisionDrafts.get(id) || "") : "");
+  const setInlineDraft = (id, val) => {
+    if (!id) return;
+    const s = String(val || "");
+    if (s.trim()) inlineDecisionDrafts.set(id, s);
+    else inlineDecisionDrafts.delete(id);
+  };
+  const inlineDraftDotsFingerprint = () => {
+    if (!inlineDecisionDrafts.size) return "";
+    const ids = [];
+    for (const [k, v] of inlineDecisionDrafts) {
+      if (v && v.trim()) ids.push(k);
+    }
+    return ids.sort().join(",");
+  };
   const ICON_EDIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
   const ICON_RECEIPT_CHK = `<svg class="rr-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
+  const ICON_SEND_UP = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
   const ICON_SPLIT_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M13 4v16"/></svg>`;
   const ICON_DOC_MINI = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>`;
   function entryPendingNow(allEntries, idx, id, pendIds = null) {
@@ -3590,18 +3608,25 @@
         text: localPick.text || "",
         at: localPick.at || "",
         sending: !!localPick.sending,
+        inPlace: !!localPick.inPlace,
       };
     }
     if (e.pick && e.pick.state) {
+      let inPlace = !!e.pick.in_place;
+      if (!inPlace && e.pick.state === "custom" && Array.isArray(allEntries) && idx >= 0) {
+        const next = getEntryGraph(allEntries).replyByTarget.get(e.id);
+        if (next?.in_place) inPlace = true;
+      }
       return {
         state: e.pick.state,
         text: e.pick.text || "",
         at: e.pick.at || "",
         sending: false,
+        inPlace,
       };
     }
     if (dismissedLocal.has(e.id)) {
-      return { state: "dismissed", text: "", at: "", sending: false };
+      return { state: "dismissed", text: "", at: "", sending: false, inPlace: false };
     }
     if (Array.isArray(allEntries) && idx >= 0) {
       const next = getEntryGraph(allEntries).replyByTarget.get(e.id);
@@ -3613,33 +3638,42 @@
           text: txt,
           at: next.at || "",
           sending: false,
+          inPlace: !!next.in_place,
         };
       }
     }
-    return { state: "dismissed", text: "", at: "", sending: false };
+    return { state: "dismissed", text: "", at: "", sending: false, inPlace: false };
   }
   function replyOptsMarkup(e, idx, allEntries, pendIds = null, opts = null) {
     if (!e || e.role !== "collie" || !e.id) return "";
     const optList = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
     if (optList.length) {
       if (entryPendingNow(allEntries, idx, e.id, pendIds, true)) {
-        const inlineOpen = openInlineDecisionId === e.id;
+        const inDrawer = !!opts?.inDrawer;
+        const isMobileTarget = !inDrawer && replyTo?.entry === e.id && replyTo?.mode === "supplement";
+        const inlineOpen = openInlineDecisionId === e.id && (inDrawer || !narrow());
+        const savedDraft = getInlineDraft(e.id);
+        const hasDraft = !inlineOpen && !isMobileTarget && savedDraft.trim().length > 0;
+        const taId = (inDrawer ? "ri-td-" : "ri-") + e.id;
         return `<div class="decision-wrap" data-decision="${esc(e.id)}"><div class="reply-opts" data-entry="${esc(e.id)}">${optList.map((o) =>
-          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen ? "true" : "false"}">${ICON_EDIT_MINI}<span>补充一句</span></button></div><div class="reply-inline" data-inline-box="${esc(e.id)}"${inlineOpen ? "" : " hidden"}><input type="text" data-inline-input="${esc(e.id)}" placeholder="补充一句发给 Collie，自动关联这条决策…" autocomplete="off"><button type="button" class="reply-inline-send" data-inline-send="${esc(e.id)}" disabled>发送</button><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="收起" aria-label="收起输入框">${ICON_X}</button></div></div>`;
+          `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}<button type="button" class="reply-more-btn${isMobileTarget ? " is-active-target" : ""}" data-toggle-inline="${esc(e.id)}" aria-expanded="${inlineOpen || isMobileTarget ? "true" : "false"}">${ICON_EDIT_MINI}<span>补充一句</span>${hasDraft ? `<span class="draft-dot" aria-label="有草稿"></span>` : ""}</button></div><form class="reply-inline" data-inline-box="${esc(e.id)}"${inlineOpen ? "" : " hidden"}><label for="${esc(taId)}" class="visually-hidden">补充一句</label><div class="ri-ta-wrap" data-replicated-value="${esc(savedDraft)}"><textarea id="${esc(taId)}" class="ri-ta" data-inline-input="${esc(e.id)}" rows="2" placeholder="补充一句…" enterkeyhint="send">${esc(savedDraft)}</textarea></div><div class="ri-bar"><span class="spacer"></span><button type="button" class="reply-inline-cancel" data-inline-cancel="${esc(e.id)}" title="取消 (Esc)" aria-label="取消">取消</button><button type="submit" class="send reply-inline-send" data-inline-send="${esc(e.id)}" title="发送 (Enter)" aria-label="发送"${savedDraft.trim() ? "" : " disabled"}>${ICON_SEND_UP}</button></div></form></div>`;
       }
       const res = resolveDecisionInfo(e, idx, allEntries);
       if (res) {
         const isDismissed = res.state === "dismissed";
         const isCustom = res.state === "custom";
-        const lbl = isDismissed ? "已划掉" : isCustom ? "已回复" : "已选：";
-        const val = isDismissed ? "暂不处理" : isCustom ? "" : (res.text || "");
+        const isInPlaceCustom = isCustom && !!res.inPlace;
+        const lbl = isDismissed ? "已划掉" : isInPlaceCustom ? "" : isCustom ? "已回复" : "已选：";
+        const val = isDismissed ? "暂不处理" : isInPlaceCustom ? plainLine(res.text || "") : isCustom ? "" : (res.text || "");
         const atStr = res.at ? hhmm(res.at) : "";
         const origHtml = optList.map((o) => {
           const hit = !isDismissed && !isCustom && o === res.text;
           return `<span class="rr-orig-opt${hit ? " is-picked" : ""}">${hit ? "✓ " : ""}${esc(o)}</span>`;
         }).join("");
+        const lblHtml = lbl ? `<span class="rr-lbl">${esc(lbl)}</span>` : "";
         const valHtml = val ? `<span class="rr-val">${esc(val)}</span>` : "";
-        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}<span class="rr-lbl">${esc(lbl)}</span>${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body"><div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
+        const noteHtml = isInPlaceCustom && res.text ? `<div class="rr-custom-note">${esc(res.text)}</div>` : "";
+        return `<details class="reply-receipt${isDismissed ? " is-dismissed" : ""}${isCustom ? " is-replied" : ""}${res.sending ? " is-sending" : ""}" data-entry="${esc(e.id)}"><summary>${ICON_RECEIPT_CHK}${lblHtml}${valHtml}${atStr ? `<span class="rr-time">· ${esc(atStr)}</span>` : ""}</summary><div class="rr-body">${noteHtml}<div class="rr-body-cap">原候选选项</div><div class="rr-orig-list">${origHtml}</div></div></details>`;
       }
       return "";
     }
@@ -3904,12 +3938,14 @@
       }
       if (e.check) h = Math.imul(h ^ 37, 16777619);
       if (e.pending) h = Math.imul(h ^ 41, 16777619);
+      if (e.in_place) h = Math.imul(h ^ 47, 16777619);
       if (e.picked || e.resolved || e.dismissed) h = Math.imul(h ^ 43, 16777619);
       if (e.claps) h = Math.imul(h ^ (((Number(e.claps) || 0) * 2654435761) >>> 0), 16777619);
       if (e.pick) {
         h = fnvHashStr(h, e.pick.state || "");
         h = fnvHashStr(h, e.pick.text || "");
         h = fnvHashStr(h, e.pick.at || "");
+        if (e.pick.in_place) h = Math.imul(h ^ 59, 16777619);
       }
       if (Array.isArray(e.files) && e.files.length) {
         h = fnvHashStr(h, e.files.join("\x1f"));
@@ -4227,6 +4263,7 @@
       const latestReply = latest && latest !== root ? latest : null;
       const replyCount = totalCount - 1;
       const rootSummary = root ? threadCleanText(root) : (missingRoot?.text ? firstCleanThreadLine(missingRoot.text) || collieNotifySummary(missingRoot.text) : threadCleanText(list[0]));
+      const hasInPlace = list.some((x) => !!x?.in_place);
       const thObj = {
         rootId,
         root,
@@ -4236,22 +4273,23 @@
         replyCount,
         totalCount,
         branchCount,
+        hasInPlace,
         title: threadTitleFromText(rootSummary),
         fullTitle: rootSummary,
         preview: latestReply ? threadPreviewFromEntry(latestReply) : "",
       };
       allThreads.set(rootId, thObj);
       for (const x of list) allMsgToRoot.set(entryKey(x), rootId);
-      if (totalCount < 3) continue;
+      if (totalCount < 3 && !(totalCount >= 2 && hasInPlace)) continue;
       threads.set(rootId, thObj);
       for (const x of list) msgToRoot.set(entryKey(x), rootId);
     }
-    // Only show `↳ N 条回复 >` at the end of each contiguous run of a >=3 thread,
-    // avoiding stacked duplicate links when messages of the same thread are adjacent.
+    // Only show `↳ N 条回复 >` at the end of each contiguous run of a thread,
+    // skipping hidden in-place replies so the visible target message always owns the entry pill.
     const showEntryOn = new Set();
     const visibleTalk = [];
     for (const m of entries) {
-      if (m && (m.role === "user" || m.role === "collie")) visibleTalk.push(m);
+      if (m && (m.role === "user" || m.role === "collie") && !m.in_place) visibleTalk.push(m);
     }
     for (let i = 0; i < visibleTalk.length; i++) {
       const k = entryKey(visibleTalk[i]);
@@ -4341,6 +4379,35 @@
     await scrollToAsync(sc, finalWant, "smooth");
     return "teleport-glide";
   }
+  const UNREAD_STAGE1_TOLERANCE_PX = 42;
+  function computeUnreadJumpTarget(sc = $("#super-thread")?.parentElement, box = $("#super-thread")) {
+    const { firstUnreadId, count } = computeUnreadInfo();
+    if (!sc || !box || count <= 0 || !firstUnreadId) return null;
+    let anchorEl = null;
+    let isSep = false;
+    if (sessionUnreadMarkerId && firstUnreadId === sessionUnreadMarkerId) {
+      const sep = $("#unread-sep", box);
+      if (sep) { anchorEl = sep; isSep = true; }
+    }
+    if (!anchorEl) {
+      anchorEl = findUnreadRowEl(box, firstUnreadId);
+    }
+    if (!anchorEl) {
+      const sep = $("#unread-sep", box);
+      if (sep) { anchorEl = sep; isSep = true; }
+    }
+    if (!anchorEl || typeof sc.getBoundingClientRect !== "function" || typeof anchorEl.getBoundingClientRect !== "function") {
+      return { anchorEl: null, isSep: false, firstUnreadId, count, rawTop: 0, wantTop: 0, fitsAtBottom: true, isStage1: false };
+    }
+    const sr = sc.getBoundingClientRect();
+    const er = anchorEl.getBoundingClientRect();
+    const rawTop = sc.scrollTop + (er.top - sr.top);
+    const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const wantTop = Math.max(0, Math.min(maxTop, rawTop - UNREAD_TOP_PAD));
+    const fitsAtBottom = maxTop <= 0 || (rawTop - UNREAD_TOP_PAD >= maxTop - 24);
+    const isStage1 = !fitsAtBottom && (wantTop > sc.scrollTop + UNREAD_STAGE1_TOLERANCE_PX);
+    return { anchorEl, isSep, firstUnreadId, count, rawTop, wantTop, fitsAtBottom, isStage1 };
+  }
   let _lastJumpUiKey = "";
   function updateSuperJump() {
     const btn = $("#super-jump"), sc = $("#super-thread")?.parentElement;
@@ -4350,16 +4417,36 @@
     const unreadCount = view === "collie" ? computeUnreadInfo().count : 0;
     const threshold = unreadCount > 0 ? AT_BOTTOM_PX : SUPER_JUMP_DIST;
     const show = view === "collie" && !pendingOpen && !superJumpHiding && dist > threshold;
-    const uiKey = `${show ? 1 : 0}|${unreadCount}`;
+    const target = show && unreadCount > 0 ? computeUnreadJumpTarget(sc, $("#super-thread")) : null;
+    const stage = show && target?.isStage1 ? "unread-start" : "latest";
+    const uiKey = `${show ? 1 : 0}|${stage}|${unreadCount}`;
     if (uiKey === _lastJumpUiKey && btn.hidden === !show) return;
     _lastJumpUiKey = uiKey;
-    const badgeText = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
-    const ariaText = unreadCount > 0 ? `回到底部，${unreadCount} 条未读` : "回到底部";
+    btn.dataset.stage = stage;
+    const isStage1 = stage === "unread-start";
+    const compactCount = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
+    const ariaText = isStage1
+      ? `跳到未读开头，${unreadCount} 条未读`
+      : unreadCount > 0
+        ? `跳到最新，余 ${unreadCount} 条未读`
+        : "跳到最新";
     const badgeEl = $("#super-jump-badge", btn);
     if (badgeEl) {
-      if (badgeEl.textContent !== badgeText) badgeEl.textContent = badgeText;
-      badgeEl.hidden = !badgeText;
+      if (isStage1 && compactCount) {
+        const nextText = `${compactCount} 未读`;
+        const nextHtml = `<span class="sj-n">${compactCount}</span> 未读`;
+        if (badgeEl.textContent !== nextText || badgeEl.innerHTML !== nextHtml) {
+          badgeEl.textContent = nextText;
+          badgeEl.innerHTML = nextHtml;
+        }
+        badgeEl.hidden = false;
+      } else {
+        if (badgeEl.textContent !== "") badgeEl.textContent = "";
+        if (badgeEl.innerHTML !== "") badgeEl.innerHTML = "";
+        badgeEl.hidden = true;
+      }
     }
+    btn.classList.toggle("stage-unread", isStage1);
     btn.classList.toggle("has-unread", unreadCount > 0);
     if (btn.title !== ariaText) {
       btn.title = ariaText;
@@ -4766,7 +4853,25 @@
     const eid = CSS.escape(id);
     return `#v-collie .msg[data-id="${eid}"], #v-collie .event[data-id="${eid}"]`;
   };
+  function resolveVisibleEntryId(id, allEntries = chatEntries()) {
+    if (!id) return "";
+    const byId = new Map();
+    for (let i = 0; i < (allEntries?.length || 0); i++) {
+      const x = allEntries[i];
+      if (x?.id) byId.set(x.id, x);
+    }
+    let cur = id;
+    const seen = new Set();
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const ent = byId.get(cur);
+      if (!ent || !ent.in_place || !ent.re?.entry) return cur;
+      cur = ent.re.entry;
+    }
+    return id;
+  }
   async function jumpToEntry(id, opts) {
+    id = resolveVisibleEntryId(id);
     if (!id) return;
     const seq = ++jumpSeq;
     cancelCollieLayoutLock();
@@ -4789,7 +4894,7 @@
     }
     if (!m) { toast("这条消息太早了，已经不在这里"); return; }
     if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
-    collieStickBottom = false;
+    setCollieBottomStick(false);
     collieForceBottomUntil = 0;
     const sc = $("#super-thread").parentElement;
     const measureTargetTop = (el) => {
@@ -5186,6 +5291,7 @@
       return { fitsAtBottom: true, wantTop: maxTop };
     }
     markProgrammaticScroll(240);
+    setCollieBottomStick(false);
     scroller.scrollTop = wantTop;
     return { fitsAtBottom: false, wantTop };
   }
@@ -5736,6 +5842,11 @@
 
   const THREAD_DESKTOP_MIN = 1180;
   let collieStickBottom = true;
+  let collieResizeWasBottom = true;
+  const setCollieBottomStick = (on) => {
+    collieStickBottom = !!on;
+    collieResizeWasBottom = !!on;
+  };
   let collieForceBottomUntil = 0;
   const isDesktopThreadSideBySide = () => !!(activeThreadRoot && innerWidth > THREAD_DESKTOP_MIN && $("#app")?.classList?.contains("has-thread"));
   function snapCollieStickBottom(sc = viewScroller("collie")) {
@@ -5781,12 +5892,12 @@
       && performance.now() < collieForceBottomUntil;
     const atBottom = forceBottom ? true : drawerFreezeMain ? false : holdRestore ? !!holdRestore.atBottom : (initialBottomLock || stickBottomLock || distBefore <= AT_BOTTOM_PX);
     if (forceBottom) {
-      collieStickBottom = true;
+      setCollieBottomStick(true);
       collieForceBottomUntil = performance.now() + 4000;
     } else if (drawerFreezeMain) {
       collieForceBottomUntil = 0;
     } else if (holdRestore && !holdRestore.atBottom) {
-      collieStickBottom = false;
+      setCollieBottomStick(false);
       collieForceBottomUntil = 0;
     }
     const jumping = flashEntry.until > Date.now();
@@ -5902,8 +6013,10 @@
       sup.hasPending ? 1 : 0,
       pendList.map((p) => p.id).join(","),
       dismissedLocal.size ? [...dismissedLocal].join(",") : "",
-      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.state || "picked"}:${v.text}`).join(",") : "",
+      pickedReplyOpts.size ? [...pickedReplyOpts.entries()].map(([k, v]) => `${k}:${v.sending ? 1 : 0}:${v.state || "picked"}:${v.inPlace ? 1 : 0}:${v.text}`).join(",") : "",
       openInlineDecisionId || "",
+      replyTo?.mode === "supplement" ? (replyTo.entry || "") : "",
+      inlineDraftDotsFingerprint(),
       !$("#file-view")?.hidden ? (fvCur?.reqPath || "") : "",
       pinList.map((p) => p.id).join(","),
       clapLocalFingerprint(),
@@ -6001,6 +6114,41 @@
           return `<button type="button" class="thread-entry" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(eKey)}" aria-expanded="false">` +
             `${ICON_THREAD_BRANCH}<span class="te-count">${replyCount} 条回复</span>${ICON_THREAD_CHEV}</button>`;
         };
+        const inPlaceByTarget = new Map();
+        for (let ii = 0; ii < allEntries.length; ii++) {
+          const x = allEntries[ii];
+          if (x && x.role === "user" && x.in_place && x.re?.entry) {
+            let arr = inPlaceByTarget.get(x.re.entry);
+            if (!arr) { arr = []; inPlaceByTarget.set(x.re.entry, arr); }
+            arr.push(x);
+          }
+        }
+        const renderInPlaceReceipts = (e, eKey) => {
+          const list = e?.id ? inPlaceByTarget.get(e.id) : null;
+          if (!list || !list.length) return "";
+          let shown = list;
+          if (e.role === "collie" && Array.isArray(e.options) && e.options.length > 0) {
+            const localPick = pickedReplyOpts.get(e.id);
+            const pickText = (localPick?.inPlace ? localPick.text : e.pick?.in_place ? e.pick.text : "").trim();
+            let skipped = false;
+            shown = list.filter((r) => {
+              if (!skipped && pickText && (threadEntryPlainText(r).trim() || String(r.text || "").trim()) === pickText) {
+                skipped = true;
+                return false;
+              }
+              return true;
+            });
+          }
+          if (!shown.length) return "";
+          const rootId = threadInfo.allMsgToRoot.get(eKey) || e.id;
+          return `<div class="inplace-receipts">${shown.map((r) => {
+            const rk = entryKey(r);
+            const full = threadEntryPlainText(r).trim() || plainLine(r.text || "");
+            const sum = plainLine(full);
+            const atStr = r.at ? hhmm(r.at) : "";
+            return `<button type="button" class="inplace-receipt${r.pending ? " is-sending" : ""}" data-open-thread="${esc(rootId)}" data-focus-msg="${esc(rk)}" title="${esc(full)}">${ICON_RECEIPT_CHK}<span class="ir-val">${esc(sum)}</span>${atStr ? `<span class="ir-time">· ${esc(atStr)}</span>` : ""}</button>`;
+          }).join("")}</div>`;
+        };
         let prevCollieRoot = "", prevCollieHasEntry = false;
         for (let ei = 0; ei < allEntries.length; ei++) {
           const e = allEntries[ei];
@@ -6052,7 +6200,8 @@
           if (e.role === "user") {
             const qi = analyzeQuote(e, ei);
             const qSig = qi ? qi.sig : "";
-            const msgSig = `u:${qSig}|${e.text || ""}`;
+            const inPlaceHtml = renderInPlaceReceipts(e, eKey);
+            const msgSig = `u:${qSig}|${inPlaceHtml}|${e.text || ""}`;
             const sig = `u|${e.id || ""}|${at}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|${curDayStamp}|${msgSig}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -6080,9 +6229,9 @@
                 const idTitleAttrs = `data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}`;
                 const quoteCls = quoteHtml ? " has-quote" : "";
                 if (mediaHtml && !parts.hasBubbleContent) {
-                  return `<div class="mine is-media-only${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}<div class="msg user is-media-only" ${idTitleAttrs}>${mediaHtml}</div>${renderFoot()}</div>`;
+                  return `<div class="mine is-media-only${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}<div class="msg user is-media-only" ${idTitleAttrs}>${mediaHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
                 }
-                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}${parts.attHtml}</div>${renderFoot()}</div>`;
+                return `<div class="mine${mediaHtml ? " has-media" : ""}${quoteCls}${pinned ? " is-pinned" : ""}"${rootAttr}>${pinBadge}${quoteHtml}${mediaHtml}<div class="msg user" ${idTitleAttrs}>${parts.textHtml}${parts.attHtml}</div>${inPlaceHtml}${renderFoot()}</div>`;
               },
             });
             lastUser = eKey; sinceUser = 0; lastEvent = ""; lastEventId = ""; sinceCollie++;
@@ -6091,9 +6240,10 @@
             const qSig = qi ? qi.sig : "";
             const hasOptsField = (Array.isArray(e.options) && e.options.length > 0) || !!e.check;
             const optsHtml = hasOptsField ? replyOptsMarkup(e, ei, allEntries, pendIds) : "";
+            const inPlaceHtml = renderInPlaceReceipts(e, eKey);
             const artifactsHtml = renderEntryArtifacts(e, openFilePath);
             const claps = effectiveClaps(e.id, e);
-            const msgSig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${e.text || ""}`;
+            const msgSig = `c|${e.id || ""}|${at}|${cont ? 1 : 0}|${curDayStamp}|${qSig}|${artifactsHtml}|${optsHtml}|${inPlaceHtml}|${e.text || ""}`;
             const sig = `${msgSig}|${pinned ? 1 : 0}|${eRoot}|${teRoot}:${teCount}|cl:${claps}`;
             const renderFoot = () => {
               const entryBtn = renderThreadEntryBtn(eKey, teRoot, teCount);
@@ -6115,7 +6265,7 @@
               render: () => {
                 const pinBadge = pinned ? `<div class="pin-ind">${ICON_PIN}<span>已钉住</span></div>` : "";
                 const rootAttr = eRoot ? ` data-thread-root="${esc(eRoot)}"` : "";
-                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${artifactsHtml}${optsHtml}${renderFoot()}</div></div>`;
+                return `<div class="say${cont ? " cont" : ""}${pinned ? " is-pinned" : ""}${claps > 0 ? " has-claps" : ""}"${rootAttr}><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${pinBadge}${renderQuoteHtml(qi, e)}${md(e.text)}${imagesIn(e.text)}${artifactsHtml}${optsHtml}${inPlaceHtml}${renderFoot()}</div></div>`;
               },
             });
             sinceUser++; lastEvent = ""; lastEventId = ""; lastCollie = eKey; sinceCollie = 0;
@@ -6348,7 +6498,7 @@
         pendingUnreadAnchorOnVisible = false;
         clearScrollReadTimer();
       }
-      collieStickBottom = true;
+      setCollieBottomStick(true);
       activeCollieRestore = null;
       markProgrammaticScroll();
       scroller.scrollTop = scroller.scrollHeight;
@@ -6368,7 +6518,7 @@
         maybeScheduleReadAtBottom();
       }
     } else {
-      collieStickBottom = false;
+      setCollieBottomStick(false);
       collieForceBottomUntil = 0;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
       if (!jumping && !olderBusy && liveAnchor) {
@@ -6421,7 +6571,6 @@
     }, true);
     let collieResizeW = sc?.clientWidth || 0;
     let collieResizeH = sc?.clientHeight || 0;
-    let collieResizeWasBottom = true;
     let collieResizeAnchor = null;
     let collieResizeGraceUntil = 0;
     let collieResizeAnchorTimer = 0;
@@ -6429,11 +6578,12 @@
     const captureCollieResizeMidAnchor = () => {
       collieResizeAnchorTimer = 0;
       if (view !== "collie" || !sc || sc.clientHeight <= 0) return;
-      if (collieResizeWasBottom || isCollieNearBottom(sc)) {
+      if (isCollieNearBottom(sc)) {
         collieResizeWasBottom = true;
         collieResizeAnchor = null;
         return;
       }
+      collieResizeWasBottom = false;
       collieResizeAnchor = captureCollieAnchor(sc);
     };
     const handleCollieScrollResize = () => {
@@ -6443,21 +6593,21 @@
       if (collieResizeW === 0 && collieResizeH === 0) {
         collieResizeW = w;
         collieResizeH = h;
-        collieResizeWasBottom = isCollieNearBottom(sc) || collieStickBottom;
+        collieResizeWasBottom = isCollieNearBottom(sc) && collieStickBottom;
         return;
       }
       if (w === collieResizeW && h === collieResizeH) return;
       const widthChanged = w !== collieResizeW;
       collieResizeW = w;
       collieResizeH = h;
-      if (collieInitialAnchor || collieLayoutLock) return;
+      if (collieInitialAnchor || collieLayoutLock || (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until)) return;
       collieResizeGraceUntil = performance.now() + 200;
       markProgrammaticScroll(200);
       const restoreNow = () => {
         if (view !== "collie" || !sc || sc.clientHeight <= 0 || collieInitialAnchor || collieLayoutLock) return;
-        if (collieResizeWasBottom || collieStickBottom) {
-          collieStickBottom = true;
-          collieResizeWasBottom = true;
+        if (activeCollieRestore && !activeCollieRestore.atBottom && performance.now() < activeCollieRestore.until) return;
+        if (collieResizeWasBottom && collieStickBottom) {
+          setCollieBottomStick(true);
           markProgrammaticScroll(140);
           sc.scrollTop = sc.scrollHeight;
           updateSuperJump();
@@ -6560,12 +6710,20 @@
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
-      if (e.deltaY < 0 && superJumpHiding) { jumpSeq++; superJumpHiding = false; updateSuperJump(); }
+      if (performance.now() < programmaticScrollUntil || superJumpHiding) {
+        jumpSeq++;
+        programmaticScrollUntil = 0;
+        if (e.deltaY < 0 && superJumpHiding) { superJumpHiding = false; updateSuperJump(); }
+      }
     }, { passive: true });
     sc?.addEventListener("touchstart", () => {
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
+      if (performance.now() < programmaticScrollUntil) {
+        jumpSeq++;
+        programmaticScrollUntil = 0;
+      }
     }, { passive: true });
     sc?.addEventListener("touchmove", () => {
       cancelCollieLayoutLock();
@@ -6678,9 +6836,40 @@
       cancelCollieLayoutLock();
       cancelInitialAnchor();
       activeCollieRestore = null;
-      collieStickBottom = true;
-      collieForceBottomUntil = 0;
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+
+      // Stage 1: unread start is below viewport top and doesn't fit in one screen ->
+      // glide to the unread divider / first unread row (leaving ~14px breathing pad)
+      // WITHOUT prematurely clearing unread; subsequent click jumps to bottom.
+      const box = $("#super-thread");
+      const target = computeUnreadJumpTarget(sc, box);
+      if (target?.isStage1) {
+        setCollieBottomStick(false);
+        collieForceBottomUntil = 0;
+        superJumpHiding = false;
+        await smartScrollCollie(sc, target.wantTop, {
+          isCanceled: () => seq !== jumpSeq,
+          markMs: 420,
+          remeasureTarget: () => computeUnreadJumpTarget(sc, box)?.wantTop,
+        });
+        if (seq !== jumpSeq) return;
+        captureViewScroll("collie", null, navCur);
+        updateSuperJump();
+        const landed = computeUnreadJumpTarget(sc, box)?.anchorEl || target.anchorEl;
+        if (landed?.classList) {
+          const pulseCls = landed.id === "unread-sep" ? "is-pulse" : "flash";
+          landed.classList.remove(pulseCls);
+          void landed.offsetWidth;
+          landed.classList.add(pulseCls);
+          setTimeout(() => { landed.classList?.remove(pulseCls); }, 1250);
+        }
+        return;
+      }
+
+      // Stage 2: already at/past unread start, single-screen unread, or 0 unread ->
+      // jump straight to bottom and sync read cursor immediately.
+      setCollieBottomStick(true);
+      collieForceBottomUntil = 0;
       superJumpHiding = true;
       const latestId = latestPersistedEntryId();
       if (latestId) commitChatRead(latestId, { immediate: true });
@@ -7048,18 +7237,42 @@
     return !(inp?.value || "").trim() && !(form?._files?.length);
   };
   const setReply = (e, opts = {}) => {
-    replyTo = e ? { entry: e.id, who: e.role === "user" ? "你" : "Collie", text: e.text } : null;
+    const mode = opts.mode === "supplement" ? "supplement" : "quote";
+    replyTo = e ? { entry: e.id, who: e.role === "user" ? "你" : "Collie", text: e.text, mode } : null;
     replyToSetLatestId = e ? latestPersistedEntryId() : "";
     replyToHadPick = !!(e && e.pick);
+    if (e && view === "collie") {
+      const sc = viewScroller("collie");
+      if (sc && !isCollieNearBottom(sc)) setCollieBottomStick(false);
+    }
     const box = $("#re-draft");
     box.hidden = !e;
     if (e) {
       const whoEl = $(".re-who", box);
-      if (whoEl) whoEl.textContent = replyTo.who;
+      if (whoEl) whoEl.textContent = mode === "supplement" ? "回复 ·" : replyTo.who;
       $(".re-t", box).textContent = reLine(e.text);
       if (opts.focus !== false) $("#super-input").focus({ preventScroll: true });
     }
   };
+  function cancelComposerReplyTarget() {
+    if (!replyTo) return;
+    const prev = replyTo;
+    const inp = $("#super-input");
+    if (prev.mode === "supplement" && inp) {
+      setInlineDraft(prev.entry, inp.value);
+      inp.value = "";
+      grow(inp);
+    }
+    const sc = view === "collie" ? viewScroller("collie") : null;
+    const keepSnap = prev.mode === "supplement" && sc && !isCollieNearBottom(sc)
+      ? (captureEntryAnchor(sc, prev.entry) || captureColliePos(sc))
+      : null;
+    if (keepSnap) keepSnap.atBottom = false;
+    setReply(null);
+    if (prev.mode === "supplement" && view === "collie") {
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    }
+  }
   function reconcileStaleReplyTo(allEntries) {
     if (!replyTo?.entry) return;
     const targetId = replyTo.entry;
@@ -7085,11 +7298,16 @@
     }
   }
   const reLine = (t) => plainLine(t);
-  $("#re-draft button").addEventListener("click", () => setReply(null));
+  $("#re-draft button").addEventListener("click", () => cancelComposerReplyTarget());
+  $("#super-input")?.addEventListener("input", () => {
+    if (replyTo?.mode === "supplement" && replyTo.entry) {
+      setInlineDraft(replyTo.entry, $("#super-input").value);
+    }
+  });
   $("#super-input")?.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && replyTo && !ev.isComposing && ev.keyCode !== 229) {
       ev.preventDefault();
-      setReply(null);
+      cancelComposerReplyTarget();
     }
   });
   document.addEventListener("click", (ev) => {
@@ -7101,7 +7319,17 @@
     ev.preventDefault();
     ev.stopPropagation();
     const e = chatEntries().find((x) => x.id === b.dataset.re);
-    if (e) setReply(e);
+    if (e) {
+      if (replyTo?.mode === "supplement" && replyTo.entry !== e.id) {
+        const inp = $("#super-input");
+        if (inp) {
+          setInlineDraft(replyTo.entry, inp.value);
+          inp.value = "";
+          grow(inp);
+        }
+      }
+      setReply(e, { mode: "quote" });
+    }
   });
 
   const newClientMsgID = () => (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
@@ -7110,16 +7338,19 @@
 
   async function sendSuper(text, re, restoreRe, clientMsgID = newClientMsgID(), opts = {}) {
     const isPick = !!opts.pick;
-    const scrollBottom = isPick ? !!opts.scrollBottom : opts.scrollBottom !== false;
+    const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
+    const isInPlace = !isPick && !!opts.inPlace && !!normRe?.entry;
+    const scrollBottom = (isPick || isInPlace) ? !!opts.scrollBottom : opts.scrollBottom !== false;
     const shouldCommitRead = scrollBottom || !!opts.commitRead;
     const keepRestore = !scrollBottom && opts.restore && !opts.restore.atBottom ? opts.restore : null;
-    const normRe = re?.entry ? { entry: String(re.entry), who: re.who || "Collie", text: re.text || "" } : null;
     // Only what was actively overridden goes along; otherwise the hub/Collie
     // follows memory preferences and configured defaults.
     const t = targetNow(), ov = targetOverrideFlags(), p = ov.any ? (target || {}) : {};
     const { model, effort } = modelNow(t);
     // Normal messages show optimistically as user bubbles; pure --opt picks
-    // collapse the decision card in-place without emitting a user bubble.
+    // collapse the decision card in-place without emitting a user bubble;
+    // in-place replies attach optimistically to the target & thread drawer
+    // without appending a stray user bubble to the bottom of the main timeline.
     let mine = null;
     if (!isPick) {
       mine = {
@@ -7131,6 +7362,7 @@
         text,
         at: new Date().toISOString(),
         pending: true,
+        ...(isInPlace ? { in_place: true } : {}),
         re: normRe,
       };
       pendingSays.push(mine);
@@ -7142,6 +7374,9 @@
       activeCollieRestore = null;
       unreadAnchorApplied = true;
       sessionUnreadMarkerId = "";
+    } else if (keepRestore) {
+      setCollieBottomStick(false);
+      collieForceBottomUntil = 0;
     }
     if (shouldCommitRead) {
       const latestBeforeSend = latestPersistedEntryId();
@@ -7163,13 +7398,14 @@
         effort: "effort" in p || "kind" in p ? sendEffort : "",
       };
       if (isPick) payload.pick = true;
+      if (isInPlace) payload.in_place = true;
       r = await api("/api/super/say", { body: payload });
     } catch (err) {
       if (mine) {
         const idx = pendingSays.indexOf(mine);
         if (idx >= 0) pendingSays.splice(idx, 1);
       }
-      if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry), { focus: false });
+      if (restoreRe && normRe && !replyTo) setReply(chatEntries().find((x) => x.id === normRe.entry), { focus: false, mode: re?.mode });
       opts.onRollback?.();
       const errSc = !scrollBottom && view === "collie" ? viewScroller("collie") : null;
       const errRestore = errSc && !isCollieNearBottom(errSc)
@@ -7183,12 +7419,15 @@
     if (mine) {
       // The hub's copy may already be here (its push beat the reply): swap seamlessly now.
       mine.id = r?.entry || mine.id || "";
+      mine.pending = false;
       if (mine.id && shouldCommitRead) commitChatRead(mine.id, { immediate: true });
       const idx = pendingSays.indexOf(mine);
       if (idx >= 0 && (!mine.id || sup.entries.some((e) => e.id === mine.id))) {
         if (mine.id) rememberPromotedPending(mine.id, mine._localId);
         pendingSays.splice(idx, 1);
         renderSide();
+        renderSuper();
+      } else if (isInPlace) {
         renderSuper();
       }
     } else if (r?.entry && shouldCommitRead) {
@@ -7197,15 +7436,57 @@
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }
 
+  function ensureInlineCardVisible(sc, entryId) {
+    if (!sc || !entryId || sc.clientHeight <= 0) return;
+    const card = $("#super-thread")?.querySelector?.(`[data-inline-box="${CSS.escape(entryId)}"]`);
+    if (!card || card.hidden || typeof card.getBoundingClientRect !== "function" || typeof sc.getBoundingClientRect !== "function") return;
+    const sr = sc.getBoundingClientRect();
+    const cr = card.getBoundingClientRect();
+    const bottomSafe = sr.bottom - 16;
+    if (cr.bottom > bottomSafe) {
+      smartScrollCollie(sc, sc.scrollTop + (cr.bottom - bottomSafe), { markMs: 280 });
+    }
+  }
+  function closeInlineDecision(id, opts = {}) {
+    if (!id || openInlineDecisionId !== id) return;
+    const sc = !opts.inDrawer && view === "collie" ? viewScroller("collie") : null;
+    const keepSnap = sc && !isCollieNearBottom(sc)
+      ? (captureEntryAnchor(sc, id) || captureColliePos(sc))
+      : null;
+    if (keepSnap) keepSnap.atBottom = false;
+    openInlineDecisionId = null;
+    renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    if (activeThreadRoot) syncThreadDrawer();
+    if (opts.restoreFocus) {
+      const scope = opts.inDrawer ? $("#td-list") : $("#super-thread");
+      scope?.querySelector?.(`[data-toggle-inline="${CSS.escape(id)}"]`)?.focus?.({ preventScroll: true });
+    }
+  }
+
   const busyReplyOpts = new Set();
   async function submitInlineDecision(id, rawText, opts = {}) {
     const text = String(rawText || "").trim();
     if (!id || !text || busyReplyOpts.has(id)) return;
     busyReplyOpts.add(id);
+    const prevDraft = getInlineDraft(id);
+    inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
-    pickedReplyOpts.set(id, { state: "custom", text, at: new Date().toISOString(), sending: true });
+    const sc = viewScroller("collie");
+    const nearBot = isCollieNearBottom(sc);
+    const isInPlace = !nearBot;
+    const shouldCommitRead = nearBot || (!!opts.inDrawer && computeUnreadInfo().count === 0);
+    let keepSnap = null;
+    if (!opts.inDrawer && !nearBot) {
+      cancelCollieLayoutLock();
+      cancelInitialAnchor();
+      activeCollieRestore = null;
+      unreadAnchorApplied = true;
+      keepSnap = captureEntryAnchor(sc, id) || captureColliePos(sc);
+      if (keepSnap) keepSnap.atBottom = false;
+    }
+    pickedReplyOpts.set(id, { state: "custom", text, at: new Date().toISOString(), sending: true, inPlace: isInPlace });
     try {
       await sendSuper(
         text,
@@ -7213,9 +7494,14 @@
         false,
         undefined,
         {
-          scrollBottom: !opts.inDrawer,
-          commitRead: true,
-          onRollback: () => { pickedReplyOpts.delete(id); },
+          inPlace: isInPlace,
+          scrollBottom: nearBot && !opts.inDrawer,
+          commitRead: shouldCommitRead,
+          restore: keepSnap,
+          onRollback: () => {
+            pickedReplyOpts.delete(id);
+            setInlineDraft(id, prevDraft || text);
+          },
         },
       );
       const picked = pickedReplyOpts.get(id);
@@ -7225,6 +7511,7 @@
       }
     } catch (err) {
       pickedReplyOpts.delete(id);
+      setInlineDraft(id, prevDraft || text);
       toast(err.message, "attn");
     } finally {
       busyReplyOpts.delete(id);
@@ -7243,14 +7530,71 @@
     if (tog) {
       ev.preventDefault();
       const id = tog.dataset.toggleInline;
+      const sc = !opts.inDrawer && view === "collie" ? viewScroller("collie") : null;
+      const keepSnap = sc && !isCollieNearBottom(sc)
+        ? (captureEntryAnchor(sc, id) || captureColliePos(sc))
+        : null;
+      if (keepSnap) keepSnap.atBottom = false;
+
+      // Mobile (<=760px) Plan B: never expand mid-stream; attach compact quote strip to bottom composer.
+      if (!opts.inDrawer && narrow()) {
+        const inp = $("#super-input");
+        if (replyTo?.entry === id && replyTo?.mode === "supplement") {
+          if (inp) {
+            setInlineDraft(id, inp.value);
+            inp.value = "";
+            grow(inp);
+          }
+          setReply(null);
+          renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+          return true;
+        }
+        if (replyTo?.mode === "supplement" && replyTo.entry && inp) {
+          setInlineDraft(replyTo.entry, inp.value);
+        }
+        const hadSupplement = replyTo?.mode === "supplement";
+        openInlineDecisionId = null;
+        const target = chatEntries().find((x) => x.id === id);
+        if (target) {
+          setReply(target, { mode: "supplement", focus: false });
+          if (inp && (hadSupplement || !inp.value.trim())) {
+            inp.value = getInlineDraft(id);
+            grow(inp);
+          }
+          renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+          if (inp) {
+            inp.focus({ preventScroll: true });
+            const end = inp.value.length;
+            inp.setSelectionRange?.(end, end);
+          }
+        }
+        return true;
+      }
+
+      // Desktop (>760px) / Drawer Plan A: smooth 1px multiline inline comment card right below options.
+      if (replyTo?.mode === "supplement") {
+        const inp = $("#super-input");
+        if (inp) {
+          setInlineDraft(replyTo.entry, inp.value);
+          inp.value = "";
+          grow(inp);
+        }
+        setReply(null);
+      }
       openInlineDecisionId = openInlineDecisionId === id ? null : id;
-      renderSuper();
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
       if (activeThreadRoot) syncThreadDrawer();
       if (openInlineDecisionId) {
         requestAnimationFrame(() => {
           const scope = opts.inDrawer ? $("#td-list") : $("#super-thread");
           const inp = scope?.querySelector?.(`[data-inline-input="${CSS.escape(openInlineDecisionId)}"]`);
-          inp?.focus?.({ preventScroll: true });
+          if (inp) {
+            trackIME(inp);
+            inp.focus?.({ preventScroll: true });
+            const end = String(inp.value || "").length;
+            inp.setSelectionRange?.(end, end);
+          }
+          if (!opts.inDrawer && sc) ensureInlineCardVisible(sc, openInlineDecisionId);
         });
       }
       return true;
@@ -7258,11 +7602,7 @@
     const cancel = ev.target.closest("[data-inline-cancel]");
     if (cancel) {
       ev.preventDefault();
-      if (openInlineDecisionId === cancel.dataset.inlineCancel) {
-        openInlineDecisionId = null;
-        renderSuper();
-        if (activeThreadRoot) syncThreadDrawer();
-      }
+      closeInlineDecision(cancel.dataset.inlineCancel, { inDrawer: !!opts.inDrawer, restoreFocus: true });
       return true;
     }
     const sendBtn = ev.target.closest("[data-inline-send]");
@@ -7283,6 +7623,7 @@
     grp.dataset.busy = "1";
     grp.querySelectorAll("button").forEach((x) => { x.disabled = true; });
     const text = b.dataset.opt;
+    inlineDecisionDrafts.delete(id);
     if (openInlineDecisionId === id) openInlineDecisionId = null;
     if (replyTo && (replyTo.entry === id || isSuperComposerEmpty())) setReply(null);
     const e = chatEntries().find((x) => x.id === id);
@@ -7329,9 +7670,22 @@
     return true;
   }
   $("#super-thread").addEventListener("click", (ev) => { handleQuickOptionClick(ev); });
+  document.addEventListener("submit", (ev) => {
+    const form = ev.target?.closest?.("form.reply-inline[data-inline-box]");
+    if (!form) return;
+    ev.preventDefault();
+    const id = form.dataset.inlineBox;
+    const inp = form.querySelector?.("[data-inline-input]");
+    if (inp?.value?.trim()) submitInlineDecision(id, inp.value, { inDrawer: !!form.closest?.("#thread-drawer") });
+  });
   document.addEventListener("input", (ev) => {
     const inp = ev.target?.closest?.("[data-inline-input]");
     if (!inp) return;
+    const id = inp.dataset.inlineInput;
+    setInlineDraft(id, inp.value);
+    if (!window.CSS?.supports?.("field-sizing", "content") && inp.parentElement) {
+      inp.parentElement.dataset.replicatedValue = inp.value;
+    }
     const box = inp.closest("[data-inline-box]");
     const btn = box?.querySelector?.("[data-inline-send]");
     if (btn) btn.disabled = !String(inp.value || "").trim();
@@ -7340,16 +7694,26 @@
     const inp = ev.target?.closest?.("[data-inline-input]");
     if (!inp) return;
     const id = inp.dataset.inlineInput;
-    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) {
-      ev.preventDefault();
-      if (String(inp.value || "").trim()) submitInlineDecision(id, inp.value, { inDrawer: !!inp.closest("#thread-drawer") });
-    } else if (ev.key === "Escape" && !ev.isComposing) {
-      ev.preventDefault();
-      if (openInlineDecisionId === id) {
-        openInlineDecisionId = null;
-        renderSuper();
-        if (activeThreadRoot) syncThreadDrawer();
+    const ime = trackIME(inp);
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      if (isIMEComposing(ev, ime)) return;
+      if (isPostCompositionSafariEnter(ev, ime)) {
+        ev.preventDefault();
+        return;
       }
+      const mod = ev.metaKey || ev.ctrlKey;
+      if (prefs.sendKey() === "mod" ? mod : !mod) {
+        ev.preventDefault();
+        if (ev.repeat) return;
+        if (String(inp.value || "").trim()) {
+          const form = inp.closest?.("form.reply-inline");
+          if (form?.requestSubmit) form.requestSubmit();
+          else submitInlineDecision(id, inp.value, { inDrawer: !!inp.closest?.("#thread-drawer") });
+        }
+      }
+    } else if (ev.key === "Escape" && !isIMEComposing(ev, ime)) {
+      ev.preventDefault();
+      closeInlineDecision(id, { inDrawer: !!inp.closest?.("#thread-drawer"), restoreFocus: true });
     }
   });
 
@@ -7378,11 +7742,60 @@
     }
   });
 
-  bindComposer($("#super-composer"), $("#super-input"), async (text, re) => {
-    await sendSuper(text, re, true);
+  bindComposer($("#super-composer"), $("#super-input"), async (text, ctx) => {
+    const re = ctx?.re || null;
+    const isInPlace = !!(re?.entry && !ctx?.nearBot);
+    const targetEntry = re?.entry ? chatEntries().find((x) => x.id === re.entry) : null;
+    const marksDecision = !!(targetEntry && targetEntry.role === "collie" && Array.isArray(targetEntry.options) && targetEntry.options.length && !targetEntry.pick && !pickedReplyOpts.has(targetEntry.id));
+    if (marksDecision) {
+      pickedReplyOpts.set(targetEntry.id, { state: "custom", text: String(text || "").trim(), at: new Date().toISOString(), sending: true, inPlace: isInPlace });
+    }
+    try {
+      await sendSuper(text, re, true, undefined, {
+        inPlace: isInPlace,
+        scrollBottom: !isInPlace,
+        commitRead: !isInPlace,
+        restore: isInPlace ? ctx?.restore : null,
+        onRollback: () => {
+          if (marksDecision) pickedReplyOpts.delete(targetEntry.id);
+          if (re?.mode === "supplement" && re.entry) setInlineDraft(re.entry, text);
+        },
+      });
+      if (marksDecision) {
+        const picked = pickedReplyOpts.get(targetEntry.id);
+        if (picked) {
+          picked.sending = false;
+          document.querySelectorAll(`.reply-receipt[data-entry="${CSS.escape(targetEntry.id)}"]`).forEach((el) => el.classList.remove("is-sending"));
+        }
+      }
+    } catch (err) {
+      if (marksDecision) pickedReplyOpts.delete(targetEntry.id);
+      throw err;
+    }
   }, () => targetNow().machine, {
-    beforeSend: () => { const re = replyTo; setReply(null); return re; },
-    onError: (re) => { if (re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry), { focus: false }); },
+    beforeSend: () => {
+      const re = replyTo;
+      const sc = view === "collie" ? viewScroller("collie") : null;
+      const nearBot = !re?.entry || isCollieNearBottom(sc);
+      let keepSnap = null;
+      if (re?.entry) {
+        inlineDecisionDrafts.delete(re.entry);
+        if (!nearBot && sc) {
+          cancelCollieLayoutLock();
+          cancelInitialAnchor();
+          activeCollieRestore = null;
+          unreadAnchorApplied = true;
+          keepSnap = captureEntryAnchor(sc, re.entry) || captureColliePos(sc);
+          if (keepSnap) keepSnap.atBottom = false;
+        }
+      }
+      setReply(null);
+      return { re, nearBot, restore: keepSnap };
+    },
+    onError: (ctx) => {
+      const re = ctx?.re;
+      if (re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry), { focus: false, mode: re.mode });
+    },
   });
 
   // ───────────────────────────── automation view
@@ -15536,6 +15949,40 @@
   // can't fit 120 columns legibly: there it shows the screen at a readable
   // size and scrolls sideways, or, with 全览, the whole width at once.
   const narrowScreen = matchMedia("(max-width: 760px)");
+  narrowScreen.addEventListener?.("change", () => {
+    if (view !== "collie") return;
+    const sc = viewScroller("collie");
+    const nearBot = isCollieNearBottom(sc);
+    if (narrowScreen.matches && openInlineDecisionId && !activeThreadRoot) {
+      const id = openInlineDecisionId;
+      const target = chatEntries().find((x) => x.id === id);
+      const keepSnap = !nearBot ? (captureEntryAnchor(sc, id) || captureColliePos(sc)) : null;
+      if (keepSnap) keepSnap.atBottom = false;
+      openInlineDecisionId = null;
+      if (target) {
+        setReply(target, { mode: "supplement", focus: false });
+        const inp = $("#super-input");
+        if (inp && !inp.value.trim()) {
+          inp.value = getInlineDraft(id);
+          grow(inp);
+        }
+      }
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    } else if (!narrowScreen.matches && replyTo?.mode === "supplement" && replyTo.entry) {
+      const id = replyTo.entry;
+      const inp = $("#super-input");
+      if (inp) {
+        setInlineDraft(id, inp.value);
+        inp.value = "";
+        grow(inp);
+      }
+      const keepSnap = !nearBot ? (captureEntryAnchor(sc, id) || captureColliePos(sc)) : null;
+      if (keepSnap) keepSnap.atBottom = false;
+      setReply(null);
+      openInlineDecisionId = id;
+      renderSuper(keepSnap ? { restore: keepSnap, once: true } : undefined);
+    }
+  });
   function fitTerm() {
     if (!term || !size.cols) return;
     const el = $("#screen"), was = screenNearBottom();
@@ -17698,7 +18145,7 @@
   document.addEventListener("click", (e) => {
     if (!matchMedia("(hover: none)").matches) return;
     const m = e.target.closest("#v-collie .msg[data-time], #v-collie .say .msg, #v-collie .mine .msg");
-    if (m && e.target.closest("a, button, summary, details, input, .thumb, img")) return;
+    if (m && e.target.closest("a, button, summary, details, input, textarea, .thumb, img")) return;
     for (const x of document.querySelectorAll("#v-collie .msg.show-time")) if (x !== m) x.classList.remove("show-time");
     m?.classList.toggle("show-time");
   });

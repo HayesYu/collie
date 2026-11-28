@@ -87,6 +87,8 @@ type Super struct {
 type sayReceipt struct {
 	entry   string
 	trigger string
+	picked  bool
+	inPlace bool
 	at      time.Time
 }
 

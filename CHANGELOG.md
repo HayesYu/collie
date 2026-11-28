@@ -4,6 +4,33 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.16 (2026-11-28)
+
+### Highlights
+
+- **Lightbox Boundary No-Wrap & Rubber-Band Damping (`web/{app.css,app.js}`, `internal/collie/inline_image_gallery_test.go`, `docs/demo/`)**:
+  - Removed modulo wrap-around at gallery ends in `showLbSlide()` and clamped initial indices in `openLightbox()`.
+  - Added pure-GPU `0.25×` horizontal rubber-band resistance (clamped to `±48px`) when swiping past the first or last slide with clean snap-back on release, disabled and softly dimmed boundary Prev/Next arrows (absorbing clicks so disabled arrows never dismiss the Lightbox), and stopped `ArrowLeft`/`ArrowRight` navigation at gallery ends.
+- **Quota Popover Click-Toggle Race Fix (`web/quota.js`, `internal/collie/quota_test.go`, `docs/demo/`)**:
+  - Tracked close intent on `pointerdown` for `#nav-quota` and `#rail-quota` so native `popover="auto"` light-dismiss before `click` no longer triggers an immediate flash-reopen.
+  - Preserved keyboard `Enter`/`Space` toggling, cross-trigger anchor switching, outside light-dismiss, and cleared pending close state on outside `pointerup`, `pointercancel`, `keydown`, and `window.blur` (with frozen `Date.now()` determinism in `TestWebQuotaBadgeContracts`).
+- **Inline Supplement Input Synchronous Keyboard Focus & Zero-Teardown Preservation (`web/{app.css,app.js}`, `internal/collie/{inline_reply_kb_focus_test.go,chat_render_perf_test.go}`, `docs/demo/`)**:
+  - Focused `[data-inline-input]` synchronously inside the `click` gesture handler for iOS/iPadOS Safari keyboard activation, attached `trackIME` and `bindCompositionGuard` immediately, and revealed/updated `.decision-wrap` in place via `patchDecisionWrapInPlace()` with zero `<textarea>` teardown or blur across live SSE rerenders.
+  - Isolated soft-keyboard viewport shrink in `setVH()` and scroller `ResizeObserver`s so active inline scrollers are never yanked to bottom, recovered accidental WebKit void-target focus drops during shrink, aligned inline cards cleanly via top+bottom `ensureInlineCardVisible()` + `scroll-padding-block: 16px 24px`, and prevented `#thread-drawer` inline taps from dismissing the drawer or stealing focus.
+- **Outside Rich Micro-Actions, KPI/Mermaid/KaTeX Clarity & Default Code Soft-Wrap (`web/{app.css,app.js}`, `internal/collie/{rich_blocks_test.go,rich_visuals_test.go}`, `docs/demo/`)**:
+  - Unified frameless outside top-right micro-actions for Markdown tables, `html-card`, Mermaid, and SVG across desktop and touch so headers, iframes, diagrams, and preceding headings are never overlapped (transparent, zero `backdrop-filter`, zero reflow).
+  - Normalized KPI `.md-metric-val` font-weight from synthetic `650` to standard `600` with AA+ contrast, upgraded Mermaid native SVG text to `14px` / `500` weight with a `0.93` readable scale floor (`0` `<foreignObject>`), restored crisp KaTeX optical scaling (`1.18em` inline / `1.24em` display) with solid fraction rules, and enabled default soft-wrapping (`pre-wrap` with hanging diff `+`/`−` indentation) for code and diff blocks across all viewports.
+- **Pure-GPU iPad/Tablet Overlay Sidebar & Zero-Flash Keyboard Isolation (`web/{index.html,app.css,app.js}`, `internal/collie/ipad_sidebar_overlay_kb_test.go`, `docs/demo/`)**:
+  - Kept a permanent `54px` icon rail on tablet portrait (`761–1000px`) and touch wide screens (`>760px` coarse/no-hover) while sliding `.side-full` out as a pure-GPU `translate3d` overlay with a lightweight `.side-scrim` (zero `backdrop-filter`, `0px` main/drawer width change, zero layout reflow), aligning `[data-toggle-side]` and `Cmd/Ctrl+\` with `≤760px` so tablet portrait collapses/expands cleanly.
+  - Kept `#app` and `.side` pinned at full viewport height on `>760px` and applied non-inheriting `@property --kb-inset` / `--kb-top` atomically only to `.main`, `#v-collie`, and right drawers/notes — preventing `.side-foot` from lifting on keyboard open and eliminating `:root --vh` full-screen flash on keyboard dismiss.
+
+### Client / API Changes
+
+- None (Web UI interaction, rendering, layout, and test-suite improvements with synced static demo only; no HTTP API, SSE event, JSON schema, or agent `kind` changes).
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.15 (2026-11-28)
 
 ### Highlights

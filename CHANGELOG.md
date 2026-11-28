@@ -4,6 +4,33 @@ All notable changes to Collie are documented in this file. Each release includes
 
 ---
 
+## v0.3.17 (2026-11-28)
+
+### Highlights
+
+- **Mobile Notes Right-Edge Clipping, iOS Text Inflation & Unified Sheet Typography (`web/app.css`, `internal/collie/mobile_notes_clip_test.go`, `docs/demo/`)**:
+  - Set `-webkit-text-size-adjust: 100%` and `text-size-adjust: 100%` on `:root` and `html, body` to prevent iOS Safari automatic text inflation across Notes, File Preview, Thread Drawer, and main chat.
+  - Constrained `.np-list`, `.np-th-list`, `.np-th-sublist`, and `.np-fold` CSS Grid tracks to `minmax(0, 1fr)` with `min-width: 0` on children so long titles and notes never overflow or clip at the right edge; enabled graceful 2-line clamping with `overflow-wrap: anywhere`, top-aligned bullets, and safe-area horizontal padding on mobile/tablet sheets (`≤1359px`).
+  - Calibrated mobile (`≤760px`) drawer prose (`.filepane .fv-md`, `.threadpane .td-text` / `.td-text.msg`, `.workerpane .wd-thread .msg.assistant`) to `calc(var(--msg-fs-m, 15.5px) - 1px)` (`14.5px`) so user and assistant messages stay symmetric and proportional to main chat.
+- **Notebook "Today's Files" & Cross-Message Lightbox Image Streams (`web/app.js`, `internal/collie/inline_image_gallery_test.go`, `docs/demo/`)**:
+  - Connected clicking any image in `#np-files-list` ("Today's Files" in both desktop panel and mobile sheet) to open Lightbox over all image artifacts in display order (deduplicating by path while non-image files continue opening `#file-view`).
+  - Upgraded `collectGallery()` to collect all images chronologically per enclosing stream container (`#super-thread`, `#td-list`, `#wd-thread`/`#thread`/`#x-thread`) — covering user uploads, inline `--file` galleries including `+N` hidden items, and Markdown images (`.md-img-btn`) — targeting the exact clicked DOM node while preserving non-wrapping rubber-band bounds and lazy per-slide loading.
+- **iPad Landscape Docked Sidebar, Locked Base Height, Zero-Flash Keyboard & Rotation Scroll Anchoring (`web/{app.css,app.js}`, `internal/collie/ipad_sidebar_overlay_kb_test.go`, `docs/demo/`)**:
+  - Scoped pure-GPU `54px`-rail overlay sidebar mode strictly to tablet portrait (`761–1000px`), restoring the docked expanded sidebar on iPad landscape (`>1000px`, same 1px flat plane, zero shadow, manual collapse/expand) while preserving coarse-pointer 44px hit-target extensions.
+  - Locked `#app`, `.side`, `#side-full`, and drawers to the full keyboard-closed baseline height via non-inheriting `@property --side-full-h` (`<length-percentage>`) on touch wide screens so `.side-foot`/`.sr-foot` never lift, `--kb-inset` stays monotonic across staggered iPadOS `innerHeight`/`visualViewport` frames, and `:root --vh` performs `0` writes on keyboard open/dismiss.
+  - Downgraded active `#v-collie` from `contain: strict` to `contain: layout style` (keeping `contain: strict` on `#v-collie.is-parked`), removed `>760px` `position: fixed; inset: 0` on `.app`, moved `window.scrollY` reads into Phase 1 (zero forced reflow), and anchored both bottom-pinned (`dist ≤ 1px`) and mid-history scroll positions across iPad landscape ↔ portrait rotations.
+- **60 FPS Mobile Worker Drawer Slide-In & Zero-Twitch Streaming (`web/{app.css,app.js}`, `internal/collie/mobile_worker_drawer_jank_test.go`, `docs/demo/`)**:
+  - Removed `content-visibility: auto` from `#wd-thread` rows (keeping per-row `contain: layout style`) and raised the mobile progressive chunking threshold so standard worker transcripts mount cleanly without 300–460px height-mismatch scroll jumps on open or upward scroll.
+  - Locked `.wd-live.is-working` to a fixed `35px` single-line ellipsis strip patched in place (`textContent`) and kept mounted across transient empty tail ticks so `#wd-thread.clientHeight` never pumps during live SSE streaming.
+  - Deferred initial xterm mount until after the opening slide finishes with immediate precomputed mobile font/cell metrics, guarded `ResizeObserver` with `≥2px` delta and slide-animation checks, short-circuited identical `#wd-log` frames, disabled competing CSS transitions/ambient animations during `.is-sheet-opening`, flushed pending `rootVHSyncTimer` before unhiding all three mobile drawers, deferred background live updates/RO during slides, and prewarmed uncached assistant Markdown purely in JS (`≤4ms` micro-slices).
+
+### Client / API Changes
+
+- None (Web UI layout, Lightbox image streams, iPad/mobile ergonomics, rendering stability, and test-suite improvements with synced static demo only; no HTTP API, SSE event, JSON schema, or agent `kind` changes).
+- **Breaking changes**: None.
+
+---
+
 ## v0.3.16 (2026-11-28)
 
 ### Highlights
